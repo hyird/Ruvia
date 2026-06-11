@@ -8,7 +8,7 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(ruvia VERSION 0.0.1 LANGUAGES CXX)
+project(ruvia VERSION 0.0.2 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
