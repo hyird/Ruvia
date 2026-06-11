@@ -1,0 +1,27 @@
+{
+  "name": "ruvia",
+  "version-string": "0.0.1",
+  "dependencies": [
+    "asio",
+    "mimalloc",
+    "openssl",
+    "zlib"
+  ],
+  "features": {
+    "jwt": {
+      "description": "Build HMAC JWT helper APIs."
+    },
+    "mariadb": {
+      "description": "Build MariaDB-compatible database APIs.",
+      "dependencies": [
+        "libmariadb"
+      ]
+    },
+    "redis": {
+      "description": "Build Redis client APIs.",
+      "dependencies": [
+        "hiredis"
+      ]
+    }
+  }
+}

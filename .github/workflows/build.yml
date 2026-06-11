@@ -1,0 +1,220 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - "include/**"
+      - "src/**"
+      - "examples/**"
+      - "benchmarks/**"
+      - ".github/workflows/build.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - "include/**"
+      - "src/**"
+      - "examples/**"
+      - "benchmarks/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu_build:
+    name: Ubuntu build
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:lts
+        env:
+          MARIADB_ROOT_PASSWORD: summit
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -uroot -psummit --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      BUILD_TYPE: Debug
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 ninja-build curl zip unzip tar mariadb-client
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/build-test/vcpkg_installed
+          key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-build-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$VCPKG_ROOT" reset --hard origin/master
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-test -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_ENABLE_MARIADB=ON \
+            -DRUVIA_ENABLE_REDIS=ON \
+            -DRUVIA_ENABLE_JWT=ON \
+            -DRUVIA_BUILD_EXAMPLES=ON \
+            -DRUVIA_BUILD_TECHEMPOWER=ON \
+            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build-test --config "$BUILD_TYPE"
+
+      - name: Initialize TechEmpower database
+        run: |
+          set -euo pipefail
+          mariadb -h127.0.0.1 -P3306 -uroot -psummit <<'SQL'
+          CREATE DATABASE IF NOT EXISTS hello_world;
+          CREATE USER IF NOT EXISTS 'benchmarkdbuser'@'%' IDENTIFIED BY 'benchmarkdbpass';
+          GRANT ALL PRIVILEGES ON hello_world.* TO 'benchmarkdbuser'@'%';
+          FLUSH PRIVILEGES;
+          USE hello_world;
+          CREATE TABLE IF NOT EXISTS World (id INT NOT NULL PRIMARY KEY, randomNumber INT NOT NULL);
+          CREATE TABLE IF NOT EXISTS CachedWorld (id INT NOT NULL PRIMARY KEY, randomNumber INT NOT NULL);
+          CREATE TABLE IF NOT EXISTS Fortune (id INT NOT NULL PRIMARY KEY, message VARCHAR(2048) NOT NULL);
+          INSERT IGNORE INTO World(id, randomNumber)
+            SELECT seq, 1 + MOD(seq * 7919, 10000) FROM seq_1_to_10000;
+          INSERT IGNORE INTO CachedWorld(id, randomNumber)
+            SELECT seq, 1 + MOD(seq * 3571, 10000) FROM seq_1_to_10000;
+          INSERT IGNORE INTO Fortune(id, message) VALUES
+            (1, 'fortune: No such file or directory'),
+            (2, 'A computer scientist is someone who fixes things that aren''t broken.'),
+            (3, 'After enough decimal places, nobody gives a damn.'),
+            (4, 'A bad random number generator: 1, 1, 1, 1, 1'),
+            (5, 'A computer program does what you tell it to do, not what you want it to do.'),
+            (6, 'Emacs is a nice operating system, but I prefer UNIX.'),
+            (7, 'Any program that runs right is obsolete.'),
+            (8, 'A list is only as strong as its weakest link.'),
+            (9, 'Feature: A bug with seniority.'),
+            (10, 'Computers make very fast, very accurate mistakes.'),
+            (11, '<script>alert("This should not be displayed in a browser alert box.");</script>'),
+            (12, 'フレームワークのベンチマーク');
+          SQL
+
+      - name: TechEmpower spec smoke test
+        run: |
+          set -euo pipefail
+          RUVIA_THREADS=1 \
+          RUVIA_DB_HOST=127.0.0.1 \
+          RUVIA_DB_PORT=3306 \
+          RUVIA_DB_USER=benchmarkdbuser \
+          RUVIA_DB_PASSWORD=benchmarkdbpass \
+          RUVIA_DB_DATABASE=hello_world \
+            ./build-test/benchmarks/techempower/ruvia/ruvia_techempower > ruvia_techempower.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/plaintext >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+            if [ "$attempt" -eq 30 ]; then
+              cat ruvia_techempower.log
+              exit 1
+            fi
+          done
+
+          curl -fsS http://127.0.0.1:8080/json | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"message":"Hello, World!"}'
+          test "$(curl -fsS http://127.0.0.1:8080/plaintext)" = "Hello, World!"
+          curl -fsS http://127.0.0.1:8080/db | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data["id"], int) and isinstance(data["randomNumber"], int)'
+          curl -fsS 'http://127.0.0.1:8080/queries?queries=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
+          curl -fsS http://127.0.0.1:8080/fortunes | grep -q 'Additional fortune added at request time.'
+          curl -fsS 'http://127.0.0.1:8080/updates?queries=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
+          curl -fsS 'http://127.0.0.1:8080/cached-worlds?count=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
+          curl -fsS 'http://127.0.0.1:8080/cached-queries?count=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
+
+  windows_build:
+    name: Windows build
+    runs-on: windows-2025-vs2026
+    env:
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      BUILD_TYPE: Debug
+
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ${{ github.workspace }}\build-test\vcpkg_installed
+          key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-build-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "$env:VCPKG_ROOT\.git")) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
+          } else {
+            git -C "$env:VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$env:VCPKG_ROOT" reset --hard origin/master
+          }
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build-test `
+            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DRUVIA_ENABLE_MARIADB=ON `
+            -DRUVIA_ENABLE_REDIS=ON `
+            -DRUVIA_ENABLE_JWT=ON `
+            -DRUVIA_BUILD_EXAMPLES=ON `
+            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build-test --config "$env:BUILD_TYPE"
