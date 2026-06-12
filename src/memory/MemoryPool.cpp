@@ -3,10 +3,18 @@
 #include <mimalloc.h>
 
 namespace ruvia {
+
+namespace detail {
+
+void ensureMimallocGlobalOverrideLinked() noexcept;
+
+}  // namespace detail
+
 namespace {
 
 struct DefaultResourceInstaller final {
     DefaultResourceInstaller() noexcept {
+        detail::ensureMimallocGlobalOverrideLinked();
         (void)ProcessMemory::instance();
     }
 };

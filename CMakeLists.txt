@@ -8,7 +8,11 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(ruvia VERSION 0.0.3 LANGUAGES CXX)
+if(CMAKE_HOST_WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "Default vcpkg triplet")
+endif()
+
+project(ruvia VERSION 0.0.4 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -67,6 +71,7 @@ set(RUVIA_SOURCES
     src/http/HttpParser.cpp
     src/http/HttpTypes.cpp
     src/memory/MemoryPool.cpp
+    src/memory/MimallocOverride.cpp
     src/net/ConnectionScanner.cpp
     src/net/HttpDateCache.cpp
     src/net/HttpResponseWriter.cpp
@@ -97,6 +102,8 @@ set_target_properties(ruvia PROPERTIES
 )
 
 function(ruvia_configure_library target)
+    target_compile_features(${target} PUBLIC cxx_std_23)
+
     target_include_directories(${target}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -122,6 +129,14 @@ endfunction()
 
 ruvia_configure_library(ruvia)
 
+set(RUVIA_MIMALLOC_TARGET mimalloc)
+if(TARGET mimalloc-static)
+    get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
+    if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
+        set(RUVIA_MIMALLOC_TARGET mimalloc-static)
+    endif()
+endif()
+
 target_link_libraries(ruvia
     PUBLIC
         asio::asio
@@ -129,7 +144,7 @@ target_link_libraries(ruvia
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
-        $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>
+        ${RUVIA_MIMALLOC_TARGET}
 )
 
 if(RUVIA_ENABLE_MARIADB)
@@ -152,6 +167,10 @@ target_link_options(ruvia
 
 if(WIN32)
     target_link_libraries(ruvia PUBLIC Mswsock)
+    set_target_properties(ruvia PROPERTIES
+        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
+    )
+    target_link_options(ruvia INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
 endif()
 
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)

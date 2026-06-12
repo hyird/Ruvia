@@ -1,9 +1,19 @@
 {
   "name": "ruvia",
-  "version-string": "0.0.3",
+  "version-string": "0.0.4",
   "dependencies": [
     "asio",
-    "mimalloc",
+    {
+      "name": "mimalloc",
+      "features": [
+        "override"
+      ],
+      "platform": "!windows | !static"
+    },
+    {
+      "name": "mimalloc",
+      "platform": "windows & static"
+    },
     "openssl",
     "zlib"
   ],
