@@ -8,7 +8,11 @@ if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
 
-project(ruvia VERSION 0.0.2 LANGUAGES CXX)
+if(CMAKE_HOST_WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
+    set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "Default vcpkg triplet")
+endif()
+
+project(ruvia VERSION 0.0.4 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -17,7 +21,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(MSVC)
+if(MSVC AND NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
@@ -67,6 +71,7 @@ set(RUVIA_SOURCES
     src/http/HttpParser.cpp
     src/http/HttpTypes.cpp
     src/memory/MemoryPool.cpp
+    src/memory/MimallocOverride.cpp
     src/net/ConnectionScanner.cpp
     src/net/HttpDateCache.cpp
     src/net/HttpResponseWriter.cpp
@@ -91,9 +96,14 @@ add_library(ruvia ${RUVIA_SOURCES})
 
 add_library(ruvia::ruvia ALIAS ruvia)
 
-set_target_properties(ruvia PROPERTIES EXPORT_NAME ruvia)
+set_target_properties(ruvia PROPERTIES
+    EXPORT_NAME ruvia
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+)
 
 function(ruvia_configure_library target)
+    target_compile_features(${target} PUBLIC cxx_std_23)
+
     target_include_directories(${target}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -119,6 +129,14 @@ endfunction()
 
 ruvia_configure_library(ruvia)
 
+set(RUVIA_MIMALLOC_TARGET mimalloc)
+if(TARGET mimalloc-static)
+    get_target_property(_ruvia_mimalloc_static_type mimalloc-static TYPE)
+    if(NOT _ruvia_mimalloc_static_type STREQUAL "INTERFACE_LIBRARY")
+        set(RUVIA_MIMALLOC_TARGET mimalloc-static)
+    endif()
+endif()
+
 target_link_libraries(ruvia
     PUBLIC
         asio::asio
@@ -126,7 +144,7 @@ target_link_libraries(ruvia
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
-        $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>
+        ${RUVIA_MIMALLOC_TARGET}
 )
 
 if(RUVIA_ENABLE_MARIADB)
@@ -149,6 +167,10 @@ target_link_options(ruvia
 
 if(WIN32)
     target_link_libraries(ruvia PUBLIC Mswsock)
+    set_target_properties(ruvia PROPERTIES
+        INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
+    )
+    target_link_options(ruvia INTERFACE "$<$<CXX_COMPILER_ID:MSVC>:/INCLUDE:mi_version>")
 endif()
 
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)
@@ -165,6 +187,7 @@ endif()
 install(
     TARGETS
         ruvia
+    EXPORT ruviaTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -227,46 +250,7 @@ if(RUVIA_ENABLE_REDIS)
     find_dependency(hiredis CONFIG REQUIRED)
 endif()
 
-if(NOT TARGET ruvia::ruvia)
-    add_library(ruvia::ruvia STATIC IMPORTED)
-    get_filename_component(_ruvia_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
-    set(_ruvia_compile_definitions ASIO_STANDALONE)
-    if(RUVIA_ENABLE_MARIADB)
-        list(APPEND _ruvia_compile_definitions RUVIA_ENABLE_MARIADB)
-    endif()
-    if(RUVIA_ENABLE_REDIS)
-        list(APPEND _ruvia_compile_definitions RUVIA_ENABLE_REDIS)
-    endif()
-    if(RUVIA_ENABLE_JWT)
-        list(APPEND _ruvia_compile_definitions RUVIA_ENABLE_JWT)
-    endif()
-    set_target_properties(ruvia::ruvia PROPERTIES
-        IMPORTED_LOCATION "${_ruvia_prefix}/@RUVIA_INSTALL_LIBDIR@/@CMAKE_STATIC_LIBRARY_PREFIX@ruvia@CMAKE_STATIC_LIBRARY_SUFFIX@"
-        INTERFACE_INCLUDE_DIRECTORIES "${_ruvia_prefix}/@RUVIA_INSTALL_INCLUDEDIR@"
-        INTERFACE_COMPILE_DEFINITIONS "${_ruvia_compile_definitions}"
-        INTERFACE_COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/utf-8>;$<$<CXX_COMPILER_ID:MSVC>:/Zc:preprocessor>"
-    )
-    target_link_libraries(ruvia::ruvia INTERFACE
-        asio::asio
-        Threads::Threads
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        ZLIB::ZLIB
-        $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>
-    )
-    if(RUVIA_ENABLE_MARIADB)
-        target_link_libraries(ruvia::ruvia INTERFACE unofficial::libmariadb)
-    endif()
-    if(RUVIA_ENABLE_REDIS)
-        target_link_libraries(ruvia::ruvia INTERFACE hiredis::hiredis)
-    endif()
-    target_link_options(ruvia::ruvia INTERFACE
-        $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
-    )
-    if(WIN32)
-        target_link_libraries(ruvia::ruvia INTERFACE Mswsock)
-    endif()
-endif()
+include("${CMAKE_CURRENT_LIST_DIR}/ruviaTargets.cmake")
 
 set(_ruvia_requested_components ${ruvia_FIND_COMPONENTS})
 if(NOT _ruvia_requested_components)
@@ -290,8 +274,6 @@ foreach(_ruvia_component IN LISTS _ruvia_requested_components)
 endforeach()
 ]=])
 
-set(RUVIA_INSTALL_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
-set(RUVIA_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}")
 string(CONFIGURE "${_ruvia_config}" _ruvia_config @ONLY)
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake "${_ruvia_config}")
 
@@ -305,5 +287,12 @@ install(
     FILES
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+)
+
+install(
+    EXPORT ruviaTargets
+    FILE ruviaTargets.cmake
+    NAMESPACE ruvia::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
 )
