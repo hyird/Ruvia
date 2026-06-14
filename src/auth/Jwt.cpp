@@ -360,6 +360,9 @@ struct JwtPayloadAccess final {
 
         // Collect non-reserved custom string claims with proper JSON traversal
         // and escape-sequence decoding via jwtScanString.
+        // Perf: scan the raw key first (without allocation) to check isReservedClaim.
+        // JWT claim names are ASCII identifiers; raw bytes equal decoded bytes,
+        // so allocation is only needed for custom (non-reserved) claim keys.
         std::size_t pos = jwtSkipWs(json, 0);
         if (pos >= json.size() || json[pos] != '{') {
             return payload;
@@ -370,15 +373,23 @@ struct JwtPayloadAccess final {
             if (pos >= json.size() || json[pos] != '"') {
                 break;
             }
-            std::pmr::string key(resolved);
-            pos = jwtScanString(json, pos, &key);
+            // Scan key without allocation to check reserved status.
+            const auto keyViewStart = pos + 1;
+            pos = jwtScanString(json, pos, nullptr);
+            if (pos <= keyViewStart) {
+                break;
+            }
+            const auto rawKey = json.substr(keyViewStart, pos - 1 - keyViewStart);
             pos = jwtSkipWs(json, pos);
             if (pos >= json.size() || json[pos] != ':') {
                 break;
             }
             ++pos;
             pos = jwtSkipWs(json, pos);
-            if (!isReservedClaim(key) && pos < json.size() && json[pos] == '"') {
+            if (!isReservedClaim(rawKey) && pos < json.size() && json[pos] == '"') {
+                // Only allocate for custom claims (rawKey has no escape sequences).
+                std::pmr::string key(resolved);
+                key.assign(rawKey.data(), rawKey.size());
                 std::pmr::string value(resolved);
                 pos = jwtScanString(json, pos, &value);
                 payload.claims_.push_back(JwtClaim{std::move(key), std::move(value)});

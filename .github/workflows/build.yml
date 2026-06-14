@@ -11,6 +11,7 @@ on:
       - "src/**"
       - "examples/**"
       - "benchmarks/**"
+      - "tests/**"
       - ".github/workflows/build.yml"
   pull_request:
     branches: [main]
@@ -21,6 +22,7 @@ on:
       - "src/**"
       - "examples/**"
       - "benchmarks/**"
+      - "tests/**"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -96,11 +98,15 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TECHEMPOWER=ON \
+            -DRUVIA_BUILD_TESTS=ON \
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build build-test --config "$BUILD_TYPE"
+
+      - name: Run unit tests
+        run: ctest --test-dir build-test -C "$BUILD_TYPE" --output-on-failure -V
 
       - name: Initialize TechEmpower database
         run: |

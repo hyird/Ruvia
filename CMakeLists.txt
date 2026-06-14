@@ -175,6 +175,8 @@ endif()
 
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)
 option(RUVIA_BUILD_TECHEMPOWER "Build Ruvia TechEmpower benchmark app" OFF)
+option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
+option(RUVIA_BUILD_BENCH "Build Ruvia wrk benchmark server" OFF)
 
 if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
@@ -182,6 +184,15 @@ endif()
 
 if(RUVIA_BUILD_TECHEMPOWER)
     add_subdirectory(benchmarks/techempower/ruvia)
+endif()
+
+if(RUVIA_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+if(RUVIA_BUILD_BENCH)
+    add_subdirectory(bench)
 endif()
 
 install(
