@@ -201,82 +201,200 @@ struct TokenParts {
         token.substr(0, second)};
 }
 
-[[nodiscard]] std::string_view findJsonString(std::string_view json, std::string_view key) {
-    std::pmr::string needle(std::pmr::get_default_resource());
-    appendJsonEscaped(needle, key);
-    needle.push_back(':');
-    const auto found = json.find(needle);
-    if (found == std::string_view::npos) { return {}; }
-    auto pos = found + needle.size();
-    while (pos < json.size() && json[pos] == ' ') { ++pos; }
-    if (pos >= json.size() || json[pos] != '"') { return {}; }
-    ++pos;
-    const auto start = pos;
-    bool escaped = false;
-    for (; pos < json.size(); ++pos) {
-        if (escaped) { escaped = false; continue; }
-        if (json[pos] == '\\') { escaped = true; continue; }
-        if (json[pos] == '"') { return json.substr(start, pos - start); }
+// Skip JSON whitespace (SP, HT, LF, CR).
+[[nodiscard]] std::size_t jwtSkipWs(std::string_view s, std::size_t pos) noexcept {
+    while (pos < s.size() &&
+           (s[pos] == ' ' || s[pos] == '\t' || s[pos] == '\n' || s[pos] == '\r')) {
+        ++pos;
     }
-    return {};
+    return pos;
+}
+
+// Advance past one JSON string starting at s[pos] == '"'.
+// When out != nullptr, append the decoded (unescaped) content.
+// Returns the position after the closing '"', or s.size() on an unterminated string.
+[[nodiscard]] std::size_t jwtScanString(
+    std::string_view s,
+    std::size_t pos,
+    std::pmr::string* out) noexcept {
+    if (pos >= s.size() || s[pos] != '"') {
+        return s.size();
+    }
+    ++pos;
+    while (pos < s.size()) {
+        const char c = s[pos++];
+        if (c == '"') {
+            return pos;
+        }
+        if (c == '\\' && pos < s.size()) {
+            if (out != nullptr) {
+                switch (s[pos]) {
+                    case '"': case '\\': case '/': out->push_back(s[pos]); break;
+                    case 'b': out->push_back('\b'); break;
+                    case 'f': out->push_back('\f'); break;
+                    case 'n': out->push_back('\n'); break;
+                    case 'r': out->push_back('\r'); break;
+                    case 't': out->push_back('\t'); break;
+                    default:  out->push_back(s[pos]); break;
+                }
+            }
+            ++pos;
+        } else if (c != '\\' && out != nullptr) {
+            out->push_back(c);
+        }
+    }
+    return s.size();
+}
+
+// Skip past one scalar JSON value (string, number, bool, null).
+[[nodiscard]] std::size_t jwtSkipValue(std::string_view s, std::size_t pos) noexcept {
+    pos = jwtSkipWs(s, pos);
+    if (pos >= s.size()) {
+        return pos;
+    }
+    if (s[pos] == '"') {
+        return jwtScanString(s, pos, nullptr);
+    }
+    while (pos < s.size() &&
+           s[pos] != ',' && s[pos] != '}' && s[pos] != ']' &&
+           s[pos] != ' ' && s[pos] != '\t' && s[pos] != '\n' && s[pos] != '\r') {
+        ++pos;
+    }
+    return pos;
+}
+
+// Shared top-level key scanner: advances pos to the value position for `key`,
+// or returns false if not found. Properly traverses the object structure so
+// that patterns like "key": inside a string value cannot produce false matches.
+[[nodiscard]] static bool jwtFindMember(
+    std::string_view json,
+    std::string_view key,
+    std::size_t& pos) {
+    pos = jwtSkipWs(json, 0);
+    if (pos >= json.size() || json[pos] != '{') {
+        return false;
+    }
+    ++pos;
+    for (;;) {
+        pos = jwtSkipWs(json, pos);
+        if (pos >= json.size() || json[pos] != '"') {
+            return false;
+        }
+        const auto keyStart = pos + 1;
+        pos = jwtScanString(json, pos, nullptr);
+        // pos <= keyStart means jwtScanString hit end-of-input before the closing '"'
+        if (pos <= keyStart) {
+            return false;
+        }
+        const auto foundKey = json.substr(keyStart, pos - 1 - keyStart);
+        pos = jwtSkipWs(json, pos);
+        if (pos >= json.size() || json[pos] != ':') {
+            return false;
+        }
+        ++pos;
+        pos = jwtSkipWs(json, pos);
+        if (foundKey == key) {
+            return true;
+        }
+        pos = jwtSkipValue(json, pos);
+        pos = jwtSkipWs(json, pos);
+        if (pos >= json.size() || json[pos] == '}') {
+            return false;
+        }
+        if (json[pos] != ',') {
+            return false;
+        }
+        ++pos;
+    }
+}
+
+// Returns the raw (unescaped) bytes of the string value for `key`, or empty.
+[[nodiscard]] std::string_view findJsonString(std::string_view json, std::string_view key) {
+    std::size_t pos = 0;
+    if (!jwtFindMember(json, key, pos) || pos >= json.size() || json[pos] != '"') {
+        return {};
+    }
+    const auto valueStart = pos + 1;
+    const auto afterValue = jwtScanString(json, pos, nullptr);
+    return afterValue > valueStart ? json.substr(valueStart, afterValue - 1 - valueStart) : std::string_view{};
 }
 
 [[nodiscard]] std::optional<std::int64_t> findJsonInteger(std::string_view json, std::string_view key) {
-    std::pmr::string needle(std::pmr::get_default_resource());
-    appendJsonEscaped(needle, key);
-    needle.push_back(':');
-    const auto found = json.find(needle);
-    if (found == std::string_view::npos) { return std::nullopt; }
-    auto value = json.substr(found + needle.size());
-    while (!value.empty() && value.front() == ' ') { value.remove_prefix(1); }
+    std::size_t pos = 0;
+    if (!jwtFindMember(json, key, pos)) {
+        return std::nullopt;
+    }
     std::int64_t parsed = 0;
-    const auto* first = value.data();
-    const auto* last = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(first, last, parsed);
-    if (ec != std::errc{} || ptr == first) { return std::nullopt; }
+    const auto [ptr, ec] = std::from_chars(
+        json.data() + pos, json.data() + json.size(), parsed);
+    if (ec != std::errc{} || ptr == json.data() + pos) {
+        return std::nullopt;
+    }
     return parsed;
 }
 
+// Finds `key` in a flat JSON object and decodes (unescapes) its string value
+// into `target`. No-op when the key is absent or the value is not a string.
 void copyJsonString(std::pmr::string& target, std::string_view json, std::string_view key) {
-    const auto value = findJsonString(json, key);
-    if (!value.empty()) { target.assign(value.data(), value.size()); }
+    std::size_t pos = 0;
+    if (!jwtFindMember(json, key, pos) || pos >= json.size() || json[pos] != '"') {
+        return;
+    }
+    target.clear();
+    jwtScanString(json, pos, &target);
 }
 
 }  // namespace
 
 struct JwtPayloadAccess final {
     static JwtPayload decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
-    auto* resolved = resourceOrDefault(resource);
-    JwtPayload payload(resolved);
-    copyJsonString(payload.issuer_, json, "iss");
-    copyJsonString(payload.subject_, json, "sub");
-    copyJsonString(payload.audience_, json, "aud");
-    copyJsonString(payload.id_, json, "jti");
-    if (auto exp = findJsonInteger(json, "exp")) { payload.expiresAt_ = fromEpochSeconds(*exp); }
-    if (auto nbf = findJsonInteger(json, "nbf")) { payload.notBefore_ = fromEpochSeconds(*nbf); }
-    if (auto iat = findJsonInteger(json, "iat")) { payload.issuedAt_ = fromEpochSeconds(*iat); }
+        auto* resolved = resourceOrDefault(resource);
+        JwtPayload payload(resolved);
+        copyJsonString(payload.issuer_, json, "iss");
+        copyJsonString(payload.subject_, json, "sub");
+        copyJsonString(payload.audience_, json, "aud");
+        copyJsonString(payload.id_, json, "jti");
+        if (const auto exp = findJsonInteger(json, "exp")) { payload.expiresAt_ = fromEpochSeconds(*exp); }
+        if (const auto nbf = findJsonInteger(json, "nbf")) { payload.notBefore_ = fromEpochSeconds(*nbf); }
+        if (const auto iat = findJsonInteger(json, "iat")) { payload.issuedAt_ = fromEpochSeconds(*iat); }
 
-    std::size_t pos = 0;
-    while ((pos = json.find('"', pos)) != std::string_view::npos) {
-        const auto keyStart = ++pos;
-        while (pos < json.size() && json[pos] != '"') { ++pos; }
-        if (pos >= json.size()) { break; }
-        const auto key = json.substr(keyStart, pos - keyStart);
-        ++pos;
-        while (pos < json.size() && (json[pos] == ' ' || json[pos] == ':')) { ++pos; }
-        if (isReservedClaim(key) || pos >= json.size() || json[pos] != '"') { continue; }
-        const auto valueStart = ++pos;
-        while (pos < json.size() && json[pos] != '"') { ++pos; }
-        if (pos > valueStart) {
-            payload.claims_.push_back(JwtClaim{
-                makePmrString(key, resolved),
-                makePmrString(json.substr(valueStart, pos - valueStart), resolved)});
+        // Collect non-reserved custom string claims with proper JSON traversal
+        // and escape-sequence decoding via jwtScanString.
+        std::size_t pos = jwtSkipWs(json, 0);
+        if (pos >= json.size() || json[pos] != '{') {
+            return payload;
         }
-        if (pos < json.size()) {
+        ++pos;
+        for (;;) {
+            pos = jwtSkipWs(json, pos);
+            if (pos >= json.size() || json[pos] != '"') {
+                break;
+            }
+            std::pmr::string key(resolved);
+            pos = jwtScanString(json, pos, &key);
+            pos = jwtSkipWs(json, pos);
+            if (pos >= json.size() || json[pos] != ':') {
+                break;
+            }
+            ++pos;
+            pos = jwtSkipWs(json, pos);
+            if (!isReservedClaim(key) && pos < json.size() && json[pos] == '"') {
+                std::pmr::string value(resolved);
+                pos = jwtScanString(json, pos, &value);
+                payload.claims_.push_back(JwtClaim{std::move(key), std::move(value)});
+            } else {
+                pos = jwtSkipValue(json, pos);
+            }
+            pos = jwtSkipWs(json, pos);
+            if (pos >= json.size() || json[pos] == '}') {
+                break;
+            }
+            if (json[pos] != ',') {
+                break;
+            }
             ++pos;
         }
-    }
-    return payload;
+        return payload;
     }
 };
 
