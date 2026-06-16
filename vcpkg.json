@@ -1,8 +1,9 @@
 {
   "name": "ruvia",
-  "version-string": "0.0.4",
+  "version-string": "0.0.5",
   "dependencies": [
     "asio",
+    "doctest",
     {
       "name": "mimalloc",
       "features": [

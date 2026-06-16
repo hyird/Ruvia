@@ -200,6 +200,11 @@ struct ParsedHeaderBlock {
                 return RequestHeaderKind::kOrigin;
             }
             break;
+        case 7:
+            if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
+                return RequestHeaderKind::kUpgrade;
+            }
+            break;
         case 8:
             if (detail::httpAsciiEqualsIgnoreCase(name, "If-Match")) {
                 return RequestHeaderKind::kIfMatch;
@@ -255,16 +260,6 @@ struct ParsedHeaderBlock {
                 return RequestHeaderKind::kIfUnmodifiedSince;
             }
             break;
-        case 29:
-            if (detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Request-Method")) {
-                return RequestHeaderKind::kAccessControlRequestMethod;
-            }
-            break;
-        case 7:
-            if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
-                return RequestHeaderKind::kUpgrade;
-            }
-            break;
         case 21:
             if (detail::httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Version")) {
                 return RequestHeaderKind::kSecWebSocketVersion;
@@ -273,6 +268,11 @@ struct ParsedHeaderBlock {
         case 22:
             if (detail::httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Protocol")) {
                 return RequestHeaderKind::kSecWebSocketProtocol;
+            }
+            break;
+        case 29:
+            if (detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Request-Method")) {
+                return RequestHeaderKind::kAccessControlRequestMethod;
             }
             break;
         case 30:
@@ -468,12 +468,15 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     if (close == std::string_view::npos || close <= 1) {
         return false;
     }
+    // RFC 3986 §3.2.2: inside IP-literal brackets only IPv6/IPv4-mapped hex
+    // digits, colons, and dots are valid. Allowing the full reg-name set
+    // (which includes sub-delims like '!', '$', etc.) is too permissive.
     for (std::size_t i = 1; i < close; ++i) {
         const auto c = static_cast<unsigned char>(value[i]);
         if (c == ':' || c == '.') {
             continue;
         }
-        if (!isRegNameChar(c)) {
+        if (!isHexDigit(c)) {
             return false;
         }
     }

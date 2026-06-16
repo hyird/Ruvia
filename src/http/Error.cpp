@@ -96,6 +96,8 @@ std::string_view defaultErrorCode(std::uint16_t statusCode) noexcept {
             return "internal_error";
         case 501:
             return "not_implemented";
+        case 503:
+            return "service_unavailable";
         case 505:
             return "http_version_not_supported";
         default:

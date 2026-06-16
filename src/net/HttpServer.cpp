@@ -584,7 +584,7 @@ Task<void> HttpServer::acceptLoop() {
             auto response = makeErrorResponse(
                 limitMemory.resource(),
                 HttpErrorInfo{
-                    .statusCode = 429,
+                    .statusCode = 503,
                     .message = "too many active connections"},
                 true);
             std::error_code writeEc;
