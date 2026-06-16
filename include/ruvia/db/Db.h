@@ -184,7 +184,7 @@ public:
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
     QueryResult(QueryResult&& other) noexcept;
-    QueryResult& operator=(QueryResult&& other) = delete;
+    QueryResult& operator=(QueryResult&& other);
     ~QueryResult();
 
     [[nodiscard]] std::span<const DbRow> rows() const noexcept;

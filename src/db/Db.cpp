@@ -663,6 +663,27 @@ QueryResult::QueryResult(QueryResult&& other) noexcept
       rawResult_(std::exchange(other.rawResult_, nullptr)),
       releaseRawResult_(std::exchange(other.releaseRawResult_, nullptr)) {}
 
+QueryResult& QueryResult::operator=(QueryResult&& other) {
+    if (this == &other) {
+        return *this;
+    }
+
+    if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
+        releaseRawResult_(rawResult_);
+    }
+    rawResult_ = nullptr;
+    releaseRawResult_ = nullptr;
+
+    rows_ = std::move(other.rows_);
+    fields_ = std::move(other.fields_);
+    affectedRows_ = std::exchange(other.affectedRows_, 0);
+    lastInsertId_ = std::exchange(other.lastInsertId_, 0);
+    mounted_ = std::exchange(other.mounted_, nullptr);
+    rawResult_ = std::exchange(other.rawResult_, nullptr);
+    releaseRawResult_ = std::exchange(other.releaseRawResult_, nullptr);
+    return *this;
+}
+
 QueryResult::~QueryResult() {
     if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
         releaseRawResult_(rawResult_);
@@ -995,11 +1016,12 @@ void DbTransaction::release() noexcept {
 
 class detail::DbMigrationRunner final {
 public:
-    [[nodiscard]] static Task<DbMigrationReport> run(
+    [[nodiscard]] static Task<void> run(
         asio::io_context& ioContext,
         DbConfig config,
         std::span<const DbMigration> migrations,
         DbMigrationOptions options,
+        DbMigrationReport& report,
         std::pmr::memory_resource* resource) {
         auto* resolved = resolveResource(resource);
         validateMigrationList(migrations);
@@ -1026,7 +1048,10 @@ public:
         auto handle = registry.get(resolved);
 
         const auto lockSeconds = static_cast<std::int64_t>(options.lockTimeout.count());
-        auto lockResult = co_await handle.query("SELECT GET_LOCK(?, ?)", {std::string_view(lockName), lockSeconds});
+        std::array<DbValue, 2> lockParams{DbValue{std::string_view(lockName)}, DbValue{lockSeconds}};
+        auto lockResult = co_await handle.query(
+            "SELECT GET_LOCK(?, ?)",
+            std::span<const DbValue>(lockParams));
         if (lockResult.rows().size() != 1 ||
             lockResult.rows()[0].empty() ||
             lockResult.rows()[0][0].text() != "1") {
@@ -1034,7 +1059,6 @@ public:
             throw std::runtime_error("database migration lock could not be acquired");
         }
 
-        DbMigrationReport report(resolved);
         std::exception_ptr failure;
         try {
             (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, resolved));
@@ -1042,14 +1066,16 @@ public:
             auto findSql = buildFindMigrationSql(options.table, resolved);
             auto insertSql = buildInsertMigrationSql(options.table, resolved);
             for (const auto& migration : migrations) {
-                auto existing = co_await handle.query(findSql, {migration.id});
+                std::array<DbValue, 1> findParams{DbValue{migration.id}};
+                auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
                 if (!existing.rows().empty()) {
                     appendMigrationId(report.skipped_, migration.id);
                     continue;
                 }
 
                 (void)co_await handle.execute(migration.sql);
-                (void)co_await handle.execute(insertSql, {migration.id});
+                std::array<DbValue, 1> insertParams{DbValue{migration.id}};
+                (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
                 appendMigrationId(report.applied_, migration.id);
             }
         } catch (...) {
@@ -1057,7 +1083,10 @@ public:
         }
 
         try {
-            (void)co_await handle.execute("DO RELEASE_LOCK(?)", {std::string_view(lockName)});
+            std::array<DbValue, 1> releaseParams{DbValue{std::string_view(lockName)}};
+            (void)co_await handle.execute(
+                "DO RELEASE_LOCK(?)",
+                std::span<const DbValue>(releaseParams));
         } catch (...) {
             if (failure == nullptr) {
                 failure = std::current_exception();
@@ -1068,7 +1097,7 @@ public:
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
-        co_return report;
+        co_return;
     }
 };
 
@@ -1089,6 +1118,8 @@ DbMigrationReport DbMigrator::migrate(
     std::span<const DbMigration> migrations,
     DbMigrationOptions options,
     std::pmr::memory_resource* resource) {
+    auto* resolved = resolveResource(resource);
+    DbMigrationReport report(resolved);
     asio::io_context ioContext(1);
     auto future = asio::co_spawn(
         ioContext,
@@ -1097,10 +1128,12 @@ DbMigrationReport DbMigrator::migrate(
             std::move(config),
             migrations,
             std::move(options),
+            report,
             resource)),
         asio::use_future);
     ioContext.run();
-    return future.get();
+    future.get();
+    return report;
 }
 
 
@@ -1431,7 +1464,7 @@ Task<void> detail::MariaDbPool::executeControl(
     ConnectionSlot& slot,
     std::string_view sql,
     std::pmr::memory_resource* resource) {
-    (void)co_await executeOnSlot(slot, sql, {}, resource);
+    (void)co_await executeOnSlot(slot, sql, std::span<const DbValue>(), resource);
     co_return;
 }
 

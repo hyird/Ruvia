@@ -82,8 +82,9 @@ std::pmr::vector<RouteMiddleware> makeRouteMiddlewares(std::span<const Controlle
 std::pmr::vector<ControllerMiddlewareDescriptor> mergeControllerMiddlewares(
     const std::pmr::vector<ControllerMiddlewareDescriptor>& base,
     std::pmr::vector<ControllerMiddlewareDescriptor> extra) {
-    auto merged = base;
+    std::pmr::vector<ControllerMiddlewareDescriptor> merged;
     merged.reserve(base.size() + extra.size());
+    merged.insert(merged.end(), base.begin(), base.end());
     merged.insert(merged.end(), extra.begin(), extra.end());
     return merged;
 }

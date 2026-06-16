@@ -224,7 +224,12 @@ private:
     static void appendData(std::pmr::string& frame, std::string_view data) {
         while (true) {
             const auto next = data.find('\n');
-            const auto line = next == std::string_view::npos ? data : data.substr(0, next);
+            auto line = next == std::string_view::npos ? data : data.substr(0, next);
+            // Strip a trailing \r so \r\n line endings don't embed a bare CR
+            // in the SSE data field value.
+            if (!line.empty() && line.back() == '\r') {
+                line.remove_suffix(1);
+            }
             frame.append("data: ");
             frame.append(line.data(), line.size());
             frame.push_back('\n');
