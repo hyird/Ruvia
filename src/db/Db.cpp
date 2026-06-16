@@ -1048,7 +1048,10 @@ public:
         auto handle = registry.get(resolved);
 
         const auto lockSeconds = static_cast<std::int64_t>(options.lockTimeout.count());
-        auto lockResult = co_await handle.query("SELECT GET_LOCK(?, ?)", {std::string_view(lockName), lockSeconds});
+        std::array<DbValue, 2> lockParams{DbValue{std::string_view(lockName)}, DbValue{lockSeconds}};
+        auto lockResult = co_await handle.query(
+            "SELECT GET_LOCK(?, ?)",
+            std::span<const DbValue>(lockParams));
         if (lockResult.rows().size() != 1 ||
             lockResult.rows()[0].empty() ||
             lockResult.rows()[0][0].text() != "1") {
@@ -1063,14 +1066,16 @@ public:
             auto findSql = buildFindMigrationSql(options.table, resolved);
             auto insertSql = buildInsertMigrationSql(options.table, resolved);
             for (const auto& migration : migrations) {
-                auto existing = co_await handle.query(findSql, {migration.id});
+                std::array<DbValue, 1> findParams{DbValue{migration.id}};
+                auto existing = co_await handle.query(findSql, std::span<const DbValue>(findParams));
                 if (!existing.rows().empty()) {
                     appendMigrationId(report.skipped_, migration.id);
                     continue;
                 }
 
                 (void)co_await handle.execute(migration.sql);
-                (void)co_await handle.execute(insertSql, {migration.id});
+                std::array<DbValue, 1> insertParams{DbValue{migration.id}};
+                (void)co_await handle.execute(insertSql, std::span<const DbValue>(insertParams));
                 appendMigrationId(report.applied_, migration.id);
             }
         } catch (...) {
@@ -1078,7 +1083,10 @@ public:
         }
 
         try {
-            (void)co_await handle.execute("DO RELEASE_LOCK(?)", {std::string_view(lockName)});
+            std::array<DbValue, 1> releaseParams{DbValue{std::string_view(lockName)}};
+            (void)co_await handle.execute(
+                "DO RELEASE_LOCK(?)",
+                std::span<const DbValue>(releaseParams));
         } catch (...) {
             if (failure == nullptr) {
                 failure = std::current_exception();
@@ -1456,7 +1464,7 @@ Task<void> detail::MariaDbPool::executeControl(
     ConnectionSlot& slot,
     std::string_view sql,
     std::pmr::memory_resource* resource) {
-    (void)co_await executeOnSlot(slot, sql, {}, resource);
+    (void)co_await executeOnSlot(slot, sql, std::span<const DbValue>(), resource);
     co_return;
 }
 

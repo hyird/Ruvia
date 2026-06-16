@@ -322,9 +322,10 @@ private:
     }
 
     static ruvia::Task<void> fetchWorld(ruvia::Context& c, std::uint32_t id, World& world) {
+        std::array<ruvia::DbValue, 1> params{ruvia::DbValue{id}};
         auto result = co_await c.db().query(
             "SELECT id, randomNumber FROM World WHERE id = ?",
-            {id});
+            std::span<const ruvia::DbValue>(params));
         world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
         co_return;
     }
@@ -350,15 +351,18 @@ private:
         std::pmr::vector<World>& worlds) {
         auto tx = co_await c.db().beginTransaction();
         for (std::uint32_t i = 0; i < count; ++i) {
+            std::array<ruvia::DbValue, 1> queryParams{ruvia::DbValue{randomWorldId()}};
             auto result = co_await tx.query(
                 "SELECT id, randomNumber FROM World WHERE id = ?",
-                {randomWorldId()});
+                std::span<const ruvia::DbValue>(queryParams));
             World world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
             world.randomNumber = randomWorldId();
-            auto updateResult = co_await tx.execute(
+            std::array<ruvia::DbValue, 2> updateParams{
+                ruvia::DbValue{world.randomNumber},
+                ruvia::DbValue{world.id}};
+            (void)co_await tx.execute(
                 "UPDATE World SET randomNumber = ? WHERE id = ?",
-                {world.randomNumber, world.id});
-            (void)updateResult;
+                std::span<const ruvia::DbValue>(updateParams));
             worlds.push_back(world);
         }
         co_await tx.commit();

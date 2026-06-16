@@ -82,9 +82,11 @@ private:
     }
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
+        std::array<ruvia::DbValue, 1> params{
+            ruvia::DbValue{c.param("id").toStringView().value_or("")}};
         auto result = co_await c.db().query(
             "SELECT id, name FROM users WHERE id = ?",
-            {c.param("id").toStringView().value_or("")});
+            std::span<const ruvia::DbValue>(params));
         found = !result.rows().empty();
         co_return;
     }
@@ -101,19 +103,24 @@ private:
     }
 
     static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
+        std::array<ruvia::DbValue, 1> params{ruvia::DbValue{name}};
         auto result = co_await c.db().execute(
             "INSERT INTO users(name) VALUES (?)",
-            {name});
+            std::span<const ruvia::DbValue>(params));
         id = result.lastInsertId();
         co_return;
     }
 
     static ruvia::Task<void> transferFunds(ruvia::Context& c) {
         auto tx = co_await c.db().beginTransaction();
-        auto debit = co_await tx.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", {100, 1});
-        auto credit = co_await tx.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", {100, 2});
-        (void)debit;
-        (void)credit;
+        std::array<ruvia::DbValue, 2> debitParams{ruvia::DbValue{100}, ruvia::DbValue{1}};
+        (void)co_await tx.execute(
+            "UPDATE accounts SET balance = balance - ? WHERE id = ?",
+            std::span<const ruvia::DbValue>(debitParams));
+        std::array<ruvia::DbValue, 2> creditParams{ruvia::DbValue{100}, ruvia::DbValue{2}};
+        (void)co_await tx.execute(
+            "UPDATE accounts SET balance = balance + ? WHERE id = ?",
+            std::span<const ruvia::DbValue>(creditParams));
         co_await tx.commit();
         co_return;
     }
