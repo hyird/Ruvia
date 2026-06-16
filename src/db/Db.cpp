@@ -995,11 +995,12 @@ void DbTransaction::release() noexcept {
 
 class detail::DbMigrationRunner final {
 public:
-    [[nodiscard]] static Task<DbMigrationReport> run(
+    [[nodiscard]] static Task<void> run(
         asio::io_context& ioContext,
         DbConfig config,
         std::span<const DbMigration> migrations,
         DbMigrationOptions options,
+        DbMigrationReport& report,
         std::pmr::memory_resource* resource) {
         auto* resolved = resolveResource(resource);
         validateMigrationList(migrations);
@@ -1034,7 +1035,6 @@ public:
             throw std::runtime_error("database migration lock could not be acquired");
         }
 
-        DbMigrationReport report(resolved);
         std::exception_ptr failure;
         try {
             (void)co_await handle.execute(buildCreateMigrationsTableSql(options.table, resolved));
@@ -1068,7 +1068,7 @@ public:
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
-        co_return report;
+        co_return;
     }
 };
 
@@ -1089,6 +1089,8 @@ DbMigrationReport DbMigrator::migrate(
     std::span<const DbMigration> migrations,
     DbMigrationOptions options,
     std::pmr::memory_resource* resource) {
+    auto* resolved = resolveResource(resource);
+    DbMigrationReport report(resolved);
     asio::io_context ioContext(1);
     auto future = asio::co_spawn(
         ioContext,
@@ -1097,10 +1099,12 @@ DbMigrationReport DbMigrator::migrate(
             std::move(config),
             migrations,
             std::move(options),
+            report,
             resource)),
         asio::use_future);
     ioContext.run();
-    return future.get();
+    future.get();
+    return report;
 }
 
 
