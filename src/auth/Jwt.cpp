@@ -23,10 +23,6 @@ constexpr std::string_view kBase64Url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm
     return resource == nullptr ? std::pmr::get_default_resource() : resource;
 }
 
-[[nodiscard]] std::pmr::string makePmrString(std::string_view value, std::pmr::memory_resource* resource) {
-    return std::pmr::string(value.data(), value.size(), resourceOrDefault(resource));
-}
-
 void appendJsonEscaped(std::pmr::string& out, std::string_view value) {
     out.push_back('"');
     for (const auto ch : value) {
@@ -341,7 +337,7 @@ void copyJsonString(std::pmr::string& target, std::string_view json, std::string
         return;
     }
     target.clear();
-    jwtScanString(json, pos, &target);
+    (void)jwtScanString(json, pos, &target);
 }
 
 }  // namespace

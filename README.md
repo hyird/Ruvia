@@ -811,7 +811,7 @@ With vcpkg manifest features, request the same optional surfaces through `mariad
 
 ## Current Status
 
-The current formal release is `v0.0.2`.
+The current formal release is `v0.0.6`.
 
 This release is focused on evaluating:
 
