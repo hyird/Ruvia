@@ -663,6 +663,27 @@ QueryResult::QueryResult(QueryResult&& other) noexcept
       rawResult_(std::exchange(other.rawResult_, nullptr)),
       releaseRawResult_(std::exchange(other.releaseRawResult_, nullptr)) {}
 
+QueryResult& QueryResult::operator=(QueryResult&& other) {
+    if (this == &other) {
+        return *this;
+    }
+
+    if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
+        releaseRawResult_(rawResult_);
+    }
+    rawResult_ = nullptr;
+    releaseRawResult_ = nullptr;
+
+    rows_ = std::move(other.rows_);
+    fields_ = std::move(other.fields_);
+    affectedRows_ = std::exchange(other.affectedRows_, 0);
+    lastInsertId_ = std::exchange(other.lastInsertId_, 0);
+    mounted_ = std::exchange(other.mounted_, nullptr);
+    rawResult_ = std::exchange(other.rawResult_, nullptr);
+    releaseRawResult_ = std::exchange(other.releaseRawResult_, nullptr);
+    return *this;
+}
+
 QueryResult::~QueryResult() {
     if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
         releaseRawResult_(rawResult_);

@@ -326,6 +326,7 @@ private:
             "SELECT id, randomNumber FROM World WHERE id = ?",
             {id});
         world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
+        co_return;
     }
 
     static ruvia::Task<void> loadFortunes(ruvia::Context& c, std::pmr::vector<Fortune>& fortunes) {
@@ -340,6 +341,7 @@ private:
             }
             fortunes.emplace_back(std::move(fortune));
         }
+        co_return;
     }
 
     static ruvia::Task<void> updateWorlds(
@@ -360,6 +362,7 @@ private:
             worlds.push_back(world);
         }
         co_await tx.commit();
+        co_return;
     }
 
     static std::pmr::vector<World>& cache() {
@@ -381,6 +384,7 @@ private:
                 cached[world.id] = world;
             }
         }
+        co_return;
     }
 };
 

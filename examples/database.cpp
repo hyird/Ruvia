@@ -86,6 +86,7 @@ private:
             "SELECT id, name FROM users WHERE id = ?",
             {c.param("id").toStringView().value_or("")});
         found = !result.rows().empty();
+        co_return;
     }
 
     static ruvia::Task<void> appendUsers(ruvia::Context& c, std::pmr::string& body) {
@@ -96,6 +97,7 @@ private:
                 body.push_back('\n');
             }
         }
+        co_return;
     }
 
     static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
@@ -103,6 +105,7 @@ private:
             "INSERT INTO users(name) VALUES (?)",
             {name});
         id = result.lastInsertId();
+        co_return;
     }
 
     static ruvia::Task<void> transferFunds(ruvia::Context& c) {
@@ -112,6 +115,7 @@ private:
         (void)debit;
         (void)credit;
         co_await tx.commit();
+        co_return;
     }
 
     static void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
