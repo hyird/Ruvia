@@ -1,5 +1,7 @@
 #include "ruvia/app/App.h"
 
+#include <stdexcept>
+
 #include "ruvia/http/Controller.h"
 #include "../net/HttpServer.h"
 #include "../router/RouterInternal.h"
@@ -13,6 +15,19 @@ void addShutdownSignals(asio::signal_set& signals) {
 #if defined(SIGBREAK)
     signals.add(SIGBREAK);
 #endif
+}
+
+void ensureNotRunning(bool running, const char* message) {
+    if (running) {
+        throw std::logic_error(message);
+    }
+}
+
+template <typename Rep, typename Period>
+void ensureNonNegative(std::chrono::duration<Rep, Period> value, const char* message) {
+    if (value.count() < 0) {
+        throw std::invalid_argument(message);
+    }
 }
 
 }  // namespace
@@ -48,9 +63,7 @@ const Env& App::env() const noexcept {
 
 App& App::loadDotenv(DotenvOptions options) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot load dotenv while app is running");
-    }
+    ensureNotRunning(running_, "cannot load dotenv while app is running");
 
     (void)env_.loadFromExecutableDirectory(options);
     return *this;
@@ -58,9 +71,7 @@ App& App::loadDotenv(DotenvOptions options) {
 
 App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot load dotenv while app is running");
-    }
+    ensureNotRunning(running_, "cannot load dotenv while app is running");
 
     (void)env_.loadFromFile(path, options);
     return *this;
@@ -68,9 +79,7 @@ App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
 
 App& App::setListenAddress(std::string_view address, std::uint16_t port) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change listen address while app is running");
-    }
+    ensureNotRunning(running_, "cannot change listen address while app is running");
 
     listenAddress_.assign(address.data(), address.size());
     listenPort_ = port;
@@ -79,9 +88,7 @@ App& App::setListenAddress(std::string_view address, std::uint16_t port) {
 
 App& App::setThreadNum(std::size_t threadNum) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change thread count while app is running");
-    }
+    ensureNotRunning(running_, "cannot change thread count while app is running");
     if (threadNum == 0) {
         throw std::invalid_argument("thread count must be greater than 0");
     }
@@ -92,12 +99,8 @@ App& App::setThreadNum(std::size_t threadNum) {
 
 App& App::setIdleTimeout(std::chrono::milliseconds timeout) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change idle timeout while app is running");
-    }
-    if (timeout.count() < 0) {
-        throw std::invalid_argument("idle timeout must not be negative");
-    }
+    ensureNotRunning(running_, "cannot change idle timeout while app is running");
+    ensureNonNegative(timeout, "idle timeout must not be negative");
 
     options_.idleTimeout = timeout;
     return *this;
@@ -105,12 +108,8 @@ App& App::setIdleTimeout(std::chrono::milliseconds timeout) {
 
 App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change connection scan interval while app is running");
-    }
-    if (interval.count() < 0) {
-        throw std::invalid_argument("connection scan interval must not be negative");
-    }
+    ensureNotRunning(running_, "cannot change connection scan interval while app is running");
+    ensureNonNegative(interval, "connection scan interval must not be negative");
 
     options_.scanInterval = interval;
     return *this;
@@ -118,12 +117,8 @@ App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
 
 App& App::setHeaderTimeout(std::chrono::milliseconds timeout) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change header timeout while app is running");
-    }
-    if (timeout.count() < 0) {
-        throw std::invalid_argument("header timeout must not be negative");
-    }
+    ensureNotRunning(running_, "cannot change header timeout while app is running");
+    ensureNonNegative(timeout, "header timeout must not be negative");
 
     options_.headerTimeout = timeout;
     return *this;
@@ -131,12 +126,8 @@ App& App::setHeaderTimeout(std::chrono::milliseconds timeout) {
 
 App& App::setBodyTimeout(std::chrono::milliseconds timeout) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change body timeout while app is running");
-    }
-    if (timeout.count() < 0) {
-        throw std::invalid_argument("body timeout must not be negative");
-    }
+    ensureNotRunning(running_, "cannot change body timeout while app is running");
+    ensureNonNegative(timeout, "body timeout must not be negative");
 
     options_.bodyTimeout = timeout;
     return *this;
@@ -144,12 +135,8 @@ App& App::setBodyTimeout(std::chrono::milliseconds timeout) {
 
 App& App::setWriteTimeout(std::chrono::milliseconds timeout) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change write timeout while app is running");
-    }
-    if (timeout.count() < 0) {
-        throw std::invalid_argument("write timeout must not be negative");
-    }
+    ensureNotRunning(running_, "cannot change write timeout while app is running");
+    ensureNonNegative(timeout, "write timeout must not be negative");
 
     options_.writeTimeout = timeout;
     return *this;
@@ -157,9 +144,7 @@ App& App::setWriteTimeout(std::chrono::milliseconds timeout) {
 
 App& App::setMaxConnectionsPerWorker(std::size_t maxConnections) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change connection limit while app is running");
-    }
+    ensureNotRunning(running_, "cannot change connection limit while app is running");
 
     options_.maxConnections = maxConnections;
     return *this;
@@ -167,9 +152,7 @@ App& App::setMaxConnectionsPerWorker(std::size_t maxConnections) {
 
 App& App::setMaxRequestsPerConnection(std::size_t maxRequests) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change keep-alive request limit while app is running");
-    }
+    ensureNotRunning(running_, "cannot change keep-alive request limit while app is running");
 
     options_.maxRequestsPerConnection = maxRequests;
     return *this;
@@ -177,9 +160,7 @@ App& App::setMaxRequestsPerConnection(std::size_t maxRequests) {
 
 App& App::setMaxBufferedBodyBytes(std::size_t bytes) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change buffered body limit while app is running");
-    }
+    ensureNotRunning(running_, "cannot change buffered body limit while app is running");
 
     options_.maxBufferedBodyBytes = bytes;
     return *this;
@@ -187,9 +168,7 @@ App& App::setMaxBufferedBodyBytes(std::size_t bytes) {
 
 App& App::setMaxStreamBodyBytes(std::size_t bytes) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change stream body limit while app is running");
-    }
+    ensureNotRunning(running_, "cannot change stream body limit while app is running");
 
     options_.maxStreamBodyBytes = bytes;
     return *this;
@@ -197,9 +176,7 @@ App& App::setMaxStreamBodyBytes(std::size_t bytes) {
 
 App& App::setMaxWebSocketMessageBytes(std::size_t bytes) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change websocket message limit while app is running");
-    }
+    ensureNotRunning(running_, "cannot change websocket message limit while app is running");
 
     options_.maxWebSocketMessageBytes = bytes;
     return *this;
@@ -207,9 +184,7 @@ App& App::setMaxWebSocketMessageBytes(std::size_t bytes) {
 
 App& App::useTls(TlsConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot configure TLS while app is running");
-    }
+    ensureNotRunning(running_, "cannot configure TLS while app is running");
     if (config.certificateChainFile.empty()) {
         throw std::invalid_argument("TLS certificate chain file must not be empty");
     }
@@ -227,9 +202,7 @@ App& App::useTls(TlsConfig config) {
 
 App& App::setCompression(CompressionConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change compression config while app is running");
-    }
+    ensureNotRunning(running_, "cannot change compression config while app is running");
 
     options_.compression.enabled = config.enabled;
     options_.compression.minBytes = config.minBytes;
@@ -238,15 +211,11 @@ App& App::setCompression(CompressionConfig config) {
 
 App& App::setCors(CorsConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change CORS config while app is running");
-    }
+    ensureNotRunning(running_, "cannot change CORS config while app is running");
     if (config.enabled && config.allowOrigin.empty()) {
         throw std::invalid_argument("CORS allowOrigin must not be empty when CORS is enabled");
     }
-    if (config.maxAge.count() < 0) {
-        throw std::invalid_argument("CORS maxAge must not be negative");
-    }
+    ensureNonNegative(config.maxAge, "CORS maxAge must not be negative");
 
     options_.cors.enabled = config.enabled;
     options_.cors.allowOrigin = std::move(config.allowOrigin);
@@ -259,9 +228,7 @@ App& App::setCors(CorsConfig config) {
 
 App& App::setDocumentRoot(DocumentRootConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change document root while app is running");
-    }
+    ensureNotRunning(running_, "cannot change document root while app is running");
     if (config.root.empty()) {
         throw std::invalid_argument("document root must not be empty");
     }
@@ -281,9 +248,7 @@ App& App::setDocumentRoot(const std::filesystem::path& root) {
 
 App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change memory pool config while app is running");
-    }
+    ensureNotRunning(running_, "cannot change memory pool config while app is running");
     if (config.requestInitialBufferBytes == 0) {
         throw std::invalid_argument("memory pool config values must be greater than 0");
     }
@@ -294,9 +259,7 @@ App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
 
 App& App::setErrorHandler(HttpErrorHandler handler) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot change error handler while app is running");
-    }
+    ensureNotRunning(running_, "cannot change error handler while app is running");
 
     errorHandler_ = handler;
     return *this;
@@ -309,9 +272,7 @@ App& App::useDb(DbConfig config) {
 
 App& App::useDb(std::string_view alias, DbConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot configure database while app is running");
-    }
+    ensureNotRunning(running_, "cannot configure database while app is running");
     if (alias.empty()) {
         throw std::invalid_argument("database alias must not be empty");
     }
@@ -336,9 +297,7 @@ App& App::useRedis(RedisConfig config) {
 
 App& App::useRedis(std::string_view alias, RedisConfig config) {
     std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot configure redis while app is running");
-    }
+    ensureNotRunning(running_, "cannot configure redis while app is running");
     if (alias.empty()) {
         throw std::invalid_argument("redis alias must not be empty");
     }
@@ -362,9 +321,7 @@ void App::run() {
 
     {
         std::lock_guard lock(mutex_);
-        if (running_) {
-            throw std::logic_error("app is already running");
-        }
+        ensureNotRunning(running_, "app is already running");
 
         if (!autoControllersLoaded_) {
             detail::registerControllers(router_, controllerLifetimes_);

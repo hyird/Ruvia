@@ -236,7 +236,7 @@ private:
         // Mark committed BEFORE the write. Otherwise a mid-write failure
         // (broken pipe after partial header bytes already flushed) leaves
         // committed_=false and the server's exception path would emit a
-        // second response head onto the same socket — framing corruption.
+        // second response head onto the same socket, causing framing corruption.
         committed_ = true;
         auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
             asio::async_write(stream_, asio::buffer(headView), std::move(handler));

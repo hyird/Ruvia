@@ -12,7 +12,7 @@ if(CMAKE_HOST_WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
     set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "Default vcpkg triplet")
 endif()
 
-project(ruvia VERSION 0.0.5 LANGUAGES CXX)
+project(ruvia VERSION 0.0.6 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -68,24 +68,48 @@ set(RUVIA_SOURCES
     src/ruvia.cpp
     src/http/Controller.cpp
     src/http/Error.cpp
+    src/http/HttpBasics.cpp
+    src/http/HttpCors.cpp
+    src/http/HttpChunkParser.cpp
     src/http/HttpParser.cpp
+    src/http/HttpParserErrors.cpp
+    src/http/HttpParserSyntax.cpp
+    src/http/HttpRequest.cpp
+    src/http/HttpResponse.cpp
+    src/http/HttpRequestTarget.cpp
     src/http/HttpTypes.cpp
     src/memory/MemoryPool.cpp
     src/memory/MimallocOverride.cpp
+    src/net/HttpConnectionState.cpp
     src/net/ConnectionScanner.cpp
     src/net/HttpDateCache.cpp
     src/net/HttpResponseWriter.cpp
+    src/net/HttpServerLifecycle.cpp
+    src/net/HttpTransferCodingDecoder.cpp
     src/net/HttpWebSocketUtils.cpp
     src/net/HttpServer.cpp
+    src/router/RouterDispatch.cpp
+    src/router/RouterIndex.cpp
     src/router/Router.cpp
 )
 
 if(RUVIA_ENABLE_MARIADB)
-    list(APPEND RUVIA_SOURCES src/db/Db.cpp)
+    list(APPEND RUVIA_SOURCES
+        src/db/Db.cpp
+        src/db/DbHandle.cpp
+        src/db/DbMigration.cpp
+        src/db/DbTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
-    list(APPEND RUVIA_SOURCES src/redis/Redis.cpp)
+    list(APPEND RUVIA_SOURCES
+        src/redis/Redis.cpp
+        src/redis/RedisHandle.cpp
+        src/redis/RedisHandleHelpers.cpp
+        src/redis/RedisPipeline.cpp
+        src/redis/RedisPool.cpp
+        src/redis/RedisProtocol.cpp
+        src/redis/RedisTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_JWT)
@@ -113,7 +137,7 @@ function(ruvia_configure_library target)
         PUBLIC
             ASIO_STANDALONE
     )
-    target_precompile_headers(${target} PRIVATE src/pch.h)
+    target_precompile_headers(${target} PRIVATE "${PROJECT_SOURCE_DIR}/src/pch.h")
 
     if(WIN32)
         target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
@@ -175,7 +199,6 @@ endif()
 
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)
 option(RUVIA_BUILD_TECHEMPOWER "Build Ruvia TechEmpower benchmark app" OFF)
-option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
 option(RUVIA_BUILD_BENCH "Build Ruvia wrk benchmark server" OFF)
 
 if(RUVIA_BUILD_EXAMPLES)
@@ -184,11 +207,6 @@ endif()
 
 if(RUVIA_BUILD_TECHEMPOWER)
     add_subdirectory(benchmarks/techempower/ruvia)
-endif()
-
-if(RUVIA_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(tests)
 endif()
 
 if(RUVIA_BUILD_BENCH)

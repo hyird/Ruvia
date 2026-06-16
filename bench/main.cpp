@@ -1,6 +1,13 @@
 #include "ruvia/app/App.h"
 #include "ruvia/http/Controller.h"
 
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <memory>
+#include <string>
+#include <string_view>
+
 // A minimal benchmark server designed for wrk / wrk2 pressure testing.
 // Disable compression so wrk measures pure framework overhead, not zlib.
 //
@@ -14,8 +21,26 @@
 
 namespace {
 
-static constexpr std::string_view kPlainBody = "Hello, World!";
-static constexpr std::string_view kJsonBody  = "{\"message\":\"Hello, World!\"}";
+constexpr std::string_view kPlainBody = "Hello, World!";
+constexpr std::string_view kJsonBody = "{\"message\":\"Hello, World!\"}";
+
+std::string readEnvironment(std::string_view name) {
+#ifdef _WIN32
+    const auto key = std::string(name);
+    char* value = nullptr;
+    std::size_t size = 0;
+    if (_dupenv_s(&value, &size, key.c_str()) != 0 || value == nullptr) {
+        return {};
+    }
+
+    std::unique_ptr<char, decltype(&std::free)> guard(value, std::free);
+    return std::string(value, size > 0 ? size - 1 : 0);
+#else
+    const auto key = std::string(name);
+    const auto* value = std::getenv(key.c_str());
+    return value == nullptr ? std::string{} : std::string(value);
+#endif
+}
 
 }  // namespace
 
@@ -23,12 +48,12 @@ class BenchController final : public ruvia::Controller<BenchController> {
 public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/plaintext", plaintext);
-    RUVIA_GET("/json",      json);
-    RUVIA_GET("/echo",      echo);
+    RUVIA_GET("/json", json);
+    RUVIA_GET("/echo", echo);
     RUVIA_ROUTES_END
 
 private:
-    // Borrows a static literal — zero copy on the response body path.
+    // Borrows a static literal; zero copy on the response body path.
     ruvia::Task<ruvia::HttpResponse> plaintext(ruvia::Context& c) {
         ruvia::HttpResponse resp(c.resource());
         resp.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -43,7 +68,7 @@ private:
         co_return resp;
     }
 
-    // Reads the request body and echoes it back (tests body reading throughput).
+    // Reads the request body and echoes it back.
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
         const auto body = co_await c.body();
         ruvia::HttpResponse resp(c.resource());
@@ -54,17 +79,17 @@ private:
 };
 
 int main() {
-    const auto* portEnv = std::getenv("RUVIA_PORT");
-    const std::uint16_t port = portEnv ? static_cast<std::uint16_t>(std::stoul(portEnv)) : 8088;
+    const auto portEnv = readEnvironment("RUVIA_PORT");
+    const std::uint16_t port = portEnv.empty() ? 8088 : static_cast<std::uint16_t>(std::stoul(portEnv));
 
     auto& a = ruvia::app();
     a.setListenAddress("0.0.0.0", port)
-     .setCompression({.enabled = false})   // raw perf without zlib
+     .setCompression({.enabled = false})
      .setIdleTimeout(std::chrono::seconds(60))
      .setHeaderTimeout(std::chrono::seconds(15))
      .setWriteTimeout(std::chrono::seconds(30))
      .setMaxConnectionsPerWorker(100000)
-     .setMaxRequestsPerConnection(0);      // unlimited keep-alive pipelining
+     .setMaxRequestsPerConnection(0);
 
     a.run();
 }

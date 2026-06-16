@@ -15,8 +15,8 @@
 #include <windows.h>
 #endif
 
-#include "ruvia/http/HeaderUtils.h"
 #include "ruvia/http/HttpStatus.h"
+#include "../http/ResponseHeaderUtils.h"
 
 namespace ruvia::detail {
 
@@ -68,21 +68,6 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
         throw std::logic_error("failed to format compressed content length");
     }
     response.setHeader("Content-Length", std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
-}
-
-void addAcceptEncodingVary(HttpResponse& response) {
-    const auto vary = response.header(HttpResponse::kKnownHeaderVary);
-    if (vary.empty()) {
-        response.setHeader("Vary", "Accept-Encoding");
-        return;
-    }
-    if (httpHasToken(vary, "Accept-Encoding")) {
-        return;
-    }
-    std::pmr::string updated(response.resource());
-    updated.append(vary);
-    updated.append(", Accept-Encoding");
-    response.setHeader("Vary", updated);
 }
 
 bool gzipCompress(std::string_view input, std::pmr::string& output) {
@@ -178,7 +163,7 @@ bool compressResponseBodyIfAccepted(
     }
 
     response.setHeader("Content-Encoding", "gzip");
-    addAcceptEncodingVary(response);
+    addVaryToken(response, "Accept-Encoding");
     setCompressedContentLength(response, compressed.size());
     response.setBody(std::move(compressed));
     return true;

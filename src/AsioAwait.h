@@ -131,7 +131,7 @@ public:
     }
 
     // If initiate_ throws, the coroutine is resumed and the exception is
-    // rethrown from the await-expression ([expr.await]/5) — same semantics as
+    // rethrown from the await-expression ([expr.await]/5), same semantics as
     // catching and rethrowing in await_resume, without an exception_ptr slot.
     [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
         initiate_([this, handle](std::error_code ec, auto&&...) mutable {
