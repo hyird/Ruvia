@@ -52,47 +52,66 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> findUser(ruvia::Context& c) {
-        auto result = co_await c.db().query(
-            "SELECT id, name FROM users WHERE id = ?",
-            {c.param("id").toStringView().value_or("")});
-
+        bool found = false;
+        co_await loadUserFound(c, found);
         std::pmr::string body(c.allocator<char>());
-        body.append(result.rows().empty() ? "not found\n" : "found\n");
-        co_return c.text(body, result.rows().empty() ? 404 : 200);
+        body.append(found ? "found\n" : "not found\n");
+        co_return c.text(body, found ? 200 : 404);
     }
 
     ruvia::Task<ruvia::HttpResponse> streamUsers(ruvia::Context& c) {
-        auto rows = co_await c.db().queryStream("SELECT name FROM users ORDER BY id");
         std::pmr::string body(c.allocator<char>());
+        co_await appendUsers(c, body);
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
+        const auto name = co_await c.body();
+        std::uint64_t id = 0;
+        co_await insertUser(c, name, id);
+        std::pmr::string body(c.allocator<char>());
+        body.append("created id=");
+        appendUnsigned(body, id);
+        body.push_back('\n');
+        co_return c.text(body, 201);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> transfer(ruvia::Context& c) {
+        co_await transferFunds(c);
+        co_return c.text("transfer committed\n");
+    }
+
+    static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
+        auto result = co_await c.db().query(
+            "SELECT id, name FROM users WHERE id = ?",
+            {c.param("id").toStringView().value_or("")});
+        found = !result.rows().empty();
+    }
+
+    static ruvia::Task<void> appendUsers(ruvia::Context& c, std::pmr::string& body) {
+        auto rows = co_await c.db().queryStream("SELECT name FROM users ORDER BY id");
         while (auto row = co_await rows.read()) {
             if (!row->empty()) {
                 body.append((*row)[0].text());
                 body.push_back('\n');
             }
         }
-        co_return c.text(body);
     }
 
-    ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
-        const auto name = co_await c.body();
+    static ruvia::Task<void> insertUser(ruvia::Context& c, std::string_view name, std::uint64_t& id) {
         auto result = co_await c.db().execute(
             "INSERT INTO users(name) VALUES (?)",
             {name});
-        std::pmr::string body(c.allocator<char>());
-        body.append("created id=");
-        appendUnsigned(body, result.lastInsertId());
-        body.push_back('\n');
-        co_return c.text(body, 201);
+        id = result.lastInsertId();
     }
 
-    ruvia::Task<ruvia::HttpResponse> transfer(ruvia::Context& c) {
+    static ruvia::Task<void> transferFunds(ruvia::Context& c) {
         auto tx = co_await c.db().beginTransaction();
         auto debit = co_await tx.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", {100, 1});
         auto credit = co_await tx.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", {100, 2});
         (void)debit;
         (void)credit;
         co_await tx.commit();
-        co_return c.text("transfer committed\n");
     }
 
     static void appendUnsigned(std::pmr::string& output, std::uint64_t value) {

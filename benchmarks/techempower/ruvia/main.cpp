@@ -244,7 +244,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> db(ruvia::Context& c) {
-        const auto world = co_await fetchWorld(c, randomWorldId());
+        World world;
+        co_await fetchWorld(c, randomWorldId(), world);
         std::pmr::string body(c.allocator<char>());
         appendWorldJson(body, world);
         co_return exactResponse(c, "application/json", body);
@@ -255,7 +256,9 @@ private:
         std::pmr::vector<World> worlds(c.allocator<World>());
         worlds.reserve(count);
         for (std::uint32_t i = 0; i < count; ++i) {
-            worlds.push_back(co_await fetchWorld(c, randomWorldId()));
+            World world;
+            co_await fetchWorld(c, randomWorldId(), world);
+            worlds.push_back(world);
         }
 
         std::pmr::string body(c.allocator<char>());
@@ -264,18 +267,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> fortunes(ruvia::Context& c) {
-        auto result = co_await c.db().query("SELECT id, message FROM Fortune");
         std::pmr::vector<Fortune> fortunes(c.allocator<Fortune>());
-        fortunes.reserve(result.rows().size() + 1);
-
-        for (const auto& row : result.rows()) {
-            Fortune fortune(c.resource());
-            if (row.size() >= 2) {
-                fortune.id = parseUnsigned(row[0].text());
-                fortune.message.assign(row[1].text().data(), row[1].text().size());
-            }
-            fortunes.emplace_back(std::move(fortune));
-        }
+        co_await loadFortunes(c, fortunes);
 
         Fortune extra(c.resource());
         extra.id = 0;
@@ -305,21 +298,7 @@ private:
         const auto count = boundedQueryCount(c, "queries");
         std::pmr::vector<World> worlds(c.allocator<World>());
         worlds.reserve(count);
-
-        auto tx = co_await c.db().beginTransaction();
-        for (std::uint32_t i = 0; i < count; ++i) {
-            auto result = co_await tx.query(
-                "SELECT id, randomNumber FROM World WHERE id = ?",
-                {randomWorldId()});
-            World world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
-            world.randomNumber = randomWorldId();
-            auto updateResult = co_await tx.execute(
-                "UPDATE World SET randomNumber = ? WHERE id = ?",
-                {world.randomNumber, world.id});
-            (void)updateResult;
-            worlds.push_back(world);
-        }
-        co_await tx.commit();
+        co_await updateWorlds(c, count, worlds);
 
         std::pmr::string body(c.allocator<char>());
         appendWorldArrayJson(body, worlds);
@@ -342,11 +321,45 @@ private:
         co_return exactResponse(c, "application/json", body);
     }
 
-    static ruvia::Task<World> fetchWorld(ruvia::Context& c, std::uint32_t id) {
+    static ruvia::Task<void> fetchWorld(ruvia::Context& c, std::uint32_t id, World& world) {
         auto result = co_await c.db().query(
             "SELECT id, randomNumber FROM World WHERE id = ?",
             {id});
-        co_return result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
+        world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
+    }
+
+    static ruvia::Task<void> loadFortunes(ruvia::Context& c, std::pmr::vector<Fortune>& fortunes) {
+        auto result = co_await c.db().query("SELECT id, message FROM Fortune");
+        fortunes.reserve(result.rows().size() + 1);
+
+        for (const auto& row : result.rows()) {
+            Fortune fortune(c.resource());
+            if (row.size() >= 2) {
+                fortune.id = parseUnsigned(row[0].text());
+                fortune.message.assign(row[1].text().data(), row[1].text().size());
+            }
+            fortunes.emplace_back(std::move(fortune));
+        }
+    }
+
+    static ruvia::Task<void> updateWorlds(
+        ruvia::Context& c,
+        std::uint32_t count,
+        std::pmr::vector<World>& worlds) {
+        auto tx = co_await c.db().beginTransaction();
+        for (std::uint32_t i = 0; i < count; ++i) {
+            auto result = co_await tx.query(
+                "SELECT id, randomNumber FROM World WHERE id = ?",
+                {randomWorldId()});
+            World world = result.rows().empty() ? World{} : worldFromRow(result.rows()[0]);
+            world.randomNumber = randomWorldId();
+            auto updateResult = co_await tx.execute(
+                "UPDATE World SET randomNumber = ? WHERE id = ?",
+                {world.randomNumber, world.id});
+            (void)updateResult;
+            worlds.push_back(world);
+        }
+        co_await tx.commit();
     }
 
     static std::pmr::vector<World>& cache() {
