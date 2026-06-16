@@ -12,7 +12,7 @@ if(CMAKE_HOST_WIN32 AND NOT DEFINED VCPKG_TARGET_TRIPLET)
     set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "Default vcpkg triplet")
 endif()
 
-project(ruvia VERSION 0.0.4 LANGUAGES CXX)
+project(ruvia VERSION 0.0.5 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
