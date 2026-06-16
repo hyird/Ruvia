@@ -155,7 +155,13 @@ bool isValidHttpHeaderName(std::string_view name) noexcept {
 
 bool isValidHttpHeaderValue(std::string_view value) noexcept {
     for (const auto c : value) {
-        if (c == '\r' || c == '\n' || c == '\0') {
+        const auto byte = static_cast<unsigned char>(c);
+        // RFC 9110 §5.5: field-vchar = VCHAR / obs-text; HTAB and SP are also allowed.
+        // Reject: NUL–BS (0x00–0x08), LF (0x0A), VT–CR (0x0B–0x0D), SO–US (0x0E–0x1F), DEL (0x7F).
+        if (byte == 0x09) {
+            continue;
+        }
+        if (byte < 0x20 || byte == 0x7F) {
             return false;
         }
     }
