@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/Controller.h"
-#include "../net/HttpServer.h"
+#include "../net/server/HttpServer.h"
 #include "../router/RouterInternal.h"
 
 namespace ruvia {

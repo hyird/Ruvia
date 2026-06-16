@@ -5,18 +5,18 @@
 
 #include "ConnectionScanner.h"
 #include "HttpConnectionState.h"
-#include "HttpRequestBody.h"
+#include "../body/HttpRequestBody.h"
 #include "HttpResponseWriter.h"
-#include "HttpWebSocketConnection.h"
-#include "HttpWebSocketHandshake.h"
-#include "HttpWebSocketUtils.h"
-#include "../http/HttpCors.h"
+#include "../ws/HttpWebSocketConnection.h"
+#include "../ws/HttpWebSocketHandshake.h"
+#include "../ws/HttpWebSocketUtils.h"
+#include "../../http/HttpCors.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HeaderUtils.h"
 #include "ruvia/http/HttpParser.h"
-#include "../AsioAwait.h"
-#include "../router/RouterInternal.h"
+#include "../../AsioAwait.h"
+#include "../../router/RouterInternal.h"
 
 namespace ruvia::detail {
 

@@ -1,6 +1,6 @@
 #include "ruvia/db/Db.h"
 
-#include "DbInternal.h"
+#include "../DbInternal.h"
 #include "DbUtils.h"
 #include "ruvia/memory/MemoryPool.h"
 

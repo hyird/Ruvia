@@ -16,7 +16,7 @@
 #endif
 
 #include "ruvia/http/HttpStatus.h"
-#include "../http/ResponseHeaderUtils.h"
+#include "../../http/ResponseHeaderUtils.h"
 
 namespace ruvia::detail {
 

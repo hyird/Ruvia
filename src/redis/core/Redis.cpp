@@ -1,7 +1,7 @@
 #include "ruvia/redis/Redis.h"
 
 #include "ruvia/http/Context.h"
-#include "RedisInternal.h"
+#include "../RedisInternal.h"
 #include "RedisUtils.h"
 
 #include <ranges>

@@ -1,6 +1,6 @@
 #include "ruvia/redis/Redis.h"
 
-#include "RedisInternal.h"
+#include "../RedisInternal.h"
 #include "RedisUtils.h"
 
 #include <stdexcept>

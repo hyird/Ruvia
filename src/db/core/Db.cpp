@@ -1,4 +1,4 @@
-#include "DbInternal.h"
+#include "../DbInternal.h"
 #include "DbUtils.h"
 #include "ruvia/http/Context.h"
 
@@ -10,7 +10,7 @@
 #endif
 #include <mysql/mysql.h>
 
-#include "../AsioAwait.h"
+#include "../../AsioAwait.h"
 
 #include <algorithm>
 #include <array>

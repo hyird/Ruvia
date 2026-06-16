@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RedisInternal.h"
+#include "../RedisInternal.h"
 
 #include <chrono>
 #include <initializer_list>

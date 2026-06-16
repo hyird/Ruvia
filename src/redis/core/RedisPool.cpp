@@ -1,7 +1,7 @@
 #include "ruvia/redis/Redis.h"
 
-#include "../AsioAwait.h"
-#include "RedisInternal.h"
+#include "../../AsioAwait.h"
+#include "../RedisInternal.h"
 #include "RedisProtocol.h"
 #include "RedisUtils.h"
 

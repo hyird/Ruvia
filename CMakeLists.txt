@@ -62,54 +62,74 @@ if(RUVIA_ENABLE_MARIADB)
     ruvia_deduplicate_link_interface(unofficial::libmariadb)
 endif()
 
-set(RUVIA_SOURCES
+set(RUVIA_APP_SOURCES
     src/app/Dotenv.cpp
     src/app/App.cpp
     src/ruvia.cpp
+)
+
+set(RUVIA_HTTP_SOURCES
     src/http/Controller.cpp
     src/http/Error.cpp
     src/http/HttpBasics.cpp
     src/http/HttpCors.cpp
-    src/http/HttpChunkParser.cpp
-    src/http/HttpParser.cpp
-    src/http/HttpParserErrors.cpp
-    src/http/HttpParserSyntax.cpp
     src/http/HttpRequest.cpp
     src/http/HttpResponse.cpp
-    src/http/HttpRequestTarget.cpp
     src/http/HttpTypes.cpp
+    src/http/parser/HttpChunkParser.cpp
+    src/http/parser/HttpParser.cpp
+    src/http/parser/HttpParserErrors.cpp
+    src/http/parser/HttpParserSyntax.cpp
+    src/http/parser/HttpRequestTarget.cpp
+)
+
+set(RUVIA_MEMORY_SOURCES
     src/memory/MemoryPool.cpp
     src/memory/MimallocOverride.cpp
-    src/net/HttpConnectionState.cpp
-    src/net/ConnectionScanner.cpp
-    src/net/HttpDateCache.cpp
-    src/net/HttpResponseWriter.cpp
-    src/net/HttpServerLifecycle.cpp
-    src/net/HttpTransferCodingDecoder.cpp
-    src/net/HttpWebSocketUtils.cpp
-    src/net/HttpServer.cpp
-    src/router/RouterDispatch.cpp
-    src/router/RouterIndex.cpp
-    src/router/Router.cpp
+)
+
+set(RUVIA_NET_SOURCES
+    src/net/body/HttpTransferCodingDecoder.cpp
+    src/net/server/ConnectionScanner.cpp
+    src/net/server/HttpConnectionState.cpp
+    src/net/server/HttpDateCache.cpp
+    src/net/server/HttpResponseWriter.cpp
+    src/net/server/HttpServer.cpp
+    src/net/server/HttpServerLifecycle.cpp
+    src/net/ws/HttpWebSocketUtils.cpp
+)
+
+set(RUVIA_ROUTER_SOURCES
+    src/router/core/Router.cpp
+    src/router/core/RouterDispatch.cpp
+    src/router/core/RouterIndex.cpp
+)
+
+set(RUVIA_SOURCES
+    ${RUVIA_APP_SOURCES}
+    ${RUVIA_HTTP_SOURCES}
+    ${RUVIA_MEMORY_SOURCES}
+    ${RUVIA_NET_SOURCES}
+    ${RUVIA_ROUTER_SOURCES}
 )
 
 if(RUVIA_ENABLE_MARIADB)
     list(APPEND RUVIA_SOURCES
-        src/db/Db.cpp
-        src/db/DbHandle.cpp
-        src/db/DbMigration.cpp
-        src/db/DbTypes.cpp)
+        src/db/core/Db.cpp
+        src/db/core/DbHandle.cpp
+        src/db/core/DbMigration.cpp
+        src/db/core/DbTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
     list(APPEND RUVIA_SOURCES
-        src/redis/Redis.cpp
-        src/redis/RedisHandle.cpp
-        src/redis/RedisHandleHelpers.cpp
-        src/redis/RedisPipeline.cpp
-        src/redis/RedisPool.cpp
-        src/redis/RedisProtocol.cpp
-        src/redis/RedisTypes.cpp)
+        src/redis/core/Redis.cpp
+        src/redis/core/RedisHandle.cpp
+        src/redis/core/RedisHandleHelpers.cpp
+        src/redis/core/RedisPipeline.cpp
+        src/redis/core/RedisPool.cpp
+        src/redis/core/RedisProtocol.cpp
+        src/redis/core/RedisTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_JWT)

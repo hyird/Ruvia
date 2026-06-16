@@ -15,8 +15,8 @@
 #include "ruvia/app/App.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/memory/MemoryPool.h"
-#include "../db/DbInternal.h"
-#include "../redis/RedisInternal.h"
+#include "../../db/DbInternal.h"
+#include "../../redis/RedisInternal.h"
 
 namespace ruvia::detail {
 

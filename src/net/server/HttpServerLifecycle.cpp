@@ -17,7 +17,7 @@
 #endif
 
 #include "ConnectionScanner.h"
-#include "../AsioAwait.h"
+#include "../../AsioAwait.h"
 
 namespace ruvia::detail {
 

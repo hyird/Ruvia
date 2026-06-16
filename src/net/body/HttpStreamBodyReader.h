@@ -10,11 +10,11 @@
 #include <string_view>
 
 #include <asio.hpp>
-#include "ConnectionScanner.h"
+#include "../server/ConnectionScanner.h"
 #include "HttpContinueWriter.h"
 #include "HttpTransferCodingDecoder.h"
-#include "../http/HttpBodyFramer.h"
-#include "../AsioAwait.h"
+#include "../../http/HttpBodyFramer.h"
+#include "../../AsioAwait.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpParser.h"
