@@ -297,9 +297,11 @@ public:
     Task<std::pmr::string> ping(std::string_view message) const;
     Task<std::optional<std::pmr::string>> get(std::string_view key) const;
     Task<std::pmr::vector<std::optional<std::pmr::string>>> mget(std::span<const std::string_view> keys) const;
+    Task<std::pmr::vector<std::optional<std::pmr::string>>> mget(std::initializer_list<std::string_view> keys) const;
     Task<void> set(std::string_view key, std::string_view value) const;
     Task<std::optional<std::pmr::string>> set(std::string_view key, std::string_view value, RedisSetOptions options) const;
     Task<void> mset(std::span<const std::pair<std::string_view, std::string_view>> items) const;
+    Task<void> mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const;
     Task<void> setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const;
     Task<bool> setNx(std::string_view key, std::string_view value) const;
     Task<std::optional<std::pmr::string>> getDel(std::string_view key) const;
@@ -325,7 +327,9 @@ public:
     Task<std::optional<std::pmr::string>> hget(std::string_view key, std::string_view field) const;
     Task<std::int64_t> hset(std::string_view key, std::string_view field, std::string_view value) const;
     Task<std::int64_t> hset(std::string_view key, std::span<const std::pair<std::string_view, std::string_view>> fields) const;
+    Task<std::int64_t> hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields) const;
     Task<std::pmr::vector<std::optional<std::pmr::string>>> hmget(std::string_view key, std::span<const std::string_view> fields) const;
+    Task<std::pmr::vector<std::optional<std::pmr::string>>> hmget(std::string_view key, std::initializer_list<std::string_view> fields) const;
     Task<std::pmr::vector<RedisKeyValue>> hgetAll(std::string_view key) const;
     Task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
     Task<bool> hexists(std::string_view key, std::string_view field) const;
@@ -351,8 +355,11 @@ public:
     Task<std::optional<std::pmr::string>> spop(std::string_view key) const;
     Task<std::optional<std::pmr::string>> srandMember(std::string_view key) const;
     Task<std::pmr::vector<std::pmr::string>> sinter(std::span<const std::string_view> keys) const;
+    Task<std::pmr::vector<std::pmr::string>> sinter(std::initializer_list<std::string_view> keys) const;
     Task<std::pmr::vector<std::pmr::string>> sunion(std::span<const std::string_view> keys) const;
+    Task<std::pmr::vector<std::pmr::string>> sunion(std::initializer_list<std::string_view> keys) const;
     Task<std::pmr::vector<std::pmr::string>> sdiff(std::span<const std::string_view> keys) const;
+    Task<std::pmr::vector<std::pmr::string>> sdiff(std::initializer_list<std::string_view> keys) const;
     Task<std::int64_t> zadd(std::string_view key, double score, std::string_view member) const;
     Task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
     Task<std::pmr::vector<std::pmr::string>> zrange(std::string_view key, std::int64_t start, std::int64_t stop) const;
@@ -374,6 +381,7 @@ public:
         std::span<const std::string_view> args = {}) const;
     Task<std::pmr::string> scriptLoad(std::string_view script) const;
     Task<std::pmr::vector<bool>> scriptExists(std::span<const std::string_view> sha1s) const;
+    Task<std::pmr::vector<bool>> scriptExists(std::initializer_list<std::string_view> sha1s) const;
     Task<std::optional<RedisKeyValue>> blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
     Task<std::optional<RedisKeyValue>> brpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const;
 

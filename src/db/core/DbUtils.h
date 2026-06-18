@@ -4,6 +4,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -39,6 +40,13 @@ inline void appendDbNumber(std::pmr::string& output, std::uint64_t value) {
 }
 
 inline void appendDbNumber(std::pmr::string& output, double value) {
+    // std::to_chars renders inf/nan as the literal words "inf"/"nan", which are
+    // not valid SQL numeric literals and would be spliced unquoted into the
+    // statement. Reject them up front with a clear error instead of letting the
+    // server fail on malformed SQL.
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument("database double value must be finite");
+    }
     std::array<char, 64> buffer{};
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {

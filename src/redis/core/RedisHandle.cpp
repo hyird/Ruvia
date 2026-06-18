@@ -44,6 +44,10 @@ Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::mget(std::s
     return detail::redisOptionalStringArrayCommand(pool_, detail::redisCommandWithKeys("MGET", keys, resource_), resource_);
 }
 
+Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::mget(std::initializer_list<std::string_view> keys) const {
+    return mget(std::span<const std::string_view>(keys.begin(), keys.size()));
+}
+
 Task<void> RedisHandle::set(std::string_view key, std::string_view value) const {
     return detail::redisOkCommand(pool_, detail::ownRedisArgs({"SET", key, value}, resource_), resource_);
 }
@@ -96,6 +100,10 @@ Task<std::optional<std::pmr::string>> RedisHandle::set(std::string_view key, std
 
 Task<void> RedisHandle::mset(std::span<const std::pair<std::string_view, std::string_view>> items) const {
     return detail::redisOkCommand(pool_, detail::redisMsetArgs(items, resource_), resource_);
+}
+
+Task<void> RedisHandle::mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const {
+    return mset(std::span<const std::pair<std::string_view, std::string_view>>(items.begin(), items.size()));
 }
 
 Task<void> RedisHandle::setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const {
@@ -215,8 +223,16 @@ Task<std::int64_t> RedisHandle::hset(std::string_view key, std::span<const std::
     return detail::redisIntegerCommand(pool_, detail::redisHsetFieldsArgs(key, fields, resource_), resource_);
 }
 
+Task<std::int64_t> RedisHandle::hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields) const {
+    return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields.begin(), fields.size()));
+}
+
 Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::hmget(std::string_view key, std::span<const std::string_view> fields) const {
     return detail::redisOptionalStringArrayCommand(pool_, detail::redisCommandWithKeyFields("HMGET", key, fields, resource_), resource_);
+}
+
+Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::hmget(std::string_view key, std::initializer_list<std::string_view> fields) const {
+    return hmget(key, std::span<const std::string_view>(fields.begin(), fields.size()));
 }
 
 Task<std::pmr::vector<RedisKeyValue>> RedisHandle::hgetAll(std::string_view key) const {
@@ -330,12 +346,24 @@ Task<std::pmr::vector<std::pmr::string>> RedisHandle::sinter(std::span<const std
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SINTER", keys, resource_), resource_);
 }
 
+Task<std::pmr::vector<std::pmr::string>> RedisHandle::sinter(std::initializer_list<std::string_view> keys) const {
+    return sinter(std::span<const std::string_view>(keys.begin(), keys.size()));
+}
+
 Task<std::pmr::vector<std::pmr::string>> RedisHandle::sunion(std::span<const std::string_view> keys) const {
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SUNION", keys, resource_), resource_);
 }
 
+Task<std::pmr::vector<std::pmr::string>> RedisHandle::sunion(std::initializer_list<std::string_view> keys) const {
+    return sunion(std::span<const std::string_view>(keys.begin(), keys.size()));
+}
+
 Task<std::pmr::vector<std::pmr::string>> RedisHandle::sdiff(std::span<const std::string_view> keys) const {
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SDIFF", keys, resource_), resource_);
+}
+
+Task<std::pmr::vector<std::pmr::string>> RedisHandle::sdiff(std::initializer_list<std::string_view> keys) const {
+    return sdiff(std::span<const std::string_view>(keys.begin(), keys.size()));
 }
 
 Task<std::int64_t> RedisHandle::zadd(std::string_view key, double score, std::string_view member) const {
@@ -461,6 +489,10 @@ Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<const std::stri
         args.emplace_back(std::pmr::string(sha1.data(), sha1.size(), resource_));
     }
     return detail::redisBoolArrayCommand(pool_, std::move(args), resource_);
+}
+
+Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::initializer_list<std::string_view> sha1s) const {
+    return scriptExists(std::span<const std::string_view>(sha1s.begin(), sha1s.size()));
 }
 
 Task<std::optional<RedisKeyValue>> RedisHandle::blpop(std::span<const std::string_view> keys, std::chrono::seconds timeout) const {

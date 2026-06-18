@@ -1,64 +1,52 @@
 #include "RedisProtocol.h"
 
+#include "RedisUtils.h"
+
 #include <hiredis/hiredis.h>
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
-#include <vector>
 
 namespace ruvia::detail {
+namespace {
+
+// Writes the RESP multi-bulk encoding of `args` to `output`. No manual
+// reserve: `output` is the per-connection write buffer reused across requests,
+// so in steady state it already holds enough capacity, and std::pmr::string's
+// geometric growth keeps pipelined appends amortized O(total) bytes (an exact
+// per-command reserve would instead force O(n^2) copying for large pipelines).
+template <typename Args>
+void serializeRespCommand(std::pmr::string& output, const Args& args) {
+    output.push_back('*');
+    appendRedisNumber(output, static_cast<std::uint64_t>(args.size()));
+    output.append("\r\n", 2);
+    for (const auto& arg : args) {
+        const auto size = static_cast<std::size_t>(arg.size());
+        output.push_back('$');
+        appendRedisNumber(output, static_cast<std::uint64_t>(size));
+        output.append("\r\n", 2);
+        if (size != 0) {
+            output.append(arg.data(), size);
+        }
+        output.append("\r\n", 2);
+    }
+}
+
+}  // namespace
 
 void appendRespCommand(std::pmr::string& output, std::span<const std::string_view> args) {
     if (args.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
-    if (args.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        throw std::invalid_argument("redis command has too many arguments");
-    }
+    serializeRespCommand(output, args);
+}
 
-    constexpr std::size_t stackArgLimit = 32;
-    std::array<const char*, stackArgLimit> stackArgv{};
-    std::array<std::size_t, stackArgLimit> stackArgvLen{};
-    std::pmr::vector<const char*> heapArgv(output.get_allocator().resource());
-    std::pmr::vector<std::size_t> heapArgvLen(output.get_allocator().resource());
-
-    const bool useStackArgs = args.size() <= stackArgLimit;
-    auto* argv = stackArgv.data();
-    auto* argvLen = stackArgvLen.data();
-    if (!useStackArgs) {
-        heapArgv.reserve(args.size());
-        heapArgvLen.reserve(args.size());
-        argv = heapArgv.data();
-        argvLen = heapArgvLen.data();
+void appendRespCommand(std::pmr::string& output, std::span<const std::pmr::string> args) {
+    if (args.empty()) {
+        throw std::invalid_argument("redis command must not be empty");
     }
-
-    for (std::size_t i = 0; i < args.size(); ++i) {
-        if (useStackArgs) {
-            stackArgv[i] = args[i].data();
-            stackArgvLen[i] = args[i].size();
-        } else {
-            heapArgv.push_back(args[i].data());
-            heapArgvLen.push_back(args[i].size());
-        }
-    }
-    if (!useStackArgs) {
-        argv = heapArgv.data();
-        argvLen = heapArgvLen.data();
-    }
-
-    char* command = nullptr;
-    const auto size = redisFormatCommandArgv(
-        &command,
-        static_cast<int>(args.size()),
-        argv,
-        argvLen);
-    if (size < 0 || command == nullptr) {
-        throw RedisError(RedisError::Code::kProtocolError, "failed to format redis command");
-    }
-    output.append(command, static_cast<std::size_t>(size));
-    redisFreeCommand(command);
+    serializeRespCommand(output, args);
 }
 
 RedisValue hiredisReplyToValue(

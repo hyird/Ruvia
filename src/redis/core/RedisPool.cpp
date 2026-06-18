@@ -536,8 +536,9 @@ Task<std::pmr::vector<RedisValue>> RedisPool::executePipeline(
 
         connection.writeBuffer.clear();
         for (const auto& command : commands) {
-            auto views = detail::viewRedisArgs(command.args, resource_);
-            appendRespCommand(connection.writeBuffer, std::span<const std::string_view>(views.data(), views.size()));
+            appendRespCommand(
+                connection.writeBuffer,
+                std::span<const std::pmr::string>(command.args.data(), command.args.size()));
         }
 
         const auto writeEc = co_await asyncSocketWrite(connection, config_.commandTimeout);
