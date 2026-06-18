@@ -213,6 +213,16 @@ Task<HttpResponse> detail::RouteTable::dispatch(
 }
 
 Task<HttpResponse> detail::RouteTable::invokeRoute(const RouteEntry& route, Context& context) const {
+    // Hot path: a route with no middleware goes straight to the handler. This
+    // is a plain (non-coroutine) forward, so skipping invokeMiddlewareAt saves
+    // one heap-allocated coroutine frame and one HttpResponse move per request
+    // for the common zero-middleware route. invokeMiddlewareAt at index 0 with
+    // middlewareCount == 0 is exactly `co_await route.handler(context)`, so the
+    // behavior (including exception propagation into dispatch's try/catch) is
+    // identical.
+    if (route.middlewareCount == 0) {
+        return route.handler(context);
+    }
     return invokeMiddlewareAt(route, 0, context);
 }
 
