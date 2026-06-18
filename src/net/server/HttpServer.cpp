@@ -2,6 +2,7 @@
 
 #include <asio/ssl.hpp>
 #include <array>
+#include <type_traits>
 
 #include "ConnectionScanner.h"
 #include "HttpConnectionState.h"
@@ -76,6 +77,29 @@ public:
 
 private:
     std::size_t* count_;
+};
+
+// Returns a connection's borrowed work set to the per-worker pool on scope
+// exit, covering every way a session ends (keep-alive close, read error, or any
+// co_return). Tracks the work-set pointer variable by reference so the explicit
+// idle-gap release (which nulls it) is not double-released.
+class WorkSetReturn final {
+public:
+    WorkSetReturn(ConnectionWorkSetPool& pool, ConnectionWorkSet*& workSet) noexcept
+        : pool_(&pool), workSet_(&workSet) {}
+
+    WorkSetReturn(const WorkSetReturn&) = delete;
+    WorkSetReturn& operator=(const WorkSetReturn&) = delete;
+
+    ~WorkSetReturn() {
+        if (*workSet_ != nullptr) {
+            pool_->release(*workSet_);
+        }
+    }
+
+private:
+    ConnectionWorkSetPool* pool_;
+    ConnectionWorkSet** workSet_;
 };
 
 }  // namespace
@@ -209,13 +233,14 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
 
 template <typename Stream>
 Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
-    ConnectionState connection(memory_);
-    ConnectionScanner::Guard scannerGuard(connectionScanner_.get(), connection.scannerEntry, socket);
-    auto& scannerEntry = connection.scannerEntry;
-    auto& readBuffer = connection.readBuffer;
-    auto& usedBytes = connection.usedBytes;
-    auto& requestCount = connection.requestCount;
-    auto& parser = connection.parser;
+    // Resident connection identity (held for the whole connection): the scanner
+    // entry, keep-alive counters, the remote address, and the count of buffered
+    // bytes. The heavy per-request working set (read buffer, request arena,
+    // parse result, response head, file chunk) is borrowed from a per-worker
+    // pool only while the connection is actively serving and returned the moment
+    // it goes idle, so an idle keep-alive connection holds none of it.
+    ConnectionScanner::Entry scannerEntry;
+    ConnectionScanner::Guard scannerGuard(connectionScanner_.get(), scannerEntry, socket);
     const auto& routes = routes_;
     std::pmr::string remoteAddress(memory_.allocator<char>());
     std::error_code remoteEc;
@@ -223,19 +248,64 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
     if (!remoteEc) {
         remoteAddress = remoteEndpoint.address().to_string();
     }
+    std::size_t requestCount = 0;
+    std::size_t usedBytes = 0;
+    ConnectionWorkSet* workSet = nullptr;
+    WorkSetReturn workSetReturn(*workSetPool_, workSet);
 
-    // One connection-scoped parse result, reset in place by parseHeaders():
-    // the ~2.5KB struct is never copied or re-zeroed per request/read.
-    HttpParseResult parsed;
+    constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
 
     for (;;) {
         scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-        std::array<std::byte, kRequestArenaStackBytes> requestArenaBuffer;
+
+        // Borrow-on-use / return-on-idle for the whole work set: when the
+        // connection has no buffered bytes and nothing is pending, return the
+        // work set to the per-worker pool and wait for readability without
+        // holding one, so an idle keep-alive connection occupies no work set
+        // (memory scales with in-flight requests, not total connections).
+        // available() gates this, so a back-to-back / pipelined burst keeps its
+        // work set and pays no extra wait. Plain TCP only: a TLS engine may
+        // buffer a decrypted record the raw socket's available() cannot see, so
+        // a bufferless wait there could block forever; TLS holds across the
+        // connection.
+        if constexpr (kPlainTcp) {
+            if (usedBytes == 0) {
+                std::error_code availabilityEc;
+                const auto pendingBytes = socket.available(availabilityEc);
+                if (!availabilityEc && pendingBytes == 0) {
+                    if (workSet != nullptr) {
+                        workSetPool_->release(workSet);
+                        workSet = nullptr;
+                    }
+                    // Wait bufferless for the next request under the same phase
+                    // the buffered gap read used (kReadingHeader), so the
+                    // headerTimeout/idleTimeout bound on an idle keep-alive
+                    // connection is unchanged.
+                    scannerEntry.setPhase(ConnectionScanner::Phase::kReadingHeader);
+                    const auto waitEc = co_await asyncError([&socket](auto handler) mutable {
+                        socket.async_wait(TcpSocket::wait_read, std::move(handler));
+                    });
+                    if (waitEc || !started_.load(std::memory_order_relaxed)) {
+                        co_return;
+                    }
+                }
+            }
+        }
+        if (workSet == nullptr) {
+            workSet = workSetPool_->acquire();
+        }
+        auto& readBuffer = workSet->readBuffer;
+        auto& parser = workSet->parser;
+        auto& parsed = workSet->parsed;
+        auto& responseHead = workSet->responseHead;
+        auto& fileChunk = workSet->fileChunk;
+        auto& routeResolution = workSet->routeResolution;
+
         std::optional<RequestMemory> requestMemoryStorage;
-        if (memory_.requestInitialBufferBytes() <= requestArenaBuffer.size()) {
+        if (memory_.requestInitialBufferBytes() <= sizeof(workSet->arenaBlock)) {
             requestMemoryStorage.emplace(
                 memory_,
-                std::span<std::byte>(requestArenaBuffer.data(), memory_.requestInitialBufferBytes()));
+                std::span<std::byte>(workSet->arenaBlock, memory_.requestInitialBufferBytes()));
         } else {
             requestMemoryStorage.emplace(memory_);
         }
@@ -247,7 +317,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
         bool bufferAlreadyCompacted = false;
         std::size_t consumedBytes = 0;
         std::size_t headerSearchOffset = 0;
-        RouteResolution routeResolution;
         for (;;) {
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
             parser.parseHeaders(bufferView, parsed, headerSearchOffset);
@@ -399,7 +468,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                     ResponseSink responseSink(
                         stream,
                         memory_,
-                        connection.responseHead,
+                        responseHead,
                         scannerEntry,
                         routeResolution.route->responseMode);
                     ResponseStreamWriter responseStream(
@@ -672,8 +741,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             co_await writeResponse(
                 stream,
                 memory_,
-                &connection.responseHead,
-                &connection.fileChunk,
+                &responseHead,
+                &fileChunk,
                 response,
                 skipResponseBody,
                 ec);

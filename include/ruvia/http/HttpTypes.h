@@ -54,7 +54,16 @@ enum class ResponseBodyMode {
 
 inline constexpr std::size_t kMaxRequestHeaders = 64;
 
+inline constexpr std::size_t kMaxRouteParams = 16;
+
 struct HttpHeaderView {
+    std::string_view name;
+    std::string_view value;
+};
+
+// A matched dynamic-route parameter; name/value are views into the route
+// definition and the request target respectively.
+struct RouteParamView {
     std::string_view name;
     std::string_view value;
 };

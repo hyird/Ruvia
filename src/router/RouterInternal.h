@@ -17,6 +17,8 @@
 
 #include "ruvia/db/Db.h"
 
+#include "RouteResolution.h"
+
 namespace ruvia::detail {
 
 class RouteTable;
@@ -34,31 +36,6 @@ struct ControllerRouteBuilder::Impl final {
     Router* router;
     std::pmr::string prefix;
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares;
-};
-
-struct RouteMatch final {
-    const struct RouteEntry* route{nullptr};
-    std::array<RouteParamView, kMaxRouteParams> params{};
-    std::size_t paramCount{0};
-};
-
-enum class RouteResolveStatus {
-    kFound,
-    kNotFound,
-    kMethodNotAllowed
-};
-
-struct RouteResolution final {
-    RouteResolveStatus status{RouteResolveStatus::kNotFound};
-    const struct RouteEntry* route{nullptr};
-    RouteMatch match{};
-    RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-    std::uint32_t allowedMethods{0};
-    bool dynamic{false};
-
-    [[nodiscard]] bool found() const noexcept {
-        return status == RouteResolveStatus::kFound && route != nullptr;
-    }
 };
 
 struct RouteHandler final {

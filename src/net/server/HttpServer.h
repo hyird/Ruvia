@@ -21,6 +21,7 @@
 namespace ruvia::detail {
 
 class ConnectionScanner;
+class ConnectionWorkSetPool;
 class RouteTable;
 
 class HttpServer final {
@@ -73,6 +74,7 @@ private:
     DbRegistry databases_;
     RedisRegistry redis_;
     std::unique_ptr<ConnectionScanner> connectionScanner_;
+    std::unique_ptr<ConnectionWorkSetPool> workSetPool_;
     std::size_t activeConnectionCount_{0};
 
     std::atomic_bool started_{false};

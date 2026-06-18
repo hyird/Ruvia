@@ -17,6 +17,7 @@
 #endif
 
 #include "ConnectionScanner.h"
+#include "HttpConnectionState.h"
 #include "../../runtime/AsioAwait.h"
 
 namespace ruvia::detail {
@@ -46,7 +47,8 @@ HttpServer::HttpServer(
       options_(options),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
-      connectionScanner_(std::make_unique<ConnectionScanner>(ioContext_.get_executor(), options_)) {
+      connectionScanner_(std::make_unique<ConnectionScanner>(ioContext_.get_executor(), options_)),
+      workSetPool_(std::make_unique<ConnectionWorkSetPool>(memory_)) {
     if (databases_.hasAnyTimeout()) {
         connectionScanner_->setWorkerScanner(&databases_, [](void* target) noexcept {
             static_cast<DbRegistry*>(target)->scanDeadlines();

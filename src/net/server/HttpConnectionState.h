@@ -7,21 +7,62 @@
 
 #include "ConnectionScanner.h"
 #include "HttpResponseWriter.h"
+#include "../../router/RouteResolution.h"
 #include "ruvia/http/HttpParser.h"
 #include "ruvia/memory/MemoryPool.h"
 
 namespace ruvia::detail {
 
-struct ConnectionState final {
-    explicit ConnectionState(WorkerMemory& memory);
+// Initial bump block for the per-request arena, carried inside a work set. The
+// request monotonic_buffer_resource bump-allocates from here before spilling to
+// the worker resource, so a typical small request touches no heap at all.
+inline constexpr std::size_t kWorkSetArenaBytes = 4 * 1024;
 
-    ConnectionScanner::Entry scannerEntry;
+// All of a connection's heavy per-request working memory bundled into one
+// poolable unit: the read buffer, the request arena block, the (reused) parse
+// result, the response-head buffer, and the file chunk buffer. A connection
+// borrows a work set only while it is actively serving requests and returns it
+// the moment it goes idle, so idle keep-alive connections hold none of it and
+// memory scales with in-flight request concurrency rather than connection
+// count. The connection's small resident identity (socket, scanner entry,
+// keep-alive counters) stays in the session coroutine frame.
+struct ConnectionWorkSet final {
+    explicit ConnectionWorkSet(WorkerMemory& memory);
+
     std::pmr::string readBuffer;
     ResponseHeadBuffer responseHead;
     std::pmr::vector<char> fileChunk;
-    std::size_t usedBytes{0};
-    std::size_t requestCount{0};
     HttpParser parser;
+    HttpParseResult parsed;
+    RouteResolution routeResolution;
+    std::size_t usedBytes{0};
+    alignas(std::max_align_t) std::byte arenaBlock[kWorkSetArenaBytes];
+    ConnectionWorkSet* poolNext{nullptr};
+
+    // Return the work set to a clean borrowable state: trim grown read storage
+    // back to the initial size and clear per-request scratch.
+    void resetForReuse();
+};
+
+// Per-worker intrusive free list of work sets. Worker-private and only touched
+// from the worker thread (single-threaded cooperative coroutines), so it needs
+// no synchronization. Borrow = pop (warm, no allocation); return = reset + push,
+// or free to the upstream resource once the cap is reached.
+class ConnectionWorkSetPool final {
+public:
+    explicit ConnectionWorkSetPool(WorkerMemory& memory) noexcept;
+    ~ConnectionWorkSetPool();
+
+    ConnectionWorkSetPool(const ConnectionWorkSetPool&) = delete;
+    ConnectionWorkSetPool& operator=(const ConnectionWorkSetPool&) = delete;
+
+    [[nodiscard]] ConnectionWorkSet* acquire();
+    void release(ConnectionWorkSet* workSet) noexcept;
+
+private:
+    WorkerMemory* memory_;
+    ConnectionWorkSet* freeHead_{nullptr};
+    std::size_t freeCount_{0};
 };
 
 void compactConnectionReadBuffer(

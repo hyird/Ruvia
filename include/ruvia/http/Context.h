@@ -36,8 +36,6 @@
 
 namespace ruvia {
 
-inline constexpr std::size_t kMaxRouteParams = 16;
-
 #ifdef RUVIA_ENABLE_MARIADB
 class DbHandle;
 #endif
@@ -48,11 +46,6 @@ namespace detail {
 class DbRegistry;
 class RedisRegistry;
 }
-
-struct RouteParamView {
-    std::string_view name;
-    std::string_view value;
-};
 
 struct CookieOptions {
     std::string_view path{"/"};
