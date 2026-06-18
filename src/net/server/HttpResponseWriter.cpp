@@ -273,14 +273,18 @@ void appendResponseHead(
     const auto dateHeader = cachedDateHeader();
 
     // Upper bound on emitted bytes (filtered headers are counted anyway; the
-    // numeric slots use the 20-digit std::uint64_t worst case).
+    // numeric slots use the 20-digit std::uint64_t worst case). The trailing
+    // slots, in emit order, are: "Server: ruvia\r\n" (15) + the Date line +
+    // "Content-Length: " (16) + up to 20 digits + "\r\n" (2) + the final
+    // "\r\n" (2). The raw stack sink below emits without per-append bounds
+    // checks, so this must never undercount the actual output.
     std::size_t bound = statusLine.empty()
         ? 9 + 20 + 1 + response.statusText().size() + 2
         : statusLine.size();
     for (const auto& header : response.headers()) {
         bound += static_cast<std::size_t>(header.nameSize) + header.valueSize + 4;
     }
-    bound += 14 + dateHeader.size() + 16 + 20 + 2 + 2;
+    bound += 15 + dateHeader.size() + 16 + 20 + 2 + 2;
 
     if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
         RawHeadSink sink{cursor};
