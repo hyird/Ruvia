@@ -29,13 +29,29 @@ HttpServer::HttpServer(
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     HttpServerOptions options)
-    : HttpServer(std::move(endpoint), routes, databases, std::span<const RedisDefinition>{}, options) {}
+    : HttpServer(
+          std::move(endpoint), routes, databases,
+          std::span<const RedisDefinition>{},
+          std::span<const HttpClientDefinition>{},
+          options) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
+    HttpServerOptions options)
+    : HttpServer(
+          std::move(endpoint), routes, databases, redis,
+          std::span<const HttpClientDefinition>{},
+          options) {}
+
+HttpServer::HttpServer(
+    TcpEndpoint endpoint,
+    const RouteTable& routes,
+    std::span<const DbDefinition> databases,
+    std::span<const RedisDefinition> redis,
+    std::span<const HttpClientDefinition> httpClients,
     HttpServerOptions options)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
@@ -47,6 +63,7 @@ HttpServer::HttpServer(
       options_(options),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
+      httpClients_(ioContext_, memory_.resource(), httpClients),
       connectionScanner_(std::make_unique<ConnectionScanner>(ioContext_.get_executor(), options_)),
       workSetPool_(std::make_unique<ConnectionWorkSetPool>(memory_)) {
     if (databases_.hasAnyTimeout()) {
@@ -194,6 +211,7 @@ void HttpServer::stopOnContext() noexcept {
 
     databases_.closeNow();
     redis_.closeNow();
+    httpClients_.closeNow();
 }
 
 void HttpServer::resetStartupState() {
@@ -244,6 +262,9 @@ Task<void> HttpServer::runWorker() {
         }
         if (!redis_.empty()) {
             co_await redis_.connect();
+        }
+        if (!httpClients_.empty()) {
+            co_await httpClients_.connect();
         }
         completeStartup();
         co_await acceptLoop();

@@ -34,6 +34,7 @@ find_package(ZLIB REQUIRED)
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
 option(RUVIA_ENABLE_JWT "Build JWT helper support" OFF)
+option(RUVIA_ENABLE_HTTP_CLIENT "Build outbound HTTP client support" OFF)
 
 if(RUVIA_ENABLE_MARIADB)
     find_package(unofficial-libmariadb CONFIG REQUIRED)
@@ -136,6 +137,13 @@ if(RUVIA_ENABLE_JWT)
     list(APPEND RUVIA_SOURCES src/auth/Jwt.cpp)
 endif()
 
+if(RUVIA_ENABLE_HTTP_CLIENT)
+    list(APPEND RUVIA_SOURCES
+        src/http/client/HttpClientPool.cpp
+        src/http/client/HttpClientRegistry.cpp
+        src/http/HttpClientContext.cpp)
+endif()
+
 add_library(ruvia ${RUVIA_SOURCES})
 
 add_library(ruvia::ruvia ALIAS ruvia)
@@ -204,6 +212,11 @@ endif()
 if(RUVIA_ENABLE_JWT)
     target_compile_definitions(ruvia PUBLIC RUVIA_ENABLE_JWT)
 endif()
+
+if(RUVIA_ENABLE_HTTP_CLIENT)
+    target_compile_definitions(ruvia PUBLIC RUVIA_ENABLE_HTTP_CLIENT)
+endif()
+
 target_link_options(ruvia
     INTERFACE
         $<$<PLATFORM_ID:Darwin>:LINKER:-no_warn_duplicate_libraries>
@@ -290,6 +303,7 @@ find_dependency(ZLIB REQUIRED)
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
 set(RUVIA_ENABLE_JWT @RUVIA_ENABLE_JWT@)
+set(RUVIA_ENABLE_HTTP_CLIENT @RUVIA_ENABLE_HTTP_CLIENT@)
 
 if(RUVIA_ENABLE_MARIADB)
     find_dependency(unofficial-libmariadb CONFIG REQUIRED)

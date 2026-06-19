@@ -17,6 +17,7 @@
 #include "ruvia/memory/MemoryPool.h"
 #include "../../db/DbInternal.h"
 #include "../../redis/RedisInternal.h"
+#include "../../http/client/HttpClientInternal.h"
 
 namespace ruvia::detail {
 
@@ -36,6 +37,13 @@ public:
         const RouteTable& routes,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
+        HttpServerOptions options = {});
+    HttpServer(
+        asio::ip::tcp::endpoint endpoint,
+        const RouteTable& routes,
+        std::span<const DbDefinition> databases,
+        std::span<const RedisDefinition> redis,
+        std::span<const HttpClientDefinition> httpClients,
         HttpServerOptions options = {});
     ~HttpServer();
 
@@ -73,6 +81,7 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    HttpClientRegistry httpClients_;
     std::unique_ptr<ConnectionScanner> connectionScanner_;
     std::unique_ptr<ConnectionWorkSetPool> workSetPool_;
     std::size_t activeConnectionCount_{0};

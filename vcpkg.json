@@ -18,6 +18,9 @@
     "zlib"
   ],
   "features": {
+    "http-client": {
+      "description": "Build outbound HTTP client APIs."
+    },
     "jwt": {
       "description": "Build HMAC JWT helper APIs."
     },

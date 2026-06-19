@@ -23,6 +23,7 @@ namespace ruvia::detail {
 
 class RouteTable;
 class RedisRegistry;
+class HttpClientRegistry;
 
 struct ControllerRouteBuilder::Impl final {
     Impl(
@@ -127,7 +128,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         const RouteResolution& resolution,
@@ -135,7 +137,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
         RequestMemory& memory,
@@ -144,7 +147,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     Task<HttpResponse> handleException(
         const HttpRequest& request,
         RequestMemory& memory,
@@ -153,7 +157,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,
         const RouteResolution& resolution,
@@ -162,7 +167,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     Task<StreamDispatchResult> dispatchWebSocket(
         const HttpRequest& request,
         const RouteResolution& resolution,
@@ -171,7 +177,8 @@ public:
         DbRegistry* db = nullptr,
         RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
-        RequestBodyLoader* bodyLoader = nullptr) const;
+        RequestBodyLoader* bodyLoader = nullptr,
+        HttpClientRegistry* httpClients = nullptr) const;
     [[nodiscard]] RequestBodyMode bodyModeFor(const HttpRequest& request) const noexcept;
 
 private:

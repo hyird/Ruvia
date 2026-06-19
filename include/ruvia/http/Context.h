@@ -34,6 +34,10 @@
 #include "ruvia/redis/Redis.h"
 #endif
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+#include "ruvia/http/HttpClient.h"
+#endif
+
 namespace ruvia {
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -45,6 +49,8 @@ class RedisHandle;
 namespace detail {
 class DbRegistry;
 class RedisRegistry;
+class HttpClientRegistry;
+class HttpClientPool;
 }
 
 struct CookieOptions {
@@ -488,7 +494,8 @@ public:
         detail::RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
         RequestBodyLoader* bodyLoader = nullptr,
-        WebSocket* webSocket = nullptr) noexcept
+        WebSocket* webSocket = nullptr,
+        detail::HttpClientRegistry* httpClients = nullptr) noexcept
         : memory_(memory),
           request_(request),
           db_(db),
@@ -496,6 +503,7 @@ public:
           bodyReader_(bodyReader),
           bodyLoader_(bodyLoader),
           webSocket_(webSocket),
+          httpClients_(httpClients),
           responseStatusText_("OK", memory.resource()),
           responseHeaders_(memory.resource()) {}
 
@@ -517,7 +525,8 @@ public:
         detail::RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
         RequestBodyLoader* bodyLoader = nullptr,
-        WebSocket* webSocket = nullptr) noexcept
+        WebSocket* webSocket = nullptr,
+        detail::HttpClientRegistry* httpClients = nullptr) noexcept
         : memory_(memory),
           request_(request),
           params_(params.data()),
@@ -527,6 +536,7 @@ public:
           bodyReader_(bodyReader),
           bodyLoader_(bodyLoader),
           webSocket_(webSocket),
+          httpClients_(httpClients),
           responseStatusText_("OK", memory.resource()),
           responseHeaders_(memory.resource()) {}
 
@@ -538,13 +548,15 @@ public:
         detail::RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
         RequestBodyLoader* bodyLoader = nullptr,
-        WebSocket* webSocket = nullptr) noexcept
+        WebSocket* webSocket = nullptr,
+        detail::HttpClientRegistry* httpClients = nullptr) noexcept
         : Context(memory, request,
               db,
               redis,
               bodyReader,
               bodyLoader,
-              webSocket) {
+              webSocket,
+              httpClients) {
         responseStream_ = responseStream;
     }
 
@@ -558,13 +570,15 @@ public:
         detail::RedisRegistry* redis = nullptr,
         BodyReader* bodyReader = nullptr,
         RequestBodyLoader* bodyLoader = nullptr,
-        WebSocket* webSocket = nullptr) noexcept
+        WebSocket* webSocket = nullptr,
+        detail::HttpClientRegistry* httpClients = nullptr) noexcept
         : Context(memory, request, params, paramCount,
               db,
               redis,
               bodyReader,
               bodyLoader,
-              webSocket) {
+              webSocket,
+              httpClients) {
         responseStream_ = responseStream;
     }
 
@@ -746,6 +760,18 @@ public:
 #ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
+#endif
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+    [[nodiscard]] Task<FetchResponse> fetch(
+        std::string_view path,
+        FetchOptions options = {}) {
+        return fetch(detail::kDefaultHttpClientAlias, path, std::move(options));
+    }
+
+    [[nodiscard]] Task<FetchResponse> fetch(
+        std::string_view alias,
+        std::string_view path,
+        FetchOptions options = {});
 #endif
 
     [[nodiscard]] BodyReader& bodyReader() const {
@@ -1397,6 +1423,7 @@ private:
     std::size_t paramCount_{0};
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
+    [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
     BodyReader* bodyReader_{nullptr};
     RequestBodyLoader* bodyLoader_{nullptr};
     WebSocket* webSocket_{nullptr};

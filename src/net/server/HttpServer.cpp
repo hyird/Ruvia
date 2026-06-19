@@ -341,7 +341,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             true
                             ,
                             &databases_,
-                            &redis_
+                            &redis_,
+                            nullptr,
+                            nullptr,
+                            &httpClients_
                         );
                         response.setHeader("Connection", "close");
                         closeAfterWrite = true;
@@ -368,7 +371,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         routeResolution,
                         requestMemory,
                         &databases_,
-                        &redis_);
+                        &redis_,
+                        nullptr,
+                        nullptr,
+                        &httpClients_);
                     response.setHeader("Connection", "close");
                     closeAfterWrite = true;
                     break;
@@ -386,7 +392,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         true
                         ,
                         &databases_,
-                        &redis_
+                        &redis_,
+                        nullptr,
+                        nullptr,
+                        &httpClients_
                     );
                     response.setHeader("Connection", "close");
                     closeAfterWrite = true;
@@ -403,7 +412,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             true
                             ,
                             &databases_,
-                            &redis_
+                            &redis_,
+                            nullptr,
+                            nullptr,
+                            &httpClients_
                         );
                         response.setHeader("Connection", "close");
                         closeAfterWrite = true;
@@ -442,7 +454,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             webSocket
                             ,
                             &databases_,
-                            &redis_
+                            &redis_,
+                            nullptr,
+                            nullptr,
+                            &httpClients_
                         );
                     } catch (...) {
                         webSocketException = std::current_exception();
@@ -489,7 +504,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             &databases_,
                             &redis_,
                             nullptr,
-                            nullptr);
+                            nullptr,
+                            &httpClients_);
                         streamHandled = result.streamHandled;
                         if (streamHandled || responseSink.committed()) {
                             co_await responseStream.end();
@@ -510,7 +526,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             true
                             ,
                             &databases_,
-                            &redis_
+                            &redis_,
+                            nullptr,
+                            nullptr,
+                            &httpClients_
                         );
                         keepAlive = false;
                     } else {
@@ -572,7 +591,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             &databases_,
                             &redis_,
                             &*bodyReader,
-                            nullptr);
+                            nullptr,
+                            &httpClients_);
                     } catch (...) {
                         exception = std::current_exception();
                     }
@@ -585,7 +605,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             &databases_,
                             &redis_,
                             bodyReader ? &*bodyReader : nullptr,
-                            nullptr);
+                            nullptr,
+                            &httpClients_);
                         response.materializeBody();
                         keepAlive = false;
                     } else {
@@ -641,7 +662,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         &databases_,
                         &redis_,
                         nullptr,
-                        &*bodyLoader);
+                        &*bodyLoader,
+                        &httpClients_);
                 } catch (...) {
                     exception = std::current_exception();
                 }
@@ -653,7 +675,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         true
                         ,
                         &databases_,
-                        &redis_
+                        &redis_,
+                        nullptr,
+                        nullptr,
+                        &httpClients_
                     );
                     response.materializeBody();
                     keepAlive = false;
@@ -692,7 +717,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                     true
                     ,
                     &databases_,
-                    &redis_
+                    &redis_,
+                    nullptr,
+                    nullptr,
+                    &httpClients_
                 );
                 closeAfterWrite = true;
                 break;
@@ -712,7 +740,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                     true
                     ,
                     &databases_,
-                    &redis_
+                    &redis_,
+                    nullptr,
+                    nullptr,
+                    &httpClients_
                 );
                 closeAfterWrite = true;
                 break;

@@ -67,8 +67,9 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
-    return dispatch(request, resolve(request), memory, db, redis, bodyReader, bodyLoader);
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
+    return dispatch(request, resolve(request), memory, db, redis, bodyReader, bodyLoader, httpClients);
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
@@ -79,14 +80,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
     if (!resolution.found() || resolution.route == nullptr || resolution.route->responseMode == ResponseBodyMode::kBuffered) {
         throw std::logic_error("route is not a response stream route");
     }
     const auto* route = resolution.route;
     auto streamHandled = false;
     if (!resolution.dynamic) {
-        Context context(memory, request, &responseStream, db, redis, bodyReader, bodyLoader);
+        Context context(memory, request, &responseStream, db, redis, bodyReader, bodyLoader, nullptr, httpClients);
         responseStream.bindContext(context);
         auto response = co_await invokeStreamRoute(*route, context, streamHandled);
         co_return StreamDispatchResult{std::move(response), streamHandled};
@@ -101,7 +103,9 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
         db,
         redis,
         bodyReader,
-        bodyLoader);
+        bodyLoader,
+        nullptr,
+        httpClients);
     responseStream.bindContext(context);
     auto response = co_await invokeStreamRoute(*route, context, streamHandled);
     co_return StreamDispatchResult{std::move(response), streamHandled};
@@ -115,14 +119,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
     if (!resolution.found() || resolution.route == nullptr || resolution.route->responseMode != ResponseBodyMode::kWebSocket) {
         throw std::logic_error("route is not a websocket route");
     }
     const auto* route = resolution.route;
     auto streamHandled = false;
     if (!resolution.dynamic) {
-        Context context(memory, request, db, redis, bodyReader, bodyLoader, &webSocket);
+        Context context(memory, request, db, redis, bodyReader, bodyLoader, &webSocket, httpClients);
         auto response = co_await invokeStreamRoute(*route, context, streamHandled);
         co_return StreamDispatchResult{std::move(response), streamHandled};
     }
@@ -136,7 +141,8 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
         redis,
         bodyReader,
         bodyLoader,
-        &webSocket);
+        &webSocket,
+        httpClients);
     auto response = co_await invokeStreamRoute(*route, context, streamHandled);
     co_return StreamDispatchResult{std::move(response), streamHandled};
 }
@@ -148,10 +154,11 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
     if (resolution.found() && !resolution.dynamic) {
         const auto* route = resolution.route;
-        Context context(memory, request, db, redis, bodyReader, bodyLoader);
+        Context context(memory, request, db, redis, bodyReader, bodyLoader, nullptr, httpClients);
         std::exception_ptr exception;
         try {
             co_return co_await invokeRoute(*route, context);
@@ -162,7 +169,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     }
 
     if (!resolution.found()) {
-        Context context(memory, request, db, redis, bodyReader, bodyLoader);
+        Context context(memory, request, db, redis, bodyReader, bodyLoader, nullptr, httpClients);
         if (request.method() == HttpMethod::kOptions && request.path() == "*") {
             auto allow = makeAllowHeader(memory.resource(), allowedMethodsForServer());
             HttpResponse response(memory.resource());
@@ -202,7 +209,9 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         db,
         redis,
         bodyReader,
-        bodyLoader);
+        bodyLoader,
+        nullptr,
+        httpClients);
     std::exception_ptr exception;
     try {
         co_return co_await invokeRoute(*resolution.route, context);
@@ -288,8 +297,9 @@ Task<HttpResponse> detail::RouteTable::handleError(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
-    Context context(memory, request, db, redis, bodyReader, bodyLoader);
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
+    Context context(memory, request, db, redis, bodyReader, bodyLoader, nullptr, httpClients);
     co_return co_await handleError(context, error, closeConnection);
 }
 
@@ -301,8 +311,9 @@ Task<HttpResponse> detail::RouteTable::handleException(
     DbRegistry* db,
     RedisRegistry* redis,
     BodyReader* bodyReader,
-    RequestBodyLoader* bodyLoader) const {
-    Context context(memory, request, db, redis, bodyReader, bodyLoader);
+    RequestBodyLoader* bodyLoader,
+    HttpClientRegistry* httpClients) const {
+    Context context(memory, request, db, redis, bodyReader, bodyLoader, nullptr, httpClients);
     co_return co_await handleException(context, exception, closeConnection);
 }
 
