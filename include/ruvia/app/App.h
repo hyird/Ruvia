@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -25,6 +26,10 @@
 
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/redis/Redis.h"
+#endif
+
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+#include "ruvia/http/HttpClient.h"
 #endif
 
 namespace ruvia {
@@ -98,6 +103,14 @@ struct DocumentRootConfig final {
     StaticRootOptions staticOptions;
 };
 
+struct ListenerConfig final {
+    std::pmr::string address;
+    std::uint16_t port{8080};
+    std::optional<TlsConfig> tls;
+};
+
+using AppHook = std::function<void()>;
+
 namespace detail {
 
 struct AppRuntimeGraph;
@@ -114,6 +127,7 @@ public:
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListenAddress(std::string_view address, std::uint16_t port);
+    App& addListener(ListenerConfig config);
     App& setThreadNum(std::size_t threadNum);
     App& setIdleTimeout(std::chrono::milliseconds timeout);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -132,6 +146,8 @@ public:
     App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& setErrorHandler(HttpErrorHandler handler);
+    App& onStart(AppHook hook);
+    App& onStop(AppHook hook);
     template <typename MiddlewareT>
     App& use();
 #ifdef RUVIA_ENABLE_MARIADB
@@ -141,6 +157,10 @@ public:
 #ifdef RUVIA_ENABLE_REDIS
     App& useRedis(RedisConfig config);
     App& useRedis(std::string_view alias, RedisConfig config);
+#endif
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+    App& useHttpClient(HttpClientConfig config);
+    App& useHttpClient(std::string_view alias, HttpClientConfig config);
 #endif
 
     void run();
@@ -152,13 +172,14 @@ private:
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    std::pmr::string listenAddress_;
-    std::uint16_t listenPort_;
+    std::pmr::vector<ListenerConfig> listeners_{ProcessMemory::instance().upstreamResource()};
     std::size_t threadNum_;
     HttpServerOptions options_{};
     std::optional<DocumentRootConfig> documentRootConfig_;
     MemoryPoolConfig memoryConfig_{};
     HttpErrorHandler errorHandler_{nullptr};
+    std::pmr::vector<AppHook> onStartHooks_{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<AppHook> onStopHooks_{ProcessMemory::instance().upstreamResource()};
     std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares_{
         ProcessMemory::instance().upstreamResource()};
 #ifdef RUVIA_ENABLE_MARIADB
@@ -166,6 +187,9 @@ private:
 #endif
 #ifdef RUVIA_ENABLE_REDIS
     std::pmr::vector<detail::RedisDefinition> redis_{ProcessMemory::instance().upstreamResource()};
+#endif
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+    std::pmr::vector<detail::HttpClientDefinition> httpClients_{ProcessMemory::instance().upstreamResource()};
 #endif
 
     Env env_;

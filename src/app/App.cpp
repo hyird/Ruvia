@@ -5,6 +5,9 @@
 #include "ruvia/http/Controller.h"
 #include "../net/server/HttpServer.h"
 #include "../router/RouterInternal.h"
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+#include "../http/client/HttpClientInternal.h"
+#endif
 
 namespace ruvia {
 namespace {
@@ -51,9 +54,13 @@ App& app() {
 }
 
 App::App()
-    : listenAddress_("0.0.0.0", ProcessMemory::instance().upstreamResource()),
-      listenPort_(8080),
-      threadNum_(std::max(1U, std::thread::hardware_concurrency())) {}
+    : threadNum_(std::max(1U, std::thread::hardware_concurrency())) {
+    auto* resource = ProcessMemory::instance().upstreamResource();
+    listeners_.push_back(ListenerConfig{
+        std::pmr::string("0.0.0.0", resource),
+        8080,
+        std::nullopt});
+}
 
 App::~App() = default;
 
@@ -81,8 +88,18 @@ App& App::setListenAddress(std::string_view address, std::uint16_t port) {
     std::lock_guard lock(mutex_);
     ensureNotRunning(running_, "cannot change listen address while app is running");
 
-    listenAddress_.assign(address.data(), address.size());
-    listenPort_ = port;
+    listeners_[0].address.assign(address.data(), address.size());
+    listeners_[0].port = port;
+    return *this;
+}
+
+App& App::addListener(ListenerConfig config) {
+    std::lock_guard lock(mutex_);
+    ensureNotRunning(running_, "cannot add listener while app is running");
+    if (config.address.empty()) {
+        throw std::invalid_argument("listener address must not be empty");
+    }
+    listeners_.push_back(std::move(config));
     return *this;
 }
 
@@ -265,6 +282,20 @@ App& App::setErrorHandler(HttpErrorHandler handler) {
     return *this;
 }
 
+App& App::onStart(AppHook hook) {
+    std::lock_guard lock(mutex_);
+    ensureNotRunning(running_, "cannot register onStart hook while app is running");
+    onStartHooks_.push_back(std::move(hook));
+    return *this;
+}
+
+App& App::onStop(AppHook hook) {
+    std::lock_guard lock(mutex_);
+    ensureNotRunning(running_, "cannot register onStop hook while app is running");
+    onStopHooks_.push_back(std::move(hook));
+    return *this;
+}
+
 #ifdef RUVIA_ENABLE_MARIADB
 App& App::useDb(DbConfig config) {
     return useDb("default", std::move(config));
@@ -315,6 +346,36 @@ App& App::useRedis(std::string_view alias, RedisConfig config) {
 }
 #endif
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+App& App::useHttpClient(HttpClientConfig config) {
+    return useHttpClient("default", std::move(config));
+}
+
+App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
+    std::lock_guard lock(mutex_);
+    ensureNotRunning(running_, "cannot configure http client while app is running");
+    if (alias.empty()) {
+        throw std::invalid_argument("http client alias must not be empty");
+    }
+    if (config.host.empty()) {
+        throw std::invalid_argument("http client host must not be empty");
+    }
+
+    for (auto& definition : httpClients_) {
+        if (std::string_view(definition.alias) == alias) {
+            definition.config = std::move(config);
+            return *this;
+        }
+    }
+
+    auto* resource = ProcessMemory::instance().upstreamResource();
+    httpClients_.push_back(detail::HttpClientDefinition{
+        std::pmr::string(alias, resource),
+        std::move(config)});
+    return *this;
+}
+#endif
+
 void App::run() {
     std::pmr::vector<detail::HttpServer*> startedWorkers(ProcessMemory::instance().upstreamResource());
     auto runtime = std::make_unique<detail::AppRuntimeGraph>();
@@ -347,32 +408,48 @@ void App::run() {
         }
         const auto& routeTable = routes.routeTable();
 
-        const auto address = asio::ip::make_address(listenAddress_);
-        const asio::ip::tcp::endpoint endpoint(address, listenPort_);
-        auto serverOptions = options_;
         if (documentRootConfig_.has_value()) {
             runtime->documentRoot = std::make_unique<StaticRoot>(
                 documentRootConfig_->root,
                 documentRootConfig_->staticOptions);
-            serverOptions.documentRoot.root = runtime->documentRoot.get();
         }
 
-        runtime->workers.reserve(threadNum_);
-        for (std::size_t i = 0; i < threadNum_; ++i) {
-            runtime->workers.push_back(std::make_unique<detail::HttpServer>(
-                endpoint,
-                routeTable,
-                std::span<const detail::DbDefinition>{
+        runtime->workers.reserve(listeners_.size() * threadNum_);
+        for (const auto& listener : listeners_) {
+            const auto address = asio::ip::make_address(listener.address);
+            const asio::ip::tcp::endpoint endpoint(address, listener.port);
+            auto serverOptions = options_;
+            if (listener.tls.has_value()) {
+                serverOptions.tls.enabled = true;
+                serverOptions.tls.certificateChainFile = listener.tls->certificateChainFile;
+                serverOptions.tls.privateKeyFile = listener.tls->privateKeyFile;
+                serverOptions.tls.privateKeyPassword = listener.tls->privateKeyPassword;
+                serverOptions.tls.verifyFile = listener.tls->verifyFile;
+            }
+            if (runtime->documentRoot != nullptr) {
+                serverOptions.documentRoot.root = runtime->documentRoot.get();
+            }
+            for (std::size_t i = 0; i < threadNum_; ++i) {
+                runtime->workers.push_back(std::make_unique<detail::HttpServer>(
+                    endpoint,
+                    routeTable,
+                    std::span<const detail::DbDefinition>{
 #ifdef RUVIA_ENABLE_MARIADB
-                    databases_
+                        databases_
 #endif
-                },
-                std::span<const detail::RedisDefinition>{
+                    },
+                    std::span<const detail::RedisDefinition>{
 #ifdef RUVIA_ENABLE_REDIS
-                    redis_
+                        redis_
 #endif
-                },
-                serverOptions));
+                    },
+                    std::span<const detail::HttpClientDefinition>{
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+                        httpClients_
+#endif
+                    },
+                    serverOptions));
+            }
         }
 
         runtime_ = std::move(runtime);
@@ -387,6 +464,9 @@ void App::run() {
         addShutdownSignals(signals);
         signals.async_wait([this](const std::error_code& ec, int) {
             if (!ec) {
+                for (auto& hook : onStopHooks_) {
+                    try { hook(); } catch (...) {}
+                }
                 stop();
             }
         });
@@ -395,6 +475,10 @@ void App::run() {
         for (const auto& worker : runtime_->workers) {
             worker->start();
             startedWorkers.push_back(worker.get());
+        }
+
+        for (auto& hook : onStartHooks_) {
+            hook();
         }
 
         for (const auto& worker : runtime_->workers) {
