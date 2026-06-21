@@ -1,9 +1,11 @@
 #pragma once
 
+#include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/HttpParser.h"
 
 #include <cstddef>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 
 #include <zlib.h>

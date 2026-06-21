@@ -1,0 +1,200 @@
+#include "JwtInternal.h"
+
+#include "ruvia/detail/NumberFormat.h"
+#include "ruvia/http/detail/json/JsonObjectFields.h"
+#include "ruvia/http/detail/json/JsonString.h"
+
+#include <charconv>
+#include <optional>
+#include <utility>
+
+namespace ruvia {
+namespace detail {
+
+[[nodiscard]] std::optional<std::int64_t> jwtParseJsonIntegerValue(std::string_view value) {
+    skipJsonWhitespace(value);
+    if (value.empty()) {
+        return std::nullopt;
+    }
+    std::int64_t parsed = 0;
+    const auto [ptr, ec] = std::from_chars(
+        value.data(), value.data() + value.size(), parsed);
+    if (ec != std::errc{} || ptr == value.data()) {
+        return std::nullopt;
+    }
+    return parsed;
+}
+
+[[nodiscard]] bool jwtDecodeJsonStringValue(std::pmr::string& target, std::string_view value) {
+    std::string_view raw;
+    bool escaped = false;
+    if (!parseJsonStringRaw(value, raw, escaped)) {
+        return false;
+    }
+    skipJsonWhitespace(value);
+    if (!value.empty()) {
+        return false;
+    }
+
+    target.clear();
+    if (!escaped) {
+        target.assign(raw.data(), raw.size());
+        return true;
+    }
+    return decodeJsonString(raw, target);
+}
+
+[[nodiscard]] std::optional<std::string_view> jwtRawJsonStringValue(std::string_view value) noexcept {
+    std::string_view raw;
+    bool escaped = false;
+    if (!parseJsonStringRaw(value, raw, escaped)) {
+        return std::nullopt;
+    }
+    skipJsonWhitespace(value);
+    if (!value.empty()) {
+        return std::nullopt;
+    }
+    return raw;
+}
+
+void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value) {
+    out.push_back('"');
+    for (const auto ch : value) {
+        const auto c = static_cast<unsigned char>(ch);
+        switch (ch) {
+            case '"': out.append("\\\""); break;
+            case '\\': out.append("\\\\"); break;
+            case '\b': out.append("\\b"); break;
+            case '\f': out.append("\\f"); break;
+            case '\n': out.append("\\n"); break;
+            case '\r': out.append("\\r"); break;
+            case '\t': out.append("\\t"); break;
+            default:
+                if (c < 0x20) {
+                    constexpr char hex[] = "0123456789abcdef";
+                    out.append("\\u00");
+                    out.push_back(hex[(c >> 4) & 0x0F]);
+                    out.push_back(hex[c & 0x0F]);
+                } else {
+                    out.push_back(ch);
+                }
+                break;
+        }
+    }
+    out.push_back('"');
+}
+
+void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
+    if (!first) { out.push_back(','); }
+    first = false;
+    jwtAppendJsonEscaped(out, name);
+    out.push_back(':');
+    jwtAppendJsonEscaped(out, value);
+}
+
+void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::int64_t value) {
+    if (!first) { out.push_back(','); }
+    first = false;
+    jwtAppendJsonEscaped(out, name);
+    out.push_back(':');
+    appendFormattedNumber(out, value, "failed to format JWT numeric claim");
+}
+
+std::string_view jwtFindJsonString(std::string_view json, std::string_view key) {
+    std::string_view result;
+    (void)visitJsonObjectFields(json, std::pmr::get_default_resource(), [&](std::string_view member, std::string_view value) {
+        if (member != key) {
+            return true;
+        }
+        if (const auto raw = jwtRawJsonStringValue(value)) {
+            result = *raw;
+        }
+        return false;
+    });
+    return result;
+}
+
+}  // namespace detail
+
+JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
+    auto* resolved = detail::pmrResourceOrDefault(resource);
+    JwtPayload payload(resolved);
+
+    bool issuerSeen = false;
+    bool subjectSeen = false;
+    bool audienceSeen = false;
+    bool idSeen = false;
+    bool expSeen = false;
+    bool nbfSeen = false;
+    bool iatSeen = false;
+
+    (void)detail::visitJsonObjectFields(json, resolved, [&](std::string_view key, std::string_view value) {
+        if (key == "iss") {
+            if (!issuerSeen) {
+                issuerSeen = true;
+                (void)detail::jwtDecodeJsonStringValue(payload.issuer_, value);
+            }
+            return true;
+        }
+        if (key == "sub") {
+            if (!subjectSeen) {
+                subjectSeen = true;
+                (void)detail::jwtDecodeJsonStringValue(payload.subject_, value);
+            }
+            return true;
+        }
+        if (key == "aud") {
+            if (!audienceSeen) {
+                audienceSeen = true;
+                (void)detail::jwtDecodeJsonStringValue(payload.audience_, value);
+            }
+            return true;
+        }
+        if (key == "jti") {
+            if (!idSeen) {
+                idSeen = true;
+                (void)detail::jwtDecodeJsonStringValue(payload.id_, value);
+            }
+            return true;
+        }
+        if (key == "exp") {
+            if (!expSeen) {
+                expSeen = true;
+                if (const auto exp = detail::jwtParseJsonIntegerValue(value)) {
+                    payload.expiresAt_ = detail::jwtFromEpochSeconds(*exp);
+                }
+            }
+            return true;
+        }
+        if (key == "nbf") {
+            if (!nbfSeen) {
+                nbfSeen = true;
+                if (const auto nbf = detail::jwtParseJsonIntegerValue(value)) {
+                    payload.notBefore_ = detail::jwtFromEpochSeconds(*nbf);
+                }
+            }
+            return true;
+        }
+        if (key == "iat") {
+            if (!iatSeen) {
+                iatSeen = true;
+                if (const auto iat = detail::jwtParseJsonIntegerValue(value)) {
+                    payload.issuedAt_ = detail::jwtFromEpochSeconds(*iat);
+                }
+            }
+            return true;
+        }
+        if (!detail::jwtIsReservedClaim(key)) {
+            std::pmr::string claimValue(resolved);
+            if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
+                std::pmr::string claimName(resolved);
+                claimName.assign(key.data(), key.size());
+                payload.claims_.push_back(JwtClaim{std::move(claimName), std::move(claimValue)});
+            }
+        }
+        return true;
+    });
+    return payload;
+}
+
+}  // namespace ruvia

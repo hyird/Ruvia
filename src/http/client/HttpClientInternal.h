@@ -42,10 +42,13 @@ public:
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia::detail {
 
 class HttpClientPool;
+
+using HttpClientPoolDeleter = PmrObjectDeleter<HttpClientPool>;
 
 class HttpClientRegistry final {
 public:
@@ -68,7 +71,7 @@ public:
 private:
     struct Entry final {
         std::pmr::string alias;
-        std::unique_ptr<HttpClientPool> pool;
+        std::unique_ptr<HttpClientPool, HttpClientPoolDeleter> pool;
     };
 
     std::pmr::memory_resource* resource_;

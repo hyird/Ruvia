@@ -37,6 +37,9 @@ enum class RequestHeaderKind {
     kUserAgent
 };
 
+inline constexpr std::size_t kRequestHeaderKindCount =
+    static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
+
 enum class ChunkSizeLineStatus {
     kOk,
     kInvalidSize,

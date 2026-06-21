@@ -4,6 +4,9 @@ function(ruvia_add_example name)
     target_compile_definitions(${name}
         PRIVATE
             RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /bigobj /FS)
+    endif()
 endfunction()
 
 ruvia_add_example(ruvia_example_basic_http basic_http.cpp)

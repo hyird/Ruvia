@@ -1,0 +1,114 @@
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+
+#include "HttpClientPool.h"
+
+#include <asio/ssl/context.hpp>
+
+#include <algorithm>
+#include <memory>
+#include <memory_resource>
+#include <system_error>
+#include <utility>
+
+namespace ruvia::detail {
+
+HttpClientPool::Connection::Connection(asio::io_context& ctx, std::pmr::memory_resource* memoryResource)
+    : rawSocket(ctx),
+      tlsStream(nullptr, TlsStreamDeleter{memoryResource}),
+      resource(memoryResource) {}
+
+HttpClientPool::HttpClientPool(
+    asio::io_context& ioContext,
+    HttpClientConfig config,
+    std::pmr::memory_resource* resource)
+    : ioContext_(ioContext),
+      config_(std::move(config)),
+      resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+      connections_(resource_),
+      free_(resource_) {
+    if (config_.tls) {
+        sslContext_.emplace(asio::ssl::context::tls_client);
+        sslContext_->set_default_verify_paths();
+        sslContext_->set_verify_mode(asio::ssl::verify_peer);
+    }
+    const auto n = config_.poolSizePerWorker == 0 ? 1 : config_.poolSizePerWorker;
+    connections_.reserve(n);
+    free_.reserve(n);
+    try {
+        for (std::size_t i = 0; i < n; ++i) {
+            auto* connection = constructPmrObject<Connection>(resource_, ioContext_, resource_);
+            try {
+                connections_.push_back(connection);
+            } catch (...) {
+                destroyPmrObject(connection, resource_);
+                throw;
+            }
+            free_.push_back(i);
+        }
+    } catch (...) {
+        for (auto* conn : connections_) {
+            destroyConnection(conn);
+        }
+        connections_.clear();
+        free_.clear();
+        throw;
+    }
+}
+
+HttpClientPool::~HttpClientPool() {
+    for (auto* conn : connections_) {
+        destroyConnection(conn);
+    }
+}
+
+bool HttpClientPool::hasAnyTimeout() const noexcept {
+    return config_.connectTimeout.count() > 0 ||
+           config_.requestTimeout.count() > 0 ||
+           config_.acquireTimeout.count() > 0;
+}
+
+Task<void> HttpClientPool::connect() {
+    for (auto* conn : connections_) {
+        co_await connectOne(*conn);
+    }
+}
+
+void HttpClientPool::closeNow() noexcept {
+    closing_ = true;
+    for (auto* conn : connections_) {
+        closeConnection(*conn);
+    }
+    while (waiterHead_ != nullptr) {
+        auto* w = waiterHead_;
+        waiterHead_ = w->next;
+        if (waiterHead_ != nullptr) {
+            waiterHead_->previous = nullptr;
+        }
+        w->queued = false;
+        *w->ready = true;
+        if (w->handle) {
+            w->handle.resume();
+        }
+    }
+    waiterTail_ = nullptr;
+}
+
+void HttpClientPool::closeConnection(Connection& conn) noexcept {
+    conn.connected = false;
+    std::error_code ignored;
+    if (conn.tlsStream) {
+        conn.tlsStream->lowest_layer().cancel(ignored);
+        conn.tlsStream->lowest_layer().close(ignored);
+    } else {
+        conn.rawSocket.cancel(ignored);
+        conn.rawSocket.close(ignored);
+    }
+}
+
+void HttpClientPool::destroyConnection(Connection* conn) noexcept {
+    destroyPmrObject(conn, resource_);
+}
+
+}  // namespace ruvia::detail
+
+#endif  // RUVIA_ENABLE_HTTP_CLIENT

@@ -8,6 +8,23 @@
 #include <utility>
 
 namespace ruvia {
+namespace {
+
+struct PreparedDbStatement final {
+    std::pmr::string sql;
+    std::pmr::vector<DbValue> params;
+};
+
+[[nodiscard]] PreparedDbStatement prepareDbStatement(
+    std::string_view sql,
+    std::span<const DbValue> params,
+    std::pmr::memory_resource* resource) {
+    return PreparedDbStatement{
+        std::pmr::string(sql, resource),
+        detail::cloneDbValues(params, resource)};
+}
+
+}  // namespace
 
 DbHandle::DbHandle(
     detail::MariaDbPool& client,
@@ -28,15 +45,11 @@ QueryResult DbHandle::mountResult(QueryResult result) const {
 }
 
 Task<QueryResult> DbHandle::query(std::string_view sql, std::initializer_list<DbValue> params) const {
-    return query(sql, std::span<const DbValue>(params.begin(), params.size()));
+    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
 }
 
 Task<QueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
-    std::pmr::string sqlCopy(sql, resource_);
-    auto paramCopy = detail::cloneDbValues(params, resource_);
-
-    auto result = co_await client_.execute(std::move(sqlCopy), std::move(paramCopy), resource_);
-    co_return mountResult(std::move(result));
+    return execute(sql, params);
 }
 
 Task<QueryResult> DbHandle::execute(std::string_view sql, std::initializer_list<DbValue> params) const {
@@ -44,10 +57,12 @@ Task<QueryResult> DbHandle::execute(std::string_view sql, std::initializer_list<
 }
 
 Task<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
-    std::pmr::string sqlCopy(sql, resource_);
-    auto paramCopy = detail::cloneDbValues(params, resource_);
+    auto statement = prepareDbStatement(sql, params, resource_);
+    return executePrepared(std::move(statement.sql), std::move(statement.params));
+}
 
-    auto result = co_await client_.execute(std::move(sqlCopy), std::move(paramCopy), resource_);
+Task<QueryResult> DbHandle::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const {
+    auto result = co_await client_.execute(std::move(sql), std::move(params), resource_);
     co_return mountResult(std::move(result));
 }
 
@@ -56,10 +71,12 @@ Task<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::initialize
 }
 
 Task<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::span<const DbValue> params) const {
-    std::pmr::string sqlCopy(sql, resource_);
-    auto paramCopy = detail::cloneDbValues(params, resource_);
+    auto statement = prepareDbStatement(sql, params, resource_);
+    return queryStreamPrepared(std::move(statement.sql), std::move(statement.params));
+}
 
-    return client_.stream(std::move(sqlCopy), std::move(paramCopy), resource_);
+Task<DbStreamResult> DbHandle::queryStreamPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const {
+    return client_.stream(std::move(sql), std::move(params), resource_);
 }
 
 Task<DbTransaction> DbHandle::beginTransaction() const {
@@ -205,30 +222,11 @@ QueryResult DbTransaction::mountResult(QueryResult result) const {
 }
 
 Task<QueryResult> DbTransaction::query(std::string_view sql, std::initializer_list<DbValue> params) {
-    return query(sql, std::span<const DbValue>(params.begin(), params.size()));
+    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
 }
 
 Task<QueryResult> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
-    if (!active_ || client_ == nullptr) {
-        throw std::logic_error("database transaction is not active");
-    }
-
-    std::pmr::string sqlCopy(sql, resource_);
-    auto paramCopy = detail::cloneDbValues(params, resource_);
-
-    try {
-        auto result = co_await client_->executeOnTransactionSlot(
-            slot_,
-            std::move(sqlCopy),
-            std::move(paramCopy),
-            resource_);
-        co_return mountResult(std::move(result));
-    } catch (...) {
-        client_ = nullptr;
-        slot_ = 0;
-        active_ = false;
-        throw;
-    }
+    return execute(sql, params);
 }
 
 Task<QueryResult> DbTransaction::execute(std::string_view sql, std::initializer_list<DbValue> params) {
@@ -240,14 +238,20 @@ Task<QueryResult> DbTransaction::execute(std::string_view sql, std::span<const D
         throw std::logic_error("database transaction is not active");
     }
 
-    std::pmr::string sqlCopy(sql, resource_);
-    auto paramCopy = detail::cloneDbValues(params, resource_);
+    auto statement = prepareDbStatement(sql, params, resource_);
+    return executePrepared(std::move(statement.sql), std::move(statement.params));
+}
+
+Task<QueryResult> DbTransaction::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) {
+    if (!active_ || client_ == nullptr) {
+        throw std::logic_error("database transaction is not active");
+    }
 
     try {
         auto result = co_await client_->executeOnTransactionSlot(
             slot_,
-            std::move(sqlCopy),
-            std::move(paramCopy),
+            std::move(sql),
+            std::move(params),
             resource_);
         co_return mountResult(std::move(result));
     } catch (...) {

@@ -12,11 +12,11 @@ Task<FetchResponse> Context::fetch(
     FetchOptions options) {
     if (httpClients_ == nullptr) {
         throw std::logic_error(
-            "no http client registered — call App::useHttpClient before run()");
+            "no http client registered; call App::useHttpClient before run()");
     }
     auto* pool = httpClients_->get(alias);
     if (pool == nullptr) {
-        throw std::logic_error("http client alias not found: " + std::string(alias));
+        throw std::logic_error("http client alias not found");
     }
     co_return co_await pool->fetch(path, options, resource());
 }

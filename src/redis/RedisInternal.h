@@ -48,12 +48,18 @@ public:
 #include <string_view>
 #include <vector>
 
+#include "ruvia/memory/PmrObject.h"
+
 struct redisReader;
 
 namespace ruvia::detail {
 
 struct RedisReaderDeleter final {
     void operator()(redisReader* reader) const noexcept;
+};
+
+struct RedisCommandArgsView final {
+    std::span<const std::pmr::string> args;
 };
 
 class RedisPool final {
@@ -72,12 +78,23 @@ public:
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
     Task<RedisValue> execute(std::span<const std::string_view> args, std::pmr::memory_resource* resource);
+    Task<RedisValue> execute(std::span<const std::pmr::string> args, std::pmr::memory_resource* resource);
+    Task<RedisValue> executeOwned(
+        std::pmr::vector<std::pmr::string> args,
+        std::pmr::memory_resource* resource);
     Task<RedisValue> executeWithTimeout(
         std::span<const std::string_view> args,
         std::chrono::milliseconds timeout,
         std::pmr::memory_resource* resource);
+    Task<RedisValue> executeWithTimeout(
+        std::span<const std::pmr::string> args,
+        std::chrono::milliseconds timeout,
+        std::pmr::memory_resource* resource);
     Task<std::pmr::vector<RedisValue>> executePipeline(
         std::span<const RedisPipeline::Command> commands,
+        std::pmr::memory_resource* resource);
+    Task<std::pmr::vector<RedisValue>> executePipeline(
+        std::span<const RedisCommandArgsView> commands,
         std::pmr::memory_resource* resource);
 
 private:
@@ -151,6 +168,15 @@ private:
     Task<void> connect(Connection& connection);
     Task<void> authenticate(Connection& connection);
     Task<RedisValue> readReply(Connection& connection, std::chrono::milliseconds timeout, std::pmr::memory_resource* resource);
+    template <typename ArgSource>
+    Task<RedisValue> executeWithTimeoutImpl(
+        ArgSource args,
+        std::chrono::milliseconds timeout,
+        std::pmr::memory_resource* resource);
+    template <typename CommandSource>
+    Task<std::pmr::vector<RedisValue>> executePipelineImpl(
+        CommandSource commands,
+        std::pmr::memory_resource* resource);
     Task<std::error_code> asyncSocketWrite(Connection& connection, std::chrono::milliseconds timeout);
     Task<std::pair<std::error_code, std::size_t>> asyncSocketReadSome(
         Connection& connection,
@@ -182,17 +208,18 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] RedisHandle get(std::pmr::memory_resource* resource, RequestMemory* requestMemory = nullptr) const;
+    [[nodiscard]] RedisHandle get(std::pmr::memory_resource* resource) const;
     [[nodiscard]] RedisHandle get(
         std::string_view alias,
-        std::pmr::memory_resource* resource,
-        RequestMemory* requestMemory = nullptr) const;
+        std::pmr::memory_resource* resource) const;
     void scanDeadlines() noexcept;
 
 private:
+    using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
+
     struct Entry final {
         std::pmr::string alias;
-        std::unique_ptr<RedisPool> pool;
+        std::unique_ptr<RedisPool, RedisPoolDeleter> pool;
     };
 
     std::pmr::memory_resource* resource_;

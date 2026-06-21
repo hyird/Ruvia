@@ -10,19 +10,20 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <thread>
 
 #include "ruvia/app/App.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/memory/MemoryPool.h"
+#include "ConnectionScanner.h"
+#include "HttpConnectionState.h"
 #include "../../db/DbInternal.h"
 #include "../../redis/RedisInternal.h"
 #include "../../http/client/HttpClientInternal.h"
 
 namespace ruvia::detail {
 
-class ConnectionScanner;
-class ConnectionWorkSetPool;
 class RouteTable;
 
 class HttpServer final {
@@ -68,6 +69,8 @@ private:
     Task<void> handleSession(asio::ip::tcp::socket socket);
     template <typename Stream>
     Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket);
+    template <typename Stream>
+    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, std::string_view initialBytes = {});
     [[nodiscard]] std::optional<HttpResponse> tryDocumentRootResponse(
         const HttpRequest& request,
         RequestMemory& memory) const;
@@ -82,8 +85,8 @@ private:
     DbRegistry databases_;
     RedisRegistry redis_;
     HttpClientRegistry httpClients_;
-    std::unique_ptr<ConnectionScanner> connectionScanner_;
-    std::unique_ptr<ConnectionWorkSetPool> workSetPool_;
+    ConnectionScanner connectionScanner_;
+    ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 
     std::atomic_bool started_{false};

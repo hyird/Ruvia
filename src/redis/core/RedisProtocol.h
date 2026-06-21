@@ -20,6 +20,8 @@ namespace ruvia::detail {
 // intermediate string_view vector.
 void appendRespCommand(std::pmr::string& output, std::span<const std::string_view> args);
 void appendRespCommand(std::pmr::string& output, std::span<const std::pmr::string> args);
+[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::string_view> args) noexcept;
+[[nodiscard]] std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) noexcept;
 [[nodiscard]] RedisValue hiredisReplyToValue(
     const redisReply& reply,
     std::size_t depth,

@@ -50,9 +50,12 @@ int main() {
 
     ruvia::MemoryPoolConfig memory;
     memory.requestInitialBufferBytes = 4096;
+    const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT")
+        .value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
 
     app
-        .setListenAddress("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087))
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(httpPort)
         .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
         .setIdleTimeout(std::chrono::seconds(60))
         .setConnectionScanInterval(std::chrono::seconds(1))
@@ -85,7 +88,10 @@ int main() {
         tls.privateKeyFile = key;
         assignIfPresent(tls.privateKeyPassword, app.env().get("RUVIA_TLS_PASSWORD"));
         tls.verifyFile = pathOrEmpty(app.env().get("RUVIA_TLS_VERIFY_FILE"));
-        app.useTls(std::move(tls));
+        app
+            .setHttpsListenPort(app.env().get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443))
+            .useTls(std::move(tls))
+            .setAutoHttps(app.env().get<bool>("RUVIA_AUTO_HTTPS").value_or(false));
     }
 
     app.run();

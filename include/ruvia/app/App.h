@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -13,11 +12,13 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/app/AppHook.h"
 #include "ruvia/app/Dotenv.h"
 #include "ruvia/http/Controller.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/StaticFiles.h"
 #include "ruvia/memory/MemoryPool.h"
+#include "ruvia/memory/PmrObject.h"
 #include "ruvia/router/Router.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -61,6 +62,11 @@ struct HttpServerOptions final {
         const StaticRoot* root{nullptr};
     };
 
+    struct AutoHttps final {
+        bool enabled{false};
+        std::uint16_t httpsPort{443};
+    };
+
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     std::chrono::milliseconds headerTimeout{std::chrono::seconds(15)};
@@ -75,6 +81,7 @@ struct HttpServerOptions final {
     Compression compression;
     Cors cors;
     DocumentRoot documentRoot;
+    AutoHttps autoHttps;
 };
 
 struct TlsConfig final {
@@ -103,14 +110,6 @@ struct DocumentRootConfig final {
     StaticRootOptions staticOptions;
 };
 
-struct ListenerConfig final {
-    std::pmr::string address;
-    std::uint16_t port{8080};
-    std::optional<TlsConfig> tls;
-};
-
-using AppHook = std::function<void()>;
-
 namespace detail {
 
 struct AppRuntimeGraph;
@@ -126,8 +125,11 @@ public:
     [[nodiscard]] const Env& env() const noexcept;
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
+    App& setListenAddress(std::string_view address);
     App& setListenAddress(std::string_view address, std::uint16_t port);
-    App& addListener(ListenerConfig config);
+    App& setHttpListenPort(std::uint16_t port);
+    App& setHttpsListenPort(std::uint16_t port);
+    App& setAutoHttps(bool enabled = true);
     App& setThreadNum(std::size_t threadNum);
     App& setIdleTimeout(std::chrono::milliseconds timeout);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -172,7 +174,10 @@ private:
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    std::pmr::vector<ListenerConfig> listeners_{ProcessMemory::instance().upstreamResource()};
+    std::pmr::string listenAddress_{ProcessMemory::instance().upstreamResource()};
+    std::optional<std::uint16_t> httpListenPort_{8080};
+    std::optional<std::uint16_t> httpsListenPort_;
+    bool autoHttps_{false};
     std::size_t threadNum_;
     HttpServerOptions options_{};
     std::optional<DocumentRootConfig> documentRootConfig_;
@@ -194,7 +199,7 @@ private:
 
     Env env_;
     detail::ControllerStore controllerLifetimes_;
-    std::unique_ptr<detail::AppRuntimeGraph> runtime_;
+    std::unique_ptr<detail::AppRuntimeGraph, detail::PmrObjectDeleter<detail::AppRuntimeGraph>> runtime_;
     Router router_;
 
     mutable std::mutex mutex_;

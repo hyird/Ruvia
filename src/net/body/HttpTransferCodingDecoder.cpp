@@ -35,7 +35,6 @@ TransferCodingDecoder::TransferCodingDecoder(
             throw std::invalid_argument("invalid transfer-coding state");
         }
         initialized_ = true;
-        output_.resize(kBodyReadChunkBytes);
     }
 }
 
@@ -71,6 +70,9 @@ void TransferCodingDecoder::setInput(std::string_view input) {
 std::string_view TransferCodingDecoder::produce() {
     if (!initialized_ || ended_) {
         return {};
+    }
+    if (output_.empty()) {
+        resizePmrStringForOverwrite(output_, kBodyReadChunkBytes);
     }
     const auto step = inflateStep(output_.data(), output_.size());
     applyStatus(step);

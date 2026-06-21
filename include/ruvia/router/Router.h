@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <memory_resource>
 #include <stdexcept>
 
 #include "ruvia/app/Task.h"
@@ -13,6 +14,10 @@ namespace detail {
 class HttpServer;
 class RouteTable;
 class RouterImpl;
+struct RouterImplDeleter final {
+    std::pmr::memory_resource* resource{std::pmr::get_default_resource()};
+    void operator()(RouterImpl* impl) const noexcept;
+};
 
 }  // namespace detail
 
@@ -61,7 +66,7 @@ private:
     friend class detail::HttpServer;
     friend class detail::RouterImpl;
 
-    std::unique_ptr<detail::RouterImpl> impl_;
+    std::unique_ptr<detail::RouterImpl, detail::RouterImplDeleter> impl_;
 };
 
 }  // namespace ruvia

@@ -1,4 +1,4 @@
-#include "ruvia/http/Controller.h"
+#include "ruvia/http/ControllerDescriptors.h"
 
 namespace ruvia::detail {
 namespace {

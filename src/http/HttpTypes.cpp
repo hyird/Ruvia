@@ -1,4 +1,5 @@
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/FileToken.h"
+#include "ruvia/http/HttpCommon.h"
 
 namespace ruvia {
 

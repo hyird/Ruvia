@@ -6,24 +6,15 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/memory/PmrObject.h"
+
 namespace ruvia {
 
 struct MemoryPoolConfig {
     std::size_t requestInitialBufferBytes{4096};
 };
 
-struct MemoryStats {
-    std::size_t totalAllocations{0};
-    std::size_t totalDeallocations{0};
-    std::size_t currentBytes{0};
-    std::size_t peakBytes{0};
-};
-
 class MimallocMemoryResource final : public std::pmr::memory_resource {
-public:
-    [[nodiscard]] MemoryStats stats() const noexcept;
-    void resetStats() noexcept;
-
 private:
     void* do_allocate(std::size_t bytes, std::size_t alignment) override;
     void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override;
@@ -94,8 +85,7 @@ public:
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         auto* node = static_cast<CleanupNode*>(arena_.allocate(sizeof(CleanupNode), alignof(CleanupNode)));
-        auto* storage = arena_.allocate(sizeof(T), alignof(T));
-        auto* object = std::construct_at(static_cast<T*>(storage), std::forward<Args>(args)...);
+        auto* object = detail::constructPmrObject<T>(&arena_, std::forward<Args>(args)...);
         node->object = object;
         node->destroy = [](void* value) noexcept {
             std::destroy_at(static_cast<T*>(value));

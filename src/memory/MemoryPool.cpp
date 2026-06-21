@@ -39,13 +39,6 @@ void taskFrameDeallocate(void* pointer) noexcept {
 
 }  // namespace detail
 
-MemoryStats MimallocMemoryResource::stats() const noexcept {
-    return {};
-}
-
-void MimallocMemoryResource::resetStats() noexcept {
-}
-
 void* MimallocMemoryResource::do_allocate(std::size_t bytes, std::size_t alignment) {
     void* pointer = mi_malloc_aligned(bytes == 0 ? 1 : bytes, alignment);
     if (pointer == nullptr) {

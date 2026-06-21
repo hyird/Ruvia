@@ -47,6 +47,8 @@ public:
 #include <string_view>
 #include <vector>
 
+#include "ruvia/memory/PmrObject.h"
+
 struct st_mysql;
 struct st_mysql_res;
 
@@ -103,16 +105,18 @@ private:
     };
 
     struct ConnectionSlot {
-        // Defined out-of-line in Db.cpp where SlotSocket is a complete type, so
-        // the unique_ptr<SlotSocket> member can be destroyed. Keeping these inline
-        // would force every TU that includes this header to see SlotSocket.
+        // Defined out-of-line where SlotSocket is complete, so the
+        // unique_ptr<SlotSocket> member can be destroyed without exposing the
+        // ASIO/MariaDB socket adapter through this internal boundary.
         explicit ConnectionSlot(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
+        using SlotSocketDeleter = PmrObjectDeleter<SlotSocket>;
+
         st_mysql* connection{nullptr};
-        std::unique_ptr<SlotSocket> waitSocket;
+        std::unique_ptr<SlotSocket, SlotSocketDeleter> waitSocket;
         std::chrono::steady_clock::time_point deadline{};
         std::coroutine_handle<> deadlineContinuation{};
         bool busy{false};
@@ -205,9 +209,11 @@ public:
         RequestMemory* requestMemory = nullptr) const;
 
 private:
+    using MariaDbPoolDeleter = PmrObjectDeleter<MariaDbPool>;
+
     struct Entry {
         std::pmr::string alias;
-        std::unique_ptr<MariaDbPool> client;
+        std::unique_ptr<MariaDbPool, MariaDbPoolDeleter> client;
     };
 
     std::pmr::memory_resource* resource_;

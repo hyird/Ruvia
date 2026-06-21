@@ -84,20 +84,23 @@ public:
             if (std::filesystem::is_symlink(status)) {
                 continue;
             }
-            const auto relative = iter->path().lexically_relative(root_).generic_string();
+            auto* const upstream = ProcessMemory::instance().upstreamResource();
+            auto relative = iter->path()
+                .lexically_relative(root_)
+                .generic_string<char, std::char_traits<char>, std::pmr::polymorphic_allocator<char>>(
+                    std::pmr::polymorphic_allocator<char>(upstream));
             if (relative.empty() || relative.starts_with("../")) {
                 continue;
             }
             if (std::filesystem::is_directory(status)) {
                 if (!options_.indexFile.empty()) {
-                    directories_.push_back(std::pmr::string(relative.data(), relative.size()));
+                    directories_.push_back(std::move(relative));
                 }
                 continue;
             }
             if (!std::filesystem::is_regular_file(status)) {
                 continue;
             }
-            auto* const upstream = ProcessMemory::instance().upstreamResource();
             const auto extension = detail::httpLowerFileExtension(iter->path(), upstream);
             if (!fileTypeAllowed(extension, options_)) {
                 continue;
@@ -114,7 +117,7 @@ public:
             }
             const auto enableValidators = options_.enableValidators;
             Entry entry;
-            entry.relativePath.assign(relative.data(), relative.size());
+            entry.relativePath = std::move(relative);
             entry.file = FileToken(iter->path());
             entry.contentType = contentTypeFor(iter->path(), extension, options_);
             entry.cacheControl = options_.cacheControl;
@@ -122,15 +125,13 @@ public:
             entry.modified = modified;
             if (enableValidators) {
                 auto* const resource = ProcessMemory::instance().upstreamResource();
-                const auto etag = detail::httpMakeFileEtag(
+                entry.etag = detail::httpMakeFileEtag(
                     resource,
                     static_cast<std::uint64_t>(size),
                     modified);
-                const auto lastModified = detail::httpFormatDate(
+                entry.lastModified = detail::httpFormatDate(
                     resource,
                     detail::httpFileTimeToTimeT(modified));
-                entry.etag.assign(etag.data(), etag.size());
-                entry.lastModified.assign(lastModified.data(), lastModified.size());
             }
             entry.enableRanges = options_.enableRanges;
             entry.enableValidators = enableValidators;

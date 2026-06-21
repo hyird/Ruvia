@@ -21,6 +21,16 @@ namespace {
 }
 
 void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
+    std::size_t size =
+        std::string_view("{\"error\":").size() + detail::jsonStringSizeHint(error.statusText) +
+        std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(error.code) +
+        std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(error.message) +
+        1;
+    if (!error.detailsJson.empty()) {
+        size += std::string_view(",\"details\":").size() + error.detailsJson.size();
+    }
+    body.reserve(size);
+
     body.append("{\"error\":");
     detail::appendJsonString(body, error.statusText);
     body.append(",\"code\":");
@@ -32,6 +42,54 @@ void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
         body.append(error.detailsJson.data(), error.detailsJson.size());
     }
     body.push_back('}');
+}
+
+[[nodiscard]] std::string_view defaultErrorBody(std::uint16_t statusCode) noexcept {
+    switch (statusCode) {
+        case 400:
+            return "{\"error\":\"Bad Request\",\"code\":\"bad_request\",\"message\":\"Bad Request\"}";
+        case 401:
+            return "{\"error\":\"Unauthorized\",\"code\":\"unauthorized\",\"message\":\"Unauthorized\"}";
+        case 403:
+            return "{\"error\":\"Forbidden\",\"code\":\"forbidden\",\"message\":\"Forbidden\"}";
+        case 404:
+            return "{\"error\":\"Not Found\",\"code\":\"not_found\",\"message\":\"Not Found\"}";
+        case 405:
+            return "{\"error\":\"Method Not Allowed\",\"code\":\"method_not_allowed\",\"message\":\"Method Not Allowed\"}";
+        case 409:
+            return "{\"error\":\"Conflict\",\"code\":\"conflict\",\"message\":\"Conflict\"}";
+        case 412:
+            return "{\"error\":\"Precondition Failed\",\"code\":\"precondition_failed\",\"message\":\"Precondition Failed\"}";
+        case 413:
+            return "{\"error\":\"Payload Too Large\",\"code\":\"payload_too_large\",\"message\":\"Payload Too Large\"}";
+        case 416:
+            return "{\"error\":\"Range Not Satisfiable\",\"code\":\"range_not_satisfiable\",\"message\":\"Range Not Satisfiable\"}";
+        case 417:
+            return "{\"error\":\"Expectation Failed\",\"code\":\"expectation_failed\",\"message\":\"Expectation Failed\"}";
+        case 418:
+            return "{\"error\":\"I'm a Teapot\",\"code\":\"teapot\",\"message\":\"I'm a Teapot\"}";
+        case 422:
+            return "{\"error\":\"Unprocessable Entity\",\"code\":\"unprocessable_entity\",\"message\":\"Unprocessable Entity\"}";
+        case 429:
+            return "{\"error\":\"Too Many Requests\",\"code\":\"too_many_requests\",\"message\":\"Too Many Requests\"}";
+        case 431:
+            return "{\"error\":\"Request Header Fields Too Large\",\"code\":\"request_header_fields_too_large\",\"message\":\"Request Header Fields Too Large\"}";
+        case 500:
+            return "{\"error\":\"Internal Server Error\",\"code\":\"internal_error\",\"message\":\"Internal Server Error\"}";
+        case 501:
+            return "{\"error\":\"Not Implemented\",\"code\":\"not_implemented\",\"message\":\"Not Implemented\"}";
+        case 505:
+            return "{\"error\":\"HTTP Version Not Supported\",\"code\":\"http_version_not_supported\",\"message\":\"HTTP Version Not Supported\"}";
+        default:
+            return {};
+    }
+}
+
+[[nodiscard]] bool isDefaultErrorBodyCandidate(HttpErrorInfo error) noexcept {
+    return error.detailsJson.empty() &&
+        error.statusText == defaultStatusText(error.statusCode) &&
+        error.code == defaultErrorCode(error.statusCode) &&
+        error.message == error.statusText;
 }
 
 }  // namespace
@@ -114,9 +172,16 @@ HttpResponse makeErrorResponse(
     HttpResponse response(resource);
     response.reserveHeaders(closeConnection ? 2 : 1);
     response.setStatus(error.statusCode, error.statusText);
-    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "application/json; charset=utf-8");
     if (closeConnection) {
-        response.setHeader("Connection", "close");
+        detail::setResponseHeaderStableView(response, "Connection", "close");
+    }
+
+    if (isDefaultErrorBodyCandidate(error)) {
+        if (const auto body = defaultErrorBody(error.statusCode); !body.empty()) {
+            detail::setResponseBodyStaticView(response, body);
+            return response;
+        }
     }
 
     std::pmr::string body(resource);
@@ -136,7 +201,7 @@ Task<HttpResponse> makeErrorResponse(
         try {
             auto response = co_await handler(context, error);
             if (closeConnection) {
-                response.setHeader("Connection", "close");
+                detail::setResponseHeaderStableView(response, "Connection", "close");
             }
             co_return response;
         } catch (const HttpError& nested) {

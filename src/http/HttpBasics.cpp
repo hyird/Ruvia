@@ -1,4 +1,4 @@
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpCommon.h"
 
 #include "parser/HttpParserSyntax.h"
 
@@ -61,6 +61,9 @@ HttpMethod parseMethod(std::string_view method) {
             if (method == "OPTIONS") {
                 return HttpMethod::kOptions;
             }
+            if (method == "CONNECT") {
+                return HttpMethod::kConnect;
+            }
             break;
         default:
             break;
@@ -84,6 +87,8 @@ std::string_view methodName(HttpMethod method) {
             return "HEAD";
         case HttpMethod::kOptions:
             return "OPTIONS";
+        case HttpMethod::kConnect:
+            return "CONNECT";
         case HttpMethod::kUnknown:
         default:
             return "UNKNOWN";

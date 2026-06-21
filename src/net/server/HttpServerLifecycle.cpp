@@ -5,6 +5,7 @@
 #include <asio/post.hpp>
 #include <asio/ssl/context.hpp>
 #include <cerrno>
+#include <cstring>
 #include <memory>
 #include <openssl/ssl.h>
 #include <stdexcept>
@@ -23,6 +24,48 @@
 namespace ruvia::detail {
 
 using TcpEndpoint = asio::ip::tcp::endpoint;
+
+namespace {
+
+int selectAlpnProtocol(
+    SSL*,
+    const unsigned char** out,
+    unsigned char* outLength,
+    const unsigned char* in,
+    unsigned int inLength,
+    void*) noexcept {
+    static constexpr unsigned char protocols[] = {
+        2, 'h', '2',
+        8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+    if (SSL_select_next_proto(
+            const_cast<unsigned char**>(out),
+            outLength,
+            protocols,
+            static_cast<unsigned int>(sizeof(protocols)),
+            in,
+            inLength) == OPENSSL_NPN_NEGOTIATED) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+    return SSL_TLSEXT_ERR_NOACK;
+}
+
+int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) noexcept {
+    if (buffer == nullptr || bufferSize <= 0 || userData == nullptr) {
+        return 0;
+    }
+
+    const auto& password = *static_cast<const std::pmr::string*>(userData);
+    const auto capacity = static_cast<std::size_t>(bufferSize);
+    if (password.size() >= capacity) {
+        return 0;
+    }
+
+    std::memcpy(buffer, password.data(), password.size());
+    buffer[password.size()] = '\0';
+    return static_cast<int>(password.size());
+}
+
+}  // namespace
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
@@ -64,15 +107,15 @@ HttpServer::HttpServer(
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       httpClients_(ioContext_, memory_.resource(), httpClients),
-      connectionScanner_(std::make_unique<ConnectionScanner>(ioContext_.get_executor(), options_)),
-      workSetPool_(std::make_unique<ConnectionWorkSetPool>(memory_)) {
+      connectionScanner_(ioContext_.get_executor(), options_),
+      workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
-        connectionScanner_->setWorkerScanner(&databases_, [](void* target) noexcept {
+        connectionScanner_.setWorkerScanner(&databases_, [](void* target) noexcept {
             static_cast<DbRegistry*>(target)->scanDeadlines();
         });
     }
     if (redis_.hasAnyTimeout()) {
-        connectionScanner_->setWorkerScanner(&redis_, [](void* target) noexcept {
+        connectionScanner_.setWorkerScanner(&redis_, [](void* target) noexcept {
             static_cast<RedisRegistry*>(target)->scanDeadlines();
         });
     }
@@ -92,7 +135,7 @@ void HttpServer::start() {
         resetStartupState();
         configureAcceptor();
         configureTlsContext();
-        connectionScanner_->start();
+        connectionScanner_.start();
         asio::co_spawn(
             ioContext_,
             taskAsAwaitable(runWorker()),
@@ -185,11 +228,11 @@ void HttpServer::configureTlsContext() {
         asio::ssl::context::no_tlsv1_1 |
         asio::ssl::context::single_dh_use);
     SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
+    SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
 
     if (!options_.tls.privateKeyPassword.empty()) {
-        context.set_password_callback([password = options_.tls.privateKeyPassword](std::size_t, asio::ssl::context::password_purpose) {
-            return std::string(password);
-        });
+        SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
+        SSL_CTX_set_default_passwd_cb_userdata(context.native_handle(), &options_.tls.privateKeyPassword);
     }
     context.use_certificate_chain_file(options_.tls.certificateChainFile.string());
     context.use_private_key_file(options_.tls.privateKeyFile.string(), asio::ssl::context::pem);
@@ -204,10 +247,8 @@ void HttpServer::stopOnContext() noexcept {
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
 
-    if (connectionScanner_ != nullptr) {
-        connectionScanner_->stop();
-        connectionScanner_->closeAll();
-    }
+    connectionScanner_.stop();
+    connectionScanner_.closeAll();
 
     databases_.closeNow();
     redis_.closeNow();

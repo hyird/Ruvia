@@ -1,5 +1,7 @@
 #include "ConnectionScanner.h"
 
+#include "SocketUtils.h"
+
 #include <asio/error.hpp>
 
 namespace ruvia::detail {
@@ -9,13 +11,6 @@ namespace {
 [[nodiscard]] std::int64_t steadyNowMs() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-void closeSocket(asio::ip::tcp::socket& socket) noexcept {
-    std::error_code ignored;
-    socket.cancel(ignored);
-    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
-    socket.close(ignored);
 }
 
 }  // namespace

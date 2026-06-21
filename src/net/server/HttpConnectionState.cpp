@@ -5,12 +5,15 @@
 #include <memory>
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/PmrString.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia::detail {
 namespace {
 
 constexpr std::size_t kInitialReadBufferBytes = 8 * 1024;
 constexpr std::size_t kReadBufferShrinkCapacityBytes = 64 * 1024;
+constexpr std::size_t kCompressionScratchRetainedBytes = 256 * 1024;
 // Upper bound on work sets retained per worker. Beyond this, returned work sets
 // free to the upstream (mimalloc) so the free list never grows unbounded under
 // a burst of idle transitions.
@@ -23,8 +26,9 @@ constexpr std::size_t kMaxPooledWorkSets = 64;
 ConnectionWorkSet::ConnectionWorkSet(WorkerMemory& memory)
     : readBuffer(memory.allocator<char>()),
       responseHead(memory.allocator<char>()),
-      fileChunk(memory.allocator<char>()) {
-    readBuffer.resize(kInitialReadBufferBytes);
+      fileChunk(memory.allocator<char>()),
+      compressionScratch(memory.allocator<char>()) {
+    resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
 }
 
 void ConnectionWorkSet::resetForReuse() {
@@ -32,8 +36,13 @@ void ConnectionWorkSet::resetForReuse() {
     // resizes (never rebuilds) and cannot throw in practice; the pool's release
     // still guards against it.
     trimReadBufferStorage(readBuffer, 0);
-    usedBytes = 0;
     responseHead.reset();
+    if (compressionScratch.capacity() > kCompressionScratchRetainedBytes) {
+        std::pmr::string compact(compressionScratch.get_allocator());
+        compressionScratch.swap(compact);
+    } else {
+        compressionScratch.clear();
+    }
     // parsed is fully overwritten by the next parseHeaders(); fileChunk/parser
     // carry no cross-request state worth clearing.
 }
@@ -45,8 +54,7 @@ ConnectionWorkSetPool::~ConnectionWorkSetPool() {
     auto* current = freeHead_;
     while (current != nullptr) {
         auto* next = current->poolNext;
-        std::destroy_at(current);
-        memory_->resource()->deallocate(current, sizeof(ConnectionWorkSet), alignof(ConnectionWorkSet));
+        destroyPmrObject(current, memory_->resource());
         current = next;
     }
 }
@@ -59,8 +67,7 @@ ConnectionWorkSet* ConnectionWorkSetPool::acquire() {
         --freeCount_;
         return workSet;
     }
-    void* storage = memory_->resource()->allocate(sizeof(ConnectionWorkSet), alignof(ConnectionWorkSet));
-    return std::construct_at(static_cast<ConnectionWorkSet*>(storage), *memory_);
+    return constructPmrObject<ConnectionWorkSet>(memory_->resource(), *memory_);
 }
 
 void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
@@ -68,8 +75,7 @@ void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
         return;
     }
     const auto destroy = [this](ConnectionWorkSet* victim) noexcept {
-        std::destroy_at(victim);
-        memory_->resource()->deallocate(victim, sizeof(ConnectionWorkSet), alignof(ConnectionWorkSet));
+        destroyPmrObject(victim, memory_->resource());
     };
     if (freeCount_ >= kMaxPooledWorkSets) {
         destroy(workSet);
@@ -106,7 +112,7 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
 
     if (readBuffer.capacity() > kReadBufferShrinkCapacityBytes) {
         std::pmr::string compact(readBuffer.get_allocator());
-        compact.resize(kInitialReadBufferBytes);
+        resizePmrStringForOverwrite(compact, kInitialReadBufferBytes);
         if (usedBytes > 0) {
             std::memcpy(compact.data(), readBuffer.data(), usedBytes);
         }
@@ -115,23 +121,23 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
     }
 
     if (readBuffer.size() < kInitialReadBufferBytes) {
-        readBuffer.resize(kInitialReadBufferBytes);
+        resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
         return;
     }
 
     if (readBuffer.size() > kInitialReadBufferBytes) {
-        readBuffer.resize(kInitialReadBufferBytes);
+        resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
     }
 }
 
 void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpParseResult& parsed) {
     if (parsed.consumedBytes > readBuffer.size()) {
-        readBuffer.resize(parsed.consumedBytes);
+        resizePmrStringForOverwrite(readBuffer, parsed.consumedBytes);
         return;
     }
 
     if (usedBytes == readBuffer.size() && readBuffer.size() < kMaxHttpHeaderBytes) {
-        readBuffer.resize(std::min(readBuffer.size() * 2, kMaxHttpHeaderBytes));
+        resizePmrStringForOverwrite(readBuffer, std::min(readBuffer.size() * 2, kMaxHttpHeaderBytes));
     }
 }
 

@@ -66,8 +66,10 @@ void validateMigrationList(std::span<const DbMigration> migrations) {
 [[nodiscard]] std::pmr::string buildMigrationLockName(
     const DbConfig& config,
     std::pmr::memory_resource* resource) {
+    constexpr std::string_view kPrefix = "ruvia:migrations:";
     std::pmr::string name(resource);
-    name.append("ruvia:migrations:");
+    name.reserve(kPrefix.size() + (!config.database.empty() ? config.database.size() : config.host.size() + 1 + 10));
+    name.append(kPrefix);
     if (!config.database.empty()) {
         name.append(config.database);
     } else {
@@ -82,6 +84,7 @@ void validateMigrationList(std::span<const DbMigration> migrations) {
     std::string_view table,
     std::pmr::memory_resource* resource) {
     std::pmr::string sql(resource);
+    sql.reserve(table.size() + 260);
     sql.append("CREATE TABLE IF NOT EXISTS ");
     appendQuotedIdentifier(sql, table);
     sql.append(
@@ -97,6 +100,7 @@ void validateMigrationList(std::span<const DbMigration> migrations) {
     std::string_view table,
     std::pmr::memory_resource* resource) {
     std::pmr::string sql(resource);
+    sql.reserve(table.size() + 50);
     sql.append("SELECT migration_id FROM ");
     appendQuotedIdentifier(sql, table);
     sql.append(" WHERE migration_id = ? LIMIT 1");
@@ -107,6 +111,7 @@ void validateMigrationList(std::span<const DbMigration> migrations) {
     std::string_view table,
     std::pmr::memory_resource* resource) {
     std::pmr::string sql(resource);
+    sql.reserve(table.size() + 40);
     sql.append("INSERT INTO ");
     appendQuotedIdentifier(sql, table);
     sql.append(" (migration_id) VALUES (?)");
@@ -114,9 +119,8 @@ void validateMigrationList(std::span<const DbMigration> migrations) {
 }
 
 void appendMigrationId(std::pmr::vector<std::pmr::string>& ids, std::string_view id) {
-    std::pmr::string stored(ids.get_allocator().resource());
-    stored.assign(id.data(), id.size());
-    ids.push_back(std::move(stored));
+    ids.emplace_back();
+    ids.back().assign(id.data(), id.size());
 }
 
 }  // namespace
@@ -214,7 +218,7 @@ DbMigrator::DbMigrator(
     std::pmr::memory_resource* resource)
     : config_(std::move(config)),
       options_(std::move(options)),
-      resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+      resource_(detail::resolveDbResource(resource)) {}
 
 DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
     return migrate(config_, migrations, options_, resource_);

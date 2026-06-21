@@ -28,8 +28,8 @@ struct HttpClientConfig {
 };
 
 struct FetchRequestHeader {
-    std::string_view name;   // borrowed — must remain valid through co_await
-    std::string_view value;  // borrowed — must remain valid through co_await
+    std::string_view name;   // borrowed; must remain valid through co_await
+    std::string_view value;  // borrowed; must remain valid through co_await
 };
 
 struct FetchResponseHeader {
@@ -38,12 +38,14 @@ struct FetchResponseHeader {
     FetchResponseHeader() = default;
     FetchResponseHeader(std::pmr::string n, std::pmr::string v)
         : name(std::move(n)), value(std::move(v)) {}
+    FetchResponseHeader(std::string_view n, std::string_view v, std::pmr::memory_resource* resource)
+        : name(n.data(), n.size(), resource), value(v.data(), v.size(), resource) {}
 };
 
 struct FetchOptions {
     std::string_view method{"GET"};
-    std::initializer_list<FetchRequestHeader> headers{};
-    std::string_view body{};  // borrowed — must remain valid through co_await
+    std::initializer_list<FetchRequestHeader> headers;
+    std::string_view body{};  // borrowed; must remain valid through co_await
     std::chrono::milliseconds timeout{0};
 };
 

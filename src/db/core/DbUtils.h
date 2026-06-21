@@ -2,41 +2,29 @@
 
 #include "ruvia/db/Db.h"
 
-#include <array>
-#include <charconv>
-#include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/detail/NumberFormat.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::pmr::memory_resource* resolveDbResource(
     std::pmr::memory_resource* resource) noexcept {
-    return resource == nullptr ? std::pmr::get_default_resource() : resource;
+    return pmrResourceOrDefault(resource);
 }
 
 inline void appendDbNumber(std::pmr::string& output, std::int64_t value) {
-    std::array<char, 32> buffer{};
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format signed database value");
-    }
-    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
+    appendFormattedNumber(output, value, "failed to format signed database value");
 }
 
 inline void appendDbNumber(std::pmr::string& output, std::uint64_t value) {
-    std::array<char, 32> buffer{};
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format unsigned database value");
-    }
-    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
+    appendFormattedNumber(output, value, "failed to format unsigned database value");
 }
 
 inline void appendDbNumber(std::pmr::string& output, double value) {
@@ -44,15 +32,11 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
     // not valid SQL numeric literals and would be spliced unquoted into the
     // statement. Reject them up front with a clear error instead of letting the
     // server fail on malformed SQL.
-    if (!std::isfinite(value)) {
-        throw std::invalid_argument("database double value must be finite");
-    }
-    std::array<char, 64> buffer{};
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::invalid_argument("database double value cannot be formatted");
-    }
-    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
+    appendFormattedFiniteNumber(
+        output,
+        value,
+        "database double value must be finite",
+        "database double value cannot be formatted");
 }
 
 [[nodiscard]] inline DbValue cloneDbValueForResource(

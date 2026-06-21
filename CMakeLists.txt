@@ -65,7 +65,12 @@ endif()
 
 set(RUVIA_APP_SOURCES
     src/app/Dotenv.cpp
+    src/app/DotenvParser.cpp
+    src/app/DotenvPaths.cpp
     src/app/App.cpp
+    src/app/AppConfig.cpp
+    src/app/AppHttpConfig.cpp
+    src/app/AppIntegrationConfig.cpp
     src/ruvia.cpp
 )
 
@@ -76,8 +81,13 @@ set(RUVIA_HTTP_SOURCES
     src/http/HttpCors.cpp
     src/http/HttpRequest.cpp
     src/http/HttpResponse.cpp
+    src/http/HttpResponseHeaderOps.cpp
+    src/http/HttpResponseHeaders.cpp
+    src/http/HttpResponseHeadersStorage.cpp
+    src/http/HttpResponseKnownHeaders.cpp
     src/http/HttpTypes.cpp
     src/http/parser/HttpChunkParser.cpp
+    src/http/parser/HttpHeaderBlockParser.cpp
     src/http/parser/HttpParser.cpp
     src/http/parser/HttpParserErrors.cpp
     src/http/parser/HttpParserSyntax.cpp
@@ -91,19 +101,35 @@ set(RUVIA_MEMORY_SOURCES
 
 set(RUVIA_NET_SOURCES
     src/net/body/HttpTransferCodingDecoder.cpp
+    src/net/http2/Http2Hpack.cpp
+    src/net/http2/Http2HpackDynamic.cpp
+    src/net/http2/Http2HpackEncoder.cpp
+    src/net/http2/Http2HpackHuffman.cpp
     src/net/server/ConnectionScanner.cpp
+    src/net/server/HttpFileZeroCopy.cpp
     src/net/server/HttpConnectionState.cpp
     src/net/server/HttpDateCache.cpp
+    src/net/server/HttpResponseCompression.cpp
     src/net/server/HttpResponseWriter.cpp
+    src/net/server/HttpServerAccept.cpp
     src/net/server/HttpServer.cpp
+    src/net/server/HttpServerDocumentRoot.cpp
     src/net/server/HttpServerLifecycle.cpp
+    src/net/ws/HttpWebSocketAccept.cpp
     src/net/ws/HttpWebSocketUtils.cpp
+    src/net/ws/HttpWebSocketValidation.cpp
 )
 
 set(RUVIA_ROUTER_SOURCES
+    src/router/core/RouterBuild.cpp
     src/router/core/Router.cpp
     src/router/core/RouterDispatch.cpp
+    src/router/core/RouterDynamicIndexBuild.cpp
+    src/router/core/RouterDynamicIndex.cpp
     src/router/core/RouterIndex.cpp
+    src/router/core/RouterIndexBuild.cpp
+    src/router/core/RouterMiddlewareDispatch.cpp
+    src/router/core/RouterRegistration.cpp
 )
 
 set(RUVIA_SOURCES
@@ -119,27 +145,52 @@ if(RUVIA_ENABLE_MARIADB)
         src/db/core/Db.cpp
         src/db/core/DbHandle.cpp
         src/db/core/DbMigration.cpp
+        src/db/core/DbMysqlRuntime.cpp
+        src/db/core/DbPoolIo.cpp
+        src/db/core/DbPoolLifecycle.cpp
+        src/db/core/DbPoolSlots.cpp
+        src/db/core/DbRegistry.cpp
+        src/db/core/DbSlotSocket.cpp
+        src/db/core/DbSql.cpp
         src/db/core/DbTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
     list(APPEND RUVIA_SOURCES
         src/redis/core/Redis.cpp
+        src/redis/core/RedisCommandArgs.cpp
+        src/redis/core/RedisHandleCommandOps.cpp
+        src/redis/core/RedisHandleAdvanced.cpp
         src/redis/core/RedisHandle.cpp
+        src/redis/core/RedisHandleHashList.cpp
         src/redis/core/RedisHandleHelpers.cpp
+        src/redis/core/RedisHandleSetSorted.cpp
         src/redis/core/RedisPipeline.cpp
         src/redis/core/RedisPool.cpp
+        src/redis/core/RedisPoolIo.cpp
+        src/redis/core/RedisPoolLifecycle.cpp
+        src/redis/core/RedisPoolSlots.cpp
         src/redis/core/RedisProtocol.cpp
+        src/redis/core/RedisReplyParsers.cpp
+        src/redis/core/RedisTransaction.cpp
         src/redis/core/RedisTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_JWT)
-    list(APPEND RUVIA_SOURCES src/auth/Jwt.cpp)
+    list(APPEND RUVIA_SOURCES
+        src/auth/Jwt.cpp
+        src/auth/JwtCommon.cpp
+        src/auth/JwtCrypto.cpp
+        src/auth/JwtEncoding.cpp
+        src/auth/JwtJson.cpp)
 endif()
 
 if(RUVIA_ENABLE_HTTP_CLIENT)
     list(APPEND RUVIA_SOURCES
         src/http/client/HttpClientPool.cpp
+        src/http/client/HttpClientPoolLifecycle.cpp
+        src/http/client/HttpClientResponseParser.cpp
+        src/http/client/HttpClientPoolSlots.cpp
         src/http/client/HttpClientRegistry.cpp
         src/http/HttpClientContext.cpp)
 endif()
@@ -173,7 +224,13 @@ function(ruvia_configure_library target)
 
     if(MSVC)
         target_compile_options(${target} PUBLIC /utf-8 /Zc:preprocessor)
-        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        target_compile_options(${target} PRIVATE /W4 /permissive- /bigobj /FS)
+        if(CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "^MultiThreaded")
+            target_compile_options(${target}
+                INTERFACE
+                    "$<$<CXX_COMPILER_ID:MSVC>:/MT$<$<CONFIG:Debug>:d>>"
+            )
+        endif()
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()

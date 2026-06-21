@@ -11,6 +11,25 @@
 namespace ruvia::detail {
 namespace {
 
+[[nodiscard]] std::size_t decimalDigits(std::uint64_t value) noexcept {
+    std::size_t digits = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++digits;
+    }
+    return digits;
+}
+
+template <typename Args>
+[[nodiscard]] std::size_t respSerializedSize(const Args& args) noexcept {
+    std::size_t size = 1 + decimalDigits(static_cast<std::uint64_t>(args.size())) + 2;
+    for (const auto& arg : args) {
+        const auto bytes = static_cast<std::size_t>(arg.size());
+        size += 1 + decimalDigits(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
+    }
+    return size;
+}
+
 // Writes the RESP multi-bulk encoding of `args` to `output`. No manual
 // reserve: `output` is the per-connection write buffer reused across requests,
 // so in steady state it already holds enough capacity, and std::pmr::string's
@@ -47,6 +66,14 @@ void appendRespCommand(std::pmr::string& output, std::span<const std::pmr::strin
         throw std::invalid_argument("redis command must not be empty");
     }
     serializeRespCommand(output, args);
+}
+
+std::size_t respCommandSerializedSize(std::span<const std::string_view> args) noexcept {
+    return respSerializedSize(args);
+}
+
+std::size_t respCommandSerializedSize(std::span<const std::pmr::string> args) noexcept {
+    return respSerializedSize(args);
 }
 
 RedisValue hiredisReplyToValue(

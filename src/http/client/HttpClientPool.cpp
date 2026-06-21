@@ -5,185 +5,20 @@
 #include <asio/connect.hpp>
 #include <asio/read.hpp>
 #include <asio/write.hpp>
+#include <algorithm>
+#include <array>
 #include <charconv>
-#include <cctype>
 #include <stdexcept>
 #include <system_error>
 
 #include "../../runtime/AsioAwait.h"
+#include "HttpClientResponseParser.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 
-// ── Connection ────────────────────────────────────────────────────────────────
-
-HttpClientPool::Connection::Connection(asio::io_context& ctx)
-    : rawSocket(ctx) {}
-
-// ── ConnectionGuard ───────────────────────────────────────────────────────────
-
-HttpClientPool::ConnectionGuard::ConnectionGuard(HttpClientPool& pool, std::size_t index) noexcept
-    : pool_(&pool), index_(index) {}
-
-HttpClientPool::ConnectionGuard::~ConnectionGuard() {
-    if (pool_ == nullptr) return;
-    if (discard_) {
-        pool_->closeConnection(*pool_->connections_[index_]);
-    }
-    pool_->release(index_);
-}
-
-HttpClientPool::Connection& HttpClientPool::ConnectionGuard::connection() noexcept {
-    return *pool_->connections_[index_];
-}
-
-// ── HttpClientPool ────────────────────────────────────────────────────────────
-
-HttpClientPool::HttpClientPool(
-    asio::io_context& ioContext,
-    HttpClientConfig config,
-    std::pmr::memory_resource* resource)
-    : ioContext_(ioContext),
-      config_(std::move(config)),
-      resource_(resource),
-      connections_(resource),
-      free_(resource) {
-    if (config_.tls) {
-        sslContext_.emplace(asio::ssl::context::tls_client);
-        sslContext_->set_default_verify_paths();
-        sslContext_->set_verify_mode(asio::ssl::verify_peer);
-    }
-    const auto n = config_.poolSizePerWorker == 0 ? 1 : config_.poolSizePerWorker;
-    connections_.reserve(n);
-    free_.reserve(n);
-    for (std::size_t i = 0; i < n; ++i) {
-        connections_.push_back(new Connection(ioContext_));
-        free_.push_back(i);
-    }
-}
-
-HttpClientPool::~HttpClientPool() {
-    for (auto* conn : connections_) {
-        delete conn;
-    }
-}
-
-bool HttpClientPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.count() > 0 ||
-           config_.requestTimeout.count() > 0 ||
-           config_.acquireTimeout.count() > 0;
-}
-
-Task<void> HttpClientPool::connect() {
-    for (auto* conn : connections_) {
-        co_await connectOne(*conn);
-    }
-}
-
-void HttpClientPool::closeNow() noexcept {
-    closing_ = true;
-    for (auto* conn : connections_) {
-        closeConnection(*conn);
-    }
-    // Resume all waiters so they can observe closing_ and throw
-    while (waiterHead_ != nullptr) {
-        auto* w = waiterHead_;
-        waiterHead_ = w->next;
-        if (waiterHead_ != nullptr) waiterHead_->previous = nullptr;
-        w->queued = false;
-        *w->ready = true;
-        if (w->handle) w->handle.resume();
-    }
-    waiterTail_ = nullptr;
-}
-
-// ── Slot management ───────────────────────────────────────────────────────────
-
-namespace {
-
-struct PoolWaiterAwaiter {
-    HttpClientPool& pool;
-    HttpClientPool::PoolWaiter waiter;
-    bool ready{false};
-    std::size_t index{0};
-
-    [[nodiscard]] bool await_ready() const noexcept { return false; }
-
-    bool await_suspend(std::coroutine_handle<> handle) {
-        if (!pool.free_.empty()) {
-            index = pool.free_.back();
-            pool.free_.pop_back();
-            ready = true;
-            return false;
-        }
-        waiter.ready = &ready;
-        waiter.index = &index;
-        waiter.handle = handle;
-        pool.enqueueWaiter(waiter);
-        return true;
-    }
-
-    std::size_t await_resume() {
-        if (pool.closing_) {
-            throw std::runtime_error("http client pool is closed");
-        }
-        return index;
-    }
-};
-
-}  // namespace
-
-Task<std::size_t> HttpClientPool::acquire() {
-    PoolWaiterAwaiter awaiter{*this};
-    co_return co_await awaiter;
-}
-
-void HttpClientPool::release(std::size_t index) noexcept {
-    if (!resumeNextWaiter(index)) {
-        free_.push_back(index);
-    }
-}
-
-void HttpClientPool::enqueueWaiter(PoolWaiter& w) noexcept {
-    w.previous = waiterTail_;
-    w.next = nullptr;
-    if (waiterTail_ != nullptr) waiterTail_->next = &w;
-    else waiterHead_ = &w;
-    waiterTail_ = &w;
-    w.queued = true;
-}
-
-void HttpClientPool::removeWaiter(PoolWaiter& w) noexcept {
-    if (!w.queued) return;
-    if (w.previous != nullptr) w.previous->next = w.next;
-    else waiterHead_ = w.next;
-    if (w.next != nullptr) w.next->previous = w.previous;
-    else waiterTail_ = w.previous;
-    w.queued = false;
-}
-
-bool HttpClientPool::resumeNextWaiter(std::size_t index) noexcept {
-    if (waiterHead_ == nullptr) return false;
-    auto* w = waiterHead_;
-    removeWaiter(*w);
-    *w->index = index;
-    *w->ready = true;
-    if (w->handle) w->handle.resume();
-    return true;
-}
-
-void HttpClientPool::closeConnection(Connection& conn) noexcept {
-    conn.connected = false;
-    std::error_code ignored;
-    if (conn.tlsStream) {
-        conn.tlsStream->lowest_layer().cancel(ignored);
-        conn.tlsStream->lowest_layer().close(ignored);
-    } else {
-        conn.rawSocket.cancel(ignored);
-        conn.rawSocket.close(ignored);
-    }
-}
-
-// ── Connect ───────────────────────────────────────────────────────────────────
+// Connect
 
 Task<void> HttpClientPool::connectOne(Connection& conn) {
     if (conn.rawSocket.is_open()) {
@@ -199,18 +34,26 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
     conn.rawSocket = asio::ip::tcp::socket(ioContext_);
 
     asio::ip::tcp::resolver resolver(ioContext_);
-    const auto portStr = std::to_string(config_.port);
+    std::array<char, 5> portBuffer;
+    const auto [portEnd, portEc] = std::to_chars(
+        portBuffer.data(),
+        portBuffer.data() + portBuffer.size(),
+        config_.port);
+    if (portEc != std::errc{}) {
+        throw std::logic_error("http client: invalid port");
+    }
+    const auto port = std::string_view(portBuffer.data(), static_cast<std::size_t>(portEnd - portBuffer.data()));
     auto [resolveEc, endpoints] = co_await asyncResult<asio::ip::tcp::resolver::results_type>(
-        [&](auto handler) {
+        [this, port, &resolver](auto handler) {
             resolver.async_resolve(
-                std::string(config_.host),
-                portStr,
+                std::string_view(config_.host),
+                port,
                 std::move(handler));
         });
     if (resolveEc) {
         throw std::system_error(
             resolveEc,
-            "http client: resolve failed for " + std::string(config_.host));
+            "http client: resolve failed");
     }
 
     auto [connectEc, ep] = co_await asyncResult<asio::ip::tcp::endpoint>(
@@ -229,8 +72,8 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
 
     if (config_.tls) {
         if (!conn.tlsStream) {
-            conn.tlsStream = std::make_unique<asio::ssl::stream<asio::ip::tcp::socket&>>(
-                conn.rawSocket, *sslContext_);
+            using TlsStream = Connection::TlsStream;
+            conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
         }
         const auto handshakeEc = co_await asyncError([&](auto handler) {
             conn.tlsStream->async_handshake(
@@ -244,7 +87,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
     conn.connected = true;
 }
 
-// ── Request ───────────────────────────────────────────────────────────────────
+// Request
 
 Task<FetchResponse> HttpClientPool::fetch(
     std::string_view path,
@@ -275,12 +118,64 @@ Task<FetchResponse> HttpClientPool::executeRequest(
     std::string_view path,
     const FetchOptions& options,
     std::pmr::memory_resource* resource) {
+    auto* const requestResource = resource == nullptr ? resource_ : resource;
+    auto asyncWriteConnection = [&conn](auto buffers) {
+        return asyncError([&conn, buffers](auto handler) mutable {
+            if (conn.tlsStream) {
+                asio::async_write(*conn.tlsStream, buffers, std::move(handler));
+            } else {
+                asio::async_write(conn.rawSocket, buffers, std::move(handler));
+            }
+        });
+    };
+    auto asyncReadSomeConnection = [&conn](asio::mutable_buffer buffer) {
+        return asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
+            if (conn.tlsStream) {
+                conn.tlsStream->async_read_some(buffer, std::move(handler));
+            } else {
+                conn.rawSocket.async_read_some(buffer, std::move(handler));
+            }
+        });
+    };
+    auto asyncReadConnection = [&conn](asio::mutable_buffer buffer) {
+        return asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
+            if (conn.tlsStream) {
+                asio::async_read(*conn.tlsStream, buffer, std::move(handler));
+            } else {
+                asio::async_read(conn.rawSocket, buffer, std::move(handler));
+            }
+        });
+    };
+
     // Build request
     const auto method = options.method.empty() ? std::string_view("GET") : options.method;
     const auto effectivePath = path.empty() ? std::string_view("/") : path;
 
-    std::pmr::string requestBuf(resource_);
-    requestBuf.reserve(256);
+    std::array<char, 24> lenBuf;
+    std::string_view contentLengthValue;
+    if (!options.body.empty()) {
+        const auto [ptr, ec] = std::to_chars(
+            lenBuf.data(), lenBuf.data() + lenBuf.size(), options.body.size());
+        if (ec != std::errc{}) {
+            throw std::logic_error("failed to format request content length");
+        }
+        contentLengthValue = std::string_view(lenBuf.data(), static_cast<std::size_t>(ptr - lenBuf.data()));
+    }
+
+    std::size_t requestHeadBytes =
+        method.size() + 1 + effectivePath.size() +
+        std::string_view(" HTTP/1.1\r\nHost: ").size() + config_.host.size() +
+        std::string_view("\r\nConnection: keep-alive\r\n").size() +
+        2;
+    for (const auto& hdr : options.headers) {
+        requestHeadBytes += hdr.name.size() + 2 + hdr.value.size() + 2;
+    }
+    if (!contentLengthValue.empty()) {
+        requestHeadBytes += std::string_view("Content-Length: ").size() + contentLengthValue.size() + 2;
+    }
+
+    std::pmr::string requestBuf(requestResource);
+    requestBuf.reserve(requestHeadBytes);
     requestBuf.append(method.data(), method.size());
     requestBuf.push_back(' ');
     requestBuf.append(effectivePath.data(), effectivePath.size());
@@ -295,151 +190,93 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         requestBuf.append("\r\n");
     }
 
-    if (!options.body.empty()) {
-        std::array<char, 24> lenBuf{};
-        const auto [ptr, ec] = std::to_chars(
-            lenBuf.data(), lenBuf.data() + lenBuf.size(), options.body.size());
+    if (!contentLengthValue.empty()) {
         requestBuf.append("Content-Length: ");
-        requestBuf.append(lenBuf.data(), static_cast<std::size_t>(ptr - lenBuf.data()));
+        requestBuf.append(contentLengthValue.data(), contentLengthValue.size());
         requestBuf.append("\r\n");
     }
     requestBuf.append("\r\n");
-    if (!options.body.empty()) {
-        requestBuf.append(options.body.data(), options.body.size());
-    }
 
     // Write request
-    const auto writeEc = co_await asyncError([&](auto handler) {
-        if (conn.tlsStream) {
-            asio::async_write(
-                *conn.tlsStream,
-                asio::buffer(requestBuf.data(), requestBuf.size()),
-                std::move(handler));
-        } else {
-            asio::async_write(
-                conn.rawSocket,
-                asio::buffer(requestBuf.data(), requestBuf.size()),
-                std::move(handler));
-        }
-    });
+    const std::array<asio::const_buffer, 2> requestBuffers{
+        asio::buffer(requestBuf.data(), requestBuf.size()),
+        asio::buffer(options.body.data(), options.body.size())};
+    const auto writeEc = co_await asyncWriteConnection(requestBuffers);
     if (writeEc) {
         conn.connected = false;
         throw std::system_error(writeEc, "http client: write failed");
     }
 
     // Read response headers
-    std::pmr::string readBuf(resource_);
+    std::pmr::string readBuf(requestResource);
     readBuf.reserve(4096);
 
-    while (readBuf.find("\r\n\r\n") == std::pmr::string::npos) {
-        std::array<char, 4096> chunk{};
-        auto [readEc, n] = co_await asyncResult<std::size_t>([&](auto handler) {
-            if (conn.tlsStream) {
-                conn.tlsStream->async_read_some(asio::buffer(chunk), std::move(handler));
-            } else {
-                conn.rawSocket.async_read_some(asio::buffer(chunk), std::move(handler));
-            }
-        });
+    auto headerEnd = std::pmr::string::npos;
+    while (headerEnd == std::pmr::string::npos) {
+        if (readBuf.size() >= kMaxHttpHeaderBytes) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: response headers too large");
+        }
+
+        const auto oldSize = readBuf.size();
+        const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
+        resizePmrStringForOverwrite(readBuf, oldSize + writable);
+        auto [readEc, n] = co_await asyncReadSomeConnection(asio::buffer(readBuf.data() + oldSize, writable));
         if (readEc) {
             conn.connected = false;
             throw std::system_error(readEc, "http client: read failed");
         }
-        readBuf.append(chunk.data(), n);
-    }
-
-    const auto sep = readBuf.find("\r\n\r\n");
-    const auto headerSection = std::string_view(readBuf.data(), sep);
-    const std::size_t bodyOffset = sep + 4;
-
-    // Parse status line
-    const auto crlfPos = headerSection.find("\r\n");
-    const auto firstLine = crlfPos == std::string_view::npos
-        ? headerSection
-        : headerSection.substr(0, crlfPos);
-    const auto sp1 = firstLine.find(' ');
-    int statusCode = 200;
-    if (sp1 != std::string_view::npos) {
-        const auto sp2 = firstLine.find(' ', sp1 + 1);
-        const auto codeStr = firstLine.substr(
-            sp1 + 1,
-            sp2 == std::string_view::npos ? std::string_view::npos : sp2 - sp1 - 1);
-        std::from_chars(codeStr.data(), codeStr.data() + codeStr.size(), statusCode);
-    }
-
-    FetchResponse response(resource);
-    response.statusCode = statusCode;
-
-    // Parse headers and find Content-Length
-    std::size_t contentLength = 0;
-    auto remaining = crlfPos == std::string_view::npos
-        ? std::string_view{}
-        : headerSection.substr(crlfPos + 2);
-    while (!remaining.empty()) {
-        const auto lineEnd = remaining.find("\r\n");
-        const auto line = lineEnd == std::string_view::npos
-            ? remaining
-            : remaining.substr(0, lineEnd);
-        const auto colon = line.find(':');
-        if (colon != std::string_view::npos) {
-            auto name = line.substr(0, colon);
-            auto value = line.substr(colon + 1);
-            while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-                value.remove_prefix(1);
-            }
-            // Case-insensitive Content-Length check
-            if (name.size() == 14) {
-                bool isCL = true;
-                constexpr std::string_view kCL = "Content-Length";
-                for (std::size_t i = 0; i < 14 && isCL; ++i) {
-                    isCL = std::tolower(static_cast<unsigned char>(name[i])) ==
-                           std::tolower(static_cast<unsigned char>(kCL[i]));
-                }
-                if (isCL) {
-                    std::from_chars(value.data(), value.data() + value.size(), contentLength);
-                }
-            }
-            response.headers.push_back({
-                std::pmr::string(name.data(), name.size(), resource),
-                std::pmr::string(value.data(), value.size(), resource)});
+        if (n == 0) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: empty response read");
         }
-        if (lineEnd == std::string_view::npos) break;
-        remaining = remaining.substr(lineEnd + 2);
+        readBuf.resize(oldSize + n);
+        const auto searchOffset = oldSize > 3 ? oldSize - 3 : 0;
+        headerEnd = readBuf.find("\r\n\r\n", searchOffset);
     }
+
+    FetchResponse response(requestResource);
+    auto responseHead = parseHttpClientResponseHead(
+        method,
+        std::string_view(readBuf.data(), headerEnd),
+        response,
+        requestResource);
 
     // Collect body
-    if (contentLength > 0) {
-        response.body.resize(contentLength, '\0');
-        const auto alreadyRead = readBuf.size() > bodyOffset
-            ? readBuf.size() - bodyOffset
+    if (!responseHead.hasContentLength && responseHead.responseMayHaveBody) {
+        responseHead.closeAfterResponse = true;
+    }
+
+    if (responseHead.contentLength > 0 && responseHead.responseMayHaveBody) {
+        resizePmrStringForOverwrite(response.body, responseHead.contentLength);
+        const auto alreadyRead = readBuf.size() > responseHead.bodyOffset
+            ? readBuf.size() - responseHead.bodyOffset
             : std::size_t{0};
-        const auto toCopy = std::min(alreadyRead, contentLength);
-        if (toCopy > 0) {
-            std::copy_n(readBuf.data() + bodyOffset, toCopy, response.body.data());
+        const auto toCopy = std::min(alreadyRead, responseHead.contentLength);
+        if (alreadyRead > responseHead.contentLength) {
+            responseHead.closeAfterResponse = true;
         }
-        if (toCopy < contentLength) {
-            auto [bodyEc, bodyN] = co_await asyncResult<std::size_t>([&](auto handler) {
-                if (conn.tlsStream) {
-                    asio::async_read(
-                        *conn.tlsStream,
-                        asio::buffer(
-                            response.body.data() + toCopy,
-                            contentLength - toCopy),
-                        std::move(handler));
-                } else {
-                    asio::async_read(
-                        conn.rawSocket,
-                        asio::buffer(
-                            response.body.data() + toCopy,
-                            contentLength - toCopy),
-                        std::move(handler));
-                }
-            });
+        if (toCopy > 0) {
+            std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, response.body.data());
+        }
+        if (toCopy < responseHead.contentLength) {
+            auto [bodyEc, bodyN] = co_await asyncReadConnection(asio::buffer(
+                response.body.data() + toCopy,
+                responseHead.contentLength - toCopy));
             (void)bodyN;
-            if (bodyEc && bodyEc != asio::error::eof) {
+            if (bodyEc) {
                 conn.connected = false;
                 throw std::system_error(bodyEc, "http client: read body failed");
             }
         }
+    } else if (!responseHead.hasContentLength && readBuf.size() > responseHead.bodyOffset) {
+        responseHead.closeAfterResponse = true;
+    } else if (readBuf.size() > responseHead.bodyOffset) {
+        responseHead.closeAfterResponse = true;
+    }
+
+    if (responseHead.closeAfterResponse) {
+        closeConnection(conn);
     }
 
     co_return response;

@@ -6,11 +6,11 @@
 
 #include "ruvia/http/HttpTypes.h"
 
-// Lightweight route-resolution result types. Kept in their own header (rather
-// than RouterInternal.h) so the request hot path — including the connection
-// work set, which embeds a RouteResolution — can name them without pulling in
-// the full router/controller/model machinery. RouteEntry is only referenced
-// through a pointer here, so a forward declaration suffices.
+// Lightweight route-resolution result types. Kept below the RouteTable layer so
+// the request hot path, including the connection work set that embeds
+// RouteResolution, can name them without pulling in route indexes or router
+// builder state. RouteEntry is only referenced through a pointer here, so a
+// forward declaration suffices.
 
 namespace ruvia::detail {
 

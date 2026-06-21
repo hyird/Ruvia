@@ -1,0 +1,164 @@
+#include "HttpWebSocketUtils.h"
+
+#include <algorithm>
+#include <array>
+#include <span>
+
+#include "ruvia/http/HeaderUtils.h"
+
+namespace ruvia::detail {
+namespace {
+
+constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+void encodeBase64(char* output, std::span<const std::uint8_t> input) noexcept {
+    static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::size_t i = 0;
+    std::size_t out = 0;
+    while (i + 3 <= input.size()) {
+        const auto value =
+            (static_cast<std::uint32_t>(input[i]) << 16) |
+            (static_cast<std::uint32_t>(input[i + 1]) << 8) |
+            static_cast<std::uint32_t>(input[i + 2]);
+        output[out++] = table[(value >> 18) & 0x3F];
+        output[out++] = table[(value >> 12) & 0x3F];
+        output[out++] = table[(value >> 6) & 0x3F];
+        output[out++] = table[value & 0x3F];
+        i += 3;
+    }
+    if (i == input.size()) {
+        return;
+    }
+    const auto remaining = input.size() - i;
+    const auto value = static_cast<std::uint32_t>(input[i]) << 16 |
+        (remaining == 2 ? static_cast<std::uint32_t>(input[i + 1]) << 8 : 0U);
+    output[out++] = table[(value >> 18) & 0x3F];
+    output[out++] = table[(value >> 12) & 0x3F];
+    output[out++] = remaining == 2 ? table[(value >> 6) & 0x3F] : '=';
+    output[out] = '=';
+}
+
+[[nodiscard]] std::uint32_t sha1RotateLeft(std::uint32_t value, std::uint32_t bits) noexcept {
+    return (value << bits) | (value >> (32 - bits));
+}
+
+[[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view input) noexcept {
+    std::uint32_t h0 = 0x67452301U;
+    std::uint32_t h1 = 0xEFCDAB89U;
+    std::uint32_t h2 = 0x98BADCFEU;
+    std::uint32_t h3 = 0x10325476U;
+    std::uint32_t h4 = 0xC3D2E1F0U;
+    std::array<std::uint8_t, 64> block{};
+    std::uint64_t totalBits = static_cast<std::uint64_t>(input.size()) * 8U;
+    std::size_t offset = 0;
+
+    const auto process = [&](const std::array<std::uint8_t, 64>& data) noexcept {
+        std::array<std::uint32_t, 80> w{};
+        for (std::size_t i = 0; i < 16; ++i) {
+            w[i] = (static_cast<std::uint32_t>(data[i * 4]) << 24) |
+                (static_cast<std::uint32_t>(data[i * 4 + 1]) << 16) |
+                (static_cast<std::uint32_t>(data[i * 4 + 2]) << 8) |
+                static_cast<std::uint32_t>(data[i * 4 + 3]);
+        }
+        for (std::size_t i = 16; i < 80; ++i) {
+            w[i] = sha1RotateLeft(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        }
+        auto a = h0;
+        auto b = h1;
+        auto c = h2;
+        auto d = h3;
+        auto e = h4;
+        for (std::size_t i = 0; i < 80; ++i) {
+            std::uint32_t f = 0;
+            std::uint32_t k = 0;
+            if (i < 20) {
+                f = (b & c) | ((~b) & d);
+                k = 0x5A827999U;
+            } else if (i < 40) {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1U;
+            } else if (i < 60) {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDCU;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6U;
+            }
+            const auto temp = sha1RotateLeft(a, 5) + f + e + k + w[i];
+            e = d;
+            d = c;
+            c = sha1RotateLeft(b, 30);
+            b = a;
+            a = temp;
+        }
+        h0 += a;
+        h1 += b;
+        h2 += c;
+        h3 += d;
+        h4 += e;
+    };
+
+    while (input.size() - offset >= block.size()) {
+        for (std::size_t i = 0; i < block.size(); ++i) {
+            block[i] = static_cast<std::uint8_t>(input[offset + i]);
+        }
+        process(block);
+        offset += block.size();
+    }
+    block.fill(0);
+    const auto remaining = input.size() - offset;
+    for (std::size_t i = 0; i < remaining; ++i) {
+        block[i] = static_cast<std::uint8_t>(input[offset + i]);
+    }
+    block[remaining] = 0x80;
+    if (remaining >= 56) {
+        process(block);
+        block.fill(0);
+    }
+    for (std::size_t i = 0; i < 8; ++i) {
+        block[63 - i] = static_cast<std::uint8_t>((totalBits >> (i * 8)) & 0xFF);
+    }
+    process(block);
+
+    std::array<std::uint8_t, 20> digest{};
+    const std::array words{h0, h1, h2, h3, h4};
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        digest[i * 4] = static_cast<std::uint8_t>((words[i] >> 24) & 0xFF);
+        digest[i * 4 + 1] = static_cast<std::uint8_t>((words[i] >> 16) & 0xFF);
+        digest[i * 4 + 2] = static_cast<std::uint8_t>((words[i] >> 8) & 0xFF);
+        digest[i * 4 + 3] = static_cast<std::uint8_t>(words[i] & 0xFF);
+    }
+    return digest;
+}
+
+}  // namespace
+
+void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
+    key = detail::httpTrimOws(key);
+    if (key.size() == 24) {
+        std::array<char, 24 + kWebSocketGuid.size()> material{};
+        auto* cursor = material.data();
+        cursor = std::copy_n(key.data(), key.size(), cursor);
+        std::copy_n(kWebSocketGuid.data(), kWebSocketGuid.size(), cursor);
+        const auto digest = sha1(std::string_view(material.data(), material.size()));
+        encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
+        return;
+    }
+
+    std::pmr::string material(std::pmr::get_default_resource());
+    material.reserve(key.size() + kWebSocketGuid.size());
+    material.append(key);
+    material.append(kWebSocketGuid);
+    const auto digest = sha1(material);
+    encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
+}
+
+std::pmr::string webSocketAccept(std::string_view key, std::pmr::memory_resource* resource) {
+    WebSocketAcceptKey encoded;
+    encodeWebSocketAccept(encoded, key);
+    std::pmr::string accept(resource);
+    accept.append(encoded.data(), encoded.size());
+    return accept;
+}
+
+}  // namespace ruvia::detail

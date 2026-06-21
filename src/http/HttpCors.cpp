@@ -1,8 +1,9 @@
 #include "HttpCors.h"
 
 #include <array>
-#include <charconv>
-#include <system_error>
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
 
 #include "ResponseHeaderUtils.h"
 
@@ -13,14 +14,11 @@ void setCorsMaxAge(HttpResponse& response, std::chrono::seconds maxAge) {
     if (maxAge.count() <= 0 || response.hasKnownHeader(HttpResponse::kKnownHeaderAccessControlMaxAge)) {
         return;
     }
-
-    std::array<char, 32> buffer{};
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), maxAge.count());
-    if (ec == std::errc{}) {
-        response.setHeader(
-            "Access-Control-Max-Age",
-            std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
-    }
+    setResponseHeaderUnsigned(
+        response,
+        "Access-Control-Max-Age",
+        static_cast<std::uint64_t>(maxAge.count()),
+        HttpResponse::kKnownHeaderAccessControlMaxAge);
 }
 
 }  // namespace
@@ -37,20 +35,18 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
 
     const auto configuredOrigin = std::string_view(cors.allowOrigin);
     const auto allowOrigin = configuredOrigin == "*" && cors.allowCredentials ? origin : configuredOrigin;
+    std::array<std::string_view, 3> varyTokens{};
+    std::size_t varyTokenCount = 0;
     setResponseHeaderIfMissing(
         response,
         HttpResponse::kKnownHeaderAccessControlAllowOrigin,
         "Access-Control-Allow-Origin",
         allowOrigin);
     if (allowOrigin != "*") {
-        addVaryToken(response, "Origin");
+        varyTokens[varyTokenCount++] = "Origin";
     }
-    if (cors.allowCredentials) {
-        setResponseHeaderIfMissing(
-            response,
-            HttpResponse::kKnownHeaderAccessControlAllowCredentials,
-            "Access-Control-Allow-Credentials",
-            "true");
+    if (cors.allowCredentials && !response.hasKnownHeader(HttpResponse::kKnownHeaderAccessControlAllowCredentials)) {
+        setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
 
     const bool preflight = request.method() == HttpMethod::kOptions &&
@@ -77,13 +73,15 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
                 HttpResponse::kKnownHeaderAccessControlAllowHeaders,
                 "Access-Control-Allow-Headers",
                 requestedHeaders);
-            addVaryToken(response, "Access-Control-Request-Headers");
+            varyTokens[varyTokenCount++] = "Access-Control-Request-Headers";
         }
-        addVaryToken(response, "Access-Control-Request-Method");
+        varyTokens[varyTokenCount++] = "Access-Control-Request-Method";
+        addVaryTokens(response, varyTokens.data(), varyTokenCount);
         setCorsMaxAge(response, cors.maxAge);
         return;
     }
 
+    addVaryTokens(response, varyTokens.data(), varyTokenCount);
     if (!cors.exposeHeaders.empty()) {
         setResponseHeaderIfMissing(
             response,

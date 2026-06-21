@@ -1,13 +1,15 @@
 #include "ruvia/app/App.h"
 
+#include <algorithm>
+#include <memory_resource>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 
-#include "ruvia/http/Controller.h"
+#include "ruvia/http/ControllerTypes.h"
+#include "AppConfigGuards.h"
 #include "../net/server/HttpServer.h"
 #include "../router/RouterInternal.h"
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-#include "../http/client/HttpClientInternal.h"
-#endif
 
 namespace ruvia {
 namespace {
@@ -20,26 +22,17 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-void ensureNotRunning(bool running, const char* message) {
-    if (running) {
-        throw std::logic_error(message);
-    }
-}
-
-template <typename Rep, typename Period>
-void ensureNonNegative(std::chrono::duration<Rep, Period> value, const char* message) {
-    if (value.count() < 0) {
-        throw std::invalid_argument(message);
-    }
-}
-
 }  // namespace
 
 namespace detail {
 
 struct AppRuntimeGraph final {
-    std::unique_ptr<StaticRoot> documentRoot;
-    std::pmr::vector<std::unique_ptr<HttpServer>> workers{ProcessMemory::instance().upstreamResource()};
+    explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
+        : documentRoot(nullptr, PmrObjectDeleter<StaticRoot>{resource}),
+          workers(resource) {}
+
+    std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
+    std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
 };
 
 }  // namespace detail
@@ -55,11 +48,7 @@ App& app() {
 
 App::App()
     : threadNum_(std::max(1U, std::thread::hardware_concurrency())) {
-    auto* resource = ProcessMemory::instance().upstreamResource();
-    listeners_.push_back(ListenerConfig{
-        std::pmr::string("0.0.0.0", resource),
-        8080,
-        std::nullopt});
+    listenAddress_.assign("0.0.0.0");
 }
 
 App::~App() = default;
@@ -68,321 +57,14 @@ const Env& App::env() const noexcept {
     return env_;
 }
 
-App& App::loadDotenv(DotenvOptions options) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot load dotenv while app is running");
-
-    (void)env_.loadFromExecutableDirectory(options);
-    return *this;
-}
-
-App& App::loadDotenv(const std::filesystem::path& path, DotenvOptions options) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot load dotenv while app is running");
-
-    (void)env_.loadFromFile(path, options);
-    return *this;
-}
-
-App& App::setListenAddress(std::string_view address, std::uint16_t port) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change listen address while app is running");
-
-    listeners_[0].address.assign(address.data(), address.size());
-    listeners_[0].port = port;
-    return *this;
-}
-
-App& App::addListener(ListenerConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot add listener while app is running");
-    if (config.address.empty()) {
-        throw std::invalid_argument("listener address must not be empty");
-    }
-    listeners_.push_back(std::move(config));
-    return *this;
-}
-
-App& App::setThreadNum(std::size_t threadNum) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change thread count while app is running");
-    if (threadNum == 0) {
-        throw std::invalid_argument("thread count must be greater than 0");
-    }
-
-    threadNum_ = threadNum;
-    return *this;
-}
-
-App& App::setIdleTimeout(std::chrono::milliseconds timeout) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change idle timeout while app is running");
-    ensureNonNegative(timeout, "idle timeout must not be negative");
-
-    options_.idleTimeout = timeout;
-    return *this;
-}
-
-App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change connection scan interval while app is running");
-    ensureNonNegative(interval, "connection scan interval must not be negative");
-
-    options_.scanInterval = interval;
-    return *this;
-}
-
-App& App::setHeaderTimeout(std::chrono::milliseconds timeout) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change header timeout while app is running");
-    ensureNonNegative(timeout, "header timeout must not be negative");
-
-    options_.headerTimeout = timeout;
-    return *this;
-}
-
-App& App::setBodyTimeout(std::chrono::milliseconds timeout) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change body timeout while app is running");
-    ensureNonNegative(timeout, "body timeout must not be negative");
-
-    options_.bodyTimeout = timeout;
-    return *this;
-}
-
-App& App::setWriteTimeout(std::chrono::milliseconds timeout) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change write timeout while app is running");
-    ensureNonNegative(timeout, "write timeout must not be negative");
-
-    options_.writeTimeout = timeout;
-    return *this;
-}
-
-App& App::setMaxConnectionsPerWorker(std::size_t maxConnections) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change connection limit while app is running");
-
-    options_.maxConnections = maxConnections;
-    return *this;
-}
-
-App& App::setMaxRequestsPerConnection(std::size_t maxRequests) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change keep-alive request limit while app is running");
-
-    options_.maxRequestsPerConnection = maxRequests;
-    return *this;
-}
-
-App& App::setMaxBufferedBodyBytes(std::size_t bytes) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change buffered body limit while app is running");
-
-    options_.maxBufferedBodyBytes = bytes;
-    return *this;
-}
-
-App& App::setMaxStreamBodyBytes(std::size_t bytes) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change stream body limit while app is running");
-
-    options_.maxStreamBodyBytes = bytes;
-    return *this;
-}
-
-App& App::setMaxWebSocketMessageBytes(std::size_t bytes) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change websocket message limit while app is running");
-
-    options_.maxWebSocketMessageBytes = bytes;
-    return *this;
-}
-
-App& App::useTls(TlsConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot configure TLS while app is running");
-    if (config.certificateChainFile.empty()) {
-        throw std::invalid_argument("TLS certificate chain file must not be empty");
-    }
-    if (config.privateKeyFile.empty()) {
-        throw std::invalid_argument("TLS private key file must not be empty");
-    }
-
-    options_.tls.enabled = true;
-    options_.tls.certificateChainFile = std::move(config.certificateChainFile);
-    options_.tls.privateKeyFile = std::move(config.privateKeyFile);
-    options_.tls.privateKeyPassword = std::move(config.privateKeyPassword);
-    options_.tls.verifyFile = std::move(config.verifyFile);
-    return *this;
-}
-
-App& App::setCompression(CompressionConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change compression config while app is running");
-
-    options_.compression.enabled = config.enabled;
-    options_.compression.minBytes = config.minBytes;
-    return *this;
-}
-
-App& App::setCors(CorsConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change CORS config while app is running");
-    if (config.enabled && config.allowOrigin.empty()) {
-        throw std::invalid_argument("CORS allowOrigin must not be empty when CORS is enabled");
-    }
-    ensureNonNegative(config.maxAge, "CORS maxAge must not be negative");
-
-    options_.cors.enabled = config.enabled;
-    options_.cors.allowOrigin = std::move(config.allowOrigin);
-    options_.cors.allowHeaders = std::move(config.allowHeaders);
-    options_.cors.exposeHeaders = std::move(config.exposeHeaders);
-    options_.cors.maxAge = config.maxAge;
-    options_.cors.allowCredentials = config.allowCredentials;
-    return *this;
-}
-
-App& App::setDocumentRoot(DocumentRootConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change document root while app is running");
-    if (config.root.empty()) {
-        throw std::invalid_argument("document root must not be empty");
-    }
-    if (config.staticOptions.indexFile.empty()) {
-        config.staticOptions.indexFile = "index.html";
-    }
-
-    documentRootConfig_ = std::move(config);
-    return *this;
-}
-
-App& App::setDocumentRoot(const std::filesystem::path& root) {
-    DocumentRootConfig config;
-    config.root = root;
-    return setDocumentRoot(std::move(config));
-}
-
-App& App::setMemoryPoolConfig(MemoryPoolConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change memory pool config while app is running");
-    if (config.requestInitialBufferBytes == 0) {
-        throw std::invalid_argument("memory pool config values must be greater than 0");
-    }
-
-    memoryConfig_ = config;
-    return *this;
-}
-
-App& App::setErrorHandler(HttpErrorHandler handler) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot change error handler while app is running");
-
-    errorHandler_ = handler;
-    return *this;
-}
-
-App& App::onStart(AppHook hook) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot register onStart hook while app is running");
-    onStartHooks_.push_back(std::move(hook));
-    return *this;
-}
-
-App& App::onStop(AppHook hook) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot register onStop hook while app is running");
-    onStopHooks_.push_back(std::move(hook));
-    return *this;
-}
-
-#ifdef RUVIA_ENABLE_MARIADB
-App& App::useDb(DbConfig config) {
-    return useDb("default", std::move(config));
-}
-
-App& App::useDb(std::string_view alias, DbConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot configure database while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("database alias must not be empty");
-    }
-
-    for (auto& definition : databases_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    std::pmr::string storedAlias(alias, ProcessMemory::instance().upstreamResource());
-    databases_.push_back(detail::DbDefinition{std::move(storedAlias), std::move(config)});
-    return *this;
-}
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-App& App::useRedis(RedisConfig config) {
-    return useRedis("default", std::move(config));
-}
-
-App& App::useRedis(std::string_view alias, RedisConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot configure redis while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("redis alias must not be empty");
-    }
-
-    for (auto& definition : redis_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    std::pmr::string storedAlias(alias, ProcessMemory::instance().upstreamResource());
-    redis_.push_back(detail::RedisDefinition{std::move(storedAlias), std::move(config)});
-    return *this;
-}
-#endif
-
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-App& App::useHttpClient(HttpClientConfig config) {
-    return useHttpClient("default", std::move(config));
-}
-
-App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
-    std::lock_guard lock(mutex_);
-    ensureNotRunning(running_, "cannot configure http client while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("http client alias must not be empty");
-    }
-    if (config.host.empty()) {
-        throw std::invalid_argument("http client host must not be empty");
-    }
-
-    for (auto& definition : httpClients_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    auto* resource = ProcessMemory::instance().upstreamResource();
-    httpClients_.push_back(detail::HttpClientDefinition{
-        std::pmr::string(alias, resource),
-        std::move(config)});
-    return *this;
-}
-#endif
-
 void App::run() {
-    std::pmr::vector<detail::HttpServer*> startedWorkers(ProcessMemory::instance().upstreamResource());
-    auto runtime = std::make_unique<detail::AppRuntimeGraph>();
+    auto* runtimeResource = ProcessMemory::instance().upstreamResource();
+    std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
+    auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
     {
         std::lock_guard lock(mutex_);
-        ensureNotRunning(running_, "app is already running");
+        detail::ensureAppNotRunning(running_, "app is already running");
 
         if (!autoControllersLoaded_) {
             detail::registerControllers(router_, controllerLifetimes_);
@@ -409,28 +91,50 @@ void App::run() {
         const auto& routeTable = routes.routeTable();
 
         if (documentRootConfig_.has_value()) {
-            runtime->documentRoot = std::make_unique<StaticRoot>(
+            runtime->documentRoot = detail::makePmrObject<StaticRoot>(
+                runtimeResource,
                 documentRootConfig_->root,
                 documentRootConfig_->staticOptions);
         }
 
-        runtime->workers.reserve(listeners_.size() * threadNum_);
-        for (const auto& listener : listeners_) {
-            const auto address = asio::ip::make_address(listener.address);
-            const asio::ip::tcp::endpoint endpoint(address, listener.port);
-            auto serverOptions = options_;
-            if (listener.tls.has_value()) {
-                serverOptions.tls.enabled = true;
-                serverOptions.tls.certificateChainFile = listener.tls->certificateChainFile;
-                serverOptions.tls.privateKeyFile = listener.tls->privateKeyFile;
-                serverOptions.tls.privateKeyPassword = listener.tls->privateKeyPassword;
-                serverOptions.tls.verifyFile = listener.tls->verifyFile;
+        if (httpsListenPort_.has_value() && !options_.tls.enabled) {
+            throw std::invalid_argument("HTTPS listener requires TLS configuration");
+        }
+        if (!httpListenPort_.has_value() && !httpsListenPort_.has_value()) {
+            throw std::invalid_argument("at least one HTTP or HTTPS listener must be configured");
+        }
+        if (autoHttps_) {
+            if (!httpListenPort_.has_value() || !httpsListenPort_.has_value()) {
+                throw std::invalid_argument("auto HTTPS requires both HTTP and HTTPS listeners");
             }
+            if (*httpsListenPort_ == 0) {
+                throw std::invalid_argument("auto HTTPS requires a fixed HTTPS listen port");
+            }
+        }
+        if (httpListenPort_.has_value() && httpsListenPort_.has_value() &&
+            *httpListenPort_ != 0 &&
+            *httpListenPort_ == *httpsListenPort_) {
+            throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
+        }
+
+        const auto address = asio::ip::make_address(listenAddress_);
+        const auto workerCount =
+            (httpListenPort_.has_value() ? threadNum_ : 0) +
+            (httpsListenPort_.has_value() ? threadNum_ : 0);
+        runtime->workers.reserve(workerCount);
+
+        const auto addWorkers = [&](std::uint16_t port, bool tlsEnabled, bool autoHttpsEnabled) {
+            const asio::ip::tcp::endpoint endpoint(address, port);
+            auto serverOptions = options_;
+            serverOptions.tls.enabled = tlsEnabled;
+            serverOptions.autoHttps.enabled = autoHttpsEnabled;
+            serverOptions.autoHttps.httpsPort = httpsListenPort_.value_or(443);
             if (runtime->documentRoot != nullptr) {
                 serverOptions.documentRoot.root = runtime->documentRoot.get();
             }
             for (std::size_t i = 0; i < threadNum_; ++i) {
-                runtime->workers.push_back(std::make_unique<detail::HttpServer>(
+                runtime->workers.push_back(detail::makePmrObject<detail::HttpServer>(
+                    runtimeResource,
                     endpoint,
                     routeTable,
                     std::span<const detail::DbDefinition>{
@@ -450,6 +154,13 @@ void App::run() {
                     },
                     serverOptions));
             }
+        };
+
+        if (httpListenPort_.has_value()) {
+            addWorkers(*httpListenPort_, false, autoHttps_);
+        }
+        if (httpsListenPort_.has_value()) {
+            addWorkers(*httpsListenPort_, true, false);
         }
 
         runtime_ = std::move(runtime);

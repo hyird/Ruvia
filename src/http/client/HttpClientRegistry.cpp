@@ -3,22 +3,25 @@
 #include "HttpClientInternal.h"
 #include "HttpClientPool.h"
 
+#include <utility>
+
 namespace ruvia::detail {
 
 HttpClientRegistry::HttpClientRegistry(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const HttpClientDefinition> clients)
-    : resource_(resource), pools_(resource) {
+    : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+      pools_(resource_) {
     pools_.reserve(clients.size());
     for (const auto& def : clients) {
-        auto pool = std::make_unique<HttpClientPool>(ioContext, def.config, resource);
-        auto* raw = pool.get();
+        auto pool = makePmrObject<HttpClientPool>(resource_, ioContext, def.config, resource_);
+        auto* poolRaw = pool.get();
         pools_.push_back(Entry{
-            std::pmr::string(def.alias, resource),
+            std::pmr::string(def.alias, resource_),
             std::move(pool)});
         if (std::string_view(def.alias) == kDefaultHttpClientAlias && defaultPool_ == nullptr) {
-            defaultPool_ = raw;
+            defaultPool_ = poolRaw;
         }
     }
     if (defaultPool_ == nullptr && !pools_.empty()) {

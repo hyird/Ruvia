@@ -17,8 +17,11 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia::detail {
+
+struct PoolWaiterAwaiter;
 
 class HttpClientPool final {
 public:
@@ -41,6 +44,8 @@ public:
         std::pmr::memory_resource* resource);
 
 private:
+    friend struct PoolWaiterAwaiter;
+
     struct PoolWaiter {
         bool* ready{nullptr};
         std::size_t* index{nullptr};
@@ -52,14 +57,18 @@ private:
 
     // Non-movable: TLS stream holds a reference to rawSocket by address.
     struct Connection final {
-        explicit Connection(asio::io_context& ctx);
+        using TlsStream = asio::ssl::stream<asio::ip::tcp::socket&>;
+        using TlsStreamDeleter = PmrObjectDeleter<TlsStream>;
+
+        explicit Connection(asio::io_context& ctx, std::pmr::memory_resource* resource);
         Connection(const Connection&) = delete;
         Connection& operator=(const Connection&) = delete;
         Connection(Connection&&) = delete;
         Connection& operator=(Connection&&) = delete;
 
         asio::ip::tcp::socket rawSocket;
-        std::unique_ptr<asio::ssl::stream<asio::ip::tcp::socket&>> tlsStream;
+        std::unique_ptr<TlsStream, TlsStreamDeleter> tlsStream;
+        std::pmr::memory_resource* resource;
         bool connected{false};
     };
 
@@ -83,6 +92,7 @@ private:
     void removeWaiter(PoolWaiter& w) noexcept;
     bool resumeNextWaiter(std::size_t index) noexcept;
     void closeConnection(Connection& conn) noexcept;
+    void destroyConnection(Connection* conn) noexcept;
     Task<void> connectOne(Connection& conn);
     Task<FetchResponse> executeRequest(
         Connection& conn,

@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <memory_resource>
 #include <string>
-#include <vector>
 
 #include "ConnectionScanner.h"
 #include "HttpResponseWriter.h"
@@ -31,11 +30,11 @@ struct ConnectionWorkSet final {
 
     std::pmr::string readBuffer;
     ResponseHeadBuffer responseHead;
-    std::pmr::vector<char> fileChunk;
+    std::pmr::string fileChunk;
+    std::pmr::string compressionScratch;
     HttpParser parser;
     HttpParseResult parsed;
     RouteResolution routeResolution;
-    std::size_t usedBytes{0};
     alignas(std::max_align_t) std::byte arenaBlock[kWorkSetArenaBytes];
     ConnectionWorkSet* poolNext{nullptr};
 

@@ -5,6 +5,9 @@
 #include <type_traits>
 #include <vector>
 
+#include "ruvia/http/detail/json/JsonLimits.h"
+#include "ruvia/memory/PmrResource.h"
+
 // Internal layer: included by ruvia/http/Model.h after model field types are
 // declared. Users should include ruvia/http/Model.h instead of this file.
 
@@ -21,8 +24,6 @@ enum class ModelFieldState : std::uint8_t {
 
 template <typename>
 inline constexpr bool alwaysFalse = false;
-
-inline constexpr std::size_t kMaxJsonDepth = 64;
 
 template <typename T>
 inline constexpr bool isRuviaString = std::is_same_v<std::remove_cvref_t<T>, String>;
@@ -83,15 +84,14 @@ inline constexpr bool isModelField =
 template <typename T>
 [[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
     if constexpr (isRuviaString<T>) {
-        return T(resource == nullptr ? std::pmr::get_default_resource() : resource);
+        return T(pmrResourceOrDefault(resource));
     } else if constexpr (isRuviaArray<T>) {
         using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
-        return T(std::pmr::polymorphic_allocator<ValueT>(
-            resource == nullptr ? std::pmr::get_default_resource() : resource));
+        return T(std::pmr::polymorphic_allocator<ValueT>(pmrResourceOrDefault(resource)));
     } else if constexpr (isRuviaList<T>) {
-        return T(resource == nullptr ? std::pmr::get_default_resource() : resource);
+        return T(pmrResourceOrDefault(resource));
     } else if constexpr (JsonBody<std::remove_cvref_t<T>>::value) {
-        return T(resource == nullptr ? std::pmr::get_default_resource() : resource);
+        return T(pmrResourceOrDefault(resource));
     } else {
         (void)resource;
         return T{};

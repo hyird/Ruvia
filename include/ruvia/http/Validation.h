@@ -98,6 +98,19 @@ public:
 private:
     void buildDetailsJson() {
         detailsJson_.clear();
+        std::size_t size = 2;
+        bool sizeFirst = true;
+        for (const auto& issue : issues_) {
+            if (!sizeFirst) {
+                ++size;
+            }
+            sizeFirst = false;
+            size += std::string_view("{\"field\":").size() + detail::jsonStringSizeHint(issue.field);
+            size += std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(issue.code);
+            size += std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(issue.message);
+            size += 1;
+        }
+        detailsJson_.reserve(size);
         detailsJson_.push_back('[');
         bool first = true;
         for (const auto& issue : issues_) {

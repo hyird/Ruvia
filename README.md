@@ -1,6 +1,6 @@
 # Ruvia
 
-Ruvia is a small, focused C++23 HTTP/1.1 web framework for core web services with a compact public API and a low-overhead request path.
+Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web services with a compact public API and a low-overhead request path.
 
 ## Contents
 
@@ -29,19 +29,19 @@ Ruvia is a small, focused C++23 HTTP/1.1 web framework for core web services wit
 | Request handling | Zero-copy HTTP parser, request views into the connection read buffer, explicit streaming body routes, chunked body decoding, multipart form parsing, and helpers for headers, query values, cookies, JSON bodies, and form bodies. |
 | Responses | Chainable helpers for status, headers, cookies, redirects, text, JSON, file responses, static files with validators/ranges, configurable error handling, and unified JSON error bodies. |
 | Models | `RUVIA_MODEL` schema macros for typed JSON/form bodies and JSON responses, plus inline validator middleware rules without runtime reflection. |
-| Runtime | Per-worker standalone Asio `io_context`, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
+| Runtime | Per-worker standalone Asio `io_context`, HTTP/1.1, HTTP/2 over h2c or TLS ALPN, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
 | Distribution | CMake install/export support through one installed library file and one public target: `ruvia::ruvia`. |
 
 ## Project Scope
 
-Ruvia is intentionally a small HTTP/1.1 framework, not a full-stack application platform. The implementation boundary is the high-performance core needed to build HTTP services with explicit ownership and low request-path overhead.
+Ruvia is intentionally a small HTTP framework, not a full-stack application platform. The implementation boundary is the high-performance core needed to build HTTP services with explicit ownership and low request-path overhead.
 
 In scope:
 
-- HTTP/1.1 and built-in HTTPS server runtime, OpenSSL-backed TLS, keep-alive, pipelining safety, parser limits, timeout handling, and per-worker connection ownership.
+- HTTP/1.1 and HTTP/2 server runtime, h2c prior knowledge, h2c upgrade, TLS ALPN `h2`, OpenSSL-backed TLS, keep-alive, pipelining safety, parser limits, timeout handling, and per-worker connection ownership.
 - Hono-style controller and route macros, route groups, user-defined middleware, exact routes, `:param` routes, `*` wildcards, startup duplicate/conflict detection, and explicit `HEAD` / `OPTIONS` behavior.
 - Request helpers for headers, query values, cookies, route params, lazy buffered body reads, JSON, URL-encoded forms, buffered multipart, and explicit streaming request bodies.
-- Response helpers for status, headers, cookies, text, JSON, redirects, JSON errors, gzip compression for buffered responses, file/static-file responses with validators and Range support, explicit chunked response streaming, SSE, and WebSocket upgrades.
+- Response helpers for status, headers, cookies, text, JSON, redirects, JSON errors, gzip compression for buffered responses, file/static-file responses with validators and Range support, explicit response streaming, SSE, HTTP/1.1 WebSocket upgrades, and HTTP/2 RFC 8441 WebSocket streams.
 - `RUVIA_MODEL` schema macros backed by Ruvia model types, without runtime reflection or general-purpose maps.
 - A performance-oriented runtime: one standalone Asio `io_context` per worker, worker-owned acceptors/sockets, PMR memory resources, request arenas, zero-copy parser views, scatter-gather-friendly response writes, and `mimalloc` as the production upstream allocator.
 - Optional MariaDB-compatible DB query, transaction, and migration support through `DbHandle`, `DbTransaction`, and `DbMigrator`.
@@ -50,7 +50,7 @@ In scope:
 
 Out of scope for the current boundary:
 
-- HTTP/2, HTTP/3, template rendering, ORM/entity modeling, session/auth batteries beyond the low-level JWT helper, background job systems, distributed WebSocket fanout, and full-stack frontend integration.
+- HTTP/3, HTTP/2 priority scheduling policy tuning, template rendering, ORM/entity modeling, session/auth batteries beyond the low-level JWT helper, background job systems, distributed WebSocket fanout, and full-stack frontend integration.
 - Public synchronous handlers or public `asio::awaitable` APIs. Public handlers use `ruvia::Task<T>`.
 - Direct public route registration through `Router::addRoute(...)` or mutable runtime route rebuilding.
 - Request-path shared locks, cross-worker connection migration, shared response-body reference counting, and implicit buffering of streaming responses.
@@ -286,7 +286,7 @@ Chunks returned by `BodyReader::read()` are `std::string_view`s valid until the 
 Streaming responses are also explicit and bypass normal response-body buffering:
 
 - `c.stream()`, `c.streamText()`, and `c.streamSSE()` mirror Hono streaming helper names.
-- `RUVIA_GET_STREAM(...)` sends HTTP/1.1 chunked data.
+- `RUVIA_GET_STREAM(...)` sends HTTP/1.1 chunked data or HTTP/2 DATA frames depending on the connection protocol.
 - `RUVIA_GET_SSE(...)` sets `Content-Type: text/event-stream` and formats SSE frames with `writeSSE(...)`.
 - Streaming route macros accept the same middleware arguments as ordinary routes.
 - Middleware can set status/headers before `next(c)` or short-circuit with a normal `HttpResponse`.
@@ -311,7 +311,7 @@ ruvia::Task<void> events(ruvia::Context& c) {
 }
 ```
 
-WebSocket routes use an explicit upgrade macro and a connection-local handle. The implementation supports RFC 6455 HTTP/1.1 upgrade, text/binary messages, ping/pong, close frames, and a WebSocket-specific timeout phase that uses idle timeout instead of request-body timeout.
+WebSocket routes use an explicit upgrade macro and a connection-local handle. The implementation supports RFC 6455 HTTP/1.1 upgrade and RFC 8441 HTTP/2 extended CONNECT, text/binary messages, ping/pong, close frames, and a WebSocket-specific timeout phase that uses idle timeout instead of request-body timeout.
 
 Do not store the request-local `WebSocket` object outside the handler lifetime.
 
@@ -579,6 +579,9 @@ ruvia::app()
     .run();
 ```
 
+`setListenAddress(address, port)` configures the HTTP listener. HTTPS has its own startup-only port:
+calling `setHttpsListenPort(port)` declares the HTTPS listener, and `useTls(...)` supplies its certificate and key.
+
 Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** — once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation — `headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled.
 
 Memory pool configuration is also startup-only. Set it before `run()` and before creating any `ruvia::WorkerMemory`; the process memory layer freezes as workers are created:
@@ -757,14 +760,17 @@ HTTPS/TLS is built into the normal Ruvia runtime and does not use a separate bui
 
 ```cpp
 ruvia::app()
-    .setListenAddress("0.0.0.0", 8443)
+    .setListenAddress("0.0.0.0")
+    .setHttpListenPort(8080)
+    .setHttpsListenPort(8443)
     .useTls(ruvia::TlsConfig{
         .certificateChainFile = "server.crt",
         .privateKeyFile = "server.key"})
+    .setAutoHttps(true)
     .run();
 ```
 
-TLS is backed by OpenSSL, disables legacy SSL/TLS protocol versions and TLS compression, and keeps each accepted connection on its owning worker. Buffered responses can be gzip-compressed when clients send `Accept-Encoding: gzip`; file responses, response streams, SSE, and WebSocket traffic are not compressed.
+With `setAutoHttps(true)`, the HTTP listener returns a `308 Permanent Redirect` to the configured HTTPS port and closes the connection. TLS is backed by OpenSSL, disables legacy SSL/TLS protocol versions and TLS compression, and keeps each accepted connection on its owning worker. Buffered responses can be gzip-compressed when clients send `Accept-Encoding: gzip`; file responses, response streams, SSE, and WebSocket traffic are not compressed.
 
 ## Runtime Behavior
 
@@ -815,7 +821,7 @@ The current formal release is `v0.0.6`.
 
 This release is focused on evaluating:
 
-- The core HTTP/1.1 server and controller API.
+- The core HTTP/1.1 and HTTP/2 server and controller API.
 - Request model validation and response helpers.
 - WebSocket, SSE, request streaming, and response streaming support.
 - Optional MariaDB-compatible database query, transaction, and migration integration.

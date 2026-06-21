@@ -29,9 +29,10 @@ RedisRegistry::RedisRegistry(
                 })) {
             throw std::invalid_argument("duplicate redis alias");
         }
+        auto pool = makePmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
         pools_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
-            std::make_unique<RedisPool>(ioContext, definition.config, resource_)});
+            std::move(pool)});
         if (std::string_view(pools_.back().alias.data(), pools_.back().alias.size()) == kDefaultRedisAlias) {
             defaultPool_ = pools_.back().pool.get();
         }
@@ -63,20 +64,19 @@ bool RedisRegistry::hasAnyTimeout() const noexcept {
     });
 }
 
-RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource, RequestMemory* requestMemory) const {
+RedisHandle RedisRegistry::get(std::pmr::memory_resource* resource) const {
     if (defaultPool_ == nullptr) {
         throw RedisError(RedisError::Code::kNotConfigured, "default redis is not configured");
     }
-    return RedisHandle(*defaultPool_, resource, requestMemory);
+    return RedisHandle(*defaultPool_, resource);
 }
 
 RedisHandle RedisRegistry::get(
     std::string_view alias,
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) const {
+    std::pmr::memory_resource* resource) const {
     for (const auto& entry : pools_) {
         if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
-            return RedisHandle(*entry.pool, resource, requestMemory);
+            return RedisHandle(*entry.pool, resource);
         }
     }
     throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
@@ -95,14 +95,14 @@ RedisHandle Context::redis() const {
     if (redis_ == nullptr) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(resource(), const_cast<RequestMemory*>(&memory_));
+    return redis_->get(resource());
 }
 
 RedisHandle Context::redis(std::string_view alias) const {
     if (redis_ == nullptr) {
         throw RedisError(RedisError::Code::kNotConfigured, "redis is not configured");
     }
-    return redis_->get(alias, resource(), const_cast<RequestMemory*>(&memory_));
+    return redis_->get(alias, resource());
 }
 
 }  // namespace ruvia
