@@ -3,6 +3,7 @@
 #include "ConnectionScanner.h"
 #include "HttpServerResponseState.h"
 #include "../ws/HttpWebSocketConnection.h"
+#include "../ws/HttpWebSocketSession.h"
 #include "../ws/HttpWebSocketSocketTransport.h"
 #include "../ws/HttpWebSocketHandshake.h"
 #include "../ws/HttpWebSocketUtils.h"
@@ -13,7 +14,6 @@
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
-#include <exception>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -62,31 +62,14 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         options.maxWebSocketMessageBytes,
         memory.resource(),
         pendingFrames);
-    WebSocket webSocket(
-        &webSocketConnection,
-        &SocketWebSocketConnection<Stream>::readThunk,
-        &SocketWebSocketConnection<Stream>::writeThunk,
-        &SocketWebSocketConnection<Stream>::closeThunk);
-
-    std::exception_ptr webSocketException;
-    try {
-        scannerEntry.setPhase(ConnectionScanner::Phase::kWebSocket);
-        (void)co_await routes.dispatchWebSocket(
-            parsed.request,
-            routeResolution,
-            requestMemory,
-            webSocket,
-            baseRouteServices);
-    } catch (...) {
-        webSocketException = std::current_exception();
-    }
-    if (webSocketException != nullptr) {
-        try {
-            co_await webSocketConnection.close(1011, "internal server error");
-        } catch (...) {
-        }
-    }
-    co_await webSocketConnection.detachAndDrainBackgroundWrites();
+    co_await runWebSocketSession(
+        webSocketConnection,
+        scannerEntry,
+        routes,
+        parsed.request,
+        routeResolution,
+        requestMemory,
+        baseRouteServices);
     co_return HttpWebSocketRouteResult::kSessionFinished;
 }
 
