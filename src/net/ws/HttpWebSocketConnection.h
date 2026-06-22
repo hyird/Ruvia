@@ -12,6 +12,7 @@
 #include <asio.hpp>
 
 #include "../server/ConnectionScanner.h"
+#include "HttpWebSocketPermessageDeflate.h"
 #include "HttpWebSocketUtils.h"
 #include "../../runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"
@@ -38,16 +39,23 @@ public:
         WebSocketHeartbeatOptions heartbeatOptions,
         std::size_t maxMessageBytes,
         std::pmr::memory_resource* resource,
-        std::string_view initialBytes = {})
+        std::string_view initialBytes = {},
+        bool permessageDeflate = false)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           heartbeatOptions_(heartbeatOptions),
           maxMessageBytes_(maxMessageBytes),
           buffer_(resource == nullptr ? ProcessMemory::instance().upstreamResource() : resource),
           inbound_(buffer_.get_allocator().resource()),
+          outboundDeflated_(buffer_.get_allocator().resource()),
+          inboundInflated_(buffer_.get_allocator().resource()),
+          permessageDeflate_(permessageDeflate),
           backgroundWriteTimer_(transport_.executor()) {
         backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
         buffer_.append(initialBytes.data(), initialBytes.size());
+        if (permessageDeflate_) {
+            deflate_.emplace();
+        }
         scannerEntry_.webSocketTarget = this;
         scannerEntry_.webSocketTick = &WebSocketConnection::heartbeatTickThunk;
     }
@@ -99,6 +107,10 @@ private:
     std::size_t maxMessageBytes_{kDefaultMaxWebSocketMessageBytes};
     std::pmr::string buffer_;
     WebSocketInboundAssembler inbound_;
+    std::pmr::string outboundDeflated_;
+    std::pmr::string inboundInflated_;
+    std::optional<WebSocketDeflate> deflate_;
+    bool permessageDeflate_{false};
     asio::steady_timer backgroundWriteTimer_;
     std::size_t offset_{0};
     std::size_t pendingCompactUntil_{0};

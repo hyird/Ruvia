@@ -4,6 +4,7 @@
 #include <asio/write.hpp>
 #include <string_view>
 
+#include "HttpWebSocketPermessageDeflate.h"
 #include "HttpWebSocketUtils.h"
 #include "../../http/HttpRequestFlags.h"
 #include "../../http/HttpRequestInternal.h"
@@ -13,41 +14,49 @@
 
 namespace ruvia::detail {
 
+// Writes the 101 handshake. `permessageDeflate` is set to whether the RFC 7692
+// extension was negotiated (offered by the client and acceptable to us); when
+// set, the response advertises it with no-context-takeover in both directions.
 template <typename Stream>
 Task<bool> writeWebSocketHandshake(
     Stream& stream,
     const HttpRequest& request,
     const HttpRequestFlags& flags,
-    std::string_view supportedSubprotocols) {
+    std::string_view supportedSubprotocols,
+    bool& permessageDeflate) {
     const auto subprotocol = chooseWebSocketSubprotocol(request, flags, supportedSubprotocols);
+    permessageDeflate = webSocketOffersPermessageDeflate(request);
     static constexpr std::string_view kPrefix =
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Accept: ";
     static constexpr std::string_view kSubprotocolPrefix = "Sec-WebSocket-Protocol: ";
+    static constexpr std::string_view kExtensionsHeader =
+        "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n";
     static constexpr std::string_view kCrlf = "\r\n";
 
     WebSocketAcceptKey accept;
     encodeWebSocketAccept(accept, requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey));
-    if (subprotocol.empty()) {
-        const std::array<asio::const_buffer, 3> buffers{
-            asio::buffer(kPrefix),
-            asio::buffer(accept),
-            asio::buffer("\r\n\r\n", 4)};
-        const auto ec = co_await asyncError([&stream, &buffers](auto handler) mutable {
-            asio::async_write(stream, buffers, std::move(handler));
-        });
-        co_return !ec;
-    }
 
-    const std::array<asio::const_buffer, 6> buffers{
-        asio::buffer(kPrefix),
-        asio::buffer(accept),
-        asio::buffer(kCrlf),
-        asio::buffer(kSubprotocolPrefix),
-        asio::buffer(subprotocol),
-        asio::buffer("\r\n\r\n", 4)};
+    // Default-constructed buffers are empty (0 bytes), so the unused tail
+    // entries write nothing and the present headers keep their order.
+    std::array<asio::const_buffer, 8> buffers;
+    std::size_t count = 0;
+    buffers[count++] = asio::buffer(kPrefix);
+    buffers[count++] = asio::buffer(accept);
+    buffers[count++] = asio::buffer(kCrlf);
+    if (!subprotocol.empty()) {
+        buffers[count++] = asio::buffer(kSubprotocolPrefix);
+        buffers[count++] = asio::buffer(subprotocol);
+        buffers[count++] = asio::buffer(kCrlf);
+    }
+    if (permessageDeflate) {
+        buffers[count++] = asio::buffer(kExtensionsHeader);
+    }
+    buffers[count++] = asio::buffer(kCrlf);
+    (void)count;
+
     const auto ec = co_await asyncError([&stream, &buffers](auto handler) mutable {
         asio::async_write(stream, buffers, std::move(handler));
     });

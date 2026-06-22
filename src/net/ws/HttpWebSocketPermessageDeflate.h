@@ -1,0 +1,148 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+#include <zlib.h>
+
+#include "../../http/HeaderTokenUtils.h"
+#include "ruvia/http/HttpRequest.h"
+
+namespace ruvia::detail {
+
+enum class WebSocketInflateResult : std::uint8_t {
+    kOk,
+    kError,
+    kTooLarge,
+};
+
+// RFC 7692 permessage-deflate codec for one connection. The handshake negotiates
+// no-context-takeover in both directions, so the deflate/inflate state is reset
+// before every message and each message is an independent raw-DEFLATE block.
+// zlib's working memory comes from the global allocator, which this build routes
+// to mimalloc, so no custom resource plumbing is needed.
+class WebSocketDeflate final {
+public:
+    WebSocketDeflate() noexcept {
+        deflateOk_ = deflateInit2(&deflate_, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY) == Z_OK;
+        inflateOk_ = inflateInit2(&inflate_, -15) == Z_OK;
+    }
+
+    ~WebSocketDeflate() {
+        if (deflateOk_) {
+            (void)deflateEnd(&deflate_);
+        }
+        if (inflateOk_) {
+            (void)inflateEnd(&inflate_);
+        }
+    }
+
+    WebSocketDeflate(const WebSocketDeflate&) = delete;
+    WebSocketDeflate& operator=(const WebSocketDeflate&) = delete;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return deflateOk_ && inflateOk_;
+    }
+
+    // Compresses a whole message, appending the raw-DEFLATE block to `out` with
+    // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
+    bool compress(std::string_view input, std::pmr::string& out) {
+        if (!deflateOk_ || deflateReset(&deflate_) != Z_OK) {
+            return false;
+        }
+        deflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
+        deflate_.avail_in = static_cast<uInt>(input.size());
+        char buffer[4096];
+        for (;;) {
+            deflate_.next_out = reinterpret_cast<Bytef*>(buffer);
+            deflate_.avail_out = sizeof(buffer);
+            const int status = deflate(&deflate_, Z_SYNC_FLUSH);
+            if (status != Z_OK && status != Z_BUF_ERROR) {
+                return false;
+            }
+            out.append(buffer, sizeof(buffer) - deflate_.avail_out);
+            if (deflate_.avail_out != 0) {
+                break;
+            }
+        }
+        if (out.size() >= 4) {
+            out.resize(out.size() - 4);
+        }
+        if (out.empty()) {
+            out.push_back('\0');
+        }
+        return true;
+    }
+
+    // Decompresses a whole message: appends the 0x00 0x00 0xFF 0xFF marker that
+    // the sender stripped, then raw-inflates into `out`, bounded by `maxBytes`
+    // (0 = unbounded) to defuse decompression bombs (RFC 7692 §7.2.2).
+    WebSocketInflateResult decompress(std::string_view input, std::pmr::string& out, std::size_t maxBytes) {
+        if (!inflateOk_ || inflateReset(&inflate_) != Z_OK) {
+            return WebSocketInflateResult::kError;
+        }
+        static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
+        if (const auto r = inflateChunk(input.data(), input.size(), out, maxBytes); r != WebSocketInflateResult::kOk) {
+            return r;
+        }
+        return inflateChunk(reinterpret_cast<const char*>(kFlushMarker), sizeof(kFlushMarker), out, maxBytes);
+    }
+
+private:
+    WebSocketInflateResult inflateChunk(const char* data, std::size_t size, std::pmr::string& out, std::size_t maxBytes) {
+        inflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data));
+        inflate_.avail_in = static_cast<uInt>(size);
+        char buffer[8192];
+        for (;;) {
+            inflate_.next_out = reinterpret_cast<Bytef*>(buffer);
+            inflate_.avail_out = sizeof(buffer);
+            const int status = inflate(&inflate_, Z_NO_FLUSH);
+            if (status != Z_OK && status != Z_BUF_ERROR && status != Z_STREAM_END) {
+                return WebSocketInflateResult::kError;
+            }
+            const auto produced = sizeof(buffer) - inflate_.avail_out;
+            if (maxBytes != 0 && produced > maxBytes - out.size()) {
+                return WebSocketInflateResult::kTooLarge;
+            }
+            out.append(buffer, produced);
+            if (inflate_.avail_out != 0) {
+                break;
+            }
+        }
+        return WebSocketInflateResult::kOk;
+    }
+
+    z_stream deflate_{};
+    z_stream inflate_{};
+    bool deflateOk_{false};
+    bool inflateOk_{false};
+};
+
+// True if the client offered permessage-deflate in a form we can honor. We use a
+// 32 KiB server window with no context takeover, so we decline (fall back to no
+// compression) only when the offer pins a smaller server window we would have to
+// obey; client_max_window_bits and the no-context-takeover hints are fine.
+[[nodiscard]] inline bool webSocketOffersPermessageDeflate(const HttpRequest& request) noexcept {
+    std::string_view offers = request.header("Sec-WebSocket-Extensions");
+    while (!offers.empty()) {
+        const auto comma = offers.find(',');
+        const auto offer = httpTrimOws(comma == std::string_view::npos ? offers : offers.substr(0, comma));
+        const auto semicolon = offer.find(';');
+        const auto name = httpTrimOws(semicolon == std::string_view::npos ? offer : offer.substr(0, semicolon));
+        if (httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
+            const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
+            if (params.find("server_max_window_bits") == std::string_view::npos) {
+                return true;
+            }
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        offers.remove_prefix(comma + 1);
+    }
+    return false;
+}
+
+}  // namespace ruvia::detail

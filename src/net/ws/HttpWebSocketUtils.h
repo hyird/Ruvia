@@ -27,6 +27,7 @@ struct WebSocketFrameStart final {
     WebSocketOpcode opcode;
     bool fin{false};
     bool continuation{false};
+    bool rsv1{false};
 };
 
 [[nodiscard]] inline bool isInvalidWebSocketRawOpcode(std::uint8_t rawOpcode) noexcept {
@@ -37,18 +38,27 @@ struct WebSocketFrameStart final {
     return static_cast<std::uint8_t>(opcode) >= 0x8;
 }
 
+// allowRsv1 enables the RSV1 (compressed) bit when permessage-deflate is
+// negotiated; it is valid only on the first frame of a data message, never on a
+// continuation or control frame (RFC 7692 §6.1). RSV2/RSV3 are always rejected.
 [[nodiscard]] inline bool decodeWebSocketFrameStart(
     unsigned char first,
     unsigned char second,
-    WebSocketFrameStart& frame) noexcept {
+    WebSocketFrameStart& frame,
+    bool allowRsv1) noexcept {
     const auto rawOpcode = static_cast<std::uint8_t>(first & 0x0FU);
-    if ((first & 0x70U) != 0 || (second & 0x80U) == 0 || isInvalidWebSocketRawOpcode(rawOpcode)) {
+    const bool rsv1 = (first & 0x40U) != 0;
+    if ((first & 0x30U) != 0 || (second & 0x80U) == 0 || isInvalidWebSocketRawOpcode(rawOpcode)) {
+        return false;
+    }
+    if (rsv1 && (!allowRsv1 || rawOpcode == 0 || rawOpcode >= 0x8)) {
         return false;
     }
     frame = WebSocketFrameStart{
         .opcode = static_cast<WebSocketOpcode>(rawOpcode == 0 ? 0x1 : rawOpcode),
         .fin = (first & 0x80U) != 0,
-        .continuation = rawOpcode == 0};
+        .continuation = rawOpcode == 0,
+        .rsv1 = rsv1};
     return true;
 }
 
@@ -144,9 +154,11 @@ enum class WebSocketHeartbeatDecision : std::uint8_t {
 [[nodiscard]] inline std::size_t encodeWebSocketFrameHeader(
     WebSocketFrameHeader& header,
     WebSocketOpcode opcode,
-    std::size_t payloadSize) noexcept {
+    std::size_t payloadSize,
+    bool rsv1 = false) noexcept {
     std::size_t headerSize = 0;
-    header[headerSize++] = static_cast<char>(0x80U | static_cast<std::uint8_t>(opcode));
+    header[headerSize++] = static_cast<char>(
+        0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
     if (payloadSize <= 125) {
         header[headerSize++] = static_cast<char>(payloadSize);
     } else if (payloadSize <= 0xFFFF) {
@@ -233,12 +245,13 @@ void validateWebSocketClosePayload(std::string_view payload);
     std::string_view supported) noexcept;
 
 enum class WebSocketInboundAction : std::uint8_t {
-    kSendPong,      // reply with a Pong echoing the frame payload
-    kPongReceived,  // a Pong arrived; clear the awaiting-pong state
-    kPeerClose,     // peer-initiated Close; echo it then end the stream
-    kContinue,      // frame consumed, nothing to deliver yet
-    kDeliver,       // `out` holds a complete application message
-    kInvalidUtf8    // text payload is not valid UTF-8; close with 1007
+    kSendPong,          // reply with a Pong echoing the frame payload
+    kPongReceived,      // a Pong arrived; clear the awaiting-pong state
+    kPeerClose,         // peer-initiated Close; echo it then end the stream
+    kContinue,          // frame consumed, nothing to deliver yet
+    kDeliver,           // `out` holds a complete (already-validated) message
+    kDeliverCompressed, // `out` holds a permessage-deflate message to inflate
+    kInvalidUtf8        // text payload is not valid UTF-8; close with 1007
 };
 
 // Single owner of the WebSocket inbound message-reassembly state machine (RFC
@@ -277,13 +290,18 @@ public:
             if (!frame.fin) {
                 return WebSocketInboundAction::kContinue;
             }
-            if (opcode_ == WebSocketOpcode::kText && !isValidUtf8(message_)) {
-                return WebSocketInboundAction::kInvalidUtf8;
-            }
             fragmented_ = false;
             out = WebSocketMessage{
                 .opcode = opcode_,
                 .payload = std::string_view(message_.data(), message_.size())};
+            // A compressed message must be inflated before UTF-8 can be judged,
+            // so defer validation to the connection.
+            if (compressed_) {
+                return WebSocketInboundAction::kDeliverCompressed;
+            }
+            if (opcode_ == WebSocketOpcode::kText && !isValidUtf8(message_)) {
+                return WebSocketInboundAction::kInvalidUtf8;
+            }
             return WebSocketInboundAction::kDeliver;
         }
         if (frame.opcode == WebSocketOpcode::kText || frame.opcode == WebSocketOpcode::kBinary) {
@@ -291,14 +309,18 @@ public:
                 throw std::invalid_argument("invalid websocket fragmented message");
             }
             if (frame.fin) {
+                out = WebSocketMessage{.opcode = frame.opcode, .payload = frame.payload};
+                if (frame.rsv1) {
+                    return WebSocketInboundAction::kDeliverCompressed;
+                }
                 if (frame.opcode == WebSocketOpcode::kText && !isValidUtf8(frame.payload)) {
                     return WebSocketInboundAction::kInvalidUtf8;
                 }
-                out = WebSocketMessage{.opcode = frame.opcode, .payload = frame.payload};
                 return WebSocketInboundAction::kDeliver;
             }
             fragmented_ = true;
             opcode_ = frame.opcode;
+            compressed_ = frame.rsv1;
             message_.assign(frame.payload.data(), frame.payload.size());
             return WebSocketInboundAction::kContinue;
         }
@@ -309,6 +331,7 @@ private:
     std::pmr::string message_;
     WebSocketOpcode opcode_{WebSocketOpcode::kText};
     bool fragmented_{false};
+    bool compressed_{false};
 };
 
 struct WebSocketFrameView final {
@@ -316,6 +339,7 @@ struct WebSocketFrameView final {
     std::string_view payload;
     bool fin{true};
     bool continuation{false};
+    bool rsv1{false};
 };
 
 // Single owner of WebSocket frame decode (RFC 6455 §5.2): FIN/opcode/length
@@ -331,6 +355,7 @@ template <typename Ensure>
     std::size_t& offset,
     std::size_t& pendingCompactUntil,
     std::size_t maxMessageBytes,
+    bool permessageDeflate,
     Ensure ensure) {
     compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
     if (!(co_await ensure(2))) {
@@ -342,7 +367,7 @@ template <typename Ensure>
     std::uint64_t length = second & 0x7FU;
     std::size_t headerSize = 2;
 
-    if (!decodeWebSocketFrameStart(first, second, frameStart)) {
+    if (!decodeWebSocketFrameStart(first, second, frameStart, permessageDeflate)) {
         throw std::invalid_argument("invalid websocket frame");
     }
     if (length == 126) {
@@ -389,7 +414,8 @@ template <typename Ensure>
         .opcode = frameStart.opcode,
         .payload = payloadView,
         .fin = frameStart.fin,
-        .continuation = frameStart.continuation};
+        .continuation = frameStart.continuation,
+        .rsv1 = frameStart.rsv1};
 }
 
 }  // namespace detail
