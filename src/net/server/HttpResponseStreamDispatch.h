@@ -50,7 +50,8 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
         &Sink::writeThunk,
         &Sink::endThunk,
         &Sink::bindContextThunk,
-        &Sink::scratchThunk);
+        &Sink::scratchThunk,
+        &Sink::addTrailerThunk);
 
     std::exception_ptr exception;
     HttpResponse response(requestMemory.resource());

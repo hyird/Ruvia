@@ -8,6 +8,7 @@
 #include "Http2ResponseHeaders.h"
 #include "Http2StreamState.h"
 #include "../server/HttpResponseStreamHead.h"
+#include "../server/HttpResponseTrailers.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
@@ -25,7 +26,9 @@ public:
         : session_(session),
           stream_(stream),
           mode_(mode),
-          scratch_(session.memory_.resource()) {}
+          scratch_(session.memory_.resource()),
+          trailers_(session.memory_.resource()),
+          lowerName_(session.memory_.resource()) {}
 
     [[nodiscard]] bool committed() const noexcept {
         return committed_;
@@ -37,6 +40,10 @@ public:
 
     static Task<void> endThunk(void* target) {
         co_await static_cast<Http2ResponseStreamSink*>(target)->end();
+    }
+
+    static void addTrailerThunk(void* target, std::string_view name, std::string_view value) {
+        static_cast<Http2ResponseStreamSink*>(target)->addTrailer(name, value);
     }
 
     static void bindContextThunk(void* target, Context* context) noexcept {
@@ -83,6 +90,24 @@ private:
         co_await session_.writeData(stream_, chunk, {}, false);
     }
 
+    // RFC 9113 §8.1 trailer section: queued before the stream ends and HPACK
+    // encoded into a header block flushed here as a trailing HEADERS frame that
+    // carries END_STREAM, in place of the empty END_STREAM DATA frame.
+    void addTrailer(std::string_view name, std::string_view value) {
+        if (ended_) {
+            throw std::logic_error("response stream is already ended");
+        }
+        if (!responseTrailerFieldValid(name, value)) {
+            throw std::invalid_argument("invalid response trailer field");
+        }
+        lowerName_.clear();
+        lowerName_.reserve(name.size());
+        for (const char ch : name) {
+            lowerName_.push_back(static_cast<char>(httpLowerAscii(static_cast<unsigned char>(ch))));
+        }
+        HpackEncoder::encodeHeader(trailers_, lowerName_, value);
+    }
+
     Task<void> end() {
         if (ended_) {
             co_return;
@@ -92,7 +117,11 @@ private:
             ended_ = true;
             co_return;
         }
-        co_await session_.writeData(stream_, {}, {}, true);
+        if (trailers_.empty()) {
+            co_await session_.writeData(stream_, {}, {}, true);
+        } else {
+            co_await session_.writeHeaders(stream_, trailers_, true);
+        }
         ended_ = true;
     }
 
@@ -101,6 +130,8 @@ private:
     ResponseBodyMode mode_;
     Context* context_{nullptr};
     std::pmr::string scratch_;
+    std::pmr::string trailers_;
+    std::pmr::string lowerName_;
     bool committed_{false};
     bool ended_{false};
     bool bodyForbidden_{false};
