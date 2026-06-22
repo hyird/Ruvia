@@ -27,6 +27,27 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
                 continue;
             case WebSocketInboundAction::kDeliver:
                 co_return message;
+            case WebSocketInboundAction::kDeliverCompressed: {
+                inboundInflated_.clear();
+                const auto result = deflate_.has_value()
+                    ? deflate_->decompress(message.payload, inboundInflated_, maxMessageBytes_)
+                    : WebSocketInflateResult::kError;
+                if (result == WebSocketInflateResult::kTooLarge) {
+                    co_await close(1009, "message too large");
+                    co_return std::nullopt;
+                }
+                if (result != WebSocketInflateResult::kOk) {
+                    co_await close(1002, "decompression failed");
+                    co_return std::nullopt;
+                }
+                if (message.opcode == WebSocketOpcode::kText && !isValidUtf8(inboundInflated_)) {
+                    co_await close(1007, "invalid utf-8");
+                    co_return std::nullopt;
+                }
+                co_return WebSocketMessage{
+                    .opcode = message.opcode,
+                    .payload = std::string_view(inboundInflated_.data(), inboundInflated_.size())};
+            }
             case WebSocketInboundAction::kInvalidUtf8:
                 co_await close(1007, "invalid utf-8");
                 co_return std::nullopt;
@@ -48,7 +69,7 @@ Task<bool> WebSocketConnection<Transport>::ensure(std::size_t bytes) {
 template <typename Transport>
 Task<std::optional<WebSocketFrameView>> WebSocketConnection<Transport>::readFrame() {
     return webSocketReadFrame(
-        buffer_, offset_, pendingCompactUntil_, maxMessageBytes_,
+        buffer_, offset_, pendingCompactUntil_, maxMessageBytes_, permessageDeflate_,
         [this](std::size_t bytes) { return ensure(bytes); });
 }
 

@@ -73,12 +73,24 @@ Task<void> WebSocketConnection<Transport>::writeFrameNow(
     WebSocketOpcode opcode,
     std::string_view payload,
     bool endStream) {
-    if ((opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary) &&
-        webSocketMessageExceedsLimit(payload.size(), maxMessageBytes_)) {
+    const bool dataFrame = opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary;
+    if (dataFrame && webSocketMessageExceedsLimit(payload.size(), maxMessageBytes_)) {
         throw std::invalid_argument("websocket message is too large");
     }
+    // permessage-deflate: compress data frames only (never control frames), and
+    // only keep the result when it actually shrinks the payload — RSV1 is
+    // per-message, so sending some messages uncompressed is fine and avoids the
+    // small-message expansion that DEFLATE would otherwise add.
+    bool rsv1 = false;
+    if (dataFrame && deflate_.has_value()) {
+        outboundDeflated_.clear();
+        if (deflate_->compress(payload, outboundDeflated_) && outboundDeflated_.size() < payload.size()) {
+            payload = std::string_view(outboundDeflated_.data(), outboundDeflated_.size());
+            rsv1 = true;
+        }
+    }
     WebSocketFrameHeader header;
-    const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size());
+    const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size(), rsv1);
     const auto ec = co_await transport_.writeFrame(
         std::string_view(header.data(), headerSize), payload, endStream);
     if (ec) {

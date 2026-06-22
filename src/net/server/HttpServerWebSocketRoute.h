@@ -47,11 +47,13 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
+    bool permessageDeflate = false;
     if (!(co_await writeWebSocketHandshake(
             stream,
             parsed.request,
             parsed.flags,
-            routeResolution.route->webSocketSubprotocols))) {
+            routeResolution.route->webSocketSubprotocols,
+            permessageDeflate))) {
         co_return HttpWebSocketRouteResult::kSessionFinished;
     }
 
@@ -61,7 +63,8 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         routeResolution.route->webSocketHeartbeat,
         options.maxWebSocketMessageBytes,
         memory.resource(),
-        pendingFrames);
+        pendingFrames,
+        permessageDeflate);
     co_await runWebSocketSession(
         webSocketConnection,
         scannerEntry,
