@@ -48,6 +48,7 @@ public:
 #include <vector>
 
 #include "ruvia/memory/PmrObject.h"
+#include "../core/PoolWaiterQueue.h"
 
 struct st_mysql;
 struct st_mysql_res;
@@ -80,17 +81,6 @@ private:
     friend class ::ruvia::DbHandle;
     friend class ::ruvia::DbTransaction;
     friend class ::ruvia::DbStreamResult;
-
-    struct SlotWaiter {
-        bool* ready{nullptr};
-        bool* timedOut{nullptr};
-        std::size_t* slot{nullptr};
-        std::chrono::steady_clock::time_point deadline{};
-        std::coroutine_handle<> handle{};
-        SlotWaiter* previous{nullptr};
-        SlotWaiter* next{nullptr};
-        bool queued{false};
-    };
 
     class SlotGuard final {
     public:
@@ -133,9 +123,6 @@ private:
 
     Task<std::size_t> acquireSlot();
     void releaseSlot(std::size_t slot) noexcept;
-    void enqueueWaiter(SlotWaiter& waiter) noexcept;
-    void removeWaiter(SlotWaiter& waiter) noexcept;
-    [[nodiscard]] bool resumeNextWaiter(std::size_t slot) noexcept;
     void closeSlot(ConnectionSlot& slot) noexcept;
     void setSlotDeadline(ConnectionSlot& slot, std::chrono::milliseconds timeout, ConnectionSlot::DeadlineKind kind) noexcept;
     void clearSlotDeadline(ConnectionSlot& slot) noexcept;
@@ -180,8 +167,7 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<ConnectionSlot> slots_;
     std::pmr::vector<std::size_t> freeSlots_;
-    SlotWaiter* waiterHead_{nullptr};
-    SlotWaiter* waiterTail_{nullptr};
+    PoolWaiterQueue waiters_;
     bool closing_{false};
 };
 

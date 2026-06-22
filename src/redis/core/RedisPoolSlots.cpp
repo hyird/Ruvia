@@ -42,7 +42,7 @@ Task<std::size_t> RedisPool::acquire() {
         PoolWaiter& waiter;
 
         ~WaiterGuard() {
-            pool.removeWaiter(waiter);
+            pool.waiters_.remove(waiter);
         }
     };
 
@@ -54,7 +54,7 @@ Task<std::size_t> RedisPool::acquire() {
         .timedOut = &timedOut,
         .index = &waitedIndex,
         .deadline = std::chrono::steady_clock::now() + config_.acquireTimeout};
-    enqueueWaiter(waiter);
+    waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
     struct WaiterAwaiter final {
@@ -93,62 +93,12 @@ void RedisPool::release(std::size_t index) noexcept {
         connections_[index].busy = false;
         return;
     }
-    if (resumeNextWaiter(index)) {
+    if (waiters_.resumeNext(index)) {
         connections_[index].busy = true;
         return;
     }
     connections_[index].busy = false;
     free_.push_back(index);
-}
-
-void RedisPool::enqueueWaiter(PoolWaiter& waiter) noexcept {
-    if (waiter.queued) {
-        return;
-    }
-    waiter.previous = waiterTail_;
-    waiter.next = nullptr;
-    waiter.queued = true;
-    if (waiterTail_ != nullptr) {
-        waiterTail_->next = &waiter;
-    } else {
-        waiterHead_ = &waiter;
-    }
-    waiterTail_ = &waiter;
-}
-
-void RedisPool::removeWaiter(PoolWaiter& waiter) noexcept {
-    if (!waiter.queued) {
-        return;
-    }
-    if (waiter.previous != nullptr) {
-        waiter.previous->next = waiter.next;
-    } else {
-        waiterHead_ = waiter.next;
-    }
-    if (waiter.next != nullptr) {
-        waiter.next->previous = waiter.previous;
-    } else {
-        waiterTail_ = waiter.previous;
-    }
-    waiter.previous = nullptr;
-    waiter.next = nullptr;
-    waiter.queued = false;
-}
-
-bool RedisPool::resumeNextWaiter(std::size_t index) noexcept {
-    while (waiterHead_ != nullptr) {
-        auto* waiter = waiterHead_;
-        removeWaiter(*waiter);
-        if (waiter->ready != nullptr && waiter->index != nullptr) {
-            *waiter->index = index;
-            *waiter->ready = true;
-            if (waiter->handle) {
-                waiter->handle.resume();
-            }
-            return true;
-        }
-    }
-    return false;
 }
 
 }  // namespace ruvia::detail

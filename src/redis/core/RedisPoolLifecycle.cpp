@@ -57,38 +57,15 @@ Task<void> RedisPool::connect() {
 
 void RedisPool::closeNow() noexcept {
     closing_ = true;
-    while (waiterHead_ != nullptr) {
-        auto* waiter = waiterHead_;
-        removeWaiter(*waiter);
-        if (waiter->ready != nullptr) {
-            *waiter->ready = true;
-        }
-        if (waiter->handle) {
-            waiter->handle.resume();
-        }
-    }
+    waiters_.closeAll(connections_.size());
     for (auto& connection : connections_) {
         close(connection);
     }
 }
 
 void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    auto* waiter = waiterHead_;
-    while (waiter != nullptr) {
-        auto* next = waiter->next;
-        if (config_.acquireTimeout.count() > 0 && waiter->deadline <= now) {
-            removeWaiter(*waiter);
-            if (waiter->timedOut != nullptr) {
-                *waiter->timedOut = true;
-            }
-            if (waiter->ready != nullptr) {
-                *waiter->ready = true;
-            }
-            if (waiter->handle) {
-                waiter->handle.resume();
-            }
-        }
-        waiter = next;
+    if (config_.acquireTimeout.count() > 0) {
+        waiters_.expireDeadlines(now);
     }
 
     for (auto& connection : connections_) {

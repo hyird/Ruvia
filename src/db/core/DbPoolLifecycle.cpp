@@ -48,41 +48,15 @@ void detail::MariaDbPool::closeNow() noexcept {
         return;
     }
     closing_ = true;
-    while (waiterHead_ != nullptr) {
-        auto* waiter = waiterHead_;
-        removeWaiter(*waiter);
-        if (waiter->ready != nullptr) {
-            *waiter->ready = true;
-        }
-        if (waiter->slot != nullptr) {
-            *waiter->slot = slots_.size();
-        }
-        if (waiter->handle) {
-            waiter->handle.resume();
-        }
-    }
+    waiters_.closeAll(slots_.size());
     for (auto& slot : slots_) {
         closeSlot(slot);
     }
 }
 
 void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    auto* waiter = waiterHead_;
-    while (waiter != nullptr) {
-        auto* next = waiter->next;
-        if (config_.acquireTimeout.count() > 0 && waiter->deadline <= now) {
-            removeWaiter(*waiter);
-            if (waiter->timedOut != nullptr) {
-                *waiter->timedOut = true;
-            }
-            if (waiter->ready != nullptr) {
-                *waiter->ready = true;
-            }
-            if (waiter->handle) {
-                waiter->handle.resume();
-            }
-        }
-        waiter = next;
+    if (config_.acquireTimeout.count() > 0) {
+        waiters_.expireDeadlines(now);
     }
 
     for (auto& slot : slots_) {
