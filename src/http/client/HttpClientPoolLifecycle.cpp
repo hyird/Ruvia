@@ -83,41 +83,12 @@ void HttpClientPool::closeNow() noexcept {
     for (auto* conn : connections_) {
         closeConnection(*conn);
     }
-    while (waiterHead_ != nullptr) {
-        auto* w = waiterHead_;
-        waiterHead_ = w->next;
-        if (waiterHead_ != nullptr) {
-            waiterHead_->previous = nullptr;
-        }
-        w->queued = false;
-        if (w->timedOut != nullptr) {
-            *w->timedOut = false;
-        }
-        *w->ready = true;
-        if (w->handle) {
-            w->handle.resume();
-        }
-    }
-    waiterTail_ = nullptr;
+    waiters_.closeAll(connections_.size());
 }
 
 void HttpClientPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    auto* waiter = waiterHead_;
-    while (waiter != nullptr) {
-        auto* next = waiter->next;
-        if (config_.acquireTimeout.count() > 0 && waiter->deadline <= now) {
-            removeWaiter(*waiter);
-            if (waiter->timedOut != nullptr) {
-                *waiter->timedOut = true;
-            }
-            if (waiter->ready != nullptr) {
-                *waiter->ready = true;
-            }
-            if (waiter->handle) {
-                waiter->handle.resume();
-            }
-        }
-        waiter = next;
+    if (config_.acquireTimeout.count() > 0) {
+        waiters_.expireDeadlines(now);
     }
 
     for (auto* conn : connections_) {

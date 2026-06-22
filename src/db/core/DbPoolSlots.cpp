@@ -15,56 +15,6 @@ detail::MariaDbPool::SlotGuard::~SlotGuard() {
     }
 }
 
-void detail::MariaDbPool::enqueueWaiter(SlotWaiter& waiter) noexcept {
-    if (waiter.queued) {
-        return;
-    }
-    waiter.previous = waiterTail_;
-    waiter.next = nullptr;
-    waiter.queued = true;
-    if (waiterTail_ != nullptr) {
-        waiterTail_->next = &waiter;
-    } else {
-        waiterHead_ = &waiter;
-    }
-    waiterTail_ = &waiter;
-}
-
-void detail::MariaDbPool::removeWaiter(SlotWaiter& waiter) noexcept {
-    if (!waiter.queued) {
-        return;
-    }
-    if (waiter.previous != nullptr) {
-        waiter.previous->next = waiter.next;
-    } else {
-        waiterHead_ = waiter.next;
-    }
-    if (waiter.next != nullptr) {
-        waiter.next->previous = waiter.previous;
-    } else {
-        waiterTail_ = waiter.previous;
-    }
-    waiter.previous = nullptr;
-    waiter.next = nullptr;
-    waiter.queued = false;
-}
-
-bool detail::MariaDbPool::resumeNextWaiter(std::size_t slot) noexcept {
-    while (waiterHead_ != nullptr) {
-        auto* waiter = waiterHead_;
-        removeWaiter(*waiter);
-        if (waiter->ready != nullptr && waiter->slot != nullptr) {
-            *waiter->slot = slot;
-            *waiter->ready = true;
-            if (waiter->handle) {
-                waiter->handle.resume();
-            }
-            return true;
-        }
-    }
-    return false;
-}
-
 Task<std::size_t> detail::MariaDbPool::acquireSlot() {
     if (closing_) {
         throw std::runtime_error("database client is closing");
@@ -78,26 +28,26 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
 
     struct WaiterGuard final {
         MariaDbPool& client;
-        SlotWaiter& waiter;
+        PoolWaiter& waiter;
 
         ~WaiterGuard() {
-            client.removeWaiter(waiter);
+            client.waiters_.remove(waiter);
         }
     };
 
     bool ready = false;
     bool timedOut = false;
     std::size_t slot = 0;
-    SlotWaiter waiter{
+    PoolWaiter waiter{
         .ready = &ready,
         .timedOut = &timedOut,
-        .slot = &slot,
+        .index = &slot,
         .deadline = std::chrono::steady_clock::now() + config_.acquireTimeout};
-    enqueueWaiter(waiter);
+    waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
     struct WaiterAwaiter final {
-        SlotWaiter& waiter;
+        PoolWaiter& waiter;
         bool& ready;
 
         [[nodiscard]] bool await_ready() const noexcept {
@@ -129,7 +79,7 @@ void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {
         return;
     }
 
-    if (!closing_ && resumeNextWaiter(slot)) {
+    if (!closing_ && waiters_.resumeNext(slot)) {
         return;
     }
 

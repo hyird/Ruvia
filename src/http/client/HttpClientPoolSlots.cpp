@@ -28,7 +28,7 @@ struct PoolWaiterAwaiter {
     explicit PoolWaiterAwaiter(HttpClientPool& p) noexcept : pool(p) {}
 
     HttpClientPool& pool;
-    HttpClientPool::PoolWaiter waiter;
+    PoolWaiter waiter;
     bool ready{false};
     bool timedOut{false};
     std::size_t index{0};
@@ -47,12 +47,12 @@ struct PoolWaiterAwaiter {
         waiter.index = &index;
         waiter.deadline = std::chrono::steady_clock::now() + pool.config_.acquireTimeout;
         waiter.handle = handle;
-        pool.enqueueWaiter(waiter);
+        pool.waiters_.enqueue(waiter);
         return true;
     }
 
     std::size_t await_resume() {
-        pool.removeWaiter(waiter);
+        pool.waiters_.remove(waiter);
         if (timedOut) {
             throw std::runtime_error("http client pool acquire timed out");
         }
@@ -69,52 +69,9 @@ Task<std::size_t> HttpClientPool::acquire() {
 }
 
 void HttpClientPool::release(std::size_t index) noexcept {
-    if (!resumeNextWaiter(index)) {
+    if (!waiters_.resumeNext(index)) {
         free_.push_back(index);
     }
-}
-
-void HttpClientPool::enqueueWaiter(PoolWaiter& w) noexcept {
-    w.previous = waiterTail_;
-    w.next = nullptr;
-    if (waiterTail_ != nullptr) {
-        waiterTail_->next = &w;
-    } else {
-        waiterHead_ = &w;
-    }
-    waiterTail_ = &w;
-    w.queued = true;
-}
-
-void HttpClientPool::removeWaiter(PoolWaiter& w) noexcept {
-    if (!w.queued) {
-        return;
-    }
-    if (w.previous != nullptr) {
-        w.previous->next = w.next;
-    } else {
-        waiterHead_ = w.next;
-    }
-    if (w.next != nullptr) {
-        w.next->previous = w.previous;
-    } else {
-        waiterTail_ = w.previous;
-    }
-    w.queued = false;
-}
-
-bool HttpClientPool::resumeNextWaiter(std::size_t index) noexcept {
-    if (waiterHead_ == nullptr) {
-        return false;
-    }
-    auto* w = waiterHead_;
-    removeWaiter(*w);
-    *w->index = index;
-    *w->ready = true;
-    if (w->handle) {
-        w->handle.resume();
-    }
-    return true;
 }
 
 }  // namespace ruvia::detail

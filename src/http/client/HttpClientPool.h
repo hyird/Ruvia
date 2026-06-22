@@ -19,6 +19,7 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
+#include "../../core/PoolWaiterQueue.h"
 
 namespace ruvia::detail {
 
@@ -47,17 +48,6 @@ public:
 
 private:
     friend struct PoolWaiterAwaiter;
-
-    struct PoolWaiter {
-        bool* ready{nullptr};
-        bool* timedOut{nullptr};
-        std::size_t* index{nullptr};
-        std::chrono::steady_clock::time_point deadline{};
-        std::coroutine_handle<> handle{};
-        PoolWaiter* previous{nullptr};
-        PoolWaiter* next{nullptr};
-        bool queued{false};
-    };
 
     // Non-movable: TLS stream holds a reference to rawSocket by address.
     struct Connection final {
@@ -104,9 +94,6 @@ private:
 
     Task<std::size_t> acquire();
     void release(std::size_t index) noexcept;
-    void enqueueWaiter(PoolWaiter& w) noexcept;
-    void removeWaiter(PoolWaiter& w) noexcept;
-    bool resumeNextWaiter(std::size_t index) noexcept;
     void setDeadline(Connection& conn, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept;
     void clearDeadline(Connection& conn) noexcept;
     [[nodiscard]] bool finishDeadline(Connection& conn) noexcept;
@@ -127,8 +114,7 @@ private:
     // Owning raw pointers: Connection is non-movable (TLS stream holds rawSocket ref)
     std::pmr::vector<Connection*> connections_;
     std::pmr::vector<std::size_t> free_;
-    PoolWaiter* waiterHead_{nullptr};
-    PoolWaiter* waiterTail_{nullptr};
+    PoolWaiterQueue waiters_;
     bool closing_{false};
 };
 

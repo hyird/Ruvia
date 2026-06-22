@@ -50,6 +50,7 @@ public:
 #include <vector>
 
 #include "ruvia/memory/PmrObject.h"
+#include "../core/PoolWaiterQueue.h"
 
 struct redisReader;
 
@@ -98,17 +99,6 @@ private:
     friend class ::ruvia::RedisHandle;
     friend class ::ruvia::RedisPipeline;
 
-    struct PoolWaiter {
-        bool* ready{nullptr};
-        bool* timedOut{nullptr};
-        std::size_t* index{nullptr};
-        std::chrono::steady_clock::time_point deadline{};
-        std::coroutine_handle<> handle{};
-        PoolWaiter* previous{nullptr};
-        PoolWaiter* next{nullptr};
-        bool queued{false};
-    };
-
     struct Connection final {
         explicit Connection(asio::io_context& ioContext, std::pmr::memory_resource* resource);
         ~Connection();
@@ -155,9 +145,6 @@ private:
 
     Task<std::size_t> acquire();
     void release(std::size_t index) noexcept;
-    void enqueueWaiter(PoolWaiter& waiter) noexcept;
-    void removeWaiter(PoolWaiter& waiter) noexcept;
-    [[nodiscard]] bool resumeNextWaiter(std::size_t index) noexcept;
     void close(Connection& connection) noexcept;
     void configureSocket(Connection& connection) noexcept;
     void ensureReader(Connection& connection);
@@ -185,8 +172,7 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Connection> connections_;
     std::pmr::vector<std::size_t> free_;
-    PoolWaiter* waiterHead_{nullptr};
-    PoolWaiter* waiterTail_{nullptr};
+    PoolWaiterQueue waiters_;
     bool closing_{false};
 };
 
