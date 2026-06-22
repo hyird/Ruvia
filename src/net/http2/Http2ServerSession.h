@@ -170,6 +170,8 @@ private:
 
     [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream);
 
+    [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream);
+
     void queueInitialStreamIfReady(Http2StreamState& stream);
 
     void resolveStreamRoute(Http2StreamState& stream) noexcept;
@@ -284,6 +286,7 @@ private:
     Http2ContinuationQueue writeWaiters_;
     Http2ContinuationQueue sendWindowWaiters_;
     HpackDecoder decoder_;
+    std::optional<Http2StreamState> refusedHeaderStream_;
     Http2HeaderContinuation headerContinuation_;
     Http2PeerSettings peerSettings_;
     std::size_t inputOffset_{0};

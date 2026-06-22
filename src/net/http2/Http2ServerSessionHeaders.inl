@@ -57,11 +57,12 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
     }
 
     auto* stream = createStream(header.streamId);
-    if (stream == nullptr) {
-        co_await sendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
-        co_return true;
-    }
     lastStreamId_ = header.streamId;
+    const bool refusedStream = stream == nullptr;
+    if (refusedStream) {
+        refusedHeaderStream_.emplace(header.streamId, memory_.resource());
+        stream = &*refusedHeaderStream_;
+    }
     stream->endStream = (header.flags & kHttp2FlagEndStream) != 0;
 
     std::string_view fragment;
@@ -76,11 +77,20 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto status = decodeHeaderBlock(*stream);
+        const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
         if (status != HeaderDecodeStatus::kOk) {
+            if (refusedStream) {
+                refusedHeaderStream_.reset();
+            }
             co_return co_await handleHeaderDecodeFailure(*stream, status);
         }
-        queueInitialStreamIfReady(*stream);
+        if (refusedStream) {
+            co_await sendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
+            closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+            refusedHeaderStream_.reset();
+        } else {
+            queueInitialStreamIfReady(*stream);
+        }
     } else {
         headerContinuation_.start(stream->id, false);
     }
@@ -135,13 +145,19 @@ Task<bool> Http2ServerSession<Stream>::processContinuation(
     }
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
-        co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "missing CONTINUATION stream");
-        co_return false;
+        if (!refusedHeaderStream_ || refusedHeaderStream_->id != header.streamId) {
+            co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "missing CONTINUATION stream");
+            co_return false;
+        }
+        stream = &*refusedHeaderStream_;
     }
     if (!http2AppendHeaderBlock(*stream, payload)) {
         co_await sendRstStream(stream->id, Http2ErrorCode::kEnhanceYourCalm);
         stream->reset = true;
         headerContinuation_.reset();
+        if (refusedHeaderStream_ && refusedHeaderStream_->id == stream->id) {
+            refusedHeaderStream_.reset();
+        }
         co_return true;
     }
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
@@ -152,11 +168,21 @@ Task<bool> Http2ServerSession<Stream>::processContinuation(
                 co_return co_await handleHeaderDecodeFailure(*stream, status);
             }
         } else {
-            const auto status = decodeHeaderBlock(*stream);
+            const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id == stream->id;
+            const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
             if (status != HeaderDecodeStatus::kOk) {
+                if (refusedStream) {
+                    refusedHeaderStream_.reset();
+                }
                 co_return co_await handleHeaderDecodeFailure(*stream, status);
             }
-            queueInitialStreamIfReady(*stream);
+            if (refusedStream) {
+                co_await sendRstStream(stream->id, Http2ErrorCode::kRefusedStream);
+                closedStreams_.remember(stream->id, Http2StreamCloseSource::kLocal);
+                refusedHeaderStream_.reset();
+            } else {
+                queueInitialStreamIfReady(*stream);
+            }
         }
     }
     co_return true;

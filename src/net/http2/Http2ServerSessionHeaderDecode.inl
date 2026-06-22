@@ -77,6 +77,19 @@ HeaderDecodeStatus Http2ServerSession<Stream>::finishTrailerBlock(Http2StreamSta
 }
 
 template <typename Stream>
+HeaderDecodeStatus Http2ServerSession<Stream>::decodeRefusedHeaderBlock(Http2StreamState& stream) {
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
+        return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
+    });
+    http2ResetHeaderBlock(stream);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
+        return status;
+    }
+    return HeaderDecodeStatus::kOk;
+}
+
+template <typename Stream>
 void Http2ServerSession<Stream>::queueInitialStreamIfReady(Http2StreamState& stream) {
     if (stream.endStream || stream.standardConnect) {
         stream.bodyEnded = true;
