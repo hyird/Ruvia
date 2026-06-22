@@ -40,7 +40,7 @@ public:
           heartbeatOptions_(heartbeatOptions),
           maxMessageBytes_(maxMessageBytes),
           buffer_(resource == nullptr ? ProcessMemory::instance().upstreamResource() : resource),
-          fragmentedMessage_(buffer_.get_allocator().resource()),
+          inbound_(buffer_.get_allocator().resource()),
           backgroundWriteTimer_(session.socket_.get_executor()) {
         backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
         scannerEntry_.webSocketTarget = this;
@@ -99,7 +99,7 @@ private:
     WebSocketHeartbeatOptions heartbeatOptions_{};
     std::size_t maxMessageBytes_{kDefaultMaxWebSocketMessageBytes};
     std::pmr::string buffer_;
-    std::pmr::string fragmentedMessage_;
+    WebSocketInboundAssembler inbound_;
     asio::steady_timer backgroundWriteTimer_;
     std::size_t offset_{0};
     std::size_t pendingCompactUntil_{0};
@@ -109,8 +109,6 @@ private:
     bool closeSent_{false};
     bool awaitingPong_{false};
     std::int64_t heartbeatPingSentMs_{0};
-    bool fragmented_{false};
-    WebSocketOpcode fragmentedOpcode_{WebSocketOpcode::kText};
 };
 
 }  // namespace ruvia::detail

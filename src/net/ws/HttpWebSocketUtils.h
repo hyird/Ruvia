@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -230,6 +231,85 @@ void validateWebSocketClosePayload(std::string_view payload);
     const HttpRequest& request,
     const HttpRequestFlags& flags,
     std::string_view supported) noexcept;
+
+enum class WebSocketInboundAction : std::uint8_t {
+    kSendPong,      // reply with a Pong echoing the frame payload
+    kPongReceived,  // a Pong arrived; clear the awaiting-pong state
+    kPeerClose,     // peer-initiated Close; echo it then end the stream
+    kContinue,      // frame consumed, nothing to deliver yet
+    kDeliver,       // `out` holds a complete application message
+    kInvalidUtf8    // text payload is not valid UTF-8; close with 1007
+};
+
+// Single owner of the WebSocket inbound message-reassembly state machine (RFC
+// 6455 §5.4): control-frame dispatch, fragmentation across continuation frames,
+// per-message size limits and UTF-8 validation. Shared by the HTTP/1.1 and
+// HTTP/2 transports, which differ only in how they read frames and echo Close,
+// so only those parts stay in each connection's read loop. Throws
+// std::invalid_argument on protocol violations, matching the prior behavior.
+class WebSocketInboundAssembler final {
+public:
+    explicit WebSocketInboundAssembler(std::pmr::memory_resource* resource)
+        : message_(resource) {}
+
+    template <typename FrameT>
+    [[nodiscard]] WebSocketInboundAction accept(
+        const FrameT& frame,
+        std::size_t maxMessageBytes,
+        WebSocketMessage& out) {
+        if (frame.opcode == WebSocketOpcode::kPing) {
+            return WebSocketInboundAction::kSendPong;
+        }
+        if (frame.opcode == WebSocketOpcode::kPong) {
+            return WebSocketInboundAction::kPongReceived;
+        }
+        if (frame.opcode == WebSocketOpcode::kClose) {
+            return WebSocketInboundAction::kPeerClose;
+        }
+        if (frame.continuation) {
+            if (!fragmented_) {
+                throw std::invalid_argument("unexpected websocket continuation frame");
+            }
+            if (webSocketAppendExceedsLimit(message_.size(), frame.payload.size(), maxMessageBytes)) {
+                throw std::invalid_argument("websocket message is too large");
+            }
+            message_.append(frame.payload.data(), frame.payload.size());
+            if (!frame.fin) {
+                return WebSocketInboundAction::kContinue;
+            }
+            if (opcode_ == WebSocketOpcode::kText && !isValidUtf8(message_)) {
+                return WebSocketInboundAction::kInvalidUtf8;
+            }
+            fragmented_ = false;
+            out = WebSocketMessage{
+                .opcode = opcode_,
+                .payload = std::string_view(message_.data(), message_.size())};
+            return WebSocketInboundAction::kDeliver;
+        }
+        if (frame.opcode == WebSocketOpcode::kText || frame.opcode == WebSocketOpcode::kBinary) {
+            if (fragmented_) {
+                throw std::invalid_argument("invalid websocket fragmented message");
+            }
+            if (frame.fin) {
+                if (frame.opcode == WebSocketOpcode::kText && !isValidUtf8(frame.payload)) {
+                    return WebSocketInboundAction::kInvalidUtf8;
+                }
+                out = WebSocketMessage{.opcode = frame.opcode, .payload = frame.payload};
+                return WebSocketInboundAction::kDeliver;
+            }
+            fragmented_ = true;
+            opcode_ = frame.opcode;
+            message_.assign(frame.payload.data(), frame.payload.size());
+            return WebSocketInboundAction::kContinue;
+        }
+        return WebSocketInboundAction::kContinue;
+    }
+
+private:
+    std::pmr::string message_;
+    WebSocketOpcode opcode_{WebSocketOpcode::kText};
+    bool fragmented_{false};
+};
 
 }  // namespace detail
 }  // namespace ruvia
