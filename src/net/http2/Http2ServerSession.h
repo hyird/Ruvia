@@ -70,7 +70,7 @@ namespace ruvia::detail {
 template <typename Stream>
 class Http2ServerSession final {
     template <typename Session>
-    friend class Http2WebSocketConnection;
+    friend class Http2WebSocketTransport;
     template <typename Session>
     friend class Http2RequestBodyReader;
     template <typename Session>

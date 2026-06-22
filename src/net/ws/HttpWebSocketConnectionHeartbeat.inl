@@ -2,8 +2,8 @@
 
 namespace ruvia::detail {
 
-template <typename Stream>
-void WebSocketConnection<Stream>::completeBackgroundWrite() noexcept {
+template <typename Transport>
+void WebSocketConnection<Transport>::completeBackgroundWrite() noexcept {
     if (backgroundWriteCount_ > 0) {
         --backgroundWriteCount_;
     }
@@ -11,8 +11,8 @@ void WebSocketConnection<Stream>::completeBackgroundWrite() noexcept {
     backgroundWriteTimer_.cancel(ignored);
 }
 
-template <typename Stream>
-bool WebSocketConnection<Stream>::heartbeatTick(std::int64_t now) noexcept {
+template <typename Transport>
+bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     switch (webSocketHeartbeatDecision(
         heartbeatOptions_,
         closeSent_,
@@ -35,19 +35,10 @@ bool WebSocketConnection<Stream>::heartbeatTick(std::int64_t now) noexcept {
     heartbeatWriteActive_ = true;
     ++backgroundWriteCount_;
     try {
-        static constexpr std::array<unsigned char, 2> kHeartbeatPingFrame{
-            static_cast<unsigned char>(0x80U | static_cast<std::uint8_t>(WebSocketOpcode::kPing)),
-            0U};
-        asio::async_write(stream_, asio::buffer(kHeartbeatPingFrame), [this](std::error_code ec, std::size_t) noexcept {
-            if (ec) {
-                closeSent_ = true;
-            } else {
-                scannerEntry_.touch();
-            }
-            heartbeatWriteActive_ = false;
-            writeActive_ = false;
-            completeBackgroundWrite();
-        });
+        asio::co_spawn(
+            transport_.executor(),
+            taskAsAwaitable(writeHeartbeatPing()),
+            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     } catch (...) {
         heartbeatWriteActive_ = false;
         writeActive_ = false;
@@ -55,6 +46,18 @@ bool WebSocketConnection<Stream>::heartbeatTick(std::int64_t now) noexcept {
         return true;
     }
     return false;
+}
+
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
+    try {
+        co_await writeFrameNow(WebSocketOpcode::kPing, {}, false);
+    } catch (...) {
+        closeSent_ = true;
+    }
+    heartbeatWriteActive_ = false;
+    writeActive_ = false;
+    completeBackgroundWrite();
 }
 
 }  // namespace ruvia::detail

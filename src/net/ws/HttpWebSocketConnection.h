@@ -1,6 +1,6 @@
 #pragma once
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -21,23 +21,31 @@
 
 namespace ruvia::detail {
 
-template <typename Stream>
+// Transport-agnostic WebSocket connection (RFC 6455). All protocol behavior —
+// frame reassembly, write serialization, heartbeats, graceful/abnormal close —
+// lives here; the HTTP/1.1 and HTTP/2 transports differ only in the Transport
+// policy, which supplies the three transport-specific operations:
+//   asio-executor executor() const;
+//   Task<bool> readMore(std::pmr::string& buffer);  // append >=1 byte, false on EOF
+//   Task<std::error_code> writeFrame(std::string_view header,
+//                                    std::string_view payload, bool endStream);
+template <typename Transport>
 class WebSocketConnection final {
 public:
     WebSocketConnection(
-        Stream& stream,
-        std::pmr::memory_resource* resource,
+        Transport transport,
         ConnectionScanner::Entry& scannerEntry,
         WebSocketHeartbeatOptions heartbeatOptions,
         std::size_t maxMessageBytes,
-        std::string_view initialBytes)
-        : stream_(stream),
+        std::pmr::memory_resource* resource,
+        std::string_view initialBytes = {})
+        : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           heartbeatOptions_(heartbeatOptions),
           maxMessageBytes_(maxMessageBytes),
           buffer_(resource == nullptr ? ProcessMemory::instance().upstreamResource() : resource),
           inbound_(buffer_.get_allocator().resource()),
-          backgroundWriteTimer_(stream.get_executor()) {
+          backgroundWriteTimer_(transport_.executor()) {
         backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
         buffer_.append(initialBytes.data(), initialBytes.size());
         scannerEntry_.webSocketTarget = this;
@@ -50,6 +58,9 @@ public:
             scannerEntry_.webSocketTick = nullptr;
         }
     }
+
+    WebSocketConnection(const WebSocketConnection&) = delete;
+    WebSocketConnection& operator=(const WebSocketConnection&) = delete;
 
     [[nodiscard]] static Task<std::optional<WebSocketMessage>> readThunk(void* target) {
         return static_cast<WebSocketConnection*>(target)->read();
@@ -75,11 +86,14 @@ public:
 private:
     void completeBackgroundWrite() noexcept;
     bool heartbeatTick(std::int64_t now) noexcept;
-    Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload);
+    Task<void> writeHeartbeatPing();
+    Task<void> waitForHeartbeatWrite();
+    Task<void> writeExclusive(WebSocketOpcode opcode, std::string_view payload, bool endStream);
+    Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload, bool endStream);
     [[nodiscard]] Task<bool> ensure(std::size_t bytes);
     [[nodiscard]] Task<std::optional<WebSocketFrameView>> readFrame();
 
-    Stream& stream_;
+    Transport transport_;
     ConnectionScanner::Entry& scannerEntry_;
     WebSocketHeartbeatOptions heartbeatOptions_{};
     std::size_t maxMessageBytes_{kDefaultMaxWebSocketMessageBytes};

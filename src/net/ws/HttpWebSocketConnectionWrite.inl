@@ -2,8 +2,8 @@
 
 namespace ruvia::detail {
 
-template <typename Stream>
-Task<void> WebSocketConnection<Stream>::write(WebSocketOpcode opcode, std::string_view payload) {
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload) {
     if (closeSent_ && opcode != WebSocketOpcode::kClose) {
         co_return;
     }
@@ -11,40 +11,22 @@ Task<void> WebSocketConnection<Stream>::write(WebSocketOpcode opcode, std::strin
         payload.size() > 125) {
         throw std::invalid_argument("websocket control frame is too large");
     }
-
-    while (heartbeatWriteActive_) {
-        (void)co_await asyncError([this](auto handler) mutable {
-            backgroundWriteTimer_.async_wait(std::move(handler));
-        });
-    }
-
-    if (writeActive_) {
-        throw std::logic_error("concurrent websocket writes are not supported");
-    }
-
-    writeActive_ = true;
-    try {
-        co_await writeFrameNow(opcode, payload);
-    } catch (...) {
-        writeActive_ = false;
-        throw;
-    }
-    writeActive_ = false;
+    co_await writeExclusive(opcode, payload, false);
 }
 
-template <typename Stream>
-Task<void> WebSocketConnection<Stream>::close(std::uint16_t code, std::string_view reason) {
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string_view reason) {
     if (closeSent_) {
         co_return;
     }
     WebSocketClosePayload payload;
     const auto payloadSize = encodeWebSocketClosePayload(payload, code, reason);
     closeSent_ = true;
-    co_await write(WebSocketOpcode::kClose, std::string_view(payload.data(), payloadSize));
+    co_await writeExclusive(WebSocketOpcode::kClose, std::string_view(payload.data(), payloadSize), true);
 }
 
-template <typename Stream>
-Task<void> WebSocketConnection<Stream>::detachAndDrainBackgroundWrites() {
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
     if (scannerEntry_.webSocketTarget == this) {
         scannerEntry_.webSocketTarget = nullptr;
         scannerEntry_.webSocketTick = nullptr;
@@ -57,20 +39,48 @@ Task<void> WebSocketConnection<Stream>::detachAndDrainBackgroundWrites() {
     }
 }
 
-template <typename Stream>
-Task<void> WebSocketConnection<Stream>::writeFrameNow(WebSocketOpcode opcode, std::string_view payload) {
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::waitForHeartbeatWrite() {
+    while (heartbeatWriteActive_) {
+        (void)co_await asyncError([this](auto handler) mutable {
+            backgroundWriteTimer_.async_wait(std::move(handler));
+        });
+    }
+}
+
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::writeExclusive(
+    WebSocketOpcode opcode,
+    std::string_view payload,
+    bool endStream) {
+    co_await waitForHeartbeatWrite();
+    if (writeActive_) {
+        throw std::logic_error("concurrent websocket writes are not supported");
+    }
+
+    writeActive_ = true;
+    try {
+        co_await writeFrameNow(opcode, payload, endStream);
+    } catch (...) {
+        writeActive_ = false;
+        throw;
+    }
+    writeActive_ = false;
+}
+
+template <typename Transport>
+Task<void> WebSocketConnection<Transport>::writeFrameNow(
+    WebSocketOpcode opcode,
+    std::string_view payload,
+    bool endStream) {
     if ((opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary) &&
         webSocketMessageExceedsLimit(payload.size(), maxMessageBytes_)) {
         throw std::invalid_argument("websocket message is too large");
     }
     WebSocketFrameHeader header;
     const auto headerSize = encodeWebSocketFrameHeader(header, opcode, payload.size());
-    std::array<asio::const_buffer, 2> buffers{
-        asio::buffer(header.data(), headerSize),
-        asio::buffer(payload.data(), payload.size())};
-    const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
-        asio::async_write(stream_, buffers, std::move(handler));
-    });
+    const auto ec = co_await transport_.writeFrame(
+        std::string_view(header.data(), headerSize), payload, endStream);
     if (ec) {
         throw std::invalid_argument("failed to write websocket frame");
     }
