@@ -47,14 +47,21 @@ public:
     using End = Task<void> (*)(void*);
     using BindContext = void (*)(void*, Context*) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
+    using AddTrailer = void (*)(void*, std::string_view, std::string_view);
 
     constexpr ResponseStreamWriter(
         void* target,
         Write write,
         End end,
         BindContext bindContext = nullptr,
-        Scratch scratch = nullptr) noexcept
-        : target_(target), write_(write), end_(end), bindContext_(bindContext), scratch_(scratch) {}
+        Scratch scratch = nullptr,
+        AddTrailer addTrailer = nullptr) noexcept
+        : target_(target),
+          write_(write),
+          end_(end),
+          bindContext_(bindContext),
+          scratch_(scratch),
+          addTrailer_(addTrailer) {}
 
     ResponseStreamWriter(const ResponseStreamWriter&) = delete;
     ResponseStreamWriter& operator=(const ResponseStreamWriter&) = delete;
@@ -77,6 +84,17 @@ public:
         return end_(target_);
     }
 
+    // Queues a trailer field to be emitted when the stream ends — an HTTP/1.1
+    // chunked trailer or an HTTP/2 trailing HEADERS field, depending on the
+    // transport. Must be called before the stream is ended; throws on a field
+    // name/value that is not a valid or permissible trailer.
+    void addTrailer(std::string_view name, std::string_view value) {
+        if (addTrailer_ == nullptr) {
+            throw std::logic_error("response stream does not support trailers");
+        }
+        addTrailer_(target_, name, value);
+    }
+
     void bindContext(Context& context) noexcept {
         if (bindContext_ != nullptr) {
             bindContext_(target_, &context);
@@ -96,6 +114,7 @@ private:
     End end_{nullptr};
     BindContext bindContext_{nullptr};
     Scratch scratch_{nullptr};
+    AddTrailer addTrailer_{nullptr};
 };
 
 struct SseMessage final {
@@ -132,6 +151,10 @@ public:
         appendData(frame, message.data);
         frame.push_back('\n');
         co_await writer_.write(frame);
+    }
+
+    void addTrailer(std::string_view name, std::string_view value) {
+        writer_.addTrailer(name, value);
     }
 
     Task<void> end() {

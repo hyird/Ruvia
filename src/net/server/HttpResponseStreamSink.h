@@ -4,6 +4,7 @@
 
 #include "HttpResponseHead.h"
 #include "HttpResponseStreamHead.h"
+#include "HttpResponseTrailers.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
@@ -36,6 +37,7 @@ public:
         : stream_(stream),
           head_(head),
           scratch_(memory.resource()),
+          trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
           mode_(mode) {}
 
@@ -48,6 +50,10 @@ public:
 
     static Task<void> endThunk(void* target) {
         co_await static_cast<ResponseStreamSink*>(target)->end();
+    }
+
+    static void addTrailerThunk(void* target, std::string_view name, std::string_view value) {
+        static_cast<ResponseStreamSink*>(target)->addTrailer(name, value);
     }
 
     static void bindContextThunk(void* target, Context* context) noexcept {
@@ -124,6 +130,22 @@ private:
         scannerEntry_.touch();
     }
 
+    // RFC 9110 §6.5 trailer section: queued before the stream ends and flushed
+    // here as chunked trailer fields. The value was validated for CR/LF/NUL on
+    // entry, so it is safe to write verbatim.
+    void addTrailer(std::string_view name, std::string_view value) {
+        if (ended_) {
+            throw std::logic_error("response stream is already ended");
+        }
+        if (!responseTrailerFieldValid(name, value)) {
+            throw std::invalid_argument("invalid response trailer field");
+        }
+        trailers_.append(name.data(), name.size());
+        trailers_.append(": ");
+        trailers_.append(value.data(), value.size());
+        trailers_.append("\r\n");
+    }
+
     Task<void> end() {
         if (ended_) {
             co_return;
@@ -134,9 +156,16 @@ private:
             co_return;
         }
 
-        constexpr std::string_view finalChunk = "0\r\n\r\n";
-        const auto ec = co_await asyncError([this, finalChunk](auto handler) mutable {
-            asio::async_write(stream_, asio::buffer(finalChunk), std::move(handler));
+        // Last-chunk, then the (possibly empty) trailer section, then the
+        // closing CRLF. With no trailers this is exactly "0\r\n\r\n".
+        constexpr std::string_view lastChunk = "0\r\n";
+        constexpr std::string_view crlf = "\r\n";
+        const std::array<asio::const_buffer, 3> buffers{
+            asio::buffer(lastChunk),
+            asio::buffer(trailers_),
+            asio::buffer(crlf)};
+        const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
+            asio::async_write(stream_, buffers, std::move(handler));
         });
         ended_ = true;
         if (ec) {
@@ -149,6 +178,7 @@ private:
     Stream& stream_;
     ResponseHeadBuffer& head_;
     std::pmr::string scratch_;
+    std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
     Context* context_{nullptr};
     ResponseBodyMode mode_;
