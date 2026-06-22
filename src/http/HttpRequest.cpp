@@ -135,25 +135,16 @@ QueryValue HttpRequest::query(std::string_view name) const noexcept {
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
-    auto input = detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
-    while (!input.empty()) {
-        const auto semicolon = input.find(';');
-        const auto part = semicolon == std::string_view::npos ? input : input.substr(0, semicolon);
-        const auto equals = part.find('=');
-        if (equals != std::string_view::npos) {
-            const auto key = detail::httpTrimOws(part.substr(0, equals));
-            if (key == name) {
-                return detail::httpTrimOws(part.substr(equals + 1));
-            }
+    const auto input = detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
+    std::optional<std::string_view> result;
+    detail::httpVisitSemicolonParameters(input, [name, &result](std::string_view key, std::string_view value) noexcept {
+        if (key == name) {
+            result = value;
+            return false;
         }
-
-        if (semicolon == std::string_view::npos) {
-            break;
-        }
-        input.remove_prefix(semicolon + 1);
-    }
-
-    return std::nullopt;
+        return true;
+    });
+    return result;
 }
 
 std::pmr::memory_resource* HttpRequest::resource() const noexcept {
