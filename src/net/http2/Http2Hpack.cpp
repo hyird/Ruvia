@@ -83,6 +83,40 @@ HpackError HpackDecoder::decodeString(
     return HpackError::kNone;
 }
 
+HpackError HpackDecoder::decodeLiteralHeader(
+    const unsigned char*& cursor,
+    const unsigned char* end,
+    std::uint8_t nameIndexPrefixBits,
+    bool indexIntoDynamic,
+    void* target,
+    HeaderCallback callback) {
+    std::uint32_t nameIndex = 0;
+    if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex); error != HpackError::kNone) {
+        return error;
+    }
+
+    std::string_view name;
+    if (nameIndex == 0) {
+        if (const auto error = decodeString(cursor, end, nameScratch_, name); error != HpackError::kNone) {
+            return error;
+        }
+    } else if (const auto error = indexedName(nameIndex, name); error != HpackError::kNone) {
+        return error;
+    }
+
+    std::string_view value;
+    if (const auto error = decodeString(cursor, end, valueScratch_, value); error != HpackError::kNone) {
+        return error;
+    }
+    if (callback != nullptr && !callback(target, name, value)) {
+        return HpackError::kCallbackRejected;
+    }
+    if (indexIntoDynamic) {
+        addDynamic(name, value);
+    }
+    return HpackError::kNone;
+}
+
 void HpackDecoder::releaseScratch() {
     clearPmrStringRetainingSmall(nameScratch_);
     clearPmrStringRetainingSmall(valueScratch_);
@@ -121,27 +155,10 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0x40U) != 0) {
-            std::uint32_t nameIndex = 0;
-            if (const auto error = decodeInteger(cursor, end, 6, nameIndex); error != HpackError::kNone) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback);
+                error != HpackError::kNone) {
                 return {error};
             }
-            std::string_view name;
-            if (nameIndex == 0) {
-                if (const auto error = decodeString(cursor, end, nameScratch_, name); error != HpackError::kNone) {
-                    return {error};
-                }
-            } else if (const auto error = indexedName(nameIndex, name); error != HpackError::kNone) {
-                return {error};
-            }
-
-            std::string_view value;
-            if (const auto error = decodeString(cursor, end, valueScratch_, value); error != HpackError::kNone) {
-                return {error};
-            }
-            if (callback != nullptr && !callback(target, name, value)) {
-                return {HpackError::kCallbackRejected};
-            }
-            addDynamic(name, value);
             sawHeader = true;
             continue;
         }
@@ -163,25 +180,9 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0xf0U) == 0x00U || (first & 0xf0U) == 0x10U) {
-            std::uint32_t nameIndex = 0;
-            if (const auto error = decodeInteger(cursor, end, 4, nameIndex); error != HpackError::kNone) {
+            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback);
+                error != HpackError::kNone) {
                 return {error};
-            }
-            std::string_view name;
-            if (nameIndex == 0) {
-                if (const auto error = decodeString(cursor, end, nameScratch_, name); error != HpackError::kNone) {
-                    return {error};
-                }
-            } else if (const auto error = indexedName(nameIndex, name); error != HpackError::kNone) {
-                return {error};
-            }
-
-            std::string_view value;
-            if (const auto error = decodeString(cursor, end, valueScratch_, value); error != HpackError::kNone) {
-                return {error};
-            }
-            if (callback != nullptr && !callback(target, name, value)) {
-                return {HpackError::kCallbackRejected};
             }
             sawHeader = true;
             continue;
