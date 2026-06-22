@@ -9,59 +9,27 @@ Task<std::optional<WebSocketMessage>> Http2WebSocketConnection<Session>::read() 
         if (!frame) {
             co_return std::nullopt;
         }
-        if (frame->opcode == WebSocketOpcode::kPing) {
-            co_await write(WebSocketOpcode::kPong, frame->payload);
-            continue;
-        }
-        if (frame->opcode == WebSocketOpcode::kPong) {
-            awaitingPong_ = false;
-            continue;
-        }
-        if (frame->opcode == WebSocketOpcode::kClose) {
-            if (!closeSent_) {
-                closeSent_ = true;
-                co_await writeExclusive(WebSocketOpcode::kClose, frame->payload, true);
-            }
-            co_return std::nullopt;
-        }
-        if (frame->continuation) {
-            if (!fragmented_) {
-                throw std::invalid_argument("unexpected websocket continuation frame");
-            }
-            if (webSocketAppendExceedsLimit(
-                    fragmentedMessage_.size(),
-                    frame->payload.size(),
-                    maxMessageBytes_)) {
-                throw std::invalid_argument("websocket message is too large");
-            }
-            fragmentedMessage_.append(frame->payload.data(), frame->payload.size());
-            if (!frame->fin) {
+        WebSocketMessage message;
+        switch (inbound_.accept(*frame, maxMessageBytes_, message)) {
+            case WebSocketInboundAction::kSendPong:
+                co_await write(WebSocketOpcode::kPong, frame->payload);
                 continue;
-            }
-            if (fragmentedOpcode_ == WebSocketOpcode::kText && !isValidUtf8(fragmentedMessage_)) {
+            case WebSocketInboundAction::kPongReceived:
+                awaitingPong_ = false;
+                continue;
+            case WebSocketInboundAction::kPeerClose:
+                if (!closeSent_) {
+                    closeSent_ = true;
+                    co_await writeExclusive(WebSocketOpcode::kClose, frame->payload, true);
+                }
+                co_return std::nullopt;
+            case WebSocketInboundAction::kContinue:
+                continue;
+            case WebSocketInboundAction::kDeliver:
+                co_return message;
+            case WebSocketInboundAction::kInvalidUtf8:
                 co_await close(1007, "invalid utf-8");
                 co_return std::nullopt;
-            }
-            fragmented_ = false;
-            co_return WebSocketMessage{
-                .opcode = fragmentedOpcode_,
-                .payload = std::string_view(fragmentedMessage_.data(), fragmentedMessage_.size())};
-        }
-        if (frame->opcode == WebSocketOpcode::kText || frame->opcode == WebSocketOpcode::kBinary) {
-            if (fragmented_) {
-                throw std::invalid_argument("invalid websocket fragmented message");
-            }
-            if (frame->fin) {
-                if (frame->opcode == WebSocketOpcode::kText && !isValidUtf8(frame->payload)) {
-                    co_await close(1007, "invalid utf-8");
-                    co_return std::nullopt;
-                }
-                co_return WebSocketMessage{.opcode = frame->opcode, .payload = frame->payload};
-            }
-            fragmented_ = true;
-            fragmentedOpcode_ = frame->opcode;
-            fragmentedMessage_.assign(frame->payload.data(), frame->payload.size());
-            continue;
         }
     }
 }
