@@ -282,14 +282,6 @@ void HttpServer::configureTlsContext() {
         asio::ssl::context::no_tlsv1_1 |
         asio::ssl::context::single_dh_use);
     SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
-#ifdef SSL_OP_ENABLE_KTLS
-    // Offload symmetric record encryption/decryption to the kernel (OpenSSL 3 +
-    // Linux). This removes the userspace encrypt/decrypt staging copy on the
-    // normal data path and lets the file body be served with sendfile() over TLS
-    // (the kernel adds the TLS records). Where the kernel/NIC/cipher does not
-    // support kTLS, OpenSSL silently falls back to userspace crypto.
-    SSL_CTX_set_options(context.native_handle(), SSL_OP_ENABLE_KTLS);
-#endif
     SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
 
     if (!options_.tls.privateKeyPassword.empty()) {
