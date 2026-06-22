@@ -92,6 +92,13 @@ private:
         const unsigned char* end,
         std::pmr::string& scratch,
         std::string_view& value);
+    [[nodiscard]] HpackError decodeLiteralHeader(
+        const unsigned char*& cursor,
+        const unsigned char* end,
+        std::uint8_t nameIndexPrefixBits,
+        bool indexIntoDynamic,
+        void* target,
+        HeaderCallback callback);
     [[nodiscard]] HpackError decodeHuffman(std::string_view encoded, std::pmr::string& output);
     void releaseScratch();
     [[nodiscard]] HpackError indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;
