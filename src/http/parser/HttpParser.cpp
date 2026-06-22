@@ -32,7 +32,7 @@ void HttpServerParser::parseRequestHead(std::string_view buffer, std::size_t hea
     result.contentLength = 0;
     result.consumedBytes = 0;
     result.chunked = false;
-    result.acceptsResponseGzip = false;
+    result.responseCoding = HttpContentCoding::kNone;
     result.transferCodings = {};
     result.flags = {};
     HttpRequestAccess::reset(result.request);
@@ -137,7 +137,8 @@ void HttpServerParser::parseRequestHead(std::string_view buffer, std::size_t hea
     }
 
     result.chunked = block.sawChunked;
-    result.acceptsResponseGzip = block.gzipEncoding.accepts();
+    result.responseCoding = httpSelectResponseCodingFromQualities(
+        block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
     result.transferCodings = block.transferCodings;
     result.contentLength = block.contentLength;
     result.status = HttpParseStatus::kComplete;

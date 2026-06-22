@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../http/HeaderAcceptUtils.h"
 #include "ruvia/app/App.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -12,7 +13,7 @@ namespace ruvia::detail {
 inline constexpr std::size_t kCompressionScratchRetainedBytes = 256 * 1024;
 
 bool compressResponseBodyIfAccepted(
-    bool acceptsGzip,
+    HttpContentCoding coding,
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
     std::pmr::string& compressionScratch,

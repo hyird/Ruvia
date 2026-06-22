@@ -1,11 +1,21 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string_view>
 
 #include "HeaderTokenUtils.h"
 
 namespace ruvia::detail {
+
+// Response content-codings the server can negotiate (RFC 9110 §8.4.1). gzip is
+// RFC 1952, br (Brotli) is RFC 7932, zstd is RFC 8878.
+enum class HttpContentCoding : std::uint8_t {
+    kNone,
+    kGzip,
+    kBrotli,
+    kZstd,
+};
 
 [[nodiscard]] inline int httpParseQualityValue(std::string_view value) noexcept {
     value = httpTrimOws(value);
@@ -113,6 +123,51 @@ struct HttpAcceptedEncodingQuality {
     HttpAcceptedEncodingQuality quality;
     quality.update(acceptEncoding, coding);
     return quality.accepts();
+}
+
+[[nodiscard]] inline int httpAcceptedEncodingScore(const HttpAcceptedEncodingQuality& quality) noexcept {
+    if (!quality.accepts()) {
+        return -1;
+    }
+    return quality.explicitQuality >= 0 ? quality.explicitQuality : quality.wildcardQuality;
+}
+
+// Picks the best response coding from per-coding qualities. The highest client
+// q-value wins; ties resolve by server preference br > zstd > gzip (Brotli gives
+// the best ratio for text and is the most widely supported of the three). A
+// coding with q=0 or one the client never accepts is excluded.
+[[nodiscard]] inline HttpContentCoding httpSelectResponseCodingFromQualities(
+    const HttpAcceptedEncodingQuality& gzip,
+    const HttpAcceptedEncodingQuality& brotli,
+    const HttpAcceptedEncodingQuality& zstd) noexcept {
+    struct Candidate final {
+        HttpContentCoding coding;
+        int score;
+    };
+    const Candidate candidates[] = {
+        {HttpContentCoding::kBrotli, httpAcceptedEncodingScore(brotli)},
+        {HttpContentCoding::kZstd, httpAcceptedEncodingScore(zstd)},
+        {HttpContentCoding::kGzip, httpAcceptedEncodingScore(gzip)},
+    };
+    HttpContentCoding best = HttpContentCoding::kNone;
+    int bestScore = 0;
+    for (const auto& candidate : candidates) {
+        if (candidate.score > bestScore) {
+            bestScore = candidate.score;
+            best = candidate.coding;
+        }
+    }
+    return best;
+}
+
+[[nodiscard]] inline HttpContentCoding httpSelectResponseCoding(std::string_view acceptEncoding) noexcept {
+    HttpAcceptedEncodingQuality gzip;
+    HttpAcceptedEncodingQuality brotli;
+    HttpAcceptedEncodingQuality zstd;
+    gzip.update(acceptEncoding, "gzip");
+    brotli.update(acceptEncoding, "br");
+    zstd.update(acceptEncoding, "zstd");
+    return httpSelectResponseCodingFromQualities(gzip, brotli, zstd);
 }
 
 [[nodiscard]] inline std::string_view httpMediaTypeOnly(std::string_view value) noexcept {

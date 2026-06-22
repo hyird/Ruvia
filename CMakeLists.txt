@@ -30,6 +30,16 @@ find_package(Threads REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(unofficial-brotli CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+
+if(TARGET zstd::libzstd)
+    set(RUVIA_ZSTD_TARGET zstd::libzstd)
+elseif(TARGET zstd::libzstd_static)
+    set(RUVIA_ZSTD_TARGET zstd::libzstd_static)
+else()
+    set(RUVIA_ZSTD_TARGET zstd::libzstd_shared)
+endif()
 
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
@@ -259,6 +269,10 @@ target_link_libraries(ruvia
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
+        unofficial::brotli::brotlienc
+        unofficial::brotli::brotlidec
+        unofficial::brotli::brotlicommon
+        ${RUVIA_ZSTD_TARGET}
         ${RUVIA_MIMALLOC_TARGET}
 )
 
@@ -363,6 +377,8 @@ find_dependency(Threads REQUIRED)
 find_dependency(mimalloc CONFIG REQUIRED)
 find_dependency(OpenSSL REQUIRED)
 find_dependency(ZLIB REQUIRED)
+find_dependency(unofficial-brotli CONFIG REQUIRED)
+find_dependency(zstd CONFIG REQUIRED)
 
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)

@@ -17,17 +17,13 @@ struct HttpBufferedResponsePreparation final {
     bool bodyBorrowsCompressionScratch{false};
 };
 
-[[nodiscard]] inline bool httpRequestAcceptsGzip(std::string_view acceptEncoding) noexcept {
-    return httpAcceptsEncoding(acceptEncoding, "gzip");
-}
-
-[[nodiscard]] inline bool httpRequestAcceptsGzip(const HttpRequest& request) noexcept {
-    return httpRequestAcceptsGzip(requestKnownHeader(request, RequestKnownHeader::kAcceptEncoding));
+[[nodiscard]] inline HttpContentCoding httpResponseCodingFor(const HttpRequest& request) noexcept {
+    return httpSelectResponseCoding(requestKnownHeader(request, RequestKnownHeader::kAcceptEncoding));
 }
 
 [[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
     const HttpRequest& request,
-    bool acceptsGzip,
+    HttpContentCoding coding,
     HttpResponse& response,
     const HttpServerOptions& options,
     std::pmr::string& compressionScratch) {
@@ -35,7 +31,7 @@ struct HttpBufferedResponsePreparation final {
     applyCorsHeaders(request, response, options.cors);
     const bool skipBody = request.method() == HttpMethod::kHead;
     const bool bodyBorrowsCompressionScratch = compressResponseBodyIfAccepted(
-        acceptsGzip,
+        coding,
         response,
         options.compression,
         compressionScratch,
@@ -52,7 +48,7 @@ struct HttpBufferedResponsePreparation final {
     std::pmr::string& compressionScratch) {
     return prepareBufferedHttpResponse(
         request,
-        httpRequestAcceptsGzip(request),
+        httpResponseCodingFor(request),
         response,
         options,
         compressionScratch);
