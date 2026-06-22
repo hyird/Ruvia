@@ -40,6 +40,7 @@ struct HttpStatusEntry final {
         case 431: { static constexpr HttpStatusEntry entry{431, "Request Header Fields Too Large", "HTTP/1.1 431 Request Header Fields Too Large\r\n"}; return &entry; }
         case 500: { static constexpr HttpStatusEntry entry{500, "Internal Server Error", "HTTP/1.1 500 Internal Server Error\r\n"}; return &entry; }
         case 501: { static constexpr HttpStatusEntry entry{501, "Not Implemented", "HTTP/1.1 501 Not Implemented\r\n"}; return &entry; }
+        case 503: { static constexpr HttpStatusEntry entry{503, "Service Unavailable", "HTTP/1.1 503 Service Unavailable\r\n"}; return &entry; }
         case 505: { static constexpr HttpStatusEntry entry{505, "HTTP Version Not Supported", "HTTP/1.1 505 HTTP Version Not Supported\r\n"}; return &entry; }
         default:
             return nullptr;

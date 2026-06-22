@@ -102,14 +102,6 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     return name;
 }
 
-[[nodiscard]] inline std::string_view http2DateHeaderValue() noexcept {
-    const auto date = cachedDateHeader();
-    if (date.size() <= 8) {
-        return {};
-    }
-    return date.substr(6, date.size() - 8);
-}
-
 [[nodiscard]] inline bool http2ResponseConnectionHeaderForbidden(
     std::uint32_t knownBit,
     std::string_view name) noexcept {
@@ -174,7 +166,7 @@ inline void appendHttp2ResponseHeaders(
         HpackEncoder::encodeHeaderWithNameIndex(
             stream.responseHeaderBlock,
             HpackStaticIndex::kDate,
-            http2DateHeaderValue());
+            cachedDateValue());
     }
     if (emitAutoContentLength && !contentLengthWritten && policy.autoContentLengthAllowed) {
         std::array<char, 20> buffer{};

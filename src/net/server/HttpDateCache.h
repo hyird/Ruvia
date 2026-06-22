@@ -4,6 +4,10 @@
 
 namespace ruvia::detail {
 
+// Full "Date: <value>\r\n" line for text response heads (HTTP/1, h2c upgrade).
 [[nodiscard]] std::string_view cachedDateHeader() noexcept;
+
+// Bare date value (no field name, no CRLF) for HPACK-encoded HTTP/2 headers.
+[[nodiscard]] std::string_view cachedDateValue() noexcept;
 
 }  // namespace ruvia::detail

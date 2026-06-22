@@ -80,6 +80,8 @@ void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
             return "{\"error\":\"Internal Server Error\",\"code\":\"internal_error\",\"message\":\"Internal Server Error\"}";
         case 501:
             return "{\"error\":\"Not Implemented\",\"code\":\"not_implemented\",\"message\":\"Not Implemented\"}";
+        case 503:
+            return "{\"error\":\"Service Unavailable\",\"code\":\"service_unavailable\",\"message\":\"Service Unavailable\"}";
         case 505:
             return "{\"error\":\"HTTP Version Not Supported\",\"code\":\"http_version_not_supported\",\"message\":\"HTTP Version Not Supported\"}";
         default:
