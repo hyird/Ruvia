@@ -40,11 +40,8 @@ Task<void> writeResponseWithScratch(
             co_return;
         }
 
-        if constexpr (std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>) {
-            co_await writeFileZeroCopy(stream, fileBody, ec);
-            if (ec != asio::error::operation_not_supported) {
-                co_return;
-            }
+        if (co_await tryWriteFileZeroCopy(stream, fileBody, ec)) {
+            co_return;
         }
 
         co_await writeFileFallback(stream, memory, fileChunkBuffer, fileBody, ec);
