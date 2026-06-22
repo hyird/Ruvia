@@ -68,13 +68,7 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         appendJsonValue(output, value.value);
     } else if constexpr (std::is_same_v<T, bool>) {
         output.append(value ? "true" : "false");
-    } else if constexpr (std::is_integral_v<T>) {
-        char buffer[32];
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            output.append(buffer, static_cast<std::size_t>(ptr - buffer));
-        }
-    } else if constexpr (std::is_floating_point_v<T>) {
+    } else if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
         char buffer[64];
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
         if (ec == std::errc{}) {
@@ -84,9 +78,7 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         appendJsonString(output, value.view());
     } else if constexpr (requires { value.ruviaAppendJson(output); }) {
         value.ruviaAppendJson(output);
-    } else if constexpr (isRuviaArray<T>) {
-        appendJsonSequence(output, value);
-    } else if constexpr (isRuviaList<T>) {
+    } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
         appendJsonSequence(output, value);
     } else {
         static_assert(alwaysFalse<T>, "RUVIA_MODEL field type is not JSON serializable");
