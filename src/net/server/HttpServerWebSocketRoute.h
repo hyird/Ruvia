@@ -3,6 +3,7 @@
 #include "ConnectionScanner.h"
 #include "HttpServerResponseState.h"
 #include "../ws/HttpWebSocketConnection.h"
+#include "../ws/HttpWebSocketSocketTransport.h"
 #include "../ws/HttpWebSocketHandshake.h"
 #include "../ws/HttpWebSocketUtils.h"
 #include "../../http/HttpParserInternal.h"
@@ -54,18 +55,18 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         co_return HttpWebSocketRouteResult::kSessionFinished;
     }
 
-    WebSocketConnection<Stream> webSocketConnection(
-        stream,
-        memory.resource(),
+    SocketWebSocketConnection<Stream> webSocketConnection(
+        WebSocketSocketTransport<Stream>{stream},
         scannerEntry,
         routeResolution.route->webSocketHeartbeat,
         options.maxWebSocketMessageBytes,
+        memory.resource(),
         pendingFrames);
     WebSocket webSocket(
         &webSocketConnection,
-        &WebSocketConnection<Stream>::readThunk,
-        &WebSocketConnection<Stream>::writeThunk,
-        &WebSocketConnection<Stream>::closeThunk);
+        &SocketWebSocketConnection<Stream>::readThunk,
+        &SocketWebSocketConnection<Stream>::writeThunk,
+        &SocketWebSocketConnection<Stream>::closeThunk);
 
     std::exception_ptr webSocketException;
     try {

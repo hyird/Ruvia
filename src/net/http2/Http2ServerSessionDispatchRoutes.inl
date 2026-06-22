@@ -28,8 +28,7 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2WebSocketRoute(
         stream,
         http2ChooseWebSocketSubprotocol(request, resolution.route->webSocketSubprotocols));
     Http2WebSocketConnection<Http2ServerSession> webSocketConnection(
-        *this,
-        stream,
+        Http2WebSocketTransport<Http2ServerSession>{*this, stream},
         scannerEntry_,
         resolution.route->webSocketHeartbeat,
         options_.maxWebSocketMessageBytes,
