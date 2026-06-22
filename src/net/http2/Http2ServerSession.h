@@ -59,6 +59,7 @@
 #include "../server/ConnectionScanner.h"
 #include "../server/HttpBufferedResponse.h"
 #include "../server/HttpFileChunkBuffer.h"
+#include "../server/HttpResponseStreamDispatch.h"
 #include "../../runtime/AsioAwait.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/http/Context.h"

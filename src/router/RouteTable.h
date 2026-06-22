@@ -145,6 +145,19 @@ public:
         const RouteResolution& resolution,
         RequestMemory& memory,
         RouteServices services = {}) const;
+    // Never throws: dispatches a resolved route and turns any failure — a
+    // handler exception (already handled inside dispatch) or one escaping the
+    // routing machinery itself — into an error response. Both the HTTP/1.1 and
+    // HTTP/2 buffered paths funnel through this, so the dispatch→error-response
+    // policy lives in the routing layer rather than being re-implemented by each
+    // transport. closeConnectionOnError only governs the rare escaping-failure
+    // case (handler exceptions keep dispatch's own close semantics).
+    Task<HttpResponse> dispatchBuffered(
+        const HttpRequest& request,
+        const RouteResolution& resolution,
+        RequestMemory& memory,
+        bool closeConnectionOnError,
+        RouteServices services = {}) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
         RequestMemory& memory,
