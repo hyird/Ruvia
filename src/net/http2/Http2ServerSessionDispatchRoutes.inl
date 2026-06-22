@@ -33,35 +33,14 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2WebSocketRoute(
         resolution.route->webSocketHeartbeat,
         options_.maxWebSocketMessageBytes,
         memory_.resource());
-    WebSocket webSocket(
-        &webSocketConnection,
-        &Http2WebSocketConnection<Http2ServerSession>::readThunk,
-        &Http2WebSocketConnection<Http2ServerSession>::writeThunk,
-        &Http2WebSocketConnection<Http2ServerSession>::closeThunk);
-    std::exception_ptr webSocketException;
-    try {
-        scannerEntry_.setPhase(ConnectionScanner::Phase::kWebSocket);
-        (void)co_await routes_.dispatchWebSocket(
-            request,
-            resolution,
-            requestMemory,
-            webSocket,
-            routeServices());
-    } catch (...) {
-        webSocketException = std::current_exception();
-    }
-    if (webSocketException != nullptr) {
-        try {
-            co_await webSocketConnection.close(1011, "internal server error");
-        } catch (...) {
-        }
-    } else {
-        try {
-            co_await webSocketConnection.close(1000, {});
-        } catch (...) {
-        }
-    }
-    co_await webSocketConnection.detachAndDrainBackgroundWrites();
+    co_await runWebSocketSession(
+        webSocketConnection,
+        scannerEntry_,
+        routes_,
+        request,
+        resolution,
+        requestMemory,
+        routeServices());
     co_return true;
 }
 

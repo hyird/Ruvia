@@ -48,6 +48,7 @@
 #include "Http2WebSocket.h"
 #include "Http2WebSocketHandshake.h"
 #include "Http2WindowUpdate.h"
+#include "../ws/HttpWebSocketSession.h"
 #include "../HttpFileOpen.h"
 #include "../RequestMemoryArena.h"
 #include "../../http/HttpResponseBodyAccess.h"
