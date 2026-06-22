@@ -37,7 +37,7 @@ inline void http2EncodeWebSocketHandshakeHeaders(
     headerBlock.clear();
     HpackEncoder::encodeStatus(headerBlock, 200);
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kServer, "ruvia");
-    HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, http2DateHeaderValue());
+    HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
     if (!subprotocol.empty()) {
         HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", subprotocol);
     }

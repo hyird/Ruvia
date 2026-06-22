@@ -9,6 +9,24 @@
 
 namespace ruvia::detail {
 
+// Read exactly four hex digits as a UTF-16 code unit. Single owner of \uXXXX
+// digit decoding for both the validation scan (parseJsonStringRaw) and the
+// decode pass (decodeJsonString).
+[[nodiscard]] inline bool readJsonHex4(std::string_view input, std::uint32_t& value) noexcept {
+    if (input.size() < 4) {
+        return false;
+    }
+    value = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto hex = decodeHexNibble(input[i]);
+        if (hex < 0) {
+            return false;
+        }
+        value = (value << 4) | static_cast<std::uint32_t>(hex);
+    }
+    return true;
+}
+
 [[nodiscard]] inline bool parseJsonStringRaw(
     std::string_view& input,
     std::string_view& value,
@@ -35,9 +53,8 @@ namespace ruvia::detail {
                 continue;
             }
             if (escape == 'u') {
-                if (i + 5 >= input.size() || decodeHexNibble(input[i + 2]) < 0 ||
-                    decodeHexNibble(input[i + 3]) < 0 || decodeHexNibble(input[i + 4]) < 0 ||
-                    decodeHexNibble(input[i + 5]) < 0) {
+                std::uint32_t ignored = 0;
+                if (i + 5 >= input.size() || !readJsonHex4(input.substr(i + 2), ignored)) {
                     return false;
                 }
                 i += 5;
@@ -83,21 +100,6 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
         output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F)));
         output.push_back(static_cast<char>(0x80 | (codePoint & 0x3F)));
     }
-}
-
-[[nodiscard]] inline bool readJsonHex4(std::string_view input, std::uint32_t& value) noexcept {
-    if (input.size() < 4) {
-        return false;
-    }
-    value = 0;
-    for (std::size_t i = 0; i < 4; ++i) {
-        const auto hex = decodeHexNibble(input[i]);
-        if (hex < 0) {
-            return false;
-        }
-        value = (value << 4) | static_cast<std::uint32_t>(hex);
-    }
-    return true;
 }
 
 template <typename OutputT>

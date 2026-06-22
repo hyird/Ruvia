@@ -144,18 +144,6 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const RouteResolution& resolution,
     RequestMemory& memory,
     RouteServices services) const {
-    if (resolution.found() && !resolution.dynamic) {
-        const auto* route = resolution.route;
-        auto context = makeRouteContext(memory, request, resolution, makeContextServices(services));
-        std::exception_ptr exception;
-        try {
-            co_return co_await invokeRoute(*route, context);
-        } catch (...) {
-            exception = std::current_exception();
-        }
-        co_return co_await handleException(context, exception, true);
-    }
-
     if (!resolution.found()) {
         auto context = detail::ContextAccess::make(
             memory,

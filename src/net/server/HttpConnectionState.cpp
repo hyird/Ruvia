@@ -115,12 +115,7 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
         return;
     }
 
-    if (readBuffer.size() < kInitialReadBufferBytes) {
-        resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
-        return;
-    }
-
-    if (readBuffer.size() > kInitialReadBufferBytes) {
+    if (readBuffer.size() != kInitialReadBufferBytes) {
         resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
     }
 }
