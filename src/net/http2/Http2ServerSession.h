@@ -49,6 +49,7 @@
 #include "Http2WebSocketHandshake.h"
 #include "Http2WindowUpdate.h"
 #include "../HttpFileOpen.h"
+#include "../RequestMemoryArena.h"
 #include "../../http/HttpResponseBodyAccess.h"
 #include "../../http/HttpResponseFileAccess.h"
 #include "../../http/HttpResponseFileBody.h"
@@ -108,7 +109,6 @@ public:
 
 private:
     static constexpr std::size_t kReadChunkBytes = 16 * 1024;
-    static constexpr std::size_t kRequestArenaStackBytes = 4 * 1024;
 
     Task<void> runFrameLoop();
 

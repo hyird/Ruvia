@@ -32,7 +32,9 @@ class RouterImpl final {
 public:
     Router& owner;
 
-    explicit RouterImpl(Router& router) noexcept : owner(router) {}
+    explicit RouterImpl(Router& router) noexcept
+        : owner(router),
+          routeTable_(nullptr, RouteTableDeleter{std::pmr::get_default_resource()}) {}
 
     RouterImpl(const RouterImpl&) = delete;
     RouterImpl& operator=(const RouterImpl&) = delete;

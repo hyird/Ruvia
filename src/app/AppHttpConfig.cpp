@@ -9,14 +9,18 @@
 namespace ruvia {
 namespace {
 
-void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& path) {
-    if constexpr (std::is_same_v<detail::NativePathChar, char>) {
-        const auto native = detail::nativePathView(path);
+template <typename NativeChar>
+void assignTlsFileNameFromNative(std::pmr::string& output, std::basic_string_view<NativeChar> native) {
+    if constexpr (std::is_same_v<NativeChar, char>) {
         output.assign(native.data(), native.size());
     } else {
-        const auto name = path.string();
+        const auto name = std::filesystem::path(native.begin(), native.end()).string();
         output.assign(name.data(), name.size());
     }
+}
+
+void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& path) {
+    assignTlsFileNameFromNative(output, detail::nativePathView(path));
 }
 
 }  // namespace
