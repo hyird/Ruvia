@@ -12,7 +12,9 @@
 #include <memory_resource>
 #include <string_view>
 
+#include <brotli/encode.h>
 #include <zlib.h>
+#include <zstd.h>
 
 namespace ruvia::detail {
 namespace {
@@ -112,19 +114,77 @@ bool gzipCompress(std::string_view input, std::pmr::string& output, std::size_t 
     return status == Z_STREAM_END;
 }
 
+// Quality 5 is the dynamic-compression sweet spot: noticeably faster than the
+// archival default (11) while still beating gzip on ratio. Brotli and zstd both
+// allocate their transient working memory through the global allocator, which
+// this build routes to mimalloc, so no custom resource plumbing is needed.
+constexpr int kBrotliQuality = 5;
+
+bool brotliCompress(std::string_view input, std::pmr::string& output, std::size_t maxOutputBytes) {
+    bool ok = false;
+    output.resize_and_overwrite(
+        maxOutputBytes,
+        [&input, &ok](char* data, std::size_t count) noexcept {
+            std::size_t encodedSize = count;
+            ok = BrotliEncoderCompress(
+                     kBrotliQuality,
+                     BROTLI_DEFAULT_WINDOW,
+                     BROTLI_MODE_GENERIC,
+                     input.size(),
+                     reinterpret_cast<const std::uint8_t*>(input.data()),
+                     &encodedSize,
+                     reinterpret_cast<std::uint8_t*>(data)) == BROTLI_TRUE;
+            return ok ? encodedSize : std::size_t{0};
+        });
+    return ok;
+}
+
+bool zstdCompress(std::string_view input, std::pmr::string& output, std::size_t maxOutputBytes) {
+    bool ok = false;
+    output.resize_and_overwrite(
+        maxOutputBytes,
+        [&input, &ok](char* data, std::size_t count) noexcept {
+            const std::size_t result =
+                ZSTD_compress(data, count, input.data(), input.size(), ZSTD_CLEVEL_DEFAULT);
+            ok = ZSTD_isError(result) == 0;
+            return ok ? result : std::size_t{0};
+        });
+    return ok;
+}
+
+struct CodingCompressor final {
+    bool (*compress)(std::string_view, std::pmr::string&, std::size_t){nullptr};
+    std::string_view token;
+};
+
+[[nodiscard]] CodingCompressor codingCompressor(HttpContentCoding coding) noexcept {
+    switch (coding) {
+        case HttpContentCoding::kBrotli:
+            return {&brotliCompress, "br"};
+        case HttpContentCoding::kZstd:
+            return {&zstdCompress, "zstd"};
+        case HttpContentCoding::kGzip:
+            return {&gzipCompress, "gzip"};
+        case HttpContentCoding::kNone:
+            break;
+    }
+    return {};
+}
+
 }  // namespace
 
 bool compressResponseBodyIfAccepted(
-    bool acceptsGzip,
+    HttpContentCoding coding,
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
     std::pmr::string& compressionScratch,
     bool skipBody) {
     if (skipBody ||
         !options.enabled ||
-        !acceptsGzip) {
+        coding == HttpContentCoding::kNone) {
         return false;
     }
+    const auto compressor = codingCompressor(coding);
 
     const auto statusCode = response.statusCode();
     if (statusCode < 200 ||
@@ -146,12 +206,14 @@ bool compressResponseBodyIfAccepted(
     const auto body = responseBodyBytes(response);
     compressionScratch.clear();
     compressionScratch.reserve(body.size());
-    if (!gzipCompress(body, compressionScratch, body.size()) || compressionScratch.size() >= body.size()) {
+    if (compressor.compress == nullptr ||
+        !compressor.compress(body, compressionScratch, body.size()) ||
+        compressionScratch.size() >= body.size()) {
         clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
         return false;
     }
 
-    setResponseHeaderStableView(response, "Content-Encoding", "gzip");
+    setResponseHeaderStableView(response, "Content-Encoding", compressor.token);
     addVaryToken(response, "Accept-Encoding");
     setCompressedContentLength(response, compressionScratch.size());
     response.setBodyView(compressionScratch);

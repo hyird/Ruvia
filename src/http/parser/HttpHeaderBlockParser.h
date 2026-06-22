@@ -66,6 +66,8 @@ struct ParsedRequestHeaderBlock {
     bool sawChunked{false};
     bool sawTransferEncoding{false};
     HttpAcceptedEncodingQuality gzipEncoding;
+    HttpAcceptedEncodingQuality brotliEncoding;
+    HttpAcceptedEncodingQuality zstdEncoding;
     HttpTransferCodings transferCodings;
 };
 

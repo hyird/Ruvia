@@ -350,7 +350,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             const auto responsePreparation = prepareBufferedHttpResponse(
                 parsed.request,
-                parsed.acceptsResponseGzip,
+                parsed.responseCoding,
                 response,
                 options_,
                 compressionScratch);

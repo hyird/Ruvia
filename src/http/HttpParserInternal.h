@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
+#include "HeaderAcceptUtils.h"
 #include "HttpRequestFlags.h"
 #include "HttpTransferCoding.h"
 #include "ruvia/http/HttpParseTypes.h"
@@ -18,7 +19,7 @@ struct HttpServerParseResult {
     std::size_t contentLength{0};
     std::size_t consumedBytes{0};
     bool chunked{false};
-    bool acceptsResponseGzip{false};
+    HttpContentCoding responseCoding{HttpContentCoding::kNone};
     HttpTransferCodings transferCodings;
     HttpRequestFlags flags;
 };

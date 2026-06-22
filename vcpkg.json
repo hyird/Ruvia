@@ -3,6 +3,7 @@
   "version-string": "0.0.6",
   "dependencies": [
     "asio",
+    "brotli",
     {
       "name": "mimalloc",
       "features": [
@@ -15,7 +16,8 @@
       "platform": "windows & static"
     },
     "openssl",
-    "zlib"
+    "zlib",
+    "zstd"
   ],
   "features": {
     "http-client": {
