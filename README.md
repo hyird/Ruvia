@@ -71,7 +71,7 @@ Configure and build the default runtime:
 ```powershell
 cmake -S . -B build `
   -DCMAKE_BUILD_TYPE=Debug `
-  -DCMAKE_TOOLCHAIN_FILE=D:/Dev/vcpkg/scripts/buildsystems/vcpkg.cmake
+  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Debug
 ```
 
@@ -84,7 +84,7 @@ cmake -S . -B build `
   -DRUVIA_ENABLE_REDIS=ON `
   -DRUVIA_ENABLE_JWT=ON `
   -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
-  -DCMAKE_TOOLCHAIN_FILE=D:/Dev/vcpkg/scripts/buildsystems/vcpkg.cmake
+  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Debug
 ```
 

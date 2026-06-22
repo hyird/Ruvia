@@ -429,7 +429,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 
 - Windows 本地已用 vcpkg 构建。
 - 构建命令：`cmake --build build --config Debug`。
-- 重新配置命令：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_TOOLCHAIN_FILE=D:/Dev/vcpkg/scripts/buildsystems/vcpkg.cmake`。
+- 重新配置命令：`cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake`。
 
 ### 验证要求
 
