@@ -182,6 +182,21 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await handleException(context, exception, true);
 }
 
+Task<HttpResponse> detail::RouteTable::dispatchBuffered(
+    const HttpRequest& request,
+    const RouteResolution& resolution,
+    RequestMemory& memory,
+    bool closeConnectionOnError,
+    RouteServices services) const {
+    std::exception_ptr exception;
+    try {
+        co_return co_await dispatch(request, resolution, memory, services);
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await handleException(request, memory, exception, closeConnectionOnError, services);
+}
+
 Task<HttpResponse> detail::RouteTable::handleError(
     const HttpRequest& request,
     RequestMemory& memory,

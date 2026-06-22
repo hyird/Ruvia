@@ -53,45 +53,28 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2ResponseStreamRoute(
     BodyReader* bodyReader,
     HttpResponse& response) {
     Http2ResponseStreamSink<Http2ServerSession> responseSink(*this, stream, resolution.route->responseMode);
-    ResponseStreamWriter responseStream(
-        &responseSink,
-        &Http2ResponseStreamSink<Http2ServerSession>::writeThunk,
-        &Http2ResponseStreamSink<Http2ServerSession>::endThunk,
-        &Http2ResponseStreamSink<Http2ServerSession>::bindContextThunk,
-        &Http2ResponseStreamSink<Http2ServerSession>::scratchThunk);
-    std::exception_ptr exception;
-    bool streamHandled = false;
-    try {
-        auto result = co_await routes_.dispatchResponseStream(
-            request,
-            resolution,
-            requestMemory,
-            responseStream,
-            routeServices(bodyReader));
-        streamHandled = result.streamHandled;
-        if (stream.reset) {
+    auto result = co_await dispatchResponseStreamWith(
+        responseSink,
+        routes_,
+        request,
+        resolution,
+        requestMemory,
+        routeServices(bodyReader),
+        /*closeConnectionOnError=*/false,
+        /*peerAborted=*/[&stream]() noexcept { return stream.reset; });
+
+    switch (result.outcome) {
+        case ResponseStreamDispatchOutcome::kStreamed:
+        case ResponseStreamDispatchOutcome::kAbortedByPeer:
             co_return true;
-        }
-        if (streamHandled || responseSink.committed()) {
-            co_await responseStream.end();
-            co_return true;
-        }
-        response = std::move(result.response);
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    if (exception != nullptr) {
-        if (responseSink.committed()) {
+        case ResponseStreamDispatchOutcome::kAbortedAfterCommit:
             co_await sendRstStream(stream.id, Http2ErrorCode::kInternalError);
             stream.reset = true;
             co_return true;
-        }
-        response = co_await routes_.handleException(
-            request,
-            requestMemory,
-            exception,
-            false,
-            routeServices(bodyReader));
+        case ResponseStreamDispatchOutcome::kBuffered:
+        case ResponseStreamDispatchOutcome::kFailedBeforeCommit:
+            response = std::move(result.response);
+            co_return false;
     }
     co_return false;
 }
@@ -103,24 +86,6 @@ Task<HttpResponse> Http2ServerSession<Stream>::dispatchHttp2BufferedRoute(
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
     BodyReader* bodyReader) {
-    HttpResponse response(requestMemory.resource());
-    std::exception_ptr exception;
-    try {
-        response = co_await routes_.dispatch(
-            request,
-            resolution,
-            requestMemory,
-            routeServices(bodyReader));
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    if (exception != nullptr) {
-        response = co_await routes_.handleException(
-            request,
-            requestMemory,
-            exception,
-            false,
-            routeServices(bodyReader));
-    }
-    co_return response;
+    co_return co_await routes_.dispatchBuffered(
+        request, resolution, requestMemory, false, routeServices(bodyReader));
 }

@@ -39,7 +39,12 @@ Task<void> dispatchHttpBufferedBodyRoute(
     bool& bufferAlreadyCompacted) {
     const auto bodyAndPipeline = beginHttpBodyRoute(parsed, readBuffer, usedBytes, keepAlive, consumedBytes);
 
-    std::exception_ptr exception;
+    // The body reader/loader are this transport's own state, and their setup can
+    // throw (e.g. constructing a transfer-coding decoder for a bad
+    // Transfer-Encoding), so it stays guarded here. The dispatch itself is the
+    // routing layer's concern and never throws — dispatchBuffered turns any
+    // handler or routing failure into a response — so it sits outside the guard.
+    std::exception_ptr setupException;
     std::optional<LazyBufferedBody<Stream>> lazyBody;
     std::optional<RequestBodyLoader> bodyLoader;
     try {
@@ -58,19 +63,14 @@ Task<void> dispatchHttpBufferedBodyRoute(
             &*lazyBody,
             &LazyBufferedBody<Stream>::readAllThunk,
             &LazyBufferedBody<Stream>::discardThunk);
-        response = co_await routes.dispatch(
-            parsed.request,
-            routeResolution,
-            requestMemory,
-            baseRouteServices.withBodyLoader(&*bodyLoader));
     } catch (...) {
-        exception = std::current_exception();
+        setupException = std::current_exception();
     }
 
-    if (exception != nullptr) {
+    if (setupException != nullptr) {
         co_await completeFailedHttpBodyRoute(
             scannerEntry,
-            exception,
+            setupException,
             parsed,
             routes,
             requestMemory,
@@ -79,6 +79,13 @@ Task<void> dispatchHttpBufferedBodyRoute(
             keepAlive);
         co_return;
     }
+
+    response = co_await routes.dispatchBuffered(
+        parsed.request,
+        routeResolution,
+        requestMemory,
+        true,
+        baseRouteServices.withBodyLoader(&*bodyLoader));
 
     completeSuccessfulHttpBodyRoute(
         scannerEntry,

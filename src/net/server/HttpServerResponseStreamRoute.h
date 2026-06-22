@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ConnectionScanner.h"
+#include "HttpResponseStreamDispatch.h"
 #include "HttpResponseStreamSink.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
@@ -11,7 +12,6 @@
 #include "ruvia/memory/MemoryPool.h"
 
 #include <cstddef>
-#include <exception>
 #include <utility>
 
 namespace ruvia::detail {
@@ -45,56 +45,38 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         responseHead,
         scannerEntry,
         routeResolution.route->responseMode);
-    ResponseStreamWriter responseStream(
-        &responseSink,
-        &ResponseSink::writeThunk,
-        &ResponseSink::endThunk,
-        &ResponseSink::bindContextThunk,
-        &ResponseSink::scratchThunk);
 
-    std::exception_ptr exception;
-    bool streamHandled = false;
-    try {
-        scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-        auto result = co_await routes.dispatchResponseStream(
-            parsed.request,
-            routeResolution,
-            requestMemory,
-            responseStream,
-            baseRouteServices);
-        streamHandled = result.streamHandled;
-        if (streamHandled || responseSink.committed()) {
-            co_await responseStream.end();
-        } else {
-            response = std::move(result.response);
-        }
-    } catch (...) {
-        exception = std::current_exception();
-    }
+    scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
+    auto result = co_await dispatchResponseStreamWith(
+        responseSink,
+        routes,
+        parsed.request,
+        routeResolution,
+        requestMemory,
+        baseRouteServices,
+        /*closeConnectionOnError=*/true,
+        /*peerAborted=*/[]() noexcept { return false; });
 
-    if (exception != nullptr) {
-        if (responseSink.committed()) {
+    switch (result.outcome) {
+        case ResponseStreamDispatchOutcome::kAbortedAfterCommit:
+        case ResponseStreamDispatchOutcome::kAbortedByPeer:
             co_return HttpResponseStreamRouteResult::kSessionFinished;
-        }
-        response = co_await routes.handleException(
-            parsed.request,
-            requestMemory,
-            exception,
-            true,
-            baseRouteServices);
-        keepAlive = false;
-        scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
-    }
-
-    if (!streamHandled && !responseSink.committed()) {
-        finalizeBufferedRouteResponse(
-            response,
-            keepAlive,
-            requestCount,
-            options.maxRequestsPerConnection);
-        scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
+        case ResponseStreamDispatchOutcome::kFailedBeforeCommit:
+            response = std::move(result.response);
+            keepAlive = false;
+            scannerEntry.touch();
+            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
+        case ResponseStreamDispatchOutcome::kBuffered:
+            response = std::move(result.response);
+            finalizeBufferedRouteResponse(
+                response,
+                keepAlive,
+                requestCount,
+                options.maxRequestsPerConnection);
+            scannerEntry.touch();
+            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
+        case ResponseStreamDispatchOutcome::kStreamed:
+            break;
     }
 
     recordCompletedRequest(
