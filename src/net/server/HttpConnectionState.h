@@ -5,9 +5,9 @@
 #include <string>
 
 #include "ConnectionScanner.h"
-#include "HttpResponseWriter.h"
+#include "HttpResponseHeadBuffer.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../router/RouteResolution.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/memory/MemoryPool.h"
 
 namespace ruvia::detail {
@@ -32,8 +32,8 @@ struct ConnectionWorkSet final {
     ResponseHeadBuffer responseHead;
     std::pmr::string fileChunk;
     std::pmr::string compressionScratch;
-    HttpParser parser;
-    HttpParseResult parsed;
+    HttpServerParser parser;
+    HttpServerParseResult parsed;
     RouteResolution routeResolution;
     alignas(std::max_align_t) std::byte arenaBlock[kWorkSetArenaBytes];
     ConnectionWorkSet* poolNext{nullptr};
@@ -69,6 +69,6 @@ void compactConnectionReadBuffer(
     std::size_t& usedBytes,
     std::size_t consumedBytes) noexcept;
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpParseResult& parsed);
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpServerParseResult& parsed);
 
 }  // namespace ruvia::detail

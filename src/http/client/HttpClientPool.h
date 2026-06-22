@@ -12,6 +12,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -36,6 +37,7 @@ public:
 
     Task<void> connect();
     void closeNow() noexcept;
+    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
 
     Task<FetchResponse> fetch(
@@ -48,7 +50,9 @@ private:
 
     struct PoolWaiter {
         bool* ready{nullptr};
+        bool* timedOut{nullptr};
         std::size_t* index{nullptr};
+        std::chrono::steady_clock::time_point deadline{};
         std::coroutine_handle<> handle{};
         PoolWaiter* previous{nullptr};
         PoolWaiter* next{nullptr};
@@ -67,9 +71,21 @@ private:
         Connection& operator=(Connection&&) = delete;
 
         asio::ip::tcp::socket rawSocket;
+        asio::ip::tcp::resolver resolver;
         std::unique_ptr<TlsStream, TlsStreamDeleter> tlsStream;
         std::pmr::memory_resource* resource;
+        std::pmr::string requestBuffer;
+        std::pmr::string responseReadBuffer;
+        enum class DeadlineKind : std::uint8_t {
+            kNone,
+            kResolve,
+            kSocket
+        };
+        std::chrono::steady_clock::time_point deadline{};
+        DeadlineKind deadlineKind{DeadlineKind::kNone};
         bool connected{false};
+        bool deadlineActive{false};
+        bool timedOut{false};
     };
 
     class ConnectionGuard final {
@@ -91,6 +107,9 @@ private:
     void enqueueWaiter(PoolWaiter& w) noexcept;
     void removeWaiter(PoolWaiter& w) noexcept;
     bool resumeNextWaiter(std::size_t index) noexcept;
+    void setDeadline(Connection& conn, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept;
+    void clearDeadline(Connection& conn) noexcept;
+    [[nodiscard]] bool finishDeadline(Connection& conn) noexcept;
     void closeConnection(Connection& conn) noexcept;
     void destroyConnection(Connection* conn) noexcept;
     Task<void> connectOne(Connection& conn);
@@ -103,6 +122,7 @@ private:
     asio::io_context& ioContext_;
     HttpClientConfig config_;
     std::pmr::memory_resource* resource_;
+    std::pmr::string hostHeader_;
     std::optional<asio::ssl::context> sslContext_;
     // Owning raw pointers: Connection is non-movable (TLS stream holds rawSocket ref)
     std::pmr::vector<Connection*> connections_;

@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,6 +53,11 @@ struct HpackStaticIndex final {
     static constexpr std::uint32_t kVary = 59;
 };
 
+struct HpackHuffmanNode final {
+    std::int16_t child[2]{-1, -1};
+    std::int16_t symbol{-1};
+};
+
 class HpackDecoder final {
 public:
     using HeaderCallback = bool (*)(void*, std::string_view, std::string_view);
@@ -77,11 +81,6 @@ private:
         std::string_view value;
     };
 
-    struct HuffmanNode final {
-        std::int16_t child[2]{-1, -1};
-        std::int16_t symbol{-1};
-    };
-
     [[nodiscard]] static std::size_t entrySize(std::string_view name, std::string_view value) noexcept;
     [[nodiscard]] HpackError decodeInteger(
         const unsigned char*& cursor,
@@ -94,22 +93,25 @@ private:
         std::pmr::string& scratch,
         std::string_view& value);
     [[nodiscard]] HpackError decodeHuffman(std::string_view encoded, std::pmr::string& output);
+    void releaseScratch();
     [[nodiscard]] HpackError indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;
     [[nodiscard]] HpackError indexedName(std::uint32_t index, std::string_view& name) const noexcept;
+    [[nodiscard]] std::size_t dynamicEntryCount() const noexcept;
+    [[nodiscard]] const Entry& dynamicEntryByNewestIndex(std::size_t newestIndex) const noexcept;
     void addDynamic(std::string_view name, std::string_view value);
-    void evictDynamicToFit(std::size_t entrySize) noexcept;
-    void evictDynamic() noexcept;
-    void buildHuffmanTree() noexcept;
+    void clearDynamic() noexcept;
+    void evictDynamicToFit(std::size_t entrySize);
+    void evictDynamic();
+    void compactDynamic();
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> dynamic_;
     std::pmr::string nameScratch_;
     std::pmr::string valueScratch_;
     std::size_t dynamicSize_{0};
+    std::size_t dynamicOffset_{0};
     std::size_t maxDynamicSize_{4096};
     std::size_t allowedDynamicSize_{4096};
-    HuffmanNode huffman_[1024]{};
-    std::size_t huffmanNodeCount_{1};
 };
 
 class HpackEncoder final {

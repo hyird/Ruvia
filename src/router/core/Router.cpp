@@ -3,12 +3,21 @@
 #include "RouterUtils.h"
 #include "ruvia/memory/PmrObject.h"
 
+#include <stdexcept>
+
 namespace ruvia {
 
 using namespace detail;
 
+Task<HttpResponse> Next::operator()(Context& context) const {
+    if (invoke_ == nullptr) {
+        throw std::logic_error("route continuation is empty");
+    }
+    return invoke_(target_, context);
+}
+
 void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
-    destroyPmrObject(impl, resource == nullptr ? startupResource() : resource);
+    destroyPmrObject(impl, startupResource());
 }
 
 void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const noexcept {
@@ -17,8 +26,7 @@ void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const 
 
 Router::Router()
     : impl_(
-          constructPmrObject<detail::RouterImpl>(startupResource(), *this),
-          detail::RouterImplDeleter{startupResource()}) {}
+          constructPmrObject<detail::RouterImpl>(startupResource(), *this)) {}
 
 Router::~Router() = default;
 
@@ -84,14 +92,10 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(RouteMiddlewar
     return middleware;
 }
 
-std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
-    std::pmr::vector<RouteMiddleware> middlewares) {
-    std::pmr::vector<RouteMiddleware> result(startupResource());
-    result.reserve(middlewares.size());
+void detail::RouterImpl::materializeMiddlewares(std::pmr::vector<RouteMiddleware>& middlewares) {
     for (auto& middleware : middlewares) {
-        result.push_back(materializeMiddleware(std::move(middleware)));
+        middleware = materializeMiddleware(std::move(middleware));
     }
-    return result;
 }
 
 void detail::RouterImpl::validateRouteTarget(HttpMethod method, std::string_view path) const {

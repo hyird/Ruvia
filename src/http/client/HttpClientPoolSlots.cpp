@@ -25,9 +25,12 @@ HttpClientPool::Connection& HttpClientPool::ConnectionGuard::connection() noexce
 }
 
 struct PoolWaiterAwaiter {
+    explicit PoolWaiterAwaiter(HttpClientPool& p) noexcept : pool(p) {}
+
     HttpClientPool& pool;
     HttpClientPool::PoolWaiter waiter;
     bool ready{false};
+    bool timedOut{false};
     std::size_t index{0};
 
     [[nodiscard]] bool await_ready() const noexcept { return false; }
@@ -40,13 +43,19 @@ struct PoolWaiterAwaiter {
             return false;
         }
         waiter.ready = &ready;
+        waiter.timedOut = &timedOut;
         waiter.index = &index;
+        waiter.deadline = std::chrono::steady_clock::now() + pool.config_.acquireTimeout;
         waiter.handle = handle;
         pool.enqueueWaiter(waiter);
         return true;
     }
 
     std::size_t await_resume() {
+        pool.removeWaiter(waiter);
+        if (timedOut) {
+            throw std::runtime_error("http client pool acquire timed out");
+        }
         if (pool.closing_) {
             throw std::runtime_error("http client pool is closed");
         }
@@ -55,7 +64,7 @@ struct PoolWaiterAwaiter {
 };
 
 Task<std::size_t> HttpClientPool::acquire() {
-    PoolWaiterAwaiter awaiter{*this};
+    PoolWaiterAwaiter awaiter(*this);
     co_return co_await awaiter;
 }
 

@@ -1,7 +1,12 @@
 #pragma once
 
+#include "../HttpRequestFlags.h"
+#include "../HttpTransferCoding.h"
+#include "../HeaderAcceptUtils.h"
 #include "HttpParserSyntax.h"
-#include "ruvia/http/HttpParser.h"
+#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpParseTypes.h"
 
 #include <array>
 #include <cstddef>
@@ -30,25 +35,22 @@ struct ParsedRequestHeaderSlot {
 };
 
 using KnownRequestHeaderIndex = std::int16_t;
-inline constexpr KnownRequestHeaderIndex kMissingRequestHeaderIndex = -1;
 
 struct KnownRequestHeaderIndexes {
-    std::array<KnownRequestHeaderIndex, kRequestHeaderKindCount> values = [] {
-        std::array<KnownRequestHeaderIndex, kRequestHeaderKindCount> indexes{};
-        indexes.fill(kMissingRequestHeaderIndex);
-        return indexes;
-    }();
-
     [[nodiscard]] KnownRequestHeaderIndex get(RequestHeaderKind kind) const noexcept {
-        return values[static_cast<std::size_t>(kind)];
+        const auto value = values_[static_cast<std::size_t>(kind)];
+        return value > 0 ? static_cast<KnownRequestHeaderIndex>(value - 1) : KnownRequestHeaderIndex{-1};
     }
 
     void record(RequestHeaderKind kind, std::size_t index) noexcept {
-        auto& knownIndex = values[static_cast<std::size_t>(kind)];
-        if (knownIndex == kMissingRequestHeaderIndex) {
-            knownIndex = static_cast<KnownRequestHeaderIndex>(index);
+        auto& knownIndex = values_[static_cast<std::size_t>(kind)];
+        if (knownIndex == 0) {
+            knownIndex = static_cast<KnownRequestHeaderIndex>(index + 1);
         }
     }
+
+private:
+    std::array<KnownRequestHeaderIndex, kRequestHeaderKindCount> values_{};
 };
 
 struct ParsedRequestHeaderBlock {
@@ -63,10 +65,7 @@ struct ParsedRequestHeaderBlock {
     bool sawContentLength{false};
     bool sawChunked{false};
     bool sawTransferEncoding{false};
-    bool transferGzip{false};
-    bool transferDeflate{false};
-    int acceptGzipQuality{-1};
-    int acceptGzipWildcardQuality{-1};
+    HttpAcceptedEncodingQuality gzipEncoding;
     HttpTransferCodings transferCodings;
 };
 

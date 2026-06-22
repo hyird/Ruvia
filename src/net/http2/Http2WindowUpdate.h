@@ -2,8 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
-#include <string>
 
 #include "Http2Frame.h"
 
@@ -11,16 +9,15 @@ namespace ruvia::detail {
 
 inline constexpr std::size_t kHttp2WindowUpdateFrameBytes = kHttp2FrameHeaderBytes + 4;
 
-inline void http2AppendDataWindowUpdates(
-    std::pmr::string& out,
+inline char* http2WriteDataWindowUpdates(
+    char* out,
     std::uint32_t streamId,
-    std::uint32_t increment) {
+    std::uint32_t increment) noexcept {
     if (increment == 0) {
-        return;
+        return out;
     }
-    out.reserve(kHttp2WindowUpdateFrameBytes * 2);
-    http2AppendWindowUpdate(out, 0, increment);
-    http2AppendWindowUpdate(out, streamId, increment);
+    out = http2WriteWindowUpdate(out, 0, increment);
+    return http2WriteWindowUpdate(out, streamId, increment);
 }
 
 }  // namespace ruvia::detail

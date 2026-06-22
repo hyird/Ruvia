@@ -41,7 +41,8 @@ Task<void> Http2ServerSession<Stream>::writeFramePayload(
     std::uint8_t flags,
     std::uint32_t streamId,
     std::string_view firstPayload,
-    std::string_view secondPayload) {
+    std::string_view secondPayload,
+    bool finalWrite) {
     const auto payloadSize = firstPayload.size() + secondPayload.size();
     std::array<char, kHttp2FrameHeaderBytes> header;
     http2EncodeFrameHeader(
@@ -53,7 +54,7 @@ Task<void> Http2ServerSession<Stream>::writeFramePayload(
     if (payloadSize == 0) {
         co_await writeSerialized([this, &header](auto handler) mutable {
             asio::async_write(stream_, asio::buffer(header), std::move(handler));
-        });
+        }, finalWrite);
         co_return;
     }
 
@@ -63,7 +64,7 @@ Task<void> Http2ServerSession<Stream>::writeFramePayload(
             asio::buffer(firstPayload)};
         co_await writeSerialized([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
-        });
+        }, finalWrite);
         co_return;
     }
 
@@ -73,5 +74,5 @@ Task<void> Http2ServerSession<Stream>::writeFramePayload(
         asio::buffer(secondPayload)};
     co_await writeSerialized([this, &buffers](auto handler) mutable {
         asio::async_write(stream_, buffers, std::move(handler));
-    });
+    }, finalWrite);
 }

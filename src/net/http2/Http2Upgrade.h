@@ -6,8 +6,9 @@
 #include <string_view>
 
 #include "Http2Frame.h"
-#include "ruvia/http/HeaderUtils.h"
-#include "ruvia/http/HttpParser.h"
+#include "../../http/HttpRequestInternal.h"
+#include "../../http/HttpParserInternal.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -20,9 +21,9 @@ struct Http2UpgradeRequest final {
         : settingsPayload(resource) {}
 };
 
-[[nodiscard]] inline bool isHttp2UpgradeAttempt(const HttpParseResult& parsed) noexcept {
+[[nodiscard]] inline bool isHttp2UpgradeAttempt(const HttpServerParseResult& parsed) noexcept {
     return parsed.flags.upgrade &&
-        httpAsciiEqualsIgnoreCase(parsed.request.header(HttpRequest::KnownHeader::kUpgrade), "h2c");
+        httpAsciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
 }
 
 [[nodiscard]] inline bool http2ShouldDropInvalidCleartextPreface(
@@ -116,13 +117,13 @@ struct Http2UpgradeRequest final {
 }
 
 [[nodiscard]] inline Http2UpgradeRequest parseHttp2UpgradeRequest(
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     std::pmr::memory_resource* resource) {
     Http2UpgradeRequest result(resource);
     if (!isHttp2UpgradeAttempt(parsed)) {
         return result;
     }
-    if (!httpHasToken(parsed.request.header(HttpRequest::KnownHeader::kConnection), "HTTP2-Settings")) {
+    if (!httpHasToken(requestKnownHeader(parsed.request, RequestKnownHeader::kConnection), "HTTP2-Settings")) {
         return result;
     }
 

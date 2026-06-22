@@ -4,14 +4,19 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 
+#include "../../http/HttpResponseHeaderAccess.h"
+#include "../../http/HttpResponseHeaderState.h"
 #include "Http2Hpack.h"
 #include "Http2StreamState.h"
 #include "../server/HttpDateCache.h"
-#include "../server/HttpResponseWriter.h"
-#include "ruvia/http/HeaderUtils.h"
+#include "../server/HttpResponseHeadPolicy.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 
@@ -20,49 +25,51 @@ struct Http2KnownHeaderEncoding final {
     std::uint32_t hpackNameIndex{0};
 };
 
+inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
+
 [[nodiscard]] inline Http2KnownHeaderEncoding http2KnownHeaderEncoding(std::uint32_t knownBit) noexcept {
     switch (knownBit) {
-        case HttpResponse::kKnownHeaderContentLength:
+        case kResponseHeaderContentLength:
             return {.name = "content-length", .hpackNameIndex = HpackStaticIndex::kContentLength};
-        case HttpResponse::kKnownHeaderContentEncoding:
+        case kResponseHeaderContentEncoding:
             return {.name = "content-encoding", .hpackNameIndex = HpackStaticIndex::kContentEncoding};
-        case HttpResponse::kKnownHeaderContentType:
+        case kResponseHeaderContentType:
             return {.name = "content-type", .hpackNameIndex = HpackStaticIndex::kContentType};
-        case HttpResponse::kKnownHeaderVary:
+        case kResponseHeaderVary:
             return {.name = "vary", .hpackNameIndex = HpackStaticIndex::kVary};
-        case HttpResponse::kKnownHeaderDate:
+        case kResponseHeaderDate:
             return {.name = "date", .hpackNameIndex = HpackStaticIndex::kDate};
-        case HttpResponse::kKnownHeaderServer:
+        case kResponseHeaderServer:
             return {.name = "server", .hpackNameIndex = HpackStaticIndex::kServer};
-        case HttpResponse::kKnownHeaderCacheControl:
+        case kResponseHeaderCacheControl:
             return {.name = "cache-control", .hpackNameIndex = HpackStaticIndex::kCacheControl};
-        case HttpResponse::kKnownHeaderAllow:
+        case kResponseHeaderAllow:
             return {.name = "allow", .hpackNameIndex = HpackStaticIndex::kAllow};
-        case HttpResponse::kKnownHeaderAccessControlAllowOrigin:
+        case kResponseHeaderAccessControlAllowOrigin:
             return {
                 .name = "access-control-allow-origin",
                 .hpackNameIndex = HpackStaticIndex::kAccessControlAllowOrigin};
-        case HttpResponse::kKnownHeaderAccessControlAllowCredentials:
+        case kResponseHeaderAccessControlAllowCredentials:
             return {.name = "access-control-allow-credentials"};
-        case HttpResponse::kKnownHeaderAccessControlAllowMethods:
+        case kResponseHeaderAccessControlAllowMethods:
             return {.name = "access-control-allow-methods"};
-        case HttpResponse::kKnownHeaderAccessControlAllowHeaders:
+        case kResponseHeaderAccessControlAllowHeaders:
             return {.name = "access-control-allow-headers"};
-        case HttpResponse::kKnownHeaderAccessControlMaxAge:
+        case kResponseHeaderAccessControlMaxAge:
             return {.name = "access-control-max-age"};
-        case HttpResponse::kKnownHeaderAccessControlExposeHeaders:
+        case kResponseHeaderAccessControlExposeHeaders:
             return {.name = "access-control-expose-headers"};
-        case HttpResponse::kKnownHeaderAcceptRanges:
+        case kResponseHeaderAcceptRanges:
             return {.name = "accept-ranges", .hpackNameIndex = HpackStaticIndex::kAcceptRanges};
-        case HttpResponse::kKnownHeaderContentRange:
+        case kResponseHeaderContentRange:
             return {.name = "content-range", .hpackNameIndex = HpackStaticIndex::kContentRange};
-        case HttpResponse::kKnownHeaderEtag:
+        case kResponseHeaderEtag:
             return {.name = "etag", .hpackNameIndex = HpackStaticIndex::kEtag};
-        case HttpResponse::kKnownHeaderLastModified:
+        case kResponseHeaderLastModified:
             return {.name = "last-modified", .hpackNameIndex = HpackStaticIndex::kLastModified};
-        case HttpResponse::kKnownHeaderLocation:
+        case kResponseHeaderLocation:
             return {.name = "location", .hpackNameIndex = HpackStaticIndex::kLocation};
-        case HttpResponse::kKnownHeaderSetCookie:
+        case kResponseHeaderSetCookie:
             return {.name = "set-cookie", .hpackNameIndex = HpackStaticIndex::kSetCookie};
         default:
             return {};
@@ -70,22 +77,27 @@ struct Http2KnownHeaderEncoding final {
 }
 
 [[nodiscard]] inline std::string_view http2LowerHeaderName(
-    Http2StreamState& stream,
-    std::string_view name) {
-    for (std::size_t i = 0; i < name.size(); ++i) {
-        const auto ch = name[i];
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte >= 'A' && byte <= 'Z') {
-            stream.lowerNameScratch.clear();
-            stream.lowerNameScratch.reserve(name.size());
-            stream.lowerNameScratch.append(name.data(), i);
-            stream.lowerNameScratch.push_back(static_cast<char>(httpLowerAscii(byte)));
-            for (++i; i < name.size(); ++i) {
-                stream.lowerNameScratch.push_back(
-                    static_cast<char>(httpLowerAscii(static_cast<unsigned char>(name[i]))));
-            }
-            return stream.lowerNameScratch;
+    std::string_view name,
+    std::array<char, kHttp2LowerHeaderStackBytes>& stack,
+    std::pmr::string& scratch) {
+    const auto writeLower = [](std::string_view source, char* target) noexcept {
+        for (std::size_t i = 0; i < source.size(); ++i) {
+            target[i] = static_cast<char>(httpLowerAscii(static_cast<unsigned char>(source[i])));
         }
+    };
+
+    for (const auto ch : name) {
+        const auto byte = static_cast<unsigned char>(ch);
+        if (byte < 'A' || byte > 'Z') {
+            continue;
+        }
+        if (name.size() <= stack.size()) {
+            writeLower(name, stack.data());
+            return std::string_view(stack.data(), name.size());
+        }
+        scratch.resize(name.size());
+        writeLower(name, scratch.data());
+        return scratch;
     }
     return name;
 }
@@ -98,6 +110,23 @@ struct Http2KnownHeaderEncoding final {
     return date.substr(6, date.size() - 8);
 }
 
+[[nodiscard]] inline bool http2ResponseConnectionHeaderForbidden(
+    std::uint32_t knownBit,
+    std::string_view name) noexcept {
+    if (knownBit == kResponseHeaderConnection ||
+        knownBit == kResponseHeaderTransferEncoding) {
+        return true;
+    }
+    if (knownBit != 0) {
+        return false;
+    }
+    return httpAsciiEqualsIgnoreCase(name, "connection") ||
+        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
+        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+        httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
+        httpAsciiEqualsIgnoreCase(name, "upgrade");
+}
+
 inline void appendHttp2ResponseHeaders(
     Http2StreamState& stream,
     const HttpResponse& response,
@@ -105,22 +134,25 @@ inline void appendHttp2ResponseHeaders(
     bool emitAutoContentLength = true) {
     stream.responseHeaderBlock.clear();
     HpackEncoder::encodeStatus(stream.responseHeaderBlock, response.statusCode());
+    std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
+    std::pmr::string lowerNameScratch(stream.responseHeaderBlock.get_allocator());
 
     const auto policy = responseWritePolicy(response.statusCode());
-    const auto knownBits = response.knownHeaderBits();
+    const auto knownBits = responseKnownHeaderBits(response);
     const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed;
     bool contentLengthWritten = false;
     for (const auto& header : response.headers()) {
-        if (responseHttp2ConnectionHeaderForbidden(header.knownBit, header.name())) {
+        const auto knownBit = responseHeaderKnownBit(header);
+        if (http2ResponseConnectionHeaderForbidden(knownBit, header.name())) {
             continue;
         }
-        if (header.knownBit == HttpResponse::kKnownHeaderContentLength) {
+        if (knownBit == kResponseHeaderContentLength) {
             contentLengthWritten = true;
-            if (responseBodyFramingHeaderForbidden(header.knownBit, explicitContentLengthAllowed, true)) {
+            if (responseBodyFramingHeaderForbidden(knownBit, explicitContentLengthAllowed, true)) {
                 continue;
             }
         }
-        const auto known = http2KnownHeaderEncoding(header.knownBit);
+        const auto known = http2KnownHeaderEncoding(knownBit);
         if (known.hpackNameIndex != 0) {
             HpackEncoder::encodeHeaderWithNameIndex(
                 stream.responseHeaderBlock,
@@ -130,13 +162,15 @@ inline void appendHttp2ResponseHeaders(
         }
         HpackEncoder::encodeHeader(
             stream.responseHeaderBlock,
-            known.name.empty() ? http2LowerHeaderName(stream, header.name()) : known.name,
+            known.name.empty()
+                ? http2LowerHeaderName(header.name(), lowerNameStack, lowerNameScratch)
+                : known.name,
             header.value());
     }
-    if ((knownBits & HttpResponse::kKnownHeaderServer) == 0) {
+    if ((knownBits & kResponseHeaderServer) == 0) {
         HpackEncoder::encodeHeaderWithNameIndex(stream.responseHeaderBlock, HpackStaticIndex::kServer, "ruvia");
     }
-    if ((knownBits & HttpResponse::kKnownHeaderDate) == 0) {
+    if ((knownBits & kResponseHeaderDate) == 0) {
         HpackEncoder::encodeHeaderWithNameIndex(
             stream.responseHeaderBlock,
             HpackStaticIndex::kDate,
@@ -152,6 +186,10 @@ inline void appendHttp2ResponseHeaders(
                 std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
         }
     }
+}
+
+inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
+    clearPmrStringRetainingSmall(stream.responseHeaderBlock);
 }
 
 }  // namespace ruvia::detail

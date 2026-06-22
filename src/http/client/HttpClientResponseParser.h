@@ -14,6 +14,7 @@ struct HttpClientResponseHead final {
     std::size_t bodyOffset{0};
     std::size_t contentLength{0};
     bool hasContentLength{false};
+    bool hasTransferEncoding{false};
     bool closeAfterResponse{false};
     bool responseMayHaveBody{false};
 };

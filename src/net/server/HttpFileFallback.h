@@ -1,5 +1,8 @@
 #pragma once
 
+#include "../../http/HttpResponseFileBody.h"
+#include "../HttpFileOpen.h"
+#include "../HttpNativeFile.h"
 #include "../../runtime/AsioAwait.h"
 
 #include "HttpFileChunkBuffer.h"
@@ -10,7 +13,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
+#include <ios>
 #include <memory_resource>
 #include <string>
 #include <system_error>
@@ -34,17 +37,27 @@ Task<void> writeFileChunk(
 template <typename Stream>
 Task<void> writeFileFallback(
     Stream& stream,
-    WorkerMemory& memory,
-    std::pmr::string* reusableChunk,
-    const FileBody& fileBody,
+    std::pmr::string& chunk,
+    ResponseFileBody fileBody,
     std::error_code& ec) {
-    std::pmr::string localChunk(memory.allocator<char>());
-    auto& chunk = reusableChunk == nullptr ? localChunk : *reusableChunk;
     ensureFileChunkBuffer(chunk);
 
 #if defined(ASIO_HAS_FILE)
     asio::stream_file input(stream.get_executor());
-    input.open(fileTokenPath(fileBody.file).string(), asio::stream_file::read_only, ec);
+#if defined(_WIN32)
+    auto nativeInput = openNativeFileForRead(
+        fileBody,
+        ec,
+        NativeFileOpenOptions{.overlapped = true, .sequentialScan = true});
+    if (!ec) {
+        input.assign(nativeInput.get(), ec);
+    }
+    if (!ec) {
+        static_cast<void>(nativeInput.release());
+    }
+#else
+    input.open(fileBody.nativePathCStr(), asio::stream_file::read_only, ec);
+#endif
     if (ec) {
         ec = asio::error::operation_aborted;
         co_return;
@@ -72,7 +85,7 @@ Task<void> writeFileFallback(
         }
     }
 #else
-    std::ifstream input(fileTokenPath(fileBody.file), std::ios::binary);
+    auto input = openResponseFileInput(fileBody);
     if (!input) {
         ec = std::make_error_code(std::errc::no_such_file_or_directory);
         co_return;
@@ -100,6 +113,29 @@ Task<void> writeFileFallback(
     }
     ec = {};
 #endif
+}
+
+template <typename Stream>
+Task<void> writeFileFallbackWithLocalChunk(
+    Stream& stream,
+    WorkerMemory& memory,
+    ResponseFileBody fileBody,
+    std::error_code& ec) {
+    std::pmr::string localChunk(memory.allocator<char>());
+    co_await writeFileFallback(stream, localChunk, fileBody, ec);
+}
+
+template <typename Stream>
+Task<void> writeFileFallback(
+    Stream& stream,
+    WorkerMemory& memory,
+    std::pmr::string* reusableChunk,
+    ResponseFileBody fileBody,
+    std::error_code& ec) {
+    if (reusableChunk != nullptr) {
+        return writeFileFallback(stream, *reusableChunk, fileBody, ec);
+    }
+    return writeFileFallbackWithLocalChunk(stream, memory, fileBody, ec);
 }
 
 }  // namespace ruvia::detail

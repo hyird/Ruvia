@@ -2,11 +2,12 @@
 
 #include "../../runtime/AsioAwait.h"
 
+#include "HttpResponseHead.h"
 #include "HttpResponseStreamHead.h"
-#include "HttpResponseWriter.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/MemoryPool.h"
 
 #include <array>
@@ -59,7 +60,7 @@ public:
 
 private:
     [[nodiscard]] std::pmr::string& scratch() noexcept {
-        scratch_.clear();
+        clearPmrStringRetainingSmall(scratch_);
         return scratch_;
     }
 

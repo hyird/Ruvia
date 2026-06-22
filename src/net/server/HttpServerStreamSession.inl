@@ -98,8 +98,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
             parser.parseHeaders(bufferView, parsed, headerSearchOffset);
             if (parsed.status == HttpParseStatus::kComplete) {
-                parsed.request.setResource(requestMemory.resource());
-                parsed.request.setRemoteAddress(remoteAddress);
+                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
+                HttpRequestAccess::setRemoteAddress(parsed.request, remoteAddress);
                 // Reset phase so headerTimeout stops counting against dispatch
                 // time. Body readers will set kReadingBody on their own; the
                 // streaming/websocket paths set their own phases below; the
@@ -109,7 +109,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
                 if (options_.autoHttps.enabled) {
                     consumedBytes = parsed.headerBytes;
-                    if (parsed.request.header(HttpRequest::KnownHeader::kHost).empty()) {
+                    if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,
@@ -303,7 +303,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         co_return;
                     }
                 }
-                parsed.request.setResource(requestMemory.resource());
+                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
@@ -320,7 +320,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             growReadBuffer(readBuffer, usedBytes, parsed);
             if (usedBytes == readBuffer.size()) {
                 constexpr auto error = HttpParseError::kHeaderTooLarge;
-                parsed.request.setResource(requestMemory.resource());
+                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
@@ -350,10 +350,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             const auto responsePreparation = prepareBufferedHttpResponse(
                 parsed.request,
-                parsed.flags,
+                parsed.acceptsResponseGzip,
                 response,
                 options_,
-                &compressionScratch);
+                compressionScratch);
             co_await writeResponse(
                 stream,
                 memory_,
@@ -362,8 +362,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                 response,
                 responsePreparation.skipBody,
                 ec);
-            if (responsePreparation.borrowedCompressionScratch) {
-                compressionScratch.clear();
+            if (responsePreparation.bodyBorrowsCompressionScratch) {
+                clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
             }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             if (ec || closeAfterWrite || !keepAlive || !started_.load(std::memory_order_relaxed)) {

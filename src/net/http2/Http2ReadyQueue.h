@@ -1,28 +1,26 @@
 #pragma once
 
-#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
-#include <vector>
+#include <cstring>
 
-#include "Http2OffsetVector.h"
+#include "Http2FrameTypes.h"
 
 namespace ruvia::detail {
 
 class Http2ReadyQueue final {
 public:
-    explicit Http2ReadyQueue(std::pmr::memory_resource* resource)
-        : streamIds_(resource == nullptr ? std::pmr::get_default_resource() : resource) {
-        streamIds_.reserve(16);
-    }
-
-    void push(std::uint32_t streamId) {
-        streamIds_.push_back(streamId);
+    [[nodiscard]] bool push(std::uint32_t streamId) noexcept {
+        if (size_ >= streamIds_.size()) {
+            return false;
+        }
+        streamIds_[size_++] = streamId;
+        return true;
     }
 
     [[nodiscard]] bool hasReady() const noexcept {
-        return offset_ < streamIds_.size();
+        return offset_ < size_;
     }
 
     [[nodiscard]] std::uint32_t pop() noexcept {
@@ -32,19 +30,37 @@ public:
     }
 
     void remove(std::uint32_t streamId) noexcept {
-        const auto activeBegin = streamIds_.begin() + static_cast<std::ptrdiff_t>(offset_);
-        streamIds_.erase(
-            std::remove(activeBegin, streamIds_.end(), streamId),
-            streamIds_.end());
-        compact();
+        std::size_t write = 0;
+        for (std::size_t read = offset_; read < size_; ++read) {
+            if (streamIds_[read] != streamId) {
+                streamIds_[write++] = streamIds_[read];
+            }
+        }
+        offset_ = 0;
+        size_ = write;
     }
 
 private:
     void compact() noexcept {
-        http2CompactOffsetVector(streamIds_, offset_, 64);
+        if (offset_ == 0) {
+            return;
+        }
+        if (offset_ == size_) {
+            offset_ = 0;
+            size_ = 0;
+            return;
+        }
+        if (offset_ < 64 && offset_ < size_ - offset_) {
+            return;
+        }
+        const auto remaining = size_ - offset_;
+        std::memmove(streamIds_.data(), streamIds_.data() + offset_, remaining * sizeof(std::uint32_t));
+        offset_ = 0;
+        size_ = remaining;
     }
 
-    std::pmr::vector<std::uint32_t> streamIds_;
+    std::array<std::uint32_t, kHttp2LocalMaxConcurrentStreams> streamIds_{};
+    std::size_t size_{0};
     std::size_t offset_{0};
 };
 

@@ -6,20 +6,16 @@
 #include <filesystem>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/app/AppHook.h"
 #include "ruvia/app/Dotenv.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/http/Error.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/StaticFiles.h"
 #include "ruvia/memory/MemoryPool.h"
-#include "ruvia/memory/PmrObject.h"
-#include "ruvia/router/Router.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
 #include "ruvia/db/Db.h"
@@ -38,10 +34,10 @@ namespace ruvia {
 struct HttpServerOptions final {
     struct Tls final {
         bool enabled{false};
-        std::filesystem::path certificateChainFile;
-        std::filesystem::path privateKeyFile;
+        std::pmr::string certificateChainFile;
+        std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
-        std::filesystem::path verifyFile;
+        std::pmr::string verifyFile;
     };
 
     struct Compression final {
@@ -68,14 +64,18 @@ struct HttpServerOptions final {
     };
 
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
+    // Scanner cadence; must be greater than 0.
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     std::chrono::milliseconds headerTimeout{std::chrono::seconds(15)};
     std::chrono::milliseconds bodyTimeout{std::chrono::seconds(30)};
     std::chrono::milliseconds writeTimeout{std::chrono::seconds(30)};
     std::size_t maxConnections{0};
     std::size_t maxRequestsPerConnection{0};
+    // Buffered routes materialize body data; this limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
+    // Stream routes are explicit; 0 disables the stream body limit.
     std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};
+    // WebSocket messages are assembled before delivery; this limit must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     Tls tls;
     Compression compression;
@@ -112,8 +112,10 @@ struct DocumentRootConfig final {
 
 namespace detail {
 
-struct AppRuntimeGraph;
-class HttpServer;
+struct AppState;
+struct AppStateDeleter final {
+    void operator()(AppState* state) const noexcept;
+};
 
 }  // namespace detail
 
@@ -174,52 +176,14 @@ private:
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    std::pmr::string listenAddress_{ProcessMemory::instance().upstreamResource()};
-    std::optional<std::uint16_t> httpListenPort_{8080};
-    std::optional<std::uint16_t> httpsListenPort_;
-    bool autoHttps_{false};
-    std::size_t threadNum_;
-    HttpServerOptions options_{};
-    std::optional<DocumentRootConfig> documentRootConfig_;
-    MemoryPoolConfig memoryConfig_{};
-    HttpErrorHandler errorHandler_{nullptr};
-    std::pmr::vector<AppHook> onStartHooks_{ProcessMemory::instance().upstreamResource()};
-    std::pmr::vector<AppHook> onStopHooks_{ProcessMemory::instance().upstreamResource()};
-    std::pmr::vector<detail::ControllerMiddlewareDescriptor> globalMiddlewares_{
-        ProcessMemory::instance().upstreamResource()};
-#ifdef RUVIA_ENABLE_MARIADB
-    std::pmr::vector<detail::DbDefinition> databases_{ProcessMemory::instance().upstreamResource()};
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-    std::pmr::vector<detail::RedisDefinition> redis_{ProcessMemory::instance().upstreamResource()};
-#endif
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-    std::pmr::vector<detail::HttpClientDefinition> httpClients_{ProcessMemory::instance().upstreamResource()};
-#endif
+    App& useMiddleware(detail::ControllerMiddlewareDescriptor middleware);
 
-    Env env_;
-    detail::ControllerStore controllerLifetimes_;
-    std::unique_ptr<detail::AppRuntimeGraph, detail::PmrObjectDeleter<detail::AppRuntimeGraph>> runtime_;
-    Router router_;
-
-    mutable std::mutex mutex_;
-    bool autoControllersLoaded_{false};
-    bool routeGraphFinalized_{false};
-    bool running_{false};
+    std::unique_ptr<detail::AppState, detail::AppStateDeleter> state_;
 };
 
 template <typename MiddlewareT>
 App& App::use() {
-    std::lock_guard lock(mutex_);
-    if (running_) {
-        throw std::logic_error("cannot register middleware while app is running");
-    }
-    if (routeGraphFinalized_) {
-        throw std::logic_error("cannot register middleware after router finalize");
-    }
-
-    globalMiddlewares_.push_back(detail::makeMiddlewareDescriptor<MiddlewareT>());
-    return *this;
+    return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
 }
 
 App& app();

@@ -5,9 +5,10 @@
 #include <string_view>
 
 #include "HttpWebSocketUtils.h"
+#include "../../http/HttpRequestFlags.h"
+#include "../../http/HttpRequestInternal.h"
 #include "../../runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -28,7 +29,7 @@ Task<bool> writeWebSocketHandshake(
     static constexpr std::string_view kCrlf = "\r\n";
 
     WebSocketAcceptKey accept;
-    encodeWebSocketAccept(accept, request.header(HttpRequest::KnownHeader::kSecWebSocketKey));
+    encodeWebSocketAccept(accept, requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey));
     if (subprotocol.empty()) {
         const std::array<asio::const_buffer, 3> buffers{
             asio::buffer(kPrefix),

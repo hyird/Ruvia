@@ -11,9 +11,12 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 }  // namespace
 
 detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) const noexcept {
-    const auto path = request.path();
-    const auto method = request.method();
+    return resolve(request.method(), request.path());
+}
 
+detail::RouteResolution detail::RouteTable::resolve(
+    HttpMethod method,
+    std::string_view path) const noexcept {
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
         return RouteResolution{
             .status = RouteResolveStatus::kFound,

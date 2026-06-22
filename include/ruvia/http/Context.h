@@ -1,36 +1,25 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include <ctime>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 #include <utility>
 #include <vector>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/Cookies.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/FileResponse.h"
-#include "ruvia/http/HeaderUtils.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/Model.h"
-#include "ruvia/http/StaticFiles.h"
-#include "ruvia/http/Validation.h"
+#include "ruvia/http/MultipartReader.h"
+#include "ruvia/http/Streaming.h"
+#include "ruvia/http/ValidationTypes.h"
 #include "ruvia/http/WebSocket.h"
-#include "ruvia/http/detail/context/Cookies.h"
-#include "ruvia/http/detail/context/Streaming.h"
-#include "ruvia/http/detail/context/MultipartReader.h"
-#include "ruvia/http/detail/context/StaticFileHelpers.h"
-#include "ruvia/http/detail/context/ValidatedValues.h"
+#include "ruvia/http/detail/ValidatedValues.h"
 #include "ruvia/memory/MemoryPool.h"
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -43,6 +32,8 @@
 
 namespace ruvia {
 
+class StaticRoot;
+
 #ifdef RUVIA_ENABLE_MARIADB
 class DbHandle;
 #endif
@@ -54,62 +45,38 @@ class DbRegistry;
 class RedisRegistry;
 class HttpClientRegistry;
 class HttpClientPool;
-
-struct ContextServices final {
-    DbRegistry* db{nullptr};
-    RedisRegistry* redis{nullptr};
-    BodyReader* bodyReader{nullptr};
-    RequestBodyLoader* bodyLoader{nullptr};
-    ResponseStreamWriter* responseStream{nullptr};
-    WebSocket* webSocket{nullptr};
-    HttpClientRegistry* httpClients{nullptr};
-};
+class RequestBodyLoader;
+struct ContextAccess;
+struct ContextServices;
+[[noreturn]] void throwInvalidJsonContentType();
+[[noreturn]] void throwInvalidJsonBody();
+[[noreturn]] void throwInvalidFormContentType();
+[[noreturn]] void throwInvalidFormBody();
 }
 
 class Context final {
-public:
+private:
+    friend struct detail::ContextAccess;
+
     Context(
         RequestMemory& memory,
         const HttpRequest& request,
-        detail::ContextServices services = {}) noexcept
-        : memory_(memory),
-          request_(request),
-          db_(services.db),
-          redis_(services.redis),
-          httpClients_(services.httpClients),
-          bodyReader_(services.bodyReader),
-          bodyLoader_(services.bodyLoader),
-          webSocket_(services.webSocket),
-          responseStream_(services.responseStream),
-          responseStatusText_(memory.resource()),
-          responseHeaders_(memory.resource()) {}
-
-    ~Context() = default;
-
-    Context(const Context&) = delete;
-    Context& operator=(const Context&) = delete;
-    Context(Context&&) = delete;
-    Context& operator=(Context&&) = delete;
+        detail::ContextServices services) noexcept;
 
     Context(
         RequestMemory& memory,
         const HttpRequest& request,
         const std::array<RouteParamView, kMaxRouteParams>& params,
         std::size_t paramCount,
-        detail::ContextServices services = {}) noexcept
-        : memory_(memory),
-          request_(request),
-          params_(params.data()),
-          paramCount_(std::min(paramCount, kMaxRouteParams)),
-          db_(services.db),
-          redis_(services.redis),
-          httpClients_(services.httpClients),
-          bodyReader_(services.bodyReader),
-          bodyLoader_(services.bodyLoader),
-          webSocket_(services.webSocket),
-          responseStream_(services.responseStream),
-          responseStatusText_(memory.resource()),
-          responseHeaders_(memory.resource()) {}
+        detail::ContextServices services) noexcept;
+
+public:
+    ~Context() = default;
+
+    Context(const Context&) = delete;
+    Context& operator=(const Context&) = delete;
+    Context(Context&&) = delete;
+    Context& operator=(Context&&) = delete;
 
     [[nodiscard]] const HttpRequest& req() const noexcept {
         return request_;
@@ -133,10 +100,6 @@ public:
         return request_.header(name);
     }
 
-    [[nodiscard]] std::string_view header(HttpRequest::KnownHeader name) const noexcept {
-        return request_.header(name);
-    }
-
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept {
         return request_.query(name);
     }
@@ -145,9 +108,7 @@ public:
         return request_.cookie(name);
     }
 
-    [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept {
-        return detail::httpAcceptsMediaType(request_.header(HttpRequest::KnownHeader::kAccept), mediaType);
-    }
+    [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
     [[nodiscard]] std::string_view remoteAddress() const noexcept {
         return request_.remoteAddress();
@@ -178,12 +139,14 @@ public:
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
+    // path is an HTTP/1.1 origin-form target: empty maps to "/", otherwise use "/..." or "*".
     [[nodiscard]] Task<FetchResponse> fetch(
         std::string_view path,
         FetchOptions options = {}) {
         return fetch(detail::kDefaultHttpClientAlias, path, std::move(options));
     }
 
+    // path is an HTTP/1.1 origin-form target: empty maps to "/", otherwise use "/..." or "*".
     [[nodiscard]] Task<FetchResponse> fetch(
         std::string_view alias,
         std::string_view path,
@@ -229,11 +192,6 @@ public:
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
 
     [[nodiscard]] HttpResponse text(
-        std::string_view body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse textView(
         std::string_view body,
         std::uint16_t statusCode = 0,
         std::string_view statusText = {}) const;
@@ -305,26 +263,32 @@ public:
 private:
     [[nodiscard]] std::string_view multipartBoundary() const;
 
-    Context& setResponseHeaderStableView(std::string_view name, std::string_view value);
+    [[nodiscard]] bool requestContentTypeMatches(std::string_view expected) const noexcept;
 
-    [[nodiscard]] detail::FileConditionalHeaders fileConditionalHeaders() const noexcept;
+    Context& setStableResponseHeader(std::string_view name, std::string_view value);
 
-    [[nodiscard]] HttpResponse fileWithMetadata(
-        FileToken file,
-        const std::filesystem::path& path,
-        std::uint64_t size,
-        std::filesystem::file_time_type modified,
-        std::string_view contentType,
-        std::string_view cacheControl = {},
-        bool enableRanges = true,
-        bool enableValidators = true,
-        std::string_view precomputedEtag = {},
-        std::string_view precomputedLastModified = {}) const;
+    [[nodiscard]] HttpResponseHeader* findResponseHeaderForUpdate(
+        std::string_view name,
+        std::uint32_t knownBit) noexcept;
+
+    void recordResponseKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
 
     void applyResponseState(
         HttpResponse& response,
         std::uint16_t statusCode,
         std::string_view statusText) const;
+
+    [[nodiscard]] HttpResponse textStaticView(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::string_view statusText) const;
+
+    [[nodiscard]] HttpResponse jsonSerialized(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::string_view statusText) const;
+
+    static constexpr std::size_t kResponseIndexSlots = 22;
 
     RequestMemory& memory_;
     const HttpRequest& request_;
@@ -334,20 +298,17 @@ private:
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
     BodyReader* bodyReader_{nullptr};
-    RequestBodyLoader* bodyLoader_{nullptr};
+    detail::RequestBodyLoader* bodyLoader_{nullptr};
     WebSocket* webSocket_{nullptr};
     ResponseStreamWriter* responseStream_{nullptr};
     std::uint16_t responseStatusCode_{200};
     std::pmr::string responseStatusText_;
     HttpResponseHeaders responseHeaders_;
+    std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;
-
-    static constexpr std::size_t kFileResponseHeaderReserve = 7;
 };
 
 }  // namespace ruvia
 
-#include "ruvia/http/detail/context/ContextRequest.inl"
-#include "ruvia/http/detail/context/ContextResponse.inl"
-#include "ruvia/http/detail/context/ContextFileResponse.inl"
+#include "ruvia/http/Context.inl"

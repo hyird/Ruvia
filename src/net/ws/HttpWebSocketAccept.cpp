@@ -1,10 +1,9 @@
 #include "HttpWebSocketUtils.h"
 
-#include <algorithm>
 #include <array>
 #include <span>
 
-#include "ruvia/http/HeaderUtils.h"
+#include "../../http/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
 namespace {
@@ -42,15 +41,22 @@ void encodeBase64(char* output, std::span<const std::uint8_t> input) noexcept {
     return (value << bits) | (value >> (32 - bits));
 }
 
-[[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view input) noexcept {
+[[nodiscard]] std::array<std::uint8_t, 20> sha1(std::string_view first, std::string_view second) noexcept {
     std::uint32_t h0 = 0x67452301U;
     std::uint32_t h1 = 0xEFCDAB89U;
     std::uint32_t h2 = 0x98BADCFEU;
     std::uint32_t h3 = 0x10325476U;
     std::uint32_t h4 = 0xC3D2E1F0U;
     std::array<std::uint8_t, 64> block{};
-    std::uint64_t totalBits = static_cast<std::uint64_t>(input.size()) * 8U;
+    const auto totalSize = first.size() + second.size();
+    const std::uint64_t totalBits = static_cast<std::uint64_t>(totalSize) * 8U;
     std::size_t offset = 0;
+
+    const auto byteAt = [first, second](std::size_t index) noexcept {
+        return index < first.size()
+            ? static_cast<std::uint8_t>(first[index])
+            : static_cast<std::uint8_t>(second[index - first.size()]);
+    };
 
     const auto process = [&](const std::array<std::uint8_t, 64>& data) noexcept {
         std::array<std::uint32_t, 80> w{};
@@ -98,17 +104,17 @@ void encodeBase64(char* output, std::span<const std::uint8_t> input) noexcept {
         h4 += e;
     };
 
-    while (input.size() - offset >= block.size()) {
+    while (totalSize - offset >= block.size()) {
         for (std::size_t i = 0; i < block.size(); ++i) {
-            block[i] = static_cast<std::uint8_t>(input[offset + i]);
+            block[i] = byteAt(offset + i);
         }
         process(block);
         offset += block.size();
     }
     block.fill(0);
-    const auto remaining = input.size() - offset;
+    const auto remaining = totalSize - offset;
     for (std::size_t i = 0; i < remaining; ++i) {
-        block[i] = static_cast<std::uint8_t>(input[offset + i]);
+        block[i] = byteAt(offset + i);
     }
     block[remaining] = 0x80;
     if (remaining >= 56) {
@@ -135,21 +141,7 @@ void encodeBase64(char* output, std::span<const std::uint8_t> input) noexcept {
 
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
     key = detail::httpTrimOws(key);
-    if (key.size() == 24) {
-        std::array<char, 24 + kWebSocketGuid.size()> material{};
-        auto* cursor = material.data();
-        cursor = std::copy_n(key.data(), key.size(), cursor);
-        std::copy_n(kWebSocketGuid.data(), kWebSocketGuid.size(), cursor);
-        const auto digest = sha1(std::string_view(material.data(), material.size()));
-        encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
-        return;
-    }
-
-    std::pmr::string material(std::pmr::get_default_resource());
-    material.reserve(key.size() + kWebSocketGuid.size());
-    material.append(key);
-    material.append(kWebSocketGuid);
-    const auto digest = sha1(material);
+    const auto digest = sha1(key, kWebSocketGuid);
     encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
 }
 

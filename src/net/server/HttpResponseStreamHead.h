@@ -1,6 +1,7 @@
 #pragma once
 
-#include "HttpResponseWriter.h"
+#include "HttpResponseHeadPolicy.h"
+#include "../../http/HttpResponseHeaderState.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -29,7 +30,7 @@ struct ResponseStreamHead final {
     const auto policy = responseWritePolicy(response.statusCode());
 
     if (mode == ResponseBodyMode::kSse &&
-        !response.hasKnownHeader(HttpResponse::kKnownHeaderContentType)) {
+        !responseHasKnownHeader(response, kResponseHeaderContentType)) {
         setResponseHeaderStableView(response, "Content-Type", "text/event-stream");
     }
     if (framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed) {

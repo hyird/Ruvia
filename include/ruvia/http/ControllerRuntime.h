@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/http/ControllerDescriptors.h"
+#include "ruvia/http/Context.h"
+#include "ruvia/http/ContextModel.h"
+#include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/Model.h"
 #include "ruvia/http/Validation.h"
 
-#include <concepts>
-#include <memory>
 #include <memory_resource>
 #include <string_view>
 #include <type_traits>
@@ -13,48 +13,6 @@
 #include <vector>
 
 namespace ruvia {
-
-namespace detail {
-
-template <typename T>
-concept TaskHttpResponse = std::same_as<std::remove_cvref_t<T>, Task<HttpResponse>>;
-
-template <typename MiddlewareT>
-concept AwaitableHandleMiddleware = requires(
-    MiddlewareT middleware,
-    Context& context,
-    const Next& next) {
-    { middleware.handle(context, next) } -> TaskHttpResponse;
-};
-
-template <typename MiddlewareT>
-[[nodiscard]] Task<HttpResponse> invokeMiddleware(
-    void* target,
-    Context& context,
-    const Next& next) {
-    auto* middleware = static_cast<MiddlewareT*>(target);
-    if constexpr (AwaitableHandleMiddleware<MiddlewareT>) {
-        return middleware->handle(context, next);
-    } else {
-        static_assert(
-            AwaitableHandleMiddleware<MiddlewareT>,
-            "middleware must implement async handle(Context&, const ruvia::Next&)");
-    }
-}
-
-template <typename MiddlewareT>
-[[nodiscard]] void* createMiddleware();
-
-template <typename MiddlewareT>
-void destroyMiddleware(void* target) noexcept;
-
-template <typename MiddlewareT>
-[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
-
-}  // namespace detail
-
-template <typename MiddlewareT>
-class Middleware;
 
 template <typename ControllerT>
 class Controller {
@@ -150,31 +108,7 @@ private:
     }
 };
 
-template <typename MiddlewareT>
-class Middleware {
-public:
-    using RuviaMiddlewareType = MiddlewareT;
-
-protected:
-    constexpr Middleware() noexcept = default;
-    ~Middleware() = default;
-};
-
 namespace detail {
-
-template <typename MiddlewareT>
-[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
-    static_assert(
-        std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
-        "middleware must derive from ruvia::Middleware<MiddlewareT>");
-    static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
-    static_assert(std::is_default_constructible_v<MiddlewareT>, "middleware must be default constructible");
-
-    return ControllerMiddlewareDescriptor{
-        &invokeMiddleware<MiddlewareT>,
-        &createMiddleware<MiddlewareT>,
-        &destroyMiddleware<MiddlewareT>};
-}
 
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] Task<BodyT> parseValidatedBody(Context& c) {
@@ -195,7 +129,7 @@ Task<HttpResponse> invokeModelValidator(
     BodyT body = co_await parseValidatedBody<Target, BodyT>(c);
     Validator validator(c.resource());
     validatorMiddleware.validate(body, validator);
-    validator.throwIfInvalid();
+    std::move(validator).throwIfInvalid();
     c.setValid(Target, std::move(body));
     co_return co_await next(c);
 }
@@ -204,17 +138,6 @@ template <typename ControllerT>
 void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes) {
     auto& controller = controllerLifetimes.emplace<ControllerT>();
     controller.registerRoutes(router);
-}
-
-template <typename MiddlewareT>
-[[nodiscard]] void* createMiddleware() {
-    auto* resource = ProcessMemory::instance().upstreamResource();
-    return constructPmrObject<MiddlewareT>(resource);
-}
-
-template <typename MiddlewareT>
-void destroyMiddleware(void* target) noexcept {
-    destroyPmrObject(static_cast<MiddlewareT*>(target), ProcessMemory::instance().upstreamResource());
 }
 
 template <typename ControllerT>

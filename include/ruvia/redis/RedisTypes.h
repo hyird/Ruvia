@@ -14,16 +14,22 @@
 namespace ruvia {
 
 struct RedisConfig {
+    // Host name or unbracketed address only; keep the port in port.
     std::pmr::string host{"127.0.0.1"};
+    // Must be non-zero.
     std::uint16_t port{6379};
     std::pmr::string username;
     std::pmr::string password;
     std::uint32_t database{0};
+    // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
+    // Set to 0 to disable the corresponding timeout.
     std::chrono::milliseconds connectTimeout{0};
     std::chrono::milliseconds commandTimeout{0};
     std::chrono::milliseconds acquireTimeout{0};
+    // Set to 0 to disable the reply byte limit.
     std::size_t maxReplyBytes{64 * 1024 * 1024};
+    // Must be greater than zero.
     std::size_t maxArrayDepth{64};
     bool tcpNoDelay{true};
     bool keepAlive{false};

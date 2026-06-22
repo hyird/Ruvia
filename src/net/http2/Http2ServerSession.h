@@ -5,7 +5,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <fstream>
+#include <ios>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -48,11 +48,15 @@
 #include "Http2WebSocket.h"
 #include "Http2WebSocketHandshake.h"
 #include "Http2WindowUpdate.h"
-#include "ruvia/http/HttpParser.h"
+#include "../HttpFileOpen.h"
+#include "../../http/HttpResponseBodyAccess.h"
+#include "../../http/HttpResponseFileAccess.h"
+#include "../../http/HttpResponseFileBody.h"
+#include "../../http/HttpRequestInternal.h"
+#include "../../http/HttpParserInternal.h"
 #include "../server/ConnectionScanner.h"
 #include "../server/HttpBufferedResponse.h"
 #include "../server/HttpFileChunkBuffer.h"
-#include "../server/HttpResponseWriter.h"
 #include "../../runtime/AsioAwait.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/http/Context.h"
@@ -97,7 +101,7 @@ public:
     Task<void> run(std::string_view initialBytes = {});
 
     Task<void> runUpgraded(
-        const HttpParseResult& parsed,
+        const HttpServerParseResult& parsed,
         std::string_view settingsPayload,
         std::string_view body,
         std::string_view initialBytes = {});
@@ -170,15 +174,13 @@ private:
 
     void resolveStreamRoute(Http2StreamState& stream) noexcept;
 
-    [[nodiscard]] bool seedUpgradedStream(const HttpParseResult& parsed, std::string_view body);
+    [[nodiscard]] bool seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body);
 
     [[nodiscard]] Http2StreamState* findStream(std::uint32_t streamId) noexcept;
 
     [[nodiscard]] bool isIdleStream(std::uint32_t streamId) const noexcept;
 
     [[nodiscard]] Http2StreamState* createStream(std::uint32_t streamId);
-
-    void eraseStreamAt(std::size_t index) noexcept;
 
     void removeStream(std::uint32_t streamId) noexcept;
 
@@ -245,7 +247,8 @@ private:
         std::uint8_t flags,
         std::uint32_t streamId,
         std::string_view firstPayload,
-        std::string_view secondPayload = {});
+        std::string_view secondPayload = {},
+        bool finalWrite = false);
 
     Task<void> writeHeaders(Http2StreamState& stream, std::string_view headerBlock, bool endStream);
 
@@ -257,7 +260,7 @@ private:
         std::string_view second,
         bool endStream);
 
-    Task<void> writeFileBody(Http2StreamState& stream, const FileBody& fileBody, bool endStream);
+    Task<void> writeFileBody(Http2StreamState& stream, ResponseFileBody fileBody, bool endStream);
 
     Task<void> writeResponse(
         Http2StreamState& stream,
@@ -275,8 +278,7 @@ private:
     ConnectionScanner::Entry& scannerEntry_;
     std::string_view remoteAddress_;
     std::pmr::string input_;
-    std::pmr::string controlWriteBuffer_;
-    std::pmr::vector<Http2StreamState> streams_;
+    Http2StreamTable streams_;
     Http2ClosedStreamHistory closedStreams_;
     Http2ReadyQueue readyQueue_;
     Http2ContinuationQueue writeWaiters_;

@@ -1,5 +1,6 @@
 #include "ruvia/http/HttpResponse.h"
 
+#include "HttpResponseHeaderAccess.h"
 #include "HttpResponseStaticHeaders.h"
 
 #include <cstdint>
@@ -13,11 +14,12 @@ namespace {
 [[nodiscard]] bool overlapsHeaderStorage(
     const HttpResponseHeader& header,
     std::string_view value) noexcept {
-    if (value.empty() || header.bytes == nullptr) {
+    const auto name = header.name();
+    if (value.empty() || name.data() == nullptr) {
         return false;
     }
-    const auto storageBegin = reinterpret_cast<std::uintptr_t>(header.bytes);
-    const auto storageEnd = storageBegin + static_cast<std::size_t>(header.nameSize) + header.valueSize;
+    const auto storageBegin = reinterpret_cast<std::uintptr_t>(name.data());
+    const auto storageEnd = storageBegin + name.size() + header.value().size();
     const auto valueBegin = reinterpret_cast<std::uintptr_t>(value.data());
     const auto valueEnd = valueBegin + value.size();
     return valueBegin < storageEnd && storageBegin < valueEnd;
@@ -36,12 +38,12 @@ HttpResponseHeader HttpResponseHeaders::makeOwnedHeader(
         std::memcpy(bytes, name.data(), name.size());
         std::memcpy(bytes + name.size(), value.data(), value.size());
     }
-    return HttpResponseHeader{
-        .bytes = bytes,
-        .nameSize = static_cast<std::uint32_t>(name.size()),
-        .valueSize = static_cast<std::uint32_t>(value.size()),
-        .knownBit = knownBit,
-        .owned = true};
+    return detail::makeResponseHeader(
+        bytes,
+        static_cast<std::uint32_t>(name.size()),
+        static_cast<std::uint32_t>(value.size()),
+        knownBit,
+        true);
 }
 
 HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(
@@ -54,12 +56,12 @@ HttpResponseHeader HttpResponseHeaders::makeUninitializedHeader(
         bytes = static_cast<char*>(resource_->allocate(total, 1));
         std::memcpy(bytes, name.data(), name.size());
     }
-    return HttpResponseHeader{
-        .bytes = bytes,
-        .nameSize = static_cast<std::uint32_t>(name.size()),
-        .valueSize = static_cast<std::uint32_t>(valueSize),
-        .knownBit = knownBit,
-        .owned = true};
+    return detail::makeResponseHeader(
+        bytes,
+        static_cast<std::uint32_t>(name.size()),
+        static_cast<std::uint32_t>(valueSize),
+        knownBit,
+        true);
 }
 
 std::optional<HttpResponseHeader> HttpResponseHeaders::makeStaticHeader(
@@ -90,14 +92,10 @@ void HttpResponseHeaders::releaseHeader(HttpResponseHeader& header) noexcept {
     header.owned = false;
 }
 
-HttpResponseHeader& HttpResponseHeaders::add(
-    std::string_view name,
-    std::string_view value,
-    std::uint32_t knownBit) {
+HttpResponseHeader& HttpResponseHeaders::appendHeader(HttpResponseHeader header) {
     if (!spilled_ && size_ == kInlineCapacity) {
-        spill();
+        spill(size_ + 1);
     }
-    const auto header = makeOwnedHeader(name, value, knownBit);
     if (!spilled_) {
         auto* target = inlineData() + size_;
         *target = header;
@@ -106,43 +104,28 @@ HttpResponseHeader& HttpResponseHeaders::add(
     }
     heap_.push_back(header);
     return heap_.back();
+}
+
+HttpResponseHeader& HttpResponseHeaders::add(
+    std::string_view name,
+    std::string_view value,
+    std::uint32_t knownBit) {
+    return appendHeader(makeOwnedHeader(name, value, knownBit));
 }
 
 HttpResponseHeader& HttpResponseHeaders::addStableView(
     std::string_view name,
     std::string_view value,
     std::uint32_t knownBit) {
-    if (!spilled_ && size_ == kInlineCapacity) {
-        spill();
-    }
     const auto staticHeader = makeStaticHeader(name, value, knownBit);
-    const auto header = staticHeader ? *staticHeader : makeOwnedHeader(name, value, knownBit);
-    if (!spilled_) {
-        auto* target = inlineData() + size_;
-        *target = header;
-        ++size_;
-        return *target;
-    }
-    heap_.push_back(header);
-    return heap_.back();
+    return appendHeader(staticHeader ? *staticHeader : makeOwnedHeader(name, value, knownBit));
 }
 
 HttpResponseHeader& HttpResponseHeaders::addUninitializedValue(
     std::string_view name,
     std::size_t valueSize,
     std::uint32_t knownBit) {
-    if (!spilled_ && size_ == kInlineCapacity) {
-        spill();
-    }
-    const auto header = makeUninitializedHeader(name, valueSize, knownBit);
-    if (!spilled_) {
-        auto* target = inlineData() + size_;
-        *target = header;
-        ++size_;
-        return *target;
-    }
-    heap_.push_back(header);
-    return heap_.back();
+    return appendHeader(makeUninitializedHeader(name, valueSize, knownBit));
 }
 
 HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(

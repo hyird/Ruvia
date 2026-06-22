@@ -3,6 +3,8 @@
 #include "SocketUtils.h"
 
 #include <asio/error.hpp>
+#include <chrono>
+#include <utility>
 
 namespace ruvia::detail {
 
@@ -46,7 +48,7 @@ ConnectionScanner::Guard::~Guard() {
     }
 }
 
-ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, HttpServerOptions options)
+ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options)
     : timer_(std::move(executor)), options_(options), cachedNowMs_(steadyNowMs()) {
     sentinel_.prev = &sentinel_;
     sentinel_.next = &sentinel_;
@@ -113,19 +115,11 @@ void ConnectionScanner::closeAll() noexcept {
     }
 }
 
-std::chrono::milliseconds ConnectionScanner::interval() const noexcept {
-    if (options_.scanInterval.count() > 0) {
-        return options_.scanInterval;
-    }
-
-    return std::chrono::milliseconds(1000);
-}
-
 bool ConnectionScanner::hasAnyTimeout() const noexcept {
-    return options_.idleTimeout.count() > 0 ||
-        options_.headerTimeout.count() > 0 ||
-        options_.bodyTimeout.count() > 0 ||
-        options_.writeTimeout.count() > 0;
+    return options_.idleTimeoutMs > 0 ||
+        options_.headerTimeoutMs > 0 ||
+        options_.bodyTimeoutMs > 0 ||
+        options_.writeTimeoutMs > 0;
 }
 
 void ConnectionScanner::schedule() {
@@ -133,7 +127,7 @@ void ConnectionScanner::schedule() {
         return;
     }
 
-    timer_.expires_after(interval());
+    timer_.expires_after(options_.scanInterval);
     timer_.async_wait([this](const std::error_code& ec) {
         if (ec || !running_) {
             return;
@@ -164,22 +158,22 @@ void ConnectionScanner::scan() noexcept {
 }
 
 bool ConnectionScanner::isTimedOut(const Entry& entry, std::int64_t now) const noexcept {
-    if (options_.idleTimeout.count() > 0 && now - entry.lastActiveMs >= options_.idleTimeout.count()) {
+    if (options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs) {
         return true;
     }
 
     switch (entry.phase) {
         case Phase::kReadingHeader:
-            return options_.headerTimeout.count() > 0 && now - entry.phaseStartedMs >= options_.headerTimeout.count();
+            return options_.headerTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.headerTimeoutMs;
         case Phase::kReadingBody:
-            return options_.bodyTimeout.count() > 0 && now - entry.phaseStartedMs >= options_.bodyTimeout.count();
+            return options_.bodyTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.bodyTimeoutMs;
         case Phase::kWebSocket:
-            return options_.idleTimeout.count() > 0 && now - entry.lastActiveMs >= options_.idleTimeout.count();
+            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs;
         case Phase::kWriting:
-            return options_.writeTimeout.count() > 0 && now - entry.phaseStartedMs >= options_.writeTimeout.count();
+            return options_.writeTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.writeTimeoutMs;
         case Phase::kIdle:
         default:
-            return options_.idleTimeout.count() > 0 && now - entry.lastActiveMs >= options_.idleTimeout.count();
+            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs;
     }
 }
 

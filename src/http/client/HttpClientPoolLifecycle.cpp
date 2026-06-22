@@ -1,6 +1,7 @@
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
 #include "HttpClientPool.h"
+#include "HttpClientConfigValidation.h"
 
 #include <asio/ssl/context.hpp>
 
@@ -14,8 +15,11 @@ namespace ruvia::detail {
 
 HttpClientPool::Connection::Connection(asio::io_context& ctx, std::pmr::memory_resource* memoryResource)
     : rawSocket(ctx),
+      resolver(ctx),
       tlsStream(nullptr, TlsStreamDeleter{memoryResource}),
-      resource(memoryResource) {}
+      resource(memoryResource),
+      requestBuffer(memoryResource),
+      responseReadBuffer(memoryResource) {}
 
 HttpClientPool::HttpClientPool(
     asio::io_context& ioContext,
@@ -24,6 +28,7 @@ HttpClientPool::HttpClientPool(
     : ioContext_(ioContext),
       config_(std::move(config)),
       resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+      hostHeader_(makeHttpClientHostHeader(config_, resource_)),
       connections_(resource_),
       free_(resource_) {
     if (config_.tls) {
@@ -31,7 +36,7 @@ HttpClientPool::HttpClientPool(
         sslContext_->set_default_verify_paths();
         sslContext_->set_verify_mode(asio::ssl::verify_peer);
     }
-    const auto n = config_.poolSizePerWorker == 0 ? 1 : config_.poolSizePerWorker;
+    const auto n = config_.poolSizePerWorker;
     connections_.reserve(n);
     free_.reserve(n);
     try {
@@ -85,6 +90,9 @@ void HttpClientPool::closeNow() noexcept {
             waiterHead_->previous = nullptr;
         }
         w->queued = false;
+        if (w->timedOut != nullptr) {
+            *w->timedOut = false;
+        }
         *w->ready = true;
         if (w->handle) {
             w->handle.resume();
@@ -93,9 +101,73 @@ void HttpClientPool::closeNow() noexcept {
     waiterTail_ = nullptr;
 }
 
+void HttpClientPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
+    auto* waiter = waiterHead_;
+    while (waiter != nullptr) {
+        auto* next = waiter->next;
+        if (config_.acquireTimeout.count() > 0 && waiter->deadline <= now) {
+            removeWaiter(*waiter);
+            if (waiter->timedOut != nullptr) {
+                *waiter->timedOut = true;
+            }
+            if (waiter->ready != nullptr) {
+                *waiter->ready = true;
+            }
+            if (waiter->handle) {
+                waiter->handle.resume();
+            }
+        }
+        waiter = next;
+    }
+
+    for (auto* conn : connections_) {
+        if (conn == nullptr || !conn->deadlineActive || conn->deadline > now) {
+            continue;
+        }
+        conn->timedOut = true;
+        std::error_code ignored;
+        if (conn->deadlineKind == Connection::DeadlineKind::kResolve) {
+            conn->resolver.cancel();
+        } else if (conn->deadlineKind == Connection::DeadlineKind::kSocket) {
+            if (conn->tlsStream) {
+                conn->tlsStream->lowest_layer().cancel(ignored);
+            } else {
+                conn->rawSocket.cancel(ignored);
+            }
+        }
+    }
+}
+
+void HttpClientPool::setDeadline(
+    Connection& conn,
+    std::chrono::milliseconds timeout,
+    Connection::DeadlineKind kind) noexcept {
+    conn.deadlineKind = kind;
+    conn.timedOut = false;
+    if (timeout.count() <= 0) {
+        conn.deadlineActive = false;
+        return;
+    }
+    conn.deadline = std::chrono::steady_clock::now() + timeout;
+    conn.deadlineActive = true;
+}
+
+void HttpClientPool::clearDeadline(Connection& conn) noexcept {
+    conn.deadlineActive = false;
+    conn.deadlineKind = Connection::DeadlineKind::kNone;
+}
+
+bool HttpClientPool::finishDeadline(Connection& conn) noexcept {
+    const auto timedOut = conn.timedOut;
+    clearDeadline(conn);
+    return timedOut;
+}
+
 void HttpClientPool::closeConnection(Connection& conn) noexcept {
     conn.connected = false;
+    clearDeadline(conn);
     std::error_code ignored;
+    conn.resolver.cancel();
     if (conn.tlsStream) {
         conn.tlsStream->lowest_layer().cancel(ignored);
         conn.tlsStream->lowest_layer().close(ignored);

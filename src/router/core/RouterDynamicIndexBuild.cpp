@@ -7,6 +7,16 @@
 #include "RouterUtils.h"
 
 namespace ruvia {
+namespace {
+
+void appendDynamicParamName(detail::RouteEntry& route, std::string_view name) {
+    if (route.paramCount >= route.paramNames.size()) {
+        throw std::invalid_argument("route has too many parameters");
+    }
+    route.paramNames[route.paramCount++] = name;
+}
+
+}  // namespace
 
 void detail::RouteTable::buildDynamicRoutes() {
     hasDynamicRoutes_.fill(false);
@@ -26,7 +36,6 @@ void detail::RouteTable::buildDynamicRoutes() {
     for (auto& route : routes_) {
         if (route.dynamic) {
             hasDynamicRoutes_[methodIndex(route.method)] = true;
-            collectDynamicParamNames(route);
             insertDynamic(dynamicRoots_[methodIndex(route.method)], route);
         }
     }
@@ -69,49 +78,10 @@ std::size_t detail::RouteTable::dynamicNodeUpperBound(std::string_view path) noe
     }
 }
 
-void detail::RouteTable::collectDynamicParamNames(RouteEntry& route) {
-    route.paramCount = 0;
-    auto path = std::string_view(route.path);
-
-    while (true) {
-        std::string_view segment;
-        std::string_view rest;
-        if (!splitSegment(path, segment, rest)) {
-            return;
-        }
-        if (segment.empty()) {
-            throw std::invalid_argument("dynamic route path must not contain empty segments");
-        }
-        if (segment == "*") {
-            if (!rest.empty()) {
-                throw std::invalid_argument("wildcard route segment must be final");
-            }
-            if (route.paramCount >= route.paramNames.size()) {
-                throw std::invalid_argument("route has too many parameters");
-            }
-            route.paramNames[route.paramCount++] = "*";
-            return;
-        }
-        if (segment.front() == ':') {
-            if (segment.size() == 1) {
-                throw std::invalid_argument("route parameter name must not be empty");
-            }
-            if (route.paramCount >= route.paramNames.size()) {
-                throw std::invalid_argument("route has too many parameters");
-            }
-            route.paramNames[route.paramCount++] = segment.substr(1);
-        }
-
-        if (rest.empty()) {
-            return;
-        }
-        path = rest;
-    }
-}
-
-void detail::RouteTable::insertDynamic(DynamicNode& root, const RouteEntry& route) {
+void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
     auto path = std::string_view(route.path);
     auto* node = &root;
+    route.paramCount = 0;
 
     while (true) {
         std::string_view segment;
@@ -127,6 +97,7 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, const RouteEntry& rout
             if (!rest.empty()) {
                 throw std::invalid_argument("wildcard route segment must be final");
             }
+            appendDynamicParamName(route, "*");
             node->wildcardRoute = &route;
             return;
         }
@@ -134,6 +105,7 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, const RouteEntry& rout
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
+            appendDynamicParamName(route, segment.substr(1));
 
             if (!node->paramChild) {
                 dynamicNodeArena_.emplace_back();

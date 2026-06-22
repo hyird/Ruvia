@@ -4,9 +4,9 @@
 #include "HttpResponseStreamSink.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -28,7 +28,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     WorkerMemory& memory,
     ResponseHeadBuffer& responseHead,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,

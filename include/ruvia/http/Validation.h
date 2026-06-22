@@ -14,16 +14,9 @@
 #include "ruvia/http/Error.h"
 #include "ruvia/http/JsonUtils.h"
 #include "ruvia/http/Model.h"
+#include "ruvia/http/ValidationTypes.h"
 
 namespace ruvia {
-
-enum class ValidationTarget : std::uint8_t {
-    kJson,
-    kForm
-};
-
-inline constexpr ValidationTarget Json = ValidationTarget::kJson;
-inline constexpr ValidationTarget Form = ValidationTarget::kForm;
 
 struct ValidationIssue final {
     explicit ValidationIssue(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
@@ -76,6 +69,21 @@ public:
         for (const auto& issue : issues) {
             issues_.emplace_back(issue.field, issue.code, issue.message, resource_);
         }
+        buildDetailsJson();
+    }
+
+    explicit ValidationError(
+        IssueList&& issues,
+        std::uint16_t statusCode = 400,
+        std::string_view code = "validation_failed",
+        std::string_view message = "request validation failed",
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+          issues_(std::move(issues), resource_),
+          statusCode_(statusCode),
+          code_(code, resource_),
+          message_(message, resource_),
+          detailsJson_(resource_) {
         buildDetailsJson();
     }
 
@@ -237,9 +245,18 @@ public:
     void throwIfInvalid(
         std::uint16_t statusCode = 400,
         std::string_view code = "validation_failed",
-        std::string_view message = "request validation failed") const {
+        std::string_view message = "request validation failed") const & {
         if (!ok()) {
             throw ValidationError(issues_, statusCode, code, message, resource_);
+        }
+    }
+
+    void throwIfInvalid(
+        std::uint16_t statusCode = 400,
+        std::string_view code = "validation_failed",
+        std::string_view message = "request validation failed") && {
+        if (!ok()) {
+            throw ValidationError(std::move(issues_), statusCode, code, message, resource_);
         }
     }
 

@@ -76,6 +76,9 @@ set(RUVIA_APP_SOURCES
 
 set(RUVIA_HTTP_SOURCES
     src/http/Controller.cpp
+    src/http/ContextFileResponse.cpp
+    src/http/ContextRequest.cpp
+    src/http/ContextResponse.cpp
     src/http/Error.cpp
     src/http/HttpBasics.cpp
     src/http/HttpCors.cpp
@@ -86,6 +89,8 @@ set(RUVIA_HTTP_SOURCES
     src/http/HttpResponseHeadersStorage.cpp
     src/http/HttpResponseKnownHeaders.cpp
     src/http/HttpTypes.cpp
+    src/http/MultipartReader.cpp
+    src/http/StaticFiles.cpp
     src/http/parser/HttpChunkParser.cpp
     src/http/parser/HttpHeaderBlockParser.cpp
     src/http/parser/HttpParser.cpp
@@ -109,8 +114,9 @@ set(RUVIA_NET_SOURCES
     src/net/server/HttpFileZeroCopy.cpp
     src/net/server/HttpConnectionState.cpp
     src/net/server/HttpDateCache.cpp
+    src/net/server/HttpResponseHeadBuffer.cpp
+    src/net/server/HttpResponseHead.cpp
     src/net/server/HttpResponseCompression.cpp
-    src/net/server/HttpResponseWriter.cpp
     src/net/server/HttpServerAccept.cpp
     src/net/server/HttpServer.cpp
     src/net/server/HttpServerDocumentRoot.cpp
@@ -321,6 +327,7 @@ install(
 install(
     DIRECTORY
         include/ruvia/app
+        include/ruvia/detail
         include/ruvia/http
         include/ruvia/memory
         include/ruvia/router

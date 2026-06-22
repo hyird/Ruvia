@@ -90,13 +90,13 @@ Task<void> Http2ServerSession<Stream>::writeData(
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::writeFileBody(
     Http2StreamState& stream,
-    const FileBody& fileBody,
+    ResponseFileBody fileBody,
     bool endStream) {
     if (fileBody.length == 0) {
         co_await writeData(stream, {}, {}, endStream);
         co_return;
     }
-    std::ifstream input(fileTokenPath(fileBody.file), std::ios::binary);
+    auto input = openResponseFileInput(fileBody);
     if (!input) {
         co_await writeData(stream, {}, {}, true);
         co_return;
@@ -106,11 +106,12 @@ Task<void> Http2ServerSession<Stream>::writeFileBody(
         co_await writeData(stream, {}, {}, true);
         co_return;
     }
-    ensureFileChunkBuffer(stream.fileChunk);
+    std::pmr::string fileChunk(memory_.allocator<char>());
+    ensureFileChunkBuffer(fileChunk);
     std::uint64_t remaining = fileBody.length;
     while (remaining > 0 && !closing_ && !stream.reset) {
-        const auto next = static_cast<std::size_t>(std::min<std::uint64_t>(stream.fileChunk.size(), remaining));
-        input.read(stream.fileChunk.data(), static_cast<std::streamsize>(next));
+        const auto next = static_cast<std::size_t>(std::min<std::uint64_t>(fileChunk.size(), remaining));
+        input.read(fileChunk.data(), static_cast<std::streamsize>(next));
         const auto read = input.gcount();
         if (read <= 0) {
             co_return;
@@ -118,7 +119,7 @@ Task<void> Http2ServerSession<Stream>::writeFileBody(
         remaining -= static_cast<std::uint64_t>(read);
         co_await writeData(
             stream,
-            std::string_view(stream.fileChunk.data(), static_cast<std::size_t>(read)),
+            std::string_view(fileChunk.data(), static_cast<std::size_t>(read)),
             {},
             endStream && remaining == 0);
     }
@@ -137,18 +138,19 @@ Task<void> Http2ServerSession<Stream>::writeResponse(
     const bool sendBody = bodyAllowed && !skipBody;
     std::uint64_t contentLength = 0;
     if (bodyAllowed) {
-        contentLength = response.hasFileBody() ? response.fileBody().length : response.bodySize();
+        contentLength = responseHasFileBody(response) ? responseFileBody(response).length : responseBodySize(response);
     }
     appendHttp2ResponseHeaders(stream, response, contentLength);
     const bool endHeadersStream = !sendBody || contentLength == 0;
     co_await writeHeaders(stream, stream.responseHeaderBlock, endHeadersStream);
+    http2ReleaseResponseHeaderBlock(stream);
     if (endHeadersStream) {
         co_return;
     }
-    if (response.hasFileBody()) {
-        co_await writeFileBody(stream, response.fileBody(), true);
+    if (responseHasFileBody(response)) {
+        co_await writeFileBody(stream, responseFileBody(response), true);
         co_return;
     }
-    const auto body = response.bodyBytes();
+    const auto body = responseBodyBytes(response);
     co_await writeData(stream, body, {}, true);
 }

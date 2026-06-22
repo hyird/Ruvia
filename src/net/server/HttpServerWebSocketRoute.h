@@ -5,10 +5,10 @@
 #include "../ws/HttpWebSocketConnection.h"
 #include "../ws/HttpWebSocketHandshake.h"
 #include "../ws/HttpWebSocketUtils.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -27,7 +27,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,

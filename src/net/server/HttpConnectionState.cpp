@@ -4,6 +4,7 @@
 #include <cstring>
 #include <memory>
 
+#include "HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrObject.h"
@@ -13,7 +14,6 @@ namespace {
 
 constexpr std::size_t kInitialReadBufferBytes = 8 * 1024;
 constexpr std::size_t kReadBufferShrinkCapacityBytes = 64 * 1024;
-constexpr std::size_t kCompressionScratchRetainedBytes = 256 * 1024;
 // Upper bound on work sets retained per worker. Beyond this, returned work sets
 // free to the upstream (mimalloc) so the free list never grows unbounded under
 // a burst of idle transitions.
@@ -37,12 +37,7 @@ void ConnectionWorkSet::resetForReuse() {
     // still guards against it.
     trimReadBufferStorage(readBuffer, 0);
     responseHead.reset();
-    if (compressionScratch.capacity() > kCompressionScratchRetainedBytes) {
-        std::pmr::string compact(compressionScratch.get_allocator());
-        compressionScratch.swap(compact);
-    } else {
-        compressionScratch.clear();
-    }
+    clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
     // parsed is fully overwritten by the next parseHeaders(); fileChunk/parser
     // carry no cross-request state worth clearing.
 }
@@ -130,7 +125,7 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
     }
 }
 
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpParseResult& parsed) {
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpServerParseResult& parsed) {
     if (parsed.consumedBytes > readBuffer.size()) {
         resizePmrStringForOverwrite(readBuffer, parsed.consumedBytes);
         return;

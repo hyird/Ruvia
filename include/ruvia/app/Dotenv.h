@@ -2,18 +2,23 @@
 
 #include <charconv>
 #include <cstddef>
-#include <filesystem>
-#include <memory_resource>
+#include <memory>
 #include <optional>
-#include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
-#include <vector>
-
-#include "ruvia/memory/MemoryPool.h"
 
 namespace ruvia {
+
+namespace detail {
+
+struct EnvAccess;
+struct EnvState;
+struct EnvStateDeleter final {
+    void operator()(EnvState* state) const noexcept;
+};
+
+}  // namespace detail
 
 struct DotenvOptions {
     bool overrideExisting{false};
@@ -28,6 +33,14 @@ struct DotenvResult {
 
 class Env final {
 public:
+    Env();
+    ~Env();
+
+    Env(const Env&) = delete;
+    Env& operator=(const Env&) = delete;
+    Env(Env&&) = delete;
+    Env& operator=(Env&&) = delete;
+
     [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept;
 
     template <typename T>
@@ -37,17 +50,8 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
-    friend class App;
+    friend struct detail::EnvAccess;
 
-    struct Variable {
-        std::pmr::string name{ProcessMemory::instance().upstreamResource()};
-        std::pmr::string value{ProcessMemory::instance().upstreamResource()};
-    };
-
-    DotenvResult loadFromExecutableDirectory(DotenvOptions options);
-    DotenvResult loadFromFile(const std::filesystem::path& path, DotenvOptions options);
-    std::pmr::vector<Variable>::const_iterator findVariable(std::string_view name) const noexcept;
-    std::pmr::vector<Variable>::iterator findInsertPosition(std::string_view name) noexcept;
     [[nodiscard]] static std::optional<bool> parseBoolValue(std::string_view value) noexcept;
 
     template <typename T>
@@ -59,8 +63,7 @@ private:
     template <typename>
     static constexpr bool kUnsupportedTypedEnvValue = false;
 
-    std::pmr::vector<Variable> variables_{ProcessMemory::instance().upstreamResource()};
-    bool loaded_{false};
+    std::unique_ptr<detail::EnvState, detail::EnvStateDeleter> state_;
 };
 
 template <typename T>

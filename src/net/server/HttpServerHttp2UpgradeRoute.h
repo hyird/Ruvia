@@ -7,10 +7,10 @@
 #include "HttpServerCleartextHttp2.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -39,7 +39,7 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
     HttpClientRegistry& httpClients,
     const HttpServerOptions& options,
     std::string_view remoteAddress,
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     RequestMemory& requestMemory,

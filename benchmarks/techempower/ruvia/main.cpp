@@ -183,7 +183,7 @@ ruvia::HttpResponse exactResponse(
     std::pmr::string& body) {
     ruvia::HttpResponse response(c.resource());
     response.setHeader("Content-Type", contentType);
-    response.setBody(std::move(body));
+    response.setBodyOwned(std::move(body));
     return response;
 }
 

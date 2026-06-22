@@ -3,6 +3,7 @@
 #include "HttpClientInternal.h"
 #include "HttpClientPool.h"
 
+#include <chrono>
 #include <utility>
 
 namespace ruvia::detail {
@@ -52,6 +53,13 @@ bool HttpClientRegistry::hasAnyTimeout() const noexcept {
         if (entry.pool->hasAnyTimeout()) return true;
     }
     return false;
+}
+
+void HttpClientRegistry::scanDeadlines() noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    for (auto& entry : pools_) {
+        entry.pool->scanDeadlines(now);
+    }
 }
 
 HttpClientPool* HttpClientRegistry::get(std::string_view alias) const {

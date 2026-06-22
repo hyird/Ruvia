@@ -27,6 +27,7 @@ public:
     void closeNow() noexcept {}
     [[nodiscard]] bool empty() const noexcept { return true; }
     [[nodiscard]] bool hasAnyTimeout() const noexcept { return false; }
+    void scanDeadlines() noexcept {}
 };
 
 }  // namespace ruvia::detail
@@ -67,6 +68,7 @@ public:
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
     [[nodiscard]] HttpClientPool* get(std::string_view alias = kDefaultHttpClientAlias) const;
+    void scanDeadlines() noexcept;
 
 private:
     struct Entry final {

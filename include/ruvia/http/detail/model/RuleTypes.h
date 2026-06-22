@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/model/PatternMatcher.h"
+#include "ruvia/http/detail/model/PatternCompiler.h"
 
 namespace ruvia::detail::model {
 

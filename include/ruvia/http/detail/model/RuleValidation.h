@@ -2,11 +2,12 @@
 
 #include <cstddef>
 #include <memory_resource>
-#include <regex>
 #include <string>
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/http/detail/model/PatternMatcher.h"
+#include "ruvia/http/detail/model/RegexMatcher.h"
 #include "ruvia/http/detail/model/RuleSupport.h"
 
 namespace ruvia::detail::model {
@@ -97,13 +98,8 @@ void validateRule(
     std::string_view path,
     ValidatorT& validator,
     const RegexRule<Pattern>& rule) {
-    try {
-        const auto actual = modelString(value);
-        const auto& regex = compiledPattern<Pattern>();
-        if (!std::regex_match(actual.begin(), actual.end(), regex)) {
-            validator.add(path, "regex", rule.message);
-        }
-    } catch (const std::regex_error&) {
+    const auto actual = modelString(value);
+    if (!matchRegexPattern<Pattern>(actual)) {
         validator.add(path, "regex", rule.message);
     }
 }

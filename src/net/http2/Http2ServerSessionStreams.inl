@@ -1,6 +1,6 @@
 template <typename Stream>
 Http2StreamState* Http2ServerSession<Stream>::findStream(std::uint32_t streamId) noexcept {
-    return http2FindStream(streams_, streamId);
+    return streams_.find(streamId);
 }
 
 template <typename Stream>
@@ -10,17 +10,12 @@ bool Http2ServerSession<Stream>::isIdleStream(std::uint32_t streamId) const noex
 
 template <typename Stream>
 Http2StreamState* Http2ServerSession<Stream>::createStream(std::uint32_t streamId) {
-    return http2CreateStream(streams_, streamId, memory_.resource(), peerSettings_.initialWindowSize());
-}
-
-template <typename Stream>
-void Http2ServerSession<Stream>::eraseStreamAt(std::size_t index) noexcept {
-    http2EraseStreamAt(streams_, index);
+    return streams_.create(streamId, peerSettings_.initialWindowSize());
 }
 
 template <typename Stream>
 void Http2ServerSession<Stream>::removeStream(std::uint32_t streamId) noexcept {
-    (void)http2RemoveStream(streams_, streamId);
+    (void)streams_.remove(streamId);
 }
 
 template <typename Stream>
@@ -54,25 +49,21 @@ void Http2ServerSession<Stream>::cleanupClosedStreams() noexcept {
     if (dispatchDepth_ != 0) {
         return;
     }
-    for (std::size_t i = 0; i < streams_.size();) {
-        if (!streams_[i].reset) {
-            ++i;
-            continue;
-        }
-        const auto streamId = streams_[i].id;
-        closedStreams_.remember(streamId, streams_[i].closeSource == Http2StreamCloseSource::kNone
+    streams_.removeReset([this](const Http2StreamState& stream) noexcept {
+        const auto streamId = stream.id;
+        closedStreams_.remember(streamId, stream.closeSource == Http2StreamCloseSource::kNone
             ? Http2StreamCloseSource::kLocal
-            : streams_[i].closeSource);
+            : stream.closeSource);
         removeReadyStream(streamId);
-        eraseStreamAt(i);
-    }
+    });
 }
 
 template <typename Stream>
 void Http2ServerSession<Stream>::queueReady(std::uint32_t streamId) {
     if (auto* stream = findStream(streamId); stream != nullptr && !stream->queued && !stream->reset) {
-        stream->queued = true;
-        readyQueue_.push(streamId);
+        if (readyQueue_.push(streamId)) {
+            stream->queued = true;
+        }
     }
 }
 
@@ -163,9 +154,9 @@ void Http2ServerSession<Stream>::resumeBodyWaiter(Http2StreamState& stream) noex
 
 template <typename Stream>
 void Http2ServerSession<Stream>::resumeAllBodyWaiters() noexcept {
-    for (auto& stream : streams_) {
+    streams_.forEach([this](Http2StreamState& stream) noexcept {
         resumeBodyWaiter(stream);
-    }
+    });
 }
 
 template <typename Stream>

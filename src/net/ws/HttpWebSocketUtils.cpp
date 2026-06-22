@@ -1,7 +1,7 @@
 #include "HttpWebSocketUtils.h"
 
-#include "ruvia/http/HeaderUtils.h"
-#include "ruvia/http/HttpParser.h"
+#include "../../http/HttpRequestInternal.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -11,7 +11,7 @@ namespace {
     const HttpRequest& request,
     const HttpRequestFlags& flags,
     std::string_view protocol) noexcept {
-    if (httpHasExactToken(request.header(HttpRequest::KnownHeader::kSecWebSocketProtocol), protocol)) {
+    if (httpHasExactToken(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketProtocol), protocol)) {
         return true;
     }
     if (flags.secWebSocketProtocolCount <= 1) {
@@ -23,7 +23,7 @@ namespace {
 }  // namespace
 
 bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept {
-    if (httpHasExactToken(request.header(HttpRequest::KnownHeader::kSecWebSocketProtocol), protocol)) {
+    if (httpHasExactToken(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketProtocol), protocol)) {
         return true;
     }
     for (const auto& header : request.headers()) {

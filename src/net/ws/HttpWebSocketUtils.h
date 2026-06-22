@@ -9,12 +9,12 @@
 #include <string>
 #include <string_view>
 
+#include "../../http/HttpRequestFlags.h"
 #include "ruvia/http/WebSocket.h"
 
 namespace ruvia {
 
 class HttpRequest;
-struct HttpRequestFlags;
 
 namespace detail {
 
@@ -205,7 +205,7 @@ inline void compactWebSocketReadBuffer(
 
     offset = consumed;
     constexpr std::size_t kCompactThresholdBytes = 16 * 1024;
-    if (consumed < kCompactThresholdBytes && consumed * 2 < buffer.size()) {
+    if (consumed < kCompactThresholdBytes && consumed < buffer.size() - consumed) {
         return;
     }
 

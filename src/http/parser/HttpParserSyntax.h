@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/http/HttpParser.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -39,6 +37,11 @@ enum class RequestHeaderKind {
 
 inline constexpr std::size_t kRequestHeaderKindCount =
     static_cast<std::size_t>(RequestHeaderKind::kUserAgent) + 1;
+
+[[nodiscard]] inline constexpr std::size_t requestHeaderKindKnownSlot(RequestHeaderKind kind) noexcept {
+    const auto index = static_cast<std::size_t>(kind);
+    return index == 0 ? kRequestHeaderKindCount : index - 1;
+}
 
 enum class ChunkSizeLineStatus {
     kOk,

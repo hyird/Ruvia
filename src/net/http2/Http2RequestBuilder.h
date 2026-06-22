@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <memory_resource>
 #include <string_view>
 
+#include "../../http/HttpRequestInternal.h"
 #include "Http2StreamState.h"
 #include "../../http/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpTypes.h"
@@ -11,44 +13,66 @@ namespace ruvia::detail {
 
 class Http2RequestBuilder final {
 public:
+    [[nodiscard]] static HttpMethod requestMethod(const Http2StreamState& stream) noexcept {
+        return stream.extendedConnectWebSocket ? HttpMethod::kGet : stream.method;
+    }
+
+    [[nodiscard]] static std::string_view requestTarget(const Http2StreamState& stream) noexcept {
+        return stream.standardConnect
+            ? std::string_view(stream.authority)
+            : std::string_view(stream.path);
+    }
+
+    [[nodiscard]] static std::string_view requestPath(std::string_view target) noexcept {
+        if (target == "*") {
+            return "*";
+        }
+        const auto query = target.find('?');
+        return query == std::string_view::npos
+            ? target
+            : target.substr(0, query);
+    }
+
+    [[nodiscard]] static std::string_view requestQueryString(std::string_view target) noexcept {
+        if (target == "*") {
+            return {};
+        }
+        const auto query = target.find('?');
+        return query == std::string_view::npos
+            ? std::string_view{}
+            : target.substr(query + 1);
+    }
+
+    [[nodiscard]] static std::string_view requestPath(const Http2StreamState& stream) noexcept {
+        return requestPath(requestTarget(stream));
+    }
+
     static bool build(
         Http2StreamState& stream,
         HttpRequest& request,
         std::string_view remoteAddress,
         std::pmr::memory_resource* resource) noexcept {
-        request.reset();
-        request.setResource(resource);
-        const auto method = stream.extendedConnectWebSocket ? HttpMethod::kGet : parseMethod(stream.method);
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setResource(request, resource);
+        const auto method = requestMethod(stream);
         if (method == HttpMethod::kUnknown) {
             return false;
         }
-        const auto target = stream.standardConnect
-            ? std::string_view(stream.authority)
-            : std::string_view(stream.path);
+        const auto target = requestTarget(stream);
         if (target.empty()) {
             return false;
         }
 
-        request.setMethod(method);
-        request.setHttpVersion("HTTP/2");
-        request.setTarget(target);
-        if (target == "*") {
-            request.setPath("*");
-            request.setQueryString({});
-        } else {
-            const auto query = target.find('?');
-            if (query == std::string_view::npos) {
-                request.setPath(target);
-                request.setQueryString({});
-            } else {
-                request.setPath(target.substr(0, query));
-                request.setQueryString(target.substr(query + 1));
-            }
-        }
-        request.setBody(stream.body);
-        request.setRemoteAddress(remoteAddress);
+        HttpRequestAccess::setMethod(request, method);
+        HttpRequestAccess::setHttpVersion(request, "HTTP/2");
+        HttpRequestAccess::setTarget(request, target);
+        HttpRequestAccess::setPath(request, requestPath(target));
+        HttpRequestAccess::setQueryString(request, requestQueryString(target));
+        HttpRequestAccess::setBody(request, stream.body);
+        HttpRequestAccess::setRemoteAddress(request, remoteAddress);
 
-        for (const auto& header : stream.headers) {
+        for (std::size_t i = 0; i < stream.headers.size(); ++i) {
+            const auto header = stream.headers.at(i);
             if (!addHeader(request, header.name, header.value, header.kind)) {
                 return false;
             }
@@ -72,7 +96,7 @@ private:
         std::string_view name,
         std::string_view value,
         RequestHeaderKind kind) noexcept {
-        if (!request.addHeader(HttpHeaderView{name, value})) {
+        if (!HttpRequestAccess::addHeader(request, HttpHeaderView{name, value})) {
             return false;
         }
         cacheKnownHeader(request, kind, value);
@@ -83,82 +107,7 @@ private:
         HttpRequest& request,
         RequestHeaderKind kind,
         std::string_view value) noexcept {
-        switch (kind) {
-            case RequestHeaderKind::kAccept:
-                request.setAcceptHeader(value);
-                break;
-            case RequestHeaderKind::kAcceptEncoding:
-                request.setAcceptEncodingHeader(value);
-                break;
-            case RequestHeaderKind::kAccessControlRequestHeaders:
-                request.setAccessControlRequestHeadersHeader(value);
-                break;
-            case RequestHeaderKind::kAccessControlRequestMethod:
-                request.setAccessControlRequestMethodHeader(value);
-                break;
-            case RequestHeaderKind::kAuthorization:
-                request.setAuthorizationHeader(value);
-                break;
-            case RequestHeaderKind::kContentLength:
-                request.setContentLengthHeader(value);
-                break;
-            case RequestHeaderKind::kContentType:
-                request.setContentTypeHeader(value);
-                break;
-            case RequestHeaderKind::kCookie:
-                request.setCookieHeader(value);
-                break;
-            case RequestHeaderKind::kHost:
-                request.setHostHeader(value);
-                break;
-            case RequestHeaderKind::kIfMatch:
-                request.setIfMatchHeader(value);
-                break;
-            case RequestHeaderKind::kIfModifiedSince:
-                request.setIfModifiedSinceHeader(value);
-                break;
-            case RequestHeaderKind::kIfNoneMatch:
-                request.setIfNoneMatchHeader(value);
-                break;
-            case RequestHeaderKind::kIfRange:
-                request.setIfRangeHeader(value);
-                break;
-            case RequestHeaderKind::kIfUnmodifiedSince:
-                request.setIfUnmodifiedSinceHeader(value);
-                break;
-            case RequestHeaderKind::kOrigin:
-                request.setOriginHeader(value);
-                break;
-            case RequestHeaderKind::kRange:
-                request.setRangeHeader(value);
-                break;
-            case RequestHeaderKind::kUserAgent:
-                request.setUserAgentHeader(value);
-                break;
-            case RequestHeaderKind::kConnection:
-                request.setConnectionHeader(value);
-                break;
-            case RequestHeaderKind::kExpect:
-                request.setExpectHeader(value);
-                break;
-            case RequestHeaderKind::kSecWebSocketKey:
-                request.setSecWebSocketKeyHeader(value);
-                break;
-            case RequestHeaderKind::kSecWebSocketProtocol:
-                request.setSecWebSocketProtocolHeader(value);
-                break;
-            case RequestHeaderKind::kSecWebSocketVersion:
-                request.setSecWebSocketVersionHeader(value);
-                break;
-            case RequestHeaderKind::kTransferEncoding:
-                request.setTransferEncodingHeader(value);
-                break;
-            case RequestHeaderKind::kUpgrade:
-                request.setUpgradeHeader(value);
-                break;
-            case RequestHeaderKind::kOther:
-                break;
-        }
+        HttpRequestAccess::setKnownHeaderSlot(request, requestHeaderKindKnownSlot(kind), value);
     }
 };
 

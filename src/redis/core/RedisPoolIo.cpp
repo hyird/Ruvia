@@ -116,8 +116,10 @@ Task<RedisValue> RedisPool::readReply(
             co_return hiredisReplyToValue(*reply, 0, config_.maxArrayDepth, detail::resolveRedisResource(resource));
         }
 
-        std::array<char, 8192> buffer;
-        const auto [readEc, bytesRead] = co_await asyncSocketReadSome(connection, buffer, timeout);
+        const auto [readEc, bytesRead] = co_await asyncSocketReadSome(
+            connection,
+            std::span<char>(connection.readBuffer.data(), connection.readBuffer.size()),
+            timeout);
         if (readEc) {
             if (readEc == asio::error::timed_out) {
                 throw RedisError(RedisError::Code::kTimeout, "redis command timed out");
@@ -128,7 +130,7 @@ Task<RedisValue> RedisPool::readReply(
             throw RedisError(RedisError::Code::kProtocolError, "redis reply exceeds configured limit");
         }
         connection.replyBytes += bytesRead;
-        if (redisReaderFeed(connection.reader.get(), buffer.data(), bytesRead) != REDIS_OK) {
+        if (redisReaderFeed(connection.reader.get(), connection.readBuffer.data(), bytesRead) != REDIS_OK) {
             throw RedisError(
                 RedisError::Code::kProtocolError,
                 hiredisReaderError(*connection.reader));

@@ -3,117 +3,91 @@
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ruvia/app/Task.h"
-#include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/memory/MemoryPool.h"
-#include "ruvia/memory/PmrObject.h"
-#include "ruvia/router/Router.h"
+#include "ruvia/http/MiddlewareDescriptor.h"
+#include "ruvia/http/WebSocket.h"
+
+namespace ruvia {
+
+class Router;
+
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
+struct ControllerStoreState;
+struct ControllerStoreStateDeleter final {
+    void operator()(ControllerStoreState* state) const noexcept;
+};
+[[nodiscard]] std::pmr::memory_resource* controllerStoreResource() noexcept;
+
 class ControllerStore final {
 public:
-    ControllerStore() = default;
+    ControllerStore();
+    ~ControllerStore();
+
     ControllerStore(const ControllerStore&) = delete;
     ControllerStore& operator=(const ControllerStore&) = delete;
-    ControllerStore(ControllerStore&&) noexcept = default;
-    ControllerStore& operator=(ControllerStore&&) noexcept = default;
+    ControllerStore(ControllerStore&&) noexcept;
+    ControllerStore& operator=(ControllerStore&&) noexcept;
 
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
-        auto* resource = ProcessMemory::instance().upstreamResource();
-        auto* raw = constructPmrObject<T>(resource, std::forward<Args>(args)...);
+        auto* resource = controllerStoreResource();
+        auto* storage = resource->allocate(sizeof(T), alignof(T));
+        auto* raw = static_cast<T*>(storage);
         try {
-            lifetimes_.emplace_back(raw, &ControllerStore::destroy<T>, resource);
+            std::construct_at(raw, std::forward<Args>(args)...);
         } catch (...) {
-            destroyPmrObject(raw, resource);
+            resource->deallocate(storage, sizeof(T), alignof(T));
+            throw;
+        }
+        try {
+            addLifetime(raw, &ControllerStore::destroy<T>, resource);
+        } catch (...) {
+            std::destroy_at(raw);
+            resource->deallocate(storage, sizeof(T), alignof(T));
             throw;
         }
         return *raw;
     }
 
-    void reserve(std::size_t count) {
-        lifetimes_.reserve(count);
-    }
+    void reserve(std::size_t count);
 
-    [[nodiscard]] std::size_t size() const noexcept {
-        return lifetimes_.size();
-    }
+    [[nodiscard]] std::size_t size() const noexcept;
 
 private:
-    struct Lifetime {
-        void* target{nullptr};
-        void (*destroy)(void*, std::pmr::memory_resource*) noexcept{nullptr};
-        std::pmr::memory_resource* resource{nullptr};
+    using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
 
-        Lifetime() noexcept = default;
-        Lifetime(
-            void* targetValue,
-            void (*destroyValue)(void*, std::pmr::memory_resource*) noexcept,
-            std::pmr::memory_resource* resourceValue) noexcept
-            : target(targetValue),
-              destroy(destroyValue),
-              resource(resourceValue) {}
-        Lifetime(const Lifetime&) = delete;
-        Lifetime& operator=(const Lifetime&) = delete;
-        Lifetime(Lifetime&& other) noexcept
-            : target(std::exchange(other.target, nullptr)),
-              destroy(std::exchange(other.destroy, nullptr)),
-              resource(std::exchange(other.resource, nullptr)) {}
-        Lifetime& operator=(Lifetime&& other) noexcept {
-            if (this == &other) {
-                return *this;
-            }
-            reset();
-            target = std::exchange(other.target, nullptr);
-            destroy = std::exchange(other.destroy, nullptr);
-            resource = std::exchange(other.resource, nullptr);
-            return *this;
-        }
-        ~Lifetime() {
-            reset();
-        }
-
-        void reset() noexcept {
-            if (target != nullptr) {
-                if (destroy != nullptr) {
-                    destroy(target, resource);
-                }
-            }
-            target = nullptr;
-            destroy = nullptr;
-            resource = nullptr;
-        }
-    };
+    void addLifetime(void* target, Destroy destroy, std::pmr::memory_resource* resource);
 
     template <typename T>
     static void destroy(void* target, std::pmr::memory_resource* resource) noexcept {
-        destroyPmrObject(static_cast<T*>(target), resource);
+        if (target == nullptr) {
+            return;
+        }
+        auto* value = static_cast<T*>(target);
+        std::destroy_at(value);
+        resource->deallocate(value, sizeof(T), alignof(T));
     }
 
-    std::pmr::vector<Lifetime> lifetimes_{ProcessMemory::instance().upstreamResource()};
+    std::unique_ptr<ControllerStoreState, ControllerStoreStateDeleter> state_;
 };
 
 struct ControllerRouteHandler final {
+    using Invoke = Task<HttpResponse> (*)(void*, Context&);
+
     void* target{nullptr};
-    Next::Invoke invoke{nullptr};
+    Invoke invoke{nullptr};
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return invoke != nullptr;
-    }
-
-    [[nodiscard]] Task<HttpResponse> operator()(Context& context) const {
-        if (invoke == nullptr) {
-            throw std::logic_error("route handler is empty");
-        }
-        return invoke(target, context);
     }
 };
 
@@ -125,27 +99,6 @@ struct ControllerRouteStreamHandler final {
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return invoke != nullptr;
-    }
-
-    [[nodiscard]] Task<void> operator()(Context& context) const {
-        if (invoke == nullptr) {
-            throw std::logic_error("route stream handler is empty");
-        }
-        return invoke(target, context);
-    }
-};
-
-struct ControllerMiddlewareDescriptor final {
-    using Invoke = Task<HttpResponse> (*)(void*, Context&, const Next&);
-    using Create = void* (*)();
-    using Destroy = void (*)(void*) noexcept;
-
-    Invoke invoke{nullptr};
-    Create create{nullptr};
-    Destroy destroy{nullptr};
-
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr && create != nullptr && destroy != nullptr;
     }
 };
 
@@ -181,7 +134,6 @@ public:
 private:
     struct Impl;
     struct ImplDeleter final {
-        std::pmr::memory_resource* resource{std::pmr::get_default_resource()};
         void operator()(Impl* impl) const noexcept;
     };
     std::unique_ptr<Impl, ImplDeleter> impl_;

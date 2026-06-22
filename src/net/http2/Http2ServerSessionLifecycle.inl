@@ -21,14 +21,10 @@ Http2ServerSession<Stream>::Http2ServerSession(
       scannerEntry_(scannerEntry),
       remoteAddress_(remoteAddress),
       input_(memory.resource()),
-      controlWriteBuffer_(memory.resource()),
       streams_(memory.resource()),
-      closedStreams_(memory.resource()),
-      readyQueue_(memory.resource()),
       writeWaiters_(memory.resource()),
       sendWindowWaiters_(memory.resource()),
       decoder_(memory.resource()) {
-    streams_.reserve(kHttp2LocalMaxConcurrentStreams);
     decoder_.setMaxDynamicTableSize(4096);
 }
 
@@ -47,7 +43,7 @@ Task<void> Http2ServerSession<Stream>::run(std::string_view initialBytes) {
 
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::runUpgraded(
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     std::string_view settingsPayload,
     std::string_view body,
     std::string_view initialBytes) {

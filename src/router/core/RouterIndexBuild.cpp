@@ -1,6 +1,7 @@
 #include "../RouteTable.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <utility>
 
@@ -27,26 +28,31 @@ void detail::RouteTable::buildPerfectHash() {
 
     auto slotCount = nextPowerOfTwo(exactRoutes.size());
     std::pmr::vector<const RouteEntry*> candidate(startupResource());
+    std::pmr::vector<std::uint32_t> candidateMarks(startupResource());
+    std::uint32_t generation = 0;
 
     for (std::size_t attempt = 0; attempt < 16; ++attempt) {
         const auto mask = slotCount - 1;
+        candidate.resize(slotCount);
+        candidateMarks.resize(slotCount);
         for (std::uint64_t seed = 0; seed < 4096; ++seed) {
-            candidate.assign(slotCount, nullptr);
+            ++generation;
             bool collision = false;
 
             for (const auto* route : exactRoutes) {
                 const auto index = static_cast<std::size_t>(routeHash(route->method, route->path, seed)) & mask;
-                if (candidate[index] != nullptr) {
+                if (candidateMarks[index] == generation) {
                     collision = true;
                     break;
                 }
+                candidateMarks[index] = generation;
                 candidate[index] = route;
             }
 
             if (!collision) {
                 exactSlots_.resize(slotCount);
                 for (std::size_t i = 0; i < slotCount; ++i) {
-                    exactSlots_[i].route = candidate[i];
+                    exactSlots_[i].route = candidateMarks[i] == generation ? candidate[i] : nullptr;
                 }
                 exactSeed_ = seed;
                 exactMask_ = mask;

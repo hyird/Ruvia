@@ -4,13 +4,15 @@
 #include <type_traits>
 
 #include "ConnectionScanner.h"
+#include "../../http/HttpRequestInternal.h"
 #include "HttpBufferedResponse.h"
 #include "HttpConnectionState.h"
 #include "HttpResponseWriter.h"
 #include "HttpServerBufferedRoute.h"
 #include "HttpServerSessionUtils.h"
+#include "../../http/HttpParserInternal.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/HttpParser.h"
+#include "ruvia/http/detail/PmrString.h"
 #include "../../router/RouteTable.h"
 #include "../../runtime/AsioAwait.h"
 

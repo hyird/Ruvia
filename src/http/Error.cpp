@@ -1,5 +1,7 @@
 #include "ruvia/http/Error.h"
 
+#include "HttpResponseBodyAccess.h"
+#include "HttpResponseHeaderState.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/JsonUtils.h"
@@ -170,7 +172,7 @@ HttpResponse makeErrorResponse(
     error = normalizeError(error);
 
     HttpResponse response(resource);
-    response.reserveHeaders(closeConnection ? 2 : 1);
+    detail::reserveResponseHeaders(response, closeConnection ? 2 : 1);
     response.setStatus(error.statusCode, error.statusText);
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json; charset=utf-8");
     if (closeConnection) {
@@ -186,7 +188,7 @@ HttpResponse makeErrorResponse(
 
     std::pmr::string body(resource);
     appendErrorBody(body, error);
-    response.setBody(std::move(body));
+    response.setBodyOwned(std::move(body));
     return response;
 }
 

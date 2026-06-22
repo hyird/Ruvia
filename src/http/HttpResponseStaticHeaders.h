@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HttpResponseHeaderAccess.h"
+#include "HttpResponseHeaderBits.h"
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstdint>
@@ -13,12 +15,12 @@ template <std::size_t N>
     const char (&bytes)[N],
     std::uint32_t nameSize,
     std::uint32_t knownBit) noexcept {
-    return HttpResponseHeader{
-        .bytes = bytes,
-        .nameSize = nameSize,
-        .valueSize = static_cast<std::uint32_t>(N - 1 - nameSize),
-        .knownBit = knownBit,
-        .owned = false};
+    return makeResponseHeader(
+        bytes,
+        nameSize,
+        static_cast<std::uint32_t>(N - 1 - nameSize),
+        knownBit,
+        false);
 }
 
 [[nodiscard]] inline std::optional<HttpResponseHeader> builtinStaticResponseHeader(
@@ -48,7 +50,7 @@ template <std::size_t N>
     static constexpr char kAccessControlAllowCredentialsTrue[] = "Access-Control-Allow-Credentialstrue";
 
     switch (knownBit) {
-        case HttpResponse::kKnownHeaderContentType:
+        case kResponseHeaderContentType:
             if (value == "text/plain; charset=utf-8") {
                 return staticResponseHeader(kTextContentType, 12, knownBit);
             }
@@ -86,32 +88,32 @@ template <std::size_t N>
                 return staticResponseHeader(kOctetStreamContentType, 12, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderConnection:
+        case kResponseHeaderConnection:
             if (value == "close") {
                 return staticResponseHeader(kConnectionClose, 10, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderAcceptRanges:
+        case kResponseHeaderAcceptRanges:
             if (value == "bytes") {
                 return staticResponseHeader(kAcceptRangesBytes, 13, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderContentEncoding:
+        case kResponseHeaderContentEncoding:
             if (value == "gzip") {
                 return staticResponseHeader(kContentEncodingGzip, 16, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderTransferEncoding:
+        case kResponseHeaderTransferEncoding:
             if (value == "chunked") {
                 return staticResponseHeader(kTransferEncodingChunked, 17, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderCacheControl:
+        case kResponseHeaderCacheControl:
             if (value == "no-store") {
                 return staticResponseHeader(kCacheControlNoStore, 13, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderVary:
+        case kResponseHeaderVary:
             if (value == "Accept-Encoding") {
                 return staticResponseHeader(kVaryAcceptEncoding, 4, knownBit);
             }
@@ -125,7 +127,7 @@ template <std::size_t N>
                 return staticResponseHeader(kVaryAccessControlRequestMethod, 4, knownBit);
             }
             return std::nullopt;
-        case HttpResponse::kKnownHeaderAccessControlAllowCredentials:
+        case kResponseHeaderAccessControlAllowCredentials:
             if (value == "true") {
                 return staticResponseHeader(kAccessControlAllowCredentialsTrue, 32, knownBit);
             }

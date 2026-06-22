@@ -1,4 +1,5 @@
 #include "Http2Hpack.h"
+#include "ruvia/http/detail/PmrString.h"
 
 #include <algorithm>
 
@@ -8,10 +9,7 @@ HpackDecoder::HpackDecoder(std::pmr::memory_resource* resource)
     : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
       dynamic_(resource_),
       nameScratch_(resource_),
-      valueScratch_(resource_) {
-    dynamic_.reserve(maxDynamicSize_ / entrySize({}, {}));
-    buildHuffmanTree();
-}
+      valueScratch_(resource_) {}
 
 void HpackDecoder::setMaxDynamicTableSize(std::size_t bytes) {
     allowedDynamicSize_ = bytes;
@@ -85,7 +83,21 @@ HpackError HpackDecoder::decodeString(
     return HpackError::kNone;
 }
 
+void HpackDecoder::releaseScratch() {
+    clearPmrStringRetainingSmall(nameScratch_);
+    clearPmrStringRetainingSmall(valueScratch_);
+}
+
 HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, HeaderCallback callback) {
+    struct ScratchReleaseGuard final {
+        HpackDecoder& decoder;
+
+        ~ScratchReleaseGuard() {
+            decoder.releaseScratch();
+        }
+    };
+
+    ScratchReleaseGuard scratchGuard{*this};
     const auto* cursor = reinterpret_cast<const unsigned char*>(block.data());
     const auto* const end = cursor + block.size();
     bool sawHeader = false;

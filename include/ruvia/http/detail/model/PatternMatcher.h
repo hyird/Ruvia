@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <regex>
 #include <string_view>
 
 #include "ruvia/http/detail/model/PatternCompiler.h"
@@ -143,13 +142,6 @@ template <FixedString Pattern>
 [[nodiscard]] constexpr bool matchPatternPlan(std::string_view value) noexcept {
     constexpr auto plan = CompiledPatternPlan<Pattern>::value;
     return matchPatternPlanFrom(plan, Pattern.view(), value, 0, 0);
-}
-
-template <FixedString Pattern>
-[[nodiscard]] const std::regex& compiledPattern() {
-    constexpr auto pattern = Pattern.view();
-    static const std::regex regex(pattern.begin(), pattern.end());
-    return regex;
 }
 
 }  // namespace ruvia::detail::model

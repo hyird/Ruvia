@@ -11,6 +11,7 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 
@@ -44,7 +45,7 @@ public:
 
     static std::pmr::string& scratchThunk(void* target) noexcept {
         auto* self = static_cast<Http2ResponseStreamSink*>(target);
-        self->scratch_.clear();
+        clearPmrStringRetainingSmall(self->scratch_);
         return self->scratch_;
     }
 
@@ -65,6 +66,7 @@ private:
         appendHttp2ResponseHeaders(stream_, streamHead.response, 0, false);
         committed_ = true;
         co_await session_.writeHeaders(stream_, stream_.responseHeaderBlock, bodyForbidden_);
+        http2ReleaseResponseHeaderBlock(stream_);
         if (bodyForbidden_) {
             ended_ = true;
         }

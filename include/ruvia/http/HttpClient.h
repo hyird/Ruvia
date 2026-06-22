@@ -5,11 +5,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/http/HttpLimits.h"
 
 namespace ruvia::detail {
 inline constexpr std::string_view kDefaultHttpClientAlias = "default";
@@ -18,13 +20,19 @@ inline constexpr std::string_view kDefaultHttpClientAlias = "default";
 namespace ruvia {
 
 struct HttpClientConfig {
+    // Host name or unbracketed address only; keep the port in port.
     std::pmr::string host;
+    // Must be non-zero.
     std::uint16_t port{80};
     bool tls{false};
+    // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
+    // Set to 0 to disable the corresponding timeout.
     std::chrono::milliseconds connectTimeout{0};
     std::chrono::milliseconds requestTimeout{0};
     std::chrono::milliseconds acquireTimeout{0};
+    // Set to 0 to disable the response body limit.
+    std::size_t maxResponseBodyBytes{kDefaultMaxBufferedBodyBytes};
 };
 
 struct FetchRequestHeader {
@@ -44,7 +52,8 @@ struct FetchResponseHeader {
 
 struct FetchOptions {
     std::string_view method{"GET"};
-    std::initializer_list<FetchRequestHeader> headers;
+    // Borrowed header table; elements and pointed-to strings must remain valid through co_await.
+    std::span<const FetchRequestHeader> headers{};
     std::string_view body{};  // borrowed; must remain valid through co_await
     std::chrono::milliseconds timeout{0};
 };

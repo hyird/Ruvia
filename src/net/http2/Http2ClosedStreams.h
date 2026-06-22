@@ -1,9 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
-#include <vector>
 
 #include "Http2Frame.h"
 #include "Http2StreamState.h"
@@ -12,23 +11,19 @@ namespace ruvia::detail {
 
 class Http2ClosedStreamHistory final {
 public:
-    explicit Http2ClosedStreamHistory(std::pmr::memory_resource* resource)
-        : records_(resource == nullptr ? std::pmr::get_default_resource() : resource) {
-        records_.reserve(kRecordLimit);
-    }
-
     void remember(std::uint32_t streamId, Http2StreamCloseSource source) {
         if (streamId == 0 || source == Http2StreamCloseSource::kNone) {
             return;
         }
-        for (auto& record : records_) {
+        for (std::size_t i = 0; i < size_; ++i) {
+            auto& record = records_[i];
             if (record.id == streamId) {
                 record.source = source;
                 return;
             }
         }
-        if (records_.size() < kRecordLimit) {
-            records_.push_back(ClosedStreamRecord{streamId, source});
+        if (size_ < kRecordLimit) {
+            records_[size_++] = ClosedStreamRecord{streamId, source};
             return;
         }
         records_[replaceIndex_] = ClosedStreamRecord{streamId, source};
@@ -36,7 +31,8 @@ public:
     }
 
     [[nodiscard]] Http2StreamCloseSource source(std::uint32_t streamId) const noexcept {
-        for (const auto& record : records_) {
+        for (std::size_t i = 0; i < size_; ++i) {
+            const auto& record = records_[i];
             if (record.id == streamId) {
                 return record.source;
             }
@@ -52,7 +48,8 @@ private:
         Http2StreamCloseSource source{Http2StreamCloseSource::kNone};
     };
 
-    std::pmr::vector<ClosedStreamRecord> records_;
+    std::array<ClosedStreamRecord, kRecordLimit> records_{};
+    std::size_t size_{0};
     std::size_t replaceIndex_{0};
 };
 

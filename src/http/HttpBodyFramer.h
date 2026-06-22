@@ -4,8 +4,8 @@
 #include <limits>
 #include <string_view>
 
+#include "parser/HttpChunkParser.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/HttpParser.h"
 
 namespace ruvia::detail {
 

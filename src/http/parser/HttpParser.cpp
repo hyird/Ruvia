@@ -1,22 +1,28 @@
+#include "../HttpParserInternal.h"
+
 #include "ruvia/http/HttpParser.h"
 
+#include "../HttpRequestInternal.h"
+#include "HttpChunkParser.h"
 #include "HttpHeaderBlockParser.h"
 #include "HttpRequestTarget.h"
+#include "ruvia/http/HttpLimits.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 namespace {
 
-using detail::authorityMatchesHost;
-using detail::findHttpHeaderEnd;
-using detail::parseHttpHeaderBlock;
-using detail::parseRequestTarget;
-using detail::ParsedRequestHeaderBlock;
-using detail::RequestHeaderKind;
-using detail::RequestTargetView;
+using ruvia::detail::authorityMatchesHost;
+using ruvia::detail::findHttpHeaderEnd;
+using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::parseHttpHeaderBlock;
+using ruvia::detail::parseRequestTarget;
+using ruvia::detail::ParsedRequestHeaderBlock;
+using ruvia::detail::RequestHeaderKind;
+using ruvia::detail::RequestTargetView;
 
 }  // namespace
 
-void HttpParser::parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset, HttpParseResult& result) noexcept {
+void HttpServerParser::parseRequestHead(std::string_view buffer, std::size_t headerSearchOffset, HttpServerParseResult& result) noexcept {
     // Reset only the scalar fields and the reachable request state; the
     // result object is reused across read iterations and requests, so a
     // full value-initialization here would re-zero the 2KB header table.
@@ -24,18 +30,15 @@ void HttpParser::parseRequestHead(std::string_view buffer, std::size_t headerSea
     result.error = HttpParseError::kNone;
     result.headerBytes = 0;
     result.contentLength = 0;
-    result.decodedBodyBytes = 0;
     result.consumedBytes = 0;
     result.chunked = false;
-    result.transferGzip = false;
-    result.transferDeflate = false;
+    result.acceptsResponseGzip = false;
     result.transferCodings = {};
     result.flags = {};
-    result.bodyPlan = {};
-    result.request.reset();
+    HttpRequestAccess::reset(result.request);
 
     const auto fail = [&result](HttpParseError error) noexcept {
-        result.request.reset();
+        HttpRequestAccess::reset(result.request);
         result.status = HttpParseStatus::kError;
         result.error = error;
     };
@@ -63,14 +66,14 @@ void HttpParser::parseRequestHead(std::string_view buffer, std::size_t headerSea
 
     // parseHttpHeaderBlock scans the method through the token table, so it is
     // already a valid non-empty token here.
-    result.request.setMethod(parseMethod(block.method.bind(buffer)));
+    HttpRequestAccess::setMethod(result.request, parseMethod(block.method.bind(buffer)));
     if (result.request.method() == HttpMethod::kUnknown) {
         return fail(HttpParseError::kUnsupportedMethod);
     }
 
     const auto target = block.target.bind(buffer);
-    result.request.setTarget(target);
-    result.request.setHttpVersion(block.version.bind(buffer));
+    HttpRequestAccess::setTarget(result.request, target);
+    HttpRequestAccess::setHttpVersion(result.request, block.version.bind(buffer));
 
     if (result.request.httpVersion().size() != 8 ||
         result.request.httpVersion().substr(0, 5) != "HTTP/" ||
@@ -91,52 +94,28 @@ void HttpParser::parseRequestHead(std::string_view buffer, std::size_t headerSea
     if (!parseRequestTarget(result.request.method(), target, targetView)) {
         return fail(HttpParseError::kInvalidRequestTarget);
     }
-    result.request.setPath(targetView.path);
-    result.request.setQueryString(targetView.query);
+    HttpRequestAccess::setPath(result.request, targetView.path);
+    HttpRequestAccess::setQueryString(result.request, targetView.query);
 
     const auto knownValue = [&block, buffer](int index) noexcept -> std::string_view {
         return index < 0 ? std::string_view{} : block.headers[static_cast<std::size_t>(index)].value.bind(buffer);
     };
     for (std::size_t i = 0; i < block.headerCount; ++i) {
-        (void)result.request.addHeader(HttpHeaderView{block.headers[i].name.bind(buffer), block.headers[i].value.bind(buffer)});
+        (void)HttpRequestAccess::addHeader(
+            result.request,
+            HttpHeaderView{block.headers[i].name.bind(buffer), block.headers[i].value.bind(buffer)});
     }
-    const auto knownIndex = [&block](RequestHeaderKind kind) noexcept {
-        return block.known.get(kind);
-    };
-    const auto applyKnown = [&result, &knownValue](int index, auto setter) noexcept {
-        if (index >= 0) {
-            (result.request.*setter)(knownValue(index));
+    for (std::size_t kindIndex = 1; kindIndex < detail::kRequestHeaderKindCount; ++kindIndex) {
+        const auto headerIndex = block.known.get(static_cast<RequestHeaderKind>(kindIndex));
+        if (headerIndex >= 0) {
+            HttpRequestAccess::setKnownHeaderSlot(result.request, kindIndex - 1, knownValue(headerIndex));
         }
-    };
-    applyKnown(knownIndex(RequestHeaderKind::kConnection), &HttpRequest::setConnectionHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kHost), &HttpRequest::setHostHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kContentLength), &HttpRequest::setContentLengthHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kTransferEncoding), &HttpRequest::setTransferEncodingHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kExpect), &HttpRequest::setExpectHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kContentType), &HttpRequest::setContentTypeHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kCookie), &HttpRequest::setCookieHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kOrigin), &HttpRequest::setOriginHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kAccessControlRequestMethod), &HttpRequest::setAccessControlRequestMethodHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kAccessControlRequestHeaders), &HttpRequest::setAccessControlRequestHeadersHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kAuthorization), &HttpRequest::setAuthorizationHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kAcceptEncoding), &HttpRequest::setAcceptEncodingHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kAccept), &HttpRequest::setAcceptHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kRange), &HttpRequest::setRangeHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kIfMatch), &HttpRequest::setIfMatchHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kIfNoneMatch), &HttpRequest::setIfNoneMatchHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kIfModifiedSince), &HttpRequest::setIfModifiedSinceHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kIfUnmodifiedSince), &HttpRequest::setIfUnmodifiedSinceHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kIfRange), &HttpRequest::setIfRangeHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kUpgrade), &HttpRequest::setUpgradeHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kSecWebSocketKey), &HttpRequest::setSecWebSocketKeyHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kSecWebSocketVersion), &HttpRequest::setSecWebSocketVersionHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kSecWebSocketProtocol), &HttpRequest::setSecWebSocketProtocolHeader);
-    applyKnown(knownIndex(RequestHeaderKind::kUserAgent), &HttpRequest::setUserAgentHeader);
+    }
 
     if (result.request.httpVersion() == "HTTP/1.1" && !block.flags.hasHost) {
         return fail(HttpParseError::kMissingHost);
     }
-    const auto hostHeaderIndex = knownIndex(RequestHeaderKind::kHost);
+    const auto hostHeaderIndex = block.known.get(RequestHeaderKind::kHost);
     if (!targetView.authority.empty() &&
         hostHeaderIndex >= 0 &&
         !authorityMatchesHost(targetView.authority, knownValue(hostHeaderIndex), targetView.defaultPort)) {
@@ -158,30 +137,23 @@ void HttpParser::parseRequestHead(std::string_view buffer, std::size_t headerSea
     }
 
     result.chunked = block.sawChunked;
-    result.transferGzip = block.transferGzip;
-    result.transferDeflate = block.transferDeflate;
+    result.acceptsResponseGzip = block.gzipEncoding.accepts();
     result.transferCodings = block.transferCodings;
     result.contentLength = block.contentLength;
-    result.flags.transferGzip = block.transferGzip;
-    result.flags.transferDeflate = block.transferDeflate;
-    result.bodyPlan = HttpBodyPlan{
-        .kind = block.sawChunked ? HttpBodyKind::kChunked : (block.contentLength == 0 ? HttpBodyKind::kNone : HttpBodyKind::kContentLength),
-        .contentLength = block.contentLength,
-        .expectContinue = block.flags.expectContinue};
     result.status = HttpParseStatus::kComplete;
 }
 
-void HttpParser::parseHeaders(std::string_view buffer, HttpParseResult& result, std::size_t headerSearchOffset) const noexcept {
+void HttpServerParser::parseHeaders(std::string_view buffer, HttpServerParseResult& result, std::size_t headerSearchOffset) const noexcept {
     parseRequestHead(buffer, headerSearchOffset, result);
 }
 
-void HttpParser::parseBody(std::string_view buffer, HttpParseResult& result) const noexcept {
+void HttpServerParser::parseBody(std::string_view buffer, HttpServerParseResult& result) const noexcept {
     if (result.status != HttpParseStatus::kComplete) {
         return;
     }
 
     const auto fail = [&result](HttpParseError error) noexcept {
-        result.request.reset();
+        HttpRequestAccess::reset(result.request);
         result.status = HttpParseStatus::kError;
         result.error = error;
     };
@@ -189,7 +161,7 @@ void HttpParser::parseBody(std::string_view buffer, HttpParseResult& result) con
         std::size_t headerBytes,
         std::size_t contentLength,
         std::size_t consumedBytes) noexcept {
-        result.request.reset();
+        HttpRequestAccess::reset(result.request);
         result.status = HttpParseStatus::kIncomplete;
         result.headerBytes = headerBytes;
         result.contentLength = contentLength;
@@ -205,7 +177,6 @@ void HttpParser::parseBody(std::string_view buffer, HttpParseResult& result) con
         const auto chunked = scanHttpChunkedBody(buffer.substr(headerBytes));
         switch (chunked.status) {
             case HttpChunkScanStatus::kComplete:
-                result.decodedBodyBytes = chunked.decodedBytes;
                 result.consumedBytes = headerBytes + chunked.consumedBytes;
                 break;
             case HttpChunkScanStatus::kIncomplete:
@@ -227,7 +198,6 @@ void HttpParser::parseBody(std::string_view buffer, HttpParseResult& result) con
         if (contentLength > kMaxHttpBodyBytes || contentLength > kMaxHttpRequestBytes - headerBytes) {
             return fail(HttpParseError::kBodyTooLarge);
         }
-        result.decodedBodyBytes = contentLength;
         result.consumedBytes = headerBytes + contentLength;
     }
     if (result.consumedBytes > kMaxHttpRequestBytes) {
@@ -237,15 +207,30 @@ void HttpParser::parseBody(std::string_view buffer, HttpParseResult& result) con
         return needMore(headerBytes, contentLength, result.consumedBytes);
     }
 
-    result.request.setBody(
+    HttpRequestAccess::setBody(
+        result.request,
         result.chunked ? std::string_view{} : buffer.substr(headerBytes, contentLength));
 }
 
-HttpParseResult HttpParser::parse(std::string_view buffer) const noexcept {
-    HttpParseResult result;
+HttpServerParseResult HttpServerParser::parse(std::string_view buffer) const noexcept {
+    HttpServerParseResult result;
     parseRequestHead(buffer, 0, result);
     parseBody(buffer, result);
     return result;
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+HttpParseResult HttpParser::parse(std::string_view buffer) const noexcept {
+    detail::HttpServerParser parser;
+    auto parsed = parser.parse(buffer);
+    return HttpParseResult{
+        .status = parsed.status,
+        .error = parsed.error,
+        .request = parsed.request,
+        .consumedBytes = parsed.consumedBytes};
 }
 
 }  // namespace ruvia

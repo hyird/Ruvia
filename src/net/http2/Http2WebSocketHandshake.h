@@ -7,8 +7,9 @@
 #include "Http2Hpack.h"
 #include "Http2ResponseHeaders.h"
 #include "Http2StreamState.h"
+#include "../../http/HttpRequestInternal.h"
 #include "../ws/HttpWebSocketUtils.h"
-#include "ruvia/http/HeaderUtils.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -27,7 +28,7 @@ namespace ruvia::detail {
     return stream.extendedConnectWebSocket &&
         stream.webSocketTunnel &&
         !stream.hasContentLength &&
-        request.header(HttpRequest::KnownHeader::kSecWebSocketVersion) == "13";
+        requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
 }
 
 inline void http2EncodeWebSocketHandshakeHeaders(

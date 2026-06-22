@@ -1,15 +1,22 @@
 #pragma once
 
-#include <chrono>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <asio/any_io_executor.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/app/App.h"
-
 namespace ruvia::detail {
+
+struct ConnectionScannerOptions final {
+    std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
+    std::int64_t idleTimeoutMs{0};
+    std::int64_t headerTimeoutMs{0};
+    std::int64_t bodyTimeoutMs{0};
+    std::int64_t writeTimeoutMs{0};
+};
 
 class ConnectionScanner final {
 public:
@@ -51,7 +58,7 @@ public:
         Entry* entry_;
     };
 
-    ConnectionScanner(asio::any_io_executor executor, HttpServerOptions options);
+    ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options);
 
     void start();
     void stop() noexcept;
@@ -61,14 +68,13 @@ public:
     void closeAll() noexcept;
 
 private:
-    [[nodiscard]] std::chrono::milliseconds interval() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
     void schedule();
     void scan() noexcept;
     [[nodiscard]] bool isTimedOut(const Entry& entry, std::int64_t now) const noexcept;
 
     asio::steady_timer timer_;
-    HttpServerOptions options_;
+    ConnectionScannerOptions options_;
     std::int64_t cachedNowMs_{0};
     Entry sentinel_{};
     struct WorkerScanner final {

@@ -4,12 +4,22 @@
 #include <charconv>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline std::size_t unsignedDecimalSize(std::uint64_t value) noexcept {
+    std::size_t size = 1;
+    while (value >= 10) {
+        value /= 10;
+        ++size;
+    }
+    return size;
+}
 
 template <typename NumberT>
 inline void appendFormattedNumber(

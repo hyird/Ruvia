@@ -4,11 +4,12 @@
 
 #include "Http2StreamState.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 
-inline void http2ResetHeaderBlock(Http2StreamState& stream) noexcept {
-    stream.headerBlock.clear();
+inline void http2ResetHeaderBlock(Http2StreamState& stream) {
+    clearPmrStringRetainingSmall(stream.headerBlock);
 }
 
 [[nodiscard]] inline bool http2AppendHeaderBlock(Http2StreamState& stream, std::string_view fragment) {

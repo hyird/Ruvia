@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../http/HttpResponseFileBody.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -8,6 +9,6 @@
 
 namespace ruvia::detail {
 
-Task<void> writeFileZeroCopy(asio::ip::tcp::socket& socket, const FileBody& file, std::error_code& ec);
+Task<void> writeFileZeroCopy(asio::ip::tcp::socket& socket, ResponseFileBody file, std::error_code& ec);
 
 }  // namespace ruvia::detail

@@ -1,68 +1,93 @@
-#include "ruvia/app/App.h"
+#include "AppConfigMutation.h"
+#include "ruvia/detail/NativePath.h"
+#include "../http/HttpCorsConfigValidation.h"
 
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
-#include "AppConfigGuards.h"
-
 namespace ruvia {
+namespace {
+
+void assignTlsFileName(std::pmr::string& output, const std::filesystem::path& path) {
+    if constexpr (std::is_same_v<detail::NativePathChar, char>) {
+        const auto native = detail::nativePathView(path);
+        output.assign(native.data(), native.size());
+    } else {
+        const auto name = path.string();
+        output.assign(name.data(), name.size());
+    }
+}
+
+}  // namespace
 
 App& App::useTls(TlsConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot configure TLS while app is running");
-    if (config.certificateChainFile.empty()) {
-        throw std::invalid_argument("TLS certificate chain file must not be empty");
-    }
-    if (config.privateKeyFile.empty()) {
-        throw std::invalid_argument("TLS private key file must not be empty");
-    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot configure TLS while app is running",
+        [&config](detail::AppState& state) {
+            if (config.certificateChainFile.empty()) {
+                throw std::invalid_argument("TLS certificate chain file must not be empty");
+            }
+            if (config.privateKeyFile.empty()) {
+                throw std::invalid_argument("TLS private key file must not be empty");
+            }
 
-    options_.tls.enabled = true;
-    options_.tls.certificateChainFile = std::move(config.certificateChainFile);
-    options_.tls.privateKeyFile = std::move(config.privateKeyFile);
-    options_.tls.privateKeyPassword = std::move(config.privateKeyPassword);
-    options_.tls.verifyFile = std::move(config.verifyFile);
-    return *this;
+            state.options.tls.enabled = true;
+            assignTlsFileName(state.options.tls.certificateChainFile, config.certificateChainFile);
+            assignTlsFileName(state.options.tls.privateKeyFile, config.privateKeyFile);
+            state.options.tls.privateKeyPassword = std::move(config.privateKeyPassword);
+            assignTlsFileName(state.options.tls.verifyFile, config.verifyFile);
+        });
 }
 
 App& App::setCompression(CompressionConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot change compression config while app is running");
-
-    options_.compression.enabled = config.enabled;
-    options_.compression.minBytes = config.minBytes;
-    return *this;
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change compression config while app is running",
+        [config](detail::AppState& state) {
+            state.options.compression.enabled = config.enabled;
+            state.options.compression.minBytes = config.minBytes;
+        });
 }
 
 App& App::setCors(CorsConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot change CORS config while app is running");
-    if (config.enabled && config.allowOrigin.empty()) {
-        throw std::invalid_argument("CORS allowOrigin must not be empty when CORS is enabled");
-    }
-    detail::ensureNonNegativeDuration(config.maxAge, "CORS maxAge must not be negative");
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change CORS config while app is running",
+        [&config](detail::AppState& state) {
+            detail::validateCorsConfig(config);
 
-    options_.cors.enabled = config.enabled;
-    options_.cors.allowOrigin = std::move(config.allowOrigin);
-    options_.cors.allowHeaders = std::move(config.allowHeaders);
-    options_.cors.exposeHeaders = std::move(config.exposeHeaders);
-    options_.cors.maxAge = config.maxAge;
-    options_.cors.allowCredentials = config.allowCredentials;
-    return *this;
+            state.options.cors.enabled = config.enabled;
+            state.options.cors.allowOrigin = std::move(config.allowOrigin);
+            state.options.cors.allowHeaders = std::move(config.allowHeaders);
+            state.options.cors.exposeHeaders = std::move(config.exposeHeaders);
+            state.options.cors.maxAge = config.maxAge;
+            state.options.cors.allowCredentials = config.allowCredentials;
+        });
 }
 
 App& App::setDocumentRoot(DocumentRootConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot change document root while app is running");
-    if (config.root.empty()) {
-        throw std::invalid_argument("document root must not be empty");
-    }
-    if (config.staticOptions.indexFile.empty()) {
-        config.staticOptions.indexFile = "index.html";
-    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change document root while app is running",
+        [&config](detail::AppState& state) {
+            if (config.root.empty()) {
+                throw std::invalid_argument("document root must not be empty");
+            }
+            if (config.staticOptions.indexFile.empty()) {
+                config.staticOptions.indexFile = "index.html";
+            }
 
-    documentRootConfig_ = std::move(config);
-    return *this;
+            auto& documentRootConfig =
+                state.documentRootConfig.emplace(ProcessMemory::instance().upstreamResource());
+            detail::assignNativePath(documentRootConfig.root, config.root);
+            documentRootConfig.staticOptions = std::move(config.staticOptions);
+        });
 }
 
 App& App::setDocumentRoot(const std::filesystem::path& root) {
@@ -72,11 +97,13 @@ App& App::setDocumentRoot(const std::filesystem::path& root) {
 }
 
 App& App::setErrorHandler(HttpErrorHandler handler) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot change error handler while app is running");
-
-    errorHandler_ = handler;
-    return *this;
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change error handler while app is running",
+        [handler](detail::AppState& state) {
+            state.errorHandler = handler;
+        });
 }
 
 }  // namespace ruvia

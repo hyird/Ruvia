@@ -14,8 +14,9 @@ Task<bool> Http2ServerSession<Stream>::handleHeaderDecodeFailure(
 
 template <typename Stream>
 HeaderDecodeStatus Http2ServerSession<Stream>::decodeHeaderBlock(Http2StreamState& stream) {
-    const auto result = decoder_.decode(stream.headerBlock, &stream, [](void* target, std::string_view name, std::string_view value) {
-        return http2OnDecodedInitialHeader(*static_cast<Http2StreamState*>(target), name, value);
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
+        return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
     });
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
@@ -25,15 +26,15 @@ HeaderDecodeStatus Http2ServerSession<Stream>::decodeHeaderBlock(Http2StreamStat
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.hasProtocol) {
-        if (stream.method != "CONNECT" ||
-            stream.protocol != "websocket" ||
+        if (stream.method != HttpMethod::kConnect ||
+            !stream.protocolIsWebSocket ||
             !stream.hasScheme ||
             !stream.hasPath ||
             !stream.hasAuthority) {
             return HeaderDecodeStatus::kProtocolError;
         }
         stream.extendedConnectWebSocket = true;
-    } else if (stream.method == "CONNECT") {
+    } else if (stream.method == HttpMethod::kConnect) {
         if (!stream.hasAuthority || stream.hasScheme || stream.hasPath) {
             return HeaderDecodeStatus::kProtocolError;
         }
@@ -51,8 +52,9 @@ HeaderDecodeStatus Http2ServerSession<Stream>::decodeHeaderBlock(Http2StreamStat
 
 template <typename Stream>
 HeaderDecodeStatus Http2ServerSession<Stream>::finishTrailerBlock(Http2StreamState& stream) {
-    const auto result = decoder_.decode(stream.headerBlock, &stream, [](void* target, std::string_view name, std::string_view value) {
-        return http2OnDecodedTrailer(*static_cast<Http2StreamState*>(target), name, value);
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
+        return http2OnDecodedTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
     });
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
@@ -86,13 +88,14 @@ void Http2ServerSession<Stream>::queueInitialStreamIfReady(Http2StreamState& str
 
 template <typename Stream>
 void Http2ServerSession<Stream>::resolveStreamRoute(Http2StreamState& stream) noexcept {
-    HttpRequest request;
-    if (!Http2RequestBuilder::build(stream, request, remoteAddress_, memory_.resource())) {
+    const auto method = Http2RequestBuilder::requestMethod(stream);
+    const auto path = Http2RequestBuilder::requestPath(stream);
+    if (method == HttpMethod::kUnknown || path.empty()) {
         stream.routeResolution = {};
         stream.bodyMode = RequestBodyMode::kBuffered;
         return;
     }
-    stream.routeResolution = routes_.resolve(request);
+    stream.routeResolution = routes_.resolve(method, path);
     stream.bodyMode = stream.routeResolution.bodyMode;
     if (stream.extendedConnectWebSocket &&
         stream.routeResolution.found() &&

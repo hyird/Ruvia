@@ -1,4 +1,4 @@
-#include "ruvia/http/HttpParser.h"
+#include "ruvia/http/HttpParseTypes.h"
 
 namespace ruvia {
 

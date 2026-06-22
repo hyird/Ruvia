@@ -63,12 +63,22 @@ std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view p
 }
 
 template <typename DescriptorRange>
-[[nodiscard]] std::pmr::vector<RouteMiddleware> makeRouteMiddlewares(const DescriptorRange& descriptors) {
-    std::pmr::vector<RouteMiddleware> middlewares(startupResource());
-    middlewares.reserve(descriptors.size());
+void appendRouteMiddlewares(
+    std::pmr::vector<RouteMiddleware>& middlewares,
+    const DescriptorRange& descriptors) {
     for (const auto& descriptor : descriptors) {
         middlewares.push_back(makeRouteMiddleware(descriptor));
     }
+}
+
+template <typename BaseRange, typename ExtraRange>
+[[nodiscard]] std::pmr::vector<RouteMiddleware> makeRouteMiddlewares(
+    const BaseRange& base,
+    const ExtraRange& extra) {
+    std::pmr::vector<RouteMiddleware> middlewares(startupResource());
+    middlewares.reserve(base.size() + extra.size());
+    appendRouteMiddlewares(middlewares, base);
+    appendRouteMiddlewares(middlewares, extra);
     return middlewares;
 }
 
@@ -85,7 +95,7 @@ template <typename DescriptorRange>
 }  // namespace
 
 void detail::ControllerRouteBuilder::ImplDeleter::operator()(Impl* impl) const noexcept {
-    destroyPmrObject(impl, resource == nullptr ? startupResource() : resource);
+    destroyPmrObject(impl, startupResource());
 }
 
 void detail::RouterImpl::registerRoute(
@@ -144,7 +154,7 @@ void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
     }
     validateRouteTarget(route.method, route.path);
     route.dynamic = RouteTable::isDynamicPath(route.path);
-    route.middlewares = materializeMiddlewares(std::move(route.middlewares));
+    materializeMiddlewares(route.middlewares);
     pendingRoutes_.push_back(std::move(route));
 }
 
@@ -157,10 +167,10 @@ void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddleware
     }
 
     for (auto& route : pendingRoutes_) {
-        auto globalFrames = materializeMiddlewares(makeRouteMiddlewares(middlewares));
         std::pmr::vector<RouteMiddleware> merged(startupResource());
-        merged.reserve(globalFrames.size() + route.middlewares.size());
-        merged.insert(merged.end(), globalFrames.begin(), globalFrames.end());
+        merged.reserve(middlewares.size() + route.middlewares.size());
+        appendRouteMiddlewares(merged, middlewares);
+        materializeMiddlewares(merged);
         merged.insert(merged.end(), route.middlewares.begin(), route.middlewares.end());
         route.middlewares = std::move(merged);
     }
@@ -175,8 +185,7 @@ detail::ControllerRouteBuilder::ControllerRouteBuilder(
               startupResource(),
               router,
               joinControllerPaths({}, prefix),
-              std::move(middlewares)),
-          ImplDeleter{startupResource()}) {}
+              std::move(middlewares))) {}
 
 detail::ControllerRouteBuilder::ControllerRouteBuilder(ControllerRouteBuilder&&) noexcept = default;
 
@@ -190,13 +199,12 @@ void detail::ControllerRouteBuilder::registerRoute(
     ControllerRouteHandler handler,
     RequestBodyMode bodyMode,
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
-    auto merged = mergeControllerMiddlewares(impl_->middlewares, std::move(middlewares));
     RouterImpl::from(*impl_->router).registerRoute(
         method,
         joinControllerPaths(impl_->prefix, path),
         makeRouteHandler(handler),
         bodyMode,
-        makeRouteMiddlewares(std::move(merged)));
+        makeRouteMiddlewares(impl_->middlewares, middlewares));
 }
 
 void detail::ControllerRouteBuilder::registerStreamRoute(
@@ -206,13 +214,12 @@ void detail::ControllerRouteBuilder::registerStreamRoute(
     ResponseBodyMode responseMode,
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
     WebSocketRouteOptions webSocketOptions) const {
-    auto merged = mergeControllerMiddlewares(impl_->middlewares, std::move(middlewares));
     RouterImpl::from(*impl_->router).registerStreamRoute(
         method,
         joinControllerPaths(impl_->prefix, path),
         makeRouteStreamHandler(handler),
         responseMode,
-        makeRouteMiddlewares(std::move(merged)),
+        makeRouteMiddlewares(impl_->middlewares, middlewares),
         webSocketOptions);
 }
 

@@ -2,8 +2,9 @@
 
 #include "../http2/Http2Frame.h"
 #include "../http2/Http2ServerSession.h"
-#include "ruvia/app/Task.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../runtime/AsioAwait.h"
+#include "ruvia/app/Task.h"
 
 #include <asio/buffer.hpp>
 #include <asio/ip/tcp.hpp>
@@ -142,7 +143,7 @@ Task<void> runUpgradedHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     std::string_view settingsPayload,
     std::string_view body,
     std::string_view initialBytes) {

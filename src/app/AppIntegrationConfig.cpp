@@ -1,11 +1,39 @@
-#include "ruvia/app/App.h"
+#include "AppConfigMutation.h"
 
+#ifdef RUVIA_ENABLE_MARIADB
+#include "../db/core/DbConfigValidation.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "../redis/core/RedisConfigValidation.h"
+#endif
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+#include "../http/client/HttpClientConfigValidation.h"
+#endif
+
+#include <memory_resource>
 #include <stdexcept>
 #include <utility>
 
-#include "AppConfigGuards.h"
-
 namespace ruvia {
+namespace {
+
+template <typename Definition, typename Config, typename MakeDefinition>
+void upsertDefinition(
+    std::pmr::vector<Definition>& definitions,
+    std::string_view alias,
+    Config& config,
+    MakeDefinition&& makeDefinition) {
+    for (auto& definition : definitions) {
+        if (std::string_view(definition.alias) == alias) {
+            definition.config = std::move(config);
+            return;
+        }
+    }
+
+    definitions.push_back(std::forward<MakeDefinition>(makeDefinition)(alias, std::move(config)));
+}
+
+}  // namespace
 
 #ifdef RUVIA_ENABLE_MARIADB
 App& App::useDb(DbConfig config) {
@@ -13,22 +41,27 @@ App& App::useDb(DbConfig config) {
 }
 
 App& App::useDb(std::string_view alias, DbConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot configure database while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("database alias must not be empty");
-    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot configure database while app is running",
+        [&](detail::AppState& state) {
+            if (alias.empty()) {
+                throw std::invalid_argument("database alias must not be empty");
+            }
+            detail::validateDbConfig(config);
 
-    for (auto& definition : databases_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    std::pmr::string storedAlias(alias, ProcessMemory::instance().upstreamResource());
-    databases_.push_back(detail::DbDefinition{std::move(storedAlias), std::move(config)});
-    return *this;
+            upsertDefinition(
+                state.databases,
+                alias,
+                config,
+                [](std::string_view storedAlias, DbConfig&& storedConfig) {
+                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    return detail::DbDefinition{
+                        std::pmr::string(storedAlias, resource),
+                        std::move(storedConfig)};
+                });
+        });
 }
 #endif
 
@@ -38,22 +71,27 @@ App& App::useRedis(RedisConfig config) {
 }
 
 App& App::useRedis(std::string_view alias, RedisConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot configure redis while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("redis alias must not be empty");
-    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot configure redis while app is running",
+        [&](detail::AppState& state) {
+            if (alias.empty()) {
+                throw std::invalid_argument("redis alias must not be empty");
+            }
+            detail::validateRedisConfig(config);
 
-    for (auto& definition : redis_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    std::pmr::string storedAlias(alias, ProcessMemory::instance().upstreamResource());
-    redis_.push_back(detail::RedisDefinition{std::move(storedAlias), std::move(config)});
-    return *this;
+            upsertDefinition(
+                state.redis,
+                alias,
+                config,
+                [](std::string_view storedAlias, RedisConfig&& storedConfig) {
+                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    return detail::RedisDefinition{
+                        std::pmr::string(storedAlias, resource),
+                        std::move(storedConfig)};
+                });
+        });
 }
 #endif
 
@@ -63,27 +101,27 @@ App& App::useHttpClient(HttpClientConfig config) {
 }
 
 App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
-    std::lock_guard lock(mutex_);
-    detail::ensureAppNotRunning(running_, "cannot configure http client while app is running");
-    if (alias.empty()) {
-        throw std::invalid_argument("http client alias must not be empty");
-    }
-    if (config.host.empty()) {
-        throw std::invalid_argument("http client host must not be empty");
-    }
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot configure http client while app is running",
+        [&](detail::AppState& state) {
+            if (alias.empty()) {
+                throw std::invalid_argument("http client alias must not be empty");
+            }
+            detail::validateHttpClientConfig(config);
 
-    for (auto& definition : httpClients_) {
-        if (std::string_view(definition.alias) == alias) {
-            definition.config = std::move(config);
-            return *this;
-        }
-    }
-
-    auto* resource = ProcessMemory::instance().upstreamResource();
-    httpClients_.push_back(detail::HttpClientDefinition{
-        std::pmr::string(alias, resource),
-        std::move(config)});
-    return *this;
+            upsertDefinition(
+                state.httpClients,
+                alias,
+                config,
+                [](std::string_view storedAlias, HttpClientConfig&& storedConfig) {
+                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    return detail::HttpClientDefinition{
+                        std::pmr::string(storedAlias, resource),
+                        std::move(storedConfig)};
+                });
+        });
 }
 #endif
 

@@ -1,7 +1,7 @@
 #pragma once
 
+#include "../../http/HttpTransferCoding.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/http/HttpParser.h"
 
 #include <cstddef>
 #include <memory_resource>

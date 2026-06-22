@@ -38,6 +38,7 @@ public:
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
+#include <array>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -62,6 +63,8 @@ struct RedisCommandArgsView final {
     std::span<const std::pmr::string> args;
 };
 
+inline constexpr std::size_t kRedisReadBufferBytes = 8192;
+
 class RedisPool final {
 public:
     RedisPool(
@@ -77,14 +80,8 @@ public:
     void closeNow() noexcept;
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    Task<RedisValue> execute(std::span<const std::string_view> args, std::pmr::memory_resource* resource);
-    Task<RedisValue> execute(std::span<const std::pmr::string> args, std::pmr::memory_resource* resource);
     Task<RedisValue> executeOwned(
         std::pmr::vector<std::pmr::string> args,
-        std::pmr::memory_resource* resource);
-    Task<RedisValue> executeWithTimeout(
-        std::span<const std::string_view> args,
-        std::chrono::milliseconds timeout,
         std::pmr::memory_resource* resource);
     Task<RedisValue> executeWithTimeout(
         std::span<const std::pmr::string> args,
@@ -124,6 +121,7 @@ private:
         asio::ip::tcp::socket socket;
         asio::ip::tcp::resolver resolver;
         std::pmr::string writeBuffer;
+        std::array<char, kRedisReadBufferBytes> readBuffer;
         std::unique_ptr<redisReader, RedisReaderDeleter> reader;
         std::size_t replyBytes{0};
         std::chrono::steady_clock::time_point deadline{};

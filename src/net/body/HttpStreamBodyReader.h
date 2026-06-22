@@ -10,7 +10,6 @@
 #include "HttpTransferCodingDecoder.h"
 #include "../../http/HttpBodyFramer.h"
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpParser.h"
 
 namespace ruvia::detail {
 

@@ -83,7 +83,7 @@ private:
         body.append("remote=");
         body.append(c.remoteAddress());
         body.append("\nuser-agent=");
-        body.append(c.header(ruvia::HttpRequest::KnownHeader::kUserAgent));
+        body.append(c.header("User-Agent"));
         body.append("\npage=");
         if (const auto page = c.query("page").toUInt32()) {
             char buffer[16]{};

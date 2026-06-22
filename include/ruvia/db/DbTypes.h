@@ -15,12 +15,16 @@ namespace ruvia {
 class RequestMemory;
 
 struct DbConfig {
+    // Host name or unbracketed address only; keep the port in port.
     std::pmr::string host{"127.0.0.1"};
+    // Must be non-zero.
     std::uint16_t port{3306};
     std::pmr::string username;
     std::pmr::string password;
     std::pmr::string database;
+    // Number of connections per worker; must be greater than zero.
     std::size_t poolSize{4};
+    // Set to 0 to disable the corresponding timeout.
     std::chrono::milliseconds connectTimeout{0};
     std::chrono::milliseconds readTimeout{0};
     std::chrono::milliseconds writeTimeout{0};

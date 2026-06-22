@@ -1,6 +1,7 @@
 #include "HttpParserSyntax.h"
 
-#include "ruvia/http/HeaderUtils.h"
+#include "../HeaderTokenUtils.h"
+#include "ruvia/http/HttpCommon.h"
 
 #include <limits>
 

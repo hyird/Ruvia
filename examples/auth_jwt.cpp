@@ -35,7 +35,7 @@ ruvia::JwtVerifyOptions verifyOptions() {
 class JwtAuthMiddleware final : public ruvia::Middleware<JwtAuthMiddleware> {
 public:
     ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        const auto token = ruvia::jwtBearerToken(c.header(ruvia::HttpRequest::KnownHeader::kAuthorization));
+        const auto token = ruvia::jwtBearerToken(c.header("Authorization"));
         if (!token) {
             co_return c.error(401, "missing_token", "missing bearer token");
         }

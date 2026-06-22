@@ -6,13 +6,27 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "Http2OffsetVector.h"
 #include "Http2StreamState.h"
+#include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 
+inline constexpr std::size_t kHttp2RetainedBodyChunkVectorCapacity = 16;
+
+[[nodiscard]] inline bool http2HasOverflowQueuedStreamBodyChunk(const Http2StreamState& stream) noexcept {
+    return stream.bodyChunkOffset < stream.bodyChunks.size();
+}
+
 inline void http2EnqueueStreamBodyChunk(Http2StreamState& stream, std::string_view data) {
     if (data.empty()) {
+        return;
+    }
+    if (!stream.hasQueuedBodyChunk && !http2HasOverflowQueuedStreamBodyChunk(stream)) {
+        stream.queuedBodyChunk.assign(data.data(), data.size());
+        stream.hasQueuedBodyChunk = true;
         return;
     }
     auto& chunk = stream.bodyChunks.emplace_back();
@@ -23,32 +37,28 @@ inline void http2EnqueueOwnedStreamBodyChunk(Http2StreamState& stream, std::pmr:
     if (body.empty()) {
         return;
     }
+    if (!stream.hasQueuedBodyChunk && !http2HasOverflowQueuedStreamBodyChunk(stream)) {
+        stream.queuedBodyChunk = std::move(body);
+        stream.hasQueuedBodyChunk = true;
+        body.clear();
+        return;
+    }
     stream.bodyChunks.push_back(std::move(body));
     body.clear();
 }
 
 [[nodiscard]] inline bool http2HasQueuedStreamBodyChunk(const Http2StreamState& stream) noexcept {
-    return stream.bodyChunkOffset < stream.bodyChunks.size();
+    return stream.hasQueuedBodyChunk || http2HasOverflowQueuedStreamBodyChunk(stream);
 }
 
 inline void http2CompactBodyChunks(Http2StreamState& stream) {
-    if (stream.bodyChunkOffset == 0) {
+    http2CompactMovableOffsetVector(stream.bodyChunks, stream.bodyChunkOffset, 16);
+    if (!stream.bodyChunks.empty() || stream.bodyChunks.capacity() <= kHttp2RetainedBodyChunkVectorCapacity) {
         return;
     }
-    if (stream.bodyChunkOffset == stream.bodyChunks.size()) {
-        stream.bodyChunks.clear();
-        stream.bodyChunkOffset = 0;
-        return;
-    }
-    if (stream.bodyChunkOffset < 16 && stream.bodyChunkOffset * 2 < stream.bodyChunks.size()) {
-        return;
-    }
-    const auto remaining = stream.bodyChunks.size() - stream.bodyChunkOffset;
-    for (std::size_t i = 0; i < remaining; ++i) {
-        stream.bodyChunks[i] = std::move(stream.bodyChunks[stream.bodyChunkOffset + i]);
-    }
-    stream.bodyChunks.resize(remaining);
-    stream.bodyChunkOffset = 0;
+
+    std::pmr::vector<std::pmr::string> empty(stream.bodyChunks.get_allocator());
+    stream.bodyChunks.swap(empty);
 }
 
 [[nodiscard]] inline bool http2StreamBodyReadReady(const Http2StreamState* stream, bool closing) noexcept {
@@ -60,8 +70,14 @@ inline void http2CompactBodyChunks(Http2StreamState& stream) {
 }
 
 [[nodiscard]] inline std::string_view http2PopStreamBodyChunk(Http2StreamState& stream) {
-    stream.activeBodyChunk.clear();
-    if (!http2HasQueuedStreamBodyChunk(stream)) {
+    clearPmrStringRetainingSmall(stream.activeBodyChunk);
+    if (stream.hasQueuedBodyChunk) {
+        stream.activeBodyChunk.swap(stream.queuedBodyChunk);
+        clearPmrStringRetainingSmall(stream.queuedBodyChunk);
+        stream.hasQueuedBodyChunk = false;
+        return std::string_view(stream.activeBodyChunk);
+    }
+    if (!http2HasOverflowQueuedStreamBodyChunk(stream)) {
         return {};
     }
     stream.activeBodyChunk = std::move(stream.bodyChunks[stream.bodyChunkOffset++]);

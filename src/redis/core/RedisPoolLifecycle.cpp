@@ -1,9 +1,9 @@
 #include "../RedisInternal.h"
+#include "RedisConfigValidation.h"
 #include "RedisUtils.h"
 
 #include <hiredis/hiredis.h>
 
-#include <algorithm>
 #include <system_error>
 #include <utility>
 
@@ -32,7 +32,8 @@ RedisPool::RedisPool(asio::io_context& ioContext, RedisConfig config, std::pmr::
       resource_(detail::resolveRedisResource(resource)),
       connections_(resource_),
       free_(resource_) {
-    const auto poolSize = std::max<std::size_t>(1, config_.poolSizePerWorker);
+    validateRedisConfig(config_);
+    const auto poolSize = config_.poolSizePerWorker;
     connections_.reserve(poolSize);
     free_.reserve(poolSize);
     for (std::size_t i = 0; i < poolSize; ++i) {

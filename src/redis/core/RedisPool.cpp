@@ -14,8 +14,8 @@ namespace ruvia {
 namespace detail {
 namespace {
 
-template <typename ArgT>
-[[nodiscard]] std::span<const ArgT> redisArgSpan(std::span<const ArgT> args) noexcept {
+[[nodiscard]] std::span<const std::pmr::string> redisArgSpan(
+    std::span<const std::pmr::string> args) noexcept {
     return args;
 }
 
@@ -25,14 +25,6 @@ template <typename ArgT>
 }
 
 }  // namespace
-
-Task<RedisValue> RedisPool::execute(std::span<const std::string_view> args, std::pmr::memory_resource* resource) {
-    return executeWithTimeout(args, config_.commandTimeout, resource);
-}
-
-Task<RedisValue> RedisPool::execute(std::span<const std::pmr::string> args, std::pmr::memory_resource* resource) {
-    return executeWithTimeout(args, config_.commandTimeout, resource);
-}
 
 Task<RedisValue> RedisPool::executeOwned(
     std::pmr::vector<std::pmr::string> args,
@@ -70,13 +62,6 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
         guard.discard();
         throw;
     }
-}
-
-Task<RedisValue> RedisPool::executeWithTimeout(
-    std::span<const std::string_view> args,
-    std::chrono::milliseconds timeout,
-    std::pmr::memory_resource* resource) {
-    return executeWithTimeoutImpl(args, timeout, resource);
 }
 
 Task<RedisValue> RedisPool::executeWithTimeout(

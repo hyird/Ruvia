@@ -2,11 +2,11 @@
 
 #include "../body/HttpRequestBody.h"
 #include "ConnectionScanner.h"
-#include "HttpServerRequestState.h"
-#include "HttpServerResponseState.h"
+#include "HttpServerBodyRouteCompletion.h"
+#include "../../http/RequestBodyLoader.h"
+#include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -24,7 +24,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -37,11 +37,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
     std::size_t& requestCount,
     std::size_t& consumedBytes,
     bool& bufferAlreadyCompacted) {
-    consumedBytes = parsed.headerBytes;
-    keepAlive = shouldKeepAlive(parsed);
-    const auto bodyAndPipeline = std::string_view(
-        readBuffer.data() + parsed.headerBytes,
-        usedBytes - parsed.headerBytes);
+    const auto bodyAndPipeline = beginHttpBodyRoute(parsed, readBuffer, usedBytes, keepAlive, consumedBytes);
 
     std::exception_ptr exception;
     std::optional<LazyBufferedBody<Stream>> lazyBody;
@@ -72,28 +68,32 @@ Task<void> dispatchHttpBufferedBodyRoute(
     }
 
     if (exception != nullptr) {
-        response = co_await routes.handleException(
-            parsed.request,
-            requestMemory,
+        co_await completeFailedHttpBodyRoute(
+            scannerEntry,
             exception,
-            true,
-            baseRouteServices);
-        response.materializeBody();
-        keepAlive = false;
-    } else {
-        finalizeBodyRouteResponse(
+            parsed,
+            routes,
+            requestMemory,
+            baseRouteServices,
             response,
-            keepAlive,
-            requestCount,
-            options.maxRequestsPerConnection,
-            lazyBody->consumed());
-        if (keepAlive) {
-            lazyBody->restorePipeline(readBuffer, usedBytes);
-            consumedBytes = 0;
-            bufferAlreadyCompacted = true;
-        }
+            keepAlive);
+        co_return;
     }
-    scannerEntry.touch();
+
+    completeSuccessfulHttpBodyRoute(
+        scannerEntry,
+        response,
+        keepAlive,
+        requestCount,
+        options.maxRequestsPerConnection,
+        lazyBody->consumed(),
+        readBuffer,
+        usedBytes,
+        consumedBytes,
+        bufferAlreadyCompacted,
+        [&lazyBody](std::pmr::string& buffer, std::size_t& size) {
+            lazyBody->restorePipeline(buffer, size);
+        });
 }
 
 }  // namespace ruvia::detail

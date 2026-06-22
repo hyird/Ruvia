@@ -5,10 +5,42 @@
 
 #include "Http2StreamState.h"
 #include "../../http/parser/HttpParserSyntax.h"
-#include "ruvia/http/HeaderUtils.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace ruvia::detail {
+
+struct Http2HeaderDecodeContext final {
+    Http2StreamState& stream;
+    std::size_t decodedHeaderListBytes{0};
+};
+
+[[nodiscard]] inline bool http2AccumulateHeaderListBytes(
+    Http2HeaderDecodeContext& context,
+    std::string_view name,
+    std::string_view value) noexcept {
+    constexpr std::size_t kHeaderListEntryOverhead = 32;
+
+    if (name.size() > kMaxHttpHeaderBytes ||
+        value.size() > kMaxHttpHeaderBytes ||
+        name.size() > kMaxHttpHeaderBytes - value.size()) {
+        return false;
+    }
+
+    auto fieldBytes = name.size() + value.size();
+    if (fieldBytes > kMaxHttpHeaderBytes - kHeaderListEntryOverhead) {
+        return false;
+    }
+    fieldBytes += kHeaderListEntryOverhead;
+
+    if (context.decodedHeaderListBytes > kMaxHttpHeaderBytes ||
+        fieldBytes > kMaxHttpHeaderBytes - context.decodedHeaderListBytes) {
+        return false;
+    }
+
+    context.decodedHeaderListBytes += fieldBytes;
+    return true;
+}
 
 [[nodiscard]] inline bool http2HeaderNameHasUppercase(std::string_view name) noexcept {
     for (const auto ch : name) {
@@ -52,11 +84,37 @@ namespace ruvia::detail {
     return name != "te" || value == "trailers";
 }
 
-[[nodiscard]] inline bool http2OnDecodedInitialHeader(
+[[nodiscard]] inline bool http2AppendCookieHeaderValue(
     Http2StreamState& stream,
+    std::string_view value) {
+    constexpr std::string_view kCookieSeparator = "; ";
+    const auto separatorBytes = stream.hasCookie ? kCookieSeparator.size() : 0;
+    if (value.size() > kMaxHttpHeaderBytes ||
+        stream.cookie.size() > kMaxHttpHeaderBytes - separatorBytes ||
+        stream.cookie.size() + separatorBytes > kMaxHttpHeaderBytes - value.size()) {
+        return false;
+    }
+
+    if (stream.hasCookie) {
+        stream.cookie.append(kCookieSeparator.data(), kCookieSeparator.size());
+    }
+    if (!value.empty()) {
+        stream.cookie.append(value.data(), value.size());
+    }
+    stream.hasCookie = true;
+    return true;
+}
+
+[[nodiscard]] inline bool http2OnDecodedInitialHeader(
+    Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) {
-    if (name.empty() || stream.headers.size() >= kMaxRequestHeaders) {
+    if (!http2AccumulateHeaderListBytes(context, name, value)) {
+        return false;
+    }
+
+    auto& stream = context.stream;
+    if (name.empty() || stream.headers.full()) {
         return false;
     }
 
@@ -68,7 +126,7 @@ namespace ruvia::detail {
             if (stream.hasMethod) {
                 return false;
             }
-            stream.method.assign(value.data(), value.size());
+            stream.method = parseMethod(value);
             stream.hasMethod = true;
             return true;
         }
@@ -76,7 +134,7 @@ namespace ruvia::detail {
             if (stream.hasProtocol || value.empty()) {
                 return false;
             }
-            stream.protocol.assign(value.data(), value.size());
+            stream.protocolIsWebSocket = value == "websocket";
             stream.hasProtocol = true;
             return true;
         }
@@ -84,7 +142,6 @@ namespace ruvia::detail {
             if (stream.hasScheme) {
                 return false;
             }
-            stream.scheme.assign(value.data(), value.size());
             stream.hasScheme = true;
             return true;
         }
@@ -119,12 +176,7 @@ namespace ruvia::detail {
         stream.hasHost = true;
     }
     if (kind == RequestHeaderKind::kCookie) {
-        if (!stream.cookie.empty()) {
-            stream.cookie.append("; ");
-        }
-        stream.cookie.append(value.data(), value.size());
-        stream.hasCookie = true;
-        return true;
+        return http2AppendCookieHeaderValue(stream, value);
     }
     if (kind == RequestHeaderKind::kContentLength) {
         std::size_t parsed = 0;
@@ -138,14 +190,17 @@ namespace ruvia::detail {
         stream.contentLength = parsed;
         stream.hasContentLength = true;
     }
-    stream.headers.emplace_back(name, value, kind, stream.headers.get_allocator().resource());
-    return true;
+    return stream.headers.append(name, value, kind);
 }
 
 [[nodiscard]] inline bool http2OnDecodedTrailer(
-    Http2StreamState&,
+    Http2HeaderDecodeContext& context,
     std::string_view name,
     std::string_view value) {
+    if (!http2AccumulateHeaderListBytes(context, name, value)) {
+        return false;
+    }
+
     return http2IsValidRegularRequestHeader(name, value);
 }
 

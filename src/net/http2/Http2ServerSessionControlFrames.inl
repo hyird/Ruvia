@@ -105,9 +105,7 @@ Task<bool> Http2ServerSession<Stream>::processPing(
     if ((header.flags & kHttp2FlagAck) != 0) {
         co_return true;
     }
-    controlWriteBuffer_.clear();
-    http2AppendFrame(controlWriteBuffer_, Http2FrameType::kPing, kHttp2FlagAck, 0, payload);
-    co_await writeRaw(controlWriteBuffer_);
+    co_await writeFramePayload(Http2FrameType::kPing, kHttp2FlagAck, 0, payload);
     co_return true;
 }
 

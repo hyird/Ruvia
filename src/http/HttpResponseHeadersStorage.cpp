@@ -39,7 +39,10 @@ void HttpResponseHeaders::reserve(std::size_t count) {
         return;
     }
 
-    spill();
+    if (!spilled_) {
+        spill(count);
+        return;
+    }
     heap_.reserve(count);
 }
 
@@ -71,12 +74,12 @@ void HttpResponseHeaders::clear() noexcept {
     size_ = 0;
 }
 
-void HttpResponseHeaders::spill() {
+void HttpResponseHeaders::spill(std::size_t minCapacity) {
     if (spilled_) {
         return;
     }
 
-    heap_.reserve(std::max<std::size_t>(kInlineCapacity * 2, size_ + 1));
+    heap_.reserve(std::max<std::size_t>(kInlineCapacity * 2, minCapacity));
     auto* items = inlineData();
     for (std::size_t i = 0; i < size_; ++i) {
         heap_.push_back(items[i]);

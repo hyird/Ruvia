@@ -1,6 +1,8 @@
 #pragma once
 
-#include "ruvia/http/HeaderUtils.h"
+#include "../../http/HttpResponseBodyAccess.h"
+#include "../../http/HttpResponseHeaderState.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
 #include <cstddef>
@@ -8,7 +10,7 @@
 namespace ruvia::detail {
 
 inline bool responseWantsClose(const HttpResponse& response) noexcept {
-    return detail::httpHasToken(response.header(HttpResponse::kKnownHeaderConnection), "close");
+    return detail::httpHasToken(responseKnownHeader(response, kResponseHeaderConnection), "close");
 }
 
 inline bool requestLimitReached(std::size_t requestCount, std::size_t maxRequests) noexcept {
@@ -67,7 +69,7 @@ inline void finalizeBodyRouteResponse(
     }
     recordCompletedRequest(keepAlive, requestCount, maxRequests);
     // Fix borrowed response views before callers restore pipeline bytes.
-    response.materializeBody();
+    materializeResponseBody(response);
     markConnectionCloseIfNeeded(response, keepAlive);
 }
 

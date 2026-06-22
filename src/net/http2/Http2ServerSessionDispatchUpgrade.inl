@@ -1,16 +1,15 @@
 template <typename Stream>
 bool Http2ServerSession<Stream>::seedUpgradedStream(
-    const HttpParseResult& parsed,
+    const HttpServerParseResult& parsed,
     std::string_view body) {
     auto* stream = createStream(1);
     if (stream == nullptr) {
         return false;
     }
     lastStreamId_ = 1;
-    stream->method.assign(methodName(parsed.request.method()));
-    stream->scheme.assign("http");
+    stream->method = parsed.request.method();
     stream->path.assign(parsed.request.target().data(), parsed.request.target().size());
-    const auto host = parsed.request.header(HttpRequest::KnownHeader::kHost);
+    const auto host = requestKnownHeader(parsed.request, RequestKnownHeader::kHost);
     if (!host.empty()) {
         stream->authority.assign(host.data(), host.size());
         stream->hasAuthority = true;
@@ -34,11 +33,12 @@ bool Http2ServerSession<Stream>::seedUpgradedStream(
         if (http2IsForbiddenUpgradedRequestHeader(header.name)) {
             continue;
         }
-        stream->headers.emplace_back(
+        if (!stream->headers.append(
             header.name,
             header.value,
-            classifyRequestHeader(header.name),
-            stream->headers.get_allocator().resource());
+            classifyRequestHeader(header.name))) {
+            return false;
+        }
     }
     stream->headersDecoded = true;
     stream->endStream = true;
@@ -57,4 +57,5 @@ Task<void> Http2ServerSession<Stream>::writeHttp2WebSocketHandshake(
     std::string_view subprotocol) {
     http2EncodeWebSocketHandshakeHeaders(stream.responseHeaderBlock, subprotocol);
     co_await writeHeaders(stream, stream.responseHeaderBlock, false);
+    http2ReleaseResponseHeaderBlock(stream);
 }

@@ -71,9 +71,9 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         request,
         response,
         options_,
-        &stream.body);
+        stream.body);
     co_await writeResponse(stream, response, responsePreparation.skipBody);
-    if (responsePreparation.borrowedCompressionScratch) {
+    if (responsePreparation.bodyBorrowsCompressionScratch) {
         stream.body.clear();
     }
 }

@@ -232,7 +232,7 @@ A few lifetime and ownership rules are worth keeping close:
 
 - Use `HttpResponse::setBodyCopy(...)` when manually building a response from temporary data.
 - Use `setBodyView(...)` only for data that remains valid through response write-out.
-- Use `setBody(std::pmr::string&&)` for request-arena owned output.
+- Use `setBodyOwned(std::pmr::string&&)` for request-arena owned output.
 - Build dynamic text in a non-const `std::pmr::string` with `c.allocator<char>()`, then return it as `c.text(body)` so the response consumes the arena string.
 - Use `c.text(std::string_view)` only as a borrowed-view shortcut for stable data such as string literals.
 - `c.text(std::string)` and `c.text(char*)` are intentionally unavailable.
@@ -579,10 +579,10 @@ ruvia::app()
     .run();
 ```
 
-`setListenAddress(address, port)` configures the HTTP listener. HTTPS has its own startup-only port:
+`setListenAddress(address, port)` configures the HTTP listener; app-managed listener ports must be non-zero. HTTPS has its own startup-only port:
 calling `setHttpsListenPort(port)` declares the HTTPS listener, and `useTls(...)` supplies its certificate and key.
 
-Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** — once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation — `headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled.
+Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** — once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation — `headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled; `setConnectionScanInterval(...)` is a scanner cadence and must be greater than zero.
 
 Memory pool configuration is also startup-only. Set it before `run()` and before creating any `ruvia::WorkerMemory`; the process memory layer freezes as workers are created:
 
@@ -779,11 +779,12 @@ With `setAutoHttps(true)`, the HTTP listener returns a `308 Permanent Redirect` 
 - SIGINT and SIGTERM trigger graceful shutdown by closing each worker acceptor and active worker-owned sockets on that worker's `io_context`.
 - Idle/header/body/write timeouts are enforced by one scanner per worker, not by per-connection timers; a `0ms` timeout disables that category.
 - `setMaxConnectionsPerWorker(...)` returns `429 Too Many Requests` for excess accepted connections; `setMaxRequestsPerConnection(...)` closes keep-alive after the configured request count; `0` means unlimited.
+- Buffered request body and WebSocket message limits are memory bounds and must be greater than zero. Stream body routes are explicit; `setMaxStreamBodyBytes(0)` disables only the stream body limit.
 - HTTP parsing uses Ruvia's zero-copy parser; request method, path, version, headers, and common values are views into the connection read buffer by default. Chunked request bodies are decoded in place.
 - Stream routes (`RUVIA_POST_STREAM`, `RUVIA_PUT_STREAM`, `RUVIA_PATCH_STREAM`) dispatch after headers and let handlers consume Content-Length or chunked bodies through `c.bodyReader()`.
 - Buffered multipart parsing returns field views into the current request body; streaming multipart returns chunk views valid until the next `read()`.
 - `Expect: 100-continue` is answered before body reads, and comma-separated `Connection` tokens are honored.
-- Response construction uses request arenas and scatter-gather-friendly response data instead of building a full response string for every request. Memory bodies are either explicit borrowed views or owned arena strings; file bodies are internal `FileToken` values created only by `Context`.
+- Response construction uses request arenas and scatter-gather-friendly response data instead of building a full response string for every request. Memory bodies are either explicit borrowed views or owned arena strings; file bodies are internal path references created only by `Context`.
 - Gzip compression is applied only immediately before writing ordinary buffered responses, after routing and middleware have completed.
 - Plain TCP file responses use the platform zero-copy path when available; fallback file responses write headers plus 64KB file chunks.
 - File response conditionals support `If-None-Match`, `If-Modified-Since`, `If-Match`, `If-Unmodified-Since`, and `If-Range` for the built-in single-range path.

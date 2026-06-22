@@ -1,22 +1,19 @@
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::sendLocalSettings() {
-    controlWriteBuffer_.clear();
-    controlWriteBuffer_.reserve(kHttp2LocalSettingsFrameBytes + kHttp2WindowUpdateFrameBytes);
-    http2AppendLocalSettingsFrame(controlWriteBuffer_);
+    std::array<char, kHttp2LocalSettingsFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
+    auto* out = http2WriteLocalSettingsFrame(buffer.data());
     if constexpr (kHttp2LocalInitialWindowSize > kHttp2DefaultInitialWindowSize) {
-        http2AppendWindowUpdate(
-            controlWriteBuffer_,
+        out = http2WriteWindowUpdate(
+            out,
             0,
             kHttp2LocalInitialWindowSize - static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
     }
-    co_await writeRaw(controlWriteBuffer_);
+    co_await writeRaw(std::string_view(buffer.data(), static_cast<std::size_t>(out - buffer.data())));
 }
 
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::sendSettingsAck() {
-    controlWriteBuffer_.clear();
-    http2AppendFrameHeader(controlWriteBuffer_, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
-    co_await writeRaw(controlWriteBuffer_);
+    co_await writeFramePayload(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
 }
 
 template <typename Stream>
@@ -24,19 +21,29 @@ Task<void> Http2ServerSession<Stream>::sendGoaway(
     std::uint32_t lastStreamId,
     Http2ErrorCode error,
     std::string_view debug) {
-    controlWriteBuffer_.clear();
-    http2AppendGoaway(controlWriteBuffer_, lastStreamId, error, debug);
+    std::array<char, 8> payload;
+    auto* out = http2WriteGoawayPayload(payload.data(), lastStreamId, error);
     closing_ = true;
-    co_await writeRaw(controlWriteBuffer_, true);
+    co_await writeFramePayload(
+        Http2FrameType::kGoaway,
+        0,
+        0,
+        std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())),
+        debug,
+        true);
 }
 
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::sendRstStream(
     std::uint32_t streamId,
     Http2ErrorCode error) {
-    controlWriteBuffer_.clear();
-    http2AppendRstStream(controlWriteBuffer_, streamId, error);
-    co_await writeRaw(controlWriteBuffer_);
+    std::array<char, 4> payload;
+    auto* out = http2Write32(payload.data(), static_cast<std::uint32_t>(error));
+    co_await writeFramePayload(
+        Http2FrameType::kRstStream,
+        0,
+        streamId,
+        std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())));
 }
 
 template <typename Stream>
@@ -46,7 +53,7 @@ Task<void> Http2ServerSession<Stream>::sendDataWindowUpdates(
     if (increment == 0) {
         co_return;
     }
-    controlWriteBuffer_.clear();
-    http2AppendDataWindowUpdates(controlWriteBuffer_, streamId, increment);
-    co_await writeRaw(controlWriteBuffer_);
+    std::array<char, kHttp2WindowUpdateFrameBytes * 2> buffer;
+    auto* out = http2WriteDataWindowUpdates(buffer.data(), streamId, increment);
+    co_await writeRaw(std::string_view(buffer.data(), static_cast<std::size_t>(out - buffer.data())));
 }

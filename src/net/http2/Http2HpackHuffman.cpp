@@ -1,7 +1,46 @@
 #include "Http2Hpack.h"
 #include "Http2HpackHuffmanTables.h"
 
+#include <array>
+#include <cstddef>
+
 namespace ruvia::detail {
+
+namespace {
+
+constexpr std::size_t kHpackHuffmanNodeCapacity = 1024;
+
+struct HpackHuffmanTree final {
+    std::array<HpackHuffmanNode, kHpackHuffmanNodeCapacity> nodes{};
+    std::size_t size{1};
+};
+
+consteval HpackHuffmanTree buildHpackHuffmanTree() {
+    HpackHuffmanTree tree;
+    for (std::size_t symbol = 0; symbol < kHpackHuffmanCodes.size(); ++symbol) {
+        std::int16_t node = 0;
+        const auto code = kHpackHuffmanCodes[symbol];
+        const auto length = kHpackHuffmanLengths[symbol];
+        for (std::uint8_t bitIndex = 0; bitIndex < length; ++bitIndex) {
+            const auto shift = static_cast<std::uint8_t>(length - bitIndex - 1);
+            const auto bit = static_cast<std::uint8_t>((code >> shift) & 0x1U);
+            auto& next = tree.nodes[static_cast<std::size_t>(node)].child[bit];
+            if (next < 0) {
+                next = static_cast<std::int16_t>(tree.size);
+                tree.nodes[tree.size] = HpackHuffmanNode{};
+                ++tree.size;
+            }
+            node = next;
+        }
+        tree.nodes[static_cast<std::size_t>(node)].symbol = static_cast<std::int16_t>(symbol);
+    }
+    return tree;
+}
+
+inline constexpr auto kHpackHuffmanTree = buildHpackHuffmanTree();
+static_assert(kHpackHuffmanTree.size <= kHpackHuffmanNodeCapacity);
+
+}  // namespace
 
 HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::string& output) {
     output.clear();
@@ -14,7 +53,7 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
         const auto byte = static_cast<unsigned char>(byteValue);
         for (int bitIndex = 7; bitIndex >= 0; --bitIndex) {
             const auto bit = static_cast<std::uint8_t>((byte >> bitIndex) & 0x1U);
-            const auto next = huffman_[static_cast<std::size_t>(node)].child[bit];
+            const auto next = kHpackHuffmanTree.nodes[static_cast<std::size_t>(node)].child[bit];
             if (next < 0) {
                 return HpackError::kInvalidHuffman;
             }
@@ -22,7 +61,7 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
             ++depth;
             allOnes = allOnes && bit == 1;
 
-            const auto symbol = huffman_[static_cast<std::size_t>(node)].symbol;
+            const auto symbol = kHpackHuffmanTree.nodes[static_cast<std::size_t>(node)].symbol;
             if (symbol >= 0) {
                 if (symbol == 256) {
                     return HpackError::kInvalidHuffman;
@@ -39,28 +78,6 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
         return HpackError::kInvalidHuffman;
     }
     return HpackError::kNone;
-}
-
-void HpackDecoder::buildHuffmanTree() noexcept {
-    huffman_[0] = HuffmanNode{};
-    huffmanNodeCount_ = 1;
-    for (std::size_t symbol = 0; symbol < kHpackHuffmanCodes.size(); ++symbol) {
-        std::int16_t node = 0;
-        const auto code = kHpackHuffmanCodes[symbol];
-        const auto length = kHpackHuffmanLengths[symbol];
-        for (std::uint8_t bitIndex = 0; bitIndex < length; ++bitIndex) {
-            const auto shift = static_cast<std::uint8_t>(length - bitIndex - 1);
-            const auto bit = static_cast<std::uint8_t>((code >> shift) & 0x1U);
-            auto& next = huffman_[static_cast<std::size_t>(node)].child[bit];
-            if (next < 0) {
-                next = static_cast<std::int16_t>(huffmanNodeCount_);
-                huffman_[huffmanNodeCount_] = HuffmanNode{};
-                ++huffmanNodeCount_;
-            }
-            node = next;
-        }
-        huffman_[static_cast<std::size_t>(node)].symbol = static_cast<std::int16_t>(symbol);
-    }
 }
 
 }  // namespace ruvia::detail

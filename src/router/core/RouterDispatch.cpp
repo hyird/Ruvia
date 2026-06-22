@@ -5,6 +5,8 @@
 #include <utility>
 
 #include "RouterUtils.h"
+#include "../../http/ContextInternal.h"
+#include "../../http/HttpResponseHeaderState.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Validation.h"
 
@@ -36,6 +38,23 @@ detail::ContextServices makeContextServices(
         .httpClients = services.httpClients};
 }
 
+Context makeRouteContext(
+    RequestMemory& memory,
+    const HttpRequest& request,
+    const detail::RouteResolution& resolution,
+    detail::ContextServices services) noexcept {
+    if (!resolution.dynamic) {
+        return detail::ContextAccess::make(memory, request, services);
+    }
+
+    return detail::ContextAccess::make(
+        memory,
+        request,
+        resolution.match.params,
+        resolution.match.paramCount,
+        services);
+}
+
 struct OwnedHttpErrorInfo final {
     HttpErrorInfo info{};
     std::pmr::string statusText;
@@ -43,11 +62,11 @@ struct OwnedHttpErrorInfo final {
     std::pmr::string message;
     std::pmr::string detailsJson;
 
-    explicit OwnedHttpErrorInfo(HttpErrorInfo source)
-        : statusText(detail::startupResource()),
-          code(detail::startupResource()),
-          message(detail::startupResource()),
-          detailsJson(detail::startupResource()) {
+    explicit OwnedHttpErrorInfo(HttpErrorInfo source, std::pmr::memory_resource* resource)
+        : statusText(resource),
+          code(resource),
+          message(resource),
+          detailsJson(resource) {
         assign(source);
     }
 
@@ -108,23 +127,10 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     WebSocket* webSocket) const {
     const auto* route = resolution.route;
     auto streamHandled = false;
-    if (!resolution.dynamic) {
-        Context context(
-            memory,
-            request,
-            makeContextServices(services, responseStream, webSocket));
-        if (responseStream != nullptr) {
-            responseStream->bindContext(context);
-        }
-        auto response = co_await invokeStreamRoute(*route, context, streamHandled);
-        co_return StreamDispatchResult{std::move(response), streamHandled};
-    }
-
-    Context context(
+    auto context = makeRouteContext(
         memory,
         request,
-        resolution.match.params,
-        resolution.match.paramCount,
+        resolution,
         makeContextServices(services, responseStream, webSocket));
     if (responseStream != nullptr) {
         responseStream->bindContext(context);
@@ -140,10 +146,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     RouteServices services) const {
     if (resolution.found() && !resolution.dynamic) {
         const auto* route = resolution.route;
-        Context context(
-            memory,
-            request,
-            makeContextServices(services));
+        auto context = makeRouteContext(memory, request, resolution, makeContextServices(services));
         std::exception_ptr exception;
         try {
             co_return co_await invokeRoute(*route, context);
@@ -154,7 +157,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     }
 
     if (!resolution.found()) {
-        Context context(
+        auto context = detail::ContextAccess::make(
             memory,
             request,
             makeContextServices(services));
@@ -181,12 +184,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             false);
     }
 
-    Context context(
-        memory,
-        request,
-        resolution.match.params,
-        resolution.match.paramCount,
-        makeContextServices(services));
+    auto context = makeRouteContext(memory, request, resolution, makeContextServices(services));
     std::exception_ptr exception;
     try {
         co_return co_await invokeRoute(*resolution.route, context);
@@ -202,7 +200,7 @@ Task<HttpResponse> detail::RouteTable::handleError(
     HttpErrorInfo error,
     bool closeConnection,
     RouteServices services) const {
-    Context context(
+    auto context = detail::ContextAccess::make(
         memory,
         request,
         makeContextServices(services));
@@ -215,7 +213,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     std::exception_ptr exception,
     bool closeConnection,
     RouteServices services) const {
-    Context context(
+    auto context = detail::ContextAccess::make(
         memory,
         request,
         makeContextServices(services));
@@ -233,7 +231,9 @@ Task<HttpResponse> detail::RouteTable::handleException(
     Context& context,
     std::exception_ptr exception,
     bool closeConnection) const {
-    OwnedHttpErrorInfo errorInfo(HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"});
+    OwnedHttpErrorInfo errorInfo(
+        HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
+        context.resource());
 
     try {
         if (exception != nullptr) {

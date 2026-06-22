@@ -12,8 +12,10 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/Context.h"
 #include "RouteResolution.h"
 #include "ruvia/http/Error.h"
+#include "ruvia/http/Next.h"
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/router/Router.h"
 
@@ -23,6 +25,12 @@ class DbRegistry;
 class HttpClientRegistry;
 class RedisRegistry;
 class RouterImpl;
+
+struct NextAccess final {
+    [[nodiscard]] static constexpr Next make(void* target, Next::Invoke invoke) noexcept {
+        return Next(target, invoke);
+    }
+};
 
 struct RouteHandler final {
     void* target{nullptr};
@@ -127,6 +135,7 @@ public:
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
+    [[nodiscard]] RouteResolution resolve(HttpMethod method, std::string_view path) const noexcept;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         RequestMemory& memory,
@@ -221,9 +230,8 @@ private:
         std::string_view right) noexcept;
     static void insertRadix(RadixNode& node, std::string_view path, const RouteEntry& route);
     [[nodiscard]] static const RouteEntry* findRadixNode(const RadixNode& root, std::string_view path) noexcept;
-    static void collectDynamicParamNames(RouteEntry& route);
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
-    void insertDynamic(DynamicNode& root, const RouteEntry& route);
+    void insertDynamic(DynamicNode& root, RouteEntry& route);
     static void sortDynamicNode(DynamicNode& node);
     [[nodiscard]] static const RouteEntry* findDynamicNode(
         const DynamicNode& node,

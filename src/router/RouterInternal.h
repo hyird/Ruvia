@@ -101,7 +101,7 @@ private:
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(RouteMiddleware middleware);
-    [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(std::pmr::vector<RouteMiddleware> middlewares);
+    void materializeMiddlewares(std::pmr::vector<RouteMiddleware>& middlewares);
     [[nodiscard]] RouteTable buildRouteTable() const;
 
     struct RouteTableDeleter final {

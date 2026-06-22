@@ -2,6 +2,7 @@
 
 #include "HttpServerResponseState.h"
 
+#include "../../http/HttpRequestInternal.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -55,7 +56,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     HttpResponse response(memory.resource());
     response.setStatus(308, {});
 
-    const auto host = hostWithoutExplicitPort(request.header(HttpRequest::KnownHeader::kHost));
+    const auto host = hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
     auto path = request.path();
     if (path.empty() || path.front() != '/') {
         path = "/";

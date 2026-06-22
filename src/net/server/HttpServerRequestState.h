@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/HttpParser.h"
+#include "../../http/HttpParserInternal.h"
 #include "ruvia/memory/MemoryPool.h"
 
 #include <cstddef>
@@ -15,7 +15,7 @@ inline bool contentLengthExceedsLimit(std::size_t contentLength, std::size_t lim
     return limit != 0 && contentLength > limit;
 }
 
-inline bool shouldKeepAlive(const HttpParseResult& parsed) noexcept {
+inline bool shouldKeepAlive(const HttpServerParseResult& parsed) noexcept {
     if (parsed.flags.connectionClose) {
         return false;
     }
@@ -25,7 +25,7 @@ inline bool shouldKeepAlive(const HttpParseResult& parsed) noexcept {
     return parsed.request.httpVersion() == "HTTP/1.1";
 }
 
-inline bool wantsContinue(const HttpParseResult& parsed) noexcept {
+inline bool wantsContinue(const HttpServerParseResult& parsed) noexcept {
     return parsed.flags.expectContinue;
 }
 

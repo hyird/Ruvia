@@ -1,4 +1,5 @@
 #include "../DbInternal.h"
+#include "DbConfigValidation.h"
 #include "DbUtils.h"
 #include "ruvia/db/Db.h"
 
@@ -144,6 +145,7 @@ public:
         if (config.acquireTimeout.count() == 0) {
             config.acquireTimeout = config.queryTimeout;
         }
+        validateDbConfig(config);
 
         auto lockName = buildMigrationLockName(config, resolved);
         const detail::DbDefinition databases[] = {

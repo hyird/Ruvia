@@ -1,10 +1,10 @@
 #include "../DbInternal.h"
+#include "DbConfigValidation.h"
 #include "DbSlotSocket.h"
 #include "DbUtils.h"
 
 #include <mysql/mysql.h>
 
-#include <algorithm>
 #include <memory_resource>
 #include <utility>
 
@@ -23,9 +23,11 @@ detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, s
       resource_(detail::resolveDbResource(resource)),
       slots_(resource_),
       freeSlots_(resource_) {
-    slots_.reserve(std::max<std::size_t>(1, config_.poolSize));
-    freeSlots_.reserve(std::max<std::size_t>(1, config_.poolSize));
-    for (std::size_t i = 0; i < std::max<std::size_t>(1, config_.poolSize); ++i) {
+    detail::validateDbConfig(config_);
+    const auto poolSize = config_.poolSize;
+    slots_.reserve(poolSize);
+    freeSlots_.reserve(poolSize);
+    for (std::size_t i = 0; i < poolSize; ++i) {
         slots_.emplace_back(resource_);
         freeSlots_.push_back(i);
     }

@@ -28,7 +28,7 @@ Task<HttpResponse> detail::RouteTable::invokeMiddlewareAt(
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset + index];
     MiddlewareContinuation continuation{this, &route, index + 1};
-    const Next next(&continuation, &RouteTable::invokeMiddlewareContinuation);
+    const auto next = NextAccess::make(&continuation, &RouteTable::invokeMiddlewareContinuation);
     auto response = middleware(context, next);
     co_return co_await std::move(response);
 }
@@ -58,7 +58,7 @@ Task<HttpResponse> detail::RouteTable::invokeStreamMiddlewareAt(
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset + index];
     StreamMiddlewareContinuation continuation{this, &route, index + 1, &streamHandled};
-    const Next next(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
+    const auto next = NextAccess::make(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
     auto response = middleware(context, next);
     co_return co_await std::move(response);
 }

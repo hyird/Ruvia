@@ -1,65 +1,66 @@
-#include "ruvia/http/HttpParser.h"
+#include "HttpChunkParser.h"
 
+#include "../HeaderTokenUtils.h"
 #include "HttpParserSyntax.h"
-#include "ruvia/http/HeaderUtils.h"
+#include "ruvia/http/HttpLimits.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool isForbiddenChunkTrailer(std::string_view name) noexcept {
-    switch (detail::classifyRequestHeader(name)) {
-        case detail::RequestHeaderKind::kHost:
-        case detail::RequestHeaderKind::kContentLength:
-        case detail::RequestHeaderKind::kTransferEncoding:
-        case detail::RequestHeaderKind::kConnection:
-        case detail::RequestHeaderKind::kContentType:
-        case detail::RequestHeaderKind::kCookie:
-        case detail::RequestHeaderKind::kExpect:
-        case detail::RequestHeaderKind::kIfMatch:
-        case detail::RequestHeaderKind::kIfModifiedSince:
-        case detail::RequestHeaderKind::kIfNoneMatch:
-        case detail::RequestHeaderKind::kIfRange:
-        case detail::RequestHeaderKind::kIfUnmodifiedSince:
-        case detail::RequestHeaderKind::kRange:
-        case detail::RequestHeaderKind::kUpgrade:
-        case detail::RequestHeaderKind::kAuthorization:
+    switch (classifyRequestHeader(name)) {
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kRange:
+        case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kAuthorization:
             return true;
-        case detail::RequestHeaderKind::kOther:
-        case detail::RequestHeaderKind::kAccept:
-        case detail::RequestHeaderKind::kAcceptEncoding:
-        case detail::RequestHeaderKind::kAccessControlRequestHeaders:
-        case detail::RequestHeaderKind::kAccessControlRequestMethod:
-        case detail::RequestHeaderKind::kUserAgent:
-        case detail::RequestHeaderKind::kOrigin:
-        case detail::RequestHeaderKind::kSecWebSocketKey:
-        case detail::RequestHeaderKind::kSecWebSocketProtocol:
-        case detail::RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kUserAgent:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
             break;
     }
 
     switch (name.size()) {
         case 2:
-            return detail::httpAsciiEqualsIgnoreCase(name, "TE");
+            return httpAsciiEqualsIgnoreCase(name, "TE");
         case 7:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Trailer");
+            return httpAsciiEqualsIgnoreCase(name, "Trailer");
         case 10:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                detail::httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 13:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Authorization") ||
-                detail::httpAsciiEqualsIgnoreCase(name, "Cache-Control");
+            return httpAsciiEqualsIgnoreCase(name, "Authorization") ||
+                httpAsciiEqualsIgnoreCase(name, "Cache-Control");
         case 14:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
+            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 15:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Accept-Ranges");
+            return httpAsciiEqualsIgnoreCase(name, "Accept-Ranges");
         case 16:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Content-Range");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 17:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Content-Encoding");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding");
         case 18:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
-            return detail::httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
         default:
             return false;
     }
@@ -86,9 +87,9 @@ HttpChunkScanStatus validateHttpChunkTrailers(std::string_view trailers) noexcep
             return HttpChunkScanStatus::kInvalidTrailer;
         }
         const auto name = line.substr(0, colon);
-        const auto value = detail::httpTrimOws(line.substr(colon + 1));
-        if (!detail::isValidHttpHeaderName(name) ||
-            !detail::isValidHttpHeaderValue(value) ||
+        const auto value = httpTrimOws(line.substr(colon + 1));
+        if (!isValidHttpHeaderName(name) ||
+            !isValidHttpHeaderValue(value) ||
             isForbiddenChunkTrailer(name)) {
             return HttpChunkScanStatus::kInvalidTrailer;
         }
@@ -101,7 +102,7 @@ HttpChunkScanStatus validateHttpChunkTrailers(std::string_view trailers) noexcep
 }
 
 bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept {
-    return detail::parseHttpChunkSizeLine(value, size) == detail::ChunkSizeLineStatus::kOk;
+    return parseHttpChunkSizeLine(value, size) == ChunkSizeLineStatus::kOk;
 }
 
 HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
@@ -122,14 +123,14 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
         }
 
         std::size_t chunkSize = 0;
-        switch (detail::parseHttpChunkSizeLine(body.substr(cursor, lineEnd - cursor), chunkSize)) {
-            case detail::ChunkSizeLineStatus::kOk:
+        switch (parseHttpChunkSizeLine(body.substr(cursor, lineEnd - cursor), chunkSize)) {
+            case ChunkSizeLineStatus::kOk:
                 break;
-            case detail::ChunkSizeLineStatus::kInvalidSize:
+            case ChunkSizeLineStatus::kInvalidSize:
                 return HttpChunkScanResult{.status = HttpChunkScanStatus::kInvalidSize};
-            case detail::ChunkSizeLineStatus::kOverflow:
+            case ChunkSizeLineStatus::kOverflow:
                 return HttpChunkScanResult{.status = HttpChunkScanStatus::kSizeOverflow};
-            case detail::ChunkSizeLineStatus::kInvalidExtension:
+            case ChunkSizeLineStatus::kInvalidExtension:
                 return HttpChunkScanResult{.status = HttpChunkScanStatus::kInvalidExtension};
         }
         if (!addOverhead(lineEnd - cursor + 2)) {
@@ -144,8 +145,7 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                 }
                 return HttpChunkScanResult{
                     .status = HttpChunkScanStatus::kComplete,
-                    .consumedBytes = cursor + 2,
-                    .decodedBytes = decoded};
+                    .consumedBytes = cursor + 2};
             }
             const auto trailerEnd = body.find("\r\n\r\n", cursor);
             if (trailerEnd != std::string_view::npos) {
@@ -158,8 +158,7 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
                 }
                 return HttpChunkScanResult{
                     .status = HttpChunkScanStatus::kComplete,
-                    .consumedBytes = trailerEnd + 4,
-                    .decodedBytes = decoded};
+                    .consumedBytes = trailerEnd + 4};
             }
             return HttpChunkScanResult{.status = HttpChunkScanStatus::kIncomplete};
         }
@@ -182,4 +181,4 @@ HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept {
     }
 }
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

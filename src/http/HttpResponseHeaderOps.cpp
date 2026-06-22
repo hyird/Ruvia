@@ -1,8 +1,11 @@
 #include "ruvia/http/HttpResponse.h"
 
-#include "ruvia/http/HeaderUtils.h"
+#include "HttpResponseHeaderAccess.h"
+#include "HttpResponseHeaderBits.h"
+#include "HttpResponseKnownHeaders.h"
+#include "ruvia/detail/NumberFormat.h"
+#include "ResponseHeaderIndexCache.h"
 
-#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <cstddef>
@@ -15,18 +18,9 @@ namespace {
 
 inline constexpr std::size_t kAllowHeaderMethodSlots = static_cast<std::size_t>(HttpMethod::kOptions) + 1;
 
-[[nodiscard]] std::size_t unsignedDecimalSize(std::uint64_t value) noexcept {
-    std::size_t size = 1;
-    while (value >= 10) {
-        value /= 10;
-        ++size;
-    }
-    return size;
-}
-
 void writeUnsignedHeaderValue(HttpResponseHeader& header, std::uint64_t value) {
-    auto* const begin = const_cast<char*>(header.bytes) + header.nameSize;
-    auto* const end = begin + header.valueSize;
+    auto* const begin = detail::responseHeaderValueBegin(header);
+    auto* const end = detail::responseHeaderValueEnd(header);
     const auto [ptr, ec] = std::to_chars(begin, end, value);
     if (ec != std::errc{} || ptr != end) {
         throw std::logic_error("failed to format HTTP response header value");
@@ -55,8 +49,8 @@ void writeContentRangeHeaderValue(
         throw std::logic_error("file response byte range length must not be zero");
     }
 
-    auto* cursor = const_cast<char*>(header.bytes) + header.nameSize;
-    auto* const end = cursor + header.valueSize;
+    auto* cursor = detail::responseHeaderValueBegin(header);
+    auto* const end = detail::responseHeaderValueEnd(header);
     appendHeaderValueLiteral(cursor, "bytes ");
     appendHeaderValueUnsigned(cursor, end, offset);
     *cursor++ = '-';
@@ -69,8 +63,8 @@ void writeContentRangeHeaderValue(
 }
 
 void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::uint64_t size) {
-    auto* cursor = const_cast<char*>(header.bytes) + header.nameSize;
-    auto* const end = cursor + header.valueSize;
+    auto* cursor = detail::responseHeaderValueBegin(header);
+    auto* const end = detail::responseHeaderValueEnd(header);
     appendHeaderValueLiteral(cursor, "bytes */");
     appendHeaderValueUnsigned(cursor, end, size);
     if (cursor != end) {
@@ -92,8 +86,8 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
 }
 
 void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask) {
-    auto* cursor = const_cast<char*>(header.bytes) + header.nameSize;
-    auto* const end = cursor + header.valueSize;
+    auto* cursor = detail::responseHeaderValueBegin(header);
+    auto* const end = detail::responseHeaderValueEnd(header);
     bool first = true;
     for (std::size_t i = 0; i < kAllowHeaderMethodSlots; ++i) {
         if ((methodMask & (1U << i)) == 0) {
@@ -112,23 +106,9 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask)
 
 }  // namespace
 
-std::size_t HttpResponse::knownHeaderSlot(std::uint32_t bit) noexcept {
-    constexpr std::uint32_t knownMask = (1U << kKnownHeaderCount) - 1U;
-    if (bit == 0 || (bit & ~knownMask) != 0 || (bit & (bit - 1U)) != 0) {
-        return kKnownHeaderCount;
-    }
-    return static_cast<std::size_t>(std::countr_zero(bit));
-}
-
 void HttpResponse::recordKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept {
-    const auto slot = knownHeaderSlot(knownBit);
-    if (slot >= knownHeaderIndexes_.size()) {
-        return;
-    }
     knownHeaderBits_ |= knownBit;
-    if (knownHeaderIndexes_[slot] < 0) {
-        knownHeaderIndexes_[slot] = static_cast<std::int32_t>(index);
-    }
+    detail::recordResponseHeaderIndex(knownHeaderIndexes_, detail::responseKnownHeaderSlot(knownBit), index);
 }
 
 HttpResponseHeader* HttpResponse::findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept {
@@ -139,21 +119,16 @@ HttpResponseHeader* HttpResponse::findHeaderForUpdate(std::string_view key, std:
 const HttpResponseHeader* HttpResponse::findHeaderForRead(
     std::string_view key,
     std::uint32_t knownBit) const noexcept {
-    const auto knownSlot = knownHeaderSlot(knownBit);
-    if (knownSlot < knownHeaderIndexes_.size()) {
-        const auto index = knownHeaderIndexes_[knownSlot];
-        if (index >= 0) {
-            return headers_.begin() + index;
-        }
-        return nullptr;
-    }
-
-    for (const auto& header : headers_) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), key)) {
-            return &header;
-        }
-    }
-    return nullptr;
+    const auto* const begin = headers_.begin();
+    const auto* const end = headers_.end();
+    const auto* const header = detail::findResponseHeaderIndexed(
+        begin,
+        end,
+        knownHeaderIndexes_,
+        detail::responseKnownHeaderSlot(knownBit),
+        key,
+        knownBit);
+    return header == end ? nullptr : header;
 }
 
 HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
@@ -170,19 +145,21 @@ HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
     return header;
 }
 
-std::string_view HttpResponse::header(KnownHeaderBit bit) const noexcept {
-    const auto slot = knownHeaderSlot(bit);
-    if (slot < knownHeaderIndexes_.size()) {
-        const auto index = knownHeaderIndexes_[slot];
-        if (index >= 0) {
-            return headers_.begin()[index].value();
-        }
-    }
-    return {};
+std::string_view HttpResponse::knownHeaderValue(std::uint32_t bit) const noexcept {
+    const auto* const begin = headers_.begin();
+    const auto* const end = headers_.end();
+    const auto* const header = detail::findResponseHeaderIndexed(
+        begin,
+        end,
+        knownHeaderIndexes_,
+        detail::responseKnownHeaderSlot(bit),
+        {},
+        bit);
+    return header == end ? std::string_view{} : header->value();
 }
 
 std::string_view HttpResponse::header(std::string_view name) const noexcept {
-    if (const auto* const found = findHeaderForRead(name, classifyKnownHeader(name))) {
+    if (const auto* const found = findHeaderForRead(name, detail::classifyResponseHeaderName(name))) {
         return found->value();
     }
     return {};
@@ -195,7 +172,7 @@ void HttpResponse::setHeader(std::string_view key, std::string_view value) {
     if (!isValidHttpHeaderValue(value)) {
         throw std::invalid_argument("invalid HTTP header value");
     }
-    setHeaderValidated(key, value, classifyKnownHeader(key));
+    setHeaderValidated(key, value, detail::classifyResponseHeaderName(key));
 }
 
 void HttpResponse::setHeaderValidated(
@@ -212,16 +189,6 @@ void HttpResponse::setHeaderValidated(
     recordKnownHeaderIndex(knownBit, index);
 }
 
-void HttpResponse::appendHeader(std::string_view key, std::string_view value) {
-    if (!isValidHttpHeaderName(key)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-    if (!isValidHttpHeaderValue(value)) {
-        throw std::invalid_argument("invalid HTTP header value");
-    }
-    appendHeaderValidated(key, value, classifyKnownHeader(key));
-}
-
 void HttpResponse::appendHeaderValidated(
     std::string_view key,
     std::string_view value,
@@ -232,7 +199,7 @@ void HttpResponse::appendHeaderValidated(
 }
 
 void HttpResponse::setHeaderStableView(std::string_view key, std::string_view value) {
-    const auto knownBit = classifyKnownHeader(key);
+    const auto knownBit = detail::classifyResponseHeaderName(key);
     if (auto* const header = findHeaderForUpdate(key, knownBit)) {
         headers_.assignStableView(*header, key, value, knownBit);
         return;
@@ -244,12 +211,12 @@ void HttpResponse::setHeaderStableView(std::string_view key, std::string_view va
 }
 
 void HttpResponse::setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
-    auto& header = prepareHeaderValueStorage(key, unsignedDecimalSize(value), knownBit);
+    auto& header = prepareHeaderValueStorage(key, detail::unsignedDecimalSize(value), knownBit);
     writeUnsignedHeaderValue(header, value);
 }
 
 void HttpResponse::setAllowHeader(std::uint32_t methodMask) {
-    auto& header = prepareHeaderValueStorage("Allow", allowHeaderValueSize(methodMask), kKnownHeaderAllow);
+    auto& header = prepareHeaderValueStorage("Allow", allowHeaderValueSize(methodMask), detail::kResponseHeaderAllow);
     writeAllowHeaderValue(header, methodMask);
 }
 
@@ -259,39 +226,23 @@ void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, s
     }
     const auto endOffset = offset + length - 1;
     const auto valueSize = std::string_view("bytes ").size() +
-        unsignedDecimalSize(offset) +
+        detail::unsignedDecimalSize(offset) +
         1 +
-        unsignedDecimalSize(endOffset) +
+        detail::unsignedDecimalSize(endOffset) +
         1 +
-        unsignedDecimalSize(size);
-    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, kKnownHeaderContentRange);
+        detail::unsignedDecimalSize(size);
+    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeHeaderValue(header, offset, length, size);
 }
 
 void HttpResponse::setContentRangeUnsatisfied(std::uint64_t size) {
-    const auto valueSize = std::string_view("bytes */").size() + unsignedDecimalSize(size);
-    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, kKnownHeaderContentRange);
+    const auto valueSize = std::string_view("bytes */").size() + detail::unsignedDecimalSize(size);
+    auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeUnsatisfiedHeaderValue(header, size);
 }
 
 void HttpResponse::reserveHeaders(std::size_t count) {
     headers_.reserve(count);
 }
-
-namespace detail {
-
-void setResponseHeaderStableView(HttpResponse& response, std::string_view key, std::string_view value) {
-    response.setHeaderStableView(key, value);
-}
-
-void setResponseHeaderUnsigned(HttpResponse& response, std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
-    response.setHeaderUnsigned(key, value, knownBit);
-}
-
-void setResponseAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
-    response.setAllowHeader(methodMask);
-}
-
-}  // namespace detail
 
 }  // namespace ruvia

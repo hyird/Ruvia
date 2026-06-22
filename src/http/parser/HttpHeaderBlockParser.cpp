@@ -1,7 +1,6 @@
 #include "HttpHeaderBlockParser.h"
 
 #include "HttpRequestTarget.h"
-#include "ruvia/http/HeaderUtils.h"
 
 #include <algorithm>
 #include <charconv>
@@ -67,14 +66,12 @@ enum class TransferEncodingParse {
             if (block.transferCodings.count == kMaxTransferCodings) {
                 return TransferEncodingParse::kUnsupported;
             }
-            block.transferGzip = true;
             block.sawTransferEncoding = true;
             block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kGzip;
         } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
             if (block.transferCodings.count == kMaxTransferCodings) {
                 return TransferEncodingParse::kUnsupported;
             }
-            block.transferDeflate = true;
             block.sawTransferEncoding = true;
             block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kDeflate;
         } else {
@@ -257,14 +254,7 @@ HttpParseError parseHttpHeaderBlock(
                 }
                 break;
             case RequestHeaderKind::kAcceptEncoding:
-                httpUpdateAcceptedEncodingQuality(
-                    value,
-                    "gzip",
-                    block.acceptGzipQuality,
-                    block.acceptGzipWildcardQuality);
-                block.flags.acceptsGzip = block.acceptGzipQuality >= 0
-                    ? block.acceptGzipQuality > 0
-                    : block.acceptGzipWildcardQuality > 0;
+                block.gzipEncoding.update(value, "gzip");
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:

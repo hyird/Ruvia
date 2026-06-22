@@ -9,36 +9,37 @@
 #include <string>
 #include <utility>
 
-namespace ruvia {
+#include "ruvia/memory/PmrObject.h"
 
-std::pmr::vector<Env::Variable>::const_iterator Env::findVariable(std::string_view name) const noexcept {
-    const auto it = std::lower_bound(
-        variables_.begin(),
-        variables_.end(),
+namespace ruvia {
+namespace {
+
+template <typename Variables>
+[[nodiscard]] auto findVariableSlot(Variables& variables, std::string_view name) noexcept {
+    return std::lower_bound(
+        variables.begin(),
+        variables.end(),
         name,
-        [](const Variable& variable, std::string_view key) {
+        [](const detail::EnvVariable& variable, std::string_view key) {
             return std::string_view(variable.name).compare(key) < 0;
         });
-
-    if (it == variables_.end() || std::string_view(it->name) != name) {
-        return variables_.end();
-    }
-    return it;
 }
 
-std::pmr::vector<Env::Variable>::iterator Env::findInsertPosition(std::string_view name) noexcept {
-    return std::lower_bound(
-        variables_.begin(),
-        variables_.end(),
-        name,
-        [](const Variable& variable, std::string_view key) {
-            return std::string_view(variable.name).compare(key) < 0;
-        });
+}  // namespace
+
+Env::Env()
+    : state_(detail::constructPmrObject<detail::EnvState>(ProcessMemory::instance().upstreamResource())) {}
+
+Env::~Env() = default;
+
+void detail::EnvStateDeleter::operator()(EnvState* state) const noexcept {
+    destroyPmrObject(state, ProcessMemory::instance().upstreamResource());
 }
 
 std::optional<std::string_view> Env::get(std::string_view name) const noexcept {
-    const auto it = findVariable(name);
-    if (it == variables_.end()) {
+    const auto& variables = state_->variables;
+    const auto it = findVariableSlot(variables, name);
+    if (it == variables.end() || std::string_view(it->name) != name) {
         return std::nullopt;
     }
 
@@ -84,18 +85,18 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
 }
 
 bool Env::loaded() const noexcept {
-    return loaded_;
+    return state_->loaded;
 }
 
 std::size_t Env::size() const noexcept {
-    return variables_.size();
+    return state_->variables.size();
 }
 
-DotenvResult Env::loadFromExecutableDirectory(DotenvOptions options) {
-    return loadFromFile(detail::dotenvExecutableDirectory() / ".env", options);
+DotenvResult detail::loadEnvFromExecutableDirectory(Env& env, DotenvOptions options) {
+    return detail::loadEnvFromFile(env, detail::dotenvExecutableDirectory() / ".env", options);
 }
 
-DotenvResult Env::loadFromFile(const std::filesystem::path& path, DotenvOptions options) {
+DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path, DotenvOptions options) {
     std::ifstream probe(path);
     if (!probe) {
         if (options.required) {
@@ -107,10 +108,12 @@ DotenvResult Env::loadFromFile(const std::filesystem::path& path, DotenvOptions 
 
     const auto entries = detail::readDotenvEntries(path);
     DotenvResult result{.loaded = true};
+    auto& state = detail::EnvAccess::state(env);
 
     for (const auto& entry : entries) {
-        auto it = findInsertPosition(entry.name);
-        if (it != variables_.end() && std::string_view(it->name) == std::string_view(entry.name)) {
+        auto& variables = state.variables;
+        auto it = findVariableSlot(variables, entry.name);
+        if (it != variables.end() && std::string_view(it->name) == std::string_view(entry.name)) {
             if (!options.overrideExisting) {
                 ++result.variablesSkipped;
                 continue;
@@ -121,14 +124,14 @@ DotenvResult Env::loadFromFile(const std::filesystem::path& path, DotenvOptions 
             continue;
         }
 
-        Variable variable;
+        detail::EnvVariable variable;
         variable.name.assign(entry.name.data(), entry.name.size());
         variable.value.assign(entry.value.data(), entry.value.size());
-        variables_.insert(it, std::move(variable));
+        variables.insert(it, std::move(variable));
         ++result.variablesSet;
     }
 
-    loaded_ = true;
+    state.loaded = true;
     return result;
 }
 

@@ -5,8 +5,8 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/http/HeaderUtils.h"
-#include "ruvia/http/HttpParser.h"
+#include "../../http/HttpRequestInternal.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -96,12 +96,12 @@ namespace {
 bool isValidWebSocketRequest(const HttpRequest& request, const HttpRequestFlags& flags) noexcept {
     return request.method() == HttpMethod::kGet &&
         request.httpVersion() == "HTTP/1.1" &&
-        webSocketHeaderEquals(request.header(HttpRequest::KnownHeader::kUpgrade), "websocket") &&
+        webSocketHeaderEquals(requestKnownHeader(request, RequestKnownHeader::kUpgrade), "websocket") &&
         flags.upgrade &&
         flags.secWebSocketKeyCount == 1 &&
         flags.secWebSocketVersionCount == 1 &&
-        webSocketHeaderEquals(request.header(HttpRequest::KnownHeader::kSecWebSocketVersion), "13") &&
-        decodeWebSocketKey(request.header(HttpRequest::KnownHeader::kSecWebSocketKey)).has_value();
+        webSocketHeaderEquals(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion), "13") &&
+        decodeWebSocketKey(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey)).has_value();
 }
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {

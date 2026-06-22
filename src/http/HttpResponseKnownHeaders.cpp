@@ -1,8 +1,9 @@
-#include "ruvia/http/HttpResponse.h"
+#include "HttpResponseKnownHeaders.h"
 
-#include "ruvia/http/HeaderUtils.h"
+#include "HeaderTokenUtils.h"
+#include "HttpResponseHeaderBits.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] unsigned char lowerAscii(unsigned char c) noexcept {
@@ -11,7 +12,7 @@ namespace {
 
 }  // namespace
 
-std::uint32_t HttpResponse::classifyKnownHeader(std::string_view name) noexcept {
+std::uint32_t classifyResponseHeaderName(std::string_view name) noexcept {
     if (name.empty()) {
         return 0;
     }
@@ -20,88 +21,88 @@ std::uint32_t HttpResponse::classifyKnownHeader(std::string_view name) noexcept 
         case 4:
             switch (first) {
                 case 'd':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Date")) return kKnownHeaderDate;
+                    if (httpAsciiEqualsIgnoreCase(name, "Date")) return kResponseHeaderDate;
                     break;
                 case 'e':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "ETag")) return kKnownHeaderEtag;
+                    if (httpAsciiEqualsIgnoreCase(name, "ETag")) return kResponseHeaderEtag;
                     break;
                 case 'v':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Vary")) return kKnownHeaderVary;
+                    if (httpAsciiEqualsIgnoreCase(name, "Vary")) return kResponseHeaderVary;
                     break;
                 default:
                     break;
             }
             return 0;
         case 5:
-            if (first == 'a' && detail::httpAsciiEqualsIgnoreCase(name, "Allow")) return kKnownHeaderAllow;
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Allow")) return kResponseHeaderAllow;
             return 0;
         case 6:
-            if (first == 's' && detail::httpAsciiEqualsIgnoreCase(name, "Server")) return kKnownHeaderServer;
+            if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Server")) return kResponseHeaderServer;
             return 0;
         case 8:
-            if (first == 'l' && detail::httpAsciiEqualsIgnoreCase(name, "Location")) return kKnownHeaderLocation;
+            if (first == 'l' && httpAsciiEqualsIgnoreCase(name, "Location")) return kResponseHeaderLocation;
             return 0;
         case 10:
             switch (first) {
                 case 'c':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) return kKnownHeaderConnection;
+                    if (httpAsciiEqualsIgnoreCase(name, "Connection")) return kResponseHeaderConnection;
                     break;
                 case 's':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Set-Cookie")) return kKnownHeaderSetCookie;
+                    if (httpAsciiEqualsIgnoreCase(name, "Set-Cookie")) return kResponseHeaderSetCookie;
                     break;
                 default:
                     break;
             }
             return 0;
         case 12:
-            if (first == 'c' && detail::httpAsciiEqualsIgnoreCase(name, "Content-Type")) return kKnownHeaderContentType;
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Type")) return kResponseHeaderContentType;
             return 0;
         case 13:
             switch (first) {
                 case 'a':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Accept-Ranges")) return kKnownHeaderAcceptRanges;
+                    if (httpAsciiEqualsIgnoreCase(name, "Accept-Ranges")) return kResponseHeaderAcceptRanges;
                     break;
                 case 'c':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Cache-Control")) return kKnownHeaderCacheControl;
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Content-Range")) return kKnownHeaderContentRange;
+                    if (httpAsciiEqualsIgnoreCase(name, "Cache-Control")) return kResponseHeaderCacheControl;
+                    if (httpAsciiEqualsIgnoreCase(name, "Content-Range")) return kResponseHeaderContentRange;
                     break;
                 case 'l':
-                    if (detail::httpAsciiEqualsIgnoreCase(name, "Last-Modified")) return kKnownHeaderLastModified;
+                    if (httpAsciiEqualsIgnoreCase(name, "Last-Modified")) return kResponseHeaderLastModified;
                     break;
                 default:
                     break;
             }
             return 0;
         case 14:
-            if (first == 'c' && detail::httpAsciiEqualsIgnoreCase(name, "Content-Length")) return kKnownHeaderContentLength;
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Length")) return kResponseHeaderContentLength;
             return 0;
         case 16:
-            if (first == 'c' && detail::httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) return kKnownHeaderContentEncoding;
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) return kResponseHeaderContentEncoding;
             return 0;
         case 17:
-            if (first == 't' && detail::httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) return kKnownHeaderTransferEncoding;
+            if (first == 't' && httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) return kResponseHeaderTransferEncoding;
             return 0;
         case 27:
-            if (first == 'a' && detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Origin")) return kKnownHeaderAccessControlAllowOrigin;
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Origin")) return kResponseHeaderAccessControlAllowOrigin;
             return 0;
         case 28:
             if (first == 'a') {
-                if (detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Methods")) return kKnownHeaderAccessControlAllowMethods;
-                if (detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Headers")) return kKnownHeaderAccessControlAllowHeaders;
+                if (httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Methods")) return kResponseHeaderAccessControlAllowMethods;
+                if (httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Headers")) return kResponseHeaderAccessControlAllowHeaders;
             }
             return 0;
         case 22:
-            if (first == 'a' && detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Max-Age")) return kKnownHeaderAccessControlMaxAge;
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Max-Age")) return kResponseHeaderAccessControlMaxAge;
             return 0;
         case 29:
-            if (first == 'a' && detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Expose-Headers")) return kKnownHeaderAccessControlExposeHeaders;
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Expose-Headers")) return kResponseHeaderAccessControlExposeHeaders;
             return 0;
         case 32:
-            if (first == 'a' && detail::httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Credentials")) return kKnownHeaderAccessControlAllowCredentials;
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Allow-Credentials")) return kResponseHeaderAccessControlAllowCredentials;
             return 0;
         default:
             return 0;
     }
 }
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

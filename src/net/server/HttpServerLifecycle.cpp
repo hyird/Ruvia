@@ -4,9 +4,12 @@
 #include <asio/detached.hpp>
 #include <asio/post.hpp>
 #include <asio/ssl/context.hpp>
+#include <asio/ssl/error.hpp>
+#include <asio/system_error.hpp>
 #include <cerrno>
 #include <cstring>
 #include <memory>
+#include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <stdexcept>
 #include <string>
@@ -19,6 +22,7 @@
 
 #include "ConnectionScanner.h"
 #include "HttpConnectionState.h"
+#include "HttpServerOptionsValidation.h"
 #include "../../runtime/AsioAwait.h"
 
 namespace ruvia::detail {
@@ -65,6 +69,51 @@ int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) no
     return static_cast<int>(password.size());
 }
 
+[[nodiscard]] asio::error_code translateOpenSslError(unsigned long error) {
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+    if (ERR_SYSTEM_ERROR(error)) {
+        return asio::error_code(
+            static_cast<int>(ERR_GET_REASON(error)),
+            asio::error::get_system_category());
+    }
+#endif
+    return asio::error_code(static_cast<int>(error), asio::error::get_ssl_category());
+}
+
+[[noreturn]] void throwTlsContextFileError(const char* operation) {
+    throw asio::system_error(translateOpenSslError(::ERR_get_error()), operation);
+}
+
+void useCertificateChainFile(asio::ssl::context& context, const std::pmr::string& filename) {
+    ::ERR_clear_error();
+    if (::SSL_CTX_use_certificate_chain_file(context.native_handle(), filename.c_str()) != 1) {
+        throwTlsContextFileError("use_certificate_chain_file");
+    }
+}
+
+void usePrivateKeyFile(asio::ssl::context& context, const std::pmr::string& filename) {
+    ::ERR_clear_error();
+    if (::SSL_CTX_use_PrivateKey_file(context.native_handle(), filename.c_str(), SSL_FILETYPE_PEM) != 1) {
+        throwTlsContextFileError("use_private_key_file");
+    }
+}
+
+void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filename) {
+    ::ERR_clear_error();
+    if (::SSL_CTX_load_verify_locations(context.native_handle(), filename.c_str(), nullptr) != 1) {
+        throwTlsContextFileError("load_verify_file");
+    }
+}
+
+[[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(const HttpServerOptions& options) noexcept {
+    return ConnectionScannerOptions{
+        .scanInterval = options.scanInterval,
+        .idleTimeoutMs = options.idleTimeout.count(),
+        .headerTimeoutMs = options.headerTimeout.count(),
+        .bodyTimeoutMs = options.bodyTimeout.count(),
+        .writeTimeoutMs = options.writeTimeout.count()};
+}
+
 }  // namespace
 
 HttpServer::HttpServer(
@@ -76,7 +125,7 @@ HttpServer::HttpServer(
           std::move(endpoint), routes, databases,
           std::span<const RedisDefinition>{},
           std::span<const HttpClientDefinition>{},
-          options) {}
+          std::move(options)) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
@@ -87,7 +136,7 @@ HttpServer::HttpServer(
     : HttpServer(
           std::move(endpoint), routes, databases, redis,
           std::span<const HttpClientDefinition>{},
-          options) {}
+          std::move(options)) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
@@ -103,11 +152,11 @@ HttpServer::HttpServer(
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
-      options_(options),
+      options_(validatedHttpServerOptions(std::move(options))),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       httpClients_(ioContext_, memory_.resource(), httpClients),
-      connectionScanner_(ioContext_.get_executor(), options_),
+      connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
         connectionScanner_.setWorkerScanner(&databases_, [](void* target) noexcept {
@@ -117,6 +166,11 @@ HttpServer::HttpServer(
     if (redis_.hasAnyTimeout()) {
         connectionScanner_.setWorkerScanner(&redis_, [](void* target) noexcept {
             static_cast<RedisRegistry*>(target)->scanDeadlines();
+        });
+    }
+    if (!httpClients_.empty()) {
+        connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
+            static_cast<HttpClientRegistry*>(target)->scanDeadlines();
         });
     }
 }
@@ -234,10 +288,10 @@ void HttpServer::configureTlsContext() {
         SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
         SSL_CTX_set_default_passwd_cb_userdata(context.native_handle(), &options_.tls.privateKeyPassword);
     }
-    context.use_certificate_chain_file(options_.tls.certificateChainFile.string());
-    context.use_private_key_file(options_.tls.privateKeyFile.string(), asio::ssl::context::pem);
+    useCertificateChainFile(context, options_.tls.certificateChainFile);
+    usePrivateKeyFile(context, options_.tls.privateKeyFile);
     if (!options_.tls.verifyFile.empty()) {
-        context.load_verify_file(options_.tls.verifyFile.string());
+        loadVerifyFile(context, options_.tls.verifyFile);
         context.set_verify_mode(asio::ssl::verify_peer);
     }
 }

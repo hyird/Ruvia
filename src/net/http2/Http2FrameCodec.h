@@ -2,8 +2,6 @@
 
 #include "Http2FrameTypes.h"
 
-#include <memory_resource>
-#include <string>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -32,22 +30,18 @@ namespace ruvia::detail {
         static_cast<std::uint32_t>(data[3]);
 }
 
-inline void http2Append16(std::pmr::string& out, std::uint16_t value) {
-    out.push_back(static_cast<char>((value >> 8) & 0xff));
-    out.push_back(static_cast<char>(value & 0xff));
+inline char* http2Write16(char* out, std::uint16_t value) noexcept {
+    *out++ = static_cast<char>((value >> 8) & 0xff);
+    *out++ = static_cast<char>(value & 0xff);
+    return out;
 }
 
-inline void http2Append24(std::pmr::string& out, std::uint32_t value) {
-    out.push_back(static_cast<char>((value >> 16) & 0xff));
-    out.push_back(static_cast<char>((value >> 8) & 0xff));
-    out.push_back(static_cast<char>(value & 0xff));
-}
-
-inline void http2Append32(std::pmr::string& out, std::uint32_t value) {
-    out.push_back(static_cast<char>((value >> 24) & 0xff));
-    out.push_back(static_cast<char>((value >> 16) & 0xff));
-    out.push_back(static_cast<char>((value >> 8) & 0xff));
-    out.push_back(static_cast<char>(value & 0xff));
+inline char* http2Write32(char* out, std::uint32_t value) noexcept {
+    *out++ = static_cast<char>((value >> 24) & 0xff);
+    *out++ = static_cast<char>((value >> 16) & 0xff);
+    *out++ = static_cast<char>((value >> 8) & 0xff);
+    *out++ = static_cast<char>(value & 0xff);
+    return out;
 }
 
 inline void http2EncodeFrameHeader(
@@ -68,6 +62,16 @@ inline void http2EncodeFrameHeader(
     out[8] = static_cast<char>(id & 0xff);
 }
 
+inline char* http2WriteFrameHeader(
+    char* out,
+    std::uint32_t length,
+    Http2FrameType type,
+    std::uint8_t flags,
+    std::uint32_t streamId) noexcept {
+    http2EncodeFrameHeader(out, length, type, flags, streamId);
+    return out + kHttp2FrameHeaderBytes;
+}
+
 [[nodiscard]] inline Http2FrameHeader http2ParseFrameHeader(std::string_view bytes) noexcept {
     const auto* data = reinterpret_cast<const unsigned char*>(bytes.data());
     return Http2FrameHeader{
@@ -77,51 +81,19 @@ inline void http2EncodeFrameHeader(
         .streamId = http2Read31(data + 5)};
 }
 
-inline void http2AppendFrameHeader(
-    std::pmr::string& out,
-    std::uint32_t length,
-    Http2FrameType type,
-    std::uint8_t flags,
-    std::uint32_t streamId) {
-    char header[kHttp2FrameHeaderBytes];
-    http2EncodeFrameHeader(header, length, type, flags, streamId);
-    out.append(header, kHttp2FrameHeaderBytes);
+inline char* http2WriteSettingsEntry(char* out, Http2SettingId id, std::uint32_t value) noexcept {
+    out = http2Write16(out, static_cast<std::uint16_t>(id));
+    return http2Write32(out, value);
 }
 
-inline void http2AppendFrame(
-    std::pmr::string& out,
-    Http2FrameType type,
-    std::uint8_t flags,
-    std::uint32_t streamId,
-    std::string_view payload) {
-    http2AppendFrameHeader(out, static_cast<std::uint32_t>(payload.size()), type, flags, streamId);
-    out.append(payload.data(), payload.size());
+inline char* http2WriteWindowUpdate(char* out, std::uint32_t streamId, std::uint32_t increment) noexcept {
+    out = http2WriteFrameHeader(out, 4, Http2FrameType::kWindowUpdate, 0, streamId);
+    return http2Write32(out, increment & 0x7fffffffU);
 }
 
-inline void http2AppendSettingsEntry(std::pmr::string& out, Http2SettingId id, std::uint32_t value) {
-    http2Append16(out, static_cast<std::uint16_t>(id));
-    http2Append32(out, value);
-}
-
-inline void http2AppendRstStream(std::pmr::string& out, std::uint32_t streamId, Http2ErrorCode error) {
-    http2AppendFrameHeader(out, 4, Http2FrameType::kRstStream, 0, streamId);
-    http2Append32(out, static_cast<std::uint32_t>(error));
-}
-
-inline void http2AppendWindowUpdate(std::pmr::string& out, std::uint32_t streamId, std::uint32_t increment) {
-    http2AppendFrameHeader(out, 4, Http2FrameType::kWindowUpdate, 0, streamId);
-    http2Append32(out, increment & 0x7fffffffU);
-}
-
-inline void http2AppendGoaway(
-    std::pmr::string& out,
-    std::uint32_t lastStreamId,
-    Http2ErrorCode error,
-    std::string_view debug = {}) {
-    http2AppendFrameHeader(out, static_cast<std::uint32_t>(8 + debug.size()), Http2FrameType::kGoaway, 0, 0);
-    http2Append32(out, lastStreamId & 0x7fffffffU);
-    http2Append32(out, static_cast<std::uint32_t>(error));
-    out.append(debug.data(), debug.size());
+inline char* http2WriteGoawayPayload(char* out, std::uint32_t lastStreamId, Http2ErrorCode error) noexcept {
+    out = http2Write32(out, lastStreamId & 0x7fffffffU);
+    return http2Write32(out, static_cast<std::uint32_t>(error));
 }
 
 }  // namespace ruvia::detail

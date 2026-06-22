@@ -1,6 +1,6 @@
 #include "HttpServer.h"
 
-#include "ruvia/http/Context.h"
+#include "../../http/ContextInternal.h"
 #include "ruvia/http/Error.h"
 
 namespace ruvia::detail {
@@ -21,7 +21,7 @@ std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
         relative.remove_prefix(1);
     }
 
-    Context context(memory, request);
+    auto context = ContextAccess::make(memory, request);
     try {
         return context.staticFile(*root, relative);
     } catch (const HttpError&) {

@@ -1,6 +1,9 @@
 #include "HttpResponseCompression.h"
 
+#include "../../http/HttpResponseBodyAccess.h"
+#include "../../http/HttpResponseFileAccess.h"
 #include "../../http/ResponseHeaderUtils.h"
+#include "ruvia/http/detail/PmrString.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -8,7 +11,6 @@
 #include <limits>
 #include <memory_resource>
 #include <string_view>
-#include <utility>
 
 #include <zlib.h>
 
@@ -20,7 +22,7 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
         response,
         "Content-Length",
         static_cast<std::uint64_t>(size),
-        HttpResponse::kKnownHeaderContentLength);
+        kResponseHeaderContentLength);
 }
 
 struct alignas(std::max_align_t) ZlibAllocationHeader {
@@ -113,47 +115,46 @@ bool gzipCompress(std::string_view input, std::pmr::string& output, std::size_t 
 }  // namespace
 
 bool compressResponseBodyIfAccepted(
-    const HttpRequestFlags& requestFlags,
+    bool acceptsGzip,
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
-    std::pmr::string* compressionScratch,
+    std::pmr::string& compressionScratch,
     bool skipBody) {
     if (skipBody ||
         !options.enabled ||
-        response.hasFileBody() ||
-        response.bodySize() < options.minBytes ||
-        response.hasKnownHeader(HttpResponse::kKnownHeaderContentEncoding) ||
-        response.hasKnownHeader(HttpResponse::kKnownHeaderContentRange) ||
-        httpHasToken(response.header(HttpResponse::kKnownHeaderCacheControl), "no-transform") ||
-        !requestFlags.acceptsGzip) {
-        return false;
-    }
-    if (response.statusCode() < 200 ||
-        response.statusCode() == 206 ||
-        response.statusCode() == 204 ||
-        response.statusCode() == 205 ||
-        response.statusCode() == 304) {
+        !acceptsGzip) {
         return false;
     }
 
-    const auto body = response.bodyBytes();
-    std::pmr::string localCompressed(response.resource());
-    auto& compressed = compressionScratch == nullptr ? localCompressed : *compressionScratch;
-    compressed.clear();
-    compressed.reserve(body.size());
-    if (!gzipCompress(body, compressed, body.size()) || compressed.size() >= body.size()) {
-        compressed.clear();
+    const auto statusCode = response.statusCode();
+    if (statusCode < 200 ||
+        statusCode == 206 ||
+        statusCode == 204 ||
+        statusCode == 205 ||
+        statusCode == 304) {
+        return false;
+    }
+
+    if (responseHasFileBody(response) ||
+        responseBodySize(response) < options.minBytes ||
+        responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
+        responseHasKnownHeader(response, kResponseHeaderContentRange) ||
+        httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
+        return false;
+    }
+
+    const auto body = responseBodyBytes(response);
+    compressionScratch.clear();
+    compressionScratch.reserve(body.size());
+    if (!gzipCompress(body, compressionScratch, body.size()) || compressionScratch.size() >= body.size()) {
+        clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
         return false;
     }
 
     setResponseHeaderStableView(response, "Content-Encoding", "gzip");
     addVaryToken(response, "Accept-Encoding");
-    setCompressedContentLength(response, compressed.size());
-    if (compressionScratch == nullptr) {
-        response.setBody(std::move(compressed));
-    } else {
-        response.setBodyView(compressed);
-    }
+    setCompressedContentLength(response, compressionScratch.size());
+    response.setBodyView(compressionScratch);
     return true;
 }
 

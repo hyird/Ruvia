@@ -1,7 +1,8 @@
 #include "ruvia/http/HttpRequest.h"
 
+#include "HttpRequestInternal.h"
 #include "parser/HttpParserSyntax.h"
-#include "ruvia/http/HeaderUtils.h"
+#include "HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
 
 #include <charconv>
@@ -12,13 +13,16 @@ namespace {
 
 static_assert(
     static_cast<std::size_t>(detail::RequestHeaderKind::kAccept) ==
-    static_cast<std::size_t>(HttpRequest::KnownHeader::kAccept) + 1);
+    static_cast<std::size_t>(detail::RequestKnownHeader::kAccept) + 1);
 static_assert(
     static_cast<std::size_t>(detail::RequestHeaderKind::kAuthorization) ==
-    static_cast<std::size_t>(HttpRequest::KnownHeader::kAuthorization) + 1);
+    static_cast<std::size_t>(detail::RequestKnownHeader::kAuthorization) + 1);
 static_assert(
     static_cast<std::size_t>(detail::RequestHeaderKind::kUserAgent) ==
-    static_cast<std::size_t>(HttpRequest::KnownHeader::kUserAgent) + 1);
+    static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 1);
+static_assert(
+    detail::kRequestHeaderKindCount ==
+    static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 2);
 
 template <typename T>
 std::optional<T> parseInteger(std::optional<std::string_view> input) noexcept {
@@ -101,19 +105,11 @@ std::optional<std::pmr::string> HttpRequest::decodedPath() const {
     return detail::decodeUrlComponentToString(path_, resource(), detail::UrlDecodeMode::kPercent);
 }
 
-std::string_view HttpRequest::header(KnownHeader name) const noexcept {
-    const auto slot = knownHeaderSlot(name);
-    if (slot >= kKnownRequestHeaderCount) {
-        return {};
-    }
-    return (knownHeaderBits_ & kKnownHeaderBitsBySlot[slot]) != 0 ? knownHeaders_[slot] : std::string_view{};
-}
-
 std::string_view HttpRequest::header(std::string_view name) const noexcept {
     const auto kind = detail::classifyRequestHeader(name);
     if (kind != detail::RequestHeaderKind::kOther) {
         const auto knownSlot = static_cast<std::size_t>(kind) - 1;
-        return header(static_cast<KnownHeader>(knownSlot));
+        return detail::requestKnownHeader(*this, static_cast<detail::RequestKnownHeader>(knownSlot));
     }
 
     for (std::size_t i = 0; i < headerCount_; ++i) {
@@ -139,7 +135,7 @@ QueryValue HttpRequest::query(std::string_view name) const noexcept {
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
-    auto input = header(KnownHeader::kCookie);
+    auto input = detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
     while (!input.empty()) {
         const auto semicolon = input.find(';');
         const auto part = semicolon == std::string_view::npos ? input : input.substr(0, semicolon);
