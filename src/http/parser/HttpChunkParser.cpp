@@ -47,8 +47,9 @@ namespace {
             return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
                 httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 13:
-            return httpAsciiEqualsIgnoreCase(name, "Authorization") ||
-                httpAsciiEqualsIgnoreCase(name, "Cache-Control");
+            // "Authorization" is already caught above via classifyRequestHeader
+            // (kAuthorization); only Cache-Control needs the spelled-out check.
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control");
         case 14:
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 15:
