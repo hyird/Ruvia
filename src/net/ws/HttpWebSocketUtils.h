@@ -311,5 +311,86 @@ private:
     bool fragmented_{false};
 };
 
+struct WebSocketFrameView final {
+    WebSocketOpcode opcode{WebSocketOpcode::kText};
+    std::string_view payload;
+    bool fin{true};
+    bool continuation{false};
+};
+
+// Single owner of WebSocket frame decode (RFC 6455 §5.2): FIN/opcode/length
+// parsing, control-frame and length-limit validation, and in-place unmasking.
+// `ensure` is a callable returning an awaitable<bool>; `co_await ensure(n)`
+// yields true once at least n bytes are buffered from `offset`, or false if the
+// stream ended first. A clean end at a frame boundary returns std::nullopt; an
+// end mid-frame throws. Shared by the HTTP/1.1 and HTTP/2 transports, which
+// differ only in how `ensure` fills the buffer.
+template <typename Ensure>
+[[nodiscard]] Task<std::optional<WebSocketFrameView>> webSocketReadFrame(
+    std::pmr::string& buffer,
+    std::size_t& offset,
+    std::size_t& pendingCompactUntil,
+    std::size_t maxMessageBytes,
+    Ensure ensure) {
+    compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
+    if (!(co_await ensure(2))) {
+        co_return std::nullopt;
+    }
+    const auto first = static_cast<unsigned char>(buffer[offset]);
+    const auto second = static_cast<unsigned char>(buffer[offset + 1]);
+    WebSocketFrameStart frameStart;
+    std::uint64_t length = second & 0x7FU;
+    std::size_t headerSize = 2;
+
+    if (!decodeWebSocketFrameStart(first, second, frameStart)) {
+        throw std::invalid_argument("invalid websocket frame");
+    }
+    if (length == 126) {
+        if (!(co_await ensure(headerSize + 2))) {
+            throw std::invalid_argument("incomplete websocket frame");
+        }
+        length = readWebSocketUint16(buffer.data() + offset + headerSize);
+        headerSize += 2;
+    } else if (length == 127) {
+        if (!(co_await ensure(headerSize + 8))) {
+            throw std::invalid_argument("incomplete websocket frame");
+        }
+        if (!readWebSocketUint64(buffer.data() + offset + headerSize, length)) {
+            throw std::invalid_argument("invalid websocket frame length");
+        }
+        headerSize += 8;
+    }
+
+    if (isInvalidWebSocketControlFrame(frameStart, length)) {
+        throw std::invalid_argument("invalid websocket control frame");
+    }
+    if (webSocketFrameLengthExceedsLimit(length, maxMessageBytes)) {
+        throw std::invalid_argument("websocket message is too large");
+    }
+    if (webSocketMaskedFrameReadSizeOverflows(length, headerSize)) {
+        throw std::invalid_argument("invalid websocket frame length");
+    }
+    if (!(co_await ensure(headerSize + 4 + static_cast<std::size_t>(length)))) {
+        throw std::invalid_argument("incomplete websocket frame");
+    }
+
+    const auto maskOffset = offset + headerSize;
+    const auto payloadOffset = maskOffset + 4;
+    const auto payloadSize = static_cast<std::size_t>(length);
+    auto* payload = buffer.data() + payloadOffset;
+    decodeMaskedWebSocketPayload(payload, payloadSize, buffer.data() + maskOffset);
+    const auto payloadView = std::string_view(payload, payloadSize);
+    if (frameStart.opcode == WebSocketOpcode::kClose) {
+        validateWebSocketClosePayload(payloadView);
+    }
+    offset = payloadOffset + payloadSize;
+    pendingCompactUntil = offset;
+    co_return WebSocketFrameView{
+        .opcode = frameStart.opcode,
+        .payload = payloadView,
+        .fin = frameStart.fin,
+        .continuation = frameStart.continuation};
+}
+
 }  // namespace detail
 }  // namespace ruvia
