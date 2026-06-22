@@ -309,13 +309,10 @@ inline void httpAppendUnsigned(std::pmr::string& output, std::uint64_t value) {
 }
 
 [[nodiscard]] inline bool httpIsWeakEtag(std::string_view value) noexcept {
-    value = value.size() >= 2 && value[0] == 'W' && value[1] == '/' ? value : std::string_view{};
-    return !value.empty();
+    return value.size() >= 2 && value[0] == 'W' && value[1] == '/';
 }
 
 [[nodiscard]] inline bool httpStrongEtagEquals(std::string_view left, std::string_view right) noexcept {
-    left = std::string_view(left.data(), left.size());
-    right = std::string_view(right.data(), right.size());
     return !httpIsWeakEtag(left) && !httpIsWeakEtag(right) && left == right;
 }
 
