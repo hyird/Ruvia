@@ -73,19 +73,11 @@ public:
     Task<void> detachAndDrainBackgroundWrites();
 
 private:
-    struct Frame final {
-        WebSocketOpcode opcode{WebSocketOpcode::kText};
-        std::string_view payload;
-        bool fin{true};
-        bool continuation{false};
-    };
-
     void completeBackgroundWrite() noexcept;
     bool heartbeatTick(std::int64_t now) noexcept;
     Task<void> writeFrameNow(WebSocketOpcode opcode, std::string_view payload);
-    Task<void> ensure(std::size_t bytes);
-    void compactConsumedFrame();
-    [[nodiscard]] Task<std::optional<Frame>> readFrame();
+    [[nodiscard]] Task<bool> ensure(std::size_t bytes);
+    [[nodiscard]] Task<std::optional<WebSocketFrameView>> readFrame();
 
     Stream& stream_;
     ConnectionScanner::Entry& scannerEntry_;
