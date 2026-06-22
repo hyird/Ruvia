@@ -65,6 +65,29 @@ template <typename Predicate>
     return {};
 }
 
+// Iterate the `key=value` parameters of a `;`-delimited list (cookie pairs,
+// Content-Type / Content-Disposition parameters). Each key and value is trimmed
+// of OWS; segments without '=' are skipped. The visitor returns false to stop
+// (e.g. once it has found the parameter it wants). Quote-stripping and key
+// matching are left to the caller, which differs per RFC.
+template <typename Visitor>
+inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visitor) {
+    while (!value.empty()) {
+        const auto semicolon = value.find(';');
+        const auto part = httpTrimOws(
+            semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
+        if (const auto equals = part.find('='); equals != std::string_view::npos) {
+            if (!visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)))) {
+                return;
+            }
+        }
+        if (semicolon == std::string_view::npos) {
+            return;
+        }
+        value.remove_prefix(semicolon + 1);
+    }
+}
+
 [[nodiscard]] inline bool httpHasToken(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {
         return false;

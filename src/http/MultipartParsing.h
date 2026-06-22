@@ -51,25 +51,15 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
-    while (!disposition.empty()) {
-        const auto semicolon = disposition.find(';');
-        const auto part = httpTrimOws(
-            semicolon == std::string_view::npos ? disposition : disposition.substr(0, semicolon));
-        const auto equals = part.find('=');
-        if (equals != std::string_view::npos) {
-            const auto key = httpTrimOws(part.substr(0, equals));
-            if (key == name) {
-                return httpTrimQuotes(httpTrimOws(part.substr(equals + 1)));
-            }
+    std::optional<std::string_view> result;
+    httpVisitSemicolonParameters(disposition, [name, &result](std::string_view key, std::string_view value) noexcept {
+        if (key == name) {
+            result = httpTrimQuotes(value);
+            return false;
         }
-
-        if (semicolon == std::string_view::npos) {
-            break;
-        }
-        disposition.remove_prefix(semicolon + 1);
-    }
-
-    return std::nullopt;
+        return true;
+    });
+    return result;
 }
 
 [[nodiscard]] inline bool httpIsFormDataDisposition(std::string_view disposition) noexcept {
@@ -112,26 +102,16 @@ enum class HttpMultipartBoundaryStatus {
     }
 
     contentType.remove_prefix(mediaEnd + 1);
-    while (!contentType.empty()) {
-        const auto semicolon = contentType.find(';');
-        const auto part = httpTrimOws(
-            semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
-        const auto equals = part.find('=');
-        if (equals != std::string_view::npos) {
-            const auto key = httpTrimOws(part.substr(0, equals));
-            if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
-                boundary = httpTrimQuotes(httpTrimOws(part.substr(equals + 1)));
-                return boundary.empty()
-                    ? HttpMultipartBoundaryStatus::kInvalidBoundary
-                    : HttpMultipartBoundaryStatus::kOk;
-            }
+    httpVisitSemicolonParameters(contentType, [&boundary](std::string_view key, std::string_view value) noexcept {
+        if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
+            boundary = httpTrimQuotes(value);
+            return false;
         }
-        if (semicolon == std::string_view::npos) {
-            break;
-        }
-        contentType.remove_prefix(semicolon + 1);
-    }
-    return HttpMultipartBoundaryStatus::kInvalidBoundary;
+        return true;
+    });
+    return boundary.empty()
+        ? HttpMultipartBoundaryStatus::kInvalidBoundary
+        : HttpMultipartBoundaryStatus::kOk;
 }
 
 [[nodiscard]] inline HttpMultipartPartHeaderStatus httpParseMultipartPartHeaders(
