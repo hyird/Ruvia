@@ -173,6 +173,7 @@ HttpServer::HttpServer(
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
       acceptor_(ioContext_),
+      drainTimer_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
       options_(validatedHttpServerOptions(std::move(options))),
@@ -352,10 +353,25 @@ void HttpServer::stopOnContext() noexcept {
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
-
     connectionScanner_.stop();
-    connectionScanner_.closeAll();
 
+    // started_ is already false, so sessions self-close after their current
+    // request. With a grace period, hold the force-close for that long so
+    // in-flight requests can finish; otherwise close immediately.
+    if (options_.shutdownGracePeriod.count() > 0) {
+        drainTimer_.expires_after(options_.shutdownGracePeriod);
+        drainTimer_.async_wait([this](const std::error_code& ec) {
+            if (ec != asio::error::operation_aborted) {
+                forceCloseAll();
+            }
+        });
+        return;
+    }
+    forceCloseAll();
+}
+
+void HttpServer::forceCloseAll() noexcept {
+    connectionScanner_.closeAll();
     databases_.closeNow();
     redis_.closeNow();
     httpClients_.closeNow();

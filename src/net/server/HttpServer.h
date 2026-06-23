@@ -4,6 +4,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
+#include <asio/steady_timer.hpp>
 #include <condition_variable>
 #include <exception>
 #include <memory>
@@ -64,6 +65,7 @@ private:
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext() noexcept;
+    void forceCloseAll() noexcept;
     void resetStartupState();
     void completeStartup(std::exception_ptr exception = nullptr) noexcept;
     void waitForStartupReady();
@@ -81,6 +83,7 @@ private:
 
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
+    asio::steady_timer drainTimer_;
     std::optional<asio::ssl::context> tlsContext_;
     // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
     // sniLookup_ maps a lowercased host to its context for the SNI callback.
