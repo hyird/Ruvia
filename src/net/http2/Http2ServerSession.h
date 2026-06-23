@@ -61,6 +61,7 @@
 #include "../server/HttpFileChunkBuffer.h"
 #include "../server/HttpServerAccessLog.h"
 #include "../server/HttpResponseStreamDispatch.h"
+#include "../server/RateLimiter.h"
 #include "../../runtime/AsioAwait.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/http/Context.h"
@@ -100,7 +101,8 @@ public:
         HttpClientRegistry* httpClients,
         const HttpServerOptions& options,
         ConnectionScanner::Entry& scannerEntry,
-        std::string_view remoteAddress);
+        std::string_view remoteAddress,
+        RateLimiter* rateLimiter = nullptr);
 
     Task<void> run(std::string_view initialBytes = {});
 
@@ -282,6 +284,7 @@ private:
     const HttpServerOptions& options_;
     ConnectionScanner::Entry& scannerEntry_;
     std::string_view remoteAddress_;
+    RateLimiter* rateLimiter_{nullptr};
     std::pmr::string input_;
     Http2StreamTable streams_;
     Http2ClosedStreamHistory closedStreams_;

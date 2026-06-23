@@ -20,6 +20,20 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         co_await writeResponse(stream, response);
         co_return;
     }
+    if (rateLimiter_ != nullptr && rateLimiter_->enabled() && !rateLimiter_->allow(remoteAddress_)) {
+        auto response = co_await routes_.handleError(
+            request,
+            requestMemory,
+            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+            false,
+            routeServices());
+        setRetryAfterSeconds(response, options_.rateLimit.window);
+        co_await writeResponse(stream, response);
+        recordHttpAccess(
+            options_.accessLog, request, remoteAddress_,
+            response.statusCode(), requestStart, true);
+        co_return;
+    }
     const auto& resolution = stream.routeResolution;
     const auto maxBody = resolution.bodyMode == RequestBodyMode::kStream
         ? options_.maxStreamBodyBytes

@@ -86,6 +86,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                         options_,
                         scannerEntry,
                         remoteAddress,
+                        rateLimiter_,
                         readBuffer,
                         usedBytes);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
@@ -155,6 +156,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                             httpClients_,
                             options_,
                             remoteAddress,
+                            rateLimiter_,
                             parsed,
                             readBuffer,
                             usedBytes,
