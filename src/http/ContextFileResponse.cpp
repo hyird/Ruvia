@@ -5,6 +5,7 @@
 #include "HttpResponseHeaderState.h"
 #include "FileResponseHelpers.h"
 #include "StaticFilesInternal.h"
+#include "HeaderAcceptUtils.h"
 #include "HeaderTokenUtils.h"
 
 #include <cstddef>
@@ -172,6 +173,7 @@ template <typename ApplyResponseState>
     bool enableValidators,
     std::string_view precomputedEtag,
     std::string_view precomputedLastModified,
+    std::string_view contentEncoding,
     ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.resource());
     std::pmr::string lastModifiedStorage(context.resource());
@@ -200,6 +202,12 @@ template <typename ApplyResponseState>
         }
         if (!cacheControl.empty()) {
             response.setHeader("Cache-Control", cacheControl);
+        }
+        // A precompressed variant carries the original Content-Type with the
+        // encoding declared here; Vary lets caches key on Accept-Encoding.
+        if (!contentEncoding.empty()) {
+            detail::setResponseHeaderStableView(response, "Content-Encoding", contentEncoding);
+            detail::setResponseHeaderStableView(response, "Vary", "Accept-Encoding");
         }
         if (enableRanges) {
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
@@ -323,7 +331,63 @@ HttpResponse Context::file(
         true,
         {},
         {},
+        {},
         applyState);
+}
+
+// Selects the best precompressed sidecar (foo.js.br / .gz / .zst) the client
+// accepts and that exists in the index — highest Accept-Encoding q-value wins,
+// ties resolve br > zstd > gzip. The served bytes are the variant's, so its
+// size/etag/modified describe the wire representation; the caller keeps the
+// original Content-Type. Index lookups only (no per-request filesystem stat).
+[[nodiscard]] bool selectStaticEncodingVariant(
+    const StaticRoot& root,
+    std::string_view relative,
+    const HttpRequest& request,
+    std::pmr::memory_resource* resource,
+    detail::StaticRootEntryView& variant,
+    std::string_view& contentEncoding) {
+    const auto acceptEncoding =
+        detail::requestKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding);
+    if (acceptEncoding.empty()) {
+        return false;
+    }
+    detail::HttpAcceptedEncodingQuality brotli;
+    detail::HttpAcceptedEncodingQuality zstd;
+    detail::HttpAcceptedEncodingQuality gzip;
+    brotli.update(acceptEncoding, "br");
+    zstd.update(acceptEncoding, "zstd");
+    gzip.update(acceptEncoding, "gzip");
+
+    struct Candidate final {
+        std::string_view suffix;
+        std::string_view encoding;
+        int score;
+    };
+    const Candidate candidates[] = {
+        {".br", "br", detail::httpAcceptedEncodingScore(brotli)},
+        {".zst", "zstd", detail::httpAcceptedEncodingScore(zstd)},
+        {".gz", "gzip", detail::httpAcceptedEncodingScore(gzip)},
+    };
+
+    int best = 0;
+    bool found = false;
+    for (const auto& candidate : candidates) {
+        if (candidate.score <= best) {
+            continue;
+        }
+        std::pmr::string variantPath(resource);
+        variantPath.reserve(relative.size() + candidate.suffix.size());
+        variantPath.assign(relative.data(), relative.size());
+        variantPath.append(candidate.suffix.data(), candidate.suffix.size());
+        if (const auto entry = detail::StaticRootAccess::find(root, variantPath)) {
+            best = candidate.score;
+            variant = entry;
+            contentEncoding = candidate.encoding;
+            found = true;
+        }
+    }
+    return found;
 }
 
 HttpResponse Context::staticFile(
@@ -349,20 +413,29 @@ HttpResponse Context::staticFile(
         throw HttpError(404, "not_found", "file not found");
     }
 
+    // Serve a precompressed sidecar when the client accepts one; the bytes and
+    // validators come from the variant, the Content-Type from the base entry.
+    detail::StaticRootEntryView variant;
+    std::string_view contentEncoding;
+    const auto& served = selectStaticEncodingVariant(root, relative, req(), resource(), variant, contentEncoding)
+        ? variant
+        : entry;
+
     const auto applyState = [this](HttpResponse& response, std::uint16_t statusCode) {
         applyResponseState(response, statusCode, {});
     };
     return makeFileResponse(
         *this,
-        FileResponsePath{.nativePath = entry.filePath, .borrowNativePath = true},
-        entry.size,
-        entry.modified,
+        FileResponsePath{.nativePath = served.filePath, .borrowNativePath = true},
+        served.size,
+        served.modified,
         contentType.empty() ? entry.contentType : contentType,
         entry.cacheControl,
         entry.enableRanges,
         entry.enableValidators,
-        entry.etag,
-        entry.lastModified,
+        served.etag,
+        served.lastModified,
+        contentEncoding,
         applyState);
 }
 

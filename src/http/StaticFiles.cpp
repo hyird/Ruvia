@@ -226,6 +226,12 @@ std::pmr::string contentTypeFor(
         });
 }
 
+// A precompressed sidecar (foo.js.br / .gz / .zst) is indexed when its base
+// file's type is allowed, so it can be served as a Content-Encoding variant.
+[[nodiscard]] bool isPrecompressedSidecarExtension(std::string_view extension) noexcept {
+    return extension == ".br" || extension == ".gz" || extension == ".zst";
+}
+
 }  // namespace
 
 std::string_view detail::StaticRootAccess::indexFile(const StaticRoot& root) noexcept {
@@ -319,7 +325,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
             continue;
         }
         const auto extension = detail::httpLowerFileExtension(filePath, upstream);
-        if (!fileTypeAllowed(extension, options)) {
+        bool typeAllowed = fileTypeAllowed(extension, options);
+        if (!typeAllowed && isPrecompressedSidecarExtension(extension)) {
+            typeAllowed = fileTypeAllowed(detail::httpLowerFileExtension(filePath.stem(), upstream), options);
+        }
+        if (!typeAllowed) {
             continue;
         }
         const auto size = std::filesystem::file_size(filePath, ec);
