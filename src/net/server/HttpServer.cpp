@@ -9,6 +9,7 @@
 #include "HttpConnectionState.h"
 #include "HttpResponseWriter.h"
 #include "HttpServerBufferedRoute.h"
+#include "HttpServerDynamicRoute.h"
 #include "HttpServerSessionUtils.h"
 #include "../../http/HttpParserInternal.h"
 #include "ruvia/http/Error.h"

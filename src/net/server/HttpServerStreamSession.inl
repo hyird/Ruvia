@@ -229,6 +229,37 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                     co_return;
                 }
 
+                if (routeResolution.route->responseMode == ResponseBodyMode::kDynamic) {
+                    const auto dynamicResult = co_await dispatchHttpDynamicRoute(
+                        stream,
+                        memory_,
+                        responseHead,
+                        scannerEntry,
+                        parsed,
+                        routeResolution,
+                        routes,
+                        requestMemory,
+                        baseRouteServices,
+                        options_,
+                        readBuffer,
+                        usedBytes,
+                        response,
+                        keepAlive,
+                        requestCount,
+                        consumedBytes,
+                        bufferAlreadyCompacted);
+                    if (dynamicResult == HttpResponseStreamRouteResult::kSessionFinished) {
+                        co_return;
+                    }
+                    // kStreamDispatched already restored the pipeline and set
+                    // bufferAlreadyCompacted; kWriteBufferedResponse falls through
+                    // to the buffered write path below.
+                    if (dynamicResult == HttpResponseStreamRouteResult::kStreamDispatched) {
+                        responseStreamDispatched = true;
+                    }
+                    break;
+                }
+
                 if (routeResolution.route->responseMode != ResponseBodyMode::kBuffered) {
                     consumedBytes = parsed.headerBytes;
                     const auto streamResult = co_await dispatchHttpResponseStreamRoute(
