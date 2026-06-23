@@ -9,7 +9,8 @@ Http2ServerSession<Stream>::Http2ServerSession(
     HttpClientRegistry* httpClients,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
-    std::string_view remoteAddress)
+    std::string_view remoteAddress,
+    RateLimiter* rateLimiter)
     : stream_(stream),
       socket_(socket),
       memory_(memory),
@@ -20,6 +21,7 @@ Http2ServerSession<Stream>::Http2ServerSession(
       options_(options),
       scannerEntry_(scannerEntry),
       remoteAddress_(remoteAddress),
+      rateLimiter_(rateLimiter),
       input_(memory.resource()),
       streams_(memory.resource()),
       writeWaiters_(memory.resource()),

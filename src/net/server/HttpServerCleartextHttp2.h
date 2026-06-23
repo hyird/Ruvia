@@ -62,6 +62,7 @@ Task<void> runHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
+    RateLimiter& rateLimiter,
     std::string_view initialBytes = {}) {
     Http2ServerSession<Stream> session(
         stream,
@@ -73,7 +74,8 @@ Task<void> runHttp2ServerSession(
         &httpClients,
         options,
         scannerEntry,
-        remoteAddress);
+        remoteAddress,
+        &rateLimiter);
     co_await session.run(initialBytes);
 }
 
@@ -89,6 +91,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
+    RateLimiter& rateLimiter,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
@@ -107,6 +110,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             options,
             scannerEntry,
             remoteAddress,
+            rateLimiter,
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
@@ -143,6 +147,7 @@ Task<void> runUpgradedHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
+    RateLimiter& rateLimiter,
     const HttpServerParseResult& parsed,
     std::string_view settingsPayload,
     std::string_view body,
@@ -157,7 +162,8 @@ Task<void> runUpgradedHttp2ServerSession(
         &httpClients,
         options,
         scannerEntry,
-        remoteAddress);
+        remoteAddress,
+        &rateLimiter);
     co_await session.runUpgraded(parsed, settingsPayload, body, initialBytes);
 }
 
