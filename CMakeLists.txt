@@ -89,6 +89,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/ContextFileResponse.cpp
     src/http/ContextRequest.cpp
     src/http/ContextResponse.cpp
+    src/http/Csrf.cpp
     src/http/Error.cpp
     src/http/HttpBasics.cpp
     src/http/HttpCors.cpp
