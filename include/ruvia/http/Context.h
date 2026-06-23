@@ -114,6 +114,11 @@ public:
         return request_.remoteAddress();
     }
 
+    // The verified mutual-TLS client certificate subject DN, or empty if none.
+    [[nodiscard]] std::string_view clientCertificate() const noexcept {
+        return request_.clientCertificate();
+    }
+
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }

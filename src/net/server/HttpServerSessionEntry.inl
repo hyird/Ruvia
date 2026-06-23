@@ -15,10 +15,12 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
                     co_return;
                 }
                 handshakeEntry.touch();
+                std::pmr::string clientCertificate(memory_.allocator<char>());
+                extractTlsClientCertificate(tlsStream.native_handle(), clientCertificate);
                 if (isHttp2AlpnSelected(tlsStream)) {
-                    co_await handleHttp2Session(tlsStream, socket);
+                    co_await handleHttp2Session(tlsStream, socket, {}, clientCertificate);
                 } else {
-                    co_await handleStreamSession(tlsStream, socket);
+                    co_await handleStreamSession(tlsStream, socket, clientCertificate);
                 }
             }
             closeSocket(socket);
@@ -36,7 +38,7 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
 }
 
 template <typename Stream>
-Task<void> HttpServer::handleHttp2Session(Stream& stream, TcpSocket& socket, std::string_view initialBytes) {
+Task<void> HttpServer::handleHttp2Session(Stream& stream, TcpSocket& socket, std::string_view initialBytes, std::string_view clientCertificate) {
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
 
@@ -59,5 +61,6 @@ Task<void> HttpServer::handleHttp2Session(Stream& stream, TcpSocket& socket, std
         scannerEntry,
         remoteAddress,
         rateLimiter_,
+        clientCertificate,
         initialBytes);
 }

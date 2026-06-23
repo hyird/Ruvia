@@ -56,6 +56,12 @@ public:
         return remoteAddress_;
     }
 
+    // The verified client certificate subject DN for a mutual-TLS connection,
+    // or empty when no client certificate was presented (or no TLS).
+    [[nodiscard]] std::string_view clientCertificate() const noexcept {
+        return clientCertificate_;
+    }
+
 private:
     friend struct detail::HttpRequestAccess;
 
@@ -74,6 +80,7 @@ private:
     std::array<std::string_view, kCachedHeaderSlots> cachedHeaders_{};
     std::string_view body_;
     std::string_view remoteAddress_;
+    std::string_view clientCertificate_;
     std::pmr::memory_resource* resource_{nullptr};
 };
 

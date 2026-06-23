@@ -1,5 +1,5 @@
 template <typename Stream>
-Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
+Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, std::string_view clientCertificate) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, keep-alive counters, the remote address, and the count of buffered
     // bytes. The heavy per-request working set (read buffer, request arena,
@@ -102,6 +102,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
             if (parsed.status == HttpParseStatus::kComplete) {
                 HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 HttpRequestAccess::setRemoteAddress(parsed.request, remoteAddress);
+                HttpRequestAccess::setClientCertificate(parsed.request, clientCertificate);
                 // Reset phase so headerTimeout stops counting against dispatch
                 // time. Body readers will set kReadingBody on their own; the
                 // streaming/websocket paths set their own phases below; the

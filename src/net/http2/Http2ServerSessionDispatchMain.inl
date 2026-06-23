@@ -20,6 +20,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         co_await writeResponse(stream, response);
         co_return;
     }
+    HttpRequestAccess::setClientCertificate(request, clientCertificate_);
     if (rateLimiter_ != nullptr && rateLimiter_->enabled() && !rateLimiter_->allow(remoteAddress_)) {
         auto response = co_await routes_.handleError(
             request,

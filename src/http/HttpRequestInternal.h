@@ -72,6 +72,7 @@ struct HttpRequestAccess final {
         request.cachedHeaderBits_ = 0;
         request.body_ = {};
         request.remoteAddress_ = {};
+        request.clientCertificate_ = {};
         request.resource_ = nullptr;
     }
 
@@ -124,6 +125,10 @@ struct HttpRequestAccess final {
 
     static void setRemoteAddress(HttpRequest& request, std::string_view remoteAddress) noexcept {
         request.remoteAddress_ = remoteAddress;
+    }
+
+    static void setClientCertificate(HttpRequest& request, std::string_view clientCertificate) noexcept {
+        request.clientCertificate_ = clientCertificate;
     }
 
 private:

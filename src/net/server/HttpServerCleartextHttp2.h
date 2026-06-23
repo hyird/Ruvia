@@ -63,6 +63,7 @@ Task<void> runHttp2ServerSession(
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
     RateLimiter& rateLimiter,
+    std::string_view clientCertificate = {},
     std::string_view initialBytes = {}) {
     Http2ServerSession<Stream> session(
         stream,
@@ -75,7 +76,8 @@ Task<void> runHttp2ServerSession(
         options,
         scannerEntry,
         remoteAddress,
-        &rateLimiter);
+        &rateLimiter,
+        clientCertificate);
     co_await session.run(initialBytes);
 }
 
@@ -111,6 +113,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             scannerEntry,
             remoteAddress,
             rateLimiter,
+            {},
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {

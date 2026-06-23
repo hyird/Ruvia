@@ -10,7 +10,8 @@ Http2ServerSession<Stream>::Http2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
-    RateLimiter* rateLimiter)
+    RateLimiter* rateLimiter,
+    std::string_view clientCertificate)
     : stream_(stream),
       socket_(socket),
       memory_(memory),
@@ -22,6 +23,7 @@ Http2ServerSession<Stream>::Http2ServerSession(
       scannerEntry_(scannerEntry),
       remoteAddress_(remoteAddress),
       rateLimiter_(rateLimiter),
+      clientCertificate_(clientCertificate),
       input_(memory.resource()),
       streams_(memory.resource()),
       writeWaiters_(memory.resource()),
