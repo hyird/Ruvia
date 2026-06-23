@@ -57,6 +57,22 @@ protected:
         scope.registerRoute(method, std::move(path), std::move(handler), bodyMode, std::move(middlewares));
     }
 
+    static void ruviaAddDynamicRoute(
+        const detail::ControllerRouteBuilder& scope,
+        HttpMethod method,
+        std::pmr::string path,
+        detail::ControllerRouteHandler handler,
+        RequestBodyMode bodyMode,
+        RuviaMiddlewareList middlewares) {
+        scope.registerRoute(
+            method,
+            std::move(path),
+            std::move(handler),
+            bodyMode,
+            std::move(middlewares),
+            ResponseBodyMode::kDynamic);
+    }
+
     static void ruviaAddStreamRoute(
         const detail::ControllerRouteBuilder& scope,
         HttpMethod method,

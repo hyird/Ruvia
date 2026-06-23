@@ -58,7 +58,8 @@ public:
         std::pmr::string path,
         RouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<RouteMiddleware> middlewares = {});
+        std::pmr::vector<RouteMiddleware> middlewares = {},
+        ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
     void registerStreamRoute(
         HttpMethod method,
         std::pmr::string path,

@@ -32,6 +32,26 @@
         ::ruvia::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
+// Dynamic-response routes: the handler returns an HttpResponse but may instead
+// stream via c.stream()/c.streamSSE(); whichever it does at runtime is honored.
+#define RUVIA_GET_DYNAMIC(path, handler, ...) \
+    RuviaControllerType::ruviaAddDynamicRoute( \
+        ruviaRouteScope, \
+        ::ruvia::Get, \
+        path, \
+        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        ::ruvia::RequestBodyMode::kBuffered, \
+        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+
+#define RUVIA_POST_DYNAMIC(path, handler, ...) \
+    RuviaControllerType::ruviaAddDynamicRoute( \
+        ruviaRouteScope, \
+        ::ruvia::Post, \
+        path, \
+        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        ::ruvia::RequestBodyMode::kBuffered, \
+        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+
 #define RUVIA_GET_STREAM(path, handler, ...) \
     RuviaControllerType::ruviaAddStreamRoute( \
         ruviaRouteScope, \

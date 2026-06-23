@@ -135,6 +135,14 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     if (responseStream != nullptr) {
         responseStream->bindContext(context);
     }
+    // A kDynamic route runs the ordinary buffered handler chain with the stream
+    // writer bound: if the handler streams, the sink commits and that is the
+    // response; otherwise the returned HttpResponse is sent buffered. streamHandled
+    // stays false so the caller lets committed() decide.
+    if (route->responseMode == ResponseBodyMode::kDynamic) {
+        auto response = co_await invokeRoute(*route, context);
+        co_return StreamDispatchResult{std::move(response), false};
+    }
     auto response = co_await invokeStreamRoute(*route, context, streamHandled);
     co_return StreamDispatchResult{std::move(response), streamHandled};
 }

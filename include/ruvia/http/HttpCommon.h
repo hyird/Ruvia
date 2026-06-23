@@ -39,6 +39,10 @@ enum class ResponseBodyMode {
     kBuffered,
     kStream,
     kSse,
+    // The handler returns an HttpResponse but may instead stream via the
+    // response writer; whichever it does is honored at runtime (content
+    // negotiation, e.g. buffered JSON vs an SSE stream on one route).
+    kDynamic,
     kWebSocket
 };
 

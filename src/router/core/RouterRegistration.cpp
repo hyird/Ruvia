@@ -103,9 +103,13 @@ void detail::RouterImpl::registerRoute(
     std::pmr::string path,
     RouteHandler handler,
     RequestBodyMode bodyMode,
-    std::pmr::vector<RouteMiddleware> middlewares) {
+    std::pmr::vector<RouteMiddleware> middlewares,
+    ResponseBodyMode responseMode) {
     if (!handler) {
         throw std::invalid_argument("route handler must not be empty");
+    }
+    if (responseMode == ResponseBodyMode::kWebSocket) {
+        throw std::invalid_argument("buffered route cannot use the websocket response mode");
     }
 
     appendPendingRoute(PendingRoute{
@@ -114,7 +118,7 @@ void detail::RouterImpl::registerRoute(
         .handler = std::move(handler),
         .streamHandler = {},
         .bodyMode = bodyMode,
-        .responseMode = ResponseBodyMode::kBuffered,
+        .responseMode = responseMode,
         .dynamic = false,
         .middlewares = std::move(middlewares),
         .webSocketSubprotocols = std::pmr::string(startupResource()),
@@ -198,13 +202,15 @@ void detail::ControllerRouteBuilder::registerRoute(
     std::pmr::string path,
     ControllerRouteHandler handler,
     RequestBodyMode bodyMode,
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+    ResponseBodyMode responseMode) const {
     RouterImpl::from(*impl_->router).registerRoute(
         method,
         joinControllerPaths(impl_->prefix, path),
         makeRouteHandler(handler),
         bodyMode,
-        makeRouteMiddlewares(impl_->middlewares, middlewares));
+        makeRouteMiddlewares(impl_->middlewares, middlewares),
+        responseMode);
 }
 
 void detail::ControllerRouteBuilder::registerStreamRoute(
