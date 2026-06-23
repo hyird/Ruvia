@@ -81,7 +81,7 @@ private:
         void* target{nullptr};
         void (*scan)(void*) noexcept{nullptr};
     };
-    std::array<WorkerScanner, 4> workerScanners_{};
+    std::array<WorkerScanner, 5> workerScanners_{};
     std::size_t workerScannerCount_{0};
     bool running_{false};
 };

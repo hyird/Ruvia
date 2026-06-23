@@ -108,6 +108,18 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                 // one of those transitions, idleTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+                if (rateLimiter_.enabled() && !rateLimiter_.allow(remoteAddress)) {
+                    consumedBytes = parsed.headerBytes;
+                    response = co_await routes.handleError(
+                        parsed.request,
+                        requestMemory,
+                        HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+                        true,
+                        baseRouteServices);
+                    setRetryAfterSeconds(response, options_.rateLimit.window);
+                    markConnectionCloseAfterWrite(response, closeAfterWrite);
+                    break;
+                }
                 if (options_.autoHttps.enabled) {
                     consumedBytes = parsed.headerBytes;
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {

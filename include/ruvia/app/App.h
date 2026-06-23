@@ -83,6 +83,14 @@ struct HttpServerOptions final {
         void* user{nullptr};
     };
 
+    // Per-client request rate limit (token bucket, keyed by remote address).
+    // maxRequests == 0 disables it. The limit is enforced per worker, so the
+    // effective ceiling is roughly maxRequests x worker count (SO_REUSEPORT).
+    struct RateLimit final {
+        std::size_t maxRequests{0};
+        std::chrono::milliseconds window{std::chrono::seconds(1)};
+    };
+
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
     // Scanner cadence; must be greater than 0.
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
@@ -103,6 +111,7 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLog accessLog;
+    RateLimit rateLimit;
 };
 
 struct TlsConfig final {
@@ -171,6 +180,7 @@ public:
     App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& setErrorHandler(HttpErrorHandler handler);
+    App& setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
