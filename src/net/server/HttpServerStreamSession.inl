@@ -110,17 +110,35 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 // one of those transitions, idleTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-                if (rateLimiter_.enabled() && !rateLimiter_.allow(remoteAddress)) {
-                    consumedBytes = parsed.headerBytes;
-                    response = co_await routes.handleError(
-                        parsed.request,
-                        requestMemory,
-                        HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
-                        true,
-                        baseRouteServices);
-                    setRetryAfterSeconds(response, options_.rateLimit.window);
-                    markConnectionCloseAfterWrite(response, closeAfterWrite);
-                    break;
+                if (rateLimiter_.enabled()) {
+                    bool rateAllowed = true;
+#ifdef RUVIA_ENABLE_REDIS
+                    if (!options_.rateLimit.redisAlias.empty()) {
+                        std::pmr::string rateKey(requestMemory.resource());
+                        rateKey.append("rl:");
+                        rateKey.append(remoteAddress.data(), remoteAddress.size());
+                        rateAllowed = co_await redisRateLimitAllow(
+                            redis_.get(options_.rateLimit.redisAlias, requestMemory.resource()),
+                            rateKey,
+                            options_.rateLimit.maxRequests,
+                            options_.rateLimit.window.count());
+                    } else
+#endif
+                    {
+                        rateAllowed = rateLimiter_.allow(remoteAddress);
+                    }
+                    if (!rateAllowed) {
+                        consumedBytes = parsed.headerBytes;
+                        response = co_await routes.handleError(
+                            parsed.request,
+                            requestMemory,
+                            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+                            true,
+                            baseRouteServices);
+                        setRetryAfterSeconds(response, options_.rateLimit.window);
+                        markConnectionCloseAfterWrite(response, closeAfterWrite);
+                        break;
+                    }
                 }
                 if (options_.autoHttps.enabled) {
                     consumedBytes = parsed.headerBytes;

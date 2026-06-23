@@ -21,19 +21,37 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         co_return;
     }
     HttpRequestAccess::setClientCertificate(request, clientCertificate_);
-    if (rateLimiter_ != nullptr && rateLimiter_->enabled() && !rateLimiter_->allow(remoteAddress_)) {
-        auto response = co_await routes_.handleError(
-            request,
-            requestMemory,
-            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
-            false,
-            routeServices());
-        setRetryAfterSeconds(response, options_.rateLimit.window);
-        co_await writeResponse(stream, response);
-        recordHttpAccess(
-            options_.accessLog, request, remoteAddress_,
-            response.statusCode(), requestStart, true);
-        co_return;
+    if (rateLimiter_ != nullptr && rateLimiter_->enabled()) {
+        bool rateAllowed = true;
+#ifdef RUVIA_ENABLE_REDIS
+        if (redis_ != nullptr && !options_.rateLimit.redisAlias.empty()) {
+            std::pmr::string rateKey(requestMemory.resource());
+            rateKey.append("rl:");
+            rateKey.append(remoteAddress_.data(), remoteAddress_.size());
+            rateAllowed = co_await redisRateLimitAllow(
+                redis_->get(options_.rateLimit.redisAlias, requestMemory.resource()),
+                rateKey,
+                options_.rateLimit.maxRequests,
+                options_.rateLimit.window.count());
+        } else
+#endif
+        {
+            rateAllowed = rateLimiter_->allow(remoteAddress_);
+        }
+        if (!rateAllowed) {
+            auto response = co_await routes_.handleError(
+                request,
+                requestMemory,
+                HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+                false,
+                routeServices());
+            setRetryAfterSeconds(response, options_.rateLimit.window);
+            co_await writeResponse(stream, response);
+            recordHttpAccess(
+                options_.accessLog, request, remoteAddress_,
+                response.statusCode(), requestStart, true);
+            co_return;
+        }
     }
     const auto& resolution = stream.routeResolution;
     const auto maxBody = resolution.bodyMode == RequestBodyMode::kStream
