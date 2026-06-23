@@ -102,6 +102,9 @@ struct HttpServerOptions final {
     };
 
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
+    // On stop, how long to let in-flight requests finish before force-closing
+    // connections. 0 keeps the previous behavior (close immediately).
+    std::chrono::milliseconds shutdownGracePeriod{0};
     // Scanner cadence; must be greater than 0.
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     std::chrono::milliseconds headerTimeout{std::chrono::seconds(15)};
@@ -174,6 +177,7 @@ public:
     App& setAutoHttps(bool enabled = true);
     App& setThreadNum(std::size_t threadNum);
     App& setIdleTimeout(std::chrono::milliseconds timeout);
+    App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
     App& setHeaderTimeout(std::chrono::milliseconds timeout);
     App& setBodyTimeout(std::chrono::milliseconds timeout);
