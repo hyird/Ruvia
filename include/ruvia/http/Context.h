@@ -48,6 +48,7 @@ class HttpClientPool;
 class RequestBodyLoader;
 struct ContextAccess;
 struct ContextServices;
+struct SessionAccess;
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
@@ -57,6 +58,7 @@ struct ContextServices;
 class Context final {
 private:
     friend struct detail::ContextAccess;
+    friend struct detail::SessionAccess;
 
     Context(
         RequestMemory& memory,
@@ -117,6 +119,24 @@ public:
     // The verified mutual-TLS client certificate subject DN, or empty if none.
     [[nodiscard]] std::string_view clientCertificate() const noexcept {
         return request_.clientCertificate();
+    }
+
+    // Server-side session blob (persisted by a SessionMiddleware via Redis; the
+    // application owns the blob's format). sessionId() is empty until a session
+    // exists. setSession/clearSession mark it for persistence on the way out.
+    [[nodiscard]] std::string_view sessionId() const noexcept {
+        return std::string_view(sessionId_.data(), sessionId_.size());
+    }
+    [[nodiscard]] std::string_view session() const noexcept {
+        return std::string_view(sessionData_.data(), sessionData_.size());
+    }
+    void setSession(std::string_view data) {
+        sessionData_.assign(data.data(), data.size());
+        sessionDirty_ = true;
+    }
+    void clearSession() {
+        sessionData_.clear();
+        sessionDirty_ = true;
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
@@ -313,6 +333,10 @@ private:
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string decodedBody_;
     mutable bool bodyDecoded_{false};
+    std::pmr::string sessionId_;
+    std::pmr::string sessionData_;
+    bool sessionLoaded_{false};
+    bool sessionDirty_{false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;
