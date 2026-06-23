@@ -2,7 +2,9 @@
 
 #include "HttpRequestInternal.h"
 #include "MultipartParsing.h"
+#include "RequestBodyDecoding.h"
 #include "RequestBodyLoader.h"
+#include "ruvia/http/Error.h"
 #include "ruvia/http/detail/model/Parser.h"
 
 #include <memory_resource>
@@ -34,13 +36,31 @@ namespace detail {
 }  // namespace detail
 
 Task<std::string_view> Context::body() const {
+    if (bodyDecoded_) {
+        co_return std::string_view(decodedBody_.data(), decodedBody_.size());
+    }
+
+    std::string_view raw;
     if (bodyLoader_ != nullptr) {
-        co_return co_await bodyLoader_->readAll();
-    }
-    if (bodyReader_ != nullptr) {
+        raw = co_await bodyLoader_->readAll();
+    } else if (bodyReader_ != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
+    } else {
+        raw = detail::requestBodyBytes(request_);
     }
-    co_return detail::requestBodyBytes(request_);
+
+    // Transparently decode a request body whose Content-Encoding we understand,
+    // so handlers always see the decoded representation (RFC 9110 §8.4).
+    const auto coding = detail::requestContentCoding(request_.header("Content-Encoding"));
+    if (coding == detail::HttpContentCoding::kNone || raw.empty()) {
+        co_return raw;
+    }
+    decodedBody_.clear();
+    if (!detail::decodeRequestContentEncoding(coding, raw, decodedBody_, detail::kMaxDecodedRequestBodyBytes)) {
+        throw HttpError(400, "bad_request", "failed to decode request body");
+    }
+    bodyDecoded_ = true;
+    co_return std::string_view(decodedBody_.data(), decodedBody_.size());
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {

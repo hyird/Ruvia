@@ -35,7 +35,8 @@ inline Context::Context(
       webSocket_(services.webSocket),
       responseStream_(services.responseStream),
       responseStatusText_(memory.resource()),
-      responseHeaders_(memory.resource()) {}
+      responseHeaders_(memory.resource()),
+      decodedBody_(memory.resource()) {}
 
 inline Context::Context(
     RequestMemory& memory,
@@ -55,7 +56,8 @@ inline Context::Context(
       webSocket_(services.webSocket),
       responseStream_(services.responseStream),
       responseStatusText_(memory.resource()),
-      responseHeaders_(memory.resource()) {}
+      responseHeaders_(memory.resource()),
+      decodedBody_(memory.resource()) {}
 
 }  // namespace ruvia
 

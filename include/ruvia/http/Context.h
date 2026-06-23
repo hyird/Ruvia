@@ -309,6 +309,10 @@ private:
     std::uint16_t responseStatusCode_{200};
     std::pmr::string responseStatusText_;
     HttpResponseHeaders responseHeaders_;
+    // Holds the decoded request body when Content-Encoding was applied, so
+    // body() can return a stable view; mutable because body() is const.
+    mutable std::pmr::string decodedBody_;
+    mutable bool bodyDecoded_{false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;
