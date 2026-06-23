@@ -36,7 +36,9 @@ inline Context::Context(
       responseStream_(services.responseStream),
       responseStatusText_(memory.resource()),
       responseHeaders_(memory.resource()),
-      decodedBody_(memory.resource()) {}
+      decodedBody_(memory.resource()),
+      sessionId_(memory.resource()),
+      sessionData_(memory.resource()) {}
 
 inline Context::Context(
     RequestMemory& memory,
@@ -57,7 +59,9 @@ inline Context::Context(
       responseStream_(services.responseStream),
       responseStatusText_(memory.resource()),
       responseHeaders_(memory.resource()),
-      decodedBody_(memory.resource()) {}
+      decodedBody_(memory.resource()),
+      sessionId_(memory.resource()),
+      sessionData_(memory.resource()) {}
 
 }  // namespace ruvia
 
