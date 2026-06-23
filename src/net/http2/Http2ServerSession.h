@@ -62,6 +62,7 @@
 #include "../server/HttpServerAccessLog.h"
 #include "../server/HttpResponseStreamDispatch.h"
 #include "../server/RateLimiter.h"
+#include "../server/RedisRateLimit.h"
 #include "../../runtime/AsioAwait.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/http/Context.h"

@@ -99,6 +99,9 @@ struct HttpServerOptions final {
     struct RateLimit final {
         std::size_t maxRequests{0};
         std::chrono::milliseconds window{std::chrono::seconds(1)};
+        // When set, the limit is enforced globally via this Redis connection
+        // (shared across workers/instances) instead of the per-worker bucket.
+        std::pmr::string redisAlias;
     };
 
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
@@ -196,6 +199,12 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& setErrorHandler(HttpErrorHandler handler);
     App& setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
+#ifdef RUVIA_ENABLE_REDIS
+    App& setGlobalRateLimit(
+        std::size_t maxRequests,
+        std::chrono::milliseconds window = std::chrono::seconds(1),
+        std::string_view redisAlias = "default");
+#endif
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);

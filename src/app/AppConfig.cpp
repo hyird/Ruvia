@@ -255,8 +255,28 @@ App& App::setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window
             state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
                 ? std::chrono::milliseconds(1)
                 : window;
+            state.options.rateLimit.redisAlias.clear();
         });
 }
+
+#ifdef RUVIA_ENABLE_REDIS
+App& App::setGlobalRateLimit(
+    std::size_t maxRequests,
+    std::chrono::milliseconds window,
+    std::string_view redisAlias) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change the rate limit while app is running",
+        [maxRequests, window, redisAlias](detail::AppState& state) {
+            state.options.rateLimit.maxRequests = maxRequests;
+            state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
+                ? std::chrono::milliseconds(1)
+                : window;
+            state.options.rateLimit.redisAlias.assign(redisAlias.data(), redisAlias.size());
+        });
+}
+#endif
 
 App& App::onAccess(HttpServerOptions::AccessLog::Callback callback, void* user) {
     return detail::mutateStoppedApp(
