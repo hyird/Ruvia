@@ -46,6 +46,31 @@ App& App::useTls(TlsConfig config) {
         });
 }
 
+App& App::addTlsCertificate(std::string_view host, TlsConfig config) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot configure TLS while app is running",
+        [host, &config](detail::AppState& state) {
+            if (host.empty()) {
+                throw std::invalid_argument("SNI host must not be empty");
+            }
+            if (config.certificateChainFile.empty()) {
+                throw std::invalid_argument("TLS certificate chain file must not be empty");
+            }
+            if (config.privateKeyFile.empty()) {
+                throw std::invalid_argument("TLS private key file must not be empty");
+            }
+
+            HttpServerOptions::Tls::SniCertificate cert;
+            cert.host.assign(host.data(), host.size());
+            assignTlsFileName(cert.certificateChainFile, config.certificateChainFile);
+            assignTlsFileName(cert.privateKeyFile, config.privateKeyFile);
+            cert.privateKeyPassword = std::move(config.privateKeyPassword);
+            state.options.tls.sniCertificates.push_back(std::move(cert));
+        });
+}
+
 App& App::setCompression(CompressionConfig config) {
     return detail::mutateStoppedApp(
         *this,

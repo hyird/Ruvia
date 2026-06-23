@@ -15,6 +15,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
@@ -23,6 +24,7 @@
 #include "ConnectionScanner.h"
 #include "HttpConnectionState.h"
 #include "HttpServerOptionsValidation.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "../../runtime/AsioAwait.h"
 
 namespace ruvia::detail {
@@ -51,6 +53,27 @@ int selectAlpnProtocol(
         return SSL_TLSEXT_ERR_OK;
     }
     return SSL_TLSEXT_ERR_NOACK;
+}
+
+// RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's
+// server name matches a configured certificate; otherwise keep the default.
+int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
+    if (ssl == nullptr || arg == nullptr) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+    const char* name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
+    if (name == nullptr) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+    const auto& lookup =
+        *static_cast<const std::vector<std::pair<std::pmr::string, asio::ssl::context*>>*>(arg);
+    for (const auto& [host, context] : lookup) {
+        if (httpAsciiEqualsIgnoreCase(host, name)) {
+            SSL_set_SSL_CTX(ssl, context->native_handle());
+            break;
+        }
+    }
+    return SSL_TLSEXT_ERR_OK;
 }
 
 int copyPrivateKeyPassword(char* buffer, int bufferSize, int, void* userData) noexcept {
@@ -268,6 +291,8 @@ void HttpServer::configureAcceptor() {
 }
 
 void HttpServer::configureTlsContext() {
+    sniContexts_.clear();
+    sniLookup_.clear();
     if (!options_.tls.enabled) {
         tlsContext_.reset();
         return;
@@ -276,27 +301,50 @@ void HttpServer::configureTlsContext() {
         throw std::invalid_argument("TLS requires certificate chain and private key files");
     }
 
+    const auto configure = [this](
+                               asio::ssl::context& context,
+                               const std::pmr::string& certificateChainFile,
+                               const std::pmr::string& privateKeyFile,
+                               const std::pmr::string& privateKeyPassword) {
+        context.set_options(
+            asio::ssl::context::default_workarounds |
+            asio::ssl::context::no_sslv2 |
+            asio::ssl::context::no_sslv3 |
+            asio::ssl::context::no_tlsv1 |
+            asio::ssl::context::no_tlsv1_1 |
+            asio::ssl::context::single_dh_use);
+        SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
+        SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
+        if (!privateKeyPassword.empty()) {
+            SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
+            SSL_CTX_set_default_passwd_cb_userdata(
+                context.native_handle(), const_cast<std::pmr::string*>(&privateKeyPassword));
+        }
+        useCertificateChainFile(context, certificateChainFile);
+        usePrivateKeyFile(context, privateKeyFile);
+        if (!options_.tls.verifyFile.empty()) {
+            loadVerifyFile(context, options_.tls.verifyFile);
+            context.set_verify_mode(asio::ssl::verify_peer);
+        }
+    };
+
+    // Per-host SNI certificates first, so the lookup can point at stable storage.
+    sniContexts_.reserve(options_.tls.sniCertificates.size());
+    for (const auto& certificate : options_.tls.sniCertificates) {
+        auto& context = sniContexts_.emplace_back(asio::ssl::context::tls_server);
+        configure(context, certificate.certificateChainFile, certificate.privateKeyFile, certificate.privateKeyPassword);
+    }
+    sniLookup_.reserve(options_.tls.sniCertificates.size());
+    for (std::size_t i = 0; i < options_.tls.sniCertificates.size(); ++i) {
+        sniLookup_.emplace_back(options_.tls.sniCertificates[i].host, &sniContexts_[i]);
+    }
+
     tlsContext_.emplace(asio::ssl::context::tls_server);
     auto& context = *tlsContext_;
-    context.set_options(
-        asio::ssl::context::default_workarounds |
-        asio::ssl::context::no_sslv2 |
-        asio::ssl::context::no_sslv3 |
-        asio::ssl::context::no_tlsv1 |
-        asio::ssl::context::no_tlsv1_1 |
-        asio::ssl::context::single_dh_use);
-    SSL_CTX_set_options(context.native_handle(), SSL_OP_NO_COMPRESSION);
-    SSL_CTX_set_alpn_select_cb(context.native_handle(), selectAlpnProtocol, nullptr);
-
-    if (!options_.tls.privateKeyPassword.empty()) {
-        SSL_CTX_set_default_passwd_cb(context.native_handle(), copyPrivateKeyPassword);
-        SSL_CTX_set_default_passwd_cb_userdata(context.native_handle(), &options_.tls.privateKeyPassword);
-    }
-    useCertificateChainFile(context, options_.tls.certificateChainFile);
-    usePrivateKeyFile(context, options_.tls.privateKeyFile);
-    if (!options_.tls.verifyFile.empty()) {
-        loadVerifyFile(context, options_.tls.verifyFile);
-        context.set_verify_mode(asio::ssl::verify_peer);
+    configure(context, options_.tls.certificateChainFile, options_.tls.privateKeyFile, options_.tls.privateKeyPassword);
+    if (!sniLookup_.empty()) {
+        SSL_CTX_set_tlsext_servername_callback(context.native_handle(), &selectSniContext);
+        SSL_CTX_set_tlsext_servername_arg(context.native_handle(), &sniLookup_);
     }
 }
 
