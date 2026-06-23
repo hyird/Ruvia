@@ -234,6 +234,19 @@ App& App::onStop(AppHook hook) {
         });
 }
 
+App& App::setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change the rate limit while app is running",
+        [maxRequests, window](detail::AppState& state) {
+            state.options.rateLimit.maxRequests = maxRequests;
+            state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
+                ? std::chrono::milliseconds(1)
+                : window;
+        });
+}
+
 App& App::onAccess(HttpServerOptions::AccessLog::Callback callback, void* user) {
     return detail::mutateStoppedApp(
         *this,

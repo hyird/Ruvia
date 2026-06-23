@@ -156,6 +156,7 @@ HttpServer::HttpServer(
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       httpClients_(ioContext_, memory_.resource(), httpClients),
+      rateLimiter_(options_.rateLimit.maxRequests, options_.rateLimit.window.count(), memory_.resource()),
       connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
@@ -172,6 +173,9 @@ HttpServer::HttpServer(
         connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
             static_cast<HttpClientRegistry*>(target)->scanDeadlines();
         });
+    }
+    if (rateLimiter_.enabled()) {
+        connectionScanner_.setWorkerScanner(&rateLimiter_, &RateLimiter::evictStaleThunk);
     }
 }
 

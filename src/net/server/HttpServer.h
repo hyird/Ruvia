@@ -18,6 +18,7 @@
 #include "ruvia/memory/MemoryPool.h"
 #include "ConnectionScanner.h"
 #include "HttpConnectionState.h"
+#include "RateLimiter.h"
 #include "../../db/DbInternal.h"
 #include "../../redis/RedisInternal.h"
 #include "../../http/client/HttpClientInternal.h"
@@ -85,6 +86,7 @@ private:
     DbRegistry databases_;
     RedisRegistry redis_;
     HttpClientRegistry httpClients_;
+    RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
