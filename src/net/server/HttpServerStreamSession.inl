@@ -71,6 +71,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
         bool bufferAlreadyCompacted = false;
         std::size_t consumedBytes = 0;
         std::size_t headerSearchOffset = 0;
+        const auto requestStart = std::chrono::steady_clock::now();
         for (;;) {
             if constexpr (kPlainTcp) {
                 if (usedBytes > 0) {
@@ -397,11 +398,17 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket) {
                 clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
             }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+            recordHttpAccess(
+                options_.accessLog, parsed.request, remoteAddress,
+                response.statusCode(), requestStart, false);
             if (ec || closeAfterWrite || !keepAlive || !started_.load(std::memory_order_relaxed)) {
                 co_return;
             }
         } else {
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+            recordHttpAccess(
+                options_.accessLog, parsed.request, remoteAddress,
+                response.statusCode(), requestStart, false);
             if (!started_.load(std::memory_order_relaxed)) {
                 co_return;
             }

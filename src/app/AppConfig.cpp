@@ -234,4 +234,15 @@ App& App::onStop(AppHook hook) {
         });
 }
 
+App& App::onAccess(HttpServerOptions::AccessLog::Callback callback, void* user) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot register access-log hook while app is running",
+        [callback, user](detail::AppState& state) {
+            state.options.accessLog.callback = callback;
+            state.options.accessLog.user = user;
+        });
+}
+
 }  // namespace ruvia

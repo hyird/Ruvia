@@ -8,6 +8,7 @@
 #include "HttpBufferedResponse.h"
 #include "HttpConnectionState.h"
 #include "HttpResponseWriter.h"
+#include "HttpServerAccessLog.h"
 #include "HttpServerBufferedRoute.h"
 #include "HttpServerDynamicRoute.h"
 #include "HttpServerSessionUtils.h"
