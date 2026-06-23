@@ -12,6 +12,7 @@ Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web s
 - [Routing and Middleware](#routing-and-middleware)
 - [Context Helpers](#context-helpers)
 - [Request and Response Models](#request-and-response-models)
+- [Macro Reference](#macro-reference)
 - [Configuration](#configuration)
 - [Database Access](#database-access)
 - [Redis and JWT Helpers](#redis-and-jwt-helpers)
@@ -24,6 +25,7 @@ Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web s
 
 | Area | What Ruvia Provides |
 | --- | --- |
+| Macro DSL | A compile-time macro surface that expands to startup descriptors and generated members with no runtime reflection: routing (`RUVIA_GET` / `RUVIA_POST` / …), grouping (`RUVIA_CONTROLLER_GROUP`, `RUVIA_GROUP_BEGIN`), streaming and realtime routes (`RUVIA_GET_STREAM` / `RUVIA_GET_SSE` / `RUVIA_GET_WS`), runtime-selectable responses (`RUVIA_GET_DYNAMIC` / `RUVIA_POST_DYNAMIC`), schema models (`RUVIA_MODEL` / `RUVIA_FIELD`), and inline validation (`RUVIA_VALIDATE_JSON` with `RUVIA_RULE` / `RUVIA_REQUIRED` / …). See the consolidated [Macro Reference](#macro-reference). |
 | Controller API | Hono-style single-argument handlers with `ruvia::Context& c` and async-only `ruvia::Task<ruvia::HttpResponse>` returns. |
 | Routing | Static controller registration through macros, route groups, scoped middleware, `:param` segments, and `*` wildcards. |
 | Request handling | Zero-copy HTTP parser, request views into the connection read buffer, explicit streaming body routes, chunked body decoding, multipart form parsing, and helpers for headers, query values, cookies, JSON bodies, and form bodies. |
@@ -311,6 +313,26 @@ ruvia::Task<void> events(ruvia::Context& c) {
 }
 ```
 
+Dynamic-response routes let a single handler decide buffered-vs-streamed at runtime. `RUVIA_GET_DYNAMIC(...)` and `RUVIA_POST_DYNAMIC(...)` register a handler that returns `ruvia::Task<ruvia::HttpResponse>` like a buffered route, but the handler may instead stream through `c.stream()` or `c.streamSSE()`. Whichever it does is honored: if it commits a stream, the returned `HttpResponse` is ignored; otherwise the returned response is sent buffered. This is the basis for content negotiation (the same route serving buffered JSON or an SSE stream) and the MCP Streamable HTTP response shape. `RUVIA_POST_DYNAMIC` additionally exposes the buffered request body, so one handler can read a JSON-RPC body and answer either `application/json` or `text/event-stream`:
+
+```cpp
+RUVIA_POST_DYNAMIC("/mcp", mcp);
+
+ruvia::Task<ruvia::HttpResponse> mcp(ruvia::Context& c) {
+    const auto request = co_await c.json<RpcRequest>();
+    if (c.header("Accept") == "text/event-stream") {
+        auto stream = c.streamSSE();
+        co_await stream.writeSSE({.data = "{\"echo\":true}", .event = "message"});
+        co_return c.text("");  // ignored: the stream is the response
+    }
+    RpcResponse response(c);
+    response.echo(ruvia::Bool{true});
+    co_return c.json(response);
+}
+```
+
+Because the dynamic dispatch reuses the shared response-stream path, HTTP/1.1 and HTTP/2 behave identically.
+
 WebSocket routes use an explicit upgrade macro and a connection-local handle. The implementation supports RFC 6455 HTTP/1.1 upgrade and RFC 8441 HTTP/2 extended CONNECT, text/binary messages, ping/pong, close frames, and a WebSocket-specific timeout phase that uses idle timeout instead of request-body timeout.
 
 Do not store the request-local `WebSocket` object outside the handler lifetime.
@@ -327,6 +349,22 @@ ruvia::Task<void> websocket(ruvia::Context& c) {
         }
     }
 }
+```
+
+Use `RUVIA_GET_WS_OPTIONS(path, handler, options, Middleware...)` to attach a `ruvia::WebSocketRouteOptions` value declaring negotiated subprotocols and a heartbeat ping/pong policy. The options value is evaluated where the macro is expanded, so it can be a local declared inside `RUVIA_ROUTES_BEGIN`:
+
+```cpp
+RUVIA_ROUTES_BEGIN
+const auto chatOptions = ruvia::WebSocketRouteOptions{
+    .subprotocols = "chat.v1",
+    .heartbeat = {
+        .pingInterval = std::chrono::seconds(30),
+        .pongTimeout = std::chrono::seconds(10),
+    },
+};
+RUVIA_GET_WS("/echo", echo);
+RUVIA_GET_WS_OPTIONS("/chat", chat, chatOptions);
+RUVIA_ROUTES_END
 ```
 
 `ruvia::Task<T>` is Ruvia's coroutine type, not an alias for `asio::awaitable<T>`. It is a single-shot task, preserves exceptions through `co_await`, and resumes the awaiting coroutine from `final_suspend`. Use `co_await reader.read()` and `co_await next(c)` for temporary tasks in public code; if a task is stored in a local variable, await it with `co_await std::move(task)`. Public API does not expose `.asAwaitable()` and there is no conversion to `asio::awaitable<T>`; Asio bridging is an internal server/test boundary through `src/AsioAwait.h`.
@@ -560,6 +598,95 @@ ruvia::app()
     .setErrorHandler(&errors)
     .run();
 ```
+
+## Macro Reference
+
+Ruvia's public API is a compile-time macro DSL. Every macro expands to startup-time descriptors or generated class members — there is no runtime reflection and no per-request macro cost. This section is a single catalog of the public macros; the sections above show each one in context.
+
+### Controller structure
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_ROUTES_BEGIN` / `RUVIA_ROUTES_END` | Open and close the route-registration block inside a `ruvia::Controller<T>`. `RUVIA_ROUTES_END` also performs static controller registration. |
+| `RUVIA_CONTROLLER_GROUP(prefix, Middleware...)` | Declare the controller-wide path prefix and controller-level middleware, so a controller can be split across files. |
+| `RUVIA_GROUP_BEGIN(prefix, Middleware...)` / `RUVIA_GROUP_END` | Open and close a nested route group with its own prefix and scoped middleware. Groups nest. |
+
+### HTTP method routes
+
+Each macro takes `(path, handler, Middleware...)`, registers a buffered route whose handler returns `ruvia::Task<ruvia::HttpResponse>`, and accepts `:param` and `*` wildcard path segments.
+
+| Macro | Method |
+| --- | --- |
+| `RUVIA_GET` | `GET` |
+| `RUVIA_POST` | `POST` |
+| `RUVIA_PUT` | `PUT` |
+| `RUVIA_PATCH` | `PATCH` |
+| `RUVIA_DELETE` | `DELETE` |
+| `RUVIA_HEAD` | `HEAD` (explicit; otherwise `GET` is reused for `HEAD`) |
+| `RUVIA_OPTIONS` | `OPTIONS` (explicit; distinct from framework-generated `OPTIONS`) |
+
+### Streaming, SSE, and WebSocket routes
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_GET_STREAM(path, handler, Middleware...)` | Chunked / HTTP/2 DATA response stream; handler returns `ruvia::Task<void>` and writes through `c.stream()` / `c.streamText()`. |
+| `RUVIA_GET_SSE(path, handler, Middleware...)` | Server-Sent Events stream via `c.streamSSE()`; sets `Content-Type: text/event-stream`. |
+| `RUVIA_POST_STREAM` / `RUVIA_PUT_STREAM` / `RUVIA_PATCH_STREAM` | Streaming **request body** routes; handler reads chunk by chunk through `c.bodyReader()` / `c.multipartReader()`. |
+| `RUVIA_GET_WS(path, handler, Middleware...)` | WebSocket upgrade route (RFC 6455 over HTTP/1.1, RFC 8441 over HTTP/2); handler uses `c.webSocket()`. |
+| `RUVIA_GET_WS_OPTIONS(path, handler, options, Middleware...)` | WebSocket route with a `ruvia::WebSocketRouteOptions` value (subprotocols, heartbeat ping/pong). |
+
+### Dynamic-response routes
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_GET_DYNAMIC(path, handler, Middleware...)` | Handler returns `ruvia::Task<ruvia::HttpResponse>` but may instead stream via `c.stream()` / `c.streamSSE()`; whichever it does at runtime is honored. |
+| `RUVIA_POST_DYNAMIC(path, handler, Middleware...)` | As above for `POST`, with the buffered request body available (content negotiation, MCP Streamable HTTP). |
+
+### Model schema
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_MODEL(Type, fields...)` | Generate a request/response model class from `RUVIA_FIELD` declarations: typed getters/setters, JSON/form parsing, and schema-driven JSON serialization. |
+| `RUVIA_FIELD(field, ModelType, options...)` | Declare a field; the wire name defaults to the field name. |
+| `RUVIA_FIELD_NAME("wire_name", field, ModelType, options...)` | Declare a field whose JSON/form wire name differs from the C++ getter/setter. |
+
+Field model types are Ruvia model types only: `ruvia::String`, `ruvia::Array<T>`, `ruvia::List<T>`, scalar wrappers (`ruvia::Bool`, `ruvia::Int32`, `ruvia::Int64`, `ruvia::UInt64`, `ruvia::Float`, `ruvia::Double`), and nested `RUVIA_MODEL` types.
+
+### Field options (inside `RUVIA_FIELD` / `RUVIA_FIELD_NAME`)
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_DEFAULT(value)` | Default applied when the field is absent from the parsed body. |
+| `RUVIA_OMIT_EMPTY` | Omit the field from serialized JSON when it is empty. |
+| `RUVIA_EMIT_NULL` | Emit `null` for the field instead of omitting it. |
+
+### Validation entry points (inside a `ruvia::Middleware<T>`)
+
+| Macro | Purpose |
+| --- | --- |
+| `RUVIA_VALIDATE_JSON(Body, rules...)` | Validate a JSON body; the result is exposed through `c.valid<Body>()`. |
+| `RUVIA_VALIDATE_FORM(Body, rules...)` | Validate an `application/x-www-form-urlencoded` body; result through `c.valid<Body>(ruvia::Form)`. |
+| `RUVIA_VALIDATE_BODY(target, Body, rules...)` | Lower-level form of the two above with an explicit `ruvia::ValidationTarget`. |
+| `RUVIA_RULE(field, rules...)` | Bind a rule set to a model field; issues are reported under the field's wire name. |
+| `RUVIA_RULE_NAME("wire_name", field, rules...)` | Bind rules and report issues under a custom wire name. |
+
+### Validation rules (inside `RUVIA_RULE` / `RUVIA_RULE_NAME`)
+
+| Macro | Applies to | Issue code |
+| --- | --- | --- |
+| `RUVIA_REQUIRED(message)` | Any field | `required` |
+| `RUVIA_MIN(value, message)` | strings, arrays, lists, numeric scalars | `too_small` |
+| `RUVIA_MAX(value, message)` | strings, arrays, lists, numeric scalars | `too_big` |
+| `RUVIA_ONE_OF(message, "a", "b", ...)` | string-like | `one_of` |
+| `RUVIA_EMAIL(message)` | string-like | `email` |
+| `RUVIA_PATTERN(message, "^[a-z]+$")` | string-like | `pattern` (compile-time, hot-path) |
+| `RUVIA_REGEX(message, "^(foo\|bar)$")` | string-like | `regex` (full `std::regex`) |
+| `RUVIA_MATCH(message, predicate)` | string-like | `match` (`std::string_view` predicate) |
+| `RUVIA_CUSTOM(message, predicate)` | any parsed field | `custom` (typed value predicate) |
+| `RUVIA_NESTED(Validator)` | nested `RUVIA_MODEL` field | validator-defined |
+| `RUVIA_EACH(Validator)` | `ruvia::Array<T>` / `ruvia::List<T>` | validator-defined |
+
+The version header `ruvia/version.h` also exposes `RUVIA_VERSION_MAJOR`, `RUVIA_VERSION_MINOR`, `RUVIA_VERSION_PATCH`, and `RUVIA_VERSION_STRING`.
 
 ## Configuration
 
