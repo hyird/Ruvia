@@ -59,6 +59,7 @@
 #include "../server/ConnectionScanner.h"
 #include "../server/HttpBufferedResponse.h"
 #include "../server/HttpFileChunkBuffer.h"
+#include "../server/HttpServerAccessLog.h"
 #include "../server/HttpResponseStreamDispatch.h"
 #include "../../runtime/AsioAwait.h"
 #include "../../router/RouteTable.h"

@@ -1,6 +1,7 @@
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) {
     stream.dispatchStarted = true;
+    const auto requestStart = std::chrono::steady_clock::now();
     std::array<std::byte, kRequestArenaStackBytes> arenaBlock;
     std::optional<RequestMemory> requestMemoryStorage;
     auto& requestMemory = emplaceRequestMemory(
@@ -58,6 +59,11 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
                 requestMemory,
                 bodyReader,
                 response)) {
+            // Streamed/committed on the wire; the buffered tail below is skipped,
+            // so log the completed streamed response here (status 200).
+            recordHttpAccess(
+                options_.accessLog, request, remoteAddress_,
+                response.statusCode(), requestStart, true);
             co_return;
         }
     } else {
@@ -76,4 +82,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
     if (responsePreparation.bodyBorrowsCompressionScratch) {
         stream.body.clear();
     }
+    recordHttpAccess(
+        options_.accessLog, request, remoteAddress_,
+        response.statusCode(), requestStart, true);
 }

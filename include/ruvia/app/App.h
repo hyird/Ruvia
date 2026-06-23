@@ -31,6 +31,17 @@
 
 namespace ruvia {
 
+// One completed request, passed to the access-log callback after the response is
+// written. Views borrow request memory and are valid only for the call.
+struct AccessLogRecord final {
+    HttpMethod method{};
+    std::string_view path;
+    std::string_view remoteAddress;
+    std::uint16_t status{0};
+    std::uint64_t durationMicros{0};
+    bool http2{false};
+};
+
 struct HttpServerOptions final {
     struct Tls final {
         bool enabled{false};
@@ -63,6 +74,15 @@ struct HttpServerOptions final {
         std::uint16_t httpsPort{443};
     };
 
+    // Per-request observability hook. A raw function pointer plus user context
+    // (no captures, no type erasure) so it is zero-cost on the request path when
+    // unset and never allocates. Invoked once per completed request.
+    struct AccessLog final {
+        using Callback = void (*)(void* user, const AccessLogRecord& record) noexcept;
+        Callback callback{nullptr};
+        void* user{nullptr};
+    };
+
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
     // Scanner cadence; must be greater than 0.
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
@@ -82,6 +102,7 @@ struct HttpServerOptions final {
     Cors cors;
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
+    AccessLog accessLog;
 };
 
 struct TlsConfig final {
@@ -150,6 +171,7 @@ public:
     App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& setErrorHandler(HttpErrorHandler handler);
+    App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
     template <typename MiddlewareT>
