@@ -72,9 +72,9 @@ private:
     Task<void> acceptLoop();
     Task<void> handleSession(asio::ip::tcp::socket socket);
     template <typename Stream>
-    Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket);
+    Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket, std::string_view clientCertificate = {});
     template <typename Stream>
-    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, std::string_view initialBytes = {});
+    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, std::string_view initialBytes = {}, std::string_view clientCertificate = {});
     [[nodiscard]] std::optional<HttpResponse> tryDocumentRootResponse(
         const HttpRequest& request,
         RequestMemory& memory) const;

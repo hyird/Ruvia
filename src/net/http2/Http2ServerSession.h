@@ -102,7 +102,8 @@ public:
         const HttpServerOptions& options,
         ConnectionScanner::Entry& scannerEntry,
         std::string_view remoteAddress,
-        RateLimiter* rateLimiter = nullptr);
+        RateLimiter* rateLimiter = nullptr,
+        std::string_view clientCertificate = {});
 
     Task<void> run(std::string_view initialBytes = {});
 
@@ -285,6 +286,7 @@ private:
     ConnectionScanner::Entry& scannerEntry_;
     std::string_view remoteAddress_;
     RateLimiter* rateLimiter_{nullptr};
+    std::string_view clientCertificate_;
     std::pmr::string input_;
     Http2StreamTable streams_;
     Http2ClosedStreamHistory closedStreams_;
