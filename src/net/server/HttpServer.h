@@ -10,8 +10,11 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "ruvia/app/App.h"
 #include "ruvia/app/Task.h"
@@ -79,6 +82,10 @@ private:
     asio::io_context ioContext_;
     asio::ip::tcp::acceptor acceptor_;
     std::optional<asio::ssl::context> tlsContext_;
+    // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
+    // sniLookup_ maps a lowercased host to its context for the SNI callback.
+    std::vector<asio::ssl::context> sniContexts_;
+    std::vector<std::pair<std::pmr::string, asio::ssl::context*>> sniLookup_;
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
     WorkerMemory memory_;

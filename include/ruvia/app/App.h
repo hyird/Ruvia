@@ -8,6 +8,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ruvia/app/AppHook.h"
 #include "ruvia/app/Dotenv.h"
@@ -44,11 +45,20 @@ struct AccessLogRecord final {
 
 struct HttpServerOptions final {
     struct Tls final {
+        // An additional certificate selected by SNI server name (RFC 6066).
+        struct SniCertificate final {
+            std::pmr::string host;
+            std::pmr::string certificateChainFile;
+            std::pmr::string privateKeyFile;
+            std::pmr::string privateKeyPassword;
+        };
+
         bool enabled{false};
         std::pmr::string certificateChainFile;
         std::pmr::string privateKeyFile;
         std::pmr::string privateKeyPassword;
         std::pmr::string verifyFile;
+        std::pmr::vector<SniCertificate> sniCertificates;
     };
 
     struct Compression final {
@@ -174,6 +184,7 @@ public:
     App& setMaxStreamBodyBytes(std::size_t bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
     App& useTls(TlsConfig config);
+    App& addTlsCertificate(std::string_view host, TlsConfig config);
     App& setCompression(CompressionConfig config);
     App& setCors(CorsConfig config);
     App& setDocumentRoot(DocumentRootConfig config);
