@@ -102,6 +102,9 @@ struct HttpServerOptions final {
         // When set, the limit is enforced globally via this Redis connection
         // (shared across workers/instances) instead of the per-worker bucket.
         std::pmr::string redisAlias;
+        // For the Redis-backed limit, whether to allow (true) or reject (false)
+        // a request when Redis is unreachable.
+        bool redisFailOpen{true};
     };
 
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
@@ -203,7 +206,8 @@ public:
     App& setGlobalRateLimit(
         std::size_t maxRequests,
         std::chrono::milliseconds window = std::chrono::seconds(1),
-        std::string_view redisAlias = "default");
+        std::string_view redisAlias = "default",
+        bool failOpen = true);
 #endif
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);

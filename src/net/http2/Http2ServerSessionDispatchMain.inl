@@ -36,7 +36,8 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
                 redis_->get(options_.rateLimit.redisAlias, requestMemory.resource()),
                 rateKey,
                 options_.rateLimit.maxRequests,
-                options_.rateLimit.window.count());
+                options_.rateLimit.window.count(),
+                options_.rateLimit.redisFailOpen);
         } else
 #endif
         {

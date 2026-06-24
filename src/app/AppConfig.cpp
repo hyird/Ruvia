@@ -263,17 +263,19 @@ App& App::setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window
 App& App::setGlobalRateLimit(
     std::size_t maxRequests,
     std::chrono::milliseconds window,
-    std::string_view redisAlias) {
+    std::string_view redisAlias,
+    bool failOpen) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change the rate limit while app is running",
-        [maxRequests, window, redisAlias](detail::AppState& state) {
+        [maxRequests, window, redisAlias, failOpen](detail::AppState& state) {
             state.options.rateLimit.maxRequests = maxRequests;
             state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
                 ? std::chrono::milliseconds(1)
                 : window;
             state.options.rateLimit.redisAlias.assign(redisAlias.data(), redisAlias.size());
+            state.options.rateLimit.redisFailOpen = failOpen;
         });
 }
 #endif
