@@ -62,6 +62,11 @@ public:
         return clientCertificate_;
     }
 
+    // True when the request arrived over a TLS connection (https / h2).
+    [[nodiscard]] bool isSecure() const noexcept {
+        return secure_;
+    }
+
 private:
     friend struct detail::HttpRequestAccess;
 
@@ -81,6 +86,7 @@ private:
     std::string_view body_;
     std::string_view remoteAddress_;
     std::string_view clientCertificate_;
+    bool secure_{false};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

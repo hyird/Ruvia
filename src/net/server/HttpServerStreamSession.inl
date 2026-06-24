@@ -103,6 +103,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 HttpRequestAccess::setRemoteAddress(parsed.request, remoteAddress);
                 HttpRequestAccess::setClientCertificate(parsed.request, clientCertificate);
+                HttpRequestAccess::setSecure(parsed.request, !std::is_same_v<Stream, TcpSocket>);
                 // Reset phase so headerTimeout stops counting against dispatch
                 // time. Body readers will set kReadingBody on their own; the
                 // streaming/websocket paths set their own phases below; the
