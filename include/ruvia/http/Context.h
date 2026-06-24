@@ -53,6 +53,20 @@ struct SessionAccess;
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
 [[noreturn]] void throwInvalidFormBody();
+
+// Assign `src` into `dst`, forcing storage in the backing memory resource rather
+// than the small-string optimization's inline buffer. The Context's per-request
+// arena outlives the Context, but a string object's inline SSO bytes do not — so
+// without this, a short c.session()/c.body() value handed to c.text() (a borrowed
+// view) would dangle once the Context is destroyed before the response is written.
+// 32 clears every mainstream SSO threshold (libstdc++/MSVC 15, libc++ 22).
+inline void assignStableString(std::pmr::string& dst, std::string_view src) {
+    dst.clear();
+    if (src.size() < 32) {
+        dst.reserve(32);
+    }
+    dst.assign(src.data(), src.size());
+}
 }
 
 class Context final {
@@ -136,7 +150,7 @@ public:
         return std::string_view(sessionData_.data(), sessionData_.size());
     }
     void setSession(std::string_view data) {
-        sessionData_.assign(data.data(), data.size());
+        detail::assignStableString(sessionData_, data);
         sessionDirty_ = true;
     }
     void clearSession() {
