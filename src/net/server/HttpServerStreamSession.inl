@@ -124,7 +124,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             redis_.get(options_.rateLimit.redisAlias, requestMemory.resource()),
                             rateKey,
                             options_.rateLimit.maxRequests,
-                            options_.rateLimit.window.count());
+                            options_.rateLimit.window.count(),
+                            options_.rateLimit.redisFailOpen);
                     } else
 #endif
                     {
