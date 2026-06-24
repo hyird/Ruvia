@@ -11,6 +11,7 @@ std::string_view Http2ServerSession<Stream>::inputView(std::size_t size) const n
 template <typename Stream>
 void Http2ServerSession<Stream>::consumeInput(std::size_t size) {
     http2ConsumeInput(input_, inputOffset_, size);
+    http2ReclaimDrainedInput(input_);
 }
 
 template <typename Stream>

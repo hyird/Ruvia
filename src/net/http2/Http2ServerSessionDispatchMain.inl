@@ -26,23 +26,8 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         clientCertificate_,
         !std::is_same_v<Stream, asio::ip::tcp::socket>);
     if (rateLimiter_ != nullptr && rateLimiter_->enabled()) {
-        bool rateAllowed = true;
-#ifdef RUVIA_ENABLE_REDIS
-        if (redis_ != nullptr && !options_.rateLimit.redisAlias.empty()) {
-            std::pmr::string rateKey(requestMemory.resource());
-            rateKey.append("rl:");
-            rateKey.append(remoteAddress_.data(), remoteAddress_.size());
-            rateAllowed = co_await redisRateLimitAllow(
-                redis_->get(options_.rateLimit.redisAlias, requestMemory.resource()),
-                rateKey,
-                options_.rateLimit.maxRequests,
-                options_.rateLimit.window.count(),
-                options_.rateLimit.redisFailOpen);
-        } else
-#endif
-        {
-            rateAllowed = rateLimiter_->allow(remoteAddress_);
-        }
+        const bool rateAllowed = co_await rateLimitRequestAllowed(
+            *rateLimiter_, redis_, options_.rateLimit, remoteAddress_, requestMemory.resource());
         if (!rateAllowed) {
             auto response = co_await routes_.handleError(
                 request,
@@ -59,9 +44,8 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         }
     }
     const auto& resolution = stream.routeResolution;
-    const auto maxBody = resolution.bodyMode == RequestBodyMode::kStream
-        ? options_.maxStreamBodyBytes
-        : options_.maxBufferedBodyBytes;
+    const auto maxBody = requestBodyByteLimit(
+        resolution.bodyMode, options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
     if (maxBody != 0 && stream.body.size() > maxBody) {
         auto response = co_await routes_.handleError(
             request,

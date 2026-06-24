@@ -115,23 +115,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
                 if (rateLimiter_.enabled()) {
-                    bool rateAllowed = true;
-#ifdef RUVIA_ENABLE_REDIS
-                    if (!options_.rateLimit.redisAlias.empty()) {
-                        std::pmr::string rateKey(requestMemory.resource());
-                        rateKey.append("rl:");
-                        rateKey.append(remoteAddress.data(), remoteAddress.size());
-                        rateAllowed = co_await redisRateLimitAllow(
-                            redis_.get(options_.rateLimit.redisAlias, requestMemory.resource()),
-                            rateKey,
-                            options_.rateLimit.maxRequests,
-                            options_.rateLimit.window.count(),
-                            options_.rateLimit.redisFailOpen);
-                    } else
-#endif
-                    {
-                        rateAllowed = rateLimiter_.allow(remoteAddress);
-                    }
+                    const bool rateAllowed = co_await rateLimitRequestAllowed(
+                        rateLimiter_, &redis_, options_.rateLimit, remoteAddress, requestMemory.resource());
                     if (!rateAllowed) {
                         consumedBytes = parsed.headerBytes;
                         response = co_await routes.handleError(
@@ -230,9 +215,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     break;
                 }
 
-                const auto maxRequestBodyBytes = routeResolution.bodyMode == RequestBodyMode::kStream
-                    ? options_.maxStreamBodyBytes
-                    : options_.maxBufferedBodyBytes;
+                const auto maxRequestBodyBytes = requestBodyByteLimit(
+                    routeResolution.bodyMode, options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
                 if (contentLengthExceedsLimit(parsed.contentLength, maxRequestBodyBytes)) {
                     consumedBytes = parsed.headerBytes;
                     response = co_await routes.handleError(

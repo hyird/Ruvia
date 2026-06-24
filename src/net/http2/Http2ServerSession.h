@@ -52,6 +52,8 @@
 #include "../ws/HttpWebSocketSession.h"
 #include "../HttpFileOpen.h"
 #include "../RequestMemoryArena.h"
+#include "../RequestBodyLimit.h"
+#include "../server/RateLimitDecision.h"
 #include "../../http/HttpResponseBodyAccess.h"
 #include "../../http/HttpResponseFileAccess.h"
 #include "../../http/HttpResponseFileBody.h"

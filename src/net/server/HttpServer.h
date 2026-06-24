@@ -26,6 +26,7 @@
 #include "../../db/DbInternal.h"
 #include "../../redis/RedisInternal.h"
 #include "../../http/client/HttpClientInternal.h"
+#include "RateLimitDecision.h"
 
 namespace ruvia::detail {
 

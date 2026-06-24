@@ -367,7 +367,7 @@ RUVIA_GET_WS_OPTIONS("/chat", chat, chatOptions);
 RUVIA_ROUTES_END
 ```
 
-`ruvia::Task<T>` is Ruvia's coroutine type, not an alias for `asio::awaitable<T>`. It is a single-shot task, preserves exceptions through `co_await`, and resumes the awaiting coroutine from `final_suspend`. Use `co_await reader.read()` and `co_await next(c)` for temporary tasks in public code; if a task is stored in a local variable, await it with `co_await std::move(task)`. Public API does not expose `.asAwaitable()` and there is no conversion to `asio::awaitable<T>`; Asio bridging is an internal server/test boundary through `src/AsioAwait.h`.
+`ruvia::Task<T>` is Ruvia's coroutine type, not an alias for `asio::awaitable<T>`. It is a single-shot task, preserves exceptions through `co_await`, and resumes the awaiting coroutine from `final_suspend`. Use `co_await reader.read()` and `co_await next(c)` for temporary tasks in public code; if a task is stored in a local variable, await it with `co_await std::move(task)`. Public API does not expose `.asAwaitable()` and there is no conversion to `asio::awaitable<T>`; Asio bridging is an internal server/test boundary through `src/runtime/AsioAwait.h`.
 
 Streaming multipart uploads are also explicit:
 
