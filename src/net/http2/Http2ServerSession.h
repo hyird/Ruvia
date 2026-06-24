@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -104,7 +105,8 @@ public:
         ConnectionScanner::Entry& scannerEntry,
         std::string_view remoteAddress,
         RateLimiter* rateLimiter = nullptr,
-        std::string_view clientCertificate = {});
+        std::string_view clientCertificate = {},
+        const std::atomic_bool* serverStarted = nullptr);
 
     Task<void> run(std::string_view initialBytes = {});
 
@@ -288,6 +290,7 @@ private:
     std::string_view remoteAddress_;
     RateLimiter* rateLimiter_{nullptr};
     std::string_view clientCertificate_;
+    const std::atomic_bool* serverStarted_{nullptr};
     std::pmr::string input_;
     Http2StreamTable streams_;
     Http2ClosedStreamHistory closedStreams_;
@@ -307,6 +310,8 @@ private:
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
     bool receivedFirstSettings_{false};
     bool closing_{false};
+    bool draining_{false};
+    std::uint32_t goawayLastStreamId_{0};
     bool writeInProgress_{false};
     bool readerRunning_{false};
     std::coroutine_handle<> dispatchDrainWaiter_{};

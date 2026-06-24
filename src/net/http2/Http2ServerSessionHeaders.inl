@@ -56,7 +56,11 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
         co_return false;
     }
 
-    auto* stream = createStream(header.streamId);
+    // While draining, a stream above the id we advertised in GOAWAY must not be
+    // processed (RFC 9113 §6.8); route it through the refused-stream path so its
+    // header block is still decoded (to keep HPACK in sync) and then RST'd.
+    const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+    auto* stream = drainRefused ? nullptr : createStream(header.streamId);
     lastStreamId_ = header.streamId;
     const bool refusedStream = stream == nullptr;
     if (refusedStream) {

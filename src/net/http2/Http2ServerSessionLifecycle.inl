@@ -11,7 +11,8 @@ Http2ServerSession<Stream>::Http2ServerSession(
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
     RateLimiter* rateLimiter,
-    std::string_view clientCertificate)
+    std::string_view clientCertificate,
+    const std::atomic_bool* serverStarted)
     : stream_(stream),
       socket_(socket),
       memory_(memory),
@@ -24,6 +25,7 @@ Http2ServerSession<Stream>::Http2ServerSession(
       remoteAddress_(remoteAddress),
       rateLimiter_(rateLimiter),
       clientCertificate_(clientCertificate),
+      serverStarted_(serverStarted),
       input_(memory.resource()),
       streams_(memory.resource()),
       writeWaiters_(memory.resource()),
@@ -81,6 +83,15 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
         std::string_view payload;
         if (!(co_await readFrame(header, payload))) {
             break;
+        }
+        // The server has begun draining: tell the peer to stop opening streams
+        // (RFC 9113 §6.8). Streams already started keep running; new ones (id
+        // above this point) are refused below in processHeaders.
+        if (!draining_ && serverStarted_ != nullptr &&
+            !serverStarted_->load(std::memory_order_relaxed)) {
+            draining_ = true;
+            goawayLastStreamId_ = lastStreamId_;
+            co_await sendGoaway(lastStreamId_, Http2ErrorCode::kNoError, "server draining");
         }
         if (!(co_await processFrame(header, payload))) {
             break;
