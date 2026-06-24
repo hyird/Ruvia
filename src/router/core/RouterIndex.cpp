@@ -34,7 +34,7 @@ detail::RouteResolution detail::RouteTable::resolve(
             .dynamic = true};
     }
 
-    auto methodMask = allowedMethods(path);
+    auto methodMask = allowedMethods(path, method);
     if (methodMask != 0) {
         methodMask |= 1U << methodIndex(HttpMethod::kOptions);
         return RouteResolution{
@@ -144,11 +144,15 @@ const detail::RouteEntry* detail::RouteTable::findRadix(HttpMethod method, std::
     return findRadixNode(radixRoots_[methodIndex(method)], path);
 }
 
-std::uint32_t detail::RouteTable::allowedMethods(std::string_view path) const noexcept {
+std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept {
     std::uint32_t mask = 0;
     for (std::size_t i = 0; i < kRoutableMethodCount; ++i) {
         const auto method = static_cast<HttpMethod>(i);
-        if (method == HttpMethod::kOptions || (allowedMethodMask_ & (1U << i)) == 0) {
+        // resolve() already proved requestedMethod has no route for this path, so
+        // re-checking it here would re-hash the path and re-walk the indexes for a
+        // known miss. OPTIONS is added by resolve() itself.
+        if (method == HttpMethod::kOptions || method == requestedMethod ||
+            (allowedMethodMask_ & (1U << i)) == 0) {
             continue;
         }
         if (findStaticRoute(method, path) != nullptr || findDynamicRoute(method, path).route != nullptr) {

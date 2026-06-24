@@ -265,7 +265,7 @@ private:
     [[nodiscard]] const RouteEntry* findPerfect(HttpMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findRadix(HttpMethod method, std::string_view path) const noexcept;
     [[nodiscard]] RouteMatch findDynamic(HttpMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] std::uint32_t allowedMethods(std::string_view path) const noexcept;
+    [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<HttpResponse> invokeMiddlewareAt(
