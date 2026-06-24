@@ -10,7 +10,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
 
     HttpRequest request;
-    if (!Http2RequestBuilder::build(stream, request, remoteAddress_, requestMemory.resource())) {
+    if (!Http2RequestBuilder::build(stream, request, requestMemory.resource())) {
         HttpResponse response = co_await routes_.handleError(
             request,
             requestMemory,
@@ -20,8 +20,11 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         co_await writeResponse(stream, response);
         co_return;
     }
-    HttpRequestAccess::setClientCertificate(request, clientCertificate_);
-    HttpRequestAccess::setSecure(request, !std::is_same_v<Stream, asio::ip::tcp::socket>);
+    HttpRequestAccess::setTransport(
+        request,
+        remoteAddress_,
+        clientCertificate_,
+        !std::is_same_v<Stream, asio::ip::tcp::socket>);
     if (rateLimiter_ != nullptr && rateLimiter_->enabled()) {
         bool rateAllowed = true;
 #ifdef RUVIA_ENABLE_REDIS

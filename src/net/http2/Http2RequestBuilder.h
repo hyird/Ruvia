@@ -50,7 +50,6 @@ public:
     static bool build(
         Http2StreamState& stream,
         HttpRequest& request,
-        std::string_view remoteAddress,
         std::pmr::memory_resource* resource) noexcept {
         HttpRequestAccess::reset(request);
         HttpRequestAccess::setResource(request, resource);
@@ -69,7 +68,6 @@ public:
         HttpRequestAccess::setPath(request, requestPath(target));
         HttpRequestAccess::setQueryString(request, requestQueryString(target));
         HttpRequestAccess::setBody(request, stream.body);
-        HttpRequestAccess::setRemoteAddress(request, remoteAddress);
 
         for (std::size_t i = 0; i < stream.headers.size(); ++i) {
             const auto header = stream.headers.at(i);
