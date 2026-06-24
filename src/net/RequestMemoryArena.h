@@ -8,7 +8,10 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::size_t kRequestArenaStackBytes = 4 * 1024;
+// Per-request arena initial block carried on the HTTP/2 dispatch coroutine frame.
+// Sized to the shared kRequestArenaInitialBytes so the HTTP/1 work-set block and
+// the HTTP/2 dispatch block start from one identical initial-block size.
+inline constexpr std::size_t kRequestArenaStackBytes = kRequestArenaInitialBytes;
 
 inline RequestMemory& emplaceRequestMemory(
     std::optional<RequestMemory>& storage,

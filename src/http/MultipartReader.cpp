@@ -1,6 +1,7 @@
 #include "ruvia/http/MultipartReader.h"
 
 #include "MultipartParsing.h"
+#include "ruvia/http/detail/PmrString.h"
 
 #include <algorithm>
 #include <cstring>
@@ -64,21 +65,7 @@ void MultipartReader::consume(std::size_t bytes) noexcept {
 }
 
 void MultipartReader::compactConsumedPrefix() {
-    if (bufferOffset_ == 0) {
-        return;
-    }
-    if (bufferOffset_ == buffer_.size()) {
-        buffer_.clear();
-        bufferOffset_ = 0;
-        return;
-    }
-    if (bufferOffset_ < kCompactConsumedPrefixBytes) {
-        return;
-    }
-    const auto remaining = buffer_.size() - bufferOffset_;
-    std::memmove(buffer_.data(), buffer_.data() + bufferOffset_, remaining);
-    buffer_.resize(remaining);
-    bufferOffset_ = 0;
+    detail::compactConsumedPrefix(buffer_, bufferOffset_, kCompactConsumedPrefixBytes);
 }
 
 void MultipartReader::compactPending() {

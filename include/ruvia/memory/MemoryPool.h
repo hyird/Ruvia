@@ -10,8 +10,20 @@
 
 namespace ruvia {
 
+// Default initial bump-block size for the per-request arena. The net layer sizes
+// its connection-private arena blocks (ConnectionWorkSet::arenaBlock for HTTP/1
+// and the per-request dispatch block for HTTP/2) to this same constant, so the
+// configured default and the compile-time blocks stay in lockstep: a request
+// whose arena allocations fit within it touches no heap at all.
+//
+// Configuring requestInitialBufferBytes larger than this constant stays correct
+// but spills the arena's first block to the worker resource on every request,
+// because the in-block fast path is sized at compile time. Prefer raising
+// kRequestArenaInitialBytes itself if a larger zero-heap default is wanted.
+inline constexpr std::size_t kRequestArenaInitialBytes = 4 * 1024;
+
 struct MemoryPoolConfig {
-    std::size_t requestInitialBufferBytes{4096};
+    std::size_t requestInitialBufferBytes{kRequestArenaInitialBytes};
 };
 
 class MimallocMemoryResource final : public std::pmr::memory_resource {

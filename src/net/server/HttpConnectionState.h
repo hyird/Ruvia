@@ -14,8 +14,10 @@ namespace ruvia::detail {
 
 // Initial bump block for the per-request arena, carried inside a work set. The
 // request monotonic_buffer_resource bump-allocates from here before spilling to
-// the worker resource, so a typical small request touches no heap at all.
-inline constexpr std::size_t kWorkSetArenaBytes = 4 * 1024;
+// the worker resource, so a typical small request touches no heap at all. Sized
+// to the shared kRequestArenaInitialBytes (see MemoryPool.h) so the HTTP/1 and
+// HTTP/2 request arenas start from one identical block size.
+inline constexpr std::size_t kWorkSetArenaBytes = kRequestArenaInitialBytes;
 
 // All of a connection's heavy per-request working memory bundled into one
 // poolable unit: the read buffer, the request arena block, the (reused) parse

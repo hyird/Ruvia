@@ -267,7 +267,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - `ruvia::Task<T>` 是 single-shot；临时 task 可直接 `co_await`，存入局部变量后必须 `co_await std::move(task)`。
 - 公开 `ruvia::Task<T>` 不提供 `.asAwaitable()`，也不暴露 Asio awaitable 转换 API。
 - `ruvia::Task<T>` 必须是 Ruvia 自己的协程 handle/promise 设计，不继承或依赖 `asio::detail::awaitable_frame`。
-- 不提供 `Task<T>` 到 `asio::awaitable<T>` 的隐式转换，也不提供 lvalue await；跨到 Asio 只能在未安装内部边界使用 `src/AsioAwait.h` 的 `ruvia::detail::taskAsAwaitable(...)`。
+- 不提供 `Task<T>` 到 `asio::awaitable<T>` 的隐式转换，也不提供 lvalue await；跨到 Asio 只能在未安装内部边界使用 `src/runtime/AsioAwait.h` 的 `ruvia::detail::taskAsAwaitable(...)`。
 - 底层 Asio I/O 等待通过内部 callback awaiter 适配到 `ruvia::Task<T>`；不要为了单次 I/O await 新建 `co_spawn` 桥。
 - 公开 controller API 是 `ruvia::Controller<T>` 和 `include/ruvia/http/Controller.h`。
 

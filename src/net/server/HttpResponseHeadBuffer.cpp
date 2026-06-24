@@ -1,5 +1,7 @@
 #include "HttpResponseHeadBuffer.h"
 
+#include "ruvia/http/detail/PmrString.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cstring>
@@ -7,12 +9,8 @@
 namespace ruvia::detail {
 
 void ResponseHeadBuffer::reset() noexcept {
-    if (heap_.capacity() > kResponseHeadRetainedHeapBytes) {
-        std::pmr::string replacement(heap_.get_allocator());
-        heap_.swap(replacement);
-    } else {
-        heap_.clear();
-    }
+    // Same retain-small-else-release policy as every other pooled scratch buffer.
+    clearPmrStringRetainingSmall(heap_, kResponseHeadRetainedHeapBytes);
     used_ = 0;
     overflowed_ = false;
 }

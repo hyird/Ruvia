@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../RequestMemoryArena.h"
+#include "../RequestBodyLimit.h"
 #include "../../http/HttpParserInternal.h"
 
 namespace ruvia::detail {
