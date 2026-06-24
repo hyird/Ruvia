@@ -56,6 +56,9 @@ Task<std::string_view> Context::body() const {
         co_return raw;
     }
     decodedBody_.clear();
+    // Keep the decoded buffer in the arena (not inline SSO) so the returned view
+    // survives the Context if a handler hands it to c.text(). See assignStableString.
+    decodedBody_.reserve(32);
     if (!detail::decodeRequestContentEncoding(coding, raw, decodedBody_, detail::kMaxDecodedRequestBodyBytes)) {
         throw HttpError(400, "bad_request", "failed to decode request body");
     }

@@ -13,7 +13,7 @@ struct SessionAccess final {
         context.sessionId_.assign(id.data(), id.size());
     }
     static void load(Context& context, std::string_view data) {
-        context.sessionData_.assign(data.data(), data.size());
+        assignStableString(context.sessionData_, data);
         context.sessionLoaded_ = true;
     }
     [[nodiscard]] static bool dirty(const Context& context) noexcept {
