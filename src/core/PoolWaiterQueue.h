@@ -109,6 +109,16 @@ public:
     // invoke this when an acquire timeout is configured; otherwise the deadlines
     // are not meaningful.
     void expireDeadlines(std::chrono::steady_clock::time_point now) noexcept {
+        // Two-phase to stay safe against re-entrancy: resuming a timed-out waiter
+        // can run application continuations that re-enter the pool (e.g. an outer
+        // ConnectionGuard releasing during unwind, which resumeNext()s another
+        // queued waiter). So first detach every expired waiter into a private
+        // list, then resume them once the traversal is complete — a resumed
+        // coroutine can no longer touch a node that is already off the queue, so
+        // no waiter is ever resumed twice. (closeAll() is re-entrancy-safe for
+        // the same reason: it re-reads head_ after every resume.)
+        PoolWaiter* expiredHead = nullptr;
+        PoolWaiter* expiredTail = nullptr;
         auto* waiter = head_;
         while (waiter != nullptr) {
             auto* next = waiter->next;
@@ -120,11 +130,22 @@ public:
                 if (waiter->ready != nullptr) {
                     *waiter->ready = true;
                 }
-                if (waiter->handle) {
-                    waiter->handle.resume();
+                waiter->next = nullptr;
+                if (expiredTail != nullptr) {
+                    expiredTail->next = waiter;
+                } else {
+                    expiredHead = waiter;
                 }
+                expiredTail = waiter;
             }
             waiter = next;
+        }
+        while (expiredHead != nullptr) {
+            auto* resumeWaiter = expiredHead;
+            expiredHead = expiredHead->next;
+            if (resumeWaiter->handle) {
+                resumeWaiter->handle.resume();
+            }
         }
     }
 
