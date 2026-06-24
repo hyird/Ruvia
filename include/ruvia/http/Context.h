@@ -121,6 +121,11 @@ public:
         return request_.clientCertificate();
     }
 
+    // True when the request arrived over TLS (https / h2 over TLS).
+    [[nodiscard]] bool isSecure() const noexcept {
+        return request_.isSecure();
+    }
+
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
     // application owns the blob's format). sessionId() is empty until a session
     // exists. setSession/clearSession mark it for persistence on the way out.

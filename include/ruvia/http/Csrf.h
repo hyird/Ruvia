@@ -44,7 +44,7 @@ public:
         } else if (!cookie) {
             std::array<char, 64> buffer;
             const auto token = detail::generateCsrfToken(buffer);
-            c.setCookie("XSRF-TOKEN", token, CookieOptions{.path = "/", .sameSite = "Lax"});
+            c.setCookie("XSRF-TOKEN", token, CookieOptions{.path = "/", .sameSite = "Lax", .secure = c.isSecure()});
         }
         co_return co_await next(c);
     }

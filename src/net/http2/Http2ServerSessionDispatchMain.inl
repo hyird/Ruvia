@@ -21,6 +21,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         co_return;
     }
     HttpRequestAccess::setClientCertificate(request, clientCertificate_);
+    HttpRequestAccess::setSecure(request, !std::is_same_v<Stream, asio::ip::tcp::socket>);
     if (rateLimiter_ != nullptr && rateLimiter_->enabled()) {
         bool rateAllowed = true;
 #ifdef RUVIA_ENABLE_REDIS
