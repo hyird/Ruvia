@@ -88,7 +88,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         remoteAddress,
                         rateLimiter_,
                         readBuffer,
-                        usedBytes);
+                        usedBytes,
+                        &started_);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -186,7 +187,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             requestMemory,
                             baseRouteServices,
                             response,
-                            closeAfterWrite);
+                            closeAfterWrite,
+                            &started_);
                         if (upgradeResult == Http2UpgradeRouteResult::kWriteBufferedResponse) {
                             break;
                         }

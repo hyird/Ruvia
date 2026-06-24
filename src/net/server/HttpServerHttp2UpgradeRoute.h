@@ -46,7 +46,8 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
     RequestMemory& requestMemory,
     RouteServices baseRouteServices,
     HttpResponse& response,
-    bool& closeAfterWrite) {
+    bool& closeAfterWrite,
+    const std::atomic_bool* serverStarted = nullptr) {
     auto upgrade = parseHttp2UpgradeRequest(parsed, memory.resource());
     if (!upgrade.valid) {
         response = co_await routes.handleError(
@@ -142,7 +143,8 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
         parsed,
         upgrade.settingsPayload,
         upgradedBodyStorage,
-        pendingFrames);
+        pendingFrames,
+        serverStarted);
     co_return Http2UpgradeRouteResult::kSessionFinished;
 }
 

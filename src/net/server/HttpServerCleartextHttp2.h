@@ -9,6 +9,7 @@
 #include <asio/buffer.hpp>
 #include <asio/ip/tcp.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -64,7 +65,8 @@ Task<void> runHttp2ServerSession(
     std::string_view remoteAddress,
     RateLimiter& rateLimiter,
     std::string_view clientCertificate = {},
-    std::string_view initialBytes = {}) {
+    std::string_view initialBytes = {},
+    const std::atomic_bool* serverStarted = nullptr) {
     Http2ServerSession<Stream> session(
         stream,
         socket,
@@ -77,7 +79,8 @@ Task<void> runHttp2ServerSession(
         scannerEntry,
         remoteAddress,
         &rateLimiter,
-        clientCertificate);
+        clientCertificate,
+        serverStarted);
     co_await session.run(initialBytes);
 }
 
@@ -95,7 +98,8 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     std::string_view remoteAddress,
     RateLimiter& rateLimiter,
     std::pmr::string& readBuffer,
-    std::size_t& usedBytes) {
+    std::size_t& usedBytes,
+    const std::atomic_bool* serverStarted = nullptr) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
     case CleartextHttp2Probe::kHttp1:
@@ -114,7 +118,8 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             remoteAddress,
             rateLimiter,
             {},
-            current);
+            current,
+            serverStarted);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
         scannerEntry.setPhase(ConnectionScanner::Phase::kReadingHeader);
@@ -154,7 +159,8 @@ Task<void> runUpgradedHttp2ServerSession(
     const HttpServerParseResult& parsed,
     std::string_view settingsPayload,
     std::string_view body,
-    std::string_view initialBytes) {
+    std::string_view initialBytes,
+    const std::atomic_bool* serverStarted = nullptr) {
     Http2ServerSession<Stream> session(
         stream,
         socket,
@@ -166,7 +172,9 @@ Task<void> runUpgradedHttp2ServerSession(
         options,
         scannerEntry,
         remoteAddress,
-        &rateLimiter);
+        &rateLimiter,
+        {},
+        serverStarted);
     co_await session.runUpgraded(parsed, settingsPayload, body, initialBytes);
 }
 
