@@ -20,33 +20,34 @@ enum class Http2BodyAccountingResult : std::uint8_t {
     std::size_t dataSize,
     std::size_t maxStreamBodyBytes,
     std::size_t maxBufferedBodyBytes) noexcept {
-    if (stream.webSocketTunnel) {
+    if (stream.webSocketTunnel()) {
         return Http2BodyAccountingResult::kOk;
     }
-    const auto maxBody = requestBodyByteLimit(stream.bodyMode, maxStreamBodyBytes, maxBufferedBodyBytes);
+    const auto maxBody = requestBodyByteLimit(
+        stream.bodyMode(),
+        maxStreamBodyBytes,
+        maxBufferedBodyBytes);
     if (maxBody != 0 &&
-        (stream.receivedBodyBytes > maxBody || dataSize > maxBody - stream.receivedBodyBytes)) {
+        (stream.receivedBodyBytes() > maxBody ||
+            dataSize > maxBody - stream.receivedBodyBytes())) {
         return Http2BodyAccountingResult::kTooLarge;
     }
-    if (dataSize > std::numeric_limits<std::size_t>::max() - stream.receivedBodyBytes) {
+    if (!stream.addReceivedBodyBytes(dataSize)) {
         return Http2BodyAccountingResult::kTooLarge;
     }
-    stream.receivedBodyBytes += dataSize;
-    if (stream.hasContentLength && stream.receivedBodyBytes > stream.contentLength) {
+    if (stream.receivedBodyExceedsContentLength()) {
         return Http2BodyAccountingResult::kContentLengthExceeded;
     }
     return Http2BodyAccountingResult::kOk;
 }
 
 [[nodiscard]] inline bool http2BodyLengthComplete(const Http2StreamState& stream) noexcept {
-    return stream.webSocketTunnel ||
-        !stream.hasContentLength ||
-        stream.receivedBodyBytes == stream.contentLength;
+    return stream.webSocketTunnel() || stream.bodyLengthComplete();
 }
 
 inline void http2MarkBodyEnded(Http2StreamState& stream) noexcept {
-    stream.endStream = true;
-    stream.bodyEnded = true;
+    stream.markPeerEndStream();
+    stream.markBodyEnded();
 }
 
 }  // namespace ruvia::detail

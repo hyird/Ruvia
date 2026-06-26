@@ -1,6 +1,7 @@
 /build/
 /build-*/
 /build-release/
+/vcpkg_installed/
 /.vscode/
 /.slim/
 /.codegraph/

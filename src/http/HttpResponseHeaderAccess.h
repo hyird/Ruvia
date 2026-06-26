@@ -23,11 +23,15 @@ struct HttpResponseHeaderAccess final {
     }
 
     [[nodiscard]] static char* valueBegin(HttpResponseHeader& header) noexcept {
+        if (header.bytes == nullptr) {
+            return nullptr;
+        }
         return const_cast<char*>(header.bytes) + header.nameSize;
     }
 
     [[nodiscard]] static char* valueEnd(HttpResponseHeader& header) noexcept {
-        return valueBegin(header) + header.valueSize;
+        auto* const begin = valueBegin(header);
+        return begin == nullptr ? nullptr : begin + header.valueSize;
     }
 
     [[nodiscard]] static std::uint32_t knownBit(const HttpResponseHeader& header) noexcept {

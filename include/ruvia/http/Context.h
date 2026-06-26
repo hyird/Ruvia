@@ -47,7 +47,7 @@ class HttpClientRegistry;
 class HttpClientPool;
 class RequestBodyLoader;
 struct ContextAccess;
-struct ContextServices;
+class ContextServices;
 struct SessionAccess;
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
@@ -82,7 +82,8 @@ private:
     Context(
         RequestMemory& memory,
         const HttpRequest& request,
-        const std::array<RouteParamView, kMaxRouteParams>& params,
+        const std::string_view* paramNames,
+        const std::string_view* paramValues,
         std::size_t paramCount,
         detail::ContextServices services) noexcept;
 
@@ -98,14 +99,14 @@ public:
         return request_;
     }
 
-    [[nodiscard]] std::optional<std::pmr::string> decodedPath() const {
+    [[nodiscard]] RequestValue decodedPath() const noexcept {
         return request_.decodedPath();
     }
 
     [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
         for (std::size_t i = 0; i < paramCount_; ++i) {
-            if (params_[i].name == name) {
-                return ParamValue(params_[i].value, resource(), RequestValue::DecodeMode::kPercent);
+            if (paramNames_[i] == name) {
+                return ParamValue(paramValues_[i], resource(), RequestValue::DecodeMode::kPercent);
             }
         }
 
@@ -116,13 +117,9 @@ public:
         return request_.header(name);
     }
 
-    [[nodiscard]] QueryValue query(std::string_view name) const noexcept {
-        return request_.query(name);
-    }
+    [[nodiscard]] QueryValue query(std::string_view name) const;
 
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept {
-        return request_.cookie(name);
-    }
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
 
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
@@ -144,17 +141,23 @@ public:
     // application owns the blob's format). sessionId() is empty until a session
     // exists. setSession/clearSession mark it for persistence on the way out.
     [[nodiscard]] std::string_view sessionId() const noexcept {
-        return std::string_view(sessionId_.data(), sessionId_.size());
+        return sessionId_ == nullptr
+            ? std::string_view{}
+            : std::string_view(sessionId_->data(), sessionId_->size());
     }
     [[nodiscard]] std::string_view session() const noexcept {
-        return std::string_view(sessionData_.data(), sessionData_.size());
+        return sessionData_ == nullptr
+            ? std::string_view{}
+            : std::string_view(sessionData_->data(), sessionData_->size());
     }
     void setSession(std::string_view data) {
-        detail::assignStableString(sessionData_, data);
+        detail::assignStableString(sessionDataStorage(), data);
         sessionDirty_ = true;
     }
     void clearSession() {
-        sessionData_.clear();
+        if (sessionData_ != nullptr) {
+            sessionData_->clear();
+        }
         sessionDirty_ = true;
     }
 
@@ -332,11 +335,25 @@ private:
         std::uint16_t statusCode,
         std::string_view statusText) const;
 
+    struct RequestNameValueView final {
+        std::string_view name;
+        std::string_view value;
+    };
+
+    using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
+
+    [[nodiscard]] const RequestNameValueList& queryParams() const;
+    [[nodiscard]] const RequestNameValueList& cookieParams() const;
+    [[nodiscard]] std::pmr::string& decodedBody() const;
+    [[nodiscard]] std::pmr::string& sessionIdStorage();
+    [[nodiscard]] std::pmr::string& sessionDataStorage();
+
     static constexpr std::size_t kResponseIndexSlots = 22;
 
     RequestMemory& memory_;
     const HttpRequest& request_;
-    const RouteParamView* params_{nullptr};
+    const std::string_view* paramNames_{nullptr};
+    const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
@@ -350,12 +367,15 @@ private:
     HttpResponseHeaders responseHeaders_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
-    mutable std::pmr::string decodedBody_;
-    mutable bool bodyDecoded_{false};
-    std::pmr::string sessionId_;
-    std::pmr::string sessionData_;
-    bool sessionLoaded_{false};
-    bool sessionDirty_{false};
+    mutable std::pmr::string* decodedBody_{nullptr};
+    mutable RequestNameValueList* queryParams_{nullptr};
+    mutable RequestNameValueList* cookieParams_{nullptr};
+    std::pmr::string* sessionId_{nullptr};
+    std::pmr::string* sessionData_{nullptr};
+    mutable bool bodyDecoded_ : 1 {false};
+    mutable bool queryLookupAttempted_ : 1 {false};
+    mutable bool cookieLookupAttempted_ : 1 {false};
+    bool sessionDirty_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;

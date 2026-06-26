@@ -18,12 +18,12 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
-// Transport-agnostic WebSocket connection (RFC 6455). All protocol behavior —
-// frame reassembly, write serialization, heartbeats, graceful/abnormal close —
+// Transport-agnostic WebSocket connection (RFC 6455). All protocol behavior,
+// including frame reassembly, write serialization, heartbeats, and close,
 // lives here; the HTTP/1.1 and HTTP/2 transports differ only in the Transport
 // policy, which supplies the three transport-specific operations:
 //   asio-executor executor() const;
@@ -45,7 +45,7 @@ public:
           scannerEntry_(scannerEntry),
           heartbeatOptions_(heartbeatOptions),
           maxMessageBytes_(maxMessageBytes),
-          buffer_(resource == nullptr ? ProcessMemory::instance().upstreamResource() : resource),
+          buffer_(pmrResourceOrDefault(resource)),
           inbound_(buffer_.get_allocator().resource()),
           outboundDeflated_(buffer_.get_allocator().resource()),
           inboundInflated_(buffer_.get_allocator().resource()),
@@ -56,31 +56,15 @@ public:
         if (permessageDeflate_) {
             deflate_.emplace();
         }
-        scannerEntry_.webSocketTarget = this;
-        scannerEntry_.webSocketTick = &WebSocketConnection::heartbeatTickThunk;
+        scannerEntry_.setWebSocketHeartbeat(this, &WebSocketConnection::heartbeatTickThunk);
     }
 
     ~WebSocketConnection() {
-        if (scannerEntry_.webSocketTarget == this) {
-            scannerEntry_.webSocketTarget = nullptr;
-            scannerEntry_.webSocketTick = nullptr;
-        }
+        scannerEntry_.clearWebSocketHeartbeat(this);
     }
 
     WebSocketConnection(const WebSocketConnection&) = delete;
     WebSocketConnection& operator=(const WebSocketConnection&) = delete;
-
-    [[nodiscard]] static Task<std::optional<WebSocketMessage>> readThunk(void* target) {
-        return static_cast<WebSocketConnection*>(target)->read();
-    }
-
-    static Task<void> writeThunk(void* target, WebSocketOpcode opcode, std::string_view payload) {
-        return static_cast<WebSocketConnection*>(target)->write(opcode, payload);
-    }
-
-    static Task<void> closeThunk(void* target, std::uint16_t code, std::string_view reason) {
-        return static_cast<WebSocketConnection*>(target)->close(code, reason);
-    }
 
     static bool heartbeatTickThunk(void* target, std::int64_t now) noexcept {
         return static_cast<WebSocketConnection*>(target)->heartbeatTick(now);

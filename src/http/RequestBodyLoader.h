@@ -2,7 +2,6 @@
 
 #include "ruvia/app/Task.h"
 
-#include <stdexcept>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -18,28 +17,18 @@ public:
     RequestBodyLoader(const RequestBodyLoader&) = delete;
     RequestBodyLoader& operator=(const RequestBodyLoader&) = delete;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return readAll_ != nullptr && discard_ != nullptr;
-    }
-
     [[nodiscard]] Task<std::string_view> readAll() {
-        if (readAll_ == nullptr) {
-            throw std::logic_error("request body is not buffered");
-        }
         return readAll_(target_);
     }
 
     Task<void> discard() {
-        if (discard_ == nullptr) {
-            throw std::logic_error("request body is not buffered");
-        }
         return discard_(target_);
     }
 
 private:
-    void* target_{nullptr};
-    ReadAll readAll_{nullptr};
-    Discard discard_{nullptr};
+    void* target_;
+    ReadAll readAll_;
+    Discard discard_;
 };
 
 }  // namespace ruvia::detail

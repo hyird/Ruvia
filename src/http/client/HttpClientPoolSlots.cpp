@@ -42,11 +42,12 @@ struct PoolWaiterAwaiter {
             ready = true;
             return false;
         }
-        waiter.ready = &ready;
-        waiter.timedOut = &timedOut;
-        waiter.index = &index;
-        waiter.deadline = std::chrono::steady_clock::now() + pool.config_.acquireTimeout;
-        waiter.handle = handle;
+        waiter.bind(
+            ready,
+            timedOut,
+            index,
+            std::chrono::steady_clock::now() + pool.config_.acquireTimeout,
+            handle);
         pool.waiters_.enqueue(waiter);
         return true;
     }

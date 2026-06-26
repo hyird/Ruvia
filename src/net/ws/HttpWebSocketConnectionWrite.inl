@@ -27,10 +27,7 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
-    if (scannerEntry_.webSocketTarget == this) {
-        scannerEntry_.webSocketTarget = nullptr;
-        scannerEntry_.webSocketTick = nullptr;
-    }
+    scannerEntry_.clearWebSocketHeartbeat(this);
     closeSent_ = true;
     while (backgroundWriteCount_ > 0) {
         (void)co_await asyncError([this](auto handler) mutable {

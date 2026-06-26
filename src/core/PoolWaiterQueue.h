@@ -12,15 +12,48 @@ namespace ruvia::detail {
 //
 // `index` receives the slot handed to the waiter, `ready`/`timedOut` are the
 // awaiter's resume flags, all owned by the suspended coroutine.
-struct PoolWaiter {
-    bool* ready{nullptr};
-    bool* timedOut{nullptr};
-    std::size_t* index{nullptr};
-    std::chrono::steady_clock::time_point deadline{};
-    std::coroutine_handle<> handle{};
-    PoolWaiter* previous{nullptr};
-    PoolWaiter* next{nullptr};
-    bool queued{false};
+class PoolWaiter final {
+public:
+    PoolWaiter() noexcept = default;
+    PoolWaiter(
+        bool& ready,
+        bool& timedOut,
+        std::size_t& index,
+        std::chrono::steady_clock::time_point deadline) noexcept {
+        bind(ready, timedOut, index, deadline, {});
+    }
+
+    PoolWaiter(const PoolWaiter&) = delete;
+    PoolWaiter& operator=(const PoolWaiter&) = delete;
+
+    void bind(
+        bool& ready,
+        bool& timedOut,
+        std::size_t& index,
+        std::chrono::steady_clock::time_point deadline,
+        std::coroutine_handle<> handle) noexcept {
+        ready_ = &ready;
+        timedOut_ = &timedOut;
+        index_ = &index;
+        deadline_ = deadline;
+        handle_ = handle;
+    }
+
+    void setHandle(std::coroutine_handle<> handle) noexcept {
+        handle_ = handle;
+    }
+
+private:
+    friend class PoolWaiterQueue;
+
+    bool* ready_{nullptr};
+    bool* timedOut_{nullptr};
+    std::size_t* index_{nullptr};
+    std::chrono::steady_clock::time_point deadline_{};
+    std::coroutine_handle<> handle_{};
+    PoolWaiter* previous_{nullptr};
+    PoolWaiter* next_{nullptr};
+    bool queued_{false};
 };
 
 // Intrusive FIFO of pool acquire-waiters shared by the DB, Redis and HTTP-client
@@ -33,14 +66,14 @@ public:
     }
 
     void enqueue(PoolWaiter& waiter) noexcept {
-        if (waiter.queued) {
+        if (waiter.queued_) {
             return;
         }
-        waiter.previous = tail_;
-        waiter.next = nullptr;
-        waiter.queued = true;
+        waiter.previous_ = tail_;
+        waiter.next_ = nullptr;
+        waiter.queued_ = true;
         if (tail_ != nullptr) {
-            tail_->next = &waiter;
+            tail_->next_ = &waiter;
         } else {
             head_ = &waiter;
         }
@@ -48,22 +81,22 @@ public:
     }
 
     void remove(PoolWaiter& waiter) noexcept {
-        if (!waiter.queued) {
+        if (!waiter.queued_) {
             return;
         }
-        if (waiter.previous != nullptr) {
-            waiter.previous->next = waiter.next;
+        if (waiter.previous_ != nullptr) {
+            waiter.previous_->next_ = waiter.next_;
         } else {
-            head_ = waiter.next;
+            head_ = waiter.next_;
         }
-        if (waiter.next != nullptr) {
-            waiter.next->previous = waiter.previous;
+        if (waiter.next_ != nullptr) {
+            waiter.next_->previous_ = waiter.previous_;
         } else {
-            tail_ = waiter.previous;
+            tail_ = waiter.previous_;
         }
-        waiter.previous = nullptr;
-        waiter.next = nullptr;
-        waiter.queued = false;
+        waiter.previous_ = nullptr;
+        waiter.next_ = nullptr;
+        waiter.queued_ = false;
     }
 
     // Hand the freed slot `index` to the next waiter and resume it. Returns true
@@ -72,11 +105,11 @@ public:
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
-            if (waiter->ready != nullptr && waiter->index != nullptr) {
-                *waiter->index = index;
-                *waiter->ready = true;
-                if (waiter->handle) {
-                    waiter->handle.resume();
+            if (waiter->ready_ != nullptr && waiter->index_ != nullptr) {
+                *waiter->index_ = index;
+                *waiter->ready_ = true;
+                if (waiter->handle_) {
+                    waiter->handle_.resume();
                 }
                 return true;
             }
@@ -90,17 +123,17 @@ public:
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
-            if (waiter->timedOut != nullptr) {
-                *waiter->timedOut = false;
+            if (waiter->timedOut_ != nullptr) {
+                *waiter->timedOut_ = false;
             }
-            if (waiter->index != nullptr) {
-                *waiter->index = sentinelIndex;
+            if (waiter->index_ != nullptr) {
+                *waiter->index_ = sentinelIndex;
             }
-            if (waiter->ready != nullptr) {
-                *waiter->ready = true;
+            if (waiter->ready_ != nullptr) {
+                *waiter->ready_ = true;
             }
-            if (waiter->handle) {
-                waiter->handle.resume();
+            if (waiter->handle_) {
+                waiter->handle_.resume();
             }
         }
     }
@@ -121,18 +154,18 @@ public:
         PoolWaiter* expiredTail = nullptr;
         auto* waiter = head_;
         while (waiter != nullptr) {
-            auto* next = waiter->next;
-            if (waiter->deadline <= now) {
+            auto* next = waiter->next_;
+            if (waiter->deadline_ <= now) {
                 remove(*waiter);
-                if (waiter->timedOut != nullptr) {
-                    *waiter->timedOut = true;
+                if (waiter->timedOut_ != nullptr) {
+                    *waiter->timedOut_ = true;
                 }
-                if (waiter->ready != nullptr) {
-                    *waiter->ready = true;
+                if (waiter->ready_ != nullptr) {
+                    *waiter->ready_ = true;
                 }
-                waiter->next = nullptr;
+                waiter->next_ = nullptr;
                 if (expiredTail != nullptr) {
-                    expiredTail->next = waiter;
+                    expiredTail->next_ = waiter;
                 } else {
                     expiredHead = waiter;
                 }
@@ -142,9 +175,9 @@ public:
         }
         while (expiredHead != nullptr) {
             auto* resumeWaiter = expiredHead;
-            expiredHead = expiredHead->next;
-            if (resumeWaiter->handle) {
-                resumeWaiter->handle.resume();
+            expiredHead = expiredHead->next_;
+            if (resumeWaiter->handle_) {
+                resumeWaiter->handle_.resume();
             }
         }
     }

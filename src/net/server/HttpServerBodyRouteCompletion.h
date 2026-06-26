@@ -1,8 +1,10 @@
 #pragma once
 
+#include "../body/HttpRequestBody.h"
 #include "ConnectionScanner.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
+#include "../../http/RequestBodyLoader.h"
 #include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
@@ -12,10 +14,77 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace ruvia::detail {
+
+template <typename Stream>
+struct HttpLazyBufferedBodyRouteState final {
+    std::optional<LazyBufferedBody<Stream>> body;
+    std::optional<RequestBodyLoader> loader;
+
+    void emplace(
+        Stream& stream,
+        std::pmr::polymorphic_allocator<char> workerAllocator,
+        std::pmr::memory_resource* requestResource,
+        std::string_view bodyAndPipeline,
+        std::size_t contentLength,
+        bool chunked,
+        HttpTransferCodings transferCodings,
+        std::size_t maxBodyBytes,
+        ConnectionScanner::Entry& scannerEntry,
+        bool sendContinue) {
+        body.emplace(
+            stream,
+            workerAllocator,
+            requestResource,
+            bodyAndPipeline,
+            contentLength,
+            chunked,
+            transferCodings,
+            maxBodyBytes,
+            scannerEntry,
+            sendContinue);
+        emplaceRequestBodyLoaderFacade(loader, *body);
+    }
+
+    [[nodiscard]] ContextServices withLoader(ContextServices services) noexcept {
+        return services.withBodyLoader(*loader);
+    }
+
+    [[nodiscard]] bool consumed() const noexcept {
+        return body->consumed();
+    }
+
+    void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
+        body->restorePipeline(readBuffer, usedBytes);
+    }
+};
+
+template <typename Stream>
+inline void prepareHttpLazyBufferedBodyRoute(
+    HttpLazyBufferedBodyRouteState<Stream>& state,
+    Stream& stream,
+    WorkerMemory& memory,
+    RequestMemory& requestMemory,
+    std::string_view bodyAndPipeline,
+    const HttpServerParseResult& parsed,
+    const HttpServerOptions& options,
+    ConnectionScanner::Entry& scannerEntry) {
+    state.emplace(
+        stream,
+        memory.allocator<char>(),
+        requestMemory.resource(),
+        bodyAndPipeline,
+        parsed.contentLength,
+        parsed.chunked,
+        parsed.transferCodings,
+        options.maxBufferedBodyBytes,
+        scannerEntry,
+        (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
+}
 
 [[nodiscard]] inline std::string_view beginHttpBodyRoute(
     const HttpServerParseResult& parsed,
@@ -34,7 +103,7 @@ inline Task<void> completeFailedHttpBodyRoute(
     const HttpServerParseResult& parsed,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices exceptionServices,
+    ContextServices exceptionServices,
     HttpResponse& response,
     bool& keepAlive) {
     response = co_await routes.handleException(

@@ -14,37 +14,19 @@ namespace ruvia::detail {
 class Http2RequestBuilder final {
 public:
     [[nodiscard]] static HttpMethod requestMethod(const Http2StreamState& stream) noexcept {
-        return stream.extendedConnectWebSocket ? HttpMethod::kGet : stream.method;
+        return stream.extendedConnectWebSocket()
+            ? HttpMethod::kGet
+            : stream.requestMethod();
     }
 
     [[nodiscard]] static std::string_view requestTarget(const Http2StreamState& stream) noexcept {
-        return stream.standardConnect
-            ? std::string_view(stream.authority)
-            : std::string_view(stream.path);
-    }
-
-    [[nodiscard]] static std::string_view requestPath(std::string_view target) noexcept {
-        if (target == "*") {
-            return "*";
-        }
-        const auto query = target.find('?');
-        return query == std::string_view::npos
-            ? target
-            : target.substr(0, query);
-    }
-
-    [[nodiscard]] static std::string_view requestQueryString(std::string_view target) noexcept {
-        if (target == "*") {
-            return {};
-        }
-        const auto query = target.find('?');
-        return query == std::string_view::npos
-            ? std::string_view{}
-            : target.substr(query + 1);
+        return stream.standardConnect()
+            ? stream.requestAuthority()
+            : stream.requestPath();
     }
 
     [[nodiscard]] static std::string_view requestPath(const Http2StreamState& stream) noexcept {
-        return requestPath(requestTarget(stream));
+        return splitRequestTarget(requestTarget(stream)).path;
     }
 
     static bool build(
@@ -61,27 +43,29 @@ public:
         if (target.empty()) {
             return false;
         }
+        const auto targetParts = splitRequestTarget(target);
 
         HttpRequestAccess::setMethod(request, method);
         HttpRequestAccess::setHttpVersion(request, "HTTP/2");
         HttpRequestAccess::setTarget(request, target);
-        HttpRequestAccess::setPath(request, requestPath(target));
-        HttpRequestAccess::setQueryString(request, requestQueryString(target));
-        HttpRequestAccess::setBody(request, stream.body);
+        HttpRequestAccess::setPath(request, targetParts.path);
+        HttpRequestAccess::setQueryString(request, targetParts.queryString);
+        HttpRequestAccess::setBody(request, stream.requestBodyView());
 
-        for (std::size_t i = 0; i < stream.headers.size(); ++i) {
-            const auto header = stream.headers.at(i);
+        for (std::size_t i = 0; i < stream.requestHeaderCount(); ++i) {
+            const auto header = stream.requestHeaderAt(i);
             if (!addHeader(request, header.name, header.value, header.kind)) {
                 return false;
             }
         }
-        if (!stream.hasHost && !stream.authority.empty()) {
-            if (!addHeader(request, "host", stream.authority, RequestHeaderKind::kHost)) {
+        const auto authority = stream.requestAuthority();
+        if (!stream.hasHost() && !authority.empty()) {
+            if (!addHeader(request, "host", authority, RequestHeaderKind::kHost)) {
                 return false;
             }
         }
-        if (stream.hasCookie) {
-            if (!addHeader(request, "cookie", stream.cookie, RequestHeaderKind::kCookie)) {
+        if (stream.hasCookie()) {
+            if (!addHeader(request, "cookie", stream.requestCookie(), RequestHeaderKind::kCookie)) {
                 return false;
             }
         }
@@ -89,23 +73,31 @@ public:
     }
 
 private:
+    struct RequestTargetParts final {
+        std::string_view path;
+        std::string_view queryString;
+    };
+
+    [[nodiscard]] static RequestTargetParts splitRequestTarget(std::string_view target) noexcept {
+        if (target == "*") {
+            return RequestTargetParts{.path = "*", .queryString = {}};
+        }
+        const auto query = target.find('?');
+        if (query == std::string_view::npos) {
+            return RequestTargetParts{.path = target, .queryString = {}};
+        }
+        return RequestTargetParts{.path = target.substr(0, query), .queryString = target.substr(query + 1)};
+    }
+
     static bool addHeader(
         HttpRequest& request,
         std::string_view name,
         std::string_view value,
         RequestHeaderKind kind) noexcept {
-        if (!HttpRequestAccess::addHeader(request, HttpHeaderView{name, value})) {
-            return false;
-        }
-        cacheKnownHeader(request, kind, value);
-        return true;
-    }
-
-    static void cacheKnownHeader(
-        HttpRequest& request,
-        RequestHeaderKind kind,
-        std::string_view value) noexcept {
-        HttpRequestAccess::setKnownHeaderSlot(request, requestHeaderKindKnownSlot(kind), value);
+        return HttpRequestAccess::addHeader(
+            request,
+            HttpHeaderView{name, value},
+            requestHeaderKindKnownSlot(kind));
     }
 };
 

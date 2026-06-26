@@ -2,6 +2,7 @@
 
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/model/JsonWriter.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <memory_resource>
 #include <string>
@@ -17,8 +18,8 @@ void appendJson(std::pmr::string& output, const T& value) {
 template <typename T>
 [[nodiscard]] std::pmr::string toJson(
     const T& value,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource()) {
-    std::pmr::string output(resource);
+    std::pmr::memory_resource* resource = nullptr) {
+    std::pmr::string output(detail::pmrResourceOrDefault(resource));
     output.reserve(detail::jsonSizeHintValue(value));
     detail::appendJsonValue(output, value);
     return output;

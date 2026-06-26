@@ -100,9 +100,12 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
     appendFormattedNumber(out, value, "failed to format JWT numeric claim");
 }
 
-std::string_view jwtFindJsonString(std::string_view json, std::string_view key) {
+std::string_view jwtFindJsonString(
+    std::string_view json,
+    std::string_view key,
+    std::pmr::memory_resource* resource) {
     std::string_view result;
-    (void)visitJsonObjectFields(json, std::pmr::get_default_resource(), [&](std::string_view member, std::string_view value) {
+    (void)visitJsonObjectFields(json, pmrResourceOrDefault(resource), [&](std::string_view member, std::string_view value) {
         if (member != key) {
             return true;
         }

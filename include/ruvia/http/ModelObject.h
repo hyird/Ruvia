@@ -5,6 +5,7 @@
 #include "ruvia/http/detail/model/Parser.h"
 #include "ruvia/http/detail/model/RequestFieldVisitors.h"
 #include "ruvia/http/detail/model/Traits.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <memory_resource>
 #include <optional>
@@ -18,12 +19,12 @@ public:
 
     explicit JsonObject(
         std::string_view body,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept
-        : body_(body), resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : body_(body), resource_(detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] static std::optional<JsonObject> parse(
         std::string_view body,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept {
+        std::pmr::memory_resource* resource = nullptr) noexcept {
         detail::JsonScanner scanner(body);
         if (!scanner.consumeObject()) {
             return std::nullopt;
@@ -41,15 +42,16 @@ public:
 
     template <typename T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
+        auto* const resource = detail::pmrResourceOrDefault(resource_);
         std::optional<T> result;
         bool parseFailed = false;
-        const bool valid = detail::visitJsonObjectFields(body_, resource_, [&](std::string_view key, std::string_view valueView) {
+        const bool valid = detail::visitJsonObjectFields(body_, resource, [&](std::string_view key, std::string_view valueView) {
             if (key != field) {
                 return true;
             }
 
             auto valueInput = valueView;
-            auto value = detail::parseJsonValue<T>(valueInput, resource_);
+            auto value = detail::parseJsonValue<T>(valueInput, resource);
             detail::skipJsonWhitespace(valueInput);
             if (!value || !valueInput.empty()) {
                 parseFailed = true;
@@ -67,7 +69,7 @@ public:
 
 private:
     std::string_view body_;
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 class FormObject final {
@@ -76,12 +78,12 @@ public:
 
     explicit FormObject(
         std::string_view body,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept
-        : body_(body), resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : body_(body), resource_(detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] static std::optional<FormObject> parse(
         std::string_view body,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept {
+        std::pmr::memory_resource* resource = nullptr) noexcept {
         if (!detail::validateFormEncoding(body)) {
             return std::nullopt;
         }
@@ -94,6 +96,7 @@ public:
 
     template <typename T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
+        auto* const resource = detail::pmrResourceOrDefault(resource_);
         std::optional<T> result;
         bool parseFailed = false;
         detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
@@ -101,8 +104,8 @@ public:
                 return true;
             }
 
-            T value = detail::makeRequestValue<T>(resource_);
-            if (!detail::parseFormValue(valueView, value, resource_)) {
+            T value = detail::makeRequestValue<T>(resource);
+            if (!detail::parseFormValue(valueView, value, resource)) {
                 parseFailed = true;
                 return false;
             }
@@ -118,7 +121,7 @@ public:
 
 private:
     std::string_view body_;
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 enum class RequestObjectKind {
@@ -133,10 +136,10 @@ public:
     RequestObject(
         RequestObjectKind kind,
         std::string_view body,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept
+        std::pmr::memory_resource* resource = nullptr) noexcept
         : kind_(kind),
           body_(body),
-          resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+          resource_(detail::pmrResourceOrDefault(resource)) {}
 
     RequestObject(const RequestObject& other)
         : kind_(other.kind_),
@@ -165,7 +168,7 @@ public:
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
+        return detail::pmrResourceOrDefault(resource_);
     }
 
     template <typename T>
@@ -184,7 +187,7 @@ public:
 private:
     RequestObjectKind kind_{RequestObjectKind::kJson};
     std::string_view body_;
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 }  // namespace ruvia

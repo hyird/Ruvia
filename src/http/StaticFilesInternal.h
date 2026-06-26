@@ -57,7 +57,7 @@ struct StaticRootEntryView final {
     bool enableRanges{true};
     bool enableValidators{true};
 
-    [[nodiscard]] explicit operator bool() const noexcept {
+    [[nodiscard]] bool found() const noexcept {
         return filePath != nullptr;
     }
 };

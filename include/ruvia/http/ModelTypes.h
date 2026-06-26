@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/memory/PmrObject.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
 
@@ -101,13 +102,13 @@ template <std::size_t LeftN, std::size_t RightN>
 
 class String final {
 public:
-    explicit String(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : owned_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+    explicit String(std::pmr::memory_resource* resource = nullptr)
+        : owned_(detail::pmrResourceOrDefault(resource)) {}
 
     String(
         std::string_view value,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : view_(value), owned_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+        std::pmr::memory_resource* resource = nullptr)
+        : view_(value), owned_(detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::string_view view() const noexcept {
         if (ownedActive_) {
@@ -219,8 +220,8 @@ class List final {
 public:
     using value_type = T;
 
-    explicit List(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+    explicit List(std::pmr::memory_resource* resource = nullptr)
+        : resource_(detail::pmrResourceOrDefault(resource)),
           items_(resource_) {}
 
     List(const List&) = delete;

@@ -10,18 +10,38 @@ class HttpResponse;
 
 namespace detail {
 
-struct ControllerMiddlewareDescriptor final {
+class ControllerMiddlewareDescriptor final {
+public:
     using Invoke = Task<HttpResponse> (*)(void*, Context&, const Next&);
     using Create = void* (*)();
     using Destroy = void (*)(void*) noexcept;
 
-    Invoke invoke{nullptr};
-    Create create{nullptr};
-    Destroy destroy{nullptr};
+    constexpr ControllerMiddlewareDescriptor() noexcept = default;
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy) noexcept
+        : invoke_(invoke),
+          create_(create),
+          destroy_(destroy) {}
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr && create != nullptr && destroy != nullptr;
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
+
+    [[nodiscard]] Invoke invoke() const noexcept {
+        return invoke_;
+    }
+
+    [[nodiscard]] Create create() const noexcept {
+        return create_;
+    }
+
+    [[nodiscard]] Destroy destroy() const noexcept {
+        return destroy_;
+    }
+
+private:
+    Invoke invoke_{nullptr};
+    Create create_{nullptr};
+    Destroy destroy_{nullptr};
 };
 
 }  // namespace detail

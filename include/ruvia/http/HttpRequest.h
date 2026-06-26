@@ -34,7 +34,7 @@ public:
         return path_;
     }
 
-    [[nodiscard]] std::optional<std::pmr::string> decodedPath() const;
+    [[nodiscard]] RequestValue decodedPath() const noexcept;
 
     [[nodiscard]] std::string_view queryString() const noexcept {
         return queryString_;
@@ -70,7 +70,7 @@ public:
 private:
     friend struct detail::HttpRequestAccess;
 
-    static constexpr std::size_t kCachedHeaderSlots = 24;
+    static constexpr std::size_t kCachedHeaderSlots = 25;
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
 

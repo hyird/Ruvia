@@ -4,8 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "Http2Frame.h"
-#include "Http2StreamState.h"
+#include "Http2FrameTypes.h"
+#include "Http2StreamLifecycle.h"
 
 namespace ruvia::detail {
 

@@ -15,6 +15,7 @@ enum class RequestHeaderKind {
     kAccessControlRequestMethod,
     kAuthorization,
     kConnection,
+    kContentEncoding,
     kContentLength,
     kContentType,
     kCookie,

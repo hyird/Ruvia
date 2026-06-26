@@ -66,7 +66,7 @@ public:
     MariaDbPool(
         asio::io_context& ioContext,
         DbConfig config,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr);
     ~MariaDbPool();
 
     MariaDbPool(const MariaDbPool&) = delete;
@@ -98,7 +98,7 @@ private:
         // Defined out-of-line where SlotSocket is complete, so the
         // unique_ptr<SlotSocket> member can be destroyed without exposing the
         // ASIO/MariaDB socket adapter through this internal boundary.
-        explicit ConnectionSlot(std::pmr::memory_resource* resource = std::pmr::get_default_resource()) noexcept;
+        explicit ConnectionSlot(std::pmr::memory_resource* resource = nullptr) noexcept;
         ~ConnectionSlot();
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;

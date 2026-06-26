@@ -12,6 +12,7 @@
 
 #include "../../http/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -23,8 +24,9 @@ struct Http2StoredHeaderView final {
 
 class Http2HeaderList final {
 public:
-    explicit Http2HeaderList(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : overflowStorage_(resource), overflowFields_(resource) {}
+    explicit Http2HeaderList(std::pmr::memory_resource* resource = nullptr)
+        : overflowStorage_(pmrResourceOrDefault(resource)),
+          overflowFields_(pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
         return count_;

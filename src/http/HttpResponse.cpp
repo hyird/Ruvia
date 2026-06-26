@@ -1,6 +1,7 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include "ruvia/http/HttpStatus.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <stdexcept>
 #include <utility>
@@ -8,9 +9,9 @@
 namespace ruvia {
 
 HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
-    : statusText_(resource),
-      headers_(resource),
-      body_(resource) {}
+    : statusText_(detail::pmrResourceOrDefault(resource)),
+      headers_(detail::pmrResourceOrDefault(resource)),
+      body_(detail::pmrResourceOrDefault(resource)) {}
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return body_.get_allocator().resource();

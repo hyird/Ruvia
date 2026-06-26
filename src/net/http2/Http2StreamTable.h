@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
-#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -12,13 +11,14 @@
 #include "Http2Frame.h"
 #include "Http2StreamState.h"
 #include "ruvia/memory/PmrObject.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
 class Http2StreamTable final {
 public:
     explicit Http2StreamTable(std::pmr::memory_resource* resource)
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+        : resource_(pmrResourceOrDefault(resource)),
           overflow_(resource_) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
@@ -27,12 +27,12 @@ public:
 
     [[nodiscard]] Http2StreamState* find(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
-            if (slot && slot->id == streamId) {
+            if (slot && slot->id() == streamId) {
                 return &*slot;
             }
         }
         for (auto& stream : overflow_) {
-            if (stream != nullptr && stream->id == streamId) {
+            if (stream != nullptr && stream->id() == streamId) {
                 return stream.get();
             }
         }
@@ -41,12 +41,12 @@ public:
 
     [[nodiscard]] const Http2StreamState* find(std::uint32_t streamId) const noexcept {
         for (const auto& slot : inline_) {
-            if (slot && slot->id == streamId) {
+            if (slot && slot->id() == streamId) {
                 return &*slot;
             }
         }
         for (const auto& stream : overflow_) {
-            if (stream != nullptr && stream->id == streamId) {
+            if (stream != nullptr && stream->id() == streamId) {
                 return stream.get();
             }
         }
@@ -63,13 +63,13 @@ public:
         for (auto& slot : inline_) {
             if (!slot) {
                 slot.emplace(streamId, resource_);
-                slot->sendWindow = peerInitialWindowSize;
+                slot->setSendWindow(peerInitialWindowSize);
                 ++size_;
                 return &*slot;
             }
         }
         auto stream = makePmrObject<Http2StreamState>(resource_, streamId, resource_);
-        stream->sendWindow = peerInitialWindowSize;
+        stream->setSendWindow(peerInitialWindowSize);
         auto* result = stream.get();
         overflow_.push_back(std::move(stream));
         ++size_;
@@ -78,14 +78,14 @@ public:
 
     bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
-            if (slot && slot->id == streamId) {
+            if (slot && slot->id() == streamId) {
                 slot.reset();
                 --size_;
                 return true;
             }
         }
         for (std::size_t i = 0; i < overflow_.size(); ++i) {
-            if (overflow_[i] != nullptr && overflow_[i]->id == streamId) {
+            if (overflow_[i] != nullptr && overflow_[i]->id() == streamId) {
                 eraseOverflowAt(i);
                 --size_;
                 return true;
@@ -111,7 +111,7 @@ public:
     template <typename Callback>
     void removeReset(Callback&& callback) {
         for (auto& slot : inline_) {
-            if (!slot || !slot->reset) {
+            if (!slot || !slot->isReset()) {
                 continue;
             }
             callback(*slot);
@@ -120,7 +120,7 @@ public:
         }
         for (std::size_t i = 0; i < overflow_.size();) {
             auto& stream = overflow_[i];
-            if (stream == nullptr || !stream->reset) {
+            if (stream == nullptr || !stream->isReset()) {
                 ++i;
                 continue;
             }
@@ -136,13 +136,10 @@ public:
             if (!ok) {
                 return;
             }
-            const auto updated = static_cast<std::int64_t>(stream.sendWindow) + delta;
-            if (updated > std::numeric_limits<std::int32_t>::max() ||
-                updated < std::numeric_limits<std::int32_t>::min()) {
+            if (!stream.addSendWindow(delta)) {
                 ok = false;
                 return;
             }
-            stream.sendWindow = static_cast<std::int32_t>(updated);
         });
         return ok;
     }

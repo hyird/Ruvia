@@ -8,7 +8,7 @@
 #include "Http2ResponseHeaders.h"
 #include "Http2StreamState.h"
 #include "../server/HttpResponseStreamHead.h"
-#include "../server/HttpResponseTrailers.h"
+#include "../server/HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
@@ -31,51 +31,45 @@ public:
           lowerName_(session.memory_.resource()) {}
 
     [[nodiscard]] bool committed() const noexcept {
-        return committed_;
+        return state_.committed();
     }
 
-    static Task<void> writeThunk(void* target, std::string_view chunk) {
-        co_await static_cast<Http2ResponseStreamSink*>(target)->write(chunk);
-    }
-
-    static Task<void> endThunk(void* target) {
-        co_await static_cast<Http2ResponseStreamSink*>(target)->end();
-    }
-
-    static void addTrailerThunk(void* target, std::string_view name, std::string_view value) {
-        static_cast<Http2ResponseStreamSink*>(target)->addTrailer(name, value);
-    }
-
-    static void bindContextThunk(void* target, Context* context) noexcept {
-        static_cast<Http2ResponseStreamSink*>(target)->context_ = context;
-    }
-
-    static std::pmr::string& scratchThunk(void* target) noexcept {
-        auto* self = static_cast<Http2ResponseStreamSink*>(target);
-        clearPmrStringRetainingSmall(self->scratch_);
-        return self->scratch_;
-    }
+    template <typename Sink>
+    friend Task<void> responseStreamWriteThunk(void*, std::string_view);
+    template <typename Sink>
+    friend Task<void> responseStreamEndThunk(void*);
+    template <typename Sink>
+    friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
+    template <typename Sink>
+    friend void responseStreamBindContextThunk(void*, Context*) noexcept;
+    template <typename Sink>
+    friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
 
 private:
+    void bindContext(Context* context) noexcept {
+        state_.bindContext(context);
+    }
+
+    [[nodiscard]] std::pmr::string& scratch() noexcept {
+        clearPmrStringRetainingSmall(scratch_);
+        return scratch_;
+    }
+
     Task<void> commit() {
-        if (committed_) {
+        if (state_.committed()) {
             co_return;
         }
-        if (ended_) {
-            throw std::logic_error("response stream is already ended");
-        }
-        if (context_ == nullptr) {
-            throw std::logic_error("response stream context is not bound");
-        }
 
-        auto streamHead = prepareResponseStreamHead(*context_, mode_, ResponseStreamFraming::kHttp2DataFrames);
-        bodyForbidden_ = streamHead.bodyForbidden;
-        appendHttp2ResponseHeaders(stream_, streamHead.response, 0, false);
-        committed_ = true;
-        co_await session_.writeHeaders(stream_, stream_.responseHeaderBlock, bodyForbidden_);
+        auto streamHead = prepareResponseStreamHead(
+            state_.requireContextBeforeCommit(),
+            mode_,
+            ResponseStreamFraming::kHttp2DataFrames);
+        appendHttp2ResponseHeaders(stream_, streamHead.response(), 0, false);
+        state_.markCommitted(streamHead.bodyForbidden());
+        co_await session_.writeHeaders(stream_, stream_.responseHeaderBlock(), state_.bodyForbidden());
         http2ReleaseResponseHeaderBlock(stream_);
-        if (bodyForbidden_) {
-            ended_ = true;
+        if (state_.bodyForbidden()) {
+            state_.markEnded();
         }
     }
 
@@ -84,22 +78,15 @@ private:
             co_return;
         }
         co_await commit();
-        if (bodyForbidden_) {
-            throw std::logic_error("response status does not allow a stream body");
-        }
+        state_.ensureBodyAllowed();
         co_await session_.writeData(stream_, chunk, {}, false);
     }
 
-    // RFC 9113 §8.1 trailer section: queued before the stream ends and HPACK
+    // RFC 9113 Section 8.1 trailers are queued before the stream ends and HPACK
     // encoded into a header block flushed here as a trailing HEADERS frame that
     // carries END_STREAM, in place of the empty END_STREAM DATA frame.
     void addTrailer(std::string_view name, std::string_view value) {
-        if (ended_) {
-            throw std::logic_error("response stream is already ended");
-        }
-        if (!responseTrailerFieldValid(name, value)) {
-            throw std::invalid_argument("invalid response trailer field");
-        }
+        state_.ensureTrailerAllowed(name, value);
         lowerName_.clear();
         lowerName_.reserve(name.size());
         for (const char ch : name) {
@@ -109,12 +96,12 @@ private:
     }
 
     Task<void> end() {
-        if (ended_) {
+        if (state_.ended()) {
             co_return;
         }
         co_await commit();
-        if (bodyForbidden_) {
-            ended_ = true;
+        if (state_.bodyForbidden()) {
+            state_.markEnded();
             co_return;
         }
         if (trailers_.empty()) {
@@ -122,19 +109,16 @@ private:
         } else {
             co_await session_.writeHeaders(stream_, trailers_, true);
         }
-        ended_ = true;
+        state_.markEnded();
     }
 
     Session& session_;
     Http2StreamState& stream_;
     ResponseBodyMode mode_;
-    Context* context_{nullptr};
+    ResponseStreamState state_;
     std::pmr::string scratch_;
     std::pmr::string trailers_;
     std::pmr::string lowerName_;
-    bool committed_{false};
-    bool ended_{false};
-    bool bodyForbidden_{false};
 };
 
 }  // namespace ruvia::detail

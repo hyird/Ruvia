@@ -32,7 +32,7 @@ void destroyPmrObject(T* value, std::pmr::memory_resource* resource) noexcept {
 
 template <typename T>
 struct PmrObjectDeleter final {
-    std::pmr::memory_resource* resource{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource{nullptr};
 
     void operator()(T* value) const noexcept {
         destroyPmrObject(value, resource);

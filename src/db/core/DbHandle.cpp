@@ -98,7 +98,7 @@ DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
     : client_(std::exchange(other.client_, nullptr)),
       slot_(std::exchange(other.slot_, 0)),
       result_(std::exchange(other.result_, nullptr)),
-      resource_(std::exchange(other.resource_, std::pmr::get_default_resource())),
+      resource_(std::exchange(other.resource_, nullptr)),
       active_(std::exchange(other.active_, false)) {}
 
 DbStreamResult& DbStreamResult::operator=(DbStreamResult&& other) noexcept {
@@ -109,7 +109,7 @@ DbStreamResult& DbStreamResult::operator=(DbStreamResult&& other) noexcept {
     client_ = std::exchange(other.client_, nullptr);
     slot_ = std::exchange(other.slot_, 0);
     result_ = std::exchange(other.result_, nullptr);
-    resource_ = std::exchange(other.resource_, std::pmr::get_default_resource());
+    resource_ = std::exchange(other.resource_, nullptr);
     active_ = std::exchange(other.active_, false);
     return *this;
 }
@@ -185,7 +185,7 @@ DbTransaction::DbTransaction(
 DbTransaction::DbTransaction(DbTransaction&& other) noexcept
     : client_(std::exchange(other.client_, nullptr)),
       slot_(std::exchange(other.slot_, 0)),
-      resource_(std::exchange(other.resource_, std::pmr::get_default_resource())),
+      resource_(std::exchange(other.resource_, nullptr)),
       requestMemory_(std::exchange(other.requestMemory_, nullptr)),
       active_(std::exchange(other.active_, false)) {}
 
@@ -196,7 +196,7 @@ DbTransaction& DbTransaction::operator=(DbTransaction&& other) noexcept {
     reset();
     client_ = std::exchange(other.client_, nullptr);
     slot_ = std::exchange(other.slot_, 0);
-    resource_ = std::exchange(other.resource_, std::pmr::get_default_resource());
+    resource_ = std::exchange(other.resource_, nullptr);
     requestMemory_ = std::exchange(other.requestMemory_, nullptr);
     active_ = std::exchange(other.active_, false);
     return *this;

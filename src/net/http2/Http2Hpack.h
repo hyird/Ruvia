@@ -23,7 +23,7 @@ enum class HpackError {
 struct HpackDecodeResult final {
     HpackError error{HpackError::kNone};
 
-    [[nodiscard]] explicit operator bool() const noexcept {
+    [[nodiscard]] bool ok() const noexcept {
         return error == HpackError::kNone;
     }
 };

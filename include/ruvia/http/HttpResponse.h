@@ -35,11 +35,11 @@ struct HttpResponseHeaderStateAccess;
 struct HttpResponseHeader {
 public:
     [[nodiscard]] std::string_view name() const noexcept {
-        return {bytes, nameSize};
+        return bytes == nullptr ? std::string_view{} : std::string_view(bytes, nameSize);
     }
 
     [[nodiscard]] std::string_view value() const noexcept {
-        return {bytes + nameSize, valueSize};
+        return bytes == nullptr ? std::string_view{} : std::string_view(bytes + nameSize, valueSize);
     }
 
 private:
@@ -94,7 +94,7 @@ private:
 
     using iterator = HttpResponseHeader*;
 
-    explicit HttpResponseHeaders(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
     ~HttpResponseHeaders();
 
     HttpResponseHeaders(const HttpResponseHeaders&) = delete;
@@ -145,7 +145,7 @@ private:
 
 class HttpResponse final {
 public:
-    explicit HttpResponse(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] std::uint16_t statusCode() const noexcept;
     [[nodiscard]] std::string_view statusText() const noexcept;

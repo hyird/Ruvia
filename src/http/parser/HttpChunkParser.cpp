@@ -13,6 +13,7 @@ namespace {
         case RequestHeaderKind::kContentLength:
         case RequestHeaderKind::kTransferEncoding:
         case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentEncoding:
         case RequestHeaderKind::kContentType:
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kExpect:
@@ -46,17 +47,16 @@ namespace {
         case 10:
             return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
                 httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
-        case 13:
-            // "Authorization" is already caught above via classifyRequestHeader
-            // (kAuthorization); only Cache-Control needs the spelled-out check.
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control");
-        case 14:
+        case 12:
             return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
-        case 15:
-            return httpAsciiEqualsIgnoreCase(name, "Accept-Ranges");
+        case 13:
+            // The common classified forbidden fields are caught above; keep the
+            // less common trailer-forbidden names here without growing the hot
+            // request known-header table.
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
+                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 16:
-            return httpAsciiEqualsIgnoreCase(name, "Content-Range");
-        case 17:
             return httpAsciiEqualsIgnoreCase(name, "Content-Encoding");
         case 18:
             return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");

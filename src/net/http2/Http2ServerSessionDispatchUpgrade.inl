@@ -7,47 +7,48 @@ bool Http2ServerSession<Stream>::seedUpgradedStream(
         return false;
     }
     lastStreamId_ = 1;
-    stream->method = parsed.request.method();
-    stream->path.assign(parsed.request.target().data(), parsed.request.target().size());
+    stream->setRequestMethod(parsed.request.method());
+    stream->assignRequestPath(parsed.request.target());
     const auto host = requestKnownHeader(parsed.request, RequestKnownHeader::kHost);
     if (!host.empty()) {
-        stream->authority.assign(host.data(), host.size());
-        stream->hasAuthority = true;
-        stream->hasHost = true;
+        stream->assignRequestAuthority(host);
+        stream->markAuthority();
+        stream->markHost();
     }
-    stream->hasMethod = true;
-    stream->hasScheme = true;
-    stream->hasPath = true;
+    stream->markMethod();
+    stream->markScheme();
+    stream->markPath();
     if (!parsed.chunked && parsed.contentLength != 0) {
         if (body.size() != parsed.contentLength) {
             return false;
         }
-        stream->contentLength = parsed.contentLength;
-        stream->hasContentLength = true;
+        if (!stream->setContentLength(parsed.contentLength)) {
+            return false;
+        }
     }
     if (!body.empty()) {
-        stream->body.assign(body.data(), body.size());
-        stream->receivedBodyBytes = body.size();
+        stream->assignRequestBody(body);
+        stream->setReceivedBodyBytes(body.size());
     }
     for (const auto& header : parsed.request.headers()) {
         if (http2IsForbiddenUpgradedRequestHeader(header.name)) {
             continue;
         }
-        if (!stream->headers.append(
+        if (!stream->appendRequestHeader(
             header.name,
             header.value,
             classifyRequestHeader(header.name))) {
             return false;
         }
     }
-    stream->headersDecoded = true;
-    stream->endStream = true;
-    stream->bodyEnded = true;
+    stream->markHeadersDecoded();
+    stream->markPeerEndStream();
+    stream->markBodyEnded();
     resolveStreamRoute(*stream);
-    if (stream->bodyMode == RequestBodyMode::kStream && !stream->body.empty()) {
-        http2EnqueueOwnedStreamBodyChunk(*stream, stream->body);
+    if (stream->usesStreamRequestBody() && !stream->requestBodyEmpty()) {
+        http2EnqueueBufferedRequestBodyChunk(*stream);
     }
-    queueReady(stream->id);
+    queueReady(stream->id());
     return true;
 }
 
@@ -55,7 +56,7 @@ template <typename Stream>
 Task<void> Http2ServerSession<Stream>::writeHttp2WebSocketHandshake(
     Http2StreamState& stream,
     std::string_view subprotocol) {
-    http2EncodeWebSocketHandshakeHeaders(stream.responseHeaderBlock, subprotocol);
-    co_await writeHeaders(stream, stream.responseHeaderBlock, false);
+    http2EncodeWebSocketHandshakeHeaders(stream.responseHeaderBlock(), subprotocol);
+    co_await writeHeaders(stream, stream.responseHeaderBlock(), false);
     http2ReleaseResponseHeaderBlock(stream);
 }

@@ -124,14 +124,15 @@ inline void appendHttp2ResponseHeaders(
     const HttpResponse& response,
     std::uint64_t autoContentLength,
     bool emitAutoContentLength = true) {
-    stream.responseHeaderBlock.clear();
-    HpackEncoder::encodeStatus(stream.responseHeaderBlock, response.statusCode());
+    auto& headerBlock = stream.responseHeaderBlock();
+    headerBlock.clear();
+    HpackEncoder::encodeStatus(headerBlock, response.statusCode());
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
-    std::pmr::string lowerNameScratch(stream.responseHeaderBlock.get_allocator());
+    std::pmr::string lowerNameScratch(headerBlock.get_allocator());
 
     const auto policy = responseWritePolicy(response.statusCode());
     const auto knownBits = responseKnownHeaderBits(response);
-    const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed;
+    const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed();
     bool contentLengthWritten = false;
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
@@ -147,33 +148,33 @@ inline void appendHttp2ResponseHeaders(
         const auto known = http2KnownHeaderEncoding(knownBit);
         if (known.hpackNameIndex != 0) {
             HpackEncoder::encodeHeaderWithNameIndex(
-                stream.responseHeaderBlock,
+                headerBlock,
                 known.hpackNameIndex,
                 header.value());
             continue;
         }
         HpackEncoder::encodeHeader(
-            stream.responseHeaderBlock,
+            headerBlock,
             known.name.empty()
                 ? http2LowerHeaderName(header.name(), lowerNameStack, lowerNameScratch)
                 : known.name,
             header.value());
     }
     if ((knownBits & kResponseHeaderServer) == 0) {
-        HpackEncoder::encodeHeaderWithNameIndex(stream.responseHeaderBlock, HpackStaticIndex::kServer, "ruvia");
+        HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kServer, "ruvia");
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
         HpackEncoder::encodeHeaderWithNameIndex(
-            stream.responseHeaderBlock,
+            headerBlock,
             HpackStaticIndex::kDate,
             cachedDateValue());
     }
-    if (emitAutoContentLength && !contentLengthWritten && policy.autoContentLengthAllowed) {
+    if (emitAutoContentLength && !contentLengthWritten && policy.autoContentLengthAllowed()) {
         std::array<char, 20> buffer{};
         const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), autoContentLength);
         if (ec == std::errc{}) {
             HpackEncoder::encodeHeaderWithNameIndex(
-                stream.responseHeaderBlock,
+                headerBlock,
                 HpackStaticIndex::kContentLength,
                 std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
         }
@@ -181,7 +182,7 @@ inline void appendHttp2ResponseHeaders(
 }
 
 inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
-    clearPmrStringRetainingSmall(stream.responseHeaderBlock);
+    clearPmrStringRetainingSmall(stream.responseHeaderBlock());
 }
 
 }  // namespace ruvia::detail

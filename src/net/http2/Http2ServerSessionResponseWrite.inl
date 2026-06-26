@@ -3,7 +3,7 @@ Task<void> Http2ServerSession<Stream>::writeHeaders(
     Http2StreamState& stream,
     std::string_view headerBlock,
     bool endStream) {
-    if (stream.reset) {
+    if (stream.isReset()) {
         co_return;
     }
     std::size_t offset = 0;
@@ -19,7 +19,7 @@ Task<void> Http2ServerSession<Stream>::writeHeaders(
         co_await writeFramePayload(
             first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
             flags,
-            stream.id,
+            stream.id(),
             headerBlock.substr(offset, chunk));
         offset += chunk;
         first = false;
@@ -30,7 +30,7 @@ template <typename Stream>
 Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& stream) {
     while (!closing_ && !http2SendWindowAvailable(connectionSendWindow_, stream)) {
         if (readerRunning_) {
-            co_await Http2SendWindowAwaiter<Http2ServerSession>(*this, stream.id);
+            co_await Http2SendWindowAwaiter<Http2ServerSession>(*this, stream.id());
         } else {
             Http2FrameHeader header;
             std::string_view payload;
@@ -43,7 +43,7 @@ Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& strea
             consumeInput(kHttp2FrameHeaderBytes + header.length);
         }
     }
-    co_return !closing_ && !stream.reset;
+    co_return !closing_ && !stream.isReset();
 }
 
 template <typename Stream>
@@ -52,7 +52,7 @@ Task<void> Http2ServerSession<Stream>::writeData(
     std::string_view first,
     std::string_view second,
     bool endStream) {
-    if (stream.reset) {
+    if (stream.isReset()) {
         co_return;
     }
     const auto bodySize = first.size() + second.size();
@@ -62,7 +62,7 @@ Task<void> Http2ServerSession<Stream>::writeData(
             !(co_await waitForDataWindow(stream))) {
             co_return;
         }
-        if (closing_ || stream.reset) {
+        if (closing_ || stream.isReset()) {
             co_return;
         }
         const auto availableWindow = http2AvailableSendWindow(connectionSendWindow_, stream);
@@ -74,16 +74,16 @@ Task<void> Http2ServerSession<Stream>::writeData(
         co_await writeFramePayload(
             Http2FrameType::kData,
             static_cast<std::uint8_t>(endStream && last ? kHttp2FlagEndStream : 0),
-            stream.id,
+            stream.id(),
             payload.first,
             payload.second);
         offset += chunk;
     }
     if (endStream && bodySize == 0) {
-        if (stream.reset) {
+        if (stream.isReset()) {
             co_return;
         }
-        co_await writeFramePayload(Http2FrameType::kData, kHttp2FlagEndStream, stream.id, {});
+        co_await writeFramePayload(Http2FrameType::kData, kHttp2FlagEndStream, stream.id(), {});
     }
 }
 
@@ -109,7 +109,7 @@ Task<void> Http2ServerSession<Stream>::writeFileBody(
     std::pmr::string fileChunk(memory_.allocator<char>());
     ensureFileChunkBuffer(fileChunk);
     std::uint64_t remaining = fileBody.length;
-    while (remaining > 0 && !closing_ && !stream.reset) {
+    while (remaining > 0 && !closing_ && !stream.isReset()) {
         const auto next = static_cast<std::size_t>(std::min<std::uint64_t>(fileChunk.size(), remaining));
         input.read(fileChunk.data(), static_cast<std::streamsize>(next));
         const auto read = input.gcount();
@@ -131,10 +131,10 @@ Task<void> Http2ServerSession<Stream>::writeResponse(
     const HttpResponse& response,
     bool skipBody) {
     const auto policy = responseWritePolicy(response.statusCode());
-    if (stream.reset) {
+    if (stream.isReset()) {
         co_return;
     }
-    const bool bodyAllowed = policy.bodyAllowed;
+    const bool bodyAllowed = policy.bodyAllowed();
     const bool sendBody = bodyAllowed && !skipBody;
     std::uint64_t contentLength = 0;
     if (bodyAllowed) {
@@ -142,7 +142,7 @@ Task<void> Http2ServerSession<Stream>::writeResponse(
     }
     appendHttp2ResponseHeaders(stream, response, contentLength);
     const bool endHeadersStream = !sendBody || contentLength == 0;
-    co_await writeHeaders(stream, stream.responseHeaderBlock, endHeadersStream);
+    co_await writeHeaders(stream, stream.responseHeaderBlock(), endHeadersStream);
     http2ReleaseResponseHeaderBlock(stream);
     if (endHeadersStream) {
         co_return;

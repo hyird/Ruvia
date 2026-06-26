@@ -71,7 +71,7 @@ public:
     RedisPool(
         asio::io_context& ioContext,
         RedisConfig config,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr);
     ~RedisPool();
 
     RedisPool(const RedisPool&) = delete;

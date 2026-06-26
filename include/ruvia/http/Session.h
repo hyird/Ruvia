@@ -10,20 +10,19 @@ namespace ruvia::detail {
 // to load the stored blob in and read what the handler left behind.
 struct SessionAccess final {
     static void setId(Context& context, std::string_view id) {
-        context.sessionId_.assign(id.data(), id.size());
+        context.sessionIdStorage().assign(id.data(), id.size());
     }
     static void load(Context& context, std::string_view data) {
-        assignStableString(context.sessionData_, data);
-        context.sessionLoaded_ = true;
+        assignStableString(context.sessionDataStorage(), data);
     }
     [[nodiscard]] static bool dirty(const Context& context) noexcept {
         return context.sessionDirty_;
     }
     [[nodiscard]] static std::string_view id(const Context& context) noexcept {
-        return std::string_view(context.sessionId_.data(), context.sessionId_.size());
+        return context.sessionId();
     }
     [[nodiscard]] static std::string_view data(const Context& context) noexcept {
-        return std::string_view(context.sessionData_.data(), context.sessionData_.size());
+        return context.session();
     }
 };
 

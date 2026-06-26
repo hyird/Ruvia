@@ -1,9 +1,7 @@
 #pragma once
 
-#include "../body/HttpRequestBody.h"
 #include "ConnectionScanner.h"
 #include "HttpServerBodyRouteCompletion.h"
-#include "../../http/RequestBodyLoader.h"
 #include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
@@ -13,7 +11,6 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
-#include <optional>
 #include <string>
 #include <string_view>
 
@@ -28,7 +25,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     const HttpServerOptions& options,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
@@ -42,27 +39,20 @@ Task<void> dispatchHttpBufferedBodyRoute(
     // The body reader/loader are this transport's own state, and their setup can
     // throw (e.g. constructing a transfer-coding decoder for a bad
     // Transfer-Encoding), so it stays guarded here. The dispatch itself is the
-    // routing layer's concern and never throws — dispatchBuffered turns any
-    // handler or routing failure into a response — so it sits outside the guard.
+    // routing layer's concern and never throws: dispatchBuffered turns any
+    // handler or routing failure into a response, so it sits outside the guard.
     std::exception_ptr setupException;
-    std::optional<LazyBufferedBody<Stream>> lazyBody;
-    std::optional<RequestBodyLoader> bodyLoader;
+    HttpLazyBufferedBodyRouteState<Stream> bodyState;
     try {
-        lazyBody.emplace(
+        prepareHttpLazyBufferedBodyRoute(
+            bodyState,
             stream,
-            memory.allocator<char>(),
-            requestMemory.resource(),
+            memory,
+            requestMemory,
             bodyAndPipeline,
-            parsed.contentLength,
-            parsed.chunked,
-            parsed.transferCodings,
-            options.maxBufferedBodyBytes,
-            scannerEntry,
-            (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
-        bodyLoader.emplace(
-            &*lazyBody,
-            &LazyBufferedBody<Stream>::readAllThunk,
-            &LazyBufferedBody<Stream>::discardThunk);
+            parsed,
+            options,
+            scannerEntry);
     } catch (...) {
         setupException = std::current_exception();
     }
@@ -85,7 +75,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
         routeResolution,
         requestMemory,
         true,
-        baseRouteServices.withBodyLoader(&*bodyLoader));
+        bodyState.withLoader(baseRouteServices));
 
     completeSuccessfulHttpBodyRoute(
         scannerEntry,
@@ -93,13 +83,13 @@ Task<void> dispatchHttpBufferedBodyRoute(
         keepAlive,
         requestCount,
         options.maxRequestsPerConnection,
-        lazyBody->consumed(),
+        bodyState.consumed(),
         readBuffer,
         usedBytes,
         consumedBytes,
         bufferAlreadyCompacted,
-        [&lazyBody](std::pmr::string& buffer, std::size_t& size) {
-            lazyBody->restorePipeline(buffer, size);
+        [&bodyState](std::pmr::string& buffer, std::size_t& size) {
+            bodyState.restorePipeline(buffer, size);
         });
 }
 

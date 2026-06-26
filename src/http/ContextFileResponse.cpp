@@ -380,7 +380,7 @@ HttpResponse Context::file(
         variantPath.reserve(relative.size() + candidate.suffix.size());
         variantPath.assign(relative.data(), relative.size());
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
-        if (const auto entry = detail::StaticRootAccess::find(root, variantPath)) {
+        if (const auto entry = detail::StaticRootAccess::find(root, variantPath); entry.found()) {
             best = candidate.score;
             variant = entry;
             contentEncoding = candidate.encoding;
@@ -401,7 +401,7 @@ HttpResponse Context::staticFile(
     }
 
     auto entry = detail::StaticRootAccess::find(root, relative);
-    if (!entry && detail::StaticRootAccess::isIndexedDirectory(root, relative)) {
+    if (!entry.found() && detail::StaticRootAccess::isIndexedDirectory(root, relative)) {
         if (!relative.empty() && relative.back() != '/') {
             relative.push_back('/');
         }
@@ -409,7 +409,7 @@ HttpResponse Context::staticFile(
         relative.append(indexFile.data(), indexFile.size());
         entry = detail::StaticRootAccess::find(root, relative);
     }
-    if (!entry) {
+    if (!entry.found()) {
         throw HttpError(404, "not_found", "file not found");
     }
 

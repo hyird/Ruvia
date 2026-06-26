@@ -194,6 +194,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | Helper | Purpose |
 | --- | --- |
 | `c.req()` | Access the current `ruvia::HttpRequest`. |
+| `c.decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.header(name)` | Read a request header. |
 | `c.query(name)` | Read a query value through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
 | `c.cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
@@ -201,7 +202,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.body()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
-| `co_await c.multipart()` | Lazily read and parse a buffered multipart/form-data body. |
+| `co_await c.multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
@@ -226,6 +227,7 @@ A few lifetime and ownership rules are worth keeping close:
 - `c.header(...)` is for reading request headers. Use `c.setHeader(...)` for response headers.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Request body I/O lives on `Context`. Use `co_await c.body()`, `co_await c.json<T>()`, `co_await c.form<T>()`, or `co_await c.multipart()` rather than reading body data from `c.req()`.
+- `co_await c.multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.
 - Response status codes, reason phrases, header names, header values, cookie names, and cookie values are validated when set. Invalid output metadata throws `std::invalid_argument` before it reaches the writer.
 - File bodies are constructed through `c.file(...)` and `c.staticFile(...)`; application code should not build raw file-body responses directly.
 - Create `ruvia::StaticRoot` during startup and pass that object to `c.staticFile(...)`; the root path is canonicalized once before workers run.

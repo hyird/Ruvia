@@ -54,7 +54,7 @@ private:
         body.append("\naccepts-json=");
         body.append(c.accepts("application/json") ? "true" : "false");
         body.append("\ndecoded-path=");
-        if (auto decoded = c.decodedPath()) {
+        if (auto decoded = c.decodedPath().toString()) {
             body.append(*decoded);
         }
         body.push_back('\n');

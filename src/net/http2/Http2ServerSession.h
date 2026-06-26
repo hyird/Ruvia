@@ -229,13 +229,14 @@ private:
 
     Task<void> writeHttp2WebSocketHandshake(Http2StreamState& stream, std::string_view subprotocol);
 
-    [[nodiscard]] RouteServices routeServices(BodyReader* bodyReader = nullptr) const noexcept;
+    [[nodiscard]] ContextServices routeServices() const noexcept;
 
     Task<bool> dispatchHttp2WebSocketRoute(
         Http2StreamState& stream,
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& requestMemory,
+        ContextServices services,
         HttpResponse& response);
 
     Task<bool> dispatchHttp2ResponseStreamRoute(
@@ -243,15 +244,8 @@ private:
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& requestMemory,
-        BodyReader* bodyReader,
+        ContextServices services,
         HttpResponse& response);
-
-    Task<HttpResponse> dispatchHttp2BufferedRoute(
-        Http2StreamState& stream,
-        const HttpRequest& request,
-        const RouteResolution& resolution,
-        RequestMemory& requestMemory,
-        BodyReader* bodyReader);
 
     Task<void> dispatchStream(Http2StreamState& stream);
 

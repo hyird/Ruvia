@@ -83,7 +83,7 @@ public:
     [[nodiscard]] bool await_ready() const noexcept {
         const auto* stream = session_->findStream(streamId_);
         return stream == nullptr ||
-            stream->reset ||
+            stream->isReset() ||
             session_->closing_ ||
             http2SendWindowAvailable(session_->connectionSendWindow_, *stream);
     }
@@ -91,7 +91,7 @@ public:
     bool await_suspend(std::coroutine_handle<> continuation) {
         const auto* stream = session_->findStream(streamId_);
         if (stream == nullptr ||
-            stream->reset ||
+            stream->isReset() ||
             session_->closing_ ||
             http2SendWindowAvailable(session_->connectionSendWindow_, *stream)) {
             return false;

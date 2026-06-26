@@ -15,7 +15,6 @@
 #include <string>
 #include <system_error>
 #include <utility>
-#include <vector>
 
 #if !defined(_WIN32)
 #include <sys/socket.h>
@@ -65,8 +64,7 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     if (name == nullptr) {
         return SSL_TLSEXT_ERR_OK;
     }
-    const auto& lookup =
-        *static_cast<const std::vector<std::pair<std::pmr::string, asio::ssl::context*>>*>(arg);
+    const auto& lookup = *static_cast<const SniContextLookup*>(arg);
     for (const auto& [host, context] : lookup) {
         if (httpAsciiEqualsIgnoreCase(host, name)) {
             SSL_set_SSL_CTX(ssl, context->native_handle());
@@ -176,6 +174,8 @@ HttpServer::HttpServer(
       drainTimer_(ioContext_),
       endpoint_(std::move(endpoint)),
       routes_(routes),
+      sniContexts_(memory_.resource()),
+      sniLookup_(memory_.resource()),
       options_(validatedHttpServerOptions(std::move(options))),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),

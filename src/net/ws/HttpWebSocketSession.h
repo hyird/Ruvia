@@ -11,13 +11,37 @@
 
 namespace ruvia::detail {
 
+template <typename Connection>
+[[nodiscard]] Task<std::optional<WebSocketMessage>> webSocketReadThunk(void* target) {
+    return static_cast<Connection*>(target)->read();
+}
+
+template <typename Connection>
+Task<void> webSocketWriteThunk(void* target, WebSocketOpcode opcode, std::string_view payload) {
+    return static_cast<Connection*>(target)->write(opcode, payload);
+}
+
+template <typename Connection>
+Task<void> webSocketCloseThunk(void* target, std::uint16_t code, std::string_view reason) {
+    return static_cast<Connection*>(target)->close(code, reason);
+}
+
+template <typename Connection>
+[[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
+    return WebSocket(
+        &connection,
+        &webSocketReadThunk<Connection>,
+        &webSocketWriteThunk<Connection>,
+        &webSocketCloseThunk<Connection>);
+}
+
 // Shared run loop for an established WebSocket session, transport-agnostic.
 // Both the HTTP/1.1 and HTTP/2 routes build a WebSocketConnection<Transport>,
 // then hand it here: this wires the WebSocket facade, dispatches the user
 // handler, and closes cleanly (1000) on success or abnormally (1011) on an
 // unhandled exception, then drains any background heartbeat writes. Keeping the
 // post-handshake chain in one place keeps the two transports identical and the
-// graceful close (RFC 6455 §7.1.1) consistent across both. close() is
+// graceful close (RFC 6455 Section 7.1.1) consistent across both. close() is
 // idempotent (guarded by closeSent_), so a handler that closes itself is fine.
 template <typename Transport>
 Task<void> runWebSocketSession(
@@ -27,13 +51,8 @@ Task<void> runWebSocketSession(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
-    RouteServices services) {
-    using Connection = WebSocketConnection<Transport>;
-    WebSocket webSocket(
-        &connection,
-        &Connection::readThunk,
-        &Connection::writeThunk,
-        &Connection::closeThunk);
+    ContextServices services) {
+    auto webSocket = makeWebSocketFacade(connection);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWebSocket);
     std::exception_ptr exception;

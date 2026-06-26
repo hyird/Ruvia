@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 inline constexpr std::string_view kDefaultHttpClientAlias = "default";
@@ -47,7 +48,8 @@ struct FetchResponseHeader {
     FetchResponseHeader(std::pmr::string n, std::pmr::string v)
         : name(std::move(n)), value(std::move(v)) {}
     FetchResponseHeader(std::string_view n, std::string_view v, std::pmr::memory_resource* resource)
-        : name(n.data(), n.size(), resource), value(v.data(), v.size(), resource) {}
+        : name(n.data(), n.size(), detail::pmrResourceOrDefault(resource)),
+          value(v.data(), v.size(), detail::pmrResourceOrDefault(resource)) {}
 };
 
 struct FetchOptions {
@@ -60,8 +62,9 @@ struct FetchOptions {
 
 class FetchResponse final {
 public:
-    explicit FetchResponse(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : headers(resource), body(resource) {}
+    explicit FetchResponse(std::pmr::memory_resource* resource = nullptr)
+        : headers(detail::pmrResourceOrDefault(resource)),
+          body(detail::pmrResourceOrDefault(resource)) {}
 
     FetchResponse(const FetchResponse&) = delete;
     FetchResponse& operator=(const FetchResponse&) = delete;

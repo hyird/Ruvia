@@ -2,6 +2,7 @@
 
 #include "HttpClientPool.h"
 #include "HttpClientConfigValidation.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <asio/ssl/context.hpp>
 
@@ -27,7 +28,7 @@ HttpClientPool::HttpClientPool(
     std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
-      resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+      resource_(pmrResourceOrDefault(resource)),
       hostHeader_(makeHttpClientHostHeader(config_, resource_)),
       connections_(resource_),
       free_(resource_) {

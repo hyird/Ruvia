@@ -43,7 +43,7 @@ private:
 
     detail::MariaDbPool* client_{nullptr};
     std::size_t slot_{0};
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
     RequestMemory* requestMemory_{nullptr};
     bool active_{false};
 };

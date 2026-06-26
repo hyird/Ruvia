@@ -1,7 +1,7 @@
 #pragma once
 
 #include "HttpStreamBodyReader.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -29,7 +29,7 @@ public:
               maxBodyBytes,
               scannerEntry,
               sendContinue),
-          body_(requestResource == nullptr ? ProcessMemory::instance().upstreamResource() : requestResource),
+          body_(pmrResourceOrDefault(requestResource)),
           hasBody_(contentLength > 0 || chunked || !transferCodings.empty()) {}
 
     [[nodiscard]] bool consumed() const noexcept {
@@ -38,14 +38,6 @@ public:
 
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
         reader_.restorePipeline(readBuffer, usedBytes);
-    }
-
-    [[nodiscard]] static Task<std::string_view> readAllThunk(void* target) {
-        return static_cast<LazyBufferedBody*>(target)->readAll();
-    }
-
-    static Task<void> discardThunk(void* target) {
-        return static_cast<LazyBufferedBody*>(target)->discard();
     }
 
     [[nodiscard]] Task<std::string_view> readAll() {

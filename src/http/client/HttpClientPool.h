@@ -30,7 +30,7 @@ public:
     HttpClientPool(
         asio::io_context& ioContext,
         HttpClientConfig config,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr);
     ~HttpClientPool();
 
     HttpClientPool(const HttpClientPool&) = delete;

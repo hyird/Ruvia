@@ -88,10 +88,10 @@ template <typename MiddlewareT>
     static_assert(std::is_final_v<MiddlewareT>, "middleware must be final");
     static_assert(std::is_default_constructible_v<MiddlewareT>, "middleware must be default constructible");
 
-    return ControllerMiddlewareDescriptor{
+    return ControllerMiddlewareDescriptor(
         &invokeMiddleware<MiddlewareT>,
         &createMiddleware<MiddlewareT>,
-        &destroyMiddleware<MiddlewareT>};
+        &destroyMiddleware<MiddlewareT>);
 }
 
 }  // namespace detail

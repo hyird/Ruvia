@@ -17,7 +17,6 @@ using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::parseHttpHeaderBlock;
 using ruvia::detail::parseRequestTarget;
 using ruvia::detail::ParsedRequestHeaderBlock;
-using ruvia::detail::RequestHeaderKind;
 using ruvia::detail::RequestTargetView;
 
 }  // namespace
@@ -66,60 +65,47 @@ void HttpServerParser::parseRequestHead(std::string_view buffer, std::size_t hea
 
     // parseHttpHeaderBlock scans the method through the token table, so it is
     // already a valid non-empty token here.
-    HttpRequestAccess::setMethod(result.request, parseMethod(block.method.bind(buffer)));
-    if (result.request.method() == HttpMethod::kUnknown) {
+    const auto method = parseMethod(block.method.bind(buffer));
+    if (method == HttpMethod::kUnknown) {
         return fail(HttpParseError::kUnsupportedMethod);
     }
+    HttpRequestAccess::setMethod(result.request, method);
 
     const auto target = block.target.bind(buffer);
+    const auto version = block.version.bind(buffer);
     HttpRequestAccess::setTarget(result.request, target);
-    HttpRequestAccess::setHttpVersion(result.request, block.version.bind(buffer));
+    HttpRequestAccess::setHttpVersion(result.request, version);
 
-    if (result.request.httpVersion().size() != 8 ||
-        result.request.httpVersion().substr(0, 5) != "HTTP/" ||
-        result.request.httpVersion()[5] < '0' ||
-        result.request.httpVersion()[5] > '9' ||
-        result.request.httpVersion()[6] != '.') {
+    if (version.size() != 8 ||
+        version.substr(0, 5) != "HTTP/" ||
+        version[5] < '0' ||
+        version[5] > '9' ||
+        version[6] != '.') {
         return fail(HttpParseError::kInvalidRequestLine);
     }
-    if (result.request.httpVersion()[7] < '0' || result.request.httpVersion()[7] > '9') {
+    if (version[7] < '0' || version[7] > '9') {
         return fail(HttpParseError::kInvalidRequestLine);
     }
-    if (result.request.httpVersion()[5] != '1' ||
-        (result.request.httpVersion()[7] != '0' && result.request.httpVersion()[7] != '1')) {
+    if (version[5] != '1' || (version[7] != '0' && version[7] != '1')) {
         return fail(HttpParseError::kUnsupportedHttpVersion);
     }
 
     RequestTargetView targetView;
-    if (!parseRequestTarget(result.request.method(), target, targetView)) {
+    if (!parseRequestTarget(method, target, targetView)) {
         return fail(HttpParseError::kInvalidRequestTarget);
     }
     HttpRequestAccess::setPath(result.request, targetView.path);
     HttpRequestAccess::setQueryString(result.request, targetView.query);
 
-    const auto knownValue = [&block, buffer](int index) noexcept -> std::string_view {
-        return index < 0 ? std::string_view{} : block.headers[static_cast<std::size_t>(index)].value.bind(buffer);
-    };
-    for (std::size_t i = 0; i < block.headerCount; ++i) {
-        (void)HttpRequestAccess::addHeader(
-            result.request,
-            HttpHeaderView{block.headers[i].name.bind(buffer), block.headers[i].value.bind(buffer)});
-    }
-    for (std::size_t kindIndex = 1; kindIndex < detail::kRequestHeaderKindCount; ++kindIndex) {
-        const auto headerIndex = block.known.get(static_cast<RequestHeaderKind>(kindIndex));
-        if (headerIndex >= 0) {
-            HttpRequestAccess::setKnownHeaderSlot(result.request, kindIndex - 1, knownValue(headerIndex));
-        }
-    }
-
-    if (result.request.httpVersion() == "HTTP/1.1" && !block.flags.hasHost) {
+    if (version == "HTTP/1.1" && !block.flags.hasHost) {
         return fail(HttpParseError::kMissingHost);
     }
-    const auto hostHeaderIndex = block.known.get(RequestHeaderKind::kHost);
-    if (!targetView.authority.empty() &&
-        hostHeaderIndex >= 0 &&
-        !authorityMatchesHost(targetView.authority, knownValue(hostHeaderIndex), targetView.defaultPort)) {
-        return fail(HttpParseError::kInvalidHost);
+    const auto hostHeaderIndex = block.hostHeaderIndex;
+    if (!targetView.authority.empty() && hostHeaderIndex >= 0) {
+        const auto hostHeaderValue = block.headers[static_cast<std::size_t>(hostHeaderIndex)].value.bind(buffer);
+        if (!authorityMatchesHost(targetView.authority, hostHeaderValue, targetView.defaultPort)) {
+            return fail(HttpParseError::kInvalidHost);
+        }
     }
 
     if (block.sawTransferEncoding && block.sawContentLength) {
@@ -132,8 +118,16 @@ void HttpServerParser::parseRequestHead(std::string_view buffer, std::size_t hea
 
     // RFC 9112 section 6.1: Transfer-Encoding in an HTTP/1.0 request must be treated
     // as faulty framing; the error path closes the connection after replying.
-    if (block.sawTransferEncoding && result.request.httpVersion()[7] == '0') {
+    if (block.sawTransferEncoding && version[7] == '0') {
         return fail(HttpParseError::kInvalidTransferEncoding);
+    }
+
+    for (std::size_t i = 0; i < block.headerCount; ++i) {
+        const auto& header = block.headers[i];
+        (void)HttpRequestAccess::addHeader(
+            result.request,
+            HttpHeaderView{header.name.bind(buffer), header.value.bind(buffer)},
+            requestHeaderKindKnownSlot(header.kind));
     }
 
     result.chunked = block.sawChunked;

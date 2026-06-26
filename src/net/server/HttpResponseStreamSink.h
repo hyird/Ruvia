@@ -4,7 +4,7 @@
 
 #include "HttpResponseHead.h"
 #include "HttpResponseStreamHead.h"
-#include "HttpResponseTrailers.h"
+#include "HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
@@ -41,59 +41,48 @@ public:
           scannerEntry_(scannerEntry),
           mode_(mode) {}
 
-    [[nodiscard]] bool committed() const noexcept { return committed_; }
-    [[nodiscard]] bool failed() const noexcept { return failed_; }
+    [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
-    static Task<void> writeThunk(void* target, std::string_view chunk) {
-        co_await static_cast<ResponseStreamSink*>(target)->write(chunk);
-    }
-
-    static Task<void> endThunk(void* target) {
-        co_await static_cast<ResponseStreamSink*>(target)->end();
-    }
-
-    static void addTrailerThunk(void* target, std::string_view name, std::string_view value) {
-        static_cast<ResponseStreamSink*>(target)->addTrailer(name, value);
-    }
-
-    static void bindContextThunk(void* target, Context* context) noexcept {
-        static_cast<ResponseStreamSink*>(target)->context_ = context;
-    }
-
-    static std::pmr::string& scratchThunk(void* target) noexcept {
-        return static_cast<ResponseStreamSink*>(target)->scratch();
-    }
+    template <typename Sink>
+    friend Task<void> responseStreamWriteThunk(void*, std::string_view);
+    template <typename Sink>
+    friend Task<void> responseStreamEndThunk(void*);
+    template <typename Sink>
+    friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
+    template <typename Sink>
+    friend void responseStreamBindContextThunk(void*, Context*) noexcept;
+    template <typename Sink>
+    friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
 
 private:
+    void bindContext(Context* context) noexcept {
+        state_.bindContext(context);
+    }
+
     [[nodiscard]] std::pmr::string& scratch() noexcept {
         clearPmrStringRetainingSmall(scratch_);
         return scratch_;
     }
 
     Task<void> commit() {
-        if (committed_) {
+        if (state_.committed()) {
             co_return;
         }
-        if (ended_) {
-            throw std::logic_error("response stream is already ended");
-        }
-        if (context_ == nullptr) {
-            throw std::logic_error("response stream context is not bound");
-        }
 
-        auto streamHead = prepareResponseStreamHead(*context_, mode_, ResponseStreamFraming::kHttp1Chunked);
-        bodyForbidden_ = streamHead.bodyForbidden;
+        auto streamHead = prepareResponseStreamHead(
+            state_.requireContextBeforeCommit(),
+            mode_,
+            ResponseStreamFraming::kHttp1Chunked);
 
         head_.reset();
-        appendResponseHead(streamHead.response, head_, streamHead.policy, true);
+        appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
-        committed_ = true;
+        state_.markCommitted(streamHead.bodyForbidden());
         auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
             asio::async_write(stream_, asio::buffer(headView), std::move(handler));
         });
         if (ec) {
-            failed_ = true;
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
@@ -104,9 +93,7 @@ private:
             co_return;
         }
         co_await commit();
-        if (bodyForbidden_) {
-            throw std::logic_error("response status does not allow a stream body");
-        }
+        state_.ensureBodyAllowed();
 
         std::array<char, 32> sizeBuffer;
         const auto [ptr, ec] = std::to_chars(sizeBuffer.data(), sizeBuffer.data() + sizeBuffer.size(), chunk.size(), 16);
@@ -124,22 +111,16 @@ private:
             asio::async_write(stream_, buffers, std::move(handler));
         });
         if (writeEc) {
-            failed_ = true;
             throw std::system_error(writeEc);
         }
         scannerEntry_.touch();
     }
 
-    // RFC 9110 §6.5 trailer section: queued before the stream ends and flushed
-    // here as chunked trailer fields. The value was validated for CR/LF/NUL on
-    // entry, so it is safe to write verbatim.
+    // RFC 9110 Section 6.5 trailers are queued before the stream ends and
+    // flushed here as chunked trailer fields. The value was validated for
+    // CR/LF/NUL on entry, so it is safe to write verbatim.
     void addTrailer(std::string_view name, std::string_view value) {
-        if (ended_) {
-            throw std::logic_error("response stream is already ended");
-        }
-        if (!responseTrailerFieldValid(name, value)) {
-            throw std::invalid_argument("invalid response trailer field");
-        }
+        state_.ensureTrailerAllowed(name, value);
         trailers_.append(name.data(), name.size());
         trailers_.append(": ");
         trailers_.append(value.data(), value.size());
@@ -147,12 +128,12 @@ private:
     }
 
     Task<void> end() {
-        if (ended_) {
+        if (state_.ended()) {
             co_return;
         }
         co_await commit();
-        if (bodyForbidden_) {
-            ended_ = true;
+        if (state_.bodyForbidden()) {
+            state_.markEnded();
             co_return;
         }
 
@@ -167,9 +148,8 @@ private:
         const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
         });
-        ended_ = true;
+        state_.markEnded();
         if (ec) {
-            failed_ = true;
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
@@ -180,12 +160,8 @@ private:
     std::pmr::string scratch_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
-    Context* context_{nullptr};
     ResponseBodyMode mode_;
-    bool committed_{false};
-    bool ended_{false};
-    bool bodyForbidden_{false};
-    bool failed_{false};
+    ResponseStreamState state_;
 };
 
 }  // namespace ruvia::detail

@@ -263,6 +263,10 @@ void Context::applyResponseState(
     } else if (finalStatusCode != 200) {
         response.setStatus(finalStatusCode, {});
     }
+    const auto contextHeaderCount = responseHeaders_.size();
+    if (contextHeaderCount > 0) {
+        detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
+    }
     for (const auto& header : responseHeaders_) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         if (knownBit == detail::kResponseHeaderSetCookie) {

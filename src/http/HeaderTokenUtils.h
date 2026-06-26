@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -86,6 +87,34 @@ inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visit
         }
         value.remove_prefix(semicolon + 1);
     }
+}
+
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameter(
+    std::string_view value,
+    std::string_view name) {
+    std::optional<std::string_view> result;
+    httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
+        if (key == name) {
+            result = parameterValue;
+            return false;
+        }
+        return true;
+    });
+    return result;
+}
+
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterIgnoreCase(
+    std::string_view value,
+    std::string_view name) {
+    std::optional<std::string_view> result;
+    httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
+        if (httpAsciiEqualsIgnoreCase(key, name)) {
+            result = parameterValue;
+            return false;
+        }
+        return true;
+    });
+    return result;
 }
 
 [[nodiscard]] inline bool httpHasToken(std::string_view value, std::string_view expected) noexcept {

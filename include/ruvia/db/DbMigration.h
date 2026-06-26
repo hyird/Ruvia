@@ -23,7 +23,7 @@ struct DbMigrationOptions final {
 
 class DbMigrationReport final {
 public:
-    explicit DbMigrationReport(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit DbMigrationReport(std::pmr::memory_resource* resource = nullptr);
 
     DbMigrationReport(const DbMigrationReport&) = delete;
     DbMigrationReport& operator=(const DbMigrationReport&) = delete;
@@ -47,7 +47,7 @@ public:
     explicit DbMigrator(
         DbConfig config,
         DbMigrationOptions options = {},
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] DbMigrationReport migrate(std::span<const DbMigration> migrations) const;
 
@@ -55,7 +55,7 @@ public:
         DbConfig config,
         std::span<const DbMigration> migrations,
         DbMigrationOptions options = {},
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr);
 
 private:
     DbConfig config_;

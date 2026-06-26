@@ -26,11 +26,11 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
     }
 
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
-        if (existing->headersDecoded && !existing->reset) {
+        if (existing->headersDecoded() && !existing->isReset()) {
             co_return co_await processTrailerHeaders(*existing, header, payload);
         }
-        if (existing->reset) {
-            if (existing->closeSource == Http2StreamCloseSource::kPeer) {
+        if (existing->isReset()) {
+            if (existing->closeSource() == Http2StreamCloseSource::kPeer) {
                 co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
                 co_return true;
             }
@@ -38,8 +38,7 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
             co_return false;
         }
         co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        existing->reset = true;
-        existing->closeSource = Http2StreamCloseSource::kLocal;
+        existing->markReset();
         co_return true;
     }
     if (header.streamId <= lastStreamId_) {
@@ -67,7 +66,9 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
         refusedHeaderStream_.emplace(header.streamId, memory_.resource());
         stream = &*refusedHeaderStream_;
     }
-    stream->endStream = (header.flags & kHttp2FlagEndStream) != 0;
+    if ((header.flags & kHttp2FlagEndStream) != 0) {
+        stream->markPeerEndStream();
+    }
 
     std::string_view fragment;
     if (!http2DecodeHeadersPayload(header, payload, fragment)) {
@@ -75,8 +76,8 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
         co_return false;
     }
     if (!http2StartHeaderBlock(*stream, fragment)) {
-        co_await sendRstStream(stream->id, Http2ErrorCode::kEnhanceYourCalm);
-        stream->reset = true;
+        co_await sendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream->markReset();
         co_return true;
     }
 
@@ -96,7 +97,7 @@ Task<bool> Http2ServerSession<Stream>::processHeaders(
             queueInitialStreamIfReady(*stream);
         }
     } else {
-        headerContinuation_.start(stream->id, false);
+        headerContinuation_.start(stream->id(), false);
     }
     co_return true;
 }
@@ -106,14 +107,14 @@ Task<bool> Http2ServerSession<Stream>::processTrailerHeaders(
     Http2StreamState& stream,
     const Http2FrameHeader& header,
     std::string_view payload) {
-    if (stream.bodyEnded) {
-        co_await sendRstStream(stream.id, Http2ErrorCode::kStreamClosed);
-        stream.reset = true;
+    if (stream.bodyEnded()) {
+        co_await sendRstStream(stream.id(), Http2ErrorCode::kStreamClosed);
+        stream.markReset();
         co_return true;
     }
     if ((header.flags & kHttp2FlagEndStream) == 0) {
-        co_await sendRstStream(stream.id, Http2ErrorCode::kProtocolError);
-        stream.reset = true;
+        co_await sendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+        stream.markReset();
         co_return true;
     }
 
@@ -123,8 +124,8 @@ Task<bool> Http2ServerSession<Stream>::processTrailerHeaders(
         co_return false;
     }
     if (!http2StartHeaderBlock(stream, fragment)) {
-        co_await sendRstStream(stream.id, Http2ErrorCode::kEnhanceYourCalm);
-        stream.reset = true;
+        co_await sendRstStream(stream.id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream.markReset();
         co_return true;
     }
 
@@ -134,7 +135,7 @@ Task<bool> Http2ServerSession<Stream>::processTrailerHeaders(
             co_return co_await handleHeaderDecodeFailure(stream, status);
         }
     } else {
-        headerContinuation_.start(stream.id, true);
+        headerContinuation_.start(stream.id(), true);
     }
     co_return true;
 }
@@ -149,17 +150,17 @@ Task<bool> Http2ServerSession<Stream>::processContinuation(
     }
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
-        if (!refusedHeaderStream_ || refusedHeaderStream_->id != header.streamId) {
+        if (!refusedHeaderStream_ || refusedHeaderStream_->id() != header.streamId) {
             co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "missing CONTINUATION stream");
             co_return false;
         }
         stream = &*refusedHeaderStream_;
     }
     if (!http2AppendHeaderBlock(*stream, payload)) {
-        co_await sendRstStream(stream->id, Http2ErrorCode::kEnhanceYourCalm);
-        stream->reset = true;
+        co_await sendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream->markReset();
         headerContinuation_.reset();
-        if (refusedHeaderStream_ && refusedHeaderStream_->id == stream->id) {
+        if (refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id()) {
             refusedHeaderStream_.reset();
         }
         co_return true;
@@ -172,7 +173,7 @@ Task<bool> Http2ServerSession<Stream>::processContinuation(
                 co_return co_await handleHeaderDecodeFailure(*stream, status);
             }
         } else {
-            const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id == stream->id;
+            const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id();
             const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
             if (status != HeaderDecodeStatus::kOk) {
                 if (refusedStream) {
@@ -181,8 +182,8 @@ Task<bool> Http2ServerSession<Stream>::processContinuation(
                 co_return co_await handleHeaderDecodeFailure(*stream, status);
             }
             if (refusedStream) {
-                co_await sendRstStream(stream->id, Http2ErrorCode::kRefusedStream);
-                closedStreams_.remember(stream->id, Http2StreamCloseSource::kLocal);
+                co_await sendRstStream(stream->id(), Http2ErrorCode::kRefusedStream);
+                closedStreams_.remember(stream->id(), Http2StreamCloseSource::kLocal);
                 refusedHeaderStream_.reset();
             } else {
                 queueInitialStreamIfReady(*stream);

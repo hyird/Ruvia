@@ -146,16 +146,8 @@ HttpResponseHeader& HttpResponse::prepareHeaderValueStorage(
 }
 
 std::string_view HttpResponse::knownHeaderValue(std::uint32_t bit) const noexcept {
-    const auto* const begin = headers_.begin();
-    const auto* const end = headers_.end();
-    const auto* const header = detail::findResponseHeaderIndexed(
-        begin,
-        end,
-        knownHeaderIndexes_,
-        detail::responseKnownHeaderSlot(bit),
-        {},
-        bit);
-    return header == end ? std::string_view{} : header->value();
+    const auto* const header = findHeaderForRead({}, bit);
+    return header == nullptr ? std::string_view{} : header->value();
 }
 
 std::string_view HttpResponse::header(std::string_view name) const noexcept {

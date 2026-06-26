@@ -28,21 +28,33 @@ public:
         kWriting
     };
 
-    struct Entry final {
-        asio::ip::tcp::socket* socket{nullptr};
-        Entry* prev{nullptr};
-        Entry* next{nullptr};
-        // Coarse timestamp source owned by the scanner; refreshed once per scan
-        // tick so per-request touch()/setPhase() never hit the system clock.
-        const std::int64_t* nowMs{nullptr};
-        std::int64_t lastActiveMs{0};
-        std::int64_t phaseStartedMs{0};
-        Phase phase{Phase::kIdle};
-        void* webSocketTarget{nullptr};
-        bool (*webSocketTick)(void*, std::int64_t) noexcept{nullptr};
+    class Entry final {
+    public:
+        using WebSocketTick = bool (*)(void*, std::int64_t) noexcept;
 
         void touch() noexcept;
         void setPhase(Phase nextPhase) noexcept;
+        [[nodiscard]] std::int64_t lastActiveMs() const noexcept;
+        void setWebSocketHeartbeat(void* target, WebSocketTick tick) noexcept;
+        void clearWebSocketHeartbeat(void* target) noexcept;
+
+    private:
+        friend class ConnectionScanner;
+
+        [[nodiscard]] bool linked() const noexcept;
+        [[nodiscard]] bool tickWebSocket(std::int64_t now) noexcept;
+
+        asio::ip::tcp::socket* socket_{nullptr};
+        Entry* prev_{nullptr};
+        Entry* next_{nullptr};
+        // Coarse timestamp source owned by the scanner; refreshed once per scan
+        // tick so per-request touch()/setPhase() never hit the system clock.
+        const std::int64_t* nowMs_{nullptr};
+        std::int64_t lastActiveMs_{0};
+        std::int64_t phaseStartedMs_{0};
+        Phase phase_{Phase::kIdle};
+        void* webSocketTarget_{nullptr};
+        WebSocketTick webSocketTick_{nullptr};
     };
 
     class Guard final {

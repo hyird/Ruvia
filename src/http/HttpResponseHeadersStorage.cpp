@@ -1,4 +1,5 @@
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -8,7 +9,7 @@
 namespace ruvia {
 
 HttpResponseHeaders::HttpResponseHeaders(std::pmr::memory_resource* resource)
-    : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+    : resource_(detail::pmrResourceOrDefault(resource)),
       heap_(resource_) {}
 
 HttpResponseHeaders::~HttpResponseHeaders() {

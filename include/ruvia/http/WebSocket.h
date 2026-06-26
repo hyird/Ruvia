@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/app/Task.h"
@@ -54,14 +53,7 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return read_ != nullptr && write_ != nullptr && close_ != nullptr;
-    }
-
     [[nodiscard]] Task<std::optional<WebSocketMessage>> read() {
-        if (read_ == nullptr) {
-            throw std::logic_error("websocket is not available");
-        }
         return read_(target_);
     }
 
@@ -82,24 +74,18 @@ public:
     }
 
     Task<void> close(std::uint16_t code = 1000, std::string_view reason = {}) {
-        if (close_ == nullptr) {
-            throw std::logic_error("websocket is not available");
-        }
         return close_(target_, code, reason);
     }
 
 private:
     Task<void> write(WebSocketOpcode opcode, std::string_view payload) {
-        if (write_ == nullptr) {
-            throw std::logic_error("websocket is not available");
-        }
         return write_(target_, opcode, payload);
     }
 
-    void* target_{nullptr};
-    Read read_{nullptr};
-    Write write_{nullptr};
-    Close close_{nullptr};
+    void* target_;
+    Read read_;
+    Write write_;
+    Close close_;
 };
 
 }  // namespace ruvia

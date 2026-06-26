@@ -181,18 +181,18 @@ Task<bool> Http2ServerSession<Stream>::processWindowUpdate(
         }
         co_return true;
     }
-    switch (http2ApplyWindowUpdate(stream->sendWindow, increment)) {
+    switch (http2ApplyStreamWindowUpdate(*stream, increment)) {
         case Http2WindowUpdateResult::kOk:
             resumeSendWindowWaiters();
             co_return true;
         case Http2WindowUpdateResult::kZeroIncrement:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->reset = true;
+            stream->markReset();
             resumeSendWindowWaiters();
             co_return true;
         case Http2WindowUpdateResult::kOverflow:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            stream->reset = true;
+            stream->markReset();
             resumeSendWindowWaiters();
             co_return true;
     }

@@ -4,39 +4,31 @@
 #include <stdexcept>
 #include <utility>
 
-#include "RouterUtils.h"
-
 namespace ruvia {
-namespace {
-
-void appendDynamicParamName(detail::RouteEntry& route, std::string_view name) {
-    if (route.paramCount >= route.paramNames.size()) {
-        throw std::invalid_argument("route has too many parameters");
-    }
-    route.paramNames[route.paramCount++] = name;
-}
-
-}  // namespace
 
 void detail::RouteTable::buildDynamicRoutes() {
-    hasDynamicRoutes_.fill(false);
+    dynamicMethodMask_ = 0;
     dynamicNodeArena_.clear();
+    dynamicParamNames_.clear();
     for (auto& root : dynamicRoots_) {
-        root = DynamicNode{};
+        root = DynamicNode(resource_);
     }
 
     std::size_t dynamicNodeCapacity = 0;
+    std::size_t dynamicParamNameCapacity = 0;
     for (const auto& route : routes_) {
-        if (route.dynamic) {
-            dynamicNodeCapacity += dynamicNodeUpperBound(route.path);
+        if (route.dynamic()) {
+            dynamicNodeCapacity += dynamicNodeUpperBound(route.path());
+            dynamicParamNameCapacity += dynamicParamNameUpperBound(route.path());
         }
     }
     dynamicNodeArena_.reserve(dynamicNodeCapacity);
+    dynamicParamNames_.reserve(dynamicParamNameCapacity);
 
     for (auto& route : routes_) {
-        if (route.dynamic) {
-            hasDynamicRoutes_[methodIndex(route.method)] = true;
-            insertDynamic(dynamicRoots_[methodIndex(route.method)], route);
+        if (route.dynamic()) {
+            dynamicMethodMask_ |= 1U << methodIndex(route.method());
+            insertDynamic(dynamicRoots_[methodIndex(route.method())], route);
         }
     }
     for (auto& root : dynamicRoots_) {
@@ -78,10 +70,43 @@ std::size_t detail::RouteTable::dynamicNodeUpperBound(std::string_view path) noe
     }
 }
 
+std::size_t detail::RouteTable::dynamicParamNameUpperBound(std::string_view path) noexcept {
+    std::size_t count = 0;
+    while (true) {
+        std::string_view segment;
+        std::string_view rest;
+        if (!splitSegment(path, segment, rest)) {
+            return count;
+        }
+        if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
+            ++count;
+        }
+        if (rest.empty()) {
+            return count;
+        }
+        path = rest;
+    }
+}
+
+void detail::RouteTable::appendDynamicParamName(RouteEntry& route, std::string_view name) {
+    const auto names = route.paramNames();
+    if (names.size() >= kMaxRouteParams) {
+        throw std::invalid_argument("route has too many parameters");
+    }
+
+    const auto offset = names.empty()
+        ? dynamicParamNames_.size()
+        : static_cast<std::size_t>(names.data() - dynamicParamNames_.data());
+    dynamicParamNames_.push_back(name);
+    route.setParamNames(std::span<const std::string_view>(
+        dynamicParamNames_.data() + offset,
+        names.size() + 1));
+}
+
 void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
-    auto path = std::string_view(route.path);
+    auto path = route.path();
     auto* node = &root;
-    route.paramCount = 0;
+    route.setParamNames({});
 
     while (true) {
         std::string_view segment;
@@ -108,7 +133,7 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
             appendDynamicParamName(route, segment.substr(1));
 
             if (!node->paramChild) {
-                dynamicNodeArena_.emplace_back();
+                dynamicNodeArena_.emplace_back(resource_);
                 node->paramChild = &dynamicNodeArena_.back();
             }
             node = node->paramChild;
@@ -121,9 +146,9 @@ void detail::RouteTable::insertDynamic(DynamicNode& root, RouteEntry& route) {
                 }
             }
             if (childNode == nullptr) {
-                dynamicNodeArena_.emplace_back();
+                dynamicNodeArena_.emplace_back(resource_);
                 childNode = &dynamicNodeArena_.back();
-                auto child = DynamicStaticChild{std::pmr::string(segment, startupResource()), childNode};
+                auto child = DynamicStaticChild{std::pmr::string(segment, resource_), childNode};
                 node->staticChildren.push_back(std::move(child));
             }
             node = childNode;

@@ -24,34 +24,24 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
     return response;
 }
 
-detail::ContextServices makeContextServices(
-    detail::RouteServices services,
-    ResponseStreamWriter* responseStream = nullptr,
-    WebSocket* webSocket = nullptr) noexcept {
-    return detail::ContextServices{
-        .db = services.db,
-        .redis = services.redis,
-        .bodyReader = services.bodyReader,
-        .bodyLoader = services.bodyLoader,
-        .responseStream = responseStream,
-        .webSocket = webSocket,
-        .httpClients = services.httpClients};
-}
-
 Context makeRouteContext(
     RequestMemory& memory,
     const HttpRequest& request,
     const detail::RouteResolution& resolution,
     detail::ContextServices services) noexcept {
-    if (!resolution.dynamic) {
+    const auto* match = resolution.match();
+    if (match == nullptr) {
         return detail::ContextAccess::make(memory, request, services);
     }
 
+    const auto& route = resolution.route();
+    const auto values = match->values();
     return detail::ContextAccess::make(
         memory,
         request,
-        resolution.match.params,
-        resolution.match.paramCount,
+        route.paramNames().data(),
+        values.data(),
+        values.size(),
         services);
 }
 
@@ -85,13 +75,33 @@ struct OwnedHttpErrorInfo final {
     }
 };
 
+void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception) {
+    try {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+    } catch (const ValidationError& error) {
+        errorInfo.assign(error.info());
+    } catch (const HttpError& error) {
+        errorInfo.assign(error.info());
+    } catch (const std::invalid_argument& error) {
+        errorInfo.assign(HttpErrorInfo{.statusCode = 400, .message = error.what()});
+    } catch (const std::exception& error) {
+        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = error.what()});
+    } catch (...) {
+        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"});
+    }
+}
+
 }  // namespace
 
 Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     RequestMemory& memory,
-    RouteServices services) const {
-    return dispatch(request, resolve(request), memory, services);
+    ContextServices services) const {
+    RouteMatch match;
+    const auto resolution = resolve(request, match);
+    co_return co_await dispatch(request, resolution, memory, services);
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
@@ -99,11 +109,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
     const RouteResolution& resolution,
     RequestMemory& memory,
     ResponseStreamWriter& responseStream,
-    RouteServices services) const {
-    if (!resolution.found() || resolution.route == nullptr || resolution.route->responseMode == ResponseBodyMode::kBuffered) {
+    ContextServices services) const {
+    if (!resolution.found()) {
         throw std::logic_error("route is not a response stream route");
     }
-    return dispatchStreamRoute(request, resolution, memory, services, &responseStream, nullptr);
+    const auto& route = resolution.route();
+    if (!route.usesResponseStream()) {
+        throw std::logic_error("route is not a response stream route");
+    }
+    return dispatchStreamRoute(request, resolution, memory, services.withResponseStream(responseStream));
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
@@ -111,79 +125,89 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
     const RouteResolution& resolution,
     RequestMemory& memory,
     WebSocket& webSocket,
-    RouteServices services) const {
-    if (!resolution.found() || resolution.route == nullptr || resolution.route->responseMode != ResponseBodyMode::kWebSocket) {
+    ContextServices services) const {
+    if (!resolution.found()) {
         throw std::logic_error("route is not a websocket route");
     }
-    return dispatchStreamRoute(request, resolution, memory, services, nullptr, &webSocket);
+    const auto& route = resolution.route();
+    if (!route.isWebSocketResponse()) {
+        throw std::logic_error("route is not a websocket route");
+    }
+    return dispatchStreamRoute(request, resolution, memory, services.withWebSocket(webSocket));
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
-    RouteServices services,
-    ResponseStreamWriter* responseStream,
-    WebSocket* webSocket) const {
-    const auto* route = resolution.route;
-    auto streamHandled = false;
+    ContextServices services) const {
+    const auto& route = resolution.route();
+    auto outcome = RouteStreamDispatchOutcome::kBufferedResponse;
     auto context = makeRouteContext(
         memory,
         request,
         resolution,
-        makeContextServices(services, responseStream, webSocket));
-    if (responseStream != nullptr) {
+        services);
+    if (auto* responseStream = services.responseStream(); responseStream != nullptr) {
         responseStream->bindContext(context);
     }
     // A kDynamic route runs the ordinary buffered handler chain with the stream
     // writer bound: if the handler streams, the sink commits and that is the
-    // response; otherwise the returned HttpResponse is sent buffered. streamHandled
-    // stays false so the caller lets committed() decide.
-    if (route->responseMode == ResponseBodyMode::kDynamic) {
-        auto response = co_await invokeRoute(*route, context);
-        co_return StreamDispatchResult{std::move(response), false};
+    // response; otherwise the returned HttpResponse is sent buffered. outcome
+    // stays kBufferedResponse so the caller lets committed() decide.
+    if (route.isDynamicResponse()) {
+        auto response = co_await invokeRoute(route, context);
+        co_return StreamDispatchResult(
+            std::move(response),
+            RouteStreamDispatchOutcome::kBufferedResponse);
     }
-    auto response = co_await invokeStreamRoute(*route, context, streamHandled);
-    co_return StreamDispatchResult{std::move(response), streamHandled};
+    if (!route.hasMiddleware()) {
+        co_await route.streamHandler()(context);
+        co_return StreamDispatchResult(
+            HttpResponse(context.resource()),
+            RouteStreamDispatchOutcome::kStreamHandled);
+    }
+    auto response = co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
+    co_return StreamDispatchResult(
+        std::move(response),
+        outcome);
 }
 
 Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
-    RouteServices services) const {
+    ContextServices services) const {
     if (!resolution.found()) {
-        auto context = detail::ContextAccess::make(
-            memory,
-            request,
-            makeContextServices(services));
         if (request.method() == HttpMethod::kOptions && request.path() == "*") {
             co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
         }
 
-        if (resolution.status == RouteResolveStatus::kMethodNotAllowed) {
+        if (resolution.methodNotAllowed()) {
             if (request.method() == HttpMethod::kOptions) {
-                co_return makeAllowNoContentResponse(memory, resolution.allowedMethods);
+                co_return makeAllowNoContentResponse(memory, resolution.allowedMethods());
             }
 
-            auto response = co_await handleError(
-                context,
-                HttpErrorInfo{.statusCode = 405, .message = "method not allowed"},
-                false);
-            setAllowHeader(response, resolution.allowedMethods);
+            const auto error = HttpErrorInfo{.statusCode = 405, .message = "method not allowed"};
+            auto response = errorHandler_ == nullptr
+                ? makeErrorResponse(memory.resource(), error, false)
+                : co_await handleError(request, memory, error, false, services);
+            setAllowHeader(response, resolution.allowedMethods());
             co_return response;
         }
 
-        co_return co_await handleError(
-            context,
-            HttpErrorInfo{.statusCode = 404, .message = "route not found"},
-            false);
+        const auto error = HttpErrorInfo{.statusCode = 404, .message = "route not found"};
+        if (errorHandler_ == nullptr) {
+            co_return makeErrorResponse(memory.resource(), error, false);
+        }
+        co_return co_await handleError(request, memory, error, false, services);
     }
 
-    auto context = makeRouteContext(memory, request, resolution, makeContextServices(services));
+    auto context = makeRouteContext(memory, request, resolution, services);
     std::exception_ptr exception;
     try {
-        co_return co_await invokeRoute(*resolution.route, context);
+        const auto& route = resolution.route();
+        co_return co_await invokeRoute(route, context);
     } catch (...) {
         exception = std::current_exception();
     }
@@ -195,7 +219,7 @@ Task<HttpResponse> detail::RouteTable::dispatchBuffered(
     const RouteResolution& resolution,
     RequestMemory& memory,
     bool closeConnectionOnError,
-    RouteServices services) const {
+    ContextServices services) const {
     std::exception_ptr exception;
     try {
         co_return co_await dispatch(request, resolution, memory, services);
@@ -210,11 +234,15 @@ Task<HttpResponse> detail::RouteTable::handleError(
     RequestMemory& memory,
     HttpErrorInfo error,
     bool closeConnection,
-    RouteServices services) const {
+    ContextServices services) const {
+    if (errorHandler_ == nullptr) {
+        co_return makeErrorResponse(memory.resource(), error, closeConnection);
+    }
+
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        makeContextServices(services));
+        services);
     co_return co_await handleError(context, error, closeConnection);
 }
 
@@ -223,11 +251,19 @@ Task<HttpResponse> detail::RouteTable::handleException(
     RequestMemory& memory,
     std::exception_ptr exception,
     bool closeConnection,
-    RouteServices services) const {
+    ContextServices services) const {
+    if (errorHandler_ == nullptr) {
+        OwnedHttpErrorInfo errorInfo(
+            HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
+            memory.resource());
+        assignExceptionError(errorInfo, exception);
+        co_return makeErrorResponse(memory.resource(), errorInfo.info, closeConnection);
+    }
+
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        makeContextServices(services));
+        services);
     co_return co_await handleException(context, exception, closeConnection);
 }
 
@@ -246,21 +282,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
         HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
         context.resource());
 
-    try {
-        if (exception != nullptr) {
-            std::rethrow_exception(exception);
-        }
-    } catch (const ValidationError& error) {
-        errorInfo.assign(error.info());
-    } catch (const HttpError& error) {
-        errorInfo.assign(error.info());
-    } catch (const std::invalid_argument& error) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 400, .message = error.what()});
-    } catch (const std::exception& error) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = error.what()});
-    } catch (...) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"});
-    }
+    assignExceptionError(errorInfo, exception);
 
     co_return co_await handleError(context, errorInfo.info, closeConnection);
 }

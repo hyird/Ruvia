@@ -79,7 +79,7 @@ private:
         std::pmr::memory_resource* resource) noexcept;
 
     detail::RedisPool* pool_{nullptr};
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
     std::pmr::vector<Command> commands_;
 };
 

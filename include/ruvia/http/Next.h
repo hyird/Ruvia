@@ -15,12 +15,6 @@ class Next final {
 public:
     using Invoke = Task<HttpResponse> (*)(void*, Context&);
 
-    constexpr Next() noexcept = default;
-
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke_ != nullptr;
-    }
-
     [[nodiscard]] Task<HttpResponse> operator()(Context& context) const;
 
 private:
@@ -28,8 +22,8 @@ private:
 
     constexpr Next(void* target, Invoke invoke) noexcept : target_(target), invoke_(invoke) {}
 
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
+    void* target_;
+    Invoke invoke_;
 };
 
 }  // namespace ruvia
