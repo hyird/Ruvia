@@ -110,8 +110,12 @@ public:
         : response_(std::move(response)),
           outcome_(outcome) {}
 
-    [[nodiscard]] RouteStreamDispatchOutcome outcome() const noexcept {
-        return outcome_;
+    [[nodiscard]] bool streamHandled() const noexcept {
+        return outcome_ == RouteStreamDispatchOutcome::kStreamHandled;
+    }
+
+    [[nodiscard]] bool bufferedResponse() const noexcept {
+        return outcome_ == RouteStreamDispatchOutcome::kBufferedResponse;
     }
 
     [[nodiscard]] HttpResponse takeResponse() noexcept {

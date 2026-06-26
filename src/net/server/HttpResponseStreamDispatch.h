@@ -144,15 +144,13 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
 
     std::exception_ptr exception;
     HttpResponse response(requestMemory.resource());
-    auto routeOutcome = RouteStreamDispatchOutcome::kBufferedResponse;
     try {
         auto result = co_await routes.dispatchResponseStream(
             request, resolution, requestMemory, responseStream, services);
-        routeOutcome = result.outcome();
         if (peerAborted()) {
             co_return ResponseStreamDispatchResult::abortedByPeer(std::move(response));
         }
-        if (routeOutcome == RouteStreamDispatchOutcome::kStreamHandled || sink.committed()) {
+        if (result.streamHandled() || sink.committed()) {
             co_await responseStream.end();
             co_return ResponseStreamDispatchResult::streamed(std::move(response));
         }
