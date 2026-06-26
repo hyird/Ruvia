@@ -39,7 +39,7 @@ Task<void> Http2ServerSession<Stream>::run(std::string_view initialBytes) {
     input_.assign(initialBytes.data(), initialBytes.size());
     inputOffset_ = 0;
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
-    if (!(co_await readPreface())) {
+    if ((co_await readPreface()).shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -67,7 +67,7 @@ Task<void> Http2ServerSession<Stream>::runUpgraded(
     }
     co_await sendLocalSettings();
     co_await sendSettingsAck();
-    if (!(co_await readPreface())) {
+    if ((co_await readPreface()).shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -81,7 +81,7 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
     while (!closing_) {
         Http2FrameHeader header;
         std::string_view payload;
-        if (!(co_await readFrame(header, payload))) {
+        if ((co_await readFrame(header, payload)).shouldStop()) {
             break;
         }
         // The server has begun draining: tell the peer to stop opening streams
