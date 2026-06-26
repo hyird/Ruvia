@@ -34,7 +34,7 @@ Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& strea
         } else {
             Http2FrameHeader header;
             std::string_view payload;
-            if (!(co_await readFrame(header, payload))) {
+            if ((co_await readFrame(header, payload)).shouldStop()) {
                 co_return false;
             }
             if ((co_await processFrame(header, payload)).shouldStop()) {

@@ -144,6 +144,36 @@ private:
     State state_;
 };
 
+class Http2InputReadResult final {
+public:
+    [[nodiscard]] static constexpr Http2InputReadResult ready() noexcept {
+        return Http2InputReadResult(State::kReady);
+    }
+
+    [[nodiscard]] static constexpr Http2InputReadResult stopReading() noexcept {
+        return Http2InputReadResult(State::kStopReading);
+    }
+
+    [[nodiscard]] constexpr bool isReady() const noexcept {
+        return state_ == State::kReady;
+    }
+
+    [[nodiscard]] constexpr bool shouldStop() const noexcept {
+        return state_ == State::kStopReading;
+    }
+
+private:
+    enum class State : std::uint8_t {
+        kReady,
+        kStopReading,
+    };
+
+    constexpr explicit Http2InputReadResult(State state) noexcept
+        : state_(state) {}
+
+    State state_;
+};
+
 template <typename Stream>
 class Http2ServerSession final {
     template <typename Session>
@@ -198,11 +228,11 @@ private:
 
     void consumeInput(std::size_t size);
 
-    Task<bool> ensureInput(std::size_t size);
+    Task<Http2InputReadResult> ensureInput(std::size_t size);
 
-    Task<bool> readPreface();
+    Task<Http2InputReadResult> readPreface();
 
-    Task<bool> readFrame(Http2FrameHeader& header, std::string_view& payload);
+    Task<Http2InputReadResult> readFrame(Http2FrameHeader& header, std::string_view& payload);
 
     template <typename WriteOperation>
     Task<void> writeSerialized(WriteOperation operation, bool finalWrite = false);

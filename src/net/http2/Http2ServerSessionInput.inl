@@ -15,7 +15,7 @@ void Http2ServerSession<Stream>::consumeInput(std::size_t size) {
 }
 
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::ensureInput(std::size_t size) {
+Task<Http2InputReadResult> Http2ServerSession<Stream>::ensureInput(std::size_t size) {
     while (availableInput() < size) {
         const auto oldSize = input_.size();
         resizePmrStringForOverwrite(input_, oldSize + kReadChunkBytes);
@@ -26,43 +26,43 @@ Task<bool> Http2ServerSession<Stream>::ensureInput(std::size_t size) {
                     std::move(handler));
             });
         if (ec || bytesRead == 0) {
-            co_return false;
+            co_return Http2InputReadResult::stopReading();
         }
         input_.resize(oldSize + bytesRead);
         scannerEntry_.touch();
     }
-    co_return true;
+    co_return Http2InputReadResult::ready();
 }
 
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::readPreface() {
-    if (!(co_await ensureInput(kHttp2ClientPreface.size()))) {
-        co_return false;
+Task<Http2InputReadResult> Http2ServerSession<Stream>::readPreface() {
+    if (auto inputResult = co_await ensureInput(kHttp2ClientPreface.size()); inputResult.shouldStop()) {
+        co_return inputResult;
     }
     if (inputView(kHttp2ClientPreface.size()) != kHttp2ClientPreface) {
         co_await sendGoaway(0, Http2ErrorCode::kProtocolError, "invalid connection preface");
-        co_return false;
+        co_return Http2InputReadResult::stopReading();
     }
     consumeInput(kHttp2ClientPreface.size());
-    co_return true;
+    co_return Http2InputReadResult::ready();
 }
 
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::readFrame(
+Task<Http2InputReadResult> Http2ServerSession<Stream>::readFrame(
     Http2FrameHeader& header,
     std::string_view& payload) {
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
-    if (!(co_await ensureInput(kHttp2FrameHeaderBytes))) {
-        co_return false;
+    if (auto inputResult = co_await ensureInput(kHttp2FrameHeaderBytes); inputResult.shouldStop()) {
+        co_return inputResult;
     }
     header = http2ParseFrameHeader(inputView(kHttp2FrameHeaderBytes));
     if (header.length > kHttp2MaxFrameSizeLimit || header.length > localMaxFrameSize_) {
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kFrameSizeError, "frame too large");
-        co_return false;
+        co_return Http2InputReadResult::stopReading();
     }
-    if (!(co_await ensureInput(kHttp2FrameHeaderBytes + header.length))) {
-        co_return false;
+    if (auto inputResult = co_await ensureInput(kHttp2FrameHeaderBytes + header.length); inputResult.shouldStop()) {
+        co_return inputResult;
     }
     payload = std::string_view(input_.data() + inputOffset_ + kHttp2FrameHeaderBytes, header.length);
-    co_return true;
+    co_return Http2InputReadResult::ready();
 }
