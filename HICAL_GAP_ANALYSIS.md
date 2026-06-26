@@ -1,0 +1,43 @@
+# Hical Feature Gap Notes
+
+This repo was compared against `Hical61/Hical` v2.6.6 to identify useful ideas
+without importing Hical's public API shape or request-path tradeoffs.
+
+## Already Covered In Ruvia
+
+- Wildcard routes, dynamic route conflict detection, route groups, and middleware chains.
+- Explicit request streaming, response streaming, SSE, chunked request decoding, and `Expect: 100-continue`.
+- Static file validators, `Range` responses, gzip/brotli/zstd response compression for buffered responses.
+- HTTP/1.1 WebSocket, HTTP/2 RFC 8441 WebSocket, subprotocol negotiation, heartbeat, and permessage-deflate.
+- Per-worker connection ownership, centralized timeout scanning, connection limits, access-log hook, and rate limiting.
+- Optional MariaDB, Redis, JWT, CORS, TLS/SNI, h2c, HTTP/2 ALPN, dotenv, install/export packaging.
+
+## Good Ideas Rewritten In Ruvia Style
+
+- Helmet-like security headers: added `ruvia::SecurityHeadersMiddleware` plus
+  `applySecurityHeaders(...)` helpers. This keeps Ruvia's CRTP middleware,
+  `std::string_view` constants, response-header validation, and request-arena
+  ownership instead of Hical's closure middleware and `std::string` config.
+- Health/readiness responses: added `makeHealthResponse(...)` and
+  `makeReadyResponse(...)`. Ruvia still uses controller macros for route
+  declaration; there is no direct `registerHealthEndpoints(router)` API.
+
+## Still Worth Considering
+
+- OpenAPI metadata generation built from Ruvia model/route descriptors.
+- A first-party logging facade on top of the existing low-level access hook.
+- Optional WebSocket hub/fanout API, but only with worker-owned mailboxes rather
+  than saving request-local `WebSocket` handles across threads.
+- Benchmark and profiling scripts comparable to Hical's Docker benchmark suite.
+
+## Not Directly Portable
+
+- Hical's sync fast path and `asio::awaitable` public API conflict with Ruvia's
+  async-only public `ruvia::Task<T>` contract.
+- Direct `Router::get(...)` / `registerHealthEndpoints(router)` style APIs
+  conflict with Ruvia's macro-only startup registration boundary.
+- Gzip middleware that rewrites `std::string` bodies or offloads through shared
+  thread pools does not match Ruvia's PMR body ownership and no-shared-hot-path
+  constraints.
+- Hical's rate limiter and access logging ideas already exist in Ruvia as
+  server-level options, so duplicating middleware would create two policy paths.

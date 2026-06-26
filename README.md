@@ -31,7 +31,7 @@ Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web s
 | Request handling | Zero-copy HTTP parser, request views into the connection read buffer, explicit streaming body routes, chunked body decoding, multipart form parsing, and helpers for headers, query values, cookies, JSON bodies, and form bodies. |
 | Responses | Chainable helpers for status, headers, cookies, redirects, text, JSON, file responses, static files with validators/ranges, configurable error handling, and unified JSON error bodies. |
 | Models | `RUVIA_MODEL` schema macros for typed JSON/form bodies and JSON responses, plus inline validator middleware rules without runtime reflection. |
-| Runtime | Per-worker standalone Asio `io_context`, HTTP/1.1, HTTP/2 over h2c or TLS ALPN, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
+| Runtime | Per-worker standalone Asio `io_context`, HTTP/1.1, HTTP/2 over h2c or TLS ALPN, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, security headers, health/readiness helpers, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
 | Distribution | CMake install/export support through one installed library file and one public target: `ruvia::ruvia`. |
 
 ## Project Scope
@@ -48,7 +48,7 @@ In scope:
 - A performance-oriented runtime: one standalone Asio `io_context` per worker, worker-owned acceptors/sockets, PMR memory resources, request arenas, zero-copy parser views, scatter-gather-friendly response writes, and `mimalloc` as the production upstream allocator.
 - Optional MariaDB-compatible DB query, transaction, and migration support through `DbHandle`, `DbTransaction`, and `DbMigrator`.
 - Optional Redis command helpers, pipelines, transactions, scans, scripts, and blocking pops through worker-local pools and `Context::redis(...)`.
-- Startup conveniences such as dotenv loading, CORS response headers, gzip configuration, and optional HMAC JWT helpers.
+- Startup conveniences such as dotenv loading, CORS response headers, security headers, health/readiness response helpers, gzip configuration, and optional HMAC JWT helpers.
 
 Out of scope for the current boundary:
 

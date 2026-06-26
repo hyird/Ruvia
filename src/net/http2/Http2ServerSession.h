@@ -75,6 +75,45 @@
 
 namespace ruvia::detail {
 
+class Http2RouteDispatchResult final {
+public:
+    [[nodiscard]] static Http2RouteDispatchResult makeStreamHandled() noexcept {
+        return Http2RouteDispatchResult(Outcome::kStreamHandled);
+    }
+
+    [[nodiscard]] static Http2RouteDispatchResult makeBufferedResponse(HttpResponse response) {
+        return Http2RouteDispatchResult(std::move(response));
+    }
+
+    [[nodiscard]] bool streamHandled() const noexcept {
+        return outcome_ == Outcome::kStreamHandled;
+    }
+
+    [[nodiscard]] bool bufferedResponse() const noexcept {
+        return outcome_ == Outcome::kBufferedResponse;
+    }
+
+    [[nodiscard]] HttpResponse takeResponse() noexcept {
+        return std::move(*response_);
+    }
+
+private:
+    enum class Outcome {
+        kStreamHandled,
+        kBufferedResponse,
+    };
+
+    explicit Http2RouteDispatchResult(Outcome outcome) noexcept
+        : outcome_(outcome) {}
+
+    explicit Http2RouteDispatchResult(HttpResponse response)
+        : outcome_(Outcome::kBufferedResponse),
+          response_(std::move(response)) {}
+
+    Outcome outcome_;
+    std::optional<HttpResponse> response_;
+};
+
 template <typename Stream>
 class Http2ServerSession final {
     template <typename Session>
@@ -231,21 +270,19 @@ private:
 
     [[nodiscard]] ContextServices routeServices() const noexcept;
 
-    Task<bool> dispatchHttp2WebSocketRoute(
+    Task<Http2RouteDispatchResult> dispatchHttp2WebSocketRoute(
         Http2StreamState& stream,
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& requestMemory,
-        ContextServices services,
-        HttpResponse& response);
+        ContextServices services);
 
-    Task<bool> dispatchHttp2ResponseStreamRoute(
+    Task<Http2RouteDispatchResult> dispatchHttp2ResponseStreamRoute(
         Http2StreamState& stream,
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& requestMemory,
-        ContextServices services,
-        HttpResponse& response);
+        ContextServices services);
 
     Task<void> dispatchStream(Http2StreamState& stream);
 

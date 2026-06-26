@@ -16,6 +16,7 @@ ruvia_add_example(ruvia_example_streaming streaming.cpp)
 ruvia_add_example(ruvia_example_files_static files_static.cpp)
 ruvia_add_example(ruvia_example_websocket websocket.cpp)
 ruvia_add_example(ruvia_example_runtime_config runtime_config.cpp)
+ruvia_add_example(ruvia_example_ops ops.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt auth_jwt.cpp)
