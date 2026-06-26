@@ -56,7 +56,7 @@ Task<void> Http2ServerSession<Stream>::runUpgraded(
     input_.assign(initialBytes.data(), initialBytes.size());
     inputOffset_ = 0;
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
-    if (!(co_await applySettingsPayload(settingsPayload))) {
+    if ((co_await applySettingsPayload(settingsPayload)).shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -93,7 +93,7 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
             goawayLastStreamId_ = lastStreamId_;
             co_await sendGoaway(lastStreamId_, Http2ErrorCode::kNoError, "server draining");
         }
-        if (!(co_await processFrame(header, payload))) {
+        if ((co_await processFrame(header, payload)).shouldStop()) {
             break;
         }
         consumeInput(kHttp2FrameHeaderBytes + header.length);

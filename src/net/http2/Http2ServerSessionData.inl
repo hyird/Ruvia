@@ -1,36 +1,36 @@
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::processData(
+Task<Http2SessionFlow> Http2ServerSession<Stream>::processData(
     const Http2FrameHeader& header,
     std::string_view payload) {
     if (header.streamId == 0) {
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "DATA stream id must be nonzero");
-        co_return false;
+        co_return Http2SessionFlow::stopRunning();
     }
     if ((header.streamId & 1U) == 0) {
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "DATA on invalid client stream id");
-        co_return false;
+        co_return Http2SessionFlow::stopRunning();
     }
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
         if (header.streamId <= lastStreamId_) {
             co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-            co_return true;
+            co_return Http2SessionFlow::keepRunning();
         }
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "DATA before HEADERS");
-        co_return false;
+        co_return Http2SessionFlow::stopRunning();
     }
     if (stream->isReset()) {
-        co_return true;
+        co_return Http2SessionFlow::keepRunning();
     }
     if (!stream->headersDecoded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
         stream->markReset();
-        co_return true;
+        co_return Http2SessionFlow::keepRunning();
     }
     if (stream->bodyEnded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
         stream->markReset();
-        co_return true;
+        co_return Http2SessionFlow::keepRunning();
     }
 
     const auto flowBytes = static_cast<std::int32_t>(payload.size());
@@ -39,17 +39,17 @@ Task<bool> Http2ServerSession<Stream>::processData(
             break;
         case Http2ReceiveWindowResult::kConnectionExceeded:
             co_await sendGoaway(lastStreamId_, Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
-            co_return false;
+            co_return Http2SessionFlow::stopRunning();
         case Http2ReceiveWindowResult::kStreamExceeded:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
             stream->markReset();
-            co_return true;
+            co_return Http2SessionFlow::keepRunning();
     }
 
     std::string_view data;
     if (!http2DecodeDataPayload(header, payload, data)) {
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "invalid DATA padding");
-        co_return false;
+        co_return Http2SessionFlow::stopRunning();
     }
 
     switch (http2AccountDataBody(*stream, data.size(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes)) {
@@ -58,11 +58,11 @@ Task<bool> Http2ServerSession<Stream>::processData(
         case Http2BodyAccountingResult::kTooLarge:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kCancel);
             stream->markReset();
-            co_return true;
+            co_return Http2SessionFlow::keepRunning();
         case Http2BodyAccountingResult::kContentLengthExceeded:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
             stream->markReset();
-            co_return true;
+            co_return Http2SessionFlow::keepRunning();
     }
     if (flowBytes > 0) {
         const auto increment = static_cast<std::uint32_t>(flowBytes);
@@ -76,7 +76,7 @@ Task<bool> Http2ServerSession<Stream>::processData(
             if (!http2BodyLengthComplete(*stream)) {
                 co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
                 stream->markReset();
-                co_return true;
+                co_return Http2SessionFlow::keepRunning();
             }
             http2MarkBodyEnded(*stream);
             if (!stream->dispatchStarted()) {
@@ -84,7 +84,7 @@ Task<bool> Http2ServerSession<Stream>::processData(
             }
         }
         resumeBodyWaiter(*stream);
-        co_return true;
+        co_return Http2SessionFlow::keepRunning();
     }
 
     stream->appendRequestBody(data);
@@ -92,10 +92,10 @@ Task<bool> Http2ServerSession<Stream>::processData(
         if (!http2BodyLengthComplete(*stream)) {
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
             stream->markReset();
-            co_return true;
+            co_return Http2SessionFlow::keepRunning();
         }
         http2MarkBodyEnded(*stream);
         queueReady(stream->id());
     }
-    co_return true;
+    co_return Http2SessionFlow::keepRunning();
 }
