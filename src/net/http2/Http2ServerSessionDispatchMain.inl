@@ -75,29 +75,35 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
     if (resolution.found()) {
         const auto& route = resolution.route();
         if (route.isWebSocketResponse()) {
-            if (co_await dispatchHttp2WebSocketRoute(
-                    stream,
-                    request,
-                    resolution,
-                    requestMemory,
-                    baseServices,
-                    response)) {
+            auto dispatchResult = co_await dispatchHttp2WebSocketRoute(
+                stream,
+                request,
+                resolution,
+                requestMemory,
+                baseServices);
+            if (dispatchResult.streamHandled()) {
                 co_return;
             }
+            if (dispatchResult.bufferedResponse()) {
+                response = dispatchResult.takeResponse();
+            }
         } else if (route.usesResponseStream()) {
-            if (co_await dispatchHttp2ResponseStreamRoute(
-                    stream,
-                    request,
-                    resolution,
-                    requestMemory,
-                    dispatchServices,
-                    response)) {
+            auto dispatchResult = co_await dispatchHttp2ResponseStreamRoute(
+                stream,
+                request,
+                resolution,
+                requestMemory,
+                dispatchServices);
+            if (dispatchResult.streamHandled()) {
                 // Streamed/committed on the wire; the buffered tail below is skipped,
                 // so log the completed streamed response here (status 200).
                 recordHttpAccess(
                     options_.accessLog, request, remoteAddress_,
                     response.statusCode(), requestStart, true);
                 co_return;
+            }
+            if (dispatchResult.bufferedResponse()) {
+                response = dispatchResult.takeResponse();
             }
         } else {
             response = co_await routes_.dispatchBuffered(
