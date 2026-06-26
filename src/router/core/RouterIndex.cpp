@@ -1,6 +1,7 @@
 #include "../RouteTable.h"
 
 #include <algorithm>
+#include <bit>
 
 namespace ruvia {
 namespace {
@@ -10,36 +11,27 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
 }  // namespace
 
-detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request) const noexcept {
-    return resolve(request.method(), request.path());
+detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request, RouteMatch& match) const noexcept {
+    return resolve(request.method(), request.path(), match);
 }
 
 detail::RouteResolution detail::RouteTable::resolve(
     HttpMethod method,
-    std::string_view path) const noexcept {
+    std::string_view path,
+    RouteMatch& match) const noexcept {
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
-        return RouteResolution{
-            .status = RouteResolveStatus::kFound,
-            .route = route,
-            .bodyMode = route->bodyMode};
+        return RouteResolution::foundStatic(route);
     }
 
-    auto match = findDynamicRoute(method, path);
-    if (match.route != nullptr) {
-        return RouteResolution{
-            .status = RouteResolveStatus::kFound,
-            .route = match.route,
-            .match = match,
-            .bodyMode = match.route->bodyMode,
-            .dynamic = true};
+    const auto* dynamicRoute = findDynamicRoute(method, path, match);
+    if (dynamicRoute != nullptr) {
+        return RouteResolution::foundDynamic(dynamicRoute, match);
     }
 
     auto methodMask = allowedMethods(path, method);
     if (methodMask != 0) {
         methodMask |= 1U << methodIndex(HttpMethod::kOptions);
-        return RouteResolution{
-            .status = RouteResolveStatus::kMethodNotAllowed,
-            .allowedMethods = methodMask};
+        return RouteResolution::methodNotAllowed(methodMask);
     }
 
     return RouteResolution{};
@@ -112,6 +104,9 @@ const detail::RouteEntry* detail::RouteTable::findStaticRoute(
     if (!isRoutableMethod(method)) {
         return nullptr;
     }
+    if ((staticMethodMask_ & (1U << methodIndex(method))) == 0) {
+        return nullptr;
+    }
 
     if (const auto* route = findPerfect(method, path); route != nullptr) {
         return route;
@@ -133,7 +128,7 @@ const detail::RouteEntry* detail::RouteTable::findPerfect(HttpMethod method, std
 
     const auto index = static_cast<std::size_t>(routeHash(method, path, exactSeed_)) & exactMask_;
     const auto* route = exactSlots_[index].route;
-    if (route != nullptr && route->method == method && route->path == path) {
+    if (route != nullptr && route->method() == method && route->path() == path) {
         return route;
     }
 
@@ -146,16 +141,26 @@ const detail::RouteEntry* detail::RouteTable::findRadix(HttpMethod method, std::
 
 std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept {
     std::uint32_t mask = 0;
-    for (std::size_t i = 0; i < kRoutableMethodCount; ++i) {
+    auto candidateMask = staticMethodMask_ | dynamicMethodMask_;
+    candidateMask &= ~(1U << methodIndex(HttpMethod::kOptions));
+    if (isRoutableMethod(requestedMethod)) {
+        candidateMask &= ~(1U << methodIndex(requestedMethod));
+    }
+
+    while (candidateMask != 0) {
+        const auto i = static_cast<std::size_t>(std::countr_zero(candidateMask));
         const auto method = static_cast<HttpMethod>(i);
-        // resolve() already proved requestedMethod has no route for this path, so
-        // re-checking it here would re-hash the path and re-walk the indexes for a
-        // known miss. OPTIONS is added by resolve() itself.
-        if (method == HttpMethod::kOptions || method == requestedMethod ||
-            (allowedMethodMask_ & (1U << i)) == 0) {
-            continue;
-        }
-        if (findStaticRoute(method, path) != nullptr || findDynamicRoute(method, path).route != nullptr) {
+        const auto methodBit = 1U << i;
+        candidateMask &= ~methodBit;
+
+        // resolve() already proved requestedMethod has no route for this path.
+        // OPTIONS is added by resolve() itself.
+        const bool hasStaticRoutes = (staticMethodMask_ & methodBit) != 0;
+        const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path) : nullptr;
+        const auto* const dynamicRoute = (dynamicMethodMask_ & methodBit) != 0
+            ? findDynamicNodeNoParams(dynamicRoots_[i], path)
+            : nullptr;
+        if (staticRoute != nullptr || dynamicRoute != nullptr) {
             mask |= 1U << i;
         }
     }

@@ -89,6 +89,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/ContextFileResponse.cpp
     src/http/ContextRequest.cpp
     src/http/ContextResponse.cpp
+    src/http/ContextStorage.cpp
     src/http/Csrf.cpp
     src/http/Error.cpp
     src/http/HttpBasics.cpp
@@ -99,7 +100,6 @@ set(RUVIA_HTTP_SOURCES
     src/http/HttpResponseHeaders.cpp
     src/http/HttpResponseHeadersStorage.cpp
     src/http/HttpResponseKnownHeaders.cpp
-    src/http/HttpTypes.cpp
     src/http/MultipartReader.cpp
     src/http/StaticFiles.cpp
     src/http/parser/HttpChunkParser.cpp

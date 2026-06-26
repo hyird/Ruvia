@@ -2,6 +2,7 @@
 
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/model/Traits.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <memory_resource>
 #include <optional>
@@ -57,7 +58,7 @@ public:
         std::pmr::memory_resource* resource) noexcept
         : value_(&value),
           state_(&state),
-          resource_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+          resource_(detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] bool has_value() const noexcept {
         return value_->has_value();
@@ -179,7 +180,7 @@ public:
 private:
     std::optional<T>* value_{nullptr};
     detail::ModelFieldState* state_{nullptr};
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 }  // namespace ruvia

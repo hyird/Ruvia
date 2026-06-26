@@ -1,12 +1,13 @@
 #include "Http2Hpack.h"
 #include "ruvia/http/detail/PmrString.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <algorithm>
 
 namespace ruvia::detail {
 
 HpackDecoder::HpackDecoder(std::pmr::memory_resource* resource)
-    : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+    : resource_(pmrResourceOrDefault(resource)),
       dynamic_(resource_),
       nameScratch_(resource_),
       valueScratch_(resource_) {}

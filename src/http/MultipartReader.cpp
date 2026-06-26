@@ -2,6 +2,7 @@
 
 #include "MultipartParsing.h"
 #include "ruvia/http/detail/PmrString.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -14,7 +15,7 @@ MultipartReader::MultipartReader(
     std::string_view boundary,
     std::pmr::memory_resource* resource)
     : bodyReader_(bodyReader),
-      resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+      resource_(detail::pmrResourceOrDefault(resource)),
       buffer_(resource_),
       boundaryLine_(resource_),
       boundaryPrefix_(resource_),

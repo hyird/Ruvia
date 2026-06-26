@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/memory/PmrResource.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -55,18 +57,11 @@ struct HttpHeaderView {
     std::string_view value;
 };
 
-struct RouteParamView {
-    std::string_view name;
-    std::string_view value;
-};
-
 struct MultipartPart {
-    std::pmr::string name;
-    std::pmr::string filename;
-    std::pmr::string contentType;
+    std::string_view name;
+    std::string_view filename;
+    std::string_view contentType;
     std::string_view body;
-
-    explicit MultipartPart(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 };
 
 class RequestValue final {
@@ -80,10 +75,10 @@ public:
     RequestValue() = default;
     RequestValue(
         std::optional<std::string_view> value,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource(),
+        std::pmr::memory_resource* resource = nullptr,
         DecodeMode decodeMode = DecodeMode::kNone) noexcept
         : value_(value),
-          resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+          resource_(detail::pmrResourceOrDefault(resource)),
           decodeMode_(decodeMode) {}
 
     [[nodiscard]] bool exists() const noexcept {
@@ -105,11 +100,11 @@ public:
 
 private:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_ == nullptr ? std::pmr::get_default_resource() : resource_;
+        return detail::pmrResourceOrDefault(resource_);
     }
 
     std::optional<std::string_view> value_;
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
     DecodeMode decodeMode_{DecodeMode::kNone};
 };
 

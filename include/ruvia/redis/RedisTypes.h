@@ -123,7 +123,7 @@ public:
         kError
     };
 
-    explicit RedisValue(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit RedisValue(std::pmr::memory_resource* resource = nullptr);
 
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;

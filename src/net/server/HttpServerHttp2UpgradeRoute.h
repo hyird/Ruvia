@@ -44,7 +44,7 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     HttpResponse& response,
     bool& closeAfterWrite,
     const std::atomic_bool* serverStarted = nullptr) {

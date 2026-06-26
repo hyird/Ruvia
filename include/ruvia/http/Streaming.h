@@ -25,20 +25,13 @@ public:
     BodyReader(const BodyReader&) = delete;
     BodyReader& operator=(const BodyReader&) = delete;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return read_ != nullptr;
-    }
-
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
-        if (read_ == nullptr) {
-            throw std::logic_error("request body is not streamable");
-        }
         return read_(target_);
     }
 
 private:
-    void* target_{nullptr};
-    Read read_{nullptr};
+    void* target_;
+    Read read_;
 };
 
 class ResponseStreamWriter final {
@@ -53,9 +46,9 @@ public:
         void* target,
         Write write,
         End end,
-        BindContext bindContext = nullptr,
-        Scratch scratch = nullptr,
-        AddTrailer addTrailer = nullptr) noexcept
+        BindContext bindContext,
+        Scratch scratch,
+        AddTrailer addTrailer) noexcept
         : target_(target),
           write_(write),
           end_(end),
@@ -66,55 +59,37 @@ public:
     ResponseStreamWriter(const ResponseStreamWriter&) = delete;
     ResponseStreamWriter& operator=(const ResponseStreamWriter&) = delete;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return write_ != nullptr && end_ != nullptr;
-    }
-
     Task<void> write(std::string_view chunk) {
-        if (write_ == nullptr) {
-            throw std::logic_error("response body is not streamable");
-        }
         return write_(target_, chunk);
     }
 
     Task<void> end() {
-        if (end_ == nullptr) {
-            throw std::logic_error("response body is not streamable");
-        }
         return end_(target_);
     }
 
-    // Queues a trailer field to be emitted when the stream ends — an HTTP/1.1
+    // Queues a trailer field to be emitted when the stream ends: an HTTP/1.1
     // chunked trailer or an HTTP/2 trailing HEADERS field, depending on the
     // transport. Must be called before the stream is ended; throws on a field
     // name/value that is not a valid or permissible trailer.
     void addTrailer(std::string_view name, std::string_view value) {
-        if (addTrailer_ == nullptr) {
-            throw std::logic_error("response stream does not support trailers");
-        }
         addTrailer_(target_, name, value);
     }
 
     void bindContext(Context& context) noexcept {
-        if (bindContext_ != nullptr) {
-            bindContext_(target_, &context);
-        }
+        bindContext_(target_, &context);
     }
 
     [[nodiscard]] std::pmr::string& scratch() const {
-        if (scratch_ != nullptr) {
-            return scratch_(target_);
-        }
-        throw std::logic_error("response stream context is not bound");
+        return scratch_(target_);
     }
 
 private:
-    void* target_{nullptr};
-    Write write_{nullptr};
-    End end_{nullptr};
-    BindContext bindContext_{nullptr};
-    Scratch scratch_{nullptr};
-    AddTrailer addTrailer_{nullptr};
+    void* target_;
+    Write write_;
+    End end_;
+    BindContext bindContext_;
+    Scratch scratch_;
+    AddTrailer addTrailer_;
 };
 
 struct SseMessage final {
@@ -126,10 +101,7 @@ struct SseMessage final {
 
 class SseWriter final {
 public:
-    SseWriter(ResponseStreamWriter& writer, std::pmr::memory_resource* resource) noexcept
-        : writer_(writer) {
-        (void)resource;
-    }
+    explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
 
     Task<void> writeSSE(const SseMessage& message) {
         auto& frame = writer_.scratch();

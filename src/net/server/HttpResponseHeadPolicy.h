@@ -6,36 +6,64 @@
 
 namespace ruvia::detail {
 
-struct ResponseWritePolicy {
-    bool bodyAllowed{true};
-    bool autoContentLengthAllowed{true};
-    bool explicitContentLengthAllowed{true};
-    bool transferEncodingAllowed{true};
+class ResponseWritePolicy final {
+public:
+    [[nodiscard]] static constexpr ResponseWritePolicy normal() noexcept {
+        return ResponseWritePolicy(true, true, true, true);
+    }
+
+    [[nodiscard]] static constexpr ResponseWritePolicy bodyForbidden() noexcept {
+        return ResponseWritePolicy(false, false, false, false);
+    }
+
+    [[nodiscard]] static constexpr ResponseWritePolicy notModified() noexcept {
+        return ResponseWritePolicy(false, false, true, false);
+    }
+
+    [[nodiscard]] constexpr bool bodyAllowed() const noexcept {
+        return bodyAllowed_;
+    }
+
+    [[nodiscard]] constexpr bool autoContentLengthAllowed() const noexcept {
+        return autoContentLengthAllowed_;
+    }
+
+    [[nodiscard]] constexpr bool explicitContentLengthAllowed() const noexcept {
+        return explicitContentLengthAllowed_;
+    }
+
+    [[nodiscard]] constexpr bool transferEncodingAllowed() const noexcept {
+        return transferEncodingAllowed_;
+    }
+
+private:
+    constexpr ResponseWritePolicy(
+        bool bodyAllowed,
+        bool autoContentLengthAllowed,
+        bool explicitContentLengthAllowed,
+        bool transferEncodingAllowed) noexcept
+        : bodyAllowed_(bodyAllowed),
+          autoContentLengthAllowed_(autoContentLengthAllowed),
+          explicitContentLengthAllowed_(explicitContentLengthAllowed),
+          transferEncodingAllowed_(transferEncodingAllowed) {}
+
+    bool bodyAllowed_{true};
+    bool autoContentLengthAllowed_{true};
+    bool explicitContentLengthAllowed_{true};
+    bool transferEncodingAllowed_{true};
 };
 
 [[nodiscard]] inline ResponseWritePolicy responseWritePolicy(std::uint16_t statusCode) noexcept {
     if (statusCode >= 100 && statusCode < 200) {
-        return ResponseWritePolicy{
-            .bodyAllowed = false,
-            .autoContentLengthAllowed = false,
-            .explicitContentLengthAllowed = false,
-            .transferEncodingAllowed = false};
+        return ResponseWritePolicy::bodyForbidden();
     }
     if (statusCode == 204 || statusCode == 205) {
-        return ResponseWritePolicy{
-            .bodyAllowed = false,
-            .autoContentLengthAllowed = false,
-            .explicitContentLengthAllowed = false,
-            .transferEncodingAllowed = false};
+        return ResponseWritePolicy::bodyForbidden();
     }
     if (statusCode == 304) {
-        return ResponseWritePolicy{
-            .bodyAllowed = false,
-            .autoContentLengthAllowed = false,
-            .explicitContentLengthAllowed = true,
-            .transferEncodingAllowed = false};
+        return ResponseWritePolicy::notModified();
     }
-    return {};
+    return ResponseWritePolicy::normal();
 }
 
 [[nodiscard]] inline bool responseBodyFramingHeaderForbidden(

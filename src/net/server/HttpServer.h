@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -31,6 +32,9 @@
 namespace ruvia::detail {
 
 class RouteTable;
+
+using SniContextStore = std::pmr::vector<asio::ssl::context>;
+using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
 
 class HttpServer final {
 public:
@@ -86,13 +90,13 @@ private:
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer drainTimer_;
     std::optional<asio::ssl::context> tlsContext_;
-    // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
-    // sniLookup_ maps a lowercased host to its context for the SNI callback.
-    std::vector<asio::ssl::context> sniContexts_;
-    std::vector<std::pair<std::pmr::string, asio::ssl::context*>> sniLookup_;
     asio::ip::tcp::endpoint endpoint_;
     const RouteTable& routes_;
     WorkerMemory memory_;
+    // Per-host SNI contexts (RFC 6066), owned here so they outlive connections;
+    // sniLookup_ maps a lowercased host to its context for the SNI callback.
+    SniContextStore sniContexts_;
+    SniContextLookup sniLookup_;
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;

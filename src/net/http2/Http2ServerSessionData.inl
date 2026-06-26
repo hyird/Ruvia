@@ -19,17 +19,17 @@ Task<bool> Http2ServerSession<Stream>::processData(
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "DATA before HEADERS");
         co_return false;
     }
-    if (stream->reset) {
+    if (stream->isReset()) {
         co_return true;
     }
-    if (!stream->headersDecoded) {
+    if (!stream->headersDecoded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        stream->reset = true;
+        stream->markReset();
         co_return true;
     }
-    if (stream->bodyEnded) {
+    if (stream->bodyEnded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        stream->reset = true;
+        stream->markReset();
         co_return true;
     }
 
@@ -42,7 +42,7 @@ Task<bool> Http2ServerSession<Stream>::processData(
             co_return false;
         case Http2ReceiveWindowResult::kStreamExceeded:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            stream->reset = true;
+            stream->markReset();
             co_return true;
     }
 
@@ -57,11 +57,11 @@ Task<bool> Http2ServerSession<Stream>::processData(
             break;
         case Http2BodyAccountingResult::kTooLarge:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kCancel);
-            stream->reset = true;
+            stream->markReset();
             co_return true;
         case Http2BodyAccountingResult::kContentLengthExceeded:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->reset = true;
+            stream->markReset();
             co_return true;
     }
     if (flowBytes > 0) {
@@ -70,32 +70,32 @@ Task<bool> Http2ServerSession<Stream>::processData(
         co_await sendDataWindowUpdates(header.streamId, increment);
     }
 
-    if (stream->bodyMode == RequestBodyMode::kStream) {
+    if (stream->usesStreamRequestBody()) {
         http2EnqueueStreamBodyChunk(*stream, data);
         if ((header.flags & kHttp2FlagEndStream) != 0) {
             if (!http2BodyLengthComplete(*stream)) {
                 co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-                stream->reset = true;
+                stream->markReset();
                 co_return true;
             }
             http2MarkBodyEnded(*stream);
-            if (!stream->dispatchStarted) {
-                queueReady(stream->id);
+            if (!stream->dispatchStarted()) {
+                queueReady(stream->id());
             }
         }
         resumeBodyWaiter(*stream);
         co_return true;
     }
 
-    stream->body.append(data.data(), data.size());
+    stream->appendRequestBody(data);
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         if (!http2BodyLengthComplete(*stream)) {
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->reset = true;
+            stream->markReset();
             co_return true;
         }
         http2MarkBodyEnded(*stream);
-        queueReady(stream->id);
+        queueReady(stream->id());
     }
     co_return true;
 }

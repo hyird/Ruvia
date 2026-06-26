@@ -99,7 +99,7 @@ private:
 
 class DbField final {
 public:
-    explicit DbField(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit DbField(std::pmr::memory_resource* resource = nullptr);
     DbField(std::nullptr_t, std::pmr::memory_resource* resource);
     DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(DbField&& other) noexcept;
@@ -128,7 +128,7 @@ private:
 
 class DbRow final {
 public:
-    explicit DbRow(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit DbRow(std::pmr::memory_resource* resource = nullptr);
     DbRow(DbRow&& other) noexcept;
     DbRow& operator=(DbRow&& other) noexcept;
 

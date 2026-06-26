@@ -7,13 +7,14 @@
 #include <vector>
 
 #include "Http2OffsetVector.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
 class Http2ContinuationQueue final {
 public:
     explicit Http2ContinuationQueue(std::pmr::memory_resource* resource)
-        : overflow_(resource == nullptr ? std::pmr::get_default_resource() : resource) {}
+        : overflow_(pmrResourceOrDefault(resource)) {}
 
     void push(std::coroutine_handle<> continuation) {
         if (overflowHasActive() || !tryPushInline(continuation)) {

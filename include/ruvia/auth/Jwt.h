@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/memory/PmrResource.h"
+
 namespace ruvia {
 
 enum class JwtAlgorithm {
@@ -30,7 +32,7 @@ struct JwtSignOptions final {
     std::pmr::string id;
     std::chrono::seconds expiresIn{std::chrono::hours(1)};
     std::chrono::seconds notBeforeDelay{0};
-    std::pmr::vector<JwtClaim> claims{std::pmr::get_default_resource()};
+    std::pmr::vector<JwtClaim> claims{detail::pmrResourceOrDefault(nullptr)};
 };
 
 struct JwtVerifyOptions final {
@@ -45,7 +47,7 @@ struct JwtVerifyOptions final {
 
 class JwtPayload final {
 public:
-    explicit JwtPayload(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit JwtPayload(std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] std::string_view issuer() const noexcept;
     [[nodiscard]] std::string_view subject() const noexcept;
@@ -74,14 +76,14 @@ private:
 
 [[nodiscard]] std::pmr::string jwtSign(
     const JwtSignOptions& options,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::pmr::memory_resource* resource = nullptr);
 [[nodiscard]] JwtPayload jwtVerify(
     std::string_view token,
     const JwtVerifyOptions& options,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::pmr::memory_resource* resource = nullptr);
 [[nodiscard]] JwtPayload jwtDecodeUnverified(
     std::string_view token,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::pmr::memory_resource* resource = nullptr);
 [[nodiscard]] std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept;
 
 }  // namespace ruvia

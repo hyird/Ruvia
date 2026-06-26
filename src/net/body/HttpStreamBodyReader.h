@@ -36,8 +36,6 @@ public:
     [[nodiscard]] bool finished() const noexcept;
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes);
 
-    [[nodiscard]] static Task<std::optional<std::string_view>> readThunk(void* target);
-
     [[nodiscard]] Task<std::optional<std::string_view>> read();
     Task<std::string_view> readContentLengthAll(std::pmr::string& body);
     Task<std::string_view> readAll(std::pmr::string& body);

@@ -144,6 +144,21 @@ template <typename Visitor>
     return true;
 }
 
+[[nodiscard]] inline std::optional<std::string_view> findUrlEncodedValue(
+    std::string_view input,
+    std::string_view decodedName,
+    UrlDecodeMode mode) {
+    std::optional<std::string_view> result;
+    (void)visitUrlEncodedPairs(input, [&](std::string_view name, std::string_view value) {
+        if (urlComponentEquals(name, decodedName, mode)) {
+            result = value;
+            return false;
+        }
+        return true;
+    });
+    return result;
+}
+
 [[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponentToString(
     std::string_view input,
     std::pmr::memory_resource* resource,

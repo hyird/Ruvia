@@ -93,16 +93,16 @@ void appendResponseHead(
     ResponseHeadBuffer& head,
     ResponseWritePolicy policy,
     bool suppressAutoContentLength) {
-    const bool transferEncodingAllowed = policy.transferEncodingAllowed && suppressAutoContentLength;
+    const bool transferEncodingAllowed = policy.transferEncodingAllowed() && suppressAutoContentLength;
     const auto knownBits = responseKnownHeaderBits(response);
     const bool hasTransferEncoding = transferEncodingAllowed &&
         (knownBits & kResponseHeaderTransferEncoding) != 0;
     const bool autoContentLengthOwnedByWriter =
-        policy.autoContentLengthAllowed &&
+        policy.autoContentLengthAllowed() &&
         !hasTransferEncoding &&
         !suppressAutoContentLength;
     const bool explicitContentLengthAllowed =
-        policy.explicitContentLengthAllowed &&
+        policy.explicitContentLengthAllowed() &&
         !hasTransferEncoding &&
         !autoContentLengthOwnedByWriter;
     const ResponseHeadFlags flags{

@@ -36,30 +36,13 @@ struct ParsedRequestHeaderSlot {
 
 using KnownRequestHeaderIndex = std::int16_t;
 
-struct KnownRequestHeaderIndexes {
-    [[nodiscard]] KnownRequestHeaderIndex get(RequestHeaderKind kind) const noexcept {
-        const auto value = values_[static_cast<std::size_t>(kind)];
-        return value > 0 ? static_cast<KnownRequestHeaderIndex>(value - 1) : KnownRequestHeaderIndex{-1};
-    }
-
-    void record(RequestHeaderKind kind, std::size_t index) noexcept {
-        auto& knownIndex = values_[static_cast<std::size_t>(kind)];
-        if (knownIndex == 0) {
-            knownIndex = static_cast<KnownRequestHeaderIndex>(index + 1);
-        }
-    }
-
-private:
-    std::array<KnownRequestHeaderIndex, kRequestHeaderKindCount> values_{};
-};
-
 struct ParsedRequestHeaderBlock {
     HttpHeaderSlice method;
     HttpHeaderSlice target;
     HttpHeaderSlice version;
     std::array<ParsedRequestHeaderSlot, kMaxRequestHeaders> headers;
     std::size_t headerCount{0};
-    KnownRequestHeaderIndexes known;
+    KnownRequestHeaderIndex hostHeaderIndex{-1};
     HttpRequestFlags flags;
     std::size_t contentLength{0};
     bool sawContentLength{false};

@@ -10,7 +10,7 @@
 #define RUVIA_MODEL(T, ...)                                                  \
     class T {                                                               \
     public:                                                                 \
-        explicit T(::std::pmr::memory_resource* resource = ::std::pmr::get_default_resource()) noexcept \
+        explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \
             : body_(::ruvia::RequestObject(                                  \
                   ::ruvia::RequestObjectKind::kJson, ::std::string_view{"{}"}, resource)) { \
             ruviaParsed_ = true;                                             \

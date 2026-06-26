@@ -49,11 +49,11 @@ Task<std::size_t> RedisPool::acquire() {
     bool ready = false;
     bool timedOut = false;
     std::size_t waitedIndex = 0;
-    PoolWaiter waiter{
-        .ready = &ready,
-        .timedOut = &timedOut,
-        .index = &waitedIndex,
-        .deadline = std::chrono::steady_clock::now() + config_.acquireTimeout};
+    PoolWaiter waiter(
+        ready,
+        timedOut,
+        waitedIndex,
+        std::chrono::steady_clock::now() + config_.acquireTimeout);
     waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
@@ -66,7 +66,7 @@ Task<std::size_t> RedisPool::acquire() {
         }
 
         void await_suspend(std::coroutine_handle<> handle) noexcept {
-            waiter.handle = handle;
+            waiter.setHandle(handle);
         }
 
         void await_resume() const noexcept {}

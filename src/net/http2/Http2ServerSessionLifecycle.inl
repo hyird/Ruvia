@@ -99,7 +99,7 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
         consumeInput(kHttp2FrameHeaderBytes + header.length);
         while (hasReadyStream() && !closing_) {
             const auto streamId = popReadyStream();
-            if (auto* stream = findStream(streamId); stream != nullptr && !stream->reset) {
+            if (auto* stream = findStream(streamId); stream != nullptr && !stream->isReset()) {
                 launchStreamDispatch(*stream);
             }
         }

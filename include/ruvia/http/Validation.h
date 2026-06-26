@@ -15,21 +15,24 @@
 #include "ruvia/http/JsonUtils.h"
 #include "ruvia/http/Model.h"
 #include "ruvia/http/ValidationTypes.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
 
 struct ValidationIssue final {
-    explicit ValidationIssue(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : field(resource), code(resource), message(resource) {}
+    explicit ValidationIssue(std::pmr::memory_resource* resource = nullptr)
+        : field(detail::pmrResourceOrDefault(resource)),
+          code(detail::pmrResourceOrDefault(resource)),
+          message(detail::pmrResourceOrDefault(resource)) {}
 
     ValidationIssue(
         std::string_view fieldName,
         std::string_view codeValue,
         std::string_view messageValue,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : field(fieldName, resource),
-          code(codeValue, resource),
-          message(messageValue, resource) {}
+        std::pmr::memory_resource* resource = nullptr)
+        : field(fieldName, detail::pmrResourceOrDefault(resource)),
+          code(codeValue, detail::pmrResourceOrDefault(resource)),
+          message(messageValue, detail::pmrResourceOrDefault(resource)) {}
 
     std::pmr::string field;
     std::pmr::string code;
@@ -58,8 +61,8 @@ public:
         std::uint16_t statusCode = 400,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed",
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+        std::pmr::memory_resource* resource = nullptr)
+        : resource_(detail::pmrResourceOrDefault(resource)),
           issues_(resource_),
           statusCode_(statusCode),
           code_(code, resource_),
@@ -77,8 +80,8 @@ public:
         std::uint16_t statusCode = 400,
         std::string_view code = "validation_failed",
         std::string_view message = "request validation failed",
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+        std::pmr::memory_resource* resource = nullptr)
+        : resource_(detail::pmrResourceOrDefault(resource)),
           issues_(std::move(issues), resource_),
           statusCode_(statusCode),
           code_(code, resource_),
@@ -149,8 +152,8 @@ class Validator final {
 public:
     using IssueList = ValidationError::IssueList;
 
-    explicit Validator(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+    explicit Validator(std::pmr::memory_resource* resource = nullptr)
+        : resource_(detail::pmrResourceOrDefault(resource)),
           issues_(resource_) {}
 
     Validator& add(

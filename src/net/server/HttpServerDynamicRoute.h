@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../body/HttpRequestBody.h"
 #include "ConnectionScanner.h"
 #include "HttpResponseStreamDispatch.h"
 #include "HttpResponseStreamSink.h"
@@ -8,7 +7,6 @@
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
 #include "HttpServerResponseStreamRoute.h"
-#include "../../http/RequestBodyLoader.h"
 #include "../../http/HttpParserInternal.h"
 #include "../../router/RouteTable.h"
 #include "ruvia/app/Task.h"
@@ -17,7 +15,6 @@
 
 #include <cstddef>
 #include <exception>
-#include <optional>
 #include <utility>
 
 namespace ruvia::detail {
@@ -38,7 +35,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpDynamicRoute(
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     const HttpServerOptions& options,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
@@ -50,35 +47,29 @@ Task<HttpResponseStreamRouteResult> dispatchHttpDynamicRoute(
     const auto bodyAndPipeline = beginHttpBodyRoute(parsed, readBuffer, usedBytes, keepAlive, consumedBytes);
 
     std::exception_ptr setupException;
-    std::optional<LazyBufferedBody<Stream>> lazyBody;
-    std::optional<RequestBodyLoader> bodyLoader;
+    HttpLazyBufferedBodyRouteState<Stream> bodyState;
     try {
-        lazyBody.emplace(
+        prepareHttpLazyBufferedBodyRoute(
+            bodyState,
             stream,
-            memory.allocator<char>(),
-            requestMemory.resource(),
+            memory,
+            requestMemory,
             bodyAndPipeline,
-            parsed.contentLength,
-            parsed.chunked,
-            parsed.transferCodings,
-            options.maxBufferedBodyBytes,
-            scannerEntry,
-            (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
-        bodyLoader.emplace(
-            &*lazyBody,
-            &LazyBufferedBody<Stream>::readAllThunk,
-            &LazyBufferedBody<Stream>::discardThunk);
+            parsed,
+            options,
+            scannerEntry);
     } catch (...) {
         setupException = std::current_exception();
     }
     if (setupException != nullptr) {
         co_await completeFailedHttpBodyRoute(
             scannerEntry, setupException, parsed, routes, requestMemory, baseRouteServices, response, keepAlive);
-        co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
-    ResponseSink responseSink(stream, memory, responseHead, scannerEntry, routeResolution.route->responseMode);
+    const auto& route = routeResolution.route();
+    ResponseSink responseSink(stream, memory, responseHead, scannerEntry, route.responseMode());
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
 
     auto result = co_await dispatchResponseStreamWith(
@@ -87,52 +78,50 @@ Task<HttpResponseStreamRouteResult> dispatchHttpDynamicRoute(
         parsed.request,
         routeResolution,
         requestMemory,
-        baseRouteServices.withBodyLoader(&*bodyLoader),
+        bodyState.withLoader(baseRouteServices),
         /*closeConnectionOnError=*/true,
         /*peerAborted=*/[]() noexcept { return false; });
 
-    switch (result.outcome) {
-        case ResponseStreamDispatchOutcome::kAbortedAfterCommit:
-        case ResponseStreamDispatchOutcome::kAbortedByPeer:
-            co_return HttpResponseStreamRouteResult::kSessionFinished;
-        case ResponseStreamDispatchOutcome::kFailedBeforeCommit:
-            response = std::move(result.response);
-            keepAlive = false;
-            scannerEntry.touch();
-            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
-        case ResponseStreamDispatchOutcome::kBuffered:
-            response = std::move(result.response);
-            completeSuccessfulHttpBodyRoute(
-                scannerEntry,
-                response,
-                keepAlive,
-                requestCount,
-                options.maxRequestsPerConnection,
-                lazyBody->consumed(),
-                readBuffer,
-                usedBytes,
-                consumedBytes,
-                bufferAlreadyCompacted,
-                [&lazyBody](std::pmr::string& buffer, std::size_t& size) {
-                    lazyBody->restorePipeline(buffer, size);
-                });
-            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
-        case ResponseStreamDispatchOutcome::kStreamed:
-            break;
+    if (result.aborted()) {
+        co_return HttpResponseStreamRouteResult::sessionFinished();
+    }
+    if (result.failedBeforeCommit()) {
+        response = result.takeResponse();
+        keepAlive = false;
+        scannerEntry.touch();
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+    }
+    if (result.buffered()) {
+        response = result.takeResponse();
+        completeSuccessfulHttpBodyRoute(
+            scannerEntry,
+            response,
+            keepAlive,
+            requestCount,
+            options.maxRequestsPerConnection,
+            bodyState.consumed(),
+            readBuffer,
+            usedBytes,
+            consumedBytes,
+            bufferAlreadyCompacted,
+            [&bodyState](std::pmr::string& buffer, std::size_t& size) {
+                bodyState.restorePipeline(buffer, size);
+            });
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
     // Streamed: keep-alive only if the body was fully consumed, otherwise the
     // unread request body would desync the next request on this connection.
-    keepAlive = keepAlive && lazyBody->consumed();
+    keepAlive = keepAlive && bodyState.consumed();
     recordCompletedRequest(keepAlive, requestCount, options.maxRequestsPerConnection);
     if (keepAlive) {
-        lazyBody->restorePipeline(readBuffer, usedBytes);
+        bodyState.restorePipeline(readBuffer, usedBytes);
         consumedBytes = 0;
         bufferAlreadyCompacted = true;
         scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::kStreamDispatched;
+        co_return HttpResponseStreamRouteResult::streamDispatched();
     }
-    co_return HttpResponseStreamRouteResult::kSessionFinished;
+    co_return HttpResponseStreamRouteResult::sessionFinished();
 }
 
 }  // namespace ruvia::detail

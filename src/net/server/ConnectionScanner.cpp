@@ -18,21 +18,45 @@ namespace {
 }  // namespace
 
 void ConnectionScanner::Entry::touch() noexcept {
-    if (nowMs != nullptr) {
-        lastActiveMs = *nowMs;
+    if (nowMs_ != nullptr) {
+        lastActiveMs_ = *nowMs_;
     }
 }
 
 void ConnectionScanner::Entry::setPhase(Phase nextPhase) noexcept {
-    if (nowMs == nullptr) {
+    if (nowMs_ == nullptr) {
         return;
     }
-    const auto now = *nowMs;
-    lastActiveMs = now;
-    if (phase != nextPhase) {
-        phase = nextPhase;
-        phaseStartedMs = now;
+    const auto now = *nowMs_;
+    lastActiveMs_ = now;
+    if (phase_ != nextPhase) {
+        phase_ = nextPhase;
+        phaseStartedMs_ = now;
     }
+}
+
+std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
+    return lastActiveMs_;
+}
+
+void ConnectionScanner::Entry::setWebSocketHeartbeat(void* target, WebSocketTick tick) noexcept {
+    webSocketTarget_ = target;
+    webSocketTick_ = tick;
+}
+
+void ConnectionScanner::Entry::clearWebSocketHeartbeat(void* target) noexcept {
+    if (webSocketTarget_ == target) {
+        webSocketTarget_ = nullptr;
+        webSocketTick_ = nullptr;
+    }
+}
+
+bool ConnectionScanner::Entry::linked() const noexcept {
+    return prev_ != nullptr && next_ != nullptr;
+}
+
+bool ConnectionScanner::Entry::tickWebSocket(std::int64_t now) noexcept {
+    return webSocketTick_ != nullptr && webSocketTarget_ != nullptr && webSocketTick_(webSocketTarget_, now);
 }
 
 ConnectionScanner::Guard::Guard(ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
@@ -50,8 +74,8 @@ ConnectionScanner::Guard::~Guard() {
 
 ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options)
     : timer_(std::move(executor)), options_(options), cachedNowMs_(steadyNowMs()) {
-    sentinel_.prev = &sentinel_;
-    sentinel_.next = &sentinel_;
+    sentinel_.prev_ = &sentinel_;
+    sentinel_.next_ = &sentinel_;
 }
 
 void ConnectionScanner::start() {
@@ -79,37 +103,38 @@ void ConnectionScanner::setWorkerScanner(void* target, void (*scan)(void*) noexc
 }
 
 void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socket) noexcept {
-    entry.socket = &socket;
-    entry.nowMs = &cachedNowMs_;
+    entry.socket_ = &socket;
+    entry.nowMs_ = &cachedNowMs_;
     entry.touch();
-    entry.phaseStartedMs = entry.lastActiveMs;
-    entry.phase = Phase::kIdle;
-    entry.next = sentinel_.next;
-    entry.prev = &sentinel_;
-    sentinel_.next->prev = &entry;
-    sentinel_.next = &entry;
+    entry.phaseStartedMs_ = entry.lastActiveMs_;
+    entry.phase_ = Phase::kIdle;
+    entry.next_ = sentinel_.next_;
+    entry.prev_ = &sentinel_;
+    sentinel_.next_->prev_ = &entry;
+    sentinel_.next_ = &entry;
 }
 
 void ConnectionScanner::unregisterEntry(Entry& entry) noexcept {
-    if (entry.prev == nullptr || entry.next == nullptr) {
+    if (!entry.linked()) {
         return;
     }
 
-    entry.prev->next = entry.next;
-    entry.next->prev = entry.prev;
-    entry.prev = nullptr;
-    entry.next = nullptr;
-    entry.socket = nullptr;
-    entry.webSocketTarget = nullptr;
-    entry.webSocketTick = nullptr;
+    entry.prev_->next_ = entry.next_;
+    entry.next_->prev_ = entry.prev_;
+    entry.prev_ = nullptr;
+    entry.next_ = nullptr;
+    entry.socket_ = nullptr;
+    entry.nowMs_ = nullptr;
+    entry.webSocketTarget_ = nullptr;
+    entry.webSocketTick_ = nullptr;
 }
 
 void ConnectionScanner::closeAll() noexcept {
-    auto* current = sentinel_.next;
+    auto* current = sentinel_.next_;
     while (current != &sentinel_) {
-        auto* next = current->next;
-        if (current->socket != nullptr) {
-            closeSocket(*current->socket);
+        auto* next = current->next_;
+        if (current->socket_ != nullptr) {
+            closeSocket(*current->socket_);
         }
         current = next;
     }
@@ -144,36 +169,34 @@ void ConnectionScanner::scan() noexcept {
     for (std::size_t i = 0; i < workerScannerCount_; ++i) {
         workerScanners_[i].scan(workerScanners_[i].target);
     }
-    auto* current = sentinel_.next;
+    auto* current = sentinel_.next_;
     while (current != &sentinel_) {
-        auto* next = current->next;
-        const bool webSocketClose = current->webSocketTick != nullptr &&
-            current->webSocketTarget != nullptr &&
-            current->webSocketTick(current->webSocketTarget, now);
-        if (current->socket != nullptr && (webSocketClose || isTimedOut(*current, now))) {
-            closeSocket(*current->socket);
+        auto* next = current->next_;
+        const bool webSocketClose = current->tickWebSocket(now);
+        if (current->socket_ != nullptr && (webSocketClose || isTimedOut(*current, now))) {
+            closeSocket(*current->socket_);
         }
         current = next;
     }
 }
 
 bool ConnectionScanner::isTimedOut(const Entry& entry, std::int64_t now) const noexcept {
-    if (options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs) {
+    if (options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs) {
         return true;
     }
 
-    switch (entry.phase) {
+    switch (entry.phase_) {
         case Phase::kReadingHeader:
-            return options_.headerTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.headerTimeoutMs;
+            return options_.headerTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.headerTimeoutMs;
         case Phase::kReadingBody:
-            return options_.bodyTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.bodyTimeoutMs;
+            return options_.bodyTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.bodyTimeoutMs;
         case Phase::kWebSocket:
-            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs;
+            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs;
         case Phase::kWriting:
-            return options_.writeTimeoutMs > 0 && now - entry.phaseStartedMs >= options_.writeTimeoutMs;
+            return options_.writeTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.writeTimeoutMs;
         case Phase::kIdle:
         default:
-            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs >= options_.idleTimeoutMs;
+            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs;
     }
 }
 

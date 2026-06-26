@@ -2,6 +2,7 @@
 
 #include "HttpClientInternal.h"
 #include "HttpClientPool.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <chrono>
 #include <utility>
@@ -12,7 +13,7 @@ HttpClientRegistry::HttpClientRegistry(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const HttpClientDefinition> clients)
-    : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+    : resource_(pmrResourceOrDefault(resource)),
       pools_(resource_) {
     pools_.reserve(clients.size());
     for (const auto& def : clients) {

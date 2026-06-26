@@ -38,11 +38,11 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
     bool ready = false;
     bool timedOut = false;
     std::size_t slot = 0;
-    PoolWaiter waiter{
-        .ready = &ready,
-        .timedOut = &timedOut,
-        .index = &slot,
-        .deadline = std::chrono::steady_clock::now() + config_.acquireTimeout};
+    PoolWaiter waiter(
+        ready,
+        timedOut,
+        slot,
+        std::chrono::steady_clock::now() + config_.acquireTimeout);
     waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
@@ -55,7 +55,7 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
         }
 
         void await_suspend(std::coroutine_handle<> handle) noexcept {
-            waiter.handle = handle;
+            waiter.setHandle(handle);
         }
 
         void await_resume() const noexcept {}

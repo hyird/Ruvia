@@ -10,6 +10,7 @@
 #include <system_error>
 
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/memory/PmrResource.h"
 #include "../../core/ConfigValidation.h"
 
 namespace ruvia::detail {
@@ -38,7 +39,7 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     std::pmr::memory_resource* resource) {
     validateHttpClientConfig(config);
 
-    auto* const targetResource = resource == nullptr ? std::pmr::get_default_resource() : resource;
+    auto* const targetResource = pmrResourceOrDefault(resource);
     const auto host = std::string_view(config.host);
     const bool needsBrackets = host.find(':') != std::string_view::npos;
     const bool includePort = !httpClientUsesDefaultPort(config);

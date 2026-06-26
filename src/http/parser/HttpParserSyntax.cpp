@@ -111,6 +111,11 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
                 return RequestHeaderKind::kAcceptEncoding;
             }
             break;
+        case 16:
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
+                return RequestHeaderKind::kContentEncoding;
+            }
+            break;
         case 17:
             switch (first) {
                 case 'i':

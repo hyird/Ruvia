@@ -14,7 +14,7 @@ enum class HeaderDecodeStatus : std::uint8_t {
 
 [[nodiscard]] inline HeaderDecodeStatus http2ClassifyHeaderDecodeResult(
     HpackDecodeResult result) noexcept {
-    if (result) {
+    if (result.ok()) {
         return HeaderDecodeStatus::kOk;
     }
     return result.error == HpackError::kCallbackRejected

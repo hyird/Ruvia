@@ -19,7 +19,7 @@ class DbTransaction;
 
 class QueryResult final {
 public:
-    explicit QueryResult(std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
 
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
@@ -71,7 +71,7 @@ private:
     detail::MariaDbPool* client_{nullptr};
     std::size_t slot_{0};
     void* result_{nullptr};
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
     bool active_{false};
 };
 

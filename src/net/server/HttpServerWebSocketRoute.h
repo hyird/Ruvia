@@ -32,7 +32,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     const HttpServerOptions& options,
     std::string_view pendingFrames,
     HttpResponse& response,
@@ -48,11 +48,12 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
     bool permessageDeflate = false;
+    const auto& route = routeResolution.route();
     if (!(co_await writeWebSocketHandshake(
             stream,
             parsed.request,
             parsed.flags,
-            routeResolution.route->webSocketSubprotocols,
+            route.webSocketSubprotocols(),
             permessageDeflate))) {
         co_return HttpWebSocketRouteResult::kSessionFinished;
     }
@@ -60,7 +61,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     SocketWebSocketConnection<Stream> webSocketConnection(
         WebSocketSocketTransport<Stream>{stream},
         scannerEntry,
-        routeResolution.route->webSocketHeartbeat,
+        route.webSocketHeartbeat(),
         options.maxWebSocketMessageBytes,
         memory.resource(),
         pendingFrames,

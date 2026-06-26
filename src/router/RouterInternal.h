@@ -14,27 +14,87 @@
 
 namespace ruvia::detail {
 
-struct ControllerRouteBuilder::Impl final {
+class ControllerRouteBuilder::Impl final {
+public:
     Impl(
         Router& routerValue,
         std::pmr::string prefixValue,
         std::pmr::vector<ControllerMiddlewareDescriptor> middlewareValues)
-        : router(&routerValue),
-          prefix(std::move(prefixValue)),
-          middlewares(std::move(middlewareValues)) {}
+        : router_(routerValue),
+          prefix_(std::move(prefixValue)),
+          middlewares_(std::move(middlewareValues)) {}
 
-    Router* router;
-    std::pmr::string prefix;
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares;
+    [[nodiscard]] Router& router() const noexcept {
+        return router_;
+    }
+
+    [[nodiscard]] std::string_view prefix() const noexcept {
+        return prefix_;
+    }
+
+    [[nodiscard]] const std::pmr::vector<ControllerMiddlewareDescriptor>& middlewares() const noexcept {
+        return middlewares_;
+    }
+
+private:
+    Router& router_;
+    std::pmr::string prefix_;
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares_;
+};
+
+class RouteMiddlewareInit final {
+public:
+    using Invoke = RouteMiddleware::Invoke;
+    using Create = void* (*)();
+    using Destroy = void (*)(void*) noexcept;
+
+    constexpr RouteMiddlewareInit() noexcept = default;
+    constexpr RouteMiddlewareInit(void* target, Invoke invoke, Create create, Destroy destroy) noexcept
+        : target_(target),
+          invoke_(invoke),
+          create_(create),
+          destroy_(destroy) {}
+
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
+    }
+
+    [[nodiscard]] bool hasTarget() const noexcept {
+        return target_ != nullptr;
+    }
+
+    [[nodiscard]] bool hasFactory() const noexcept {
+        return create_ != nullptr && destroy_ != nullptr;
+    }
+
+    [[nodiscard]] void* target() const noexcept {
+        return target_;
+    }
+
+    [[nodiscard]] Invoke invoke() const noexcept {
+        return invoke_;
+    }
+
+    [[nodiscard]] Create create() const noexcept {
+        return create_;
+    }
+
+    [[nodiscard]] Destroy destroy() const noexcept {
+        return destroy_;
+    }
+
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
+    Create create_{nullptr};
+    Destroy destroy_{nullptr};
 };
 
 class RouterImpl final {
 public:
     Router& owner;
 
-    explicit RouterImpl(Router& router) noexcept
-        : owner(router),
-          routeTable_(nullptr, RouteTableDeleter{std::pmr::get_default_resource()}) {}
+    explicit RouterImpl(Router& router) noexcept;
 
     RouterImpl(const RouterImpl&) = delete;
     RouterImpl& operator=(const RouterImpl&) = delete;
@@ -51,46 +111,133 @@ public:
     void finalize();
     [[nodiscard]] const RouteTable& routeTable() const;
 
-    [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
-
     void registerRoute(
         HttpMethod method,
         std::pmr::string path,
         RouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<RouteMiddleware> middlewares = {},
+        std::pmr::vector<RouteMiddlewareInit> middlewares,
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
     void registerStreamRoute(
         HttpMethod method,
         std::pmr::string path,
         RouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        std::pmr::vector<RouteMiddleware> middlewares = {},
+        std::pmr::vector<RouteMiddlewareInit> middlewares,
         WebSocketRouteOptions webSocketOptions = {});
     void prependMiddlewares(std::span<const ControllerMiddlewareDescriptor> middlewares);
 
 private:
-    struct PendingRoute final {
-        HttpMethod method;
-        std::pmr::string path;
-        RouteHandler handler;
-        RouteStreamHandler streamHandler;
-        RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-        ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
-        bool dynamic{false};
-        std::pmr::vector<RouteMiddleware> middlewares;
-        std::pmr::string webSocketSubprotocols;
-        WebSocketHeartbeatOptions webSocketHeartbeat{};
+    class PendingRoute final {
+    public:
+        struct Init final {
+            HttpMethod method;
+            std::pmr::string path;
+            RouteHandler handler;
+            RouteStreamHandler streamHandler;
+            RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
+            ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
+            bool dynamic{false};
+            std::pmr::vector<RouteMiddleware> middlewares;
+            std::string_view webSocketSubprotocols{};
+            WebSocketHeartbeatOptions webSocketHeartbeat{};
+        };
+
+        PendingRoute(std::pmr::memory_resource* resource, Init init);
+        PendingRoute(const PendingRoute&) = delete;
+        PendingRoute& operator=(const PendingRoute&) = delete;
+        PendingRoute(PendingRoute&&) noexcept = default;
+        PendingRoute& operator=(PendingRoute&&) noexcept = default;
+
+        [[nodiscard]] HttpMethod method() const noexcept {
+            return method_;
+        }
+
+        [[nodiscard]] std::string_view path() const noexcept {
+            return path_;
+        }
+
+        [[nodiscard]] const RouteHandler& handler() const noexcept {
+            return handler_;
+        }
+
+        [[nodiscard]] const RouteStreamHandler& streamHandler() const noexcept {
+            return streamHandler_;
+        }
+
+        [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
+            return bodyMode_;
+        }
+
+        [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
+            return responseMode_;
+        }
+
+        [[nodiscard]] bool usesStreamRequestBody() const noexcept {
+            return bodyMode_ == RequestBodyMode::kStream;
+        }
+
+        [[nodiscard]] bool isBufferedResponse() const noexcept {
+            return responseMode_ == ResponseBodyMode::kBuffered;
+        }
+
+        [[nodiscard]] bool isDynamicResponse() const noexcept {
+            return responseMode_ == ResponseBodyMode::kDynamic;
+        }
+
+        [[nodiscard]] bool isWebSocketResponse() const noexcept {
+            return responseMode_ == ResponseBodyMode::kWebSocket;
+        }
+
+        [[nodiscard]] bool usesResponseStream() const noexcept {
+            return responseMode_ == ResponseBodyMode::kStream ||
+                responseMode_ == ResponseBodyMode::kSse ||
+                responseMode_ == ResponseBodyMode::kDynamic;
+        }
+
+        [[nodiscard]] bool dynamic() const noexcept {
+            return dynamic_;
+        }
+
+        [[nodiscard]] std::span<const RouteMiddleware> middlewares() const noexcept {
+            return middlewares_;
+        }
+
+        [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
+            return webSocketSubprotocols_;
+        }
+
+        [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
+            return webSocketHeartbeat_;
+        }
+
+        void setDynamic(bool dynamic) noexcept {
+            dynamic_ = dynamic;
+        }
+
+        void setMiddlewares(std::pmr::vector<RouteMiddleware> middlewares) {
+            middlewares_ = std::move(middlewares);
+        }
+
+    private:
+        HttpMethod method_;
+        std::pmr::string path_;
+        RouteHandler handler_;
+        RouteStreamHandler streamHandler_;
+        RequestBodyMode bodyMode_{RequestBodyMode::kBuffered};
+        ResponseBodyMode responseMode_{ResponseBodyMode::kBuffered};
+        bool dynamic_{false};
+        std::pmr::vector<RouteMiddleware> middlewares_;
+        std::pmr::string webSocketSubprotocols_;
+        WebSocketHeartbeatOptions webSocketHeartbeat_{};
     };
 
     void appendPendingRoute(PendingRoute route);
 
-    struct MiddlewareLifetime {
-        void* target{nullptr};
-        RouteMiddleware::Destroy destroy{nullptr};
-
+    class MiddlewareLifetime {
+    public:
         MiddlewareLifetime() noexcept = default;
-        MiddlewareLifetime(void* target, RouteMiddleware::Destroy destroy) noexcept;
+        MiddlewareLifetime(void* target, RouteMiddlewareInit::Destroy destroy) noexcept;
         MiddlewareLifetime(const MiddlewareLifetime&) = delete;
         MiddlewareLifetime& operator=(const MiddlewareLifetime&) = delete;
         MiddlewareLifetime(MiddlewareLifetime&& other) noexcept;
@@ -99,16 +246,20 @@ private:
 
     private:
         void reset() noexcept;
+
+        void* target_{nullptr};
+        RouteMiddlewareInit::Destroy destroy_{nullptr};
     };
 
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
-    [[nodiscard]] RouteMiddleware materializeMiddleware(RouteMiddleware middleware);
-    void materializeMiddlewares(std::pmr::vector<RouteMiddleware>& middlewares);
+    [[nodiscard]] RouteMiddleware materializeMiddleware(RouteMiddlewareInit middleware);
+    [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
+        std::pmr::vector<RouteMiddlewareInit> middlewares);
     [[nodiscard]] RouteTable buildRouteTable() const;
 
     struct RouteTableDeleter final {
-        std::pmr::memory_resource* resource{std::pmr::get_default_resource()};
+        std::pmr::memory_resource* resource{nullptr};
         void operator()(RouteTable* table) const noexcept;
     };
 

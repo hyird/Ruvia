@@ -25,9 +25,9 @@ namespace ruvia::detail {
 [[nodiscard]] inline bool http2IsValidWebSocketRequest(
     const Http2StreamState& stream,
     const HttpRequest& request) noexcept {
-    return stream.extendedConnectWebSocket &&
-        stream.webSocketTunnel &&
-        !stream.hasContentLength &&
+    return stream.extendedConnectWebSocket() &&
+        stream.webSocketTunnel() &&
+        !stream.hasContentLength() &&
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
 }
 

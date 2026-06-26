@@ -59,11 +59,6 @@ void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std
 }
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readThunk(void* target) {
-    return static_cast<StreamBodyReader<Stream>*>(target)->read();
-}
-
-template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
     if (chunked_) {
         co_await ensureContinue();

@@ -16,7 +16,10 @@ namespace ruvia::detail {
 void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value);
 void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::string_view value);
 void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::int64_t value);
-[[nodiscard]] std::string_view jwtFindJsonString(std::string_view json, std::string_view key);
+[[nodiscard]] std::string_view jwtFindJsonString(
+    std::string_view json,
+    std::string_view key,
+    std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::string jwtBase64UrlEncode(
     std::string_view input,

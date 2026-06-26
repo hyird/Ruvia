@@ -24,7 +24,7 @@ public:
     }
 
     [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
-        auto chunk = co_await session_.readBodyChunk(stream_.id);
+        auto chunk = co_await session_.readBodyChunk(stream_.id());
         if (!chunk) {
             co_return false;
         }

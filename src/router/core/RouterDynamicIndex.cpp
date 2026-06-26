@@ -14,45 +14,25 @@ const detail::RouteEntry* detail::RouteTable::findDynamicNode(
         if (node.route != nullptr) {
             return node.route;
         }
-        if (node.wildcardRoute != nullptr && addParam(match, "*", {})) {
+        if (node.wildcardRoute != nullptr && addParam(match, {})) {
             return node.wildcardRoute;
         }
         return nullptr;
     }
 
-    const auto originalParamCount = match.paramCount;
-    const DynamicStaticChild* staticChild = nullptr;
-    if (node.staticChildren.size() <= 4) {
-        for (const auto& child : node.staticChildren) {
-            if (child.segment == segment) {
-                staticChild = &child;
-                break;
-            }
-        }
-    } else {
-        const auto iter = std::lower_bound(
-            node.staticChildren.begin(),
-            node.staticChildren.end(),
-            segment,
-            [](const DynamicStaticChild& child, std::string_view value) {
-                return std::string_view(child.segment) < value;
-            });
-        if (iter != node.staticChildren.end() && std::string_view(iter->segment) == segment) {
-            staticChild = &*iter;
-        }
-    }
-    if (staticChild != nullptr) {
+    const auto originalParamCount = match.size();
+    if (const auto* staticChild = findDynamicStaticChild(node, segment); staticChild != nullptr) {
         if (const auto* route = findDynamicNode(*staticChild->node, rest, match); route != nullptr) {
             return route;
         }
-        match.paramCount = originalParamCount;
+        match.truncate(originalParamCount);
     }
 
-    if (node.paramChild && !segment.empty() && addParam(match, {}, segment)) {
+    if (node.paramChild && !segment.empty() && addParam(match, segment)) {
         if (const auto* route = findDynamicNode(*node.paramChild, rest, match); route != nullptr) {
             return route;
         }
-        match.paramCount = originalParamCount;
+        match.truncate(originalParamCount);
     }
 
     if (node.wildcardRoute != nullptr) {
@@ -60,22 +40,66 @@ const detail::RouteEntry* detail::RouteTable::findDynamicNode(
         if (capture.starts_with('/')) {
             capture.remove_prefix(1);
         }
-        if (addParam(match, "*", capture)) {
+        if (addParam(match, capture)) {
             return node.wildcardRoute;
         }
-        match.paramCount = originalParamCount;
+        match.truncate(originalParamCount);
     }
 
     return nullptr;
 }
 
-bool detail::RouteTable::addParam(RouteMatch& match, std::string_view name, std::string_view value) noexcept {
-    if (match.paramCount >= match.params.size()) {
-        return false;
+const detail::RouteEntry* detail::RouteTable::findDynamicNodeNoParams(
+    const DynamicNode& node,
+    std::string_view path) noexcept {
+    std::string_view segment;
+    std::string_view rest;
+    if (!splitSegment(path, segment, rest)) {
+        return node.route != nullptr ? node.route : node.wildcardRoute;
     }
 
-    match.params[match.paramCount++] = RouteParamView{name, value};
-    return true;
+    if (const auto* staticChild = findDynamicStaticChild(node, segment); staticChild != nullptr) {
+        if (const auto* route = findDynamicNodeNoParams(*staticChild->node, rest); route != nullptr) {
+            return route;
+        }
+    }
+
+    if (node.paramChild != nullptr && !segment.empty()) {
+        if (const auto* route = findDynamicNodeNoParams(*node.paramChild, rest); route != nullptr) {
+            return route;
+        }
+    }
+
+    return node.wildcardRoute;
+}
+
+const detail::RouteTable::DynamicStaticChild* detail::RouteTable::findDynamicStaticChild(
+    const DynamicNode& node,
+    std::string_view segment) noexcept {
+    if (node.staticChildren.size() <= 4) {
+        for (const auto& child : node.staticChildren) {
+            if (child.segment == segment) {
+                return &child;
+            }
+        }
+        return nullptr;
+    }
+
+    const auto iter = std::lower_bound(
+        node.staticChildren.begin(),
+        node.staticChildren.end(),
+        segment,
+        [](const DynamicStaticChild& child, std::string_view value) {
+            return std::string_view(child.segment) < value;
+        });
+    if (iter != node.staticChildren.end() && std::string_view(iter->segment) == segment) {
+        return &*iter;
+    }
+    return nullptr;
+}
+
+bool detail::RouteTable::addParam(RouteMatch& match, std::string_view value) noexcept {
+    return match.add(value);
 }
 
 bool detail::RouteTable::splitSegment(
@@ -103,28 +127,30 @@ bool detail::RouteTable::splitSegment(
     return true;
 }
 
-detail::RouteMatch detail::RouteTable::findDynamicRoute(HttpMethod method, std::string_view path) const noexcept {
-    RouteMatch match;
-    if (!isRoutableMethod(method) || !hasDynamicRoutes_[methodIndex(method)]) {
-        return match;
+const detail::RouteEntry* detail::RouteTable::findDynamicRoute(
+    HttpMethod method,
+    std::string_view path,
+    RouteMatch& match) const noexcept {
+    match.clear();
+    if (!isRoutableMethod(method)) {
+        return nullptr;
     }
 
-    match = findDynamic(method, path);
-    return match;
+    const auto methodBit = 1U << methodIndex(method);
+    return (dynamicMethodMask_ & methodBit) != 0 ? findDynamic(method, path, match) : nullptr;
 }
 
-detail::RouteMatch detail::RouteTable::findDynamic(HttpMethod method, std::string_view path) const noexcept {
-    RouteMatch match;
-    match.route = findDynamicNode(dynamicRoots_[methodIndex(method)], path, match);
-    if (match.route == nullptr || match.paramCount != match.route->paramCount) {
-        match.route = nullptr;
-        match.paramCount = 0;
-    } else {
-        for (std::size_t i = 0; i < match.paramCount; ++i) {
-            match.params[i].name = match.route->paramNames[i];
-        }
+const detail::RouteEntry* detail::RouteTable::findDynamic(
+    HttpMethod method,
+    std::string_view path,
+    RouteMatch& match) const noexcept {
+    match.clear();
+    const auto* route = findDynamicNode(dynamicRoots_[methodIndex(method)], path, match);
+    if (route == nullptr || match.size() != route->paramNames().size()) {
+        match.clear();
+        return nullptr;
     }
-    return match;
+    return route;
 }
 
 }  // namespace ruvia

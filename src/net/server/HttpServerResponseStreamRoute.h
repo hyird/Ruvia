@@ -16,10 +16,39 @@
 
 namespace ruvia::detail {
 
-enum class HttpResponseStreamRouteResult {
-    kWriteBufferedResponse,
-    kStreamDispatched,
-    kSessionFinished
+class HttpResponseStreamRouteResult final {
+public:
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult writeBufferedResponse() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kWriteBufferedResponse);
+    }
+
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult streamDispatched() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kStreamDispatched);
+    }
+
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult sessionFinished() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kSessionFinished);
+    }
+
+    [[nodiscard]] constexpr bool didDispatchStream() const noexcept {
+        return outcome_ == Outcome::kStreamDispatched;
+    }
+
+    [[nodiscard]] constexpr bool finishedSession() const noexcept {
+        return outcome_ == Outcome::kSessionFinished;
+    }
+
+private:
+    enum class Outcome {
+        kWriteBufferedResponse,
+        kStreamDispatched,
+        kSessionFinished
+    };
+
+    explicit constexpr HttpResponseStreamRouteResult(Outcome outcome) noexcept
+        : outcome_(outcome) {}
+
+    Outcome outcome_;
 };
 
 template <typename Stream>
@@ -32,19 +61,20 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     const HttpServerOptions& options,
     HttpResponse& response,
     bool& keepAlive,
     std::size_t& requestCount) {
     keepAlive = shouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
+    const auto& route = routeResolution.route();
     ResponseSink responseSink(
         stream,
         memory,
         responseHead,
         scannerEntry,
-        routeResolution.route->responseMode);
+        route.responseMode());
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(
@@ -57,26 +87,24 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         /*closeConnectionOnError=*/true,
         /*peerAborted=*/[]() noexcept { return false; });
 
-    switch (result.outcome) {
-        case ResponseStreamDispatchOutcome::kAbortedAfterCommit:
-        case ResponseStreamDispatchOutcome::kAbortedByPeer:
-            co_return HttpResponseStreamRouteResult::kSessionFinished;
-        case ResponseStreamDispatchOutcome::kFailedBeforeCommit:
-            response = std::move(result.response);
-            keepAlive = false;
-            scannerEntry.touch();
-            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
-        case ResponseStreamDispatchOutcome::kBuffered:
-            response = std::move(result.response);
-            finalizeBufferedRouteResponse(
-                response,
-                keepAlive,
-                requestCount,
-                options.maxRequestsPerConnection);
-            scannerEntry.touch();
-            co_return HttpResponseStreamRouteResult::kWriteBufferedResponse;
-        case ResponseStreamDispatchOutcome::kStreamed:
-            break;
+    if (result.aborted()) {
+        co_return HttpResponseStreamRouteResult::sessionFinished();
+    }
+    if (result.failedBeforeCommit()) {
+        response = result.takeResponse();
+        keepAlive = false;
+        scannerEntry.touch();
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+    }
+    if (result.buffered()) {
+        response = result.takeResponse();
+        finalizeBufferedRouteResponse(
+            response,
+            keepAlive,
+            requestCount,
+            options.maxRequestsPerConnection);
+        scannerEntry.touch();
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
     recordCompletedRequest(
@@ -84,9 +112,9 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         requestCount,
         options.maxRequestsPerConnection);
     if (!keepAlive) {
-        co_return HttpResponseStreamRouteResult::kSessionFinished;
+        co_return HttpResponseStreamRouteResult::sessionFinished();
     }
-    co_return HttpResponseStreamRouteResult::kStreamDispatched;
+    co_return HttpResponseStreamRouteResult::streamDispatched();
 }
 
 }  // namespace ruvia::detail

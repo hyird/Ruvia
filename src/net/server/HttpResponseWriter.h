@@ -36,7 +36,7 @@ Task<void> writeResponseWithScratch(
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {
             asio::async_write(stream, asio::buffer(headView), std::move(handler));
         });
-        if (ec || skipBody || !policy.bodyAllowed || fileBody.length == 0) {
+        if (ec || skipBody || !policy.bodyAllowed() || fileBody.length == 0) {
             co_return;
         }
 
@@ -51,7 +51,7 @@ Task<void> writeResponseWithScratch(
         co_return;
     }
 
-    const auto body = skipBody || !policy.bodyAllowed ? std::string_view{} : responseBodyBytes(response);
+    const auto body = skipBody || !policy.bodyAllowed() ? std::string_view{} : responseBodyBytes(response);
     if (body.empty()) {
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {
             asio::async_write(stream, asio::buffer(headView), std::move(handler));

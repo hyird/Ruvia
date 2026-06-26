@@ -17,7 +17,7 @@ void detail::RouteTable::buildPerfectHash() {
     std::pmr::vector<const RouteEntry*> exactRoutes(startupResource());
     exactRoutes.reserve(routes_.size());
     for (const auto& route : routes_) {
-        if (!route.dynamic) {
+        if (!route.dynamic()) {
             exactRoutes.push_back(&route);
         }
     }
@@ -40,7 +40,7 @@ void detail::RouteTable::buildPerfectHash() {
             bool collision = false;
 
             for (const auto* route : exactRoutes) {
-                const auto index = static_cast<std::size_t>(routeHash(route->method, route->path, seed)) & mask;
+                const auto index = static_cast<std::size_t>(routeHash(route->method(), route->path(), seed)) & mask;
                 if (candidateMarks[index] == generation) {
                     collision = true;
                     break;
@@ -65,20 +65,27 @@ void detail::RouteTable::buildPerfectHash() {
 }
 
 void detail::RouteTable::buildRadix() {
-    radixRoots_ = {};
+    for (auto& root : radixRoots_) {
+        root = RadixNode(resource_);
+    }
     for (const auto& route : routes_) {
-        if (route.dynamic) {
+        if (route.dynamic()) {
             continue;
         }
-        insertRadix(radixRoots_[methodIndex(route.method)], route.path, route);
+        insertRadix(radixRoots_[methodIndex(route.method())], route.path(), route);
     }
 }
 
 void detail::RouteTable::buildAllowedMethodMask() noexcept {
     allowedMethodMask_ = 0;
+    staticMethodMask_ = 0;
     for (const auto& route : routes_) {
-        if (isRoutableMethod(route.method)) {
-            allowedMethodMask_ |= 1U << methodIndex(route.method);
+        if (isRoutableMethod(route.method())) {
+            const auto methodBit = 1U << methodIndex(route.method());
+            allowedMethodMask_ |= methodBit;
+            if (!route.dynamic()) {
+                staticMethodMask_ |= methodBit;
+            }
         }
     }
     allowedMethodMask_ |= 1U << methodIndex(HttpMethod::kOptions);
@@ -104,8 +111,9 @@ void detail::RouteTable::insertRadix(RadixNode& node, std::string_view path, con
         auto oldLabel = std::move(child.label);
         auto oldChildren = std::move(child.children);
         auto* oldRoute = child.route;
+        auto* const resource = node.children.get_allocator().resource();
 
-        RadixNode suffix;
+        RadixNode suffix(resource);
         suffix.label.assign(oldLabel.data() + prefixLength, oldLabel.size() - prefixLength);
         suffix.children = std::move(oldChildren);
         suffix.route = oldRoute;
@@ -118,7 +126,7 @@ void detail::RouteTable::insertRadix(RadixNode& node, std::string_view path, con
         if (prefixLength == path.size()) {
             child.route = &route;
         } else {
-            RadixNode branch;
+            RadixNode branch(resource);
             branch.label.assign(path.data() + prefixLength, path.size() - prefixLength);
             branch.route = &route;
             child.children.push_back(std::move(branch));
@@ -126,7 +134,7 @@ void detail::RouteTable::insertRadix(RadixNode& node, std::string_view path, con
         return;
     }
 
-    RadixNode child;
+    RadixNode child(node.children.get_allocator().resource());
     child.label.assign(path.data(), path.size());
     child.route = &route;
     node.children.push_back(std::move(child));

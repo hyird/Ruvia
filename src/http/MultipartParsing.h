@@ -25,6 +25,55 @@ inline void httpAssignMultipartBoundaryMarkers(
     prefix.append(line.data(), line.size());
 }
 
+[[nodiscard]] inline std::size_t httpMultipartBoundaryLineSize(std::string_view boundary) noexcept {
+    return boundary.size() + 2;
+}
+
+[[nodiscard]] inline std::size_t httpMultipartBoundaryPrefixSize(std::string_view boundary) noexcept {
+    return boundary.size() + 4;
+}
+
+[[nodiscard]] inline bool httpMultipartBoundaryAt(
+    std::string_view input,
+    std::size_t offset,
+    std::string_view prefix,
+    std::string_view boundary) noexcept {
+    const auto markerSize = prefix.size() + boundary.size();
+    if (offset > input.size() || input.size() - offset < markerSize) {
+        return false;
+    }
+    return input.substr(offset, prefix.size()) == prefix &&
+        input.substr(offset + prefix.size(), boundary.size()) == boundary;
+}
+
+[[nodiscard]] inline std::size_t httpFindMultipartBoundaryLine(
+    std::string_view input,
+    std::string_view boundary,
+    std::size_t offset = 0) noexcept {
+    for (auto cursor = input.find("--", offset);
+         cursor != std::string_view::npos;
+         cursor = input.find("--", cursor + 1)) {
+        if (httpMultipartBoundaryAt(input, cursor, "--", boundary)) {
+            return cursor;
+        }
+    }
+    return std::string_view::npos;
+}
+
+[[nodiscard]] inline std::size_t httpFindMultipartBoundaryPrefix(
+    std::string_view input,
+    std::string_view boundary,
+    std::size_t offset = 0) noexcept {
+    for (auto cursor = input.find("\r\n--", offset);
+         cursor != std::string_view::npos;
+         cursor = input.find("\r\n--", cursor + 1)) {
+        if (httpMultipartBoundaryAt(input, cursor, "\r\n--", boundary)) {
+            return cursor;
+        }
+    }
+    return std::string_view::npos;
+}
+
 [[nodiscard]] inline std::optional<std::string_view> httpHeaderValueInBlock(
     std::string_view headers,
     std::string_view name) noexcept {
@@ -51,15 +100,8 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
-    std::optional<std::string_view> result;
-    httpVisitSemicolonParameters(disposition, [name, &result](std::string_view key, std::string_view value) noexcept {
-        if (key == name) {
-            result = httpTrimQuotes(value);
-            return false;
-        }
-        return true;
-    });
-    return result;
+    const auto value = httpFindSemicolonParameter(disposition, name);
+    return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
 }
 
 [[nodiscard]] inline bool httpIsFormDataDisposition(std::string_view disposition) noexcept {
@@ -102,13 +144,9 @@ enum class HttpMultipartBoundaryStatus {
     }
 
     contentType.remove_prefix(mediaEnd + 1);
-    httpVisitSemicolonParameters(contentType, [&boundary](std::string_view key, std::string_view value) noexcept {
-        if (httpAsciiEqualsIgnoreCase(key, "boundary")) {
-            boundary = httpTrimQuotes(value);
-            return false;
-        }
-        return true;
-    });
+    if (const auto value = httpFindSemicolonParameterIgnoreCase(contentType, "boundary")) {
+        boundary = httpTrimQuotes(*value);
+    }
     return boundary.empty()
         ? HttpMultipartBoundaryStatus::kInvalidBoundary
         : HttpMultipartBoundaryStatus::kOk;

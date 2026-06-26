@@ -18,7 +18,7 @@ bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
         closeSent_,
         awaitingPong_,
         writeActive_,
-        scannerEntry_.lastActiveMs,
+        scannerEntry_.lastActiveMs(),
         heartbeatPingSentMs_,
         now)) {
         case WebSocketHeartbeatDecision::kIdle:

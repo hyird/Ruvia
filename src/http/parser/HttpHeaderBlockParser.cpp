@@ -226,18 +226,28 @@ HttpParseError parseHttpHeaderBlock(
                 }
                 break;
             }
-            case RequestHeaderKind::kConnection:
+            case RequestHeaderKind::kConnection: {
+                auto connectionClose = block.flags.connectionClose;
+                auto connectionKeepAlive = block.flags.connectionKeepAlive;
+                auto upgrade = block.flags.upgrade;
                 httpUpdateConnectionFlags(
                     value,
-                    block.flags.connectionClose,
-                    block.flags.connectionKeepAlive,
-                    block.flags.upgrade);
+                    connectionClose,
+                    connectionKeepAlive,
+                    upgrade);
+                block.flags.connectionClose = connectionClose;
+                block.flags.connectionKeepAlive = connectionKeepAlive;
+                block.flags.upgrade = upgrade;
                 break;
-            case RequestHeaderKind::kExpect:
-                if (!httpUpdateExpectContinueFlag(value, block.flags.expectContinue)) {
+            }
+            case RequestHeaderKind::kExpect: {
+                auto expectContinue = block.flags.expectContinue;
+                if (!httpUpdateExpectContinueFlag(value, expectContinue)) {
                     return HttpParseError::kExpectationFailed;
                 }
+                block.flags.expectContinue = expectContinue;
                 break;
+            }
             case RequestHeaderKind::kSecWebSocketKey:
                 if (block.flags.secWebSocketKeyCount < 2) {
                     ++block.flags.secWebSocketKeyCount;
@@ -263,6 +273,7 @@ HttpParseError parseHttpHeaderBlock(
             case RequestHeaderKind::kAccessControlRequestHeaders:
             case RequestHeaderKind::kAccessControlRequestMethod:
             case RequestHeaderKind::kAuthorization:
+            case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kCookie:
             case RequestHeaderKind::kIfMatch:
@@ -282,7 +293,9 @@ HttpParseError parseHttpHeaderBlock(
             .name = makeSlice(nameStart, nameEnd - nameStart),
             .value = makeSlice(valueStart, valueEnd - valueStart),
             .kind = kind};
-        block.known.record(kind, index);
+        if (kind == RequestHeaderKind::kHost) {
+            block.hostHeaderIndex = static_cast<KnownRequestHeaderIndex>(index);
+        }
         cursor += 2;
     }
 

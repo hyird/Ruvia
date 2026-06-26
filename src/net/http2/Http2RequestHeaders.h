@@ -87,21 +87,10 @@ struct Http2HeaderDecodeContext final {
 [[nodiscard]] inline bool http2AppendCookieHeaderValue(
     Http2StreamState& stream,
     std::string_view value) {
-    constexpr std::string_view kCookieSeparator = "; ";
-    const auto separatorBytes = stream.hasCookie ? kCookieSeparator.size() : 0;
-    if (value.size() > kMaxHttpHeaderBytes ||
-        stream.cookie.size() > kMaxHttpHeaderBytes - separatorBytes ||
-        stream.cookie.size() + separatorBytes > kMaxHttpHeaderBytes - value.size()) {
+    if (!stream.appendRequestCookieHeaderValue(value, stream.hasCookie())) {
         return false;
     }
-
-    if (stream.hasCookie) {
-        stream.cookie.append(kCookieSeparator.data(), kCookieSeparator.size());
-    }
-    if (!value.empty()) {
-        stream.cookie.append(value.data(), value.size());
-    }
-    stream.hasCookie = true;
+    stream.markCookie();
     return true;
 }
 
@@ -114,51 +103,50 @@ struct Http2HeaderDecodeContext final {
     }
 
     auto& stream = context.stream;
-    if (name.empty() || stream.headers.full()) {
+    if (name.empty() || stream.requestHeadersFull()) {
         return false;
     }
 
     if (name.front() == ':') {
-        if (stream.regularHeaderSeen) {
+        if (stream.regularHeaderSeen()) {
             return false;
         }
         if (name == ":method") {
-            if (stream.hasMethod) {
+            if (stream.hasMethod()) {
                 return false;
             }
-            stream.method = parseMethod(value);
-            stream.hasMethod = true;
+            stream.setRequestMethod(parseMethod(value));
+            stream.markMethod();
             return true;
         }
         if (name == ":protocol") {
-            if (stream.hasProtocol || value.empty()) {
+            if (stream.hasProtocol() || value.empty()) {
                 return false;
             }
-            stream.protocolIsWebSocket = value == "websocket";
-            stream.hasProtocol = true;
+            stream.setProtocol(value == "websocket");
             return true;
         }
         if (name == ":scheme") {
-            if (stream.hasScheme) {
+            if (stream.hasScheme()) {
                 return false;
             }
-            stream.hasScheme = true;
+            stream.markScheme();
             return true;
         }
         if (name == ":authority") {
-            if (stream.hasAuthority) {
+            if (stream.hasAuthority()) {
                 return false;
             }
-            stream.authority.assign(value.data(), value.size());
-            stream.hasAuthority = true;
+            stream.assignRequestAuthority(value);
+            stream.markAuthority();
             return true;
         }
         if (name == ":path") {
-            if (stream.hasPath || value.empty()) {
+            if (stream.hasPath() || value.empty()) {
                 return false;
             }
-            stream.path.assign(value.data(), value.size());
-            stream.hasPath = true;
+            stream.assignRequestPath(value);
+            stream.markPath();
             return true;
         }
         return false;
@@ -167,13 +155,13 @@ struct Http2HeaderDecodeContext final {
     if (!http2IsValidRegularRequestHeader(name, value)) {
         return false;
     }
-    stream.regularHeaderSeen = true;
+    stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
     if (kind == RequestHeaderKind::kHost) {
-        if (stream.hasHost) {
+        if (stream.hasHost()) {
             return false;
         }
-        stream.hasHost = true;
+        stream.markHost();
     }
     if (kind == RequestHeaderKind::kCookie) {
         return http2AppendCookieHeaderValue(stream, value);
@@ -184,13 +172,11 @@ struct Http2HeaderDecodeContext final {
         if (ec != std::errc{} || ptr != value.data() + value.size()) {
             return false;
         }
-        if (stream.hasContentLength && stream.contentLength != parsed) {
+        if (!stream.setContentLength(parsed)) {
             return false;
         }
-        stream.contentLength = parsed;
-        stream.hasContentLength = true;
     }
-    return stream.headers.append(name, value, kind);
+    return stream.appendRequestHeader(name, value, kind);
 }
 
 [[nodiscard]] inline bool http2OnDecodedTrailer(

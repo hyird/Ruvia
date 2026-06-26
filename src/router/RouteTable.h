@@ -6,17 +6,18 @@
 #include <exception>
 #include <memory_resource>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "../http/ContextServices.h"
 #include "ruvia/http/Context.h"
 #include "RouteResolution.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Next.h"
 #include "ruvia/http/WebSocket.h"
+#include "ruvia/memory/PmrResource.h"
 #include "ruvia/router/Router.h"
 
 namespace ruvia::detail {
@@ -32,119 +33,236 @@ struct NextAccess final {
     }
 };
 
-struct RouteHandler final {
-    void* target{nullptr};
-    Next::Invoke invoke{nullptr};
+class RouteHandler final {
+public:
+    using Invoke = Next::Invoke;
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr;
+    constexpr RouteHandler() noexcept = default;
+    constexpr RouteHandler(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
+
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
 
     [[nodiscard]] Task<HttpResponse> operator()(Context& context) const {
-        if (invoke == nullptr) {
-            throw std::logic_error("route handler is empty");
-        }
-        return invoke(target, context);
+        return invoke_(target_, context);
     }
+
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
 };
 
-struct RouteStreamHandler final {
+class RouteStreamHandler final {
+public:
     using Invoke = Task<void> (*)(void*, Context&);
 
-    void* target{nullptr};
-    Invoke invoke{nullptr};
+    constexpr RouteStreamHandler() noexcept = default;
+    constexpr RouteStreamHandler(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr;
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
+
     [[nodiscard]] Task<void> operator()(Context& context) const {
-        if (invoke == nullptr) {
-            throw std::logic_error("route stream handler is empty");
-        }
-        return invoke(target, context);
+        return invoke_(target_, context);
     }
+
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
 };
 
-struct RouteMiddleware final {
+class RouteMiddleware final {
+public:
     using Invoke = Task<HttpResponse> (*)(void*, Context&, const Next&);
-    using Create = void* (*)();
-    using Destroy = void (*)(void*) noexcept;
 
-    void* target{nullptr};
-    Invoke invoke{nullptr};
-    Create create{nullptr};
-    Destroy destroy{nullptr};
+    constexpr RouteMiddleware() noexcept = default;
+    constexpr RouteMiddleware(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr && (target != nullptr || create != nullptr);
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
 
     [[nodiscard]] Task<HttpResponse> operator()(Context& context, const Next& next) const {
-        return invoke(target, context, next);
-    }
-};
-
-struct StreamDispatchResult final {
-    HttpResponse response;
-    bool streamHandled{false};
-};
-
-struct RouteServices final {
-    DbRegistry* db{nullptr};
-    RedisRegistry* redis{nullptr};
-    BodyReader* bodyReader{nullptr};
-    RequestBodyLoader* bodyLoader{nullptr};
-    HttpClientRegistry* httpClients{nullptr};
-
-    [[nodiscard]] RouteServices withBodyReader(BodyReader* value) const noexcept {
-        auto services = *this;
-        services.bodyReader = value;
-        return services;
+        return invoke_(target_, context, next);
     }
 
-    [[nodiscard]] RouteServices withBodyLoader(RequestBodyLoader* value) const noexcept {
-        auto services = *this;
-        services.bodyLoader = value;
-        return services;
-    }
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
 };
 
-struct RouteEntry final {
-    HttpMethod method;
-    std::pmr::string path;
-    RouteHandler handler;
-    RouteStreamHandler streamHandler;
-    RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-    ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
-    bool dynamic{false};
-    std::array<std::string_view, kMaxRouteParams> paramNames{};
-    std::size_t paramCount{0};
-    std::size_t middlewareOffset{0};
-    std::size_t middlewareCount{0};
-    std::pmr::string webSocketSubprotocols;
-    WebSocketHeartbeatOptions webSocketHeartbeat{};
+enum class RouteStreamDispatchOutcome {
+    kBufferedResponse,
+    kStreamHandled
+};
+
+class StreamDispatchResult final {
+public:
+    StreamDispatchResult(HttpResponse response, RouteStreamDispatchOutcome outcome)
+        : response_(std::move(response)),
+          outcome_(outcome) {}
+
+    [[nodiscard]] RouteStreamDispatchOutcome outcome() const noexcept {
+        return outcome_;
+    }
+
+    [[nodiscard]] HttpResponse takeResponse() noexcept {
+        return std::move(response_);
+    }
+
+private:
+    HttpResponse response_;
+    RouteStreamDispatchOutcome outcome_{RouteStreamDispatchOutcome::kBufferedResponse};
+};
+
+class RouteEntry final {
+public:
+    struct Init final {
+        HttpMethod method;
+        std::string_view path;
+        RouteHandler handler;
+        RouteStreamHandler streamHandler;
+        RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
+        ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
+        bool dynamic{false};
+        std::size_t middlewareOffset{0};
+        std::size_t middlewareCount{0};
+        std::string_view webSocketSubprotocols{};
+        WebSocketHeartbeatOptions webSocketHeartbeat{};
+    };
+
+    RouteEntry(std::pmr::memory_resource* resource, Init init);
+    RouteEntry(const RouteEntry&) = delete;
+    RouteEntry& operator=(const RouteEntry&) = delete;
+    RouteEntry(RouteEntry&&) noexcept = default;
+    RouteEntry& operator=(RouteEntry&&) noexcept = default;
+
+    [[nodiscard]] HttpMethod method() const noexcept {
+        return method_;
+    }
+
+    [[nodiscard]] std::string_view path() const noexcept {
+        return path_;
+    }
+
+    [[nodiscard]] const RouteHandler& handler() const noexcept {
+        return handler_;
+    }
+
+    [[nodiscard]] const RouteStreamHandler& streamHandler() const noexcept {
+        return streamHandler_;
+    }
+
+    [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
+        return bodyMode_;
+    }
+
+    [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
+        return responseMode_;
+    }
+
+    [[nodiscard]] bool usesStreamRequestBody() const noexcept {
+        return bodyMode_ == RequestBodyMode::kStream;
+    }
+
+    [[nodiscard]] bool isBufferedResponse() const noexcept {
+        return responseMode_ == ResponseBodyMode::kBuffered;
+    }
+
+    [[nodiscard]] bool isDynamicResponse() const noexcept {
+        return responseMode_ == ResponseBodyMode::kDynamic;
+    }
+
+    [[nodiscard]] bool isWebSocketResponse() const noexcept {
+        return responseMode_ == ResponseBodyMode::kWebSocket;
+    }
+
+    [[nodiscard]] bool usesResponseStream() const noexcept {
+        return responseMode_ == ResponseBodyMode::kStream ||
+            responseMode_ == ResponseBodyMode::kSse ||
+            responseMode_ == ResponseBodyMode::kDynamic;
+    }
+
+    [[nodiscard]] bool dynamic() const noexcept {
+        return dynamic_;
+    }
+
+    [[nodiscard]] std::span<const std::string_view> paramNames() const noexcept {
+        return paramNames_;
+    }
+
+    [[nodiscard]] std::size_t middlewareOffset() const noexcept {
+        return middlewareOffset_;
+    }
+
+    [[nodiscard]] std::size_t middlewareCount() const noexcept {
+        return middlewareCount_;
+    }
+
+    [[nodiscard]] bool hasMiddleware() const noexcept {
+        return middlewareCount_ != 0;
+    }
+
+    [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
+        return webSocketSubprotocols_;
+    }
+
+    [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
+        return webSocketHeartbeat_;
+    }
+
+    void setMiddlewareRange(std::size_t offset, std::size_t count) noexcept {
+        middlewareOffset_ = offset;
+        middlewareCount_ = count;
+    }
+
+    void setParamNames(std::span<const std::string_view> names) noexcept {
+        paramNames_ = names;
+    }
+
+private:
+    HttpMethod method_;
+    std::pmr::string path_;
+    RouteHandler handler_;
+    RouteStreamHandler streamHandler_;
+    RequestBodyMode bodyMode_{RequestBodyMode::kBuffered};
+    ResponseBodyMode responseMode_{ResponseBodyMode::kBuffered};
+    bool dynamic_{false};
+    std::span<const std::string_view> paramNames_{};
+    std::size_t middlewareOffset_{0};
+    std::size_t middlewareCount_{0};
+    std::pmr::string webSocketSubprotocols_;
+    WebSocketHeartbeatOptions webSocketHeartbeat_{};
 };
 
 class RouteTable final {
 public:
-    RouteTable() = default;
+    explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;
     RouteTable& operator=(const RouteTable&) = delete;
     RouteTable(RouteTable&&) noexcept = default;
     RouteTable& operator=(RouteTable&&) noexcept = default;
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
-    [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
-    [[nodiscard]] RouteResolution resolve(HttpMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] RouteResolution resolve(const HttpRequest& request, RouteMatch& match) const noexcept;
+    [[nodiscard]] RouteResolution resolve(HttpMethod method, std::string_view path, RouteMatch& match) const noexcept;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         RequestMemory& memory,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     // Never throws: dispatches a resolved route and turns any failure — a
     // handler exception (already handled inside dispatch) or one escaping the
     // routing machinery itself — into an error response. Both the HTTP/1.1 and
@@ -157,31 +275,31 @@ public:
         const RouteResolution& resolution,
         RequestMemory& memory,
         bool closeConnectionOnError,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
         RequestMemory& memory,
         HttpErrorInfo error,
         bool closeConnection,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     Task<HttpResponse> handleException(
         const HttpRequest& request,
         RequestMemory& memory,
         std::exception_ptr exception,
         bool closeConnection,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
     Task<StreamDispatchResult> dispatchWebSocket(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
         WebSocket& webSocket,
-        RouteServices services = {}) const;
+        ContextServices services = {}) const;
 
 private:
     friend class RouterImpl;
@@ -193,6 +311,13 @@ private:
     };
 
     struct RadixNode {
+        RadixNode()
+            : RadixNode(nullptr) {}
+
+        explicit RadixNode(std::pmr::memory_resource* resource)
+            : label(detail::pmrResourceOrDefault(resource)),
+              children(detail::pmrResourceOrDefault(resource)) {}
+
         std::pmr::string label;
         std::pmr::vector<RadixNode> children;
         const RouteEntry* route{nullptr};
@@ -206,6 +331,12 @@ private:
     };
 
     struct DynamicNode {
+        DynamicNode()
+            : DynamicNode(nullptr) {}
+
+        explicit DynamicNode(std::pmr::memory_resource* resource)
+            : staticChildren(detail::pmrResourceOrDefault(resource)) {}
+
         std::pmr::vector<DynamicStaticChild> staticChildren;
         DynamicNode* paramChild{nullptr};
         const RouteEntry* route{nullptr};
@@ -222,7 +353,7 @@ private:
         const RouteTable* table{nullptr};
         const RouteEntry* route{nullptr};
         std::size_t index{0};
-        bool* streamHandled{nullptr};
+        RouteStreamDispatchOutcome* outcome{nullptr};
     };
 
     void buildPerfectHash();
@@ -244,15 +375,22 @@ private:
     static void insertRadix(RadixNode& node, std::string_view path, const RouteEntry& route);
     [[nodiscard]] static const RouteEntry* findRadixNode(const RadixNode& root, std::string_view path) noexcept;
     [[nodiscard]] static std::size_t dynamicNodeUpperBound(std::string_view path) noexcept;
+    [[nodiscard]] static std::size_t dynamicParamNameUpperBound(std::string_view path) noexcept;
     void insertDynamic(DynamicNode& root, RouteEntry& route);
+    void appendDynamicParamName(RouteEntry& route, std::string_view name);
     static void sortDynamicNode(DynamicNode& node);
     [[nodiscard]] static const RouteEntry* findDynamicNode(
         const DynamicNode& node,
         std::string_view path,
         RouteMatch& match) noexcept;
+    [[nodiscard]] static const RouteEntry* findDynamicNodeNoParams(
+        const DynamicNode& node,
+        std::string_view path) noexcept;
+    [[nodiscard]] static const DynamicStaticChild* findDynamicStaticChild(
+        const DynamicNode& node,
+        std::string_view segment) noexcept;
     [[nodiscard]] static bool addParam(
         RouteMatch& match,
-        std::string_view name,
         std::string_view value) noexcept;
     [[nodiscard]] static bool splitSegment(
         std::string_view path,
@@ -261,10 +399,16 @@ private:
     [[nodiscard]] static bool sameDynamicShape(std::string_view left, std::string_view right) noexcept;
 
     [[nodiscard]] const RouteEntry* findStaticRoute(HttpMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] RouteMatch findDynamicRoute(HttpMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findDynamicRoute(
+        HttpMethod method,
+        std::string_view path,
+        RouteMatch& match) const noexcept;
     [[nodiscard]] const RouteEntry* findPerfect(HttpMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findRadix(HttpMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] RouteMatch findDynamic(HttpMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findDynamic(
+        HttpMethod method,
+        std::string_view path,
+        RouteMatch& match) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
@@ -273,22 +417,16 @@ private:
         std::size_t index,
         Context& context) const;
     [[nodiscard]] static Task<HttpResponse> invokeMiddlewareContinuation(void* target, Context& context);
-    [[nodiscard]] Task<HttpResponse> invokeStreamRoute(
-        const RouteEntry& route,
-        Context& context,
-        bool& streamHandled) const;
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        RouteServices services,
-        ResponseStreamWriter* responseStream,
-        WebSocket* webSocket) const;
+        ContextServices services) const;
     [[nodiscard]] Task<HttpResponse> invokeStreamMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context,
-        bool& streamHandled) const;
+        RouteStreamDispatchOutcome& outcome) const;
     [[nodiscard]] static Task<HttpResponse> invokeStreamMiddlewareContinuation(void* target, Context& context);
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
@@ -299,13 +437,16 @@ private:
         std::exception_ptr exception,
         bool closeConnection) const;
 
+    std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;
     std::pmr::vector<RouteMiddleware> middlewareFrames_;
     std::pmr::vector<PerfectSlot> exactSlots_;
     std::array<RadixNode, kRoutableMethodCount> radixRoots_{};
     std::array<DynamicNode, kRoutableMethodCount> dynamicRoots_{};
-    std::pmr::vector<DynamicNode> dynamicNodeArena_{std::pmr::get_default_resource()};
-    std::array<bool, kRoutableMethodCount> hasDynamicRoutes_{};
+    std::pmr::vector<DynamicNode> dynamicNodeArena_;
+    std::pmr::vector<std::string_view> dynamicParamNames_;
+    std::uint32_t staticMethodMask_{0};
+    std::uint32_t dynamicMethodMask_{0};
     std::uint32_t allowedMethodMask_{0};
     std::uint64_t exactSeed_{0};
     std::size_t exactMask_{0};

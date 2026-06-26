@@ -74,21 +74,22 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
 }
 
 JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, std::pmr::memory_resource* resource) {
+    auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto parts = detail::jwtSplitToken(token);
     const auto expected = detail::jwtHmacSign(
         options.algorithm,
         options.secret,
         parts.signingInput,
-        std::pmr::get_default_resource());
+        resolved);
     if (!detail::jwtConstantTimeEquals(expected, parts.signature)) {
         throw std::runtime_error("JWT signature verification failed");
     }
-    const auto header = detail::jwtBase64UrlDecode(parts.header, std::pmr::get_default_resource());
-    if (detail::jwtFindJsonString(header, "alg") != detail::jwtAlgorithmName(options.algorithm)) {
+    const auto header = detail::jwtBase64UrlDecode(parts.header, resolved);
+    if (detail::jwtFindJsonString(header, "alg", resolved) != detail::jwtAlgorithmName(options.algorithm)) {
         throw std::runtime_error("JWT algorithm mismatch");
     }
-    const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, std::pmr::get_default_resource());
-    auto payload = JwtPayloadAccess::decodePayloadJson(payloadJson, resource);
+    const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);
+    auto payload = JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
     const auto now = std::chrono::system_clock::now();
     if (options.requireExpiration && !payload.expiresAt()) {
         throw std::runtime_error("JWT token is missing exp claim");
@@ -112,9 +113,10 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
 }
 
 JwtPayload jwtDecodeUnverified(std::string_view token, std::pmr::memory_resource* resource) {
+    auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto parts = detail::jwtSplitToken(token);
-    const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, std::pmr::get_default_resource());
-    return JwtPayloadAccess::decodePayloadJson(payloadJson, resource);
+    const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);
+    return JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
 }
 
 std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept {

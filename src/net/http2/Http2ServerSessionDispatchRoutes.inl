@@ -1,10 +1,6 @@
 template <typename Stream>
-RouteServices Http2ServerSession<Stream>::routeServices(BodyReader* bodyReader) const noexcept {
-    return RouteServices{
-        .db = databases_,
-        .redis = redis_,
-        .bodyReader = bodyReader,
-        .httpClients = httpClients_};
+ContextServices Http2ServerSession<Stream>::routeServices() const noexcept {
+    return ContextServices(databases_, redis_, httpClients_);
 }
 
 template <typename Stream>
@@ -13,6 +9,7 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2WebSocketRoute(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
+    ContextServices services,
     HttpResponse& response) {
     if (!http2IsValidWebSocketRequest(stream, request)) {
         response = co_await routes_.handleError(
@@ -20,17 +17,18 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2WebSocketRoute(
             requestMemory,
             HttpErrorInfo{.statusCode = 400, .message = "invalid http2 websocket request"},
             false,
-            routeServices());
+            services);
         co_return false;
     }
 
+    const auto& route = resolution.route();
     co_await writeHttp2WebSocketHandshake(
         stream,
-        http2ChooseWebSocketSubprotocol(request, resolution.route->webSocketSubprotocols));
+        http2ChooseWebSocketSubprotocol(request, route.webSocketSubprotocols()));
     Http2WebSocketConnection<Http2ServerSession> webSocketConnection(
         Http2WebSocketTransport<Http2ServerSession>{*this, stream},
         scannerEntry_,
-        resolution.route->webSocketHeartbeat,
+        route.webSocketHeartbeat(),
         options_.maxWebSocketMessageBytes,
         memory_.resource());
     co_await runWebSocketSession(
@@ -40,7 +38,7 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2WebSocketRoute(
         request,
         resolution,
         requestMemory,
-        routeServices());
+        services);
     co_return true;
 }
 
@@ -50,42 +48,31 @@ Task<bool> Http2ServerSession<Stream>::dispatchHttp2ResponseStreamRoute(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
-    BodyReader* bodyReader,
+    ContextServices services,
     HttpResponse& response) {
-    Http2ResponseStreamSink<Http2ServerSession> responseSink(*this, stream, resolution.route->responseMode);
+    const auto& route = resolution.route();
+    Http2ResponseStreamSink<Http2ServerSession> responseSink(*this, stream, route.responseMode());
     auto result = co_await dispatchResponseStreamWith(
         responseSink,
         routes_,
         request,
         resolution,
         requestMemory,
-        routeServices(bodyReader),
+        services,
         /*closeConnectionOnError=*/false,
-        /*peerAborted=*/[&stream]() noexcept { return stream.reset; });
+        /*peerAborted=*/[&stream]() noexcept { return stream.isReset(); });
 
-    switch (result.outcome) {
-        case ResponseStreamDispatchOutcome::kStreamed:
-        case ResponseStreamDispatchOutcome::kAbortedByPeer:
-            co_return true;
-        case ResponseStreamDispatchOutcome::kAbortedAfterCommit:
-            co_await sendRstStream(stream.id, Http2ErrorCode::kInternalError);
-            stream.reset = true;
-            co_return true;
-        case ResponseStreamDispatchOutcome::kBuffered:
-        case ResponseStreamDispatchOutcome::kFailedBeforeCommit:
-            response = std::move(result.response);
-            co_return false;
+    if (result.streamed() || result.abortedByPeer()) {
+        co_return true;
+    }
+    if (result.abortedAfterCommit()) {
+        co_await sendRstStream(stream.id(), Http2ErrorCode::kInternalError);
+        stream.markReset();
+        co_return true;
+    }
+    if (result.hasBufferedResponse()) {
+        response = result.takeResponse();
+        co_return false;
     }
     co_return false;
-}
-
-template <typename Stream>
-Task<HttpResponse> Http2ServerSession<Stream>::dispatchHttp2BufferedRoute(
-    Http2StreamState&,
-    const HttpRequest& request,
-    const RouteResolution& resolution,
-    RequestMemory& requestMemory,
-    BodyReader* bodyReader) {
-    co_return co_await routes_.dispatchBuffered(
-        request, resolution, requestMemory, false, routeServices(bodyReader));
 }

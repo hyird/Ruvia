@@ -16,6 +16,7 @@ enum class RequestKnownHeader : std::uint8_t {
     kAccessControlRequestMethod,
     kAuthorization,
     kConnection,
+    kContentEncoding,
     kContentLength,
     kContentType,
     kCookie,
@@ -109,11 +110,22 @@ struct HttpRequestAccess final {
         return true;
     }
 
+    static bool addHeader(HttpRequest& request, HttpHeaderView header, std::size_t knownSlot) noexcept {
+        if (!addHeader(request, header)) {
+            return false;
+        }
+        setKnownHeaderSlot(request, knownSlot, header.value);
+        return true;
+    }
+
     static void setKnownHeaderSlot(
         HttpRequest& request,
         std::size_t slot,
         std::string_view value) noexcept {
         if (slot >= kCachedHeaderSlots) {
+            return;
+        }
+        if ((request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0) {
             return;
         }
         request.cachedHeaders_[slot] = value;

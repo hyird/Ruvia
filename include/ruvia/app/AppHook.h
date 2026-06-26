@@ -61,10 +61,6 @@ public:
         reset();
     }
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return target_ != nullptr && invoke_ != nullptr;
-    }
-
     void operator()() const {
         if (invoke_ == nullptr) {
             throw std::logic_error("app hook is empty");
@@ -109,7 +105,7 @@ private:
         invoke_ = std::exchange(other.invoke_, nullptr);
         destroy_ = std::exchange(other.destroy_, nullptr);
         clone_ = std::exchange(other.clone_, nullptr);
-        resource_ = std::exchange(other.resource_, std::pmr::get_default_resource());
+        resource_ = std::exchange(other.resource_, nullptr);
     }
 
     void reset() noexcept {
@@ -126,7 +122,7 @@ private:
     Invoke invoke_{nullptr};
     Destroy destroy_{nullptr};
     Clone clone_{nullptr};
-    std::pmr::memory_resource* resource_{std::pmr::get_default_resource()};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 }  // namespace ruvia

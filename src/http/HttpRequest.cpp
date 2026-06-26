@@ -4,6 +4,7 @@
 #include "parser/HttpParserSyntax.h"
 #include "HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <charconv>
 #include <system_error>
@@ -17,6 +18,9 @@ static_assert(
 static_assert(
     static_cast<std::size_t>(detail::RequestHeaderKind::kAuthorization) ==
     static_cast<std::size_t>(detail::RequestKnownHeader::kAuthorization) + 1);
+static_assert(
+    static_cast<std::size_t>(detail::RequestHeaderKind::kContentEncoding) ==
+    static_cast<std::size_t>(detail::RequestKnownHeader::kContentEncoding) + 1);
 static_assert(
     static_cast<std::size_t>(detail::RequestHeaderKind::kUserAgent) ==
     static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 1);
@@ -98,11 +102,8 @@ std::optional<std::uint64_t> RequestValue::toUInt64() const noexcept {
     return parseInteger<std::uint64_t>(value_);
 }
 
-std::optional<std::pmr::string> HttpRequest::decodedPath() const {
-    if (!detail::hasUrlEncoding(path_, detail::UrlDecodeMode::kPercent)) {
-        return std::pmr::string(path_.data(), path_.size(), resource());
-    }
-    return detail::decodeUrlComponentToString(path_, resource(), detail::UrlDecodeMode::kPercent);
+RequestValue HttpRequest::decodedPath() const noexcept {
+    return RequestValue(path_, resource(), RequestValue::DecodeMode::kPercent);
 }
 
 std::string_view HttpRequest::header(std::string_view name) const noexcept {
@@ -122,33 +123,20 @@ std::string_view HttpRequest::header(std::string_view name) const noexcept {
 }
 
 QueryValue HttpRequest::query(std::string_view name) const noexcept {
-    std::optional<std::string_view> result;
-    (void)detail::visitUrlEncodedPairs(queryString_, [&](std::string_view key, std::string_view value) {
-        if (detail::urlComponentEquals(key, name, detail::UrlDecodeMode::kForm)) {
-            result = value;
-            return false;
-        }
-        return true;
-    });
-
-    return QueryValue(result, resource(), RequestValue::DecodeMode::kForm);
+    return QueryValue(
+        detail::findUrlEncodedValue(queryString_, name, detail::UrlDecodeMode::kForm),
+        resource(),
+        RequestValue::DecodeMode::kForm);
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
-    const auto input = detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
-    std::optional<std::string_view> result;
-    detail::httpVisitSemicolonParameters(input, [name, &result](std::string_view key, std::string_view value) noexcept {
-        if (key == name) {
-            result = value;
-            return false;
-        }
-        return true;
-    });
-    return result;
+    return detail::httpFindSemicolonParameter(
+        detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie),
+        name);
 }
 
 std::pmr::memory_resource* HttpRequest::resource() const noexcept {
-    return resource_ == nullptr ? std::pmr::get_default_resource() : resource_;
+    return detail::pmrResourceOrDefault(resource_);
 }
 
 }  // namespace ruvia

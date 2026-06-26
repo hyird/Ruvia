@@ -5,21 +5,61 @@
 #include <utility>
 
 #include "RouterUtils.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
+
+detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
+    : method_(init.method),
+      path_(init.path, detail::pmrResourceOrDefault(resource)),
+      handler_(init.handler),
+      streamHandler_(init.streamHandler),
+      bodyMode_(init.bodyMode),
+      responseMode_(init.responseMode),
+      dynamic_(init.dynamic),
+      middlewareOffset_(init.middlewareOffset),
+      middlewareCount_(init.middlewareCount),
+      webSocketSubprotocols_(
+          init.webSocketSubprotocols,
+          path_.get_allocator().resource()),
+      webSocketHeartbeat_(init.webSocketHeartbeat) {}
+
+detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
+    : resource_(detail::pmrResourceOrDefault(resource)),
+      routes_(resource_),
+      middlewareFrames_(resource_),
+      exactSlots_(resource_),
+      radixRoots_{
+          RadixNode(resource_),
+          RadixNode(resource_),
+          RadixNode(resource_),
+          RadixNode(resource_),
+          RadixNode(resource_),
+          RadixNode(resource_),
+          RadixNode(resource_)},
+      dynamicRoots_{
+          DynamicNode(resource_),
+          DynamicNode(resource_),
+          DynamicNode(resource_),
+          DynamicNode(resource_),
+          DynamicNode(resource_),
+          DynamicNode(resource_),
+          DynamicNode(resource_)},
+      dynamicNodeArena_(resource_),
+      dynamicParamNames_(resource_) {}
 
 void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingRoute> routes) {
     for (std::size_t i = 0; i < routes.size(); ++i) {
         const auto& left = routes[i];
-        if (!left.dynamic) {
+        if (!left.dynamic()) {
             continue;
         }
         for (std::size_t j = i + 1; j < routes.size(); ++j) {
             const auto& right = routes[j];
-            if (!right.dynamic || left.method != right.method) {
+            if (!right.dynamic() || left.method() != right.method()) {
                 continue;
             }
-            if (RouteTable::sameDynamicShape(left.path, right.path)) {
+            if (RouteTable::sameDynamicShape(left.path(), right.path())) {
                 throw std::invalid_argument("conflicting dynamic route shape");
             }
         }
@@ -27,63 +67,61 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
 }
 
 detail::RouteTable detail::RouterImpl::buildRouteTable() const {
-    RouteTable table;
+    RouteTable table(startupResource());
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
-        if (route.method == HttpMethod::kGet && route.responseMode == ResponseBodyMode::kBuffered) {
+        if (route.method() == HttpMethod::kGet && route.isBufferedResponse()) {
             ++headShadowCandidateCount;
         }
-        middlewareCount += route.middlewares.size();
+        middlewareCount += route.middlewares().size();
     }
     table.routes_.reserve(pendingRoutes_.size() + headShadowCandidateCount);
     table.middlewareFrames_.reserve(middlewareCount);
 
     for (const auto& pending : pendingRoutes_) {
-        RouteEntry route{
-            .method = pending.method,
-            .path = pending.path,
-            .handler = pending.handler,
-            .streamHandler = pending.streamHandler,
-            .bodyMode = pending.bodyMode,
-            .responseMode = pending.responseMode,
-            .dynamic = pending.dynamic,
-            .paramNames = {},
-            .paramCount = 0,
+        const auto pendingMiddlewares = pending.middlewares();
+        RouteEntry route(table.resource_, RouteEntry::Init{
+            .method = pending.method(),
+            .path = pending.path(),
+            .handler = pending.handler(),
+            .streamHandler = pending.streamHandler(),
+            .bodyMode = pending.bodyMode(),
+            .responseMode = pending.responseMode(),
+            .dynamic = pending.dynamic(),
             .middlewareOffset = 0,
             .middlewareCount = 0,
-            .webSocketSubprotocols = pending.webSocketSubprotocols,
-            .webSocketHeartbeat = pending.webSocketHeartbeat};
-        route.middlewareOffset = table.middlewareFrames_.size();
-        route.middlewareCount = pending.middlewares.size();
+            .webSocketSubprotocols = pending.webSocketSubprotocols(),
+            .webSocketHeartbeat = pending.webSocketHeartbeat()});
+        route.setMiddlewareRange(table.middlewareFrames_.size(), pendingMiddlewares.size());
         table.middlewareFrames_.insert(
             table.middlewareFrames_.end(),
-            pending.middlewares.begin(),
-            pending.middlewares.end());
+            pendingMiddlewares.begin(),
+            pendingMiddlewares.end());
         table.routes_.push_back(std::move(route));
     }
 
     const auto originalRouteCount = table.routes_.size();
     const auto conflictsWithHeadRoute = [](const RouteEntry& source, const RouteEntry& headRoute) noexcept {
-        if (source.dynamic && headRoute.dynamic) {
-            return RouteTable::sameDynamicShape(source.path, headRoute.path);
+        if (source.dynamic() && headRoute.dynamic()) {
+            return RouteTable::sameDynamicShape(source.path(), headRoute.path());
         }
-        if (!source.dynamic && !headRoute.dynamic) {
-            return headRoute.path == source.path;
+        if (!source.dynamic() && !headRoute.dynamic()) {
+            return headRoute.path() == source.path();
         }
         return false;
     };
 
-    std::pmr::vector<const RouteEntry*> explicitHeadRoutes(detail::startupResource());
+    std::pmr::vector<const RouteEntry*> explicitHeadRoutes(table.resource_);
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
-        if (table.routes_[i].method == HttpMethod::kHead) {
+        if (table.routes_[i].method() == HttpMethod::kHead) {
             explicitHeadRoutes.push_back(&table.routes_[i]);
         }
     }
 
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
-        if (source.method != HttpMethod::kGet || source.responseMode != ResponseBodyMode::kBuffered) {
+        if (source.method() != HttpMethod::kGet || !source.isBufferedResponse()) {
             continue;
         }
         bool conflictsWithExistingHead = false;
@@ -96,20 +134,18 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         if (conflictsWithExistingHead) {
             continue;
         }
-        RouteEntry shadow{
+        RouteEntry shadow(table.resource_, RouteEntry::Init{
             .method = HttpMethod::kHead,
-            .path = source.path,
-            .handler = source.handler,
-            .streamHandler = source.streamHandler,
-            .bodyMode = source.bodyMode,
-            .responseMode = source.responseMode,
-            .dynamic = source.dynamic,
-            .paramNames = source.paramNames,
-            .paramCount = source.paramCount,
-            .middlewareOffset = source.middlewareOffset,
-            .middlewareCount = source.middlewareCount,
-            .webSocketSubprotocols = source.webSocketSubprotocols,
-            .webSocketHeartbeat = source.webSocketHeartbeat};
+            .path = source.path(),
+            .handler = source.handler(),
+            .streamHandler = source.streamHandler(),
+            .bodyMode = source.bodyMode(),
+            .responseMode = source.responseMode(),
+            .dynamic = source.dynamic(),
+            .middlewareOffset = source.middlewareOffset(),
+            .middlewareCount = source.middlewareCount(),
+            .webSocketSubprotocols = source.webSocketSubprotocols(),
+            .webSocketHeartbeat = source.webSocketHeartbeat()});
         table.routes_.push_back(std::move(shadow));
     }
 

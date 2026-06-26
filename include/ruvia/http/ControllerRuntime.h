@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/ControllerDescriptors.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/ContextModel.h"
 #include "ruvia/http/MiddlewareRuntime.h"
@@ -30,7 +31,7 @@ protected:
     }
 
     [[nodiscard]] static RuviaMiddlewareList ruviaControllerGroupMiddlewares() {
-        return {};
+        return RuviaMiddlewareList(detail::controllerStoreResource());
     }
 
     [[nodiscard]] static detail::ControllerRouteBuilder ruviaCreateRouteGroup(
@@ -50,23 +51,23 @@ protected:
     static void ruviaAddRoute(
         const detail::ControllerRouteBuilder& scope,
         HttpMethod method,
-        std::pmr::string path,
+        std::string_view path,
         detail::ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
         RuviaMiddlewareList middlewares) {
-        scope.registerRoute(method, std::move(path), std::move(handler), bodyMode, std::move(middlewares));
+        scope.registerRoute(method, path, std::move(handler), bodyMode, std::move(middlewares));
     }
 
     static void ruviaAddDynamicRoute(
         const detail::ControllerRouteBuilder& scope,
         HttpMethod method,
-        std::pmr::string path,
+        std::string_view path,
         detail::ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
         RuviaMiddlewareList middlewares) {
         scope.registerRoute(
             method,
-            std::move(path),
+            path,
             std::move(handler),
             bodyMode,
             std::move(middlewares),
@@ -76,14 +77,14 @@ protected:
     static void ruviaAddStreamRoute(
         const detail::ControllerRouteBuilder& scope,
         HttpMethod method,
-        std::pmr::string path,
+        std::string_view path,
         detail::ControllerRouteStreamHandler handler,
         ResponseBodyMode responseMode,
         RuviaMiddlewareList middlewares,
         WebSocketRouteOptions webSocketOptions = {}) {
         scope.registerStreamRoute(
             method,
-            std::move(path),
+            path,
             std::move(handler),
             responseMode,
             std::move(middlewares),
@@ -93,13 +94,13 @@ protected:
     template <typename T, Task<HttpResponse> (T::*Handler)(Context&)>
     [[nodiscard]] static detail::ControllerRouteHandler bind(
         T* instance) noexcept {
-        return detail::ControllerRouteHandler{instance, &Controller::invoke<T, Handler>};
+        return detail::ControllerRouteHandler(instance, &Controller::invoke<T, Handler>);
     }
 
     template <typename T, Task<void> (T::*Handler)(Context&)>
     [[nodiscard]] static detail::ControllerRouteStreamHandler bindStream(
         T* instance) noexcept {
-        return detail::ControllerRouteStreamHandler{instance, &Controller::invokeStream<T, Handler>};
+        return detail::ControllerRouteStreamHandler(instance, &Controller::invokeStream<T, Handler>);
     }
 
     template <typename MiddlewareT>
@@ -109,7 +110,12 @@ protected:
 
     template <typename... MiddlewareTs>
     [[nodiscard]] static RuviaMiddlewareList ruviaMakeMiddlewares() {
-        return {ruviaMakeMiddleware<MiddlewareTs>()...};
+        RuviaMiddlewareList middlewares(detail::controllerStoreResource());
+        if constexpr (sizeof...(MiddlewareTs) > 0) {
+            middlewares.reserve(sizeof...(MiddlewareTs));
+            (middlewares.push_back(ruviaMakeMiddleware<MiddlewareTs>()), ...);
+        }
+        return middlewares;
     }
 
 private:

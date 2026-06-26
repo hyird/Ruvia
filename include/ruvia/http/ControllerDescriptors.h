@@ -80,26 +80,56 @@ private:
     std::unique_ptr<ControllerStoreState, ControllerStoreStateDeleter> state_;
 };
 
-struct ControllerRouteHandler final {
+class ControllerRouteHandler final {
+public:
     using Invoke = Task<HttpResponse> (*)(void*, Context&);
 
-    void* target{nullptr};
-    Invoke invoke{nullptr};
+    constexpr ControllerRouteHandler() noexcept = default;
+    constexpr ControllerRouteHandler(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr;
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
+
+    [[nodiscard]] void* target() const noexcept {
+        return target_;
+    }
+
+    [[nodiscard]] Invoke invoke() const noexcept {
+        return invoke_;
+    }
+
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
 };
 
-struct ControllerRouteStreamHandler final {
+class ControllerRouteStreamHandler final {
+public:
     using Invoke = Task<void> (*)(void*, Context&);
 
-    void* target{nullptr};
-    Invoke invoke{nullptr};
+    constexpr ControllerRouteStreamHandler() noexcept = default;
+    constexpr ControllerRouteStreamHandler(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
 
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return invoke != nullptr;
+    [[nodiscard]] bool valid() const noexcept {
+        return invoke_ != nullptr;
     }
+
+    [[nodiscard]] void* target() const noexcept {
+        return target_;
+    }
+
+    [[nodiscard]] Invoke invoke() const noexcept {
+        return invoke_;
+    }
+
+private:
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
 };
 
 class ControllerRouteBuilder final {
@@ -107,7 +137,8 @@ public:
     ControllerRouteBuilder(
         Router& router,
         std::string_view prefix,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = {});
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()));
     ControllerRouteBuilder(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder& operator=(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder(const ControllerRouteBuilder&) = delete;
@@ -116,24 +147,34 @@ public:
 
     void registerRoute(
         HttpMethod method,
-        std::pmr::string path,
+        std::string_view path,
         ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = {},
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()),
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered) const;
     void registerStreamRoute(
         HttpMethod method,
-        std::pmr::string path,
+        std::string_view path,
         ControllerRouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = {},
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()),
         WebSocketRouteOptions webSocketOptions = {}) const;
     [[nodiscard]] ControllerRouteBuilder createScope(
         std::string_view prefix,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares = {}) const;
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource())) const;
 
 private:
-    struct Impl;
+    struct OwnedPrefixTag final {};
+    ControllerRouteBuilder(
+        Router& router,
+        std::pmr::string prefix,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+        OwnedPrefixTag);
+
+    class Impl;
     struct ImplDeleter final {
         void operator()(Impl* impl) const noexcept;
     };

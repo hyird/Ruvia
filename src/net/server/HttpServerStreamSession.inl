@@ -9,10 +9,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
-    const RouteServices baseRouteServices{
-        .db = &databases_,
-        .redis = &redis_,
-        .httpClients = &httpClients_};
+    const ContextServices baseRouteServices(&databases_, &redis_, &httpClients_);
     std::pmr::string remoteAddress(memory_.allocator<char>());
     std::error_code remoteEc;
     const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
@@ -57,6 +54,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
         auto& responseHead = workSet->responseHead;
         auto& fileChunk = workSet->fileChunk;
         auto& compressionScratch = workSet->compressionScratch;
+        auto& routeMatch = workSet->routeMatch;
         auto& routeResolution = workSet->routeResolution;
 
         std::optional<RequestMemory> requestMemoryStorage;
@@ -100,8 +98,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             }
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
             parser.parseHeaders(bufferView, parsed, headerSearchOffset);
+            HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
             if (parsed.status == HttpParseStatus::kComplete) {
-                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 HttpRequestAccess::setTransport(
                     parsed.request,
                     remoteAddress,
@@ -180,7 +178,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         co_return;
                     }
                 }
-                routeResolution = routes.resolve(parsed.request);
+                routeResolution = routes.resolve(parsed.request, routeMatch);
                 if (!routeResolution.found()) {
                     consumedBytes = parsed.headerBytes;
                     if (contentLengthExceedsLimit(parsed.contentLength, options_.maxBufferedBodyBytes)) {
@@ -215,8 +213,9 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     break;
                 }
 
+                const auto& route = routeResolution.route();
                 const auto maxRequestBodyBytes = requestBodyByteLimit(
-                    routeResolution.bodyMode, options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
+                    route.bodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
                 if (contentLengthExceedsLimit(parsed.contentLength, maxRequestBodyBytes)) {
                     consumedBytes = parsed.headerBytes;
                     response = co_await routes.handleError(
@@ -229,7 +228,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     break;
                 }
 
-                if (routeResolution.route->responseMode == ResponseBodyMode::kWebSocket) {
+                if (route.isWebSocketResponse()) {
                     consumedBytes = parsed.headerBytes;
                     const auto pendingFrames = std::string_view(
                         readBuffer.data() + parsed.headerBytes,
@@ -253,7 +252,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     co_return;
                 }
 
-                if (routeResolution.route->responseMode == ResponseBodyMode::kDynamic) {
+                if (route.isDynamicResponse()) {
                     const auto dynamicResult = co_await dispatchHttpDynamicRoute(
                         stream,
                         memory_,
@@ -272,19 +271,19 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         requestCount,
                         consumedBytes,
                         bufferAlreadyCompacted);
-                    if (dynamicResult == HttpResponseStreamRouteResult::kSessionFinished) {
+                    if (dynamicResult.finishedSession()) {
                         co_return;
                     }
                     // kStreamDispatched already restored the pipeline and set
                     // bufferAlreadyCompacted; kWriteBufferedResponse falls through
                     // to the buffered write path below.
-                    if (dynamicResult == HttpResponseStreamRouteResult::kStreamDispatched) {
+                    if (dynamicResult.didDispatchStream()) {
                         responseStreamDispatched = true;
                     }
                     break;
                 }
 
-                if (routeResolution.route->responseMode != ResponseBodyMode::kBuffered) {
+                if (route.usesResponseStream()) {
                     consumedBytes = parsed.headerBytes;
                     const auto streamResult = co_await dispatchHttpResponseStreamRoute(
                         stream,
@@ -300,16 +299,16 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         response,
                         keepAlive,
                         requestCount);
-                    if (streamResult == HttpResponseStreamRouteResult::kSessionFinished) {
+                    if (streamResult.finishedSession()) {
                         co_return;
                     }
-                    if (streamResult == HttpResponseStreamRouteResult::kStreamDispatched) {
+                    if (streamResult.didDispatchStream()) {
                         responseStreamDispatched = true;
                         bufferAlreadyCompacted = false;
                     }
                     break;
                 }
-                if (routeResolution.bodyMode == RequestBodyMode::kStream) {
+                if (route.usesStreamRequestBody()) {
                     co_await dispatchHttpStreamBodyRoute(
                         stream,
                         memory_,
@@ -358,7 +357,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         co_return;
                     }
                 }
-                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
@@ -375,7 +373,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             growReadBuffer(readBuffer, usedBytes, parsed);
             if (usedBytes == readBuffer.size()) {
                 constexpr auto error = HttpParseError::kHeaderTooLarge;
-                HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,

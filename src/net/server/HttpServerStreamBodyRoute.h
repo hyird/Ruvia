@@ -27,7 +27,7 @@ Task<void> dispatchHttpStreamBodyRoute(
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
-    RouteServices baseRouteServices,
+    ContextServices baseRouteServices,
     const HttpServerOptions& options,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
@@ -52,24 +52,28 @@ Task<void> dispatchHttpStreamBodyRoute(
             options.maxStreamBodyBytes,
             scannerEntry,
             (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
-        bodyReader.emplace(&*streamReader, &StreamBodyReader<Stream>::readThunk);
+        emplaceBodyReaderFacade(bodyReader, *streamReader);
         response = co_await routes.dispatch(
             parsed.request,
             routeResolution,
             requestMemory,
-            baseRouteServices.withBodyReader(&*bodyReader));
+            baseRouteServices.withBodyReader(*bodyReader));
     } catch (...) {
         exception = std::current_exception();
     }
 
     if (exception != nullptr) {
+        auto exceptionServices = baseRouteServices;
+        if (bodyReader) {
+            exceptionServices = exceptionServices.withBodyReader(*bodyReader);
+        }
         co_await completeFailedHttpBodyRoute(
             scannerEntry,
             exception,
             parsed,
             routes,
             requestMemory,
-            baseRouteServices.withBodyReader(bodyReader ? &*bodyReader : nullptr),
+            exceptionServices,
             response,
             keepAlive);
         co_return;

@@ -1,6 +1,6 @@
 template <typename Stream>
 Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) {
-    stream.dispatchStarted = true;
+    stream.markDispatchStarted();
     const auto requestStart = std::chrono::steady_clock::now();
     std::array<std::byte, kRequestArenaStackBytes> arenaBlock;
     std::optional<RequestMemory> requestMemoryStorage;
@@ -8,6 +8,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         requestMemoryStorage,
         memory_,
         std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
+    const auto baseServices = routeServices();
 
     HttpRequest request;
     if (!Http2RequestBuilder::build(stream, request, requestMemory.resource())) {
@@ -16,7 +17,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
             requestMemory,
             HttpErrorInfo{.statusCode = 400, .message = "invalid http2 request headers"},
             false,
-            routeServices());
+            baseServices);
         co_await writeResponse(stream, response);
         co_return;
     }
@@ -34,7 +35,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
                 requestMemory,
                 HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
                 false,
-                routeServices());
+                baseServices);
             setRetryAfterSeconds(response, options_.rateLimit.window);
             co_await writeResponse(stream, response);
             recordHttpAccess(
@@ -43,66 +44,89 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
             co_return;
         }
     }
-    const auto& resolution = stream.routeResolution;
+    const auto& resolution = stream.routeResolution();
     const auto maxBody = requestBodyByteLimit(
-        resolution.bodyMode, options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
-    if (maxBody != 0 && stream.body.size() > maxBody) {
+        stream.bodyMode(),
+        options_.maxStreamBodyBytes,
+        options_.maxBufferedBodyBytes);
+    if (maxBody != 0 && stream.requestBodySize() > maxBody) {
         auto response = co_await routes_.handleError(
             request,
             requestMemory,
             HttpErrorInfo{.statusCode = 413, .message = "request body is too large"},
             false,
-            routeServices());
+            baseServices);
         co_await writeResponse(stream, response);
         co_return;
     }
 
     std::optional<Http2RequestBodyReader<Http2ServerSession>> streamReaderStorage;
     std::optional<BodyReader> bodyReaderStorage;
-    if (resolution.bodyMode == RequestBodyMode::kStream) {
-        streamReaderStorage.emplace(*this, stream.id);
-        bodyReaderStorage.emplace(
-            &*streamReaderStorage,
-            &Http2RequestBodyReader<Http2ServerSession>::readThunk);
+    if (stream.usesStreamRequestBody()) {
+        streamReaderStorage.emplace(*this, stream.id());
+        emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
     }
-    auto* bodyReader = bodyReaderStorage ? &*bodyReaderStorage : nullptr;
+    auto dispatchServices = baseServices;
+    if (bodyReaderStorage) {
+        dispatchServices = dispatchServices.withBodyReader(*bodyReaderStorage);
+    }
 
     HttpResponse response(requestMemory.resource());
-    const bool foundRoute = resolution.found() && resolution.route != nullptr;
-    if (foundRoute && resolution.route->responseMode == ResponseBodyMode::kWebSocket) {
-        if (co_await dispatchHttp2WebSocketRoute(stream, request, resolution, requestMemory, response)) {
-            co_return;
-        }
-    } else if (foundRoute && resolution.route->responseMode != ResponseBodyMode::kBuffered) {
-        if (co_await dispatchHttp2ResponseStreamRoute(
-                stream,
+    if (resolution.found()) {
+        const auto& route = resolution.route();
+        if (route.isWebSocketResponse()) {
+            if (co_await dispatchHttp2WebSocketRoute(
+                    stream,
+                    request,
+                    resolution,
+                    requestMemory,
+                    baseServices,
+                    response)) {
+                co_return;
+            }
+        } else if (route.usesResponseStream()) {
+            if (co_await dispatchHttp2ResponseStreamRoute(
+                    stream,
+                    request,
+                    resolution,
+                    requestMemory,
+                    dispatchServices,
+                    response)) {
+                // Streamed/committed on the wire; the buffered tail below is skipped,
+                // so log the completed streamed response here (status 200).
+                recordHttpAccess(
+                    options_.accessLog, request, remoteAddress_,
+                    response.statusCode(), requestStart, true);
+                co_return;
+            }
+        } else {
+            response = co_await routes_.dispatchBuffered(
                 request,
                 resolution,
                 requestMemory,
-                bodyReader,
-                response)) {
-            // Streamed/committed on the wire; the buffered tail below is skipped,
-            // so log the completed streamed response here (status 200).
-            recordHttpAccess(
-                options_.accessLog, request, remoteAddress_,
-                response.statusCode(), requestStart, true);
-            co_return;
+                false,
+                dispatchServices);
         }
     } else {
-        response = co_await dispatchHttp2BufferedRoute(stream, request, resolution, requestMemory, bodyReader);
+        response = co_await routes_.dispatchBuffered(
+            request,
+            resolution,
+            requestMemory,
+            false,
+            dispatchServices);
     }
 
-    if (stream.reset) {
+    if (stream.isReset()) {
         co_return;
     }
     const auto responsePreparation = prepareBufferedHttpResponse(
         request,
         response,
         options_,
-        stream.body);
+        stream.responseCompressionScratch());
     co_await writeResponse(stream, response, responsePreparation.skipBody);
     if (responsePreparation.bodyBorrowsCompressionScratch) {
-        stream.body.clear();
+        stream.clearRequestBody();
     }
     recordHttpAccess(
         options_.accessLog, request, remoteAddress_,

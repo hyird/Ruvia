@@ -28,9 +28,7 @@ void Http2ServerSession<Stream>::closeStream(
         closedStreams_.remember(streamId, source);
         return;
     }
-    stream->reset = true;
-    stream->bodyEnded = true;
-    stream->closeSource = source;
+    stream->markClosed(source);
     removeReadyStream(streamId);
     resumeBodyWaiter(*stream);
     if (dispatchDepth_ == 0) {
@@ -50,20 +48,22 @@ void Http2ServerSession<Stream>::cleanupClosedStreams() noexcept {
         return;
     }
     streams_.removeReset([this](const Http2StreamState& stream) noexcept {
-        const auto streamId = stream.id;
-        closedStreams_.remember(streamId, stream.closeSource == Http2StreamCloseSource::kNone
+        const auto streamId = stream.id();
+        const auto closeSource = stream.closeSource();
+        closedStreams_.remember(streamId, closeSource == Http2StreamCloseSource::kNone
             ? Http2StreamCloseSource::kLocal
-            : stream.closeSource);
+            : closeSource);
         removeReadyStream(streamId);
     });
 }
 
 template <typename Stream>
 void Http2ServerSession<Stream>::queueReady(std::uint32_t streamId) {
-    if (auto* stream = findStream(streamId); stream != nullptr && !stream->queued && !stream->reset) {
+    if (auto* stream = findStream(streamId); stream != nullptr && stream->tryMarkQueued()) {
         if (readyQueue_.push(streamId)) {
-            stream->queued = true;
+            return;
         }
+        stream->clearQueued();
     }
 }
 
@@ -79,16 +79,13 @@ std::uint32_t Http2ServerSession<Stream>::popReadyStream() noexcept {
 
 template <typename Stream>
 void Http2ServerSession<Stream>::launchStreamDispatch(Http2StreamState& stream) {
-    if (stream.dispatchStarted || stream.reset) {
-        stream.queued = false;
+    if (!stream.tryStartDispatch()) {
         return;
     }
-    stream.queued = false;
-    stream.dispatchStarted = true;
     ++activeDispatches_;
     asio::co_spawn(
         socket_.get_executor(),
-        taskAsAwaitable(dispatchStreamTask(stream.id)),
+        taskAsAwaitable(dispatchStreamTask(stream.id())),
         asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
 }
 
@@ -96,7 +93,7 @@ template <typename Stream>
 Task<void> Http2ServerSession<Stream>::dispatchStreamTask(std::uint32_t streamId) {
     try {
         auto* stream = findStream(streamId);
-        if (stream != nullptr && !stream->reset) {
+        if (stream != nullptr && !stream->isReset()) {
             Http2DispatchGuard<Http2ServerSession> dispatchGuard(*this);
             co_await dispatchStream(*stream);
         }
@@ -114,9 +111,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStreamTask(std::uint32_t streamId
 template <typename Stream>
 void Http2ServerSession<Stream>::finishStreamDispatch(std::uint32_t streamId) noexcept {
     if (auto* stream = findStream(streamId); stream != nullptr) {
-        stream->reset = true;
-        stream->bodyEnded = true;
-        stream->closeSource = Http2StreamCloseSource::kLocal;
+        stream->markClosed(Http2StreamCloseSource::kLocal);
         removeReadyStream(streamId);
         resumeBodyWaiter(*stream);
     } else {
@@ -168,7 +163,7 @@ template <typename Stream>
 Task<std::optional<std::string_view>> Http2ServerSession<Stream>::readBodyChunk(std::uint32_t streamId) {
     for (;;) {
         auto* stream = findStream(streamId);
-        if (stream == nullptr || stream->reset) {
+        if (stream == nullptr || stream->isReset()) {
             co_return std::nullopt;
         }
         if (auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
@@ -177,7 +172,7 @@ Task<std::optional<std::string_view>> Http2ServerSession<Stream>::readBodyChunk(
         if (http2HasQueuedStreamBodyChunk(*stream)) {
             continue;
         }
-        if (stream->bodyEnded) {
+        if (stream->bodyEnded()) {
             co_return std::nullopt;
         }
         co_await Http2BodyChunkAwaiter<Http2ServerSession>(*this, streamId);

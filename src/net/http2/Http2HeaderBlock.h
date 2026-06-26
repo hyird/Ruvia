@@ -9,15 +9,16 @@
 namespace ruvia::detail {
 
 inline void http2ResetHeaderBlock(Http2StreamState& stream) {
-    clearPmrStringRetainingSmall(stream.headerBlock);
+    clearPmrStringRetainingSmall(stream.requestHeaderBlock());
 }
 
 [[nodiscard]] inline bool http2AppendHeaderBlock(Http2StreamState& stream, std::string_view fragment) {
-    const auto current = stream.headerBlock.size();
+    auto& headerBlock = stream.requestHeaderBlock();
+    const auto current = headerBlock.size();
     if (current > kMaxHttpHeaderBytes || fragment.size() > kMaxHttpHeaderBytes - current) {
         return false;
     }
-    stream.headerBlock.append(fragment.data(), fragment.size());
+    headerBlock.append(fragment.data(), fragment.size());
     return true;
 }
 

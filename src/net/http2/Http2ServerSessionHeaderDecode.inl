@@ -6,46 +6,53 @@ Task<bool> Http2ServerSession<Stream>::handleHeaderDecodeFailure(
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kCompressionError, "invalid HPACK block");
         co_return false;
     }
-    co_await sendRstStream(stream.id, Http2ErrorCode::kProtocolError);
-    stream.reset = true;
-    stream.closeSource = Http2StreamCloseSource::kLocal;
+    co_await sendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+    stream.markReset();
     co_return true;
 }
 
 template <typename Stream>
 HeaderDecodeStatus Http2ServerSession<Stream>::decodeHeaderBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
-        return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
-    });
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(),
+        &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedInitialHeader(
+                *static_cast<Http2HeaderDecodeContext*>(target),
+                name,
+                value);
+        });
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
-    if (!stream.hasMethod) {
+    if (!stream.hasMethod()) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (stream.hasProtocol) {
-        if (stream.method != HttpMethod::kConnect ||
-            !stream.protocolIsWebSocket ||
-            !stream.hasScheme ||
-            !stream.hasPath ||
-            !stream.hasAuthority) {
+    if (stream.hasProtocol()) {
+        if (stream.requestMethod() != HttpMethod::kConnect ||
+            !stream.protocolIsWebSocket() ||
+            !stream.hasScheme() ||
+            !stream.hasPath() ||
+            !stream.hasAuthority()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        stream.extendedConnectWebSocket = true;
-    } else if (stream.method == HttpMethod::kConnect) {
-        if (!stream.hasAuthority || stream.hasScheme || stream.hasPath) {
+        stream.markExtendedConnectWebSocket();
+    } else if (stream.requestMethod() == HttpMethod::kConnect) {
+        if (!stream.hasAuthority() ||
+            stream.hasScheme() ||
+            stream.hasPath()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        stream.standardConnect = true;
-    } else if (!stream.hasScheme || !stream.hasPath) {
+        stream.markStandardConnect();
+    } else if (!stream.hasScheme() || !stream.hasPath()) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (stream.hasContentLength && stream.body.size() > stream.contentLength) {
+    if (stream.bufferedBodyExceedsContentLength()) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    stream.headersDecoded = true;
+    stream.markHeadersDecoded();
     resolveStreamRoute(stream);
     return HeaderDecodeStatus::kOk;
 }
@@ -53,25 +60,31 @@ HeaderDecodeStatus Http2ServerSession<Stream>::decodeHeaderBlock(Http2StreamStat
 template <typename Stream>
 HeaderDecodeStatus Http2ServerSession<Stream>::finishTrailerBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
-        return http2OnDecodedTrailer(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
-    });
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(),
+        &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedTrailer(
+                *static_cast<Http2HeaderDecodeContext*>(target),
+                name,
+                value);
+        });
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
-    if (stream.hasContentLength && stream.receivedBodyBytes != stream.contentLength) {
+    if (!stream.bodyLengthComplete()) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    stream.endStream = true;
-    stream.bodyEnded = true;
-    if (stream.bodyMode == RequestBodyMode::kStream) {
-        if (!stream.dispatchStarted) {
-            queueReady(stream.id);
+    stream.markPeerEndStream();
+    stream.markBodyEnded();
+    if (stream.usesStreamRequestBody()) {
+        if (!stream.dispatchStarted()) {
+            queueReady(stream.id());
         }
         resumeBodyWaiter(stream);
     } else {
-        queueReady(stream.id);
+        queueReady(stream.id());
     }
     return HeaderDecodeStatus::kOk;
 }
@@ -79,9 +92,15 @@ HeaderDecodeStatus Http2ServerSession<Stream>::finishTrailerBlock(Http2StreamSta
 template <typename Stream>
 HeaderDecodeStatus Http2ServerSession<Stream>::decodeRefusedHeaderBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
-    const auto result = decoder_.decode(stream.headerBlock, &context, [](void* target, std::string_view name, std::string_view value) {
-        return http2OnDecodedInitialHeader(*static_cast<Http2HeaderDecodeContext*>(target), name, value);
-    });
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(),
+        &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedInitialHeader(
+                *static_cast<Http2HeaderDecodeContext*>(target),
+                name,
+                value);
+        });
     http2ResetHeaderBlock(stream);
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
@@ -91,11 +110,11 @@ HeaderDecodeStatus Http2ServerSession<Stream>::decodeRefusedHeaderBlock(Http2Str
 
 template <typename Stream>
 void Http2ServerSession<Stream>::queueInitialStreamIfReady(Http2StreamState& stream) {
-    if (stream.endStream || stream.standardConnect) {
-        stream.bodyEnded = true;
-        queueReady(stream.id);
-    } else if (stream.bodyMode == RequestBodyMode::kStream) {
-        queueReady(stream.id);
+    if (stream.peerEndStream() || stream.standardConnect()) {
+        stream.markBodyEnded();
+        queueReady(stream.id());
+    } else if (stream.usesStreamRequestBody()) {
+        queueReady(stream.id());
     }
 }
 
@@ -104,17 +123,21 @@ void Http2ServerSession<Stream>::resolveStreamRoute(Http2StreamState& stream) no
     const auto method = Http2RequestBuilder::requestMethod(stream);
     const auto path = Http2RequestBuilder::requestPath(stream);
     if (method == HttpMethod::kUnknown || path.empty()) {
-        stream.routeResolution = {};
-        stream.bodyMode = RequestBodyMode::kBuffered;
+        stream.resetRoutingToBuffered();
         return;
     }
-    stream.routeResolution = routes_.resolve(method, path);
-    stream.bodyMode = stream.routeResolution.bodyMode;
-    if (stream.extendedConnectWebSocket &&
-        stream.routeResolution.found() &&
-        stream.routeResolution.route != nullptr &&
-        stream.routeResolution.route->responseMode == ResponseBodyMode::kWebSocket) {
-        stream.webSocketTunnel = true;
-        stream.bodyMode = RequestBodyMode::kStream;
+    auto& match = stream.routeMatch();
+    stream.setRouteResolution(routes_.resolve(method, path, match));
+    const auto& resolution = stream.routeResolution();
+    if (!resolution.found()) {
+        stream.setBodyMode(RequestBodyMode::kBuffered);
+        return;
+    }
+
+    const auto& route = resolution.route();
+    stream.setBodyMode(route.bodyMode());
+    if (stream.extendedConnectWebSocket() && route.isWebSocketResponse()) {
+        stream.markWebSocketTunnel();
+        stream.setBodyMode(RequestBodyMode::kStream);
     }
 }
