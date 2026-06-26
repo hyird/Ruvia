@@ -114,6 +114,36 @@ private:
     std::optional<HttpResponse> response_;
 };
 
+class Http2SessionFlow final {
+public:
+    [[nodiscard]] static constexpr Http2SessionFlow keepRunning() noexcept {
+        return Http2SessionFlow(State::kKeepRunning);
+    }
+
+    [[nodiscard]] static constexpr Http2SessionFlow stopRunning() noexcept {
+        return Http2SessionFlow(State::kStopRunning);
+    }
+
+    [[nodiscard]] constexpr bool shouldContinue() const noexcept {
+        return state_ == State::kKeepRunning;
+    }
+
+    [[nodiscard]] constexpr bool shouldStop() const noexcept {
+        return state_ == State::kStopRunning;
+    }
+
+private:
+    enum class State : std::uint8_t {
+        kKeepRunning,
+        kStopRunning,
+    };
+
+    constexpr explicit Http2SessionFlow(State state) noexcept
+        : state_(state) {}
+
+    State state_;
+};
+
 template <typename Stream>
 class Http2ServerSession final {
     template <typename Session>
@@ -189,32 +219,32 @@ private:
 
     Task<void> sendDataWindowUpdates(std::uint32_t streamId, std::uint32_t increment);
 
-    Task<bool> processFrame(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processFrame(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processSettings(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processSettings(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> applySettingsPayload(std::string_view payload);
+    Task<Http2SessionFlow> applySettingsPayload(std::string_view payload);
 
-    Task<bool> processPing(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processPing(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processPriority(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processPriority(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processRstStream(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processRstStream(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processHeaders(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processHeaders(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processTrailerHeaders(
+    Task<Http2SessionFlow> processTrailerHeaders(
         Http2StreamState& stream,
         const Http2FrameHeader& header,
         std::string_view payload);
 
-    Task<bool> processContinuation(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processContinuation(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> processData(const Http2FrameHeader& header, std::string_view payload);
+    Task<Http2SessionFlow> processData(const Http2FrameHeader& header, std::string_view payload);
 
-    Task<bool> handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status);
+    Task<Http2SessionFlow> handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status);
 
     [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
 

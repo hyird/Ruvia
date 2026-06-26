@@ -1,14 +1,14 @@
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::handleHeaderDecodeFailure(
+Task<Http2SessionFlow> Http2ServerSession<Stream>::handleHeaderDecodeFailure(
     Http2StreamState& stream,
     HeaderDecodeStatus status) {
     if (status == HeaderDecodeStatus::kCompressionError) {
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kCompressionError, "invalid HPACK block");
-        co_return false;
+        co_return Http2SessionFlow::stopRunning();
     }
     co_await sendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
     stream.markReset();
-    co_return true;
+    co_return Http2SessionFlow::keepRunning();
 }
 
 template <typename Stream>

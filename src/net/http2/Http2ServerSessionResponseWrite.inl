@@ -37,7 +37,7 @@ Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& strea
             if (!(co_await readFrame(header, payload))) {
                 co_return false;
             }
-            if (!(co_await processFrame(header, payload))) {
+            if ((co_await processFrame(header, payload)).shouldStop()) {
                 co_return false;
             }
             consumeInput(kHttp2FrameHeaderBytes + header.length);
