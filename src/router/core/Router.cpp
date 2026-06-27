@@ -45,7 +45,7 @@ void detail::RouteTable::setErrorHandler(HttpErrorHandler handler) noexcept {
 
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(
     void* targetValue,
-    RouteMiddlewareInit::Destroy destroyValue) noexcept
+    ControllerMiddlewareDescriptor::Destroy destroyValue) noexcept
     : target_(targetValue), destroy_(destroyValue) {}
 
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(MiddlewareLifetime&& other) noexcept
@@ -76,14 +76,11 @@ void detail::RouterImpl::MiddlewareLifetime::reset() noexcept {
     destroy_ = nullptr;
 }
 
-detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(RouteMiddlewareInit middleware) {
+detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMiddlewareDescriptor middleware) {
     if (!middleware.valid()) {
         throw std::invalid_argument("middleware must be invocable");
     }
-    if (middleware.hasTarget()) {
-        return RouteMiddleware(middleware.target(), middleware.invoke());
-    }
-    if (!middleware.hasFactory()) {
+    if (middleware.create() == nullptr || middleware.destroy() == nullptr) {
         throw std::invalid_argument("middleware must be constructible");
     }
 
@@ -93,11 +90,11 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(RouteMiddlewar
 }
 
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
-    std::pmr::vector<RouteMiddlewareInit> middlewares) {
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) {
     std::pmr::vector<RouteMiddleware> frames(startupResource());
     frames.reserve(middlewares.size());
-    for (auto& middleware : middlewares) {
-        frames.push_back(materializeMiddleware(std::move(middleware)));
+    for (const auto& middleware : middlewares) {
+        frames.push_back(materializeMiddleware(middleware));
     }
     return frames;
 }

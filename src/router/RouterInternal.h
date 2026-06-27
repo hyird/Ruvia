@@ -42,54 +42,6 @@ private:
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares_;
 };
 
-class RouteMiddlewareInit final {
-public:
-    using Invoke = RouteMiddleware::Invoke;
-    using Create = void* (*)();
-    using Destroy = void (*)(void*) noexcept;
-
-    constexpr RouteMiddlewareInit() noexcept = default;
-    constexpr RouteMiddlewareInit(void* target, Invoke invoke, Create create, Destroy destroy) noexcept
-        : target_(target),
-          invoke_(invoke),
-          create_(create),
-          destroy_(destroy) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] bool hasTarget() const noexcept {
-        return target_ != nullptr;
-    }
-
-    [[nodiscard]] bool hasFactory() const noexcept {
-        return create_ != nullptr && destroy_ != nullptr;
-    }
-
-    [[nodiscard]] void* target() const noexcept {
-        return target_;
-    }
-
-    [[nodiscard]] Invoke invoke() const noexcept {
-        return invoke_;
-    }
-
-    [[nodiscard]] Create create() const noexcept {
-        return create_;
-    }
-
-    [[nodiscard]] Destroy destroy() const noexcept {
-        return destroy_;
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-    Create create_{nullptr};
-    Destroy destroy_{nullptr};
-};
-
 class RouterImpl final {
 public:
     Router& owner;
@@ -116,14 +68,14 @@ public:
         std::pmr::string path,
         RouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<RouteMiddlewareInit> middlewares,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
     void registerStreamRoute(
         HttpMethod method,
         std::pmr::string path,
         RouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        std::pmr::vector<RouteMiddlewareInit> middlewares,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
         WebSocketRouteOptions webSocketOptions = {});
     void prependMiddlewares(std::span<const ControllerMiddlewareDescriptor> middlewares);
 
@@ -219,7 +171,7 @@ private:
     class MiddlewareLifetime {
     public:
         MiddlewareLifetime() noexcept = default;
-        MiddlewareLifetime(void* target, RouteMiddlewareInit::Destroy destroy) noexcept;
+        MiddlewareLifetime(void* target, ControllerMiddlewareDescriptor::Destroy destroy) noexcept;
         MiddlewareLifetime(const MiddlewareLifetime&) = delete;
         MiddlewareLifetime& operator=(const MiddlewareLifetime&) = delete;
         MiddlewareLifetime(MiddlewareLifetime&& other) noexcept;
@@ -230,14 +182,14 @@ private:
         void reset() noexcept;
 
         void* target_{nullptr};
-        RouteMiddlewareInit::Destroy destroy_{nullptr};
+        ControllerMiddlewareDescriptor::Destroy destroy_{nullptr};
     };
 
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
-    [[nodiscard]] RouteMiddleware materializeMiddleware(RouteMiddlewareInit middleware);
+    [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
-        std::pmr::vector<RouteMiddlewareInit> middlewares);
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares);
     [[nodiscard]] RouteTable buildRouteTable() const;
 
     struct RouteTableDeleter final {
