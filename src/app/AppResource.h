@@ -7,7 +7,7 @@
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::pmr::memory_resource* appResource() noexcept {
-    return ProcessMemory::instance().upstreamResource();
+    return processResource();
 }
 
 }  // namespace ruvia::detail

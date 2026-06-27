@@ -25,7 +25,7 @@ public:
             std::is_invocable_r_v<void, Stored&>,
             int> = 0>
     AppHook(Callable&& callable)
-        : resource_(ProcessMemory::instance().upstreamResource()) {
+        : resource_(detail::processResource()) {
         emplace<Stored>(std::forward<Callable>(callable));
     }
 
