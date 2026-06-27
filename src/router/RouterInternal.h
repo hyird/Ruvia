@@ -95,7 +95,7 @@ private:
             WebSocketHeartbeatOptions webSocketHeartbeat{};
         };
 
-        PendingRoute(std::pmr::memory_resource* resource, Init init);
+        explicit PendingRoute(Init init);
         PendingRoute(const PendingRoute&) = delete;
         PendingRoute& operator=(const PendingRoute&) = delete;
         PendingRoute(PendingRoute&&) noexcept = default;

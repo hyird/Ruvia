@@ -1,7 +1,6 @@
 #include "../RouterInternal.h"
 
 #include "RouterUtils.h"
-#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
 
@@ -71,15 +70,15 @@ template <typename BaseRange, typename ExtraRange>
 
 }  // namespace
 
-detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resource, Init init)
+detail::RouterImpl::PendingRoute::PendingRoute(Init init)
     : method_(init.method),
-      path_(detail::pmrResourceOrDefault(resource)),
+      path_(startupResource()),
       handler_(std::move(init.handler)),
       streamHandler_(std::move(init.streamHandler)),
       bodyMode_(init.bodyMode),
       responseMode_(init.responseMode),
       dynamic_(init.dynamic),
-      middlewares_(detail::pmrResourceOrDefault(resource)),
+      middlewares_(startupResource()),
       webSocketSubprotocols_(
           init.webSocketSubprotocols,
           path_.get_allocator().resource()),
@@ -116,7 +115,7 @@ void detail::RouterImpl::registerRoute(
         throw std::invalid_argument("buffered route cannot use the websocket response mode");
     }
 
-    appendPendingRoute(PendingRoute(startupResource(), PendingRoute::Init{
+    appendPendingRoute(PendingRoute(PendingRoute::Init{
         .method = method,
         .path = std::move(path),
         .handler = std::move(handler),
@@ -143,7 +142,7 @@ void detail::RouterImpl::registerStreamRoute(
         throw std::invalid_argument("response stream route requires a streaming response mode");
     }
 
-    appendPendingRoute(PendingRoute(startupResource(), PendingRoute::Init{
+    appendPendingRoute(PendingRoute(PendingRoute::Init{
         .method = method,
         .path = std::move(path),
         .handler = {},
