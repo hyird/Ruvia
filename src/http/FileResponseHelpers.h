@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/detail/NativePath.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "FileResponseResource.h"
 
 #include <algorithm>
 #include <array>
@@ -54,7 +54,7 @@ template <typename Char>
 
 [[nodiscard]] inline std::pmr::string httpLowerFileExtension(
     const std::filesystem::path& path,
-    std::pmr::memory_resource* resource = ProcessMemory::instance().upstreamResource()) {
+    std::pmr::memory_resource* resource = fileResponseResource()) {
     const auto native = nativePathView(path);
     const auto source = httpFileExtension(native);
     if (source.empty()) {
