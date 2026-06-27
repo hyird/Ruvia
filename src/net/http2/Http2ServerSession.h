@@ -174,6 +174,36 @@ private:
     State state_;
 };
 
+class Http2DataWindowResult final {
+public:
+    [[nodiscard]] static constexpr Http2DataWindowResult ready() noexcept {
+        return Http2DataWindowResult(State::kReady);
+    }
+
+    [[nodiscard]] static constexpr Http2DataWindowResult stopWriting() noexcept {
+        return Http2DataWindowResult(State::kStopWriting);
+    }
+
+    [[nodiscard]] constexpr bool isReady() const noexcept {
+        return state_ == State::kReady;
+    }
+
+    [[nodiscard]] constexpr bool shouldStop() const noexcept {
+        return state_ == State::kStopWriting;
+    }
+
+private:
+    enum class State : std::uint8_t {
+        kReady,
+        kStopWriting,
+    };
+
+    constexpr explicit Http2DataWindowResult(State state) noexcept
+        : state_(state) {}
+
+    State state_;
+};
+
 template <typename Stream>
 class Http2ServerSession final {
     template <typename Session>
@@ -356,7 +386,7 @@ private:
 
     Task<void> writeHeaders(Http2StreamState& stream, std::string_view headerBlock, bool endStream);
 
-    Task<bool> waitForDataWindow(Http2StreamState& stream);
+    Task<Http2DataWindowResult> waitForDataWindow(Http2StreamState& stream);
 
     Task<void> writeData(
         Http2StreamState& stream,
