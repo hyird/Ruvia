@@ -47,14 +47,6 @@ std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view p
     return output;
 }
 
-[[nodiscard]] RouteHandler makeRouteHandler(ControllerRouteHandler handler) noexcept {
-    return RouteHandler(handler.target(), handler.invoke());
-}
-
-[[nodiscard]] RouteStreamHandler makeRouteStreamHandler(ControllerRouteStreamHandler handler) noexcept {
-    return RouteStreamHandler(handler.target(), handler.invoke());
-}
-
 template <typename BaseRange, typename ExtraRange>
 [[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> makeRouteMiddlewares(
     const BaseRange& base,
@@ -240,7 +232,7 @@ void detail::ControllerRouteBuilder::registerRoute(
     RouterImpl::from(impl_->router()).registerRoute(
         method,
         joinControllerPaths(impl_->prefix(), path),
-        makeRouteHandler(handler),
+        std::move(handler),
         bodyMode,
         makeRouteMiddlewares(impl_->middlewares(), middlewares),
         responseMode);
@@ -256,7 +248,7 @@ void detail::ControllerRouteBuilder::registerStreamRoute(
     RouterImpl::from(impl_->router()).registerStreamRoute(
         method,
         joinControllerPaths(impl_->prefix(), path),
-        makeRouteStreamHandler(handler),
+        std::move(handler),
         responseMode,
         makeRouteMiddlewares(impl_->middlewares(), middlewares),
         webSocketOptions);
