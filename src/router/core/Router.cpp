@@ -15,7 +15,10 @@ Task<HttpResponse> Next::operator()(Context& context) const {
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept
     : owner(router),
-      routeTable_(nullptr, RouteTableDeleter{registrationResource()}) {}
+      resource_(registrationResource()),
+      pendingRoutes_(resource_),
+      middlewareLifetimes_(resource_),
+      routeTable_(nullptr, RouteTableDeleter{resource_}) {}
 
 void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
     destroyPmrObject(impl, registrationResource());
@@ -100,7 +103,7 @@ void detail::RouterImpl::appendMaterializedMiddlewares(
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
-    std::pmr::vector<RouteMiddleware> frames(registrationResource());
+    std::pmr::vector<RouteMiddleware> frames(resource_);
     frames.reserve(first.size() + second.size());
     appendMaterializedMiddlewares(frames, first);
     appendMaterializedMiddlewares(frames, second);
@@ -125,8 +128,8 @@ void detail::RouterImpl::finalize() {
     }
 
     validateNoDynamicRouteConflict(pendingRoutes_);
-    routeTable_.reset(constructPmrObject<RouteTable>(registrationResource(), buildRouteTable()));
-    routeTable_.get_deleter().resource = registrationResource();
+    routeTable_.reset(constructPmrObject<RouteTable>(resource_, buildRouteTable()));
+    routeTable_.get_deleter().resource = resource_;
     routeTable_->setErrorHandler(errorHandler_);
     finalized_ = true;
 }
