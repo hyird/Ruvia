@@ -6,8 +6,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/memory/MemoryPool.h"
 #include "ruvia/memory/PmrObject.h"
+#include "ruvia/memory/ProcessResource.h"
 
 namespace ruvia {
 
