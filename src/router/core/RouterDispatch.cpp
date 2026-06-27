@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "RouterUtils.h"
 #include "../../http/ContextInternal.h"
 #include "../../http/HttpResponseHeaderState.h"
 #include "ruvia/http/Error.h"

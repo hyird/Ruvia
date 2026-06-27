@@ -1,6 +1,6 @@
 #include "../RouterInternal.h"
 
-#include "RouterUtils.h"
+#include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/memory/PmrObject.h"
 
 #include <stdexcept>
@@ -15,19 +15,19 @@ Task<HttpResponse> Next::operator()(Context& context) const {
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept
     : owner(router),
-      routeTable_(nullptr, RouteTableDeleter{startupResource()}) {}
+      routeTable_(nullptr, RouteTableDeleter{registrationResource()}) {}
 
 void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
-    destroyPmrObject(impl, startupResource());
+    destroyPmrObject(impl, registrationResource());
 }
 
 void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const noexcept {
-    destroyPmrObject(table, resource == nullptr ? startupResource() : resource);
+    destroyPmrObject(table, resource == nullptr ? registrationResource() : resource);
 }
 
 Router::Router()
     : impl_(
-          constructPmrObject<detail::RouterImpl>(startupResource(), *this)) {}
+          constructPmrObject<detail::RouterImpl>(registrationResource(), *this)) {}
 
 Router::~Router() = default;
 
@@ -92,7 +92,7 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMidd
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
-    std::pmr::vector<RouteMiddleware> frames(startupResource());
+    std::pmr::vector<RouteMiddleware> frames(registrationResource());
     frames.reserve(first.size() + second.size());
     for (const auto& middleware : first) {
         frames.push_back(materializeMiddleware(middleware));
@@ -121,8 +121,8 @@ void detail::RouterImpl::finalize() {
     }
 
     validateNoDynamicRouteConflict(pendingRoutes_);
-    routeTable_.reset(constructPmrObject<RouteTable>(startupResource(), buildRouteTable()));
-    routeTable_.get_deleter().resource = startupResource();
+    routeTable_.reset(constructPmrObject<RouteTable>(registrationResource(), buildRouteTable()));
+    routeTable_.get_deleter().resource = registrationResource();
     routeTable_->setErrorHandler(errorHandler_);
     finalized_ = true;
 }
