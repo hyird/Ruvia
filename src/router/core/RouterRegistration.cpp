@@ -1,6 +1,6 @@
 #include "../RouterInternal.h"
 
-#include "RouterUtils.h"
+#include "ruvia/http/detail/RegistrationResource.h"
 
 namespace ruvia {
 
@@ -9,7 +9,7 @@ using namespace detail;
 namespace {
 
 std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view path) {
-    auto* resource = startupResource();
+    auto* resource = registrationResource();
     if (prefix.empty() || prefix == "/") {
         if (path.empty()) {
             return std::pmr::string{"/", resource};
@@ -50,7 +50,7 @@ template <typename BaseRange, typename ExtraRange>
 [[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> mergeMiddlewareDescriptors(
     const BaseRange& base,
     const ExtraRange& extra) {
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares(startupResource());
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares(registrationResource());
     middlewares.reserve(base.size() + extra.size());
     middlewares.insert(middlewares.end(), base.begin(), base.end());
     middlewares.insert(middlewares.end(), extra.begin(), extra.end());
@@ -59,11 +59,11 @@ template <typename BaseRange, typename ExtraRange>
 
 [[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> normalizeControllerMiddlewares(
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) {
-    if (middlewares.get_allocator().resource() == startupResource()) {
+    if (middlewares.get_allocator().resource() == registrationResource()) {
         return middlewares;
     }
 
-    std::pmr::vector<ControllerMiddlewareDescriptor> normalized(startupResource());
+    std::pmr::vector<ControllerMiddlewareDescriptor> normalized(registrationResource());
     normalized.insert(normalized.end(), middlewares.begin(), middlewares.end());
     return normalized;
 }
@@ -72,13 +72,13 @@ template <typename BaseRange, typename ExtraRange>
 
 detail::RouterImpl::PendingRoute::PendingRoute(Init init)
     : method_(init.method),
-      path_(startupResource()),
+      path_(registrationResource()),
       handler_(std::move(init.handler)),
       streamHandler_(std::move(init.streamHandler)),
       bodyMode_(init.bodyMode),
       responseMode_(init.responseMode),
       dynamic_(init.dynamic),
-      middlewares_(startupResource()),
+      middlewares_(registrationResource()),
       webSocketSubprotocols_(
           init.webSocketSubprotocols,
           path_.get_allocator().resource()),
@@ -98,7 +98,7 @@ detail::RouterImpl::PendingRoute::PendingRoute(Init init)
 }
 
 void detail::ControllerRouteBuilder::ImplDeleter::operator()(Impl* impl) const noexcept {
-    destroyPmrObject(impl, startupResource());
+    destroyPmrObject(impl, registrationResource());
 }
 
 void detail::RouterImpl::registerRoute(
@@ -175,7 +175,7 @@ void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddleware
     }
 
     for (auto& route : pendingRoutes_) {
-        std::pmr::vector<RouteMiddleware> merged(startupResource());
+        std::pmr::vector<RouteMiddleware> merged(registrationResource());
         const auto routeMiddlewares = route.middlewares();
         merged.reserve(middlewares.size() + routeMiddlewares.size());
         auto prepend = materializeMiddlewares(middlewares);
@@ -202,7 +202,7 @@ detail::ControllerRouteBuilder::ControllerRouteBuilder(
     OwnedPrefixTag)
     : impl_(
           constructPmrObject<Impl>(
-              startupResource(),
+              registrationResource(),
               router,
               std::move(prefix),
               normalizeControllerMiddlewares(std::move(middlewares)))) {}

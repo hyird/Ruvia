@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "RouterUtils.h"
+#include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
@@ -67,7 +67,7 @@ void detail::RouterImpl::validateNoDynamicRouteConflict(std::span<const PendingR
 }
 
 detail::RouteTable detail::RouterImpl::buildRouteTable() const {
-    RouteTable table(startupResource());
+    RouteTable table(registrationResource());
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
