@@ -178,8 +178,7 @@ void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddleware
         std::pmr::vector<RouteMiddleware> merged(registrationResource());
         const auto routeMiddlewares = route.middlewares();
         merged.reserve(middlewares.size() + routeMiddlewares.size());
-        auto prepend = materializeMiddlewares(middlewares);
-        merged.insert(merged.end(), prepend.begin(), prepend.end());
+        appendMaterializedMiddlewares(merged, middlewares);
         merged.insert(merged.end(), routeMiddlewares.begin(), routeMiddlewares.end());
         route.setMiddlewares(std::move(merged));
     }

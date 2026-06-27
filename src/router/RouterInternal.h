@@ -190,6 +190,9 @@ private:
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
+    void appendMaterializedMiddlewares(
+        std::pmr::vector<RouteMiddleware>& frames,
+        std::span<const ControllerMiddlewareDescriptor> descriptors);
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
         std::span<const ControllerMiddlewareDescriptor> first,
         std::span<const ControllerMiddlewareDescriptor> second = {});
