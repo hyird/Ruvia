@@ -56,13 +56,13 @@ struct ControllerLifetime final {
 }  // namespace
 
 struct ControllerStoreState final {
-    std::pmr::vector<ControllerLifetime> lifetimes{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<ControllerLifetime> lifetimes{registrationResource()};
 };
 
 namespace {
 
 std::pmr::vector<ControllerRegistrar>& controllerRegistrars() {
-    static std::pmr::vector<ControllerRegistrar> registrars{ProcessMemory::instance().upstreamResource()};
+    static std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
     return registrars;
 }
 
@@ -74,7 +74,7 @@ std::mutex& controllerRegistrarsMutex() {
 }  // namespace
 
 ControllerStore::ControllerStore()
-    : state_(constructPmrObject<ControllerStoreState>(ProcessMemory::instance().upstreamResource())) {}
+    : state_(constructPmrObject<ControllerStoreState>(registrationResource())) {}
 
 ControllerStore::~ControllerStore() = default;
 
@@ -83,7 +83,7 @@ ControllerStore::ControllerStore(ControllerStore&&) noexcept = default;
 ControllerStore& ControllerStore::operator=(ControllerStore&&) noexcept = default;
 
 void ControllerStoreStateDeleter::operator()(ControllerStoreState* state) const noexcept {
-    destroyPmrObject(state, ProcessMemory::instance().upstreamResource());
+    destroyPmrObject(state, registrationResource());
 }
 
 std::pmr::memory_resource* registrationResource() noexcept {
@@ -112,7 +112,7 @@ bool addControllerRegistrar(ControllerRegistrar registrar) {
 }
 
 void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes) {
-    std::pmr::vector<ControllerRegistrar> registrars{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<ControllerRegistrar> registrars{registrationResource()};
     {
         std::lock_guard lock(controllerRegistrarsMutex());
         registrars = controllerRegistrars();
