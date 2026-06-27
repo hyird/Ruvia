@@ -32,7 +32,7 @@ protected:
     }
 
     [[nodiscard]] static RuviaMiddlewareList ruviaControllerGroupMiddlewares() {
-        return RuviaMiddlewareList(detail::controllerStoreResource());
+        return RuviaMiddlewareList(detail::registrationResource());
     }
 
     [[nodiscard]] static detail::ControllerRouteBuilder ruviaCreateRouteGroup(
@@ -111,7 +111,7 @@ protected:
 
     template <typename... MiddlewareTs>
     [[nodiscard]] static RuviaMiddlewareList ruviaMakeMiddlewares() {
-        RuviaMiddlewareList middlewares(detail::controllerStoreResource());
+        RuviaMiddlewareList middlewares(detail::registrationResource());
         if constexpr (sizeof...(MiddlewareTs) > 0) {
             middlewares.reserve(sizeof...(MiddlewareTs));
             (middlewares.push_back(ruviaMakeMiddleware<MiddlewareTs>()), ...);

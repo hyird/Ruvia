@@ -86,11 +86,7 @@ void ControllerStoreStateDeleter::operator()(ControllerStoreState* state) const 
     destroyPmrObject(state, ProcessMemory::instance().upstreamResource());
 }
 
-std::pmr::memory_resource* controllerStoreResource() noexcept {
-    return ProcessMemory::instance().upstreamResource();
-}
-
-std::pmr::memory_resource* middlewareRuntimeResource() noexcept {
+std::pmr::memory_resource* registrationResource() noexcept {
     return ProcessMemory::instance().upstreamResource();
 }
 

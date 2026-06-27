@@ -5,13 +5,12 @@
 #include <memory_resource>
 #include <type_traits>
 
+#include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
 
 namespace ruvia {
 
 namespace detail {
-
-[[nodiscard]] std::pmr::memory_resource* middlewareRuntimeResource() noexcept;
 
 template <typename T>
 concept TaskHttpResponse = std::same_as<std::remove_cvref_t<T>, Task<HttpResponse>>;
@@ -41,7 +40,7 @@ template <typename MiddlewareT>
 
 template <typename MiddlewareT>
 [[nodiscard]] void* createMiddleware() {
-    auto* resource = middlewareRuntimeResource();
+    auto* resource = registrationResource();
     auto* storage = resource->allocate(sizeof(MiddlewareT), alignof(MiddlewareT));
     auto* middleware = static_cast<MiddlewareT*>(storage);
     try {
@@ -60,7 +59,7 @@ void destroyMiddleware(void* target) noexcept {
     }
     auto* middleware = static_cast<MiddlewareT*>(target);
     std::destroy_at(middleware);
-    middlewareRuntimeResource()->deallocate(middleware, sizeof(MiddlewareT), alignof(MiddlewareT));
+    registrationResource()->deallocate(middleware, sizeof(MiddlewareT), alignof(MiddlewareT));
 }
 
 template <typename MiddlewareT>

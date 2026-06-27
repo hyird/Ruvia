@@ -11,6 +11,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/detail/CallableRef.h"
+#include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
 #include "ruvia/http/WebSocket.h"
@@ -27,7 +28,6 @@ struct ControllerStoreState;
 struct ControllerStoreStateDeleter final {
     void operator()(ControllerStoreState* state) const noexcept;
 };
-[[nodiscard]] std::pmr::memory_resource* controllerStoreResource() noexcept;
 
 class ControllerStore final {
 public:
@@ -41,7 +41,7 @@ public:
 
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
-        auto* resource = controllerStoreResource();
+        auto* resource = registrationResource();
         auto* storage = resource->allocate(sizeof(T), alignof(T));
         auto* raw = static_cast<T*>(storage);
         try {
@@ -91,7 +91,7 @@ public:
         Router& router,
         std::string_view prefix,
         std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
-            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()));
+            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
     ControllerRouteBuilder(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder& operator=(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder(const ControllerRouteBuilder&) = delete;
@@ -115,7 +115,7 @@ public:
     [[nodiscard]] ControllerRouteBuilder createScope(
         std::string_view prefix,
         std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
-            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource())) const;
+            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
 
 private:
     struct OwnedPrefixTag final {};
