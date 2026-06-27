@@ -44,6 +44,9 @@ Context makeRouteContext(
         services);
 }
 
+struct OwnedHttpErrorInfo;
+void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exception);
+
 struct OwnedHttpErrorInfo final {
     HttpErrorInfo info{};
     std::pmr::string statusText;
@@ -57,6 +60,13 @@ struct OwnedHttpErrorInfo final {
           message(resource),
           detailsJson(resource) {
         assign(source);
+    }
+
+    OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
+        : OwnedHttpErrorInfo(
+              HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
+              resource) {
+        assignExceptionError(*this, exception);
     }
 
     void assign(HttpErrorInfo source) {
@@ -188,17 +198,12 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             }
 
             const auto error = HttpErrorInfo{.statusCode = 405, .message = "method not allowed"};
-            auto response = errorHandler_ == nullptr
-                ? makeErrorResponse(memory.resource(), error, false)
-                : co_await handleError(request, memory, error, false, services);
+            auto response = co_await handleError(request, memory, error, false, services);
             setAllowHeader(response, resolution.allowedMethods());
             co_return response;
         }
 
         const auto error = HttpErrorInfo{.statusCode = 404, .message = "route not found"};
-        if (errorHandler_ == nullptr) {
-            co_return makeErrorResponse(memory.resource(), error, false);
-        }
         co_return co_await handleError(request, memory, error, false, services);
     }
 
@@ -252,10 +257,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     bool closeConnection,
     ContextServices services) const {
     if (errorHandler_ == nullptr) {
-        OwnedHttpErrorInfo errorInfo(
-            HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
-            memory.resource());
-        assignExceptionError(errorInfo, exception);
+        OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
         co_return makeErrorResponse(memory.resource(), errorInfo.info, closeConnection);
     }
 
@@ -277,11 +279,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     Context& context,
     std::exception_ptr exception,
     bool closeConnection) const {
-    OwnedHttpErrorInfo errorInfo(
-        HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
-        context.resource());
-
-    assignExceptionError(errorInfo, exception);
+    OwnedHttpErrorInfo errorInfo(context.resource(), exception);
 
     co_return co_await handleError(context, errorInfo.info, closeConnection);
 }
