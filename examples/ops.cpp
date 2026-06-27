@@ -3,15 +3,17 @@
 #include "ruvia/app/App.h"
 #include "ruvia/http/Controller.h"
 #include "ruvia/http/Health.h"
+#include "ruvia/http/RateLimit.h"
 #include "ruvia/http/SecurityHeaders.h"
 
 class OpsController final : public ruvia::Controller<OpsController> {
 public:
     RUVIA_CONTROLLER_GROUP("/admin", ruvia::SecurityHeadersMiddleware)
+    RUVIA_ROUTE_RATE_LIMIT(ReadyRateLimit, 10, 1000);
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/health", health);
-    RUVIA_GET("/ready", ready);
+    RUVIA_GET("/ready", ready, ReadyRateLimit);
     RUVIA_ROUTES_END
 
 private:

@@ -1,3 +1,8 @@
+#include <asio/bind_allocator.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/recycling_allocator.hpp>
+
 template <typename Stream>
 Http2StreamState* Http2ServerSession<Stream>::findStream(std::uint32_t streamId) noexcept {
     return streams_.find(streamId);

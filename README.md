@@ -31,7 +31,7 @@ Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web s
 | Request handling | Zero-copy HTTP parser, request views into the connection read buffer, explicit streaming body routes, chunked body decoding, multipart form parsing, and helpers for headers, query values, cookies, JSON bodies, and form bodies. |
 | Responses | Chainable helpers for status, headers, cookies, redirects, text, JSON, file responses, static files with validators/ranges, configurable error handling, and unified JSON error bodies. |
 | Models | `RUVIA_MODEL` schema macros for typed JSON/form bodies and JSON responses, plus inline validator middleware rules without runtime reflection. |
-| Runtime | Per-worker standalone Asio `io_context`, HTTP/1.1, HTTP/2 over h2c or TLS ALPN, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, security headers, health/readiness helpers, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
+| Runtime | Per-worker standalone Asio `io_context`, HTTP/1.1, HTTP/2 over h2c or TLS ALPN, built-in HTTPS/TLS, gzip compression, optional MariaDB/Redis/JWT feature support, graceful shutdown, centralized timeout scanning, connection limits, security headers, route-level per-IP rate limiting, health/readiness helpers, per-worker PMR allocators, per-request arenas, and `mimalloc` as the production upstream allocator. |
 | Distribution | CMake install/export support through one installed library file and one public target: `ruvia::ruvia`. |
 
 ## Project Scope
@@ -186,6 +186,26 @@ private:
 ```
 
 Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks.
+
+Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
+
+```cpp
+#include "ruvia/http/RateLimit.h"
+
+class ApiController final : public ruvia::Controller<ApiController> {
+public:
+    RUVIA_ROUTE_RATE_LIMIT(LoginRateLimit, 5, 60'000);
+
+    RUVIA_ROUTES_BEGIN
+    RUVIA_POST("/login", login, LoginRateLimit);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::Task<ruvia::HttpResponse> login(ruvia::Context& c);
+};
+```
+
+`RUVIA_ROUTE_RATE_LIMIT(name, maxRequests, windowMs)` keys by `Context::remoteAddress()`, returns JSON `429` with `Retry-After` and `X-RateLimit-*` headers, and keeps worker-local/thread-local buckets so request dispatch stays lock-free. Use the server-level Redis/global limiter when a cross-worker or distributed limit is required.
 
 ## Context Helpers
 
