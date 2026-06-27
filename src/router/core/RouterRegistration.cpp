@@ -70,15 +70,15 @@ template <typename BaseRange, typename ExtraRange>
 
 }  // namespace
 
-detail::RouterImpl::PendingRoute::PendingRoute(Init init)
+detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
-      path_(registrationResource()),
+      path_(resource),
       handler_(std::move(init.handler)),
       streamHandler_(std::move(init.streamHandler)),
       bodyMode_(init.bodyMode),
       responseMode_(init.responseMode),
       dynamic_(init.dynamic),
-      middlewares_(registrationResource()),
+      middlewares_(resource),
       webSocketSubprotocols_(
           init.webSocketSubprotocols,
           path_.get_allocator().resource()),
@@ -116,7 +116,7 @@ void detail::RouterImpl::registerRoute(
         throw std::invalid_argument("buffered route cannot use the websocket response mode");
     }
 
-    appendPendingRoute(PendingRoute(PendingRoute::Init{
+    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
         .method = method,
         .path = std::move(path),
         .handler = std::move(handler),
@@ -144,7 +144,7 @@ void detail::RouterImpl::registerStreamRoute(
         throw std::invalid_argument("response stream route requires a streaming response mode");
     }
 
-    appendPendingRoute(PendingRoute(PendingRoute::Init{
+    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
         .method = method,
         .path = std::move(path),
         .handler = {},
@@ -175,7 +175,7 @@ void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddleware
     }
 
     for (auto& route : pendingRoutes_) {
-        std::pmr::vector<RouteMiddleware> merged(registrationResource());
+        std::pmr::vector<RouteMiddleware> merged(resource_);
         const auto routeMiddlewares = route.middlewares();
         merged.reserve(middlewares.size() + routeMiddlewares.size());
         appendMaterializedMiddlewares(merged, middlewares);

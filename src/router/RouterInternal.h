@@ -97,7 +97,7 @@ private:
             WebSocketHeartbeatOptions webSocketHeartbeat{};
         };
 
-        explicit PendingRoute(Init init);
+        PendingRoute(std::pmr::memory_resource* resource, Init init);
         PendingRoute(const PendingRoute&) = delete;
         PendingRoute& operator=(const PendingRoute&) = delete;
         PendingRoute(PendingRoute&&) noexcept = default;
@@ -203,6 +203,7 @@ private:
         void operator()(RouteTable* table) const noexcept;
     };
 
+    std::pmr::memory_resource* resource_{nullptr};
     std::pmr::vector<PendingRoute> pendingRoutes_;
     std::pmr::vector<MiddlewareLifetime> middlewareLifetimes_;
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
