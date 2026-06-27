@@ -189,7 +189,7 @@ private:
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares);
+        std::span<const ControllerMiddlewareDescriptor> middlewares);
     [[nodiscard]] RouteTable buildRouteTable() const;
 
     struct RouteTableDeleter final {

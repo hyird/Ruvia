@@ -90,7 +90,7 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMidd
 }
 
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) {
+    std::span<const ControllerMiddlewareDescriptor> middlewares) {
     std::pmr::vector<RouteMiddleware> frames(startupResource());
     frames.reserve(middlewares.size());
     for (const auto& middleware : middlewares) {
