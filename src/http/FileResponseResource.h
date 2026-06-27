@@ -1,8 +1,6 @@
 #pragma once
 
-#include <memory_resource>
-
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/memory/ProcessResource.h"
 
 namespace ruvia::detail {
 

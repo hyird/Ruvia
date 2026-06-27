@@ -17,6 +17,7 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/Next.h"
+#include "ruvia/memory/ProcessResource.h"
 
 namespace ruvia {
 
@@ -85,7 +86,7 @@ private:
 
     class Shard final {
     public:
-        Shard(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        Shard(std::pmr::memory_resource* resource = detail::processResource())
             : buckets_(resource) {}
 
         [[nodiscard]] CheckResult allow(std::string_view key, std::int64_t nowMs) {

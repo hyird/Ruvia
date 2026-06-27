@@ -25,6 +25,10 @@ DefaultResourceInstaller defaultResourceInstaller;
 
 namespace detail {
 
+std::pmr::memory_resource* processResource() noexcept {
+    return ProcessMemory::instance().upstreamResource();
+}
+
 void* taskFrameAllocate(std::size_t bytes) {
     void* pointer = mi_malloc(bytes == 0 ? 1 : bytes);
     if (pointer == nullptr) {
