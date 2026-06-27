@@ -57,10 +57,6 @@ public:
         return Http2SessionFlow(State::kStopRunning);
     }
 
-    [[nodiscard]] constexpr bool shouldContinue() const noexcept {
-        return state_ == State::kKeepRunning;
-    }
-
     [[nodiscard]] constexpr bool shouldStop() const noexcept {
         return state_ == State::kStopRunning;
     }
@@ -87,10 +83,6 @@ public:
         return Http2InputReadResult(State::kStopReading);
     }
 
-    [[nodiscard]] constexpr bool isReady() const noexcept {
-        return state_ == State::kReady;
-    }
-
     [[nodiscard]] constexpr bool shouldStop() const noexcept {
         return state_ == State::kStopReading;
     }
@@ -115,10 +107,6 @@ public:
 
     [[nodiscard]] static constexpr Http2DataWindowResult stopWriting() noexcept {
         return Http2DataWindowResult(State::kStopWriting);
-    }
-
-    [[nodiscard]] constexpr bool isReady() const noexcept {
-        return state_ == State::kReady;
     }
 
     [[nodiscard]] constexpr bool shouldStop() const noexcept {
