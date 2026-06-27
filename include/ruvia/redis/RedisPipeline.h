@@ -74,6 +74,23 @@ private:
         std::pmr::vector<std::pmr::string> args;
     };
 
+    [[nodiscard]] static Command makeCommand(
+        std::pmr::memory_resource* resource,
+        std::span<const std::string_view> args);
+    [[nodiscard]] static Command makeCommand(
+        std::pmr::memory_resource* resource,
+        std::string_view first,
+        std::span<const std::string_view> rest = {});
+    static void appendCommand(
+        std::pmr::vector<Command>& target,
+        std::pmr::memory_resource* resource,
+        std::span<const std::string_view> args);
+    static void appendCommand(
+        std::pmr::vector<Command>& target,
+        std::pmr::memory_resource* resource,
+        std::string_view first,
+        std::span<const std::string_view> rest = {});
+
     RedisPipeline(
         detail::RedisPool& pool,
         std::pmr::memory_resource* resource) noexcept;

@@ -35,20 +35,12 @@ RedisTransaction& RedisTransaction::watch(std::span<const std::string_view> keys
     if (keys.empty()) {
         return *this;
     }
-    RedisPipeline::Command command{std::pmr::vector<std::pmr::string>(pipeline_.resource_)};
-    command.args.reserve(keys.size() + 1);
-    detail::emplaceRedisString(command.args, "WATCH");
-    for (const auto key : keys) {
-        detail::emplaceRedisString(command.args, key);
-    }
-    watches_.emplace_back(std::move(command));
+    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "WATCH", keys);
     return markActive();
 }
 
 RedisTransaction& RedisTransaction::unwatch() {
-    RedisPipeline::Command command{std::pmr::vector<std::pmr::string>(pipeline_.resource_)};
-    detail::emplaceRedisString(command.args, "UNWATCH");
-    watches_.emplace_back(std::move(command));
+    RedisPipeline::appendCommand(watches_, pipeline_.resource_, "UNWATCH");
     return markActive();
 }
 
@@ -257,16 +249,11 @@ Task<std::pmr::vector<RedisValue>> RedisTransaction::exec() {
     const auto resource = pipeline_.resource_;
     std::pmr::vector<detail::RedisCommandArgsView> framed(resource);
     framed.reserve(watches_.size() + commands.size() + 2);
-    auto makeFrameCommand = [resource](std::string_view value) {
-        RedisPipeline::Command command{std::pmr::vector<std::pmr::string>(resource)};
-        detail::emplaceRedisString(command.args, value);
-        return command;
-    };
     auto appendCommandView = [&framed](const RedisPipeline::Command& command) {
         framed.emplace_back(std::span<const std::pmr::string>(command.args.data(), command.args.size()));
     };
-    auto multi = makeFrameCommand("MULTI");
-    auto exec = makeFrameCommand("EXEC");
+    auto multi = RedisPipeline::makeCommand(resource, "MULTI");
+    auto exec = RedisPipeline::makeCommand(resource, "EXEC");
     for (const auto& command : watches_) {
         appendCommandView(command);
     }
