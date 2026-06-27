@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/detail/CallableRef.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
 #include "ruvia/http/WebSocket.h"
@@ -80,57 +81,8 @@ private:
     std::unique_ptr<ControllerStoreState, ControllerStoreStateDeleter> state_;
 };
 
-class ControllerRouteHandler final {
-public:
-    using Invoke = Task<HttpResponse> (*)(void*, Context&);
-
-    constexpr ControllerRouteHandler() noexcept = default;
-    constexpr ControllerRouteHandler(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] void* target() const noexcept {
-        return target_;
-    }
-
-    [[nodiscard]] Invoke invoke() const noexcept {
-        return invoke_;
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-};
-
-class ControllerRouteStreamHandler final {
-public:
-    using Invoke = Task<void> (*)(void*, Context&);
-
-    constexpr ControllerRouteStreamHandler() noexcept = default;
-    constexpr ControllerRouteStreamHandler(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] void* target() const noexcept {
-        return target_;
-    }
-
-    [[nodiscard]] Invoke invoke() const noexcept {
-        return invoke_;
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-};
+using ControllerRouteHandler = CallableRef<HttpResponse, Context&>;
+using ControllerRouteStreamHandler = CallableRef<void, Context&>;
 
 class ControllerRouteBuilder final {
 public:

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
+#include "ruvia/http/detail/CallableRef.h"
 
 namespace ruvia {
 
@@ -13,17 +13,17 @@ struct NextAccess;
 
 class Next final {
 public:
-    using Invoke = Task<HttpResponse> (*)(void*, Context&);
+    using Invoke = detail::CallableRef<HttpResponse, Context&>::Invoke;
 
     [[nodiscard]] Task<HttpResponse> operator()(Context& context) const;
 
 private:
     friend struct detail::NextAccess;
 
-    constexpr Next(void* target, Invoke invoke) noexcept : target_(target), invoke_(invoke) {}
+    constexpr Next(void* target, Invoke invoke) noexcept
+        : callable_(target, invoke) {}
 
-    void* target_;
-    Invoke invoke_;
+    detail::CallableRef<HttpResponse, Context&> callable_;
 };
 
 }  // namespace ruvia
