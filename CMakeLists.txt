@@ -102,6 +102,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/HttpResponseHeadersStorage.cpp
     src/http/HttpResponseKnownHeaders.cpp
     src/http/MultipartReader.cpp
+    src/http/RateLimit.cpp
     src/http/SecurityHeaders.cpp
     src/http/StaticFiles.cpp
     src/http/parser/HttpChunkParser.cpp

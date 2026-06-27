@@ -11,7 +11,7 @@ inline Context::Context(
     RequestMemory& memory,
     const HttpRequest& request,
     detail::ContextServices services) noexcept
-    : Context(memory, request, nullptr, nullptr, 0, services) {}
+    : Context(memory, request, nullptr, nullptr, 0, 0, services) {}
 
 inline Context::Context(
     RequestMemory& memory,
@@ -19,6 +19,7 @@ inline Context::Context(
     const std::string_view* paramNames,
     const std::string_view* paramValues,
     std::size_t paramCount,
+    std::uintptr_t routeRateLimitScope,
     detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
@@ -28,6 +29,8 @@ inline Context::Context(
       db_(services.db()),
       redis_(services.redis()),
       httpClients_(services.httpClients()),
+      rateLimiter_(services.rateLimiter()),
+      routeRateLimitScope_(routeRateLimitScope),
       bodyReader_(services.bodyReader()),
       bodyLoader_(services.bodyLoader()),
       webSocket_(services.webSocket()),
@@ -50,11 +53,28 @@ struct ContextAccess final {
     [[nodiscard]] static Context make(
         RequestMemory& memory,
         const HttpRequest& request,
+        std::uintptr_t routeRateLimitScope,
+        ContextServices services = {}) noexcept {
+        return Context(memory, request, nullptr, nullptr, 0, routeRateLimitScope, services);
+    }
+
+    [[nodiscard]] static Context make(
+        RequestMemory& memory,
+        const HttpRequest& request,
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
+        std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
-        return Context(memory, request, paramNames, paramValues, paramCount, services);
+        return Context(memory, request, paramNames, paramValues, paramCount, routeRateLimitScope, services);
+    }
+
+    [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {
+        return context.rateLimiter_;
+    }
+
+    [[nodiscard]] static std::uintptr_t routeRateLimitScope(const Context& context) noexcept {
+        return context.routeRateLimitScope_;
     }
 };
 

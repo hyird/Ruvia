@@ -32,6 +32,8 @@
 
 namespace ruvia {
 
+inline constexpr std::size_t kDefaultRateLimitSlotCount = 65536;
+
 // One completed request, passed to the access-log callback after the response is
 // written. Views borrow request memory and are valid only for the call.
 struct AccessLogRecord final {
@@ -41,6 +43,17 @@ struct AccessLogRecord final {
     std::uint16_t status{0};
     std::uint64_t durationMicros{0};
     bool http2{false};
+};
+
+// Single-process, per-IP fixed-window rate limit rule. maxRequests == 0
+// disables the app-level rule. slotCount sizes the shared atomic key table used
+// by both app-level and route-level limit checks; when the table is full, the
+// limiter follows failClosed.
+struct RateLimitRule final {
+    std::size_t maxRequests{0};
+    std::chrono::milliseconds window{std::chrono::seconds(1)};
+    std::size_t slotCount{kDefaultRateLimitSlotCount};
+    bool failClosed{true};
 };
 
 struct HttpServerOptions final {
@@ -93,20 +106,6 @@ struct HttpServerOptions final {
         void* user{nullptr};
     };
 
-    // Per-client request rate limit (token bucket, keyed by remote address).
-    // maxRequests == 0 disables it. The limit is enforced per worker, so the
-    // effective ceiling is roughly maxRequests x worker count (SO_REUSEPORT).
-    struct RateLimit final {
-        std::size_t maxRequests{0};
-        std::chrono::milliseconds window{std::chrono::seconds(1)};
-        // When set, the limit is enforced globally via this Redis connection
-        // (shared across workers/instances) instead of the per-worker bucket.
-        std::pmr::string redisAlias;
-        // For the Redis-backed limit, whether to allow (true) or reject (false)
-        // a request when Redis is unreachable.
-        bool redisFailOpen{true};
-    };
-
     std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
     // On stop, how long to let in-flight requests finish before force-closing
     // connections. 0 keeps the previous behavior (close immediately).
@@ -130,7 +129,7 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLog accessLog;
-    RateLimit rateLimit;
+    RateLimitRule rateLimit;
 };
 
 struct TlsConfig final {
@@ -202,13 +201,9 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& setErrorHandler(HttpErrorHandler handler);
     App& setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
-#ifdef RUVIA_ENABLE_REDIS
-    App& setGlobalRateLimit(
-        std::size_t maxRequests,
-        std::chrono::milliseconds window = std::chrono::seconds(1),
-        std::string_view redisAlias = "default",
-        bool failOpen = true);
-#endif
+    App& setRateLimit(RateLimitRule rule);
+    App& setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
+    App& setGlobalRateLimit(RateLimitRule rule);
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);

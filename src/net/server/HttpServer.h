@@ -42,20 +42,23 @@ public:
         asio::ip::tcp::endpoint endpoint,
         const RouteTable& routes,
         std::span<const DbDefinition> databases = {},
-        HttpServerOptions options = {});
+        HttpServerOptions options = {},
+        RateLimiter* rateLimiter = nullptr);
     HttpServer(
         asio::ip::tcp::endpoint endpoint,
         const RouteTable& routes,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
-        HttpServerOptions options = {});
+        HttpServerOptions options = {},
+        RateLimiter* rateLimiter = nullptr);
     HttpServer(
         asio::ip::tcp::endpoint endpoint,
         const RouteTable& routes,
         std::span<const DbDefinition> databases,
         std::span<const RedisDefinition> redis,
         std::span<const HttpClientDefinition> httpClients,
-        HttpServerOptions options = {});
+        HttpServerOptions options = {},
+        RateLimiter* rateLimiter = nullptr);
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -101,7 +104,7 @@ private:
     DbRegistry databases_;
     RedisRegistry redis_;
     HttpClientRegistry httpClients_;
-    RateLimiter rateLimiter_;
+    RateLimiter* rateLimiter_{nullptr};
     ConnectionScanner connectionScanner_;
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};

@@ -39,7 +39,7 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
     HttpClientRegistry& httpClients,
     const HttpServerOptions& options,
     std::string_view remoteAddress,
-    RateLimiter& rateLimiter,
+    RateLimiter* rateLimiter,
     const HttpServerParseResult& parsed,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,

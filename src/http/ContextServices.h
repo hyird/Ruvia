@@ -11,6 +11,7 @@ namespace detail {
 class DbRegistry;
 class HttpClientRegistry;
 class RedisRegistry;
+class RateLimiter;
 class RequestBodyLoader;
 
 class ContextServices final {
@@ -20,10 +21,12 @@ public:
     constexpr ContextServices(
         DbRegistry* db,
         RedisRegistry* redis,
-        HttpClientRegistry* httpClients) noexcept
+        HttpClientRegistry* httpClients,
+        RateLimiter* rateLimiter = nullptr) noexcept
         : db_(db),
           redis_(redis),
-          httpClients_(httpClients) {}
+          httpClients_(httpClients),
+          rateLimiter_(rateLimiter) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
         return db_;
@@ -35,6 +38,10 @@ public:
 
     [[nodiscard]] HttpClientRegistry* httpClients() const noexcept {
         return httpClients_;
+    }
+
+    [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
+        return rateLimiter_;
     }
 
     [[nodiscard]] BodyReader* bodyReader() const noexcept {
@@ -85,6 +92,7 @@ private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
     HttpClientRegistry* httpClients_{nullptr};
+    RateLimiter* rateLimiter_{nullptr};
 
     BodyReader* bodyReader_{nullptr};
     RequestBodyLoader* bodyLoader_{nullptr};

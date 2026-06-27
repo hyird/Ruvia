@@ -141,23 +141,27 @@ HttpServer::HttpServer(
     TcpEndpoint endpoint,
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
-    HttpServerOptions options)
+    HttpServerOptions options,
+    RateLimiter* rateLimiter)
     : HttpServer(
           std::move(endpoint), routes, databases,
           std::span<const RedisDefinition>{},
           std::span<const HttpClientDefinition>{},
-          std::move(options)) {}
+          std::move(options),
+          rateLimiter) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
-    HttpServerOptions options)
+    HttpServerOptions options,
+    RateLimiter* rateLimiter)
     : HttpServer(
           std::move(endpoint), routes, databases, redis,
           std::span<const HttpClientDefinition>{},
-          std::move(options)) {}
+          std::move(options),
+          rateLimiter) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
@@ -165,7 +169,8 @@ HttpServer::HttpServer(
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
     std::span<const HttpClientDefinition> httpClients,
-    HttpServerOptions options)
+    HttpServerOptions options,
+    RateLimiter* rateLimiter)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
@@ -180,7 +185,7 @@ HttpServer::HttpServer(
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
       httpClients_(ioContext_, memory_.resource(), httpClients),
-      rateLimiter_(options_.rateLimit.maxRequests, options_.rateLimit.window.count(), memory_.resource()),
+      rateLimiter_(rateLimiter),
       connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {
@@ -197,9 +202,6 @@ HttpServer::HttpServer(
         connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
             static_cast<HttpClientRegistry*>(target)->scanDeadlines();
         });
-    }
-    if (rateLimiter_.enabled()) {
-        connectionScanner_.setWorkerScanner(&rateLimiter_, &RateLimiter::evictStaleThunk);
     }
 }
 

@@ -63,7 +63,7 @@ Task<void> runHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
-    RateLimiter& rateLimiter,
+    RateLimiter* rateLimiter,
     std::string_view clientCertificate = {},
     std::string_view initialBytes = {},
     const std::atomic_bool* serverStarted = nullptr) {
@@ -78,7 +78,7 @@ Task<void> runHttp2ServerSession(
         options,
         scannerEntry,
         remoteAddress,
-        &rateLimiter,
+        rateLimiter,
         clientCertificate,
         serverStarted);
     co_await session.run(initialBytes);
@@ -96,7 +96,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
-    RateLimiter& rateLimiter,
+    RateLimiter* rateLimiter,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     const std::atomic_bool* serverStarted = nullptr) {
@@ -155,7 +155,7 @@ Task<void> runUpgradedHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
-    RateLimiter& rateLimiter,
+    RateLimiter* rateLimiter,
     const HttpServerParseResult& parsed,
     std::string_view settingsPayload,
     std::string_view body,
@@ -172,7 +172,7 @@ Task<void> runUpgradedHttp2ServerSession(
         options,
         scannerEntry,
         remoteAddress,
-        &rateLimiter,
+        rateLimiter,
         {},
         serverStarted);
     co_await session.runUpgraded(parsed, settingsPayload, body, initialBytes);

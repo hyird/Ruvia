@@ -9,7 +9,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
-    const ContextServices baseRouteServices(&databases_, &redis_, &httpClients_);
+    const ContextServices baseRouteServices(&databases_, &redis_, &httpClients_, rateLimiter_);
     std::pmr::string remoteAddress(memory_.allocator<char>());
     std::error_code remoteEc;
     const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
@@ -112,22 +112,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 // one of those transitions, idleTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-                if (rateLimiter_.enabled()) {
-                    const bool rateAllowed = co_await rateLimitRequestAllowed(
-                        rateLimiter_, &redis_, options_.rateLimit, remoteAddress, requestMemory.resource());
-                    if (!rateAllowed) {
-                        consumedBytes = parsed.headerBytes;
-                        response = co_await routes.handleError(
-                            parsed.request,
-                            requestMemory,
-                            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
-                            true,
-                            baseRouteServices);
-                        setRetryAfterSeconds(response, options_.rateLimit.window);
-                        markConnectionCloseAfterWrite(response, closeAfterWrite);
-                        break;
-                    }
-                }
                 if (options_.autoHttps.enabled) {
                     consumedBytes = parsed.headerBytes;
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
@@ -179,6 +163,19 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     }
                 }
                 routeResolution = routes.resolve(parsed.request, routeMatch);
+                const auto appRateLimit = rateLimitRequestAllowed(rateLimiter_, remoteAddress);
+                if (!appRateLimit.allowed) {
+                    consumedBytes = parsed.headerBytes;
+                    response = co_await routes.handleError(
+                        parsed.request,
+                        requestMemory,
+                        HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+                        true,
+                        baseRouteServices);
+                    setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
+                    markConnectionCloseAfterWrite(response, closeAfterWrite);
+                    break;
+                }
                 if (!routeResolution.found()) {
                     consumedBytes = parsed.headerBytes;
                     if (contentLengthExceedsLimit(parsed.contentLength, options_.maxBufferedBodyBytes)) {
