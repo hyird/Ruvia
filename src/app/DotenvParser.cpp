@@ -52,7 +52,7 @@ namespace {
     const std::filesystem::path& path,
     std::size_t lineNumber,
     std::string_view message) {
-    std::pmr::string result("invalid dotenv entry in ", ProcessMemory::instance().upstreamResource());
+    std::pmr::string result("invalid dotenv entry in ", appResource());
     result += path.string();
     result += ':';
     result += std::to_string(lineNumber);
@@ -66,7 +66,7 @@ namespace {
     const std::filesystem::path& path,
     std::size_t lineNumber,
     std::size_t& consumed) {
-    std::pmr::string result(ProcessMemory::instance().upstreamResource());
+    std::pmr::string result(appResource());
     result.reserve(value.size());
 
     for (std::size_t index = 1; index < value.size(); ++index) {
@@ -122,7 +122,7 @@ namespace {
     }
 
     consumed = close + 1;
-    return std::pmr::string(value.substr(1, close - 1), ProcessMemory::instance().upstreamResource());
+    return std::pmr::string(value.substr(1, close - 1), appResource());
 }
 
 void validateQuotedRemainder(
@@ -144,7 +144,7 @@ void validateQuotedRemainder(
         }
     }
 
-    return std::pmr::string(trim(value.substr(0, end)), ProcessMemory::instance().upstreamResource());
+    return std::pmr::string(trim(value.substr(0, end)), appResource());
 }
 
 [[nodiscard]] std::pmr::string parseValue(
@@ -216,8 +216,8 @@ std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& pat
         return {};
     }
 
-    std::pmr::vector<DotenvEntry> entries(ProcessMemory::instance().upstreamResource());
-    std::pmr::string line(ProcessMemory::instance().upstreamResource());
+    std::pmr::vector<DotenvEntry> entries(appResource());
+    std::pmr::string line(appResource());
     std::size_t lineNumber = 0;
 
     while (std::getline(input, line)) {
