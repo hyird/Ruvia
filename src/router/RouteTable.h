@@ -13,6 +13,7 @@
 
 #include "../http/ContextServices.h"
 #include "ruvia/http/Context.h"
+#include "ruvia/http/detail/CallableRef.h"
 #include "RouteResolution.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Next.h"
@@ -33,32 +34,9 @@ struct NextAccess final {
     }
 };
 
-template <typename Result, typename... Args>
-class RouteCallable final {
-public:
-    using Invoke = Task<Result> (*)(void*, Args...);
-
-    constexpr RouteCallable() noexcept = default;
-    constexpr RouteCallable(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] Task<Result> operator()(Args... args) const {
-        return invoke_(target_, args...);
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-};
-
-using RouteHandler = RouteCallable<HttpResponse, Context&>;
-using RouteStreamHandler = RouteCallable<void, Context&>;
-using RouteMiddleware = RouteCallable<HttpResponse, Context&, const Next&>;
+using RouteHandler = CallableRef<HttpResponse, Context&>;
+using RouteStreamHandler = CallableRef<void, Context&>;
+using RouteMiddleware = CallableRef<HttpResponse, Context&, const Next&>;
 
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
