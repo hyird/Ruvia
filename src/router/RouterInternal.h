@@ -173,26 +173,8 @@ private:
             return responseMode_;
         }
 
-        [[nodiscard]] bool usesStreamRequestBody() const noexcept {
-            return bodyMode_ == RequestBodyMode::kStream;
-        }
-
         [[nodiscard]] bool isBufferedResponse() const noexcept {
             return responseMode_ == ResponseBodyMode::kBuffered;
-        }
-
-        [[nodiscard]] bool isDynamicResponse() const noexcept {
-            return responseMode_ == ResponseBodyMode::kDynamic;
-        }
-
-        [[nodiscard]] bool isWebSocketResponse() const noexcept {
-            return responseMode_ == ResponseBodyMode::kWebSocket;
-        }
-
-        [[nodiscard]] bool usesResponseStream() const noexcept {
-            return responseMode_ == ResponseBodyMode::kStream ||
-                responseMode_ == ResponseBodyMode::kSse ||
-                responseMode_ == ResponseBodyMode::kDynamic;
         }
 
         [[nodiscard]] bool dynamic() const noexcept {
