@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -102,16 +103,14 @@ public:
         std::string_view path,
         ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
-            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()),
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {},
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered) const;
     void registerStreamRoute(
         HttpMethod method,
         std::string_view path,
         ControllerRouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
-            std::pmr::vector<ControllerMiddlewareDescriptor>(controllerStoreResource()),
+        std::span<const ControllerMiddlewareDescriptor> middlewares = {},
         WebSocketRouteOptions webSocketOptions = {}) const;
     [[nodiscard]] ControllerRouteBuilder createScope(
         std::string_view prefix,
