@@ -48,7 +48,7 @@ std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view p
 }
 
 template <typename BaseRange, typename ExtraRange>
-[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> makeRouteMiddlewares(
+[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> mergeMiddlewareDescriptors(
     const BaseRange& base,
     const ExtraRange& extra) {
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares(startupResource());
@@ -56,16 +56,6 @@ template <typename BaseRange, typename ExtraRange>
     middlewares.insert(middlewares.end(), base.begin(), base.end());
     middlewares.insert(middlewares.end(), extra.begin(), extra.end());
     return middlewares;
-}
-
-[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> mergeControllerMiddlewares(
-    const std::pmr::vector<ControllerMiddlewareDescriptor>& base,
-    std::pmr::vector<ControllerMiddlewareDescriptor> extra) {
-    std::pmr::vector<ControllerMiddlewareDescriptor> merged(startupResource());
-    merged.reserve(base.size() + extra.size());
-    merged.insert(merged.end(), base.begin(), base.end());
-    merged.insert(merged.end(), extra.begin(), extra.end());
-    return merged;
 }
 
 [[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> normalizeControllerMiddlewares(
@@ -134,7 +124,7 @@ void detail::RouterImpl::registerRoute(
         .bodyMode = bodyMode,
         .responseMode = responseMode,
         .dynamic = false,
-        .middlewares = materializeMiddlewares(std::move(middlewares)),
+        .middlewares = materializeMiddlewares(middlewares),
         .webSocketSubprotocols = {},
         .webSocketHeartbeat = {}}));
 }
@@ -161,7 +151,7 @@ void detail::RouterImpl::registerStreamRoute(
         .bodyMode = RequestBodyMode::kBuffered,
         .responseMode = responseMode,
         .dynamic = false,
-        .middlewares = materializeMiddlewares(std::move(middlewares)),
+        .middlewares = materializeMiddlewares(middlewares),
         .webSocketSubprotocols = webSocketOptions.subprotocols,
         .webSocketHeartbeat = webSocketOptions.heartbeat}));
 }
@@ -187,7 +177,7 @@ void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddleware
         std::pmr::vector<RouteMiddleware> merged(startupResource());
         const auto routeMiddlewares = route.middlewares();
         merged.reserve(middlewares.size() + routeMiddlewares.size());
-        auto prepend = materializeMiddlewares(makeRouteMiddlewares(middlewares, std::span<const ControllerMiddlewareDescriptor>{}));
+        auto prepend = materializeMiddlewares(middlewares);
         merged.insert(merged.end(), prepend.begin(), prepend.end());
         merged.insert(merged.end(), routeMiddlewares.begin(), routeMiddlewares.end());
         route.setMiddlewares(std::move(merged));
@@ -234,7 +224,7 @@ void detail::ControllerRouteBuilder::registerRoute(
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
         bodyMode,
-        makeRouteMiddlewares(impl_->middlewares(), middlewares),
+        mergeMiddlewareDescriptors(impl_->middlewares(), middlewares),
         responseMode);
 }
 
@@ -250,14 +240,14 @@ void detail::ControllerRouteBuilder::registerStreamRoute(
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
         responseMode,
-        makeRouteMiddlewares(impl_->middlewares(), middlewares),
+        mergeMiddlewareDescriptors(impl_->middlewares(), middlewares),
         webSocketOptions);
 }
 
 detail::ControllerRouteBuilder detail::ControllerRouteBuilder::createScope(
     std::string_view prefix,
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares) const {
-    auto merged = mergeControllerMiddlewares(impl_->middlewares(), std::move(middlewares));
+    auto merged = mergeMiddlewareDescriptors(impl_->middlewares(), middlewares);
     return ControllerRouteBuilder(
         impl_->router(),
         joinControllerPaths(impl_->prefix(), prefix),
