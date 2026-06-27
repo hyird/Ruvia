@@ -27,7 +27,7 @@ Task<void> Http2ServerSession<Stream>::writeHeaders(
 }
 
 template <typename Stream>
-Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& stream) {
+Task<Http2DataWindowResult> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& stream) {
     while (!closing_ && !http2SendWindowAvailable(connectionSendWindow_, stream)) {
         if (readerRunning_) {
             co_await Http2SendWindowAwaiter<Http2ServerSession>(*this, stream.id());
@@ -35,15 +35,17 @@ Task<bool> Http2ServerSession<Stream>::waitForDataWindow(Http2StreamState& strea
             Http2FrameHeader header;
             std::string_view payload;
             if ((co_await readFrame(header, payload)).shouldStop()) {
-                co_return false;
+                co_return Http2DataWindowResult::stopWriting();
             }
             if ((co_await processFrame(header, payload)).shouldStop()) {
-                co_return false;
+                co_return Http2DataWindowResult::stopWriting();
             }
             consumeInput(kHttp2FrameHeaderBytes + header.length);
         }
     }
-    co_return !closing_ && !stream.isReset();
+    co_return (!closing_ && !stream.isReset())
+        ? Http2DataWindowResult::ready()
+        : Http2DataWindowResult::stopWriting();
 }
 
 template <typename Stream>
@@ -58,9 +60,10 @@ Task<void> Http2ServerSession<Stream>::writeData(
     const auto bodySize = first.size() + second.size();
     std::size_t offset = 0;
     while (offset < bodySize) {
-        if (!http2SendWindowAvailable(connectionSendWindow_, stream) &&
-            !(co_await waitForDataWindow(stream))) {
-            co_return;
+        if (!http2SendWindowAvailable(connectionSendWindow_, stream)) {
+            if ((co_await waitForDataWindow(stream)).shouldStop()) {
+                co_return;
+            }
         }
         if (closing_ || stream.isReset()) {
             co_return;
