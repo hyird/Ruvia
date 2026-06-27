@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/detail/CallableRef.h"
 
 #include <array>
 #include <charconv>
@@ -18,20 +19,20 @@ class Context;
 
 class BodyReader final {
 public:
-    using Read = Task<std::optional<std::string_view>> (*)(void*);
+    using Read = detail::CallableRef<std::optional<std::string_view>>::Invoke;
 
-    constexpr BodyReader(void* target, Read read) noexcept : target_(target), read_(read) {}
+    constexpr BodyReader(void* target, Read read) noexcept
+        : read_(target, read) {}
 
     BodyReader(const BodyReader&) = delete;
     BodyReader& operator=(const BodyReader&) = delete;
 
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
-        return read_(target_);
+        return read_();
     }
 
 private:
-    void* target_;
-    Read read_;
+    detail::CallableRef<std::optional<std::string_view>> read_;
 };
 
 class ResponseStreamWriter final {
