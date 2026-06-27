@@ -106,7 +106,8 @@ void detail::RouterImpl::registerRoute(
     std::pmr::string path,
     RouteHandler handler,
     RequestBodyMode bodyMode,
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
     ResponseBodyMode responseMode) {
     if (!handler.valid()) {
         throw std::invalid_argument("route handler must not be empty");
@@ -123,7 +124,7 @@ void detail::RouterImpl::registerRoute(
         .bodyMode = bodyMode,
         .responseMode = responseMode,
         .dynamic = false,
-        .middlewares = materializeMiddlewares(middlewares),
+        .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
         .webSocketSubprotocols = {},
         .webSocketHeartbeat = {}}));
 }
@@ -133,7 +134,8 @@ void detail::RouterImpl::registerStreamRoute(
     std::pmr::string path,
     RouteStreamHandler handler,
     ResponseBodyMode responseMode,
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
     WebSocketRouteOptions webSocketOptions) {
     if (!handler.valid()) {
         throw std::invalid_argument("route stream handler must not be empty");
@@ -150,7 +152,7 @@ void detail::RouterImpl::registerStreamRoute(
         .bodyMode = RequestBodyMode::kBuffered,
         .responseMode = responseMode,
         .dynamic = false,
-        .middlewares = materializeMiddlewares(middlewares),
+        .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
         .webSocketSubprotocols = webSocketOptions.subprotocols,
         .webSocketHeartbeat = webSocketOptions.heartbeat}));
 }
@@ -223,7 +225,8 @@ void detail::ControllerRouteBuilder::registerRoute(
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
         bodyMode,
-        mergeMiddlewareDescriptors(impl_->middlewares(), middlewares),
+        impl_->middlewares(),
+        middlewares,
         responseMode);
 }
 
@@ -239,7 +242,8 @@ void detail::ControllerRouteBuilder::registerStreamRoute(
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
         responseMode,
-        mergeMiddlewareDescriptors(impl_->middlewares(), middlewares),
+        impl_->middlewares(),
+        middlewares,
         webSocketOptions);
 }
 
