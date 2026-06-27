@@ -33,12 +33,13 @@ struct NextAccess final {
     }
 };
 
-class RouteHandler final {
+template <typename Result, typename... Args>
+class RouteCallable final {
 public:
-    using Invoke = Next::Invoke;
+    using Invoke = Task<Result> (*)(void*, Args...);
 
-    constexpr RouteHandler() noexcept = default;
-    constexpr RouteHandler(void* target, Invoke invoke) noexcept
+    constexpr RouteCallable() noexcept = default;
+    constexpr RouteCallable(void* target, Invoke invoke) noexcept
         : target_(target),
           invoke_(invoke) {}
 
@@ -46,8 +47,8 @@ public:
         return invoke_ != nullptr;
     }
 
-    [[nodiscard]] Task<HttpResponse> operator()(Context& context) const {
-        return invoke_(target_, context);
+    [[nodiscard]] Task<Result> operator()(Args... args) const {
+        return invoke_(target_, args...);
     }
 
 private:
@@ -55,49 +56,9 @@ private:
     Invoke invoke_{nullptr};
 };
 
-class RouteStreamHandler final {
-public:
-    using Invoke = Task<void> (*)(void*, Context&);
-
-    constexpr RouteStreamHandler() noexcept = default;
-    constexpr RouteStreamHandler(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] Task<void> operator()(Context& context) const {
-        return invoke_(target_, context);
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-};
-
-class RouteMiddleware final {
-public:
-    using Invoke = Task<HttpResponse> (*)(void*, Context&, const Next&);
-
-    constexpr RouteMiddleware() noexcept = default;
-    constexpr RouteMiddleware(void* target, Invoke invoke) noexcept
-        : target_(target),
-          invoke_(invoke) {}
-
-    [[nodiscard]] bool valid() const noexcept {
-        return invoke_ != nullptr;
-    }
-
-    [[nodiscard]] Task<HttpResponse> operator()(Context& context, const Next& next) const {
-        return invoke_(target_, context, next);
-    }
-
-private:
-    void* target_{nullptr};
-    Invoke invoke_{nullptr};
-};
+using RouteHandler = RouteCallable<HttpResponse, Context&>;
+using RouteStreamHandler = RouteCallable<void, Context&>;
+using RouteMiddleware = RouteCallable<HttpResponse, Context&, const Next&>;
 
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
