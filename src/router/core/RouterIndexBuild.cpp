@@ -5,8 +5,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/RegistrationResource.h"
-
 namespace ruvia {
 
 void detail::RouteTable::buildPerfectHash() {
@@ -14,7 +12,7 @@ void detail::RouteTable::buildPerfectHash() {
     exactSeed_ = 0;
     exactMask_ = 0;
 
-    std::pmr::vector<const RouteEntry*> exactRoutes(registrationResource());
+    std::pmr::vector<const RouteEntry*> exactRoutes(resource_);
     exactRoutes.reserve(routes_.size());
     for (const auto& route : routes_) {
         if (!route.dynamic()) {
@@ -27,8 +25,8 @@ void detail::RouteTable::buildPerfectHash() {
     }
 
     auto slotCount = nextPowerOfTwo(exactRoutes.size());
-    std::pmr::vector<const RouteEntry*> candidate(registrationResource());
-    std::pmr::vector<std::uint32_t> candidateMarks(registrationResource());
+    std::pmr::vector<const RouteEntry*> candidate(resource_);
+    std::pmr::vector<std::uint32_t> candidateMarks(resource_);
     std::uint32_t generation = 0;
 
     for (std::size_t attempt = 0; attempt < 16; ++attempt) {
