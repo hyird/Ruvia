@@ -55,31 +55,14 @@ std::pmr::string joinControllerPaths(std::string_view prefix, std::string_view p
     return RouteStreamHandler(handler.target(), handler.invoke());
 }
 
-[[nodiscard]] RouteMiddlewareInit makeRouteMiddleware(ControllerMiddlewareDescriptor middleware) noexcept {
-    return RouteMiddlewareInit(
-        nullptr,
-        middleware.invoke(),
-        middleware.create(),
-        middleware.destroy());
-}
-
-template <typename DescriptorRange>
-void appendRouteMiddlewares(
-    std::pmr::vector<RouteMiddlewareInit>& middlewares,
-    const DescriptorRange& descriptors) {
-    for (const auto& descriptor : descriptors) {
-        middlewares.push_back(makeRouteMiddleware(descriptor));
-    }
-}
-
 template <typename BaseRange, typename ExtraRange>
-[[nodiscard]] std::pmr::vector<RouteMiddlewareInit> makeRouteMiddlewares(
+[[nodiscard]] std::pmr::vector<ControllerMiddlewareDescriptor> makeRouteMiddlewares(
     const BaseRange& base,
     const ExtraRange& extra) {
-    std::pmr::vector<RouteMiddlewareInit> middlewares(startupResource());
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares(startupResource());
     middlewares.reserve(base.size() + extra.size());
-    appendRouteMiddlewares(middlewares, base);
-    appendRouteMiddlewares(middlewares, extra);
+    middlewares.insert(middlewares.end(), base.begin(), base.end());
+    middlewares.insert(middlewares.end(), extra.begin(), extra.end());
     return middlewares;
 }
 
@@ -142,7 +125,7 @@ void detail::RouterImpl::registerRoute(
     std::pmr::string path,
     RouteHandler handler,
     RequestBodyMode bodyMode,
-    std::pmr::vector<RouteMiddlewareInit> middlewares,
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
     ResponseBodyMode responseMode) {
     if (!handler.valid()) {
         throw std::invalid_argument("route handler must not be empty");
@@ -169,7 +152,7 @@ void detail::RouterImpl::registerStreamRoute(
     std::pmr::string path,
     RouteStreamHandler handler,
     ResponseBodyMode responseMode,
-    std::pmr::vector<RouteMiddlewareInit> middlewares,
+    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
     WebSocketRouteOptions webSocketOptions) {
     if (!handler.valid()) {
         throw std::invalid_argument("route stream handler must not be empty");
