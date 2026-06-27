@@ -68,14 +68,16 @@ public:
         std::pmr::string path,
         RouteHandler handler,
         RequestBodyMode bodyMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
     void registerStreamRoute(
         HttpMethod method,
         std::pmr::string path,
         RouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
         WebSocketRouteOptions webSocketOptions = {});
     void prependMiddlewares(std::span<const ControllerMiddlewareDescriptor> middlewares);
 
@@ -189,7 +191,8 @@ private:
     void validateRouteTarget(HttpMethod method, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
-        std::span<const ControllerMiddlewareDescriptor> middlewares);
+        std::span<const ControllerMiddlewareDescriptor> first,
+        std::span<const ControllerMiddlewareDescriptor> second = {});
     [[nodiscard]] RouteTable buildRouteTable() const;
 
     struct RouteTableDeleter final {
