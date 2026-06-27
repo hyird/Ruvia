@@ -218,7 +218,7 @@ void detail::ControllerRouteBuilder::registerRoute(
     std::string_view path,
     ControllerRouteHandler handler,
     RequestBodyMode bodyMode,
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+    std::span<const ControllerMiddlewareDescriptor> middlewares,
     ResponseBodyMode responseMode) const {
     RouterImpl::from(impl_->router()).registerRoute(
         method,
@@ -235,7 +235,7 @@ void detail::ControllerRouteBuilder::registerStreamRoute(
     std::string_view path,
     ControllerRouteStreamHandler handler,
     ResponseBodyMode responseMode,
-    std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
+    std::span<const ControllerMiddlewareDescriptor> middlewares,
     WebSocketRouteOptions webSocketOptions) const {
     RouterImpl::from(impl_->router()).registerStreamRoute(
         method,

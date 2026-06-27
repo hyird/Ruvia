@@ -8,6 +8,7 @@
 #include "ruvia/http/Validation.h"
 
 #include <memory_resource>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -54,8 +55,8 @@ protected:
         std::string_view path,
         detail::ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
-        RuviaMiddlewareList middlewares) {
-        scope.registerRoute(method, path, std::move(handler), bodyMode, std::move(middlewares));
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
     static void ruviaAddDynamicRoute(
@@ -64,13 +65,13 @@ protected:
         std::string_view path,
         detail::ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
-        RuviaMiddlewareList middlewares) {
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
         scope.registerRoute(
             method,
             path,
             std::move(handler),
             bodyMode,
-            std::move(middlewares),
+            middlewares,
             ResponseBodyMode::kDynamic);
     }
 
@@ -80,14 +81,14 @@ protected:
         std::string_view path,
         detail::ControllerRouteStreamHandler handler,
         ResponseBodyMode responseMode,
-        RuviaMiddlewareList middlewares,
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares,
         WebSocketRouteOptions webSocketOptions = {}) {
         scope.registerStreamRoute(
             method,
             path,
             std::move(handler),
             responseMode,
-            std::move(middlewares),
+            middlewares,
             webSocketOptions);
     }
 
