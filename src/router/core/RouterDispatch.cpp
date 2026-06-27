@@ -1,5 +1,6 @@
 #include "../RouteTable.h"
 
+#include <cstdint>
 #include <exception>
 #include <stdexcept>
 #include <utility>
@@ -28,12 +29,13 @@ Context makeRouteContext(
     const HttpRequest& request,
     const detail::RouteResolution& resolution,
     detail::ContextServices services) noexcept {
+    const auto& route = resolution.route();
+    const auto routeRateLimitScope = reinterpret_cast<std::uintptr_t>(&route);
     const auto* match = resolution.match();
     if (match == nullptr) {
-        return detail::ContextAccess::make(memory, request, services);
+        return detail::ContextAccess::make(memory, request, routeRateLimitScope, services);
     }
 
-    const auto& route = resolution.route();
     const auto values = match->values();
     return detail::ContextAccess::make(
         memory,
@@ -41,6 +43,7 @@ Context makeRouteContext(
         route.paramNames().data(),
         values.data(),
         values.size(),
+        routeRateLimitScope,
         services);
 }
 

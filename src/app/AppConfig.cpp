@@ -246,39 +246,35 @@ App& App::onStop(AppHook hook) {
 }
 
 App& App::setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change the rate limit while app is running",
-        [maxRequests, window](detail::AppState& state) {
-            state.options.rateLimit.maxRequests = maxRequests;
-            state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
-                ? std::chrono::milliseconds(1)
-                : window;
-            state.options.rateLimit.redisAlias.clear();
-        });
+    return setGlobalRateLimit(maxRequests, window);
 }
 
-#ifdef RUVIA_ENABLE_REDIS
-App& App::setGlobalRateLimit(
-    std::size_t maxRequests,
-    std::chrono::milliseconds window,
-    std::string_view redisAlias,
-    bool failOpen) {
+App& App::setRateLimit(RateLimitRule rule) {
+    return setGlobalRateLimit(rule);
+}
+
+App& App::setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window) {
+    RateLimitRule rule;
+    rule.maxRequests = maxRequests;
+    rule.window = window;
+    return setGlobalRateLimit(rule);
+}
+
+App& App::setGlobalRateLimit(RateLimitRule rule) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change the rate limit while app is running",
-        [maxRequests, window, redisAlias, failOpen](detail::AppState& state) {
-            state.options.rateLimit.maxRequests = maxRequests;
-            state.options.rateLimit.window = window <= std::chrono::milliseconds::zero()
+        "cannot change the global rate limit while app is running",
+        [rule](detail::AppState& state) mutable {
+            rule.window = rule.window <= std::chrono::milliseconds::zero()
                 ? std::chrono::milliseconds(1)
-                : window;
-            state.options.rateLimit.redisAlias.assign(redisAlias.data(), redisAlias.size());
-            state.options.rateLimit.redisFailOpen = failOpen;
+                : rule.window;
+            if (rule.slotCount == 0) {
+                rule.slotCount = 1;
+            }
+            state.options.rateLimit = rule;
         });
 }
-#endif
 
 App& App::onAccess(HttpServerOptions::AccessLog::Callback callback, void* user) {
     return detail::mutateStoppedApp(

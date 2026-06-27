@@ -32,6 +32,7 @@
 
 namespace ruvia {
 
+class Context;
 class StaticRoot;
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -45,9 +46,13 @@ class DbRegistry;
 class RedisRegistry;
 class HttpClientRegistry;
 class HttpClientPool;
+class RateLimiter;
 class RequestBodyLoader;
 struct ContextAccess;
 class ContextServices;
+struct RouteRateLimitOptions;
+struct RouteRateLimitResult;
+RouteRateLimitResult checkRouteRateLimit(Context& context, RouteRateLimitOptions options) noexcept;
 struct SessionAccess;
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
@@ -73,6 +78,9 @@ class Context final {
 private:
     friend struct detail::ContextAccess;
     friend struct detail::SessionAccess;
+    friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
+        Context& context,
+        detail::RouteRateLimitOptions options) noexcept;
 
     Context(
         RequestMemory& memory,
@@ -85,6 +93,7 @@ private:
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
+        std::uintptr_t routeRateLimitScope,
         detail::ContextServices services) noexcept;
 
 public:
@@ -358,6 +367,8 @@ private:
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
+    detail::RateLimiter* rateLimiter_{nullptr};
+    std::uintptr_t routeRateLimitScope_{0};
     BodyReader* bodyReader_{nullptr};
     detail::RequestBodyLoader* bodyLoader_{nullptr};
     WebSocket* webSocket_{nullptr};

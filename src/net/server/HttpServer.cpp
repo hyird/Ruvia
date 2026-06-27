@@ -12,7 +12,6 @@
 #include "HttpServerBufferedRoute.h"
 #include "HttpServerDynamicRoute.h"
 #include "HttpServerSessionUtils.h"
-#include "RedisRateLimit.h"
 #include "../../http/HttpParserInternal.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/detail/PmrString.h"

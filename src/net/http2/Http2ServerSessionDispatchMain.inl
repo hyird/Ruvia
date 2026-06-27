@@ -26,25 +26,22 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         remoteAddress_,
         clientCertificate_,
         !std::is_same_v<Stream, asio::ip::tcp::socket>);
-    if (rateLimiter_ != nullptr && rateLimiter_->enabled()) {
-        const bool rateAllowed = co_await rateLimitRequestAllowed(
-            *rateLimiter_, redis_, options_.rateLimit, remoteAddress_, requestMemory.resource());
-        if (!rateAllowed) {
-            auto response = co_await routes_.handleError(
-                request,
-                requestMemory,
-                HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
-                false,
-                baseServices);
-            setRetryAfterSeconds(response, options_.rateLimit.window);
-            co_await writeResponse(stream, response);
-            recordHttpAccess(
-                options_.accessLog, request, remoteAddress_,
-                response.statusCode(), requestStart, true);
-            co_return;
-        }
-    }
     const auto& resolution = stream.routeResolution();
+    const auto appRateLimit = rateLimitRequestAllowed(rateLimiter_, remoteAddress_);
+    if (!appRateLimit.allowed) {
+        auto response = co_await routes_.handleError(
+            request,
+            requestMemory,
+            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+            false,
+            baseServices);
+        setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
+        co_await writeResponse(stream, response);
+        recordHttpAccess(
+            options_.accessLog, request, remoteAddress_,
+            response.statusCode(), requestStart, true);
+        co_return;
+    }
     const auto maxBody = requestBodyByteLimit(
         stream.bodyMode(),
         options_.maxStreamBodyBytes,

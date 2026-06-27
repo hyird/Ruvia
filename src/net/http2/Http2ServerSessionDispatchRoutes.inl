@@ -1,6 +1,6 @@
 template <typename Stream>
 ContextServices Http2ServerSession<Stream>::routeServices() const noexcept {
-    return ContextServices(databases_, redis_, httpClients_);
+    return ContextServices(databases_, redis_, httpClients_, rateLimiter_);
 }
 
 template <typename Stream>

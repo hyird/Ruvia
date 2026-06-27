@@ -1,16 +1,25 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
+#include <cstring>
+#include <memory>
 #include <memory_resource>
-#include <string>
 #include <string_view>
-#include <unordered_map>
+#include <thread>
+
+#include "ruvia/app/App.h"
 
 namespace ruvia::detail {
+
+struct RateLimitCheck final {
+    bool allowed{true};
+    std::int64_t resetAfterMs{1};
+};
 
 [[nodiscard]] inline std::int64_t rateLimiterNowMs() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -18,92 +27,278 @@ namespace ruvia::detail {
         .count();
 }
 
-// Per-worker, per-client token-bucket rate limiter. Each worker owns one
-// io_context and runs single-threaded, so the bucket map needs no locks. The
-// bucket holds up to `maxRequests` tokens and refills at maxRequests/window;
-// every request spends one token and is rejected (429) when the bucket is empty.
-// Because the kernel spreads connections across workers (SO_REUSEPORT), the
-// effective limit is per worker — i.e. roughly maxRequests x worker count. Stale
-// buckets are evicted on the periodic worker scan so memory tracks active
-// clients, not all clients ever seen.
+// Single-process shared fixed-window limiter. All worker threads hit the same
+// startup-allocated open-addressing table; request-path updates are atomic CAS
+// operations and never allocate or take a lock. Keys are (scope, remote IP).
 class RateLimiter final {
 public:
-    RateLimiter(std::size_t maxRequests, std::int64_t windowMs, std::pmr::memory_resource* resource)
-        : maxRequests_(maxRequests),
-          windowMs_(windowMs > 0 ? windowMs : 1),
-          buckets_(resource) {}
+    explicit RateLimiter(
+        RateLimitRule appRule,
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+          appRule_(normalizeRule(appRule)),
+          slotCount_(nextPowerOfTwo(appRule_.slotCount)),
+          slots_(allocateSlots(slotCount_)) {}
 
-    [[nodiscard]] bool enabled() const noexcept {
-        return maxRequests_ > 0;
-    }
-
-    // Consumes one token for `key`; false means the limit is exceeded.
-    [[nodiscard]] bool allow(std::string_view key) {
-        if (maxRequests_ == 0) {
-            return true;
-        }
-        const auto now = rateLimiterNowMs();
-        auto it = buckets_.find(key);
-        if (it == buckets_.end()) {
-            it = buckets_
-                     .emplace(
-                         std::pmr::string(key, buckets_.get_allocator().resource()),
-                         Bucket{static_cast<double>(maxRequests_), now, now})
-                     .first;
-        }
-        Bucket& bucket = it->second;
-        refill(bucket, now);
-        bucket.lastSeenMs = now;
-        if (bucket.tokens < 1.0) {
-            return false;
-        }
-        bucket.tokens -= 1.0;
-        return true;
-    }
-
-    // Drops buckets idle for longer than a window; they are at full tokens and
-    // carry no state, so eviction is lossless. Invoked from the worker scan.
-    void evictStale() {
-        if (maxRequests_ == 0 || buckets_.empty()) {
+    ~RateLimiter() {
+        if (slots_ == nullptr) {
             return;
         }
-        const auto now = rateLimiterNowMs();
-        for (auto it = buckets_.begin(); it != buckets_.end();) {
-            it = now - it->second.lastSeenMs > windowMs_ ? buckets_.erase(it) : std::next(it);
+        auto allocator = allocatorFor(resource_);
+        for (std::size_t i = 0; i < slotCount_; ++i) {
+            std::destroy_at(slots_ + i);
         }
+        allocator.deallocate(slots_, slotCount_);
     }
 
-    static void evictStaleThunk(void* target) noexcept {
-        static_cast<RateLimiter*>(target)->evictStale();
+    RateLimiter(const RateLimiter&) = delete;
+    RateLimiter& operator=(const RateLimiter&) = delete;
+
+    [[nodiscard]] bool enabled() const noexcept {
+        return appRule_.maxRequests > 0;
+    }
+
+    [[nodiscard]] RateLimitCheck allowGlobal(std::string_view remoteAddress) noexcept {
+        return allow(kGlobalScope, remoteAddress, appRule_);
+    }
+
+    [[nodiscard]] RateLimitCheck allowRoute(
+        std::uintptr_t routeScope,
+        std::string_view remoteAddress,
+        std::size_t maxRequests,
+        std::int64_t windowMs) noexcept {
+        RateLimitRule rule;
+        rule.maxRequests = maxRequests;
+        rule.window = std::chrono::milliseconds(windowMs <= 0 ? 1 : windowMs);
+        rule.slotCount = appRule_.slotCount;
+        rule.failClosed = appRule_.failClosed;
+        return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule);
     }
 
 private:
-    struct StringHash final {
-        using is_transparent = void;
-        [[nodiscard]] std::size_t operator()(std::string_view value) const noexcept {
-            return std::hash<std::string_view>{}(value);
-        }
+    static constexpr std::size_t kMaxKeyBytes = 64;
+    static constexpr std::uint64_t kEmptyHash = 0;
+    static constexpr std::uint64_t kInstallingHash = 1;
+    static constexpr std::uint64_t kCountBits = 22;
+    static constexpr std::uint64_t kCountMask = (std::uint64_t{1} << kCountBits) - 1;
+    static constexpr std::uintptr_t kGlobalScope = 1;
+    static constexpr std::uintptr_t kFallbackRouteScope = 2;
+
+    struct Slot final {
+        std::atomic<std::uintptr_t> scope{0};
+        std::atomic<std::uint64_t> keyHash{kEmptyHash};
+        std::atomic<std::uint16_t> keySize{0};
+        std::array<char, kMaxKeyBytes> keyBytes{};
+        std::atomic<std::uint64_t> state{0};
     };
 
-    struct Bucket final {
-        double tokens;
-        std::int64_t lastRefillMs;
-        std::int64_t lastSeenMs;
-    };
-
-    void refill(Bucket& bucket, std::int64_t now) const noexcept {
-        const auto elapsed = now - bucket.lastRefillMs;
-        if (elapsed <= 0) {
-            return;
-        }
-        const double perMs = static_cast<double>(maxRequests_) / static_cast<double>(windowMs_);
-        bucket.tokens = std::min(static_cast<double>(maxRequests_), bucket.tokens + static_cast<double>(elapsed) * perMs);
-        bucket.lastRefillMs = now;
+    [[nodiscard]] static std::pmr::polymorphic_allocator<Slot> allocatorFor(
+        std::pmr::memory_resource* resource) noexcept {
+        return std::pmr::polymorphic_allocator<Slot>(resource);
     }
 
-    std::size_t maxRequests_;
-    std::int64_t windowMs_;
-    std::pmr::unordered_map<std::pmr::string, Bucket, StringHash, std::equal_to<>> buckets_;
+    [[nodiscard]] Slot* allocateSlots(std::size_t count) {
+        auto allocator = allocatorFor(resource_);
+        auto* slots = allocator.allocate(count);
+        std::size_t constructed = 0;
+        try {
+            for (; constructed < count; ++constructed) {
+                std::construct_at(slots + constructed);
+            }
+        } catch (...) {
+            while (constructed > 0) {
+                --constructed;
+                std::destroy_at(slots + constructed);
+            }
+            allocator.deallocate(slots, count);
+            throw;
+        }
+        return slots;
+    }
+
+    [[nodiscard]] static RateLimitRule normalizeRule(RateLimitRule rule) noexcept {
+        if (rule.window <= std::chrono::milliseconds::zero()) {
+            rule.window = std::chrono::milliseconds(1);
+        }
+        if (rule.slotCount == 0) {
+            rule.slotCount = 1;
+        }
+        if (rule.maxRequests > kCountMask) {
+            rule.maxRequests = kCountMask;
+        }
+        return rule;
+    }
+
+    [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept {
+        std::size_t result = 1;
+        while (result < value) {
+            result <<= 1U;
+        }
+        return result;
+    }
+
+    [[nodiscard]] static std::uint64_t keyHash(std::uintptr_t scope, std::string_view key) noexcept {
+        std::uint64_t hash = 1469598103934665603ULL;
+        auto mix = [&hash](std::uint64_t value) noexcept {
+            for (std::size_t i = 0; i < sizeof(value); ++i) {
+                hash ^= static_cast<unsigned char>((value >> (i * 8U)) & 0xffU);
+                hash *= 1099511628211ULL;
+            }
+        };
+        mix(static_cast<std::uint64_t>(scope));
+        for (const unsigned char c : key) {
+            hash ^= c;
+            hash *= 1099511628211ULL;
+        }
+        return hash <= kInstallingHash ? hash + kInstallingHash + 1 : hash;
+    }
+
+    [[nodiscard]] static std::uint64_t currentWindow(std::int64_t nowMs, const RateLimitRule& rule) noexcept {
+        const auto safeNow = nowMs < 0 ? std::int64_t{0} : nowMs;
+        return static_cast<std::uint64_t>(safeNow / rule.window.count());
+    }
+
+    [[nodiscard]] static std::int64_t windowResetAfter(
+        std::int64_t nowMs,
+        std::uint64_t window,
+        const RateLimitRule& rule) noexcept {
+        const auto nextWindowMs = static_cast<std::int64_t>(window + 1) * rule.window.count();
+        const auto remaining = nextWindowMs - nowMs;
+        return remaining <= 0 ? 1 : remaining;
+    }
+
+    [[nodiscard]] static std::uint64_t packState(std::uint64_t window, std::uint64_t count) noexcept {
+        return (window << kCountBits) | (count & kCountMask);
+    }
+
+    [[nodiscard]] static std::uint64_t stateWindow(std::uint64_t state) noexcept {
+        return state >> kCountBits;
+    }
+
+    [[nodiscard]] static std::uint64_t stateCount(std::uint64_t state) noexcept {
+        return state & kCountMask;
+    }
+
+    [[nodiscard]] static bool keyEquals(
+        const Slot& slot,
+        std::uintptr_t scope,
+        std::string_view key,
+        std::uint64_t hash) noexcept {
+        if (slot.keyHash.load(std::memory_order_acquire) != hash) {
+            return false;
+        }
+        if (slot.scope.load(std::memory_order_acquire) != scope) {
+            return false;
+        }
+        const auto size = slot.keySize.load(std::memory_order_acquire);
+        if (size != key.size()) {
+            return false;
+        }
+        return std::memcmp(slot.keyBytes.data(), key.data(), size) == 0;
+    }
+
+    [[nodiscard]] bool tryInstall(
+        Slot& slot,
+        std::uintptr_t scope,
+        std::string_view key,
+        std::uint64_t hash,
+        std::uint64_t window,
+        std::uint64_t expectedHash) noexcept {
+        if (!slot.keyHash.compare_exchange_strong(
+                expectedHash,
+                kInstallingHash,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return false;
+        }
+
+        std::memcpy(slot.keyBytes.data(), key.data(), key.size());
+        slot.scope.store(scope, std::memory_order_release);
+        slot.keySize.store(static_cast<std::uint16_t>(key.size()), std::memory_order_release);
+        slot.state.store(packState(window, 0), std::memory_order_release);
+        slot.keyHash.store(hash, std::memory_order_release);
+        return true;
+    }
+
+    [[nodiscard]] static RateLimitCheck consume(
+        Slot& slot,
+        std::int64_t nowMs,
+        const RateLimitRule& rule,
+        std::uint64_t window) noexcept {
+        for (;;) {
+            auto observed = slot.state.load(std::memory_order_acquire);
+            const auto observedWindow = stateWindow(observed);
+            const auto observedCount = stateCount(observed);
+            const auto resetAfterMs = windowResetAfter(nowMs, window, rule);
+
+            if (observedWindow != window) {
+                const auto desired = packState(window, 1);
+                if (slot.state.compare_exchange_weak(
+                        observed,
+                        desired,
+                        std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfterMs};
+                }
+                continue;
+            }
+
+            if (observedCount >= rule.maxRequests) {
+                return RateLimitCheck{.allowed = false, .resetAfterMs = resetAfterMs};
+            }
+
+            const auto desired = packState(window, observedCount + 1);
+            if (slot.state.compare_exchange_weak(
+                    observed,
+                    desired,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfterMs};
+            }
+        }
+    }
+
+    [[nodiscard]] RateLimitCheck allow(
+        std::uintptr_t scope,
+        std::string_view key,
+        RateLimitRule rule) noexcept {
+        rule = normalizeRule(rule);
+        if (rule.maxRequests == 0) {
+            return RateLimitCheck{};
+        }
+        if (key.size() > kMaxKeyBytes) {
+            return RateLimitCheck{.allowed = !rule.failClosed, .resetAfterMs = 1};
+        }
+
+        const auto nowMs = rateLimiterNowMs();
+        const auto window = currentWindow(nowMs, rule);
+        const auto hash = keyHash(scope, key);
+        const auto start = static_cast<std::size_t>(hash) & (slotCount_ - 1);
+
+        for (std::size_t probe = 0; probe < slotCount_; ++probe) {
+            auto& slot = slots_[(start + probe) & (slotCount_ - 1)];
+            const auto observedHash = slot.keyHash.load(std::memory_order_acquire);
+            if (observedHash == hash && keyEquals(slot, scope, key, hash)) {
+                return consume(slot, nowMs, rule, window);
+            }
+            if (observedHash == kInstallingHash) {
+                std::this_thread::yield();
+                --probe;
+                continue;
+            }
+            if (observedHash == kEmptyHash &&
+                tryInstall(slot, scope, key, hash, window, observedHash)) {
+                return consume(slot, nowMs, rule, window);
+            }
+        }
+
+        return RateLimitCheck{.allowed = !rule.failClosed, .resetAfterMs = 1};
+    }
+
+    std::pmr::memory_resource* resource_;
+    RateLimitRule appRule_;
+    std::size_t slotCount_;
+    Slot* slots_{nullptr};
 };
 
 }  // namespace ruvia::detail
