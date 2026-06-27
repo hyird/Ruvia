@@ -53,7 +53,7 @@ struct AppRuntimeGraph final {
 
 AppState::AppState()
     : threadNum(std::max(1U, std::thread::hardware_concurrency())),
-      runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{ProcessMemory::instance().upstreamResource()}) {
+      runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
     listenAddress.assign("0.0.0.0");
 }
 
@@ -71,12 +71,12 @@ App& app() {
 }
 
 App::App()
-    : state_(detail::constructPmrObject<detail::AppState>(ProcessMemory::instance().upstreamResource())) {}
+    : state_(detail::constructPmrObject<detail::AppState>(detail::appResource())) {}
 
 App::~App() = default;
 
 void detail::AppStateDeleter::operator()(AppState* state) const noexcept {
-    destroyPmrObject(state, ProcessMemory::instance().upstreamResource());
+    destroyPmrObject(state, detail::appResource());
 }
 
 const Env& App::env() const noexcept {
@@ -99,7 +99,7 @@ App& App::useMiddleware(detail::ControllerMiddlewareDescriptor middleware) {
 
 void App::run() {
     auto& state = *state_;
-    auto* runtimeResource = ProcessMemory::instance().upstreamResource();
+    auto* runtimeResource = detail::appResource();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
     auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
@@ -258,7 +258,7 @@ void App::run() {
 
 void App::stop() {
     auto& state = *state_;
-    std::pmr::vector<detail::HttpServer*> workers(ProcessMemory::instance().upstreamResource());
+    std::pmr::vector<detail::HttpServer*> workers(detail::appResource());
 
     {
         std::lock_guard lock(state.mutex);

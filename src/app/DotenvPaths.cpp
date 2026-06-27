@@ -32,13 +32,13 @@ std::filesystem::path dotenvExecutableDirectory() {
 #elif defined(__APPLE__)
     uint32_t size = 0;
     (void)::_NSGetExecutablePath(nullptr, &size);
-    std::pmr::vector<char> buffer(size, ProcessMemory::instance().upstreamResource());
+    std::pmr::vector<char> buffer(size, appResource());
     if (::_NSGetExecutablePath(buffer.data(), &size) != 0) {
         throw std::runtime_error("failed to resolve executable path");
     }
     return std::filesystem::weakly_canonical(std::filesystem::path(buffer.data())).parent_path();
 #else
-    std::pmr::vector<char> buffer(1024, ProcessMemory::instance().upstreamResource());
+    std::pmr::vector<char> buffer(1024, appResource());
     for (;;) {
         const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
         if (length < 0) {

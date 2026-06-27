@@ -28,12 +28,12 @@ template <typename Variables>
 }  // namespace
 
 Env::Env()
-    : state_(detail::constructPmrObject<detail::EnvState>(ProcessMemory::instance().upstreamResource())) {}
+    : state_(detail::constructPmrObject<detail::EnvState>(detail::appResource())) {}
 
 Env::~Env() = default;
 
 void detail::EnvStateDeleter::operator()(EnvState* state) const noexcept {
-    destroyPmrObject(state, ProcessMemory::instance().upstreamResource());
+    destroyPmrObject(state, detail::appResource());
 }
 
 std::optional<std::string_view> Env::get(std::string_view name) const noexcept {

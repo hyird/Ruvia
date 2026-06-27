@@ -56,7 +56,7 @@ App& App::useDb(std::string_view alias, DbConfig config) {
                 alias,
                 config,
                 [](std::string_view storedAlias, DbConfig&& storedConfig) {
-                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    auto* resource = detail::appResource();
                     return detail::DbDefinition{
                         std::pmr::string(storedAlias, resource),
                         std::move(storedConfig)};
@@ -86,7 +86,7 @@ App& App::useRedis(std::string_view alias, RedisConfig config) {
                 alias,
                 config,
                 [](std::string_view storedAlias, RedisConfig&& storedConfig) {
-                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    auto* resource = detail::appResource();
                     return detail::RedisDefinition{
                         std::pmr::string(storedAlias, resource),
                         std::move(storedConfig)};
@@ -116,7 +116,7 @@ App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
                 alias,
                 config,
                 [](std::string_view storedAlias, HttpClientConfig&& storedConfig) {
-                    auto* resource = ProcessMemory::instance().upstreamResource();
+                    auto* resource = detail::appResource();
                     return detail::HttpClientDefinition{
                         std::pmr::string(storedAlias, resource),
                         std::move(storedConfig)};

@@ -8,6 +8,7 @@
 
 #include "ruvia/memory/PmrObject.h"
 #include "ruvia/router/Router.h"
+#include "AppResource.h"
 #include "DotenvInternal.h"
 #include "ruvia/detail/NativePath.h"
 #include "ruvia/http/ControllerDescriptors.h"
@@ -31,7 +32,7 @@ struct AppState final {
     AppState();
     ~AppState();
 
-    std::pmr::string listenAddress{ProcessMemory::instance().upstreamResource()};
+    std::pmr::string listenAddress{appResource()};
     std::optional<std::uint16_t> httpListenPort{8080};
     std::optional<std::uint16_t> httpsListenPort;
     bool autoHttps{false};
@@ -40,18 +41,18 @@ struct AppState final {
     std::optional<AppDocumentRootConfig> documentRootConfig;
     MemoryPoolConfig memoryConfig{};
     HttpErrorHandler errorHandler{nullptr};
-    std::pmr::vector<AppHook> onStartHooks{ProcessMemory::instance().upstreamResource()};
-    std::pmr::vector<AppHook> onStopHooks{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<AppHook> onStartHooks{appResource()};
+    std::pmr::vector<AppHook> onStopHooks{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{
-        ProcessMemory::instance().upstreamResource()};
+        appResource()};
 #ifdef RUVIA_ENABLE_MARIADB
-    std::pmr::vector<DbDefinition> databases{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<DbDefinition> databases{appResource()};
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    std::pmr::vector<RedisDefinition> redis{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<RedisDefinition> redis{appResource()};
 #endif
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
-    std::pmr::vector<HttpClientDefinition> httpClients{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<HttpClientDefinition> httpClients{appResource()};
 #endif
 
     Env env;

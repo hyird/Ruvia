@@ -8,17 +8,17 @@
 #include <vector>
 
 #include "ruvia/app/Dotenv.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "AppResource.h"
 
 namespace ruvia::detail {
 
 struct EnvVariable final {
-    std::pmr::string name{ProcessMemory::instance().upstreamResource()};
-    std::pmr::string value{ProcessMemory::instance().upstreamResource()};
+    std::pmr::string name{appResource()};
+    std::pmr::string value{appResource()};
 };
 
 struct EnvState final {
-    std::pmr::vector<EnvVariable> variables{ProcessMemory::instance().upstreamResource()};
+    std::pmr::vector<EnvVariable> variables{appResource()};
     bool loaded{false};
 };
 
@@ -33,8 +33,8 @@ struct EnvAccess final {
 };
 
 struct DotenvEntry final {
-    std::pmr::string name{ProcessMemory::instance().upstreamResource()};
-    std::pmr::string value{ProcessMemory::instance().upstreamResource()};
+    std::pmr::string name{appResource()};
+    std::pmr::string value{appResource()};
 };
 
 [[nodiscard]] std::pmr::vector<DotenvEntry> readDotenvEntries(const std::filesystem::path& path);

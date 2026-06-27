@@ -113,7 +113,7 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
             }
 
             auto& documentRootConfig =
-                state.documentRootConfig.emplace(ProcessMemory::instance().upstreamResource());
+                state.documentRootConfig.emplace(detail::appResource());
             detail::assignNativePath(documentRootConfig.root, config.root);
             documentRootConfig.staticOptions = std::move(config.staticOptions);
         });
