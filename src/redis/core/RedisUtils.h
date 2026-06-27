@@ -19,8 +19,7 @@ namespace ruvia::detail {
 }
 
 inline void emplaceRedisString(std::pmr::vector<std::pmr::string>& target, std::string_view value) {
-    target.emplace_back();
-    target.back().assign(value.data(), value.size());
+    target.emplace_back(value.data(), value.size());
 }
 
 inline void appendRedisNumber(std::pmr::string& output, std::uint64_t value) {
