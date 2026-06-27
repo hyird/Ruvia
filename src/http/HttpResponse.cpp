@@ -10,8 +10,8 @@ namespace ruvia {
 
 HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
     : statusText_(detail::pmrResourceOrDefault(resource)),
-      headers_(detail::pmrResourceOrDefault(resource)),
-      body_(detail::pmrResourceOrDefault(resource)) {}
+      headers_(statusText_.get_allocator().resource()),
+      body_(statusText_.get_allocator().resource()) {}
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return body_.get_allocator().resource();
