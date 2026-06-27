@@ -4,7 +4,6 @@
 #include "RedisUtils.h"
 
 #include <stdexcept>
-#include <utility>
 
 namespace ruvia {
 
@@ -15,17 +14,51 @@ RedisPipeline::RedisPipeline(
       resource_(detail::resolveRedisResource(resource)),
       commands_(resource_) {}
 
+RedisPipeline::Command RedisPipeline::makeCommand(
+    std::pmr::memory_resource* resource,
+    std::span<const std::string_view> args) {
+    Command command{std::pmr::vector<std::pmr::string>(resource)};
+    command.args.reserve(args.size());
+    for (const auto arg : args) {
+        detail::emplaceRedisString(command.args, arg);
+    }
+    return command;
+}
+
+RedisPipeline::Command RedisPipeline::makeCommand(
+    std::pmr::memory_resource* resource,
+    std::string_view first,
+    std::span<const std::string_view> rest) {
+    Command command{std::pmr::vector<std::pmr::string>(resource)};
+    command.args.reserve(rest.size() + 1);
+    detail::emplaceRedisString(command.args, first);
+    for (const auto arg : rest) {
+        detail::emplaceRedisString(command.args, arg);
+    }
+    return command;
+}
+
+void RedisPipeline::appendCommand(
+    std::pmr::vector<Command>& target,
+    std::pmr::memory_resource* resource,
+    std::span<const std::string_view> args) {
+    target.emplace_back(makeCommand(resource, args));
+}
+
+void RedisPipeline::appendCommand(
+    std::pmr::vector<Command>& target,
+    std::pmr::memory_resource* resource,
+    std::string_view first,
+    std::span<const std::string_view> rest) {
+    target.emplace_back(makeCommand(resource, first, rest));
+}
+
 RedisPipeline& RedisPipeline::command(std::initializer_list<std::string_view> args) {
     return command(std::span<const std::string_view>(args.begin(), args.size()));
 }
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
-    Command command{std::pmr::vector<std::pmr::string>(resource_)};
-    command.args.reserve(args.size());
-    for (const auto arg : args) {
-        detail::emplaceRedisString(command.args, arg);
-    }
-    commands_.emplace_back(std::move(command));
+    appendCommand(commands_, resource_, args);
     return *this;
 }
 
