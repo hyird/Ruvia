@@ -89,17 +89,21 @@ detail::RouteMiddleware detail::RouterImpl::materializeMiddleware(ControllerMidd
     return RouteMiddleware(target, middleware.invoke());
 }
 
+void detail::RouterImpl::appendMaterializedMiddlewares(
+    std::pmr::vector<RouteMiddleware>& frames,
+    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+    for (const auto& middleware : descriptors) {
+        frames.push_back(materializeMiddleware(middleware));
+    }
+}
+
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
     std::pmr::vector<RouteMiddleware> frames(registrationResource());
     frames.reserve(first.size() + second.size());
-    for (const auto& middleware : first) {
-        frames.push_back(materializeMiddleware(middleware));
-    }
-    for (const auto& middleware : second) {
-        frames.push_back(materializeMiddleware(middleware));
-    }
+    appendMaterializedMiddlewares(frames, first);
+    appendMaterializedMiddlewares(frames, second);
     return frames;
 }
 
