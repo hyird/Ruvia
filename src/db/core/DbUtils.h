@@ -41,12 +41,12 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
 
 [[nodiscard]] inline DbValue cloneDbValueForResource(
     const DbValue& value,
-    std::pmr::memory_resource* resource) {
+    std::pmr::memory_resource* resolvedResource) {
     switch (value.type()) {
         case DbValueType::kNull:
             return DbValue(nullptr);
         case DbValueType::kString:
-            return DbValue(std::pmr::string(value.text(), resolveDbResource(resource)));
+            return DbValue(std::pmr::string(value.text(), resolvedResource));
         case DbValueType::kSigned:
             return DbValue(value.signedValue());
         case DbValueType::kUnsigned:
