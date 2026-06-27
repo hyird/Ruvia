@@ -56,6 +56,14 @@ private:
     bool frozen_{false};
 };
 
+namespace detail {
+
+[[nodiscard]] inline std::pmr::memory_resource* processResource() noexcept {
+    return ProcessMemory::instance().upstreamResource();
+}
+
+}  // namespace detail
+
 class WorkerMemory final {
 public:
     explicit WorkerMemory(const MemoryPoolConfig& config = ProcessMemory::instance().config());

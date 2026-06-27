@@ -87,7 +87,7 @@ void ControllerStoreStateDeleter::operator()(ControllerStoreState* state) const 
 }
 
 std::pmr::memory_resource* registrationResource() noexcept {
-    return ProcessMemory::instance().upstreamResource();
+    return processResource();
 }
 
 void ControllerStore::reserve(std::size_t count) {

@@ -95,7 +95,7 @@ MimallocMemoryResource& ProcessMemory::mimallocResource() noexcept {
 
 WorkerMemory::WorkerMemory(const MemoryPoolConfig& config)
     : config_(config),
-      resource_(ProcessMemory::instance().upstreamResource()) {
+      resource_(detail::processResource()) {
     ProcessMemory::instance().freeze();
 }
 
