@@ -12,6 +12,7 @@
 
 #include "ruvia/app/AppHook.h"
 #include "ruvia/app/Dotenv.h"
+#include "ruvia/app/RateLimitRule.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/MiddlewareRuntime.h"
@@ -32,8 +33,6 @@
 
 namespace ruvia {
 
-inline constexpr std::size_t kDefaultRateLimitSlotCount = 65536;
-
 // One completed request, passed to the access-log callback after the response is
 // written. Views borrow request memory and are valid only for the call.
 struct AccessLogRecord final {
@@ -43,17 +42,6 @@ struct AccessLogRecord final {
     std::uint16_t status{0};
     std::uint64_t durationMicros{0};
     bool http2{false};
-};
-
-// Single-process, per-IP fixed-window rate limit rule. maxRequests == 0
-// disables the app-level rule. slotCount sizes the shared atomic key table used
-// by both app-level and route-level limit checks; when the table is full, the
-// limiter follows failClosed.
-struct RateLimitRule final {
-    std::size_t maxRequests{0};
-    std::chrono::milliseconds window{std::chrono::seconds(1)};
-    std::size_t slotCount{kDefaultRateLimitSlotCount};
-    bool failClosed{true};
 };
 
 struct HttpServerOptions final {

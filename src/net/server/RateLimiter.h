@@ -12,7 +12,7 @@
 #include <string_view>
 #include <thread>
 
-#include "ruvia/app/App.h"
+#include "ruvia/app/RateLimitRule.h"
 
 namespace ruvia::detail {
 
@@ -65,11 +65,8 @@ public:
     [[nodiscard]] RateLimitCheck allowRoute(
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
-        std::size_t maxRequests,
-        std::int64_t windowMs) noexcept {
-        RateLimitRule rule;
-        rule.maxRequests = maxRequests;
-        rule.window = std::chrono::milliseconds(windowMs <= 0 ? 1 : windowMs);
+        RateLimitRule rule) noexcept {
+        rule = normalizeRule(rule);
         rule.slotCount = appRule_.slotCount;
         rule.failClosed = appRule_.failClosed;
         return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule);
@@ -261,8 +258,7 @@ private:
     [[nodiscard]] RateLimitCheck allow(
         std::uintptr_t scope,
         std::string_view key,
-        RateLimitRule rule) noexcept {
-        rule = normalizeRule(rule);
+        const RateLimitRule& rule) noexcept {
         if (rule.maxRequests == 0) {
             return RateLimitCheck{};
         }
