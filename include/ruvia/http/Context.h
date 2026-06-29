@@ -52,7 +52,7 @@ struct ContextAccess;
 class ContextServices;
 struct RouteRateLimitOptions;
 struct RouteRateLimitResult;
-RouteRateLimitResult checkRouteRateLimit(Context& context, RouteRateLimitOptions options) noexcept;
+RouteRateLimitResult checkRouteRateLimit(Context& context, const RouteRateLimitOptions& options) noexcept;
 struct SessionAccess;
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
@@ -80,7 +80,7 @@ private:
     friend struct detail::SessionAccess;
     friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
         Context& context,
-        detail::RouteRateLimitOptions options) noexcept;
+        const detail::RouteRateLimitOptions& options) noexcept;
 
     Context(
         RequestMemory& memory,

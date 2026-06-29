@@ -1,11 +1,13 @@
 #pragma once
 
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/app/RateLimitRule.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpResponse.h"
@@ -17,8 +19,7 @@ namespace ruvia {
 namespace detail {
 
 struct RouteRateLimitOptions final {
-    std::size_t maxRequests{0};
-    std::int64_t windowMs{1};
+    RateLimitRule rule;
 };
 
 struct RouteRateLimitResult final {
@@ -28,7 +29,16 @@ struct RouteRateLimitResult final {
 
 [[nodiscard]] RouteRateLimitResult checkRouteRateLimit(
     Context& context,
-    RouteRateLimitOptions options) noexcept;
+    const RouteRateLimitOptions& options) noexcept;
+
+[[nodiscard]] constexpr RouteRateLimitOptions routeRateLimitOptions(
+    std::size_t maxRequests,
+    std::int64_t windowMs) noexcept {
+    RateLimitRule rule;
+    rule.maxRequests = maxRequests;
+    rule.window = std::chrono::milliseconds(windowMs <= 0 ? 1 : windowMs);
+    return RouteRateLimitOptions{.rule = rule};
+}
 
 inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
     char buffer[24];
@@ -55,11 +65,7 @@ public:
             Derived::ruviaRateLimitWindowMs > 0,
             "route rate limit window must be greater than 0ms");
 
-        const auto check = detail::checkRouteRateLimit(
-            context,
-            detail::RouteRateLimitOptions{
-                .maxRequests = Derived::ruviaRateLimitMaxRequests,
-                .windowMs = Derived::ruviaRateLimitWindowMs});
+        const auto check = detail::checkRouteRateLimit(context, routeRateLimitOptions());
         if (!check.allowed) {
             auto response = context.error(429, "too_many_requests", "rate limit exceeded");
             detail::setUnsignedHeader(response, "Retry-After", detail::retryAfterSeconds(check.resetAfterMs));
@@ -70,6 +76,14 @@ public:
         }
 
         co_return co_await next(context);
+    }
+
+private:
+    [[nodiscard]] static const detail::RouteRateLimitOptions& routeRateLimitOptions() noexcept {
+        static constexpr auto options = detail::routeRateLimitOptions(
+            Derived::ruviaRateLimitMaxRequests,
+            Derived::ruviaRateLimitWindowMs);
+        return options;
     }
 };
 
