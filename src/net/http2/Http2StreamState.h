@@ -34,9 +34,9 @@ class Http2StreamState final {
 public:
     explicit Http2StreamState(std::uint32_t streamId, std::pmr::memory_resource* resource)
         : id_(streamId),
-          requestData_(resource),
+          bodyQueue_(resource),
           headerBlocks_(resource),
-          bodyQueue_(resource) {}
+          requestData_(resource) {}
 
     [[nodiscard]] std::uint32_t id() const noexcept {
         return id_;

@@ -34,10 +34,10 @@ Task<Http2DataWindowResult> Http2ServerSession<Stream>::waitForDataWindow(Http2S
         } else {
             Http2FrameHeader header;
             std::string_view payload;
-            if ((co_await readFrame(header, payload)).shouldStop()) {
+            if (auto readResult = co_await readFrame(header, payload); readResult.shouldStop()) {
                 co_return Http2DataWindowResult::stopWriting();
             }
-            if ((co_await processFrame(header, payload)).shouldStop()) {
+            if (auto processResult = co_await processFrame(header, payload); processResult.shouldStop()) {
                 co_return Http2DataWindowResult::stopWriting();
             }
             consumeInput(kHttp2FrameHeaderBytes + header.length);
@@ -61,7 +61,7 @@ Task<void> Http2ServerSession<Stream>::writeData(
     std::size_t offset = 0;
     while (offset < bodySize) {
         if (!http2SendWindowAvailable(connectionSendWindow_, stream)) {
-            if ((co_await waitForDataWindow(stream)).shouldStop()) {
+            if (auto windowResult = co_await waitForDataWindow(stream); windowResult.shouldStop()) {
                 co_return;
             }
         }
