@@ -39,7 +39,7 @@ Task<void> Http2ServerSession<Stream>::run(std::string_view initialBytes) {
     input_.assign(initialBytes.data(), initialBytes.size());
     inputOffset_ = 0;
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
-    if ((co_await readPreface()).shouldStop()) {
+    if (auto prefaceResult = co_await readPreface(); prefaceResult.shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -56,7 +56,7 @@ Task<void> Http2ServerSession<Stream>::runUpgraded(
     input_.assign(initialBytes.data(), initialBytes.size());
     inputOffset_ = 0;
     scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
-    if ((co_await applySettingsPayload(settingsPayload)).shouldStop()) {
+    if (auto settingsResult = co_await applySettingsPayload(settingsPayload); settingsResult.shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -67,7 +67,7 @@ Task<void> Http2ServerSession<Stream>::runUpgraded(
     }
     co_await sendLocalSettings();
     co_await sendSettingsAck();
-    if ((co_await readPreface()).shouldStop()) {
+    if (auto prefaceResult = co_await readPreface(); prefaceResult.shouldStop()) {
         closing_ = true;
         co_return;
     }
@@ -81,7 +81,7 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
     while (!closing_) {
         Http2FrameHeader header;
         std::string_view payload;
-        if ((co_await readFrame(header, payload)).shouldStop()) {
+        if (auto readResult = co_await readFrame(header, payload); readResult.shouldStop()) {
             break;
         }
         // The server has begun draining: tell the peer to stop opening streams
@@ -93,7 +93,7 @@ Task<void> Http2ServerSession<Stream>::runFrameLoop() {
             goawayLastStreamId_ = lastStreamId_;
             co_await sendGoaway(lastStreamId_, Http2ErrorCode::kNoError, "server draining");
         }
-        if ((co_await processFrame(header, payload)).shouldStop()) {
+        if (auto processResult = co_await processFrame(header, payload); processResult.shouldStop()) {
             break;
         }
         consumeInput(kHttp2FrameHeaderBytes + header.length);
