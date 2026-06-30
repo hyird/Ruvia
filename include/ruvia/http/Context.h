@@ -247,7 +247,11 @@ public:
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
-    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options = {}) const;
+    [[nodiscard]] Task<RequestFormFieldList> parseBody() const {
+        return parseBody(ParseBodyOptions{});
+    }
+
+    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options) const;
 
     Task<void> discardBody() const;
 
@@ -420,7 +424,11 @@ public:
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
 
-    Context& header(std::string_view name, std::string_view value, HeaderOptions options = {});
+    Context& header(std::string_view name, std::string_view value) {
+        return header(name, value, HeaderOptions{});
+    }
+
+    Context& header(std::string_view name, std::string_view value, HeaderOptions options);
 
     Context& setHeader(std::string_view name, std::string_view value);
 
