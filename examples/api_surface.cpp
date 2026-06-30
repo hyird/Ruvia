@@ -164,7 +164,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
-        auto parts = co_await c.multipart();
+        auto parts = co_await c.req().multipart();
         std::pmr::string body(c.allocator<char>());
         body.append("parts=");
         appendUnsigned(body, parts.size());
@@ -183,7 +183,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> parsedBody(ruvia::Context& c) {
-        auto fields = co_await c.parseBody({.all = true, .dot = true});
+        auto fields = co_await c.req().parseBody({.all = true, .dot = true});
         std::pmr::string body(c.allocator<char>());
         body.append("fields=");
         appendUnsigned(body, fields.size());

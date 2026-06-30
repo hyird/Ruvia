@@ -82,9 +82,9 @@ void assignDotPath(
 }
 
 void appendParsedBodyField(
-    Context::RequestFormFieldList& fields,
-    Context::RequestFormField&& field,
-    Context::ParseBodyOptions options) {
+    ContextRequest::RequestFormFieldList& fields,
+    ContextRequest::RequestFormField&& field,
+    ContextRequest::ParseBodyOptions options) {
     if (options.dot) {
         assignDotPath(field, fields.get_allocator().resource());
     }
@@ -161,7 +161,7 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
         expected);
 }
 
-Task<std::pmr::vector<MultipartPart>> Context::multipart() const {
+Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundaryValue = multipartBoundary();
 
     const auto requestBody = co_await this->requestBody();
@@ -216,7 +216,7 @@ Task<std::pmr::vector<MultipartPart>> Context::multipart() const {
     co_return parts;
 }
 
-Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options) const {
+Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
 
     if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
@@ -237,7 +237,7 @@ Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options)
                 stripArraySuffix(*decodedName);
                 appendParsedBodyField(
                     fields,
-                    RequestFormField(
+                        ContextRequest::RequestFormField(
                         resource(),
                         std::move(*decodedName),
                         std::move(*decodedValue),
@@ -255,7 +255,7 @@ Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options)
     }
 
     if (requestContentTypeMatches("multipart/form-data")) {
-        auto parts = co_await multipart();
+        auto parts = co_await requestMultipart();
         RequestFormFieldList fields(resource());
         fields.reserve(parts.size());
         for (const auto& part : parts) {
@@ -264,7 +264,7 @@ Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options)
             stripArraySuffix(name);
             appendParsedBodyField(
                 fields,
-                RequestFormField(
+                    ContextRequest::RequestFormField(
                     resource(),
                     std::move(name),
                     std::pmr::string(part.body.data(), part.body.size(), resource()),

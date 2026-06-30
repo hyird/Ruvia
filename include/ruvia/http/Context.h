@@ -83,6 +83,39 @@ inline void assignStableString(std::pmr::string& dst, std::string_view src) {
 
 class ContextRequest final {
 public:
+    struct ParseBodyOptions final {
+        bool all{false};
+        bool dot{false};
+    };
+
+    struct RequestFormField final {
+        RequestFormField(
+            std::pmr::memory_resource* resource,
+            std::pmr::string&& fieldName,
+            std::pmr::string&& fieldValue,
+            std::pmr::string&& fieldFilename = {},
+            std::pmr::string&& fieldContentType = {},
+            bool fieldFile = false,
+            bool fieldArray = false)
+            : name(std::move(fieldName)),
+              value(std::move(fieldValue)),
+              filename(std::move(fieldFilename)),
+              contentType(std::move(fieldContentType)),
+              path(resource),
+              file(fieldFile),
+              array(fieldArray) {}
+
+        std::pmr::string name;
+        std::pmr::string value;
+        std::pmr::string filename;
+        std::pmr::string contentType;
+        std::pmr::vector<std::pmr::string> path;
+        bool file{false};
+        bool array{false};
+    };
+
+    using RequestFormFieldList = std::pmr::vector<RequestFormField>;
+
     [[nodiscard]] const HttpRequest& raw() const noexcept;
     [[nodiscard]] operator const HttpRequest&() const noexcept {
         return raw();
@@ -111,6 +144,14 @@ public:
 
     template <typename T>
     [[nodiscard]] Task<T> form() const;
+
+    [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
+
+    [[nodiscard]] Task<RequestFormFieldList> parseBody() const {
+        return parseBody(ParseBodyOptions{});
+    }
+
+    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options) const;
 
 private:
     friend class Context;
@@ -148,43 +189,13 @@ private:
 
 public:
     using Renderer = Task<HttpResponse> (*)(Context& context, std::string_view body);
+    using ParseBodyOptions = ContextRequest::ParseBodyOptions;
+    using RequestFormField = ContextRequest::RequestFormField;
+    using RequestFormFieldList = ContextRequest::RequestFormFieldList;
 
     struct HeaderOptions final {
         bool append{false};
     };
-
-    struct ParseBodyOptions final {
-        bool all{false};
-        bool dot{false};
-    };
-
-    struct RequestFormField final {
-        RequestFormField(
-            std::pmr::memory_resource* resource,
-            std::pmr::string&& fieldName,
-            std::pmr::string&& fieldValue,
-            std::pmr::string&& fieldFilename = {},
-            std::pmr::string&& fieldContentType = {},
-            bool fieldFile = false,
-            bool fieldArray = false)
-            : name(std::move(fieldName)),
-              value(std::move(fieldValue)),
-              filename(std::move(fieldFilename)),
-              contentType(std::move(fieldContentType)),
-              path(resource),
-              file(fieldFile),
-              array(fieldArray) {}
-
-        std::pmr::string name;
-        std::pmr::string value;
-        std::pmr::string filename;
-        std::pmr::string contentType;
-        std::pmr::vector<std::pmr::string> path;
-        bool file{false};
-        bool array{false};
-    };
-
-    using RequestFormFieldList = std::pmr::vector<RequestFormField>;
 
     ~Context() = default;
 
@@ -238,14 +249,6 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }
-
-    [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
-
-    [[nodiscard]] Task<RequestFormFieldList> parseBody() const {
-        return parseBody(ParseBodyOptions{});
-    }
-
-    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options) const;
 
     Task<void> discardBody() const;
 
@@ -584,6 +587,8 @@ public:
 
 private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
+    [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
+    [[nodiscard]] Task<RequestFormFieldList> parseRequestBody(ParseBodyOptions options) const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -744,6 +749,14 @@ inline bool ContextRequest::isSecure() const noexcept {
 
 inline Task<std::string_view> ContextRequest::text() const {
     return context_->requestBody();
+}
+
+inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
+    return context_->requestMultipart();
+}
+
+inline Task<ContextRequest::RequestFormFieldList> ContextRequest::parseBody(ParseBodyOptions options) const {
+    return context_->parseRequestBody(options);
 }
 
 namespace detail {
