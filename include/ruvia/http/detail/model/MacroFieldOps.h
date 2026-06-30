@@ -47,7 +47,7 @@
             return; \
         } \
         auto ruviaValueInput = value; \
-        if (auto ruviaValue = ::ruvia::detail::parseJsonValue<RUVIA_MODEL_UNPAREN type>(ruviaValueInput, body_.resource()); ruviaValue) { \
+        if (auto ruviaValue = ::ruvia::detail::parseJsonValue<RUVIA_MODEL_UNPAREN type>(ruviaValueInput, ruviaResource); ruviaValue) { \
             ::ruvia::detail::skipJsonWhitespace(ruviaValueInput); \
             if (ruviaValueInput.empty()) { \
                 ruviaField_##field##_.emplace(::std::move(*ruviaValue)); \
@@ -71,8 +71,14 @@
                 ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kDuplicate; \
                 return; \
             } \
-            RUVIA_MODEL_UNPAREN type ruviaValue = ::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>(body_.resource()); \
-            if (::ruvia::detail::parseFormValue(value, ruviaValue, body_.resource())) { \
+            RUVIA_MODEL_UNPAREN type ruviaValue = ::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
+                ::ruvia::detail::ResolvedPmrResourceTag{}, \
+                ruviaResource); \
+            if (::ruvia::detail::parseFormValue( \
+                    ::ruvia::detail::ResolvedPmrResourceTag{}, \
+                    value, \
+                    ruviaValue, \
+                    ruviaResource)) { \
                 ruviaField_##field##_.emplace(::std::move(ruviaValue)); \
                 ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
             } else { \
@@ -88,10 +94,12 @@
 #define RUVIA_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
     [[nodiscard]] ::ruvia::ModelFieldRef<RUVIA_MODEL_UNPAREN type> field() { \
         ruviaEnsureParsed(); \
+        auto* const ruviaResource = body_.resource(); \
         return ::ruvia::ModelFieldRef<RUVIA_MODEL_UNPAREN type>( \
+            ::ruvia::detail::ResolvedPmrResourceTag{}, \
             ruviaField_##field##_, \
             ruviaState_##field##_, \
-            body_.resource()); \
+            ruviaResource); \
     } \
     [[nodiscard]] ::ruvia::ModelFieldConstRef<RUVIA_MODEL_UNPAREN type> field() const { \
         ruviaEnsureParsed(); \
@@ -105,11 +113,12 @@
                       ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
     model_type& field(RuviaFieldValueT&& value) { \
         ruviaEnsureParsed(); \
+        auto* const ruviaResource = body_.resource(); \
         ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         ::ruvia::detail::model::assignFieldValue( \
             ruviaField_##field##_, \
             ::std::forward<RuviaFieldValueT>(value), \
-            body_.resource()); \
+            ruviaResource); \
         return *this; \
     }
 
@@ -118,7 +127,7 @@
 #define RUVIA_MODEL_APPLY_DEFAULT_FIELD_I(...) RUVIA_MODEL_APPLY_DEFAULT_FIELD_IMPL(__VA_ARGS__)
 #define RUVIA_MODEL_APPLY_DEFAULT_FIELD_IMPL(type, field, wire, rules) \
     if (ruviaState_##field##_ == ::ruvia::detail::ModelFieldState::kMissing) { \
-        rules.applyDefault(ruviaField_##field##_, body_.resource()); \
+        rules.applyDefault(ruviaField_##field##_, ruviaResource); \
         if (ruviaField_##field##_) { \
             ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         } \

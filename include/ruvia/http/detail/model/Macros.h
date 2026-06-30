@@ -119,9 +119,10 @@
             ruviaParsed_ = true;                                             \
             ruviaInvalid_ = false;                                           \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_RESET_FIELD, T, __VA_ARGS__)           \
+            auto* const ruviaResource = body_.resource();                    \
             bool ruviaValid = true;                                          \
             if (body_.kind() == ::ruvia::RequestObjectKind::kJson) {         \
-                ruviaValid = ::ruvia::detail::visitRequestJsonFields(body_, [this, &ruviaValid]( \
+                ruviaValid = ::ruvia::detail::visitRequestJsonFields(body_, [this, &ruviaValid, ruviaResource]( \
                     ::std::string_view key,                                 \
                     ::std::string_view value) {                             \
                     if (!ruviaValid) {                                       \
@@ -130,7 +131,7 @@
                     RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_PARSE_JSON_FIELD, T, __VA_ARGS__) \
                 }) && ruviaValid;                                            \
             } else {                                                        \
-                ruviaValid = ::ruvia::detail::visitRequestFormFields(body_, [this, &ruviaValid]( \
+                ruviaValid = ::ruvia::detail::visitRequestFormFields(body_, [this, &ruviaValid, ruviaResource]( \
                     ::std::string_view key,                                 \
                     ::std::string_view value) {                             \
                     if (!ruviaValid) {                                       \
