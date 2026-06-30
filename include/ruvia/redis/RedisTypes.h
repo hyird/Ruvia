@@ -11,6 +11,8 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/memory/PmrResource.h"
+
 namespace ruvia {
 
 struct RedisConfig {
@@ -144,6 +146,8 @@ public:
 
 private:
     friend class detail::RedisPool;
+
+    RedisValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     Kind kind_{Kind::kNull};
     std::pmr::string string_;

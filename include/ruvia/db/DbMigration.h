@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/db/DbTypes.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <chrono>
 #include <memory_resource>
@@ -37,6 +38,8 @@ public:
 private:
     friend class DbMigrator;
     friend class detail::DbMigrationRunner;
+
+    DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<std::pmr::string> applied_;
     std::pmr::vector<std::pmr::string> skipped_;

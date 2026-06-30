@@ -186,8 +186,11 @@ void DbRow::refreshView() noexcept {
 }
 
 QueryResult::QueryResult(std::pmr::memory_resource* resource)
-    : rows_(detail::pmrResourceOrDefault(resource)),
-      fields_(detail::pmrResourceOrDefault(resource)) {}
+    : QueryResult(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+QueryResult::QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    : rows_(resource),
+      fields_(resource) {}
 
 QueryResult::QueryResult(QueryResult&& other) noexcept
     : rows_(std::move(other.rows_)),
@@ -241,8 +244,11 @@ std::uint64_t QueryResult::lastInsertId() const noexcept {
 }
 
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)
-    : applied_(detail::pmrResourceOrDefault(resource)),
-      skipped_(detail::pmrResourceOrDefault(resource)) {}
+    : DbMigrationReport(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+DbMigrationReport::DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    : applied_(resource),
+      skipped_(resource) {}
 
 std::span<const std::pmr::string> DbMigrationReport::applied() const noexcept {
     return std::span<const std::pmr::string>(applied_.data(), applied_.size());
