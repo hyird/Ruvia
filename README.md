@@ -245,6 +245,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
 | `c.redirect(location)` | Return a redirect response. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
+| `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
 | `c.notFound()` | Return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |

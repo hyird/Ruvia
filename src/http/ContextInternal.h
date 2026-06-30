@@ -4,6 +4,7 @@
 #include "ContextServices.h"
 
 #include <cstddef>
+#include <exception>
 #include <utility>
 
 namespace ruvia {
@@ -80,6 +81,10 @@ struct ContextAccess final {
 
     static void setResponse(Context& context, HttpResponse&& response) {
         context.storeResponse(std::move(response));
+    }
+
+    static void setError(Context& context, std::exception_ptr exception) noexcept {
+        context.storeError(std::move(exception));
     }
 
     [[nodiscard]] static bool hasResponse(const Context& context) noexcept {
