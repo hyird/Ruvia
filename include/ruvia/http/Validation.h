@@ -20,23 +20,44 @@
 namespace ruvia {
 
 struct ValidationIssue final {
+private:
+    struct ResolvedResourceTag final {};
+
+public:
     explicit ValidationIssue(std::pmr::memory_resource* resource = nullptr)
-        : field(detail::pmrResourceOrDefault(resource)),
-          code(detail::pmrResourceOrDefault(resource)),
-          message(detail::pmrResourceOrDefault(resource)) {}
+        : ValidationIssue(ResolvedResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     ValidationIssue(
         std::string_view fieldName,
         std::string_view codeValue,
         std::string_view messageValue,
         std::pmr::memory_resource* resource = nullptr)
-        : field(fieldName, detail::pmrResourceOrDefault(resource)),
-          code(codeValue, detail::pmrResourceOrDefault(resource)),
-          message(messageValue, detail::pmrResourceOrDefault(resource)) {}
+        : ValidationIssue(
+              ResolvedResourceTag{},
+              fieldName,
+              codeValue,
+              messageValue,
+              detail::pmrResourceOrDefault(resource)) {}
 
     std::pmr::string field;
     std::pmr::string code;
     std::pmr::string message;
+
+private:
+    ValidationIssue(ResolvedResourceTag, std::pmr::memory_resource* resource)
+        : field(resource),
+          code(resource),
+          message(resource) {}
+
+    ValidationIssue(
+        ResolvedResourceTag,
+        std::string_view fieldName,
+        std::string_view codeValue,
+        std::string_view messageValue,
+        std::pmr::memory_resource* resource)
+        : field(fieldName, resource),
+          code(codeValue, resource),
+          message(messageValue, resource) {}
 };
 
 namespace detail {

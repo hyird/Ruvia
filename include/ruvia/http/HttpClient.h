@@ -42,14 +42,29 @@ struct FetchRequestHeader {
 };
 
 struct FetchResponseHeader {
+private:
+    struct ResolvedResourceTag final {};
+
+public:
     std::pmr::string name;
     std::pmr::string value;
+
     FetchResponseHeader() = default;
+
     FetchResponseHeader(std::pmr::string n, std::pmr::string v)
         : name(std::move(n)), value(std::move(v)) {}
+
     FetchResponseHeader(std::string_view n, std::string_view v, std::pmr::memory_resource* resource)
-        : name(n.data(), n.size(), detail::pmrResourceOrDefault(resource)),
-          value(v.data(), v.size(), detail::pmrResourceOrDefault(resource)) {}
+        : FetchResponseHeader(ResolvedResourceTag{}, n, v, detail::pmrResourceOrDefault(resource)) {}
+
+private:
+    FetchResponseHeader(
+        ResolvedResourceTag,
+        std::string_view n,
+        std::string_view v,
+        std::pmr::memory_resource* resource)
+        : name(n.data(), n.size(), resource),
+          value(v.data(), v.size(), resource) {}
 };
 
 struct FetchOptions {
@@ -61,10 +76,11 @@ struct FetchOptions {
 };
 
 class FetchResponse final {
+    struct ResolvedResourceTag final {};
+
 public:
     explicit FetchResponse(std::pmr::memory_resource* resource = nullptr)
-        : headers(detail::pmrResourceOrDefault(resource)),
-          body(detail::pmrResourceOrDefault(resource)) {}
+        : FetchResponse(ResolvedResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     FetchResponse(const FetchResponse&) = delete;
     FetchResponse& operator=(const FetchResponse&) = delete;
@@ -74,6 +90,11 @@ public:
     int statusCode{0};
     std::pmr::vector<FetchResponseHeader> headers;
     std::pmr::string body;
+
+private:
+    FetchResponse(ResolvedResourceTag, std::pmr::memory_resource* resource)
+        : headers(resource),
+          body(resource) {}
 };
 
 namespace detail {
