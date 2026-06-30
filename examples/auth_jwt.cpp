@@ -43,13 +43,13 @@ public:
 
         try {
             const auto payload = ruvia::jwtVerify(*token, verifyOptions(), c.resource());
-            c.setHeader("X-Jwt-Subject", payload.subject());
+            c.header("X-Jwt-Subject", payload.subject());
         } catch (...) {
             c.res(c.error(401, "invalid_token", "invalid bearer token"));
             co_return;
         }
 
-        co_await next(c);
+        co_await next();
     }
 };
 
@@ -65,7 +65,7 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
         auto options = signOptions(c);
-        options.subject.assign(c.query("sub").toStringView().value_or("example-user"));
+        options.subject.assign(c.req().query("sub").toStringView().value_or("example-user"));
         auto jwt = ruvia::jwtSign(options, c.resource());
         co_return c.text(jwt);
     }

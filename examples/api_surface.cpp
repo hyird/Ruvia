@@ -46,7 +46,7 @@ public:
         c.set("traceId", std::string_view("surface-trace"));
         c.setRenderer(&surfaceRenderer);
         try {
-            co_await next(c);
+            co_await next();
             c.header("X-Surface-Middleware", "after-next");
         } catch (...) {
             if (c.error()) {
@@ -99,7 +99,7 @@ private:
         body.append("\nheaders=");
         appendUnsigned(body, c.req().headers().size());
         body.append("\nparams=");
-        appendUnsigned(body, c.params().size());
+        appendUnsigned(body, c.param().size());
         body.append("\nquery-fields=");
         appendUnsigned(body, c.query().size());
         body.append("\ncookies=");
@@ -111,7 +111,7 @@ private:
         body.append("\naccepts-json=");
         body.append(c.accepts("application/json") ? "true" : "false");
         body.append("\ndecoded-path=");
-        if (auto decoded = c.decodedPath().toString()) {
+        if (auto decoded = c.req().decodedPath().toString()) {
             body.append(*decoded);
         }
         body.push_back('\n');

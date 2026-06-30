@@ -65,7 +65,7 @@ namespace ruvia {
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
     Task<void> handle(Context& c, const Next& next) {
-        const auto cookie = c.cookie("sid");
+        const auto cookie = c.req().cookie("sid");
         if (cookie && detail::isValidSessionId(*cookie)) {
             detail::SessionAccess::setId(c, *cookie);
             std::pmr::string key(c.resource());
@@ -76,7 +76,7 @@ public:
             }
         }
 
-        co_await next(c);
+        co_await next();
 
         if (detail::SessionAccess::dirty(c)) {
             auto& response = c.res();

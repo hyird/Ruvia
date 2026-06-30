@@ -5,7 +5,7 @@ namespace {
 
 void setContextHeaderIfEnabled(Context& context, std::string_view name, std::string_view value) {
     if (!value.empty()) {
-        context.setHeader(name, value);
+        context.header(name, value);
     }
 }
 
@@ -38,16 +38,16 @@ void setResponseHeader(
 
 void applySecurityHeaders(Context& context, const SecurityHeadersOptions& options) {
     if (options.contentTypeOptions) {
-        context.setHeader("X-Content-Type-Options", "nosniff");
+        context.header("X-Content-Type-Options", "nosniff");
     }
     if (options.frameOptions) {
-        context.setHeader("X-Frame-Options", "DENY");
+        context.header("X-Frame-Options", "DENY");
     }
     if (options.strictTransportSecurity) {
-        context.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+        context.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
     if (options.xssProtection) {
-        context.setHeader("X-XSS-Protection", "0");
+        context.header("X-XSS-Protection", "0");
     }
 
     setContextHeaderIfEnabled(context, "Content-Security-Policy", options.contentSecurityPolicy);
@@ -55,7 +55,7 @@ void applySecurityHeaders(Context& context, const SecurityHeadersOptions& option
     setContextHeaderIfEnabled(context, "Permissions-Policy", options.permissionsPolicy);
 
     for (const auto& header : options.customHeaders) {
-        context.setHeader(header.name, header.value);
+        context.header(header.name, header.value);
     }
 }
 
@@ -96,7 +96,7 @@ void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& 
 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, const Next& next) {
     applySecurityHeaders(context);
-    co_await next(context);
+    co_await next();
     applySecurityHeaders(context.res());
 }
 

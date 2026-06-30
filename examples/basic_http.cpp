@@ -11,7 +11,7 @@
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
-        co_await next(c);
+        co_await next();
         c.res().setHeader("X-Example", "basic-http");
     }
 };
@@ -23,7 +23,7 @@ public:
             c.res(c.error(401, "unauthorized", "missing admin token"));
             co_return;
         }
-        co_await next(c);
+        co_await next();
     }
 };
 
@@ -85,7 +85,7 @@ private:
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent"));
         body.append("\npage=");
-        if (const auto page = c.query("page").toUInt32()) {
+        if (const auto page = c.req().query("page").toUInt32()) {
             char buffer[16]{};
             const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), *page);
             if (ec == std::errc{}) {
@@ -93,7 +93,7 @@ private:
             }
         }
         body.append("\nsession=");
-        body.append(c.cookie("session").value_or(""));
+        body.append(c.req().cookie("session").value_or(""));
         body.push_back('\n');
         co_return c.text(body);
     }
@@ -102,7 +102,7 @@ private:
         const auto body = co_await c.body();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        co_return c.status(201).setHeader("X-Echo", "true").text(owned);
+        co_return c.status(201).header("X-Echo", "true").text(owned);
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
@@ -118,7 +118,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
-        co_return c.status(204).setHeader("Allow", "GET, HEAD, OPTIONS").text("");
+        co_return c.status(204).header("Allow", "GET, HEAD, OPTIONS").text("");
     }
 
     ruvia::Task<ruvia::HttpResponse> adminStatus(ruvia::Context& c) {

@@ -77,7 +77,7 @@ public:
             co_return;
         }
 
-        co_await next(context);
+        co_await next();
     }
 
 private:

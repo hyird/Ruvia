@@ -26,7 +26,7 @@ std::filesystem::path pathOrEmpty(std::optional<std::string_view> value) {
 class GlobalHeaderMiddleware final : public ruvia::Middleware<GlobalHeaderMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
-        co_await next(c);
+        co_await next();
         c.res().setHeader("X-Runtime-Example", "true");
     }
 };

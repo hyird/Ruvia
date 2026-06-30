@@ -159,10 +159,6 @@ public:
         return request_;
     }
 
-    [[nodiscard]] RequestValue decodedPath() const noexcept {
-        return request_.decodedPath();
-    }
-
     [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
         for (std::size_t i = 0; i < paramCount_; ++i) {
             if (paramNames_[i] == name) {
@@ -175,17 +171,9 @@ public:
 
     [[nodiscard]] const RequestNameValueList& param() const;
 
-    [[nodiscard]] const RequestNameValueList& params() const;
-
-    [[nodiscard]] QueryValue query(std::string_view name) const;
-
     [[nodiscard]] const RequestNameValueList& query() const;
 
     [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
-
-    [[nodiscard]] const RequestNameValueList& queries() const;
-
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
 
     [[nodiscard]] const RequestNameValueList& cookies() const;
 
@@ -234,10 +222,6 @@ public:
     }
 
     [[nodiscard]] Task<std::string_view> body() const;
-
-    [[nodiscard]] Task<std::string_view> arrayBuffer() const {
-        return body();
-    }
 
     template <typename T>
     [[nodiscard]] Task<T> json() const;
@@ -429,10 +413,6 @@ public:
     }
 
     Context& header(std::string_view name, std::string_view value, HeaderOptions options);
-
-    Context& setHeader(std::string_view name, std::string_view value);
-
-    Context& appendHeader(std::string_view name, std::string_view value);
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
 
@@ -755,8 +735,6 @@ private:
     HttpResponse* response_{nullptr};
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
-    mutable bool queryLookupAttempted_ : 1 {false};
-    mutable bool cookieLookupAttempted_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 

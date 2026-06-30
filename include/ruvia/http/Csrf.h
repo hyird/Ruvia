@@ -35,7 +35,7 @@ public:
         const bool safe = method == HttpMethod::kGet ||
             method == HttpMethod::kHead ||
             method == HttpMethod::kOptions;
-        const auto cookie = c.cookie("XSRF-TOKEN");
+        const auto cookie = c.req().cookie("XSRF-TOKEN");
         if (!safe) {
             const auto header = c.req().header("X-XSRF-TOKEN");
             if (!cookie || cookie->empty() || header.empty() || *cookie != header) {
@@ -47,7 +47,7 @@ public:
             const auto token = detail::generateCsrfToken(buffer);
             c.setCookie("XSRF-TOKEN", token, CookieOptions{.path = "/", .sameSite = "Lax", .secure = c.isSecure()});
         }
-        co_await next(c);
+        co_await next();
     }
 };
 
