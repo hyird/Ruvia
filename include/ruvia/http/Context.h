@@ -200,7 +200,10 @@ private:
         detail::ContextServices services) noexcept;
 
 public:
-    using Renderer = Task<HttpResponse> (*)(Context& context, std::string_view body);
+    using Renderer = Task<HttpResponse> (*)(
+        Context& context,
+        std::string_view body,
+        std::string_view head);
 
     struct HeaderOptions final {
         bool append{false};
@@ -509,7 +512,7 @@ public:
 
     Context& setRenderer(Renderer renderer) noexcept;
 
-    [[nodiscard]] Task<HttpResponse> render(std::string_view body);
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body, std::string_view head = {});
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
@@ -530,6 +533,8 @@ public:
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse notFound() const;
 
 private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
