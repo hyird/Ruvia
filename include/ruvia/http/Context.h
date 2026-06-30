@@ -58,6 +58,8 @@ struct RouteRateLimitOptions;
 struct RouteRateLimitResult;
 RouteRateLimitResult checkRouteRateLimit(Context& context, const RouteRateLimitOptions& options) noexcept;
 struct SessionAccess;
+template <typename T>
+void setValidatedBody(Context& context, ValidationTarget target, T&& body);
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
@@ -85,6 +87,8 @@ private:
     friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
         Context& context,
         const detail::RouteRateLimitOptions& options) noexcept;
+    template <typename T>
+    friend void detail::setValidatedBody(Context& context, ValidationTarget target, T&& body);
 
     Context(
         RequestMemory& memory,
@@ -313,11 +317,6 @@ public:
     template <typename T>
     [[nodiscard]] const T& valid(ValidationTarget target) const {
         return validatedValues_.get<T>(target);
-    }
-
-    template <typename T>
-    void setValid(ValidationTarget target, T&& body) {
-        validatedValues_.set(target, std::forward<T>(body), resource());
     }
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
@@ -638,6 +637,15 @@ private:
 
     detail::ValidatedValueStore validatedValues_;
 };
+
+namespace detail {
+
+template <typename T>
+void setValidatedBody(Context& context, ValidationTarget target, T&& body) {
+    context.validatedValues_.set(target, std::forward<T>(body), context.resource());
+}
+
+}  // namespace detail
 
 }  // namespace ruvia
 
