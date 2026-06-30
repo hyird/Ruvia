@@ -20,7 +20,7 @@ public:
     explicit JsonObject(
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept
-        : body_(body), resource_(detail::pmrResourceOrDefault(resource)) {}
+        : JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] static std::optional<JsonObject> parse(
         std::string_view body,
@@ -33,7 +33,7 @@ public:
         if (!scanner.empty()) {
             return std::nullopt;
         }
-        return JsonObject(body, resource);
+        return JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
     }
 
     [[nodiscard]] std::string_view view() const noexcept {
@@ -42,7 +42,7 @@ public:
 
     template <typename T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
-        auto* const resource = detail::pmrResourceOrDefault(resource_);
+        auto* const resource = resource_;
         std::optional<T> result;
         bool parseFailed = false;
         const bool valid = detail::visitJsonObjectFields(body_, resource, [&](std::string_view key, std::string_view valueView) {
@@ -68,6 +68,14 @@ public:
     }
 
 private:
+    friend class RequestObject;
+
+    JsonObject(
+        detail::ResolvedPmrResourceTag,
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept
+        : body_(body), resource_(resource) {}
+
     std::string_view body_;
     std::pmr::memory_resource* resource_{nullptr};
 };
@@ -79,7 +87,7 @@ public:
     explicit FormObject(
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept
-        : body_(body), resource_(detail::pmrResourceOrDefault(resource)) {}
+        : FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] static std::optional<FormObject> parse(
         std::string_view body,
@@ -87,7 +95,7 @@ public:
         if (!detail::validateFormEncoding(body)) {
             return std::nullopt;
         }
-        return FormObject(body, resource);
+        return FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
     }
 
     [[nodiscard]] std::string_view view() const noexcept {
@@ -96,7 +104,7 @@ public:
 
     template <typename T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
-        auto* const resource = detail::pmrResourceOrDefault(resource_);
+        auto* const resource = resource_;
         std::optional<T> result;
         bool parseFailed = false;
         detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
@@ -104,7 +112,7 @@ public:
                 return true;
             }
 
-            T value = detail::makeRequestValue<T>(resource);
+            T value = detail::makeRequestValue<T>(detail::ResolvedPmrResourceTag{}, resource);
             if (!detail::parseFormValue(valueView, value, resource)) {
                 parseFailed = true;
                 return false;
@@ -120,6 +128,14 @@ public:
     }
 
 private:
+    friend class RequestObject;
+
+    FormObject(
+        detail::ResolvedPmrResourceTag,
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept
+        : body_(body), resource_(resource) {}
+
     std::string_view body_;
     std::pmr::memory_resource* resource_{nullptr};
 };
@@ -137,9 +153,11 @@ public:
         RequestObjectKind kind,
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept
-        : kind_(kind),
-          body_(body),
-          resource_(detail::pmrResourceOrDefault(resource)) {}
+        : RequestObject(
+              detail::ResolvedPmrResourceTag{},
+              kind,
+              body,
+              detail::pmrResourceOrDefault(resource)) {}
 
     RequestObject(const RequestObject& other)
         : kind_(other.kind_),
@@ -173,11 +191,12 @@ public:
 
     template <typename T>
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
+        auto* const resource = this->resource();
         if (kind_ == RequestObjectKind::kJson) {
-            return JsonObject(body_, resource_).get<T>(field);
+            return JsonObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
         }
         if constexpr (detail::isFormField<T>) {
-            return FormObject(body_, resource_).get<T>(field);
+            return FormObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
         } else {
             (void)field;
             return std::nullopt;
@@ -185,6 +204,15 @@ public:
     }
 
 private:
+    RequestObject(
+        detail::ResolvedPmrResourceTag,
+        RequestObjectKind kind,
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept
+        : kind_(kind),
+          body_(body),
+          resource_(resource) {}
+
     RequestObjectKind kind_{RequestObjectKind::kJson};
     std::string_view body_;
     std::pmr::memory_resource* resource_{nullptr};

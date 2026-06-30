@@ -82,16 +82,32 @@ inline constexpr bool isModelField =
     isRuviaScalar<T>;
 
 template <typename T>
-[[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
+[[nodiscard]] T makeRequestValue(
+    ResolvedPmrResourceTag,
+    std::pmr::memory_resource* resource) {
     if constexpr (isRuviaString<T>) {
-        return T(pmrResourceOrDefault(resource));
+        return T(resource);
     } else if constexpr (isRuviaArray<T>) {
         using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
-        return T(std::pmr::polymorphic_allocator<ValueT>(pmrResourceOrDefault(resource)));
+        return T(std::pmr::polymorphic_allocator<ValueT>(resource));
     } else if constexpr (isRuviaList<T>) {
-        return T(pmrResourceOrDefault(resource));
+        return T(resource);
     } else if constexpr (JsonBody<std::remove_cvref_t<T>>::value) {
-        return T(pmrResourceOrDefault(resource));
+        return T(resource);
+    } else {
+        (void)resource;
+        return T{};
+    }
+}
+
+template <typename T>
+[[nodiscard]] T makeRequestValue(std::pmr::memory_resource* resource) {
+    if constexpr (
+        isRuviaString<T> ||
+        isRuviaArray<T> ||
+        isRuviaList<T> ||
+        JsonBody<std::remove_cvref_t<T>>::value) {
+        return makeRequestValue<T>(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource));
     } else {
         (void)resource;
         return T{};
