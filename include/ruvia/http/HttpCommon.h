@@ -77,9 +77,11 @@ public:
         std::optional<std::string_view> value,
         std::pmr::memory_resource* resource = nullptr,
         DecodeMode decodeMode = DecodeMode::kNone) noexcept
-        : value_(value),
-          resource_(detail::pmrResourceOrDefault(resource)),
-          decodeMode_(decodeMode) {}
+        : RequestValue(
+              detail::ResolvedPmrResourceTag{},
+              value,
+              detail::pmrResourceOrDefault(resource),
+              decodeMode) {}
 
     [[nodiscard]] bool exists() const noexcept {
         return value_.has_value();
@@ -99,8 +101,17 @@ public:
     [[nodiscard]] std::optional<std::uint64_t> toUInt64() const noexcept;
 
 private:
+    RequestValue(
+        detail::ResolvedPmrResourceTag,
+        std::optional<std::string_view> value,
+        std::pmr::memory_resource* resource,
+        DecodeMode decodeMode) noexcept
+        : value_(value),
+          resource_(resource),
+          decodeMode_(decodeMode) {}
+
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return detail::pmrResourceOrDefault(resource_);
+        return resource_;
     }
 
     std::optional<std::string_view> value_;
