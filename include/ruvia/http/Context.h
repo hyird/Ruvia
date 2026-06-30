@@ -179,20 +179,6 @@ public:
 
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
-    [[nodiscard]] std::string_view remoteAddress() const noexcept {
-        return request_.remoteAddress();
-    }
-
-    // The verified mutual-TLS client certificate subject DN, or empty if none.
-    [[nodiscard]] std::string_view clientCertificate() const noexcept {
-        return request_.clientCertificate();
-    }
-
-    // True when the request arrived over TLS (https / h2 over TLS).
-    [[nodiscard]] bool isSecure() const noexcept {
-        return request_.isSecure();
-    }
-
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
     // application owns the blob's format). sessionId() is empty until a session
     // exists. setSession/clearSession mark it for persistence on the way out.

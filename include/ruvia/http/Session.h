@@ -92,7 +92,7 @@ public:
                 setCookie.append("sid=");
                 setCookie.append(id.data(), id.size());
                 setCookie.append("; Path=/; HttpOnly; SameSite=Lax");
-                if (c.isSecure()) {
+                if (c.req().isSecure()) {
                     setCookie.append("; Secure");
                 }
                 response.setHeader("Set-Cookie", setCookie);
