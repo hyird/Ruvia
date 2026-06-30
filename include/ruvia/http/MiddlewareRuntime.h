@@ -7,6 +7,7 @@
 
 #include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
 
@@ -40,26 +41,12 @@ template <typename MiddlewareT>
 
 template <typename MiddlewareT>
 [[nodiscard]] void* createMiddleware() {
-    auto* resource = registrationResource();
-    auto* storage = resource->allocate(sizeof(MiddlewareT), alignof(MiddlewareT));
-    auto* middleware = static_cast<MiddlewareT*>(storage);
-    try {
-        std::construct_at(middleware);
-    } catch (...) {
-        resource->deallocate(storage, sizeof(MiddlewareT), alignof(MiddlewareT));
-        throw;
-    }
-    return middleware;
+    return constructPmrObject<MiddlewareT>(registrationResource());
 }
 
 template <typename MiddlewareT>
 void destroyMiddleware(void* target) noexcept {
-    if (target == nullptr) {
-        return;
-    }
-    auto* middleware = static_cast<MiddlewareT*>(target);
-    std::destroy_at(middleware);
-    registrationResource()->deallocate(middleware, sizeof(MiddlewareT), alignof(MiddlewareT));
+    destroyPmrObject(static_cast<MiddlewareT*>(target), registrationResource());
 }
 
 template <typename MiddlewareT>

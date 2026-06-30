@@ -15,6 +15,7 @@
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
 #include "ruvia/http/WebSocket.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
 
@@ -42,19 +43,11 @@ public:
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         auto* resource = registrationResource();
-        auto* storage = resource->allocate(sizeof(T), alignof(T));
-        auto* raw = static_cast<T*>(storage);
-        try {
-            std::construct_at(raw, std::forward<Args>(args)...);
-        } catch (...) {
-            resource->deallocate(storage, sizeof(T), alignof(T));
-            throw;
-        }
+        auto* raw = constructPmrObject<T>(resource, std::forward<Args>(args)...);
         try {
             addLifetime(raw, &ControllerStore::destroy<T>, resource);
         } catch (...) {
-            std::destroy_at(raw);
-            resource->deallocate(storage, sizeof(T), alignof(T));
+            destroyPmrObject(raw, resource);
             throw;
         }
         return *raw;
@@ -71,12 +64,7 @@ private:
 
     template <typename T>
     static void destroy(void* target, std::pmr::memory_resource* resource) noexcept {
-        if (target == nullptr) {
-            return;
-        }
-        auto* value = static_cast<T*>(target);
-        std::destroy_at(value);
-        resource->deallocate(value, sizeof(T), alignof(T));
+        destroyPmrObject(static_cast<T*>(target), registrationResourceOrDefault(resource));
     }
 
     std::unique_ptr<ControllerStoreState, ControllerStoreStateDeleter> state_;
