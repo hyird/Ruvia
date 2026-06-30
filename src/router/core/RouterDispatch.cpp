@@ -220,7 +220,6 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         co_return co_await invokeRoute(route, context);
     } catch (...) {
         exception = std::current_exception();
-        detail::ContextAccess::setError(context, exception);
     }
     co_return co_await handleException(context, exception, true);
 }

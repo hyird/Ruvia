@@ -2,7 +2,6 @@
 
 #include "../../http/ContextInternal.h"
 
-#include <exception>
 #include <utility>
 
 namespace ruvia {
@@ -29,27 +28,17 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     std::size_t index,
     Context& context) const {
     if (index >= route.middlewareCount()) {
-        try {
-            auto response = co_await route.handler()(context);
-            detail::ContextAccess::setResponse(context, std::move(response));
-            co_return;
-        } catch (...) {
-            detail::ContextAccess::setError(context, std::current_exception());
-            throw;
-        }
+        auto response = co_await route.handler()(context);
+        detail::ContextAccess::setResponse(context, std::move(response));
+        co_return;
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     MiddlewareContinuation continuation{this, &route, &context, index + 1};
     const auto next = NextAccess::make(&continuation, &RouteTable::invokeMiddlewareContinuation);
-    try {
-        auto task = middleware(context, next);
-        co_await std::move(task);
-        co_return;
-    } catch (...) {
-        detail::ContextAccess::setError(context, std::current_exception());
-        throw;
-    }
+    auto task = middleware(context, next);
+    co_await std::move(task);
+    co_return;
 }
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
@@ -66,27 +55,17 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     Context& context,
     RouteStreamDispatchOutcome& outcome) const {
     if (index >= route.middlewareCount()) {
-        try {
-            co_await route.streamHandler()(context);
-            outcome = RouteStreamDispatchOutcome::kStreamHandled;
-            co_return;
-        } catch (...) {
-            detail::ContextAccess::setError(context, std::current_exception());
-            throw;
-        }
+        co_await route.streamHandler()(context);
+        outcome = RouteStreamDispatchOutcome::kStreamHandled;
+        co_return;
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     StreamMiddlewareContinuation continuation{this, &route, &context, index + 1, &outcome};
     const auto next = NextAccess::make(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
-    try {
-        auto task = middleware(context, next);
-        co_await std::move(task);
-        co_return;
-    } catch (...) {
-        detail::ContextAccess::setError(context, std::current_exception());
-        throw;
-    }
+    auto task = middleware(context, next);
+    co_await std::move(task);
+    co_return;
 }
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target) {

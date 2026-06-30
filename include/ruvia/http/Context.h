@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
@@ -564,10 +563,6 @@ public:
         std::string_view message,
         std::string_view statusText = {}) const;
 
-    [[nodiscard]] std::exception_ptr error() const noexcept {
-        return error_;
-    }
-
 private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
@@ -623,9 +618,6 @@ private:
         return response_ != nullptr;
     }
     [[nodiscard]] HttpResponse takeResponse();
-    void setError(std::exception_ptr error) noexcept {
-        error_ = error;
-    }
     [[nodiscard]] detail::ContextValueStore* valuesIf() noexcept {
         return values_;
     }
@@ -661,7 +653,6 @@ private:
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
     HttpResponse* response_{nullptr};
-    std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
