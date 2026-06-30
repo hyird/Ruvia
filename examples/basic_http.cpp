@@ -64,7 +64,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         UserResponse response(c);
         response
-            .id(c.param("id").toStringView().value_or("unknown"))
+            .id(c.req().param("id").toStringView().value_or("unknown"))
             .name("example-user")
             .active(ruvia::Bool{true});
         co_return c.json(response);
@@ -73,7 +73,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> wildcard(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("wildcard=");
-        body.append(c.param("*").toStringView().value_or(""));
+        body.append(c.req().param("*").toStringView().value_or(""));
         body.push_back('\n');
         co_return c.text(body);
     }

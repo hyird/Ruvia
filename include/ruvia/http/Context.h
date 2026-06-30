@@ -157,6 +157,10 @@ public:
 
     [[nodiscard]] MultipartReader multipartReader() const;
 
+    [[nodiscard]] ParamValue param(std::string_view name) const noexcept;
+
+    [[nodiscard]] const RequestNameValueList& param() const;
+
 private:
     friend class Context;
 
@@ -211,18 +215,6 @@ public:
     [[nodiscard]] ContextRequest req() const noexcept {
         return ContextRequest(*this);
     }
-
-    [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
-        for (std::size_t i = 0; i < paramCount_; ++i) {
-            if (paramNames_[i] == name) {
-                return ParamValue(paramValues_[i], resource(), RequestValue::DecodeMode::kPercent);
-            }
-        }
-
-        return ParamValue(std::nullopt, resource(), RequestValue::DecodeMode::kPercent);
-    }
-
-    [[nodiscard]] const RequestNameValueList& param() const;
 
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
@@ -591,6 +583,7 @@ private:
     [[nodiscard]] Task<RequestFormFieldList> parseRequestBody(ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
+    [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -767,6 +760,14 @@ inline BodyReader& ContextRequest::bodyReader() const {
 
 inline MultipartReader ContextRequest::multipartReader() const {
     return context_->requestMultipartReader();
+}
+
+inline ParamValue ContextRequest::param(std::string_view name) const noexcept {
+    return context_->routeParam(name);
+}
+
+inline const RequestNameValueList& ContextRequest::param() const {
+    return context_->routeParams();
 }
 
 namespace detail {

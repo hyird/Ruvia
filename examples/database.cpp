@@ -83,7 +83,7 @@ private:
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
         std::array<ruvia::DbValue, 1> params{
-            ruvia::DbValue{c.param("id").toStringView().value_or("")}};
+            ruvia::DbValue{c.req().param("id").toStringView().value_or("")}};
         auto result = co_await c.db().query(
             "SELECT id, name FROM users WHERE id = ?",
             std::span<const ruvia::DbValue>(params));

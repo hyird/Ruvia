@@ -25,7 +25,7 @@ Ruvia is a small, focused C++23 HTTP/1.1 and HTTP/2 web framework for core web s
 
 | Area | What Ruvia Provides |
 | --- | --- |
-| Macro DSL | A compile-time macro surface that expands to startup descriptors and generated members with no runtime reflection: routing (`RUVIA_GET` / `RUVIA_POST` / …), grouping (`RUVIA_CONTROLLER_GROUP`, `RUVIA_GROUP_BEGIN`), streaming and realtime routes (`RUVIA_GET_STREAM` / `RUVIA_GET_SSE` / `RUVIA_GET_WS`), runtime-selectable responses (`RUVIA_GET_DYNAMIC` / `RUVIA_POST_DYNAMIC`), schema models (`RUVIA_MODEL` / `RUVIA_FIELD`), and inline validation (`RUVIA_VALIDATE_JSON` with `RUVIA_RULE` / `RUVIA_REQUIRED` / …). See the consolidated [Macro Reference](#macro-reference). |
+| Macro DSL | A compile-time macro surface that expands to startup descriptors and generated members with no runtime reflection: routing (`RUVIA_GET` / `RUVIA_POST` / �?, grouping (`RUVIA_CONTROLLER_GROUP`, `RUVIA_GROUP_BEGIN`), streaming and realtime routes (`RUVIA_GET_STREAM` / `RUVIA_GET_SSE` / `RUVIA_GET_WS`), runtime-selectable responses (`RUVIA_GET_DYNAMIC` / `RUVIA_POST_DYNAMIC`), schema models (`RUVIA_MODEL` / `RUVIA_FIELD`), and inline validation (`RUVIA_VALIDATE_JSON` with `RUVIA_RULE` / `RUVIA_REQUIRED` / �?. See the consolidated [Macro Reference](#macro-reference). |
 | Controller API | Hono-style single-argument handlers with `ruvia::Context& c` and async-only `ruvia::Task<ruvia::HttpResponse>` returns. |
 | Routing | Static controller registration through macros, route groups, scoped middleware, `:param` segments, and `*` wildcards. |
 | Request handling | Zero-copy HTTP parser, request views into the connection read buffer, explicit streaming body routes, chunked body decoding, multipart form parsing, and helpers for headers, query values, cookies, JSON bodies, and form bodies. |
@@ -220,7 +220,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().header(name)` | Read a request header. |
 | `c.req().query(name)` / `c.req().queries(name)` | Read query values through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
 | `c.req().cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
-| `c.param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.param("*")` for wildcard routes. |
+| `c.req().param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.req().param("*")` for wildcard routes. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
@@ -629,7 +629,7 @@ ruvia::app()
 
 ## Macro Reference
 
-Ruvia's public API is a compile-time macro DSL. Every macro expands to startup-time descriptors or generated class members — there is no runtime reflection and no per-request macro cost. This section is a single catalog of the public macros; the sections above show each one in context.
+Ruvia's public API is a compile-time macro DSL. Every macro expands to startup-time descriptors or generated class members �?there is no runtime reflection and no per-request macro cost. This section is a single catalog of the public macros; the sections above show each one in context.
 
 ### Controller structure
 
@@ -737,7 +737,7 @@ ruvia::app()
 `setListenAddress(address, port)` configures the HTTP listener; app-managed listener ports must be non-zero. HTTPS has its own startup-only port:
 calling `setHttpsListenPort(port)` declares the HTTPS listener, and `useTls(...)` supplies its certificate and key.
 
-Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** — once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation — `headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled; `setConnectionScanInterval(...)` is a scanner cadence and must be greater than zero.
+Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** �?once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation �?`headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled; `setConnectionScanInterval(...)` is a scanner cadence and must be greater than zero.
 
 Memory pool configuration is also startup-only. Set it before `run()` and before creating any `ruvia::WorkerMemory`; the process memory layer freezes as workers are created:
 
@@ -805,7 +805,7 @@ static constexpr std::string_view kFindUserQuery =
     "SELECT id, name FROM users WHERE id = ?";
 
 ruvia::Task<ruvia::HttpResponse> findUser(ruvia::Context& c) {
-    auto result = co_await c.db().query(kFindUserQuery, {c.param("id").toStringView().value_or("")});
+    auto result = co_await c.db().query(kFindUserQuery, {c.req().param("id").toStringView().value_or("")});
     (void)result;
     co_return c.text("user query completed\n");
 }
