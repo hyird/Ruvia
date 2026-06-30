@@ -104,7 +104,7 @@ private:
         Connection& conn,
         std::string_view path,
         const FetchOptions& options,
-        std::pmr::memory_resource* resource);
+        std::pmr::memory_resource* requestResource);
 
     asio::io_context& ioContext_;
     HttpClientConfig config_;

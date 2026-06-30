@@ -168,6 +168,7 @@ Task<FetchResponse> HttpClientPool::fetch(
     if (closing_) {
         throw std::runtime_error("http client pool is closed");
     }
+    auto* const requestResource = resource == nullptr ? resource_ : resource;
 
     const auto index = co_await acquire();
     ConnectionGuard guard(*this, index);
@@ -177,7 +178,7 @@ Task<FetchResponse> HttpClientPool::fetch(
         if (!conn.connected) {
             co_await connectOne(conn);
         }
-        co_return co_await executeRequest(conn, path, options, resource);
+        co_return co_await executeRequest(conn, path, options, requestResource);
     } catch (...) {
         guard.discard();
         throw;
@@ -188,8 +189,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
     Connection& conn,
     std::string_view path,
     const FetchOptions& options,
-    std::pmr::memory_resource* resource) {
-    auto* const requestResource = resource == nullptr ? resource_ : resource;
+    std::pmr::memory_resource* requestResource) {
     if (options.timeout.count() < 0) {
         throw std::invalid_argument("http client request timeout must not be negative");
     }
