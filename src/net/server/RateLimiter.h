@@ -59,17 +59,14 @@ public:
     }
 
     [[nodiscard]] RateLimitCheck allowGlobal(std::string_view remoteAddress) noexcept {
-        return allow(kGlobalScope, remoteAddress, appRule_);
+        return allow(kGlobalScope, remoteAddress, appRule_, appRule_.failClosed);
     }
 
     [[nodiscard]] RateLimitCheck allowRoute(
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
-        RateLimitRule rule) noexcept {
-        rule = normalizeRateLimitRule(rule);
-        rule.slotCount = appRule_.slotCount;
-        rule.failClosed = appRule_.failClosed;
-        return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule);
+        const RateLimitRule& rule) noexcept {
+        return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule, appRule_.failClosed);
     }
 
 private:
@@ -245,12 +242,13 @@ private:
     [[nodiscard]] RateLimitCheck allow(
         std::uintptr_t scope,
         std::string_view key,
-        const RateLimitRule& rule) noexcept {
+        const RateLimitRule& rule,
+        bool failClosed) noexcept {
         if (rule.maxRequests == 0) {
             return RateLimitCheck{};
         }
         if (key.size() > kMaxKeyBytes) {
-            return RateLimitCheck{.allowed = !rule.failClosed, .resetAfterMs = 1};
+            return RateLimitCheck{.allowed = !failClosed, .resetAfterMs = 1};
         }
 
         const auto nowMs = rateLimiterNowMs();
@@ -275,7 +273,7 @@ private:
             }
         }
 
-        return RateLimitCheck{.allowed = !rule.failClosed, .resetAfterMs = 1};
+        return RateLimitCheck{.allowed = !failClosed, .resetAfterMs = 1};
     }
 
     std::pmr::memory_resource* resource_;
