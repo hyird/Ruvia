@@ -117,7 +117,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         const auto& user = c.get(kCurrentUser);
-        const auto traceId = c.var<std::string_view>("traceId");
+        const auto traceId = c.get<std::string_view>("traceId");
         std::pmr::string body(c.allocator<char>());
         body.append("user=");
         body.append(user.name);

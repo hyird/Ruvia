@@ -56,9 +56,6 @@ template <typename MiddlewareT>
 
 template <typename MiddlewareT>
 class Middleware {
-public:
-    using RuviaMiddlewareType = MiddlewareT;
-
 protected:
     constexpr Middleware() noexcept = default;
     ~Middleware() = default;
