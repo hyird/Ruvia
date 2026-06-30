@@ -25,7 +25,7 @@ void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
 }
 
 void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const noexcept {
-    destroyPmrObject(table, resource == nullptr ? registrationResource() : resource);
+    destroyPmrObject(table, registrationResourceOrDefault(resource));
 }
 
 Router::Router()
