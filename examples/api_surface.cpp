@@ -109,7 +109,7 @@ private:
         body.append("\nversion=");
         body.append(request.httpVersion());
         body.append("\naccepts-json=");
-        body.append(c.accepts("application/json") ? "true" : "false");
+        body.append(c.req().accepts("application/json") ? "true" : "false");
         body.append("\ndecoded-path=");
         if (auto decoded = c.req().decodedPath().toString()) {
             body.append(*decoded);

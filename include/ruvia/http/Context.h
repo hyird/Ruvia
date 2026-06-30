@@ -129,6 +129,7 @@ public:
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+    [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
     [[nodiscard]] RequestNameValueList query() const;
     [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
@@ -215,8 +216,6 @@ public:
     [[nodiscard]] ContextRequest req() const noexcept {
         return ContextRequest(*this);
     }
-
-    [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
     // application owns the blob's format). sessionId() is empty until a session
@@ -584,6 +583,7 @@ private:
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;
+    [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -708,6 +708,10 @@ inline std::span<const HttpHeaderView> ContextRequest::headers() const noexcept 
 
 inline std::string_view ContextRequest::header(std::string_view name) const noexcept {
     return raw().header(name);
+}
+
+inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
+    return context_->requestAccepts(mediaType);
 }
 
 inline QueryValue ContextRequest::query(std::string_view name) const noexcept {

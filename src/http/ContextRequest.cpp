@@ -1,6 +1,7 @@
 #include "ruvia/http/Context.h"
 
 #include "HeaderTokenUtils.h"
+#include "HeaderAcceptUtils.h"
 #include "HttpRequestInternal.h"
 #include "MultipartParsing.h"
 #include "RequestBodyDecoding.h"
@@ -125,6 +126,12 @@ ParamValue Context::routeParam(std::string_view name) const noexcept {
     }
 
     return ParamValue(std::nullopt, resource(), RequestValue::DecodeMode::kPercent);
+}
+
+bool Context::requestAccepts(std::string_view mediaType) const noexcept {
+    return detail::httpAcceptsMediaType(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kAccept),
+        mediaType);
 }
 
 Task<std::string_view> Context::requestBody() const {

@@ -5,7 +5,6 @@
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderState.h"
-#include "HeaderAcceptUtils.h"
 #include "ruvia/detail/NumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
 
@@ -17,12 +16,6 @@
 #include <utility>
 
 namespace ruvia {
-
-bool Context::accepts(std::string_view mediaType) const noexcept {
-    return detail::httpAcceptsMediaType(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kAccept),
-        mediaType);
-}
 
 HttpResponseHeader* Context::findResponseHeaderForUpdate(
     std::string_view name,
