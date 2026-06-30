@@ -226,8 +226,8 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
-| `c.bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
-| `c.multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
+| `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
+| `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
 | `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. |
 | `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=utf-8` and returns the stream writer. |
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
@@ -303,7 +303,7 @@ RUVIA_POST_STREAM("/upload", upload);
 
 ruvia::Task<ruvia::HttpResponse> upload(ruvia::Context& c) {
     std::pmr::string body(c.allocator<char>());
-    auto& reader = c.bodyReader();
+    auto& reader = c.req().bodyReader();
     while (auto chunk = co_await reader.read()) {
         body.append(chunk->data(), chunk->size());
     }
@@ -403,7 +403,7 @@ Streaming multipart uploads are also explicit:
 RUVIA_POST_STREAM("/upload", uploadMultipart);
 
 ruvia::Task<ruvia::HttpResponse> uploadMultipart(ruvia::Context& c) {
-    auto reader = c.multipartReader();
+    auto reader = c.req().multipartReader();
     while (auto part = co_await reader.read()) {
         // part->name / filename / contentType / body are valid until the next reader.read().
     }
@@ -659,7 +659,7 @@ Each macro takes `(path, handler, Middleware...)`, registers a buffered route wh
 | --- | --- |
 | `RUVIA_GET_STREAM(path, handler, Middleware...)` | Chunked / HTTP/2 DATA response stream; handler returns `ruvia::Task<void>` and writes through `c.stream()` / `c.streamText()`. |
 | `RUVIA_GET_SSE(path, handler, Middleware...)` | Server-Sent Events stream via `c.streamSSE()`; sets `Content-Type: text/event-stream`. |
-| `RUVIA_POST_STREAM` / `RUVIA_PUT_STREAM` / `RUVIA_PATCH_STREAM` | Streaming **request body** routes; handler reads chunk by chunk through `c.bodyReader()` / `c.multipartReader()`. |
+| `RUVIA_POST_STREAM` / `RUVIA_PUT_STREAM` / `RUVIA_PATCH_STREAM` | Streaming **request body** routes; handler reads chunk by chunk through `c.req().bodyReader()` / `c.req().multipartReader()`. |
 | `RUVIA_GET_WS(path, handler, Middleware...)` | WebSocket upgrade route (RFC 6455 over HTTP/1.1, RFC 8441 over HTTP/2); handler uses `c.webSocket()`. |
 | `RUVIA_GET_WS_OPTIONS(path, handler, options, Middleware...)` | WebSocket route with a `ruvia::WebSocketRouteOptions` value (subprotocols, heartbeat ping/pong). |
 
@@ -936,7 +936,7 @@ With `setAutoHttps(true)`, the HTTP listener returns a `308 Permanent Redirect` 
 - `setMaxConnectionsPerWorker(...)` returns `429 Too Many Requests` for excess accepted connections; `setMaxRequestsPerConnection(...)` closes keep-alive after the configured request count; `0` means unlimited.
 - Buffered request body and WebSocket message limits are memory bounds and must be greater than zero. Stream body routes are explicit; `setMaxStreamBodyBytes(0)` disables only the stream body limit.
 - HTTP parsing uses Ruvia's zero-copy parser; request method, path, version, headers, and common values are views into the connection read buffer by default. Chunked request bodies are decoded in place.
-- Stream routes (`RUVIA_POST_STREAM`, `RUVIA_PUT_STREAM`, `RUVIA_PATCH_STREAM`) dispatch after headers and let handlers consume Content-Length or chunked bodies through `c.bodyReader()`.
+- Stream routes (`RUVIA_POST_STREAM`, `RUVIA_PUT_STREAM`, `RUVIA_PATCH_STREAM`) dispatch after headers and let handlers consume Content-Length or chunked bodies through `c.req().bodyReader()`.
 - Buffered multipart parsing returns field views into the current request body; streaming multipart returns chunk views valid until the next `read()`.
 - `Expect: 100-continue` is answered before body reads, and comma-separated `Connection` tokens are honored.
 - Response construction uses request arenas and scatter-gather-friendly response data instead of building a full response string for every request. Memory bodies are either explicit borrowed views or owned arena strings; file bodies are internal path references created only by `Context`.

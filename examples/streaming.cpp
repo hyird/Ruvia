@@ -19,7 +19,7 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> uploadRaw(ruvia::Context& c) {
         std::size_t bytes = 0;
-        auto& reader = c.bodyReader();
+        auto& reader = c.req().bodyReader();
         while (auto chunk = co_await reader.read()) {
             bytes += chunk->size();
         }
@@ -34,7 +34,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> uploadMultipart(ruvia::Context& c) {
         std::size_t parts = 0;
         std::size_t bytes = 0;
-        auto reader = c.multipartReader();
+        auto reader = c.req().multipartReader();
         while (auto part = co_await reader.read()) {
             if (part->partBegin) {
                 ++parts;

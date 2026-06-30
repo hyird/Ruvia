@@ -283,7 +283,7 @@ private:
 
     static ruvia::Task<ruvia::HttpResponse> countStreamingBody(ruvia::Context& c, std::string_view verb) {
         std::uint64_t bytes = 0;
-        auto& reader = c.bodyReader();
+        auto& reader = c.req().bodyReader();
         while (auto chunk = co_await reader.read()) {
             bytes += chunk->size();
         }

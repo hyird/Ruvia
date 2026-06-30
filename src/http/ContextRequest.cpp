@@ -290,15 +290,15 @@ Task<void> Context::discardBody() const {
     }
 }
 
-BodyReader& Context::bodyReader() const {
+BodyReader& Context::requestBodyReader() const {
     if (bodyReader_ == nullptr) {
         throw std::logic_error("request body is not streamable");
     }
     return *bodyReader_;
 }
 
-MultipartReader Context::multipartReader() const {
-    return MultipartReader(bodyReader(), multipartBoundary(), resource());
+MultipartReader Context::requestMultipartReader() const {
+    return MultipartReader(requestBodyReader(), multipartBoundary(), resource());
 }
 
 WebSocket& Context::webSocket() const {
