@@ -78,10 +78,6 @@ struct ContextAccess final {
         return context.routeRateLimitScope_;
     }
 
-    static void setError(Context& context, std::exception_ptr error) noexcept {
-        context.setError(error);
-    }
-
     static void setResponse(Context& context, HttpResponse&& response) {
         context.storeResponse(std::move(response));
     }

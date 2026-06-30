@@ -47,14 +47,11 @@ public:
         c.setRenderer(&surfaceRenderer);
         try {
             co_await next();
-            c.header("X-Surface-Middleware", "after-next");
         } catch (...) {
-            if (c.error()) {
-                c.res(c.text("caught by middleware\n", 500));
-                co_return;
-            }
-            throw;
+            c.res(c.text("caught by middleware\n", 500));
+            co_return;
         }
+        c.header("X-Surface-Middleware", "after-next");
     }
 };
 
