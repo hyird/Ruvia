@@ -20,12 +20,8 @@
 namespace ruvia {
 
 struct ValidationIssue final {
-private:
-    struct ResolvedResourceTag final {};
-
-public:
     explicit ValidationIssue(std::pmr::memory_resource* resource = nullptr)
-        : ValidationIssue(ResolvedResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+        : ValidationIssue(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     ValidationIssue(
         std::string_view fieldName,
@@ -33,7 +29,7 @@ public:
         std::string_view messageValue,
         std::pmr::memory_resource* resource = nullptr)
         : ValidationIssue(
-              ResolvedResourceTag{},
+              detail::ResolvedPmrResourceTag{},
               fieldName,
               codeValue,
               messageValue,
@@ -44,13 +40,13 @@ public:
     std::pmr::string message;
 
 private:
-    ValidationIssue(ResolvedResourceTag, std::pmr::memory_resource* resource)
+    ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : field(resource),
           code(resource),
           message(resource) {}
 
     ValidationIssue(
-        ResolvedResourceTag,
+        detail::ResolvedPmrResourceTag,
         std::string_view fieldName,
         std::string_view codeValue,
         std::string_view messageValue,

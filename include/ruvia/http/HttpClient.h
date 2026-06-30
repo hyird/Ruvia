@@ -42,10 +42,6 @@ struct FetchRequestHeader {
 };
 
 struct FetchResponseHeader {
-private:
-    struct ResolvedResourceTag final {};
-
-public:
     std::pmr::string name;
     std::pmr::string value;
 
@@ -55,11 +51,11 @@ public:
         : name(std::move(n)), value(std::move(v)) {}
 
     FetchResponseHeader(std::string_view n, std::string_view v, std::pmr::memory_resource* resource)
-        : FetchResponseHeader(ResolvedResourceTag{}, n, v, detail::pmrResourceOrDefault(resource)) {}
+        : FetchResponseHeader(detail::ResolvedPmrResourceTag{}, n, v, detail::pmrResourceOrDefault(resource)) {}
 
 private:
     FetchResponseHeader(
-        ResolvedResourceTag,
+        detail::ResolvedPmrResourceTag,
         std::string_view n,
         std::string_view v,
         std::pmr::memory_resource* resource)
@@ -76,11 +72,9 @@ struct FetchOptions {
 };
 
 class FetchResponse final {
-    struct ResolvedResourceTag final {};
-
 public:
     explicit FetchResponse(std::pmr::memory_resource* resource = nullptr)
-        : FetchResponse(ResolvedResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+        : FetchResponse(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     FetchResponse(const FetchResponse&) = delete;
     FetchResponse& operator=(const FetchResponse&) = delete;
@@ -92,7 +86,7 @@ public:
     std::pmr::string body;
 
 private:
-    FetchResponse(ResolvedResourceTag, std::pmr::memory_resource* resource)
+    FetchResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : headers(resource),
           body(resource) {}
 };
