@@ -24,6 +24,7 @@ template <typename Visitor>
 
 template <typename Visitor>
 [[nodiscard]] bool visitFormObjectFields(
+    ResolvedPmrResourceTag,
     std::string_view body,
     std::pmr::memory_resource* resource,
     Visitor&& visitor) {
@@ -34,7 +35,7 @@ template <typename Visitor>
             return dispatchJsonObjectFieldVisitor(visitorRef, name, value);
         }
 
-        std::pmr::string decodedName(pmrResourceOrDefault(resource));
+        std::pmr::string decodedName(resource);
         if (!decodeFormComponent(name, decodedName)) {
             valid = false;
             return false;
@@ -42,6 +43,18 @@ template <typename Visitor>
         return dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(decodedName), value);
     });
     return completed && valid;
+}
+
+template <typename Visitor>
+[[nodiscard]] bool visitFormObjectFields(
+    std::string_view body,
+    std::pmr::memory_resource* resource,
+    Visitor&& visitor) {
+    return visitFormObjectFields(
+        ResolvedPmrResourceTag{},
+        body,
+        pmrResourceOrDefault(resource),
+        std::forward<Visitor>(visitor));
 }
 
 }  // namespace ruvia::detail
