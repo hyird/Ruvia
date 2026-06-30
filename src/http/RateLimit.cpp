@@ -15,7 +15,7 @@ RouteRateLimitResult checkRouteRateLimit(
 
     const auto check = limiter->allowRoute(
         ContextAccess::routeRateLimitScope(context),
-        context.remoteAddress(),
+        context.req().remoteAddress(),
         options.rule);
     return RouteRateLimitResult{
         .allowed = check.allowed,
