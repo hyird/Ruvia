@@ -56,9 +56,20 @@ public:
         std::optional<T>& value,
         detail::ModelFieldState& state,
         std::pmr::memory_resource* resource) noexcept
+        : ModelFieldRef(
+              detail::ResolvedPmrResourceTag{},
+              value,
+              state,
+              detail::pmrResourceOrDefault(resource)) {}
+
+    ModelFieldRef(
+        detail::ResolvedPmrResourceTag,
+        std::optional<T>& value,
+        detail::ModelFieldState& state,
+        std::pmr::memory_resource* resource) noexcept
         : value_(&value),
           state_(&state),
-          resource_(detail::pmrResourceOrDefault(resource)) {}
+          resource_(resource) {}
 
     [[nodiscard]] bool has_value() const noexcept {
         return value_->has_value();
