@@ -40,8 +40,8 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    MiddlewareContinuation continuation{this, &route, index + 1};
-    const auto next = NextAccess::make(context, &continuation, &RouteTable::invokeMiddlewareContinuation);
+    MiddlewareContinuation continuation{this, &route, &context, index + 1};
+    const auto next = NextAccess::make(&continuation, &RouteTable::invokeMiddlewareContinuation);
     try {
         auto task = middleware(context, next);
         co_await std::move(task);
@@ -52,9 +52,12 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     }
 }
 
-Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target, Context& context) {
+Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
     const auto* continuation = static_cast<const MiddlewareContinuation*>(target);
-    return continuation->table->invokeMiddlewareAt(*continuation->route, continuation->index, context);
+    return continuation->table->invokeMiddlewareAt(
+        *continuation->route,
+        continuation->index,
+        *continuation->context);
 }
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
@@ -74,8 +77,8 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    StreamMiddlewareContinuation continuation{this, &route, index + 1, &outcome};
-    const auto next = NextAccess::make(context, &continuation, &RouteTable::invokeStreamMiddlewareContinuation);
+    StreamMiddlewareContinuation continuation{this, &route, &context, index + 1, &outcome};
+    const auto next = NextAccess::make(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
     try {
         auto task = middleware(context, next);
         co_await std::move(task);
@@ -86,12 +89,12 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     }
 }
 
-Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target, Context& context) {
+Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target) {
     const auto* continuation = static_cast<const StreamMiddlewareContinuation*>(target);
     return continuation->table->invokeStreamMiddlewareAt(
         *continuation->route,
         continuation->index,
-        context,
+        *continuation->context,
         *continuation->outcome);
 }
 

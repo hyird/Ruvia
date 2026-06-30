@@ -30,10 +30,9 @@ class RouterImpl;
 
 struct NextAccess final {
     [[nodiscard]] static constexpr Next make(
-        Context& context,
         void* target,
         Next::Invoke invoke) noexcept {
-        return Next(context, target, invoke);
+        return Next(target, invoke);
     }
 };
 
@@ -299,12 +298,14 @@ private:
     struct MiddlewareContinuation {
         const RouteTable* table{nullptr};
         const RouteEntry* route{nullptr};
+        Context* context{nullptr};
         std::size_t index{0};
     };
 
     struct StreamMiddlewareContinuation {
         const RouteTable* table{nullptr};
         const RouteEntry* route{nullptr};
+        Context* context{nullptr};
         std::size_t index{0};
         RouteStreamDispatchOutcome* outcome{nullptr};
     };
@@ -370,7 +371,7 @@ private:
         const RouteEntry& route,
         std::size_t index,
         Context& context) const;
-    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(void* target, Context& context);
+    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(void* target);
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
         const RouteResolution& resolution,
@@ -381,7 +382,7 @@ private:
         std::size_t index,
         Context& context,
         RouteStreamDispatchOutcome& outcome) const;
-    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(void* target, Context& context);
+    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(void* target);
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
         HttpErrorInfo error,
