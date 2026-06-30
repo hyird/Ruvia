@@ -9,8 +9,14 @@
 namespace ruvia {
 
 detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
+    : RouteEntry(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource), init) {}
+
+detail::RouteEntry::RouteEntry(
+    detail::ResolvedPmrResourceTag,
+    std::pmr::memory_resource* resource,
+    Init init)
     : method_(init.method),
-      path_(init.path, detail::pmrResourceOrDefault(resource)),
+      path_(init.path, resource),
       handler_(init.handler),
       streamHandler_(init.streamHandler),
       bodyMode_(init.bodyMode),
@@ -18,9 +24,7 @@ detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
       dynamic_(init.dynamic),
       middlewareOffset_(init.middlewareOffset),
       middlewareCount_(init.middlewareCount),
-      webSocketSubprotocols_(
-          init.webSocketSubprotocols,
-          path_.get_allocator().resource()),
+      webSocketSubprotocols_(init.webSocketSubprotocols, resource),
       webSocketHeartbeat_(init.webSocketHeartbeat) {}
 
 detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
@@ -29,21 +33,21 @@ detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
       middlewareFrames_(resource_),
       exactSlots_(resource_),
       radixRoots_{
-          RadixNode(resource_),
-          RadixNode(resource_),
-          RadixNode(resource_),
-          RadixNode(resource_),
-          RadixNode(resource_),
-          RadixNode(resource_),
-          RadixNode(resource_)},
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_),
+          RadixNode(detail::ResolvedPmrResourceTag{}, resource_)},
       dynamicRoots_{
-          DynamicNode(resource_),
-          DynamicNode(resource_),
-          DynamicNode(resource_),
-          DynamicNode(resource_),
-          DynamicNode(resource_),
-          DynamicNode(resource_),
-          DynamicNode(resource_)},
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_),
+          DynamicNode(detail::ResolvedPmrResourceTag{}, resource_)},
       dynamicNodeArena_(resource_),
       dynamicParamNames_(resource_) {}
 
@@ -80,7 +84,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
 
     for (const auto& pending : pendingRoutes_) {
         const auto pendingMiddlewares = pending.middlewares();
-        RouteEntry route(table.resource_, RouteEntry::Init{
+        RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
             .method = pending.method(),
             .path = pending.path(),
             .handler = pending.handler(),
@@ -133,7 +137,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         if (conflictsWithExistingHead) {
             continue;
         }
-        RouteEntry shadow(table.resource_, RouteEntry::Init{
+        RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
             .method = HttpMethod::kHead,
             .path = source.path(),
             .handler = source.handler(),

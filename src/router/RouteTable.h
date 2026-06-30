@@ -83,6 +83,7 @@ public:
     };
 
     RouteEntry(std::pmr::memory_resource* resource, Init init);
+    RouteEntry(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource, Init init);
     RouteEntry(const RouteEntry&) = delete;
     RouteEntry& operator=(const RouteEntry&) = delete;
     RouteEntry(RouteEntry&&) noexcept = default;
