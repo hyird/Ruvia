@@ -331,11 +331,11 @@ Context& Context::setRenderer(Renderer renderer) noexcept {
     return *this;
 }
 
-Task<HttpResponse> Context::render(std::string_view body) {
+Task<HttpResponse> Context::render(std::string_view body, std::string_view head) {
     if (renderer_ == nullptr) {
         co_return html(body);
     }
-    co_return co_await renderer_(*this, body);
+    co_return co_await renderer_(*this, body, head);
 }
 
 HttpResponse Context::redirect(
@@ -360,6 +360,10 @@ HttpResponse Context::error(
             .statusText = statusText,
             .code = code,
             .message = message});
+}
+
+HttpResponse Context::notFound() const {
+    return makeErrorResponse(resource(), HttpErrorInfo{.statusCode = 404});
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {

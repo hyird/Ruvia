@@ -31,9 +31,14 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
 
 }  // namespace
 
-ruvia::Task<ruvia::HttpResponse> surfaceRenderer(ruvia::Context& c, std::string_view body) {
+ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
+    ruvia::Context& c,
+    std::string_view body,
+    std::string_view head) {
     std::pmr::string html(c.allocator<char>());
-    html.append("<!doctype html><html><body><main>");
+    html.append("<!doctype html><html><head>");
+    html.append(head);
+    html.append("</head><body><main>");
     html.append(body);
     html.append("</main></body></html>");
     co_return c.html(html);
@@ -149,7 +154,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
-        co_return co_await c.render("<h1>rendered body</h1>");
+        co_return co_await c.render("<h1>rendered body</h1>", "<title>surface</title>");
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
@@ -157,7 +162,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
-        co_return c.error(404, "not_found", "not found");
+        co_return c.notFound();
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {

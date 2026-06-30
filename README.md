@@ -240,11 +240,12 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.body(...)` | Return a raw response body without setting a content type. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
-| `c.html(...)` / `co_await c.render(...)` | Return HTML directly or through a middleware-installed renderer. |
+| `c.html(...)` / `co_await c.render(body, head)` | Return HTML directly or through a middleware-installed renderer with optional head metadata. |
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
 | `c.redirect(location)` | Return a redirect response. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
+| `c.notFound()` | Return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |
 
