@@ -143,6 +143,12 @@ public:
     template <typename T>
     [[nodiscard]] Task<T> form() const;
 
+    template <typename T>
+    [[nodiscard]] const T& valid() const;
+
+    template <typename T>
+    [[nodiscard]] const T& valid(ValidationTarget target) const;
+
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
     [[nodiscard]] Task<RequestFormFieldList> parseBody() const {
@@ -330,16 +336,6 @@ public:
     template <typename T>
     [[nodiscard]] const T& var(ContextKey<T> key) const {
         return get(key);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T& valid() const {
-        return valid<T>(ValidationTarget::kJson);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T& valid(ValidationTarget target) const {
-        return validatedValues_.get<T>(target);
     }
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
@@ -762,6 +758,16 @@ inline ParamValue ContextRequest::param(std::string_view name) const noexcept {
 
 inline const RequestNameValueList& ContextRequest::param() const {
     return context_->routeParams();
+}
+
+template <typename T>
+inline const T& ContextRequest::valid() const {
+    return valid<T>(ValidationTarget::kJson);
+}
+
+template <typename T>
+inline const T& ContextRequest::valid(ValidationTarget target) const {
+    return context_->validatedValues_.get<T>(target);
 }
 
 namespace detail {

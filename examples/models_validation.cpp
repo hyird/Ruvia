@@ -119,7 +119,7 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
-        const auto& request = c.valid<RegisterRequest>();
+        const auto& request = c.req().valid<RegisterRequest>();
 
         RegisterResponse response(c);
         response.username(request.username()->view());
@@ -132,7 +132,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
-        const auto& form = c.valid<ContactForm>(ruvia::Form);
+        const auto& form = c.req().valid<ContactForm>(ruvia::Form);
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
         body.append(form.name()->view());
