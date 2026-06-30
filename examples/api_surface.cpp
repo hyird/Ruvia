@@ -50,9 +50,8 @@ public:
         c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
         c.set("traceId", std::string_view("surface-trace"));
         c.setRenderer(&surfaceRenderer);
-        try {
-            co_await next();
-        } catch (...) {
+        co_await next();
+        if (c.error()) {
             c.res(c.text("caught by middleware\n", 500));
             co_return;
         }

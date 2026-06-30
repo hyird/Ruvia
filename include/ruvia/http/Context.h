@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
@@ -218,6 +219,10 @@ public:
 
     [[nodiscard]] ContextRequest req() const noexcept {
         return ContextRequest(*this);
+    }
+
+    [[nodiscard]] std::exception_ptr error() const noexcept {
+        return error_;
     }
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
@@ -593,6 +598,9 @@ private:
     [[nodiscard]] detail::ContextValueStore& values();
     [[nodiscard]] HttpResponse& responseStorage();
     void storeResponse(HttpResponse&& response);
+    void storeError(std::exception_ptr exception) noexcept {
+        error_ = std::move(exception);
+    }
     [[nodiscard]] bool hasResponse() const noexcept {
         return response_ != nullptr;
     }
@@ -632,6 +640,7 @@ private:
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
     HttpResponse* response_{nullptr};
+    std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};

@@ -2,6 +2,7 @@
 
 #include "../../http/ContextInternal.h"
 
+#include <exception>
 #include <utility>
 
 namespace ruvia {
@@ -20,6 +21,12 @@ Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(
     const RouteEntry& route,
     Context& context) const {
     co_await invokeMiddlewareAt(route, 0, context);
+    if (detail::ContextAccess::hasResponse(context)) {
+        co_return detail::ContextAccess::takeResponse(context);
+    }
+    if (auto exception = context.error()) {
+        co_return co_await handleException(context, exception, true);
+    }
     co_return detail::ContextAccess::takeResponse(context);
 }
 
@@ -43,10 +50,14 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
     const auto* continuation = static_cast<const MiddlewareContinuation*>(target);
-    return continuation->table->invokeMiddlewareAt(
-        *continuation->route,
-        continuation->index,
-        *continuation->context);
+    try {
+        co_await continuation->table->invokeMiddlewareAt(
+            *continuation->route,
+            continuation->index,
+            *continuation->context);
+    } catch (...) {
+        detail::ContextAccess::setError(*continuation->context, std::current_exception());
+    }
 }
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
@@ -70,11 +81,15 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target) {
     const auto* continuation = static_cast<const StreamMiddlewareContinuation*>(target);
-    return continuation->table->invokeStreamMiddlewareAt(
-        *continuation->route,
-        continuation->index,
-        *continuation->context,
-        *continuation->outcome);
+    try {
+        co_await continuation->table->invokeStreamMiddlewareAt(
+            *continuation->route,
+            continuation->index,
+            *continuation->context,
+            *continuation->outcome);
+    } catch (...) {
+        detail::ContextAccess::setError(*continuation->context, std::current_exception());
+    }
 }
 
 }  // namespace ruvia

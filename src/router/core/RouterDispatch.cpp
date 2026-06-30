@@ -180,6 +180,11 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             RouteStreamDispatchOutcome::kStreamHandled);
     }
     co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
+    if (!detail::ContextAccess::hasResponse(context)) {
+        if (auto exception = context.error()) {
+            std::rethrow_exception(exception);
+        }
+    }
     auto response = detail::ContextAccess::hasResponse(context)
         ? detail::ContextAccess::takeResponse(context)
         : HttpResponse(context.resource());
