@@ -13,6 +13,7 @@
 #include <thread>
 
 #include "ruvia/app/RateLimitRule.h"
+#include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -34,8 +35,8 @@ class RateLimiter final {
 public:
     explicit RateLimiter(
         RateLimitRule appRule,
-        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
-        : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
+        std::pmr::memory_resource* resource = nullptr)
+        : resource_(pmrResourceOrDefault(resource)),
           appRule_(normalizeRateLimitRule(appRule)),
           slotCount_(nextPowerOfTwo(appRule_.slotCount)),
           slots_(allocateSlots(slotCount_)) {}
