@@ -14,13 +14,11 @@ namespace ruvia::detail {
 class Http2StreamBodyQueue;
 
 class Http2StreamRequestData final {
+    struct ResolvedResourceTag final {};
+
 public:
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
-        : authority_(pmrResourceOrDefault(resource)),
-          path_(pmrResourceOrDefault(resource)),
-          cookie_(pmrResourceOrDefault(resource)),
-          body_(pmrResourceOrDefault(resource)),
-          headers_(pmrResourceOrDefault(resource)) {}
+        : Http2StreamRequestData(ResolvedResourceTag{}, pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] HttpMethod method() const noexcept {
         return method_;
@@ -120,6 +118,13 @@ public:
     }
 
 private:
+    Http2StreamRequestData(ResolvedResourceTag, std::pmr::memory_resource* resource)
+        : authority_(resource),
+          path_(resource),
+          cookie_(resource),
+          body_(resource),
+          headers_(resource) {}
+
     HttpMethod method_{HttpMethod::kUnknown};
     std::pmr::string authority_;
     std::pmr::string path_;
