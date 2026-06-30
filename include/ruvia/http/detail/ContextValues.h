@@ -116,15 +116,6 @@ public:
         throw std::logic_error("context value is not available");
     }
 
-    [[nodiscard]] bool contains(std::string_view name) const noexcept {
-        return find(name) != nullptr;
-    }
-
-    template <typename T>
-    [[nodiscard]] bool contains(std::string_view name) const noexcept {
-        return getIf<T>(name) != nullptr;
-    }
-
     void clear() noexcept {
         for (auto& entry : entries_) {
             clearValue(entry);

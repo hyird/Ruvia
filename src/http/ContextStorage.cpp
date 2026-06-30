@@ -50,8 +50,4 @@ HttpResponse Context::takeResponse() {
     return std::move(responseStorage());
 }
 
-bool Context::has(std::string_view name) const noexcept {
-    return values_ != nullptr && values_->contains(name);
-}
-
 }  // namespace ruvia
