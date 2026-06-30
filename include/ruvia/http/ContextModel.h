@@ -12,7 +12,7 @@ Task<T> Context::json() const {
     if (!requestContentTypeMatches("application/json")) {
         detail::throwInvalidJsonContentType();
     }
-    const auto requestBody = co_await body();
+    const auto requestBody = co_await this->requestBody();
     auto parsed = JsonBody<T>::parse(requestBody, resource());
     if (!parsed) {
         detail::throwInvalidJsonBody();
@@ -26,7 +26,7 @@ Task<T> Context::form() const {
     if (!requestContentTypeMatches("application/x-www-form-urlencoded")) {
         detail::throwInvalidFormContentType();
     }
-    const auto requestBody = co_await body();
+    const auto requestBody = co_await this->requestBody();
     auto parsed = FormBody<T>::parse(requestBody, resource());
     if (!parsed) {
         detail::throwInvalidFormBody();

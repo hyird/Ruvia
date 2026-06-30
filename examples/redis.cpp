@@ -89,7 +89,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> setValue(ruvia::Context& c) {
-        auto body = co_await c.body();
+        auto body = co_await c.req().text();
         co_await c.redis().set(c.param("key").toStringView().value_or(""), body);
         co_return c.text("OK\n");
     }
@@ -130,7 +130,7 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
         const auto key = c.param("key").toStringView().value_or("");
-        const auto value = co_await c.body();
+        const auto value = co_await c.req().text();
         const std::array<std::pair<std::string_view, std::string_view>, 2> items{{
             {"ruvia:example:mset:a", "one"},
             {"ruvia:example:mset:b", "two"},
