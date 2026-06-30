@@ -170,8 +170,8 @@ public:
             c.res(c.error(401, "unauthorized", "unauthorized"));
             co_return;
         }
-        co_await next(c);
-        c.res().setHeader("X-Auth", "ok");
+        co_await next();
+        c.header("X-Auth", "ok");
     }
 };
 
@@ -187,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next(c)` advances the chain, `c.res()` reads or mutates the final downstream response, and `c.res(response)` short-circuits with a prepared response.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain, `c.header(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 
@@ -319,8 +319,8 @@ Streaming responses are also explicit and bypass normal response-body buffering:
 - `RUVIA_GET_STREAM(...)` sends HTTP/1.1 chunked data or HTTP/2 DATA frames depending on the connection protocol.
 - `RUVIA_GET_SSE(...)` sets `Content-Type: text/event-stream` and formats SSE frames with `writeSSE(...)`.
 - Streaming route macros accept the same middleware arguments as ordinary routes.
-- Middleware can set status/headers before `next(c)`, mutate `c.res()` after `next(c)`, or short-circuit by assigning `c.res(response)`.
-- Post-`next(c)` response mutations do not change an already committed stream.
+- Middleware can set status/headers before `next()`, mutate headers after `next()`, or short-circuit by assigning `c.res(response)`.
+- Post-`next()` response mutations do not change an already committed stream.
 - Set status and headers before the first `write()` because the response head is committed on the first chunk.
 - `HEAD` does not implicitly run a streaming `GET` handler.
 
@@ -395,7 +395,7 @@ RUVIA_GET_WS_OPTIONS("/chat", chat, chatOptions);
 RUVIA_ROUTES_END
 ```
 
-`ruvia::Task<T>` is Ruvia's coroutine type, not an alias for `asio::awaitable<T>`. It is a single-shot task, preserves exceptions through `co_await`, and resumes the awaiting coroutine from `final_suspend`. Use `co_await reader.read()` and `co_await next(c)` for temporary tasks in public code; if a task is stored in a local variable, await it with `co_await std::move(task)`. Public API does not expose `.asAwaitable()` and there is no conversion to `asio::awaitable<T>`; Asio bridging is an internal server/test boundary through `src/runtime/AsioAwait.h`.
+`ruvia::Task<T>` is Ruvia's coroutine type, not an alias for `asio::awaitable<T>`. It is a single-shot task, preserves exceptions through `co_await`, and resumes the awaiting coroutine from `final_suspend`. Use `co_await reader.read()` and `co_await next()` for temporary tasks in public code; if a task is stored in a local variable, await it with `co_await std::move(task)`. Public API does not expose `.asAwaitable()` and there is no conversion to `asio::awaitable<T>`; Asio bridging is an internal server/test boundary through `src/runtime/AsioAwait.h`.
 
 Streaming multipart uploads are also explicit:
 

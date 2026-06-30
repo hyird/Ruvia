@@ -42,12 +42,22 @@ HttpResponse& Context::res() {
 }
 
 Context& Context::res(HttpResponse&& response) {
-    responseStorage() = std::move(response);
+    storeResponse(std::move(response));
     return *this;
 }
 
+void Context::storeResponse(HttpResponse&& response) {
+    responseStorage() = std::move(response);
+}
+
 HttpResponse Context::takeResponse() {
-    return std::move(responseStorage());
+    if (response_ == nullptr) {
+        return HttpResponse(resource());
+    }
+
+    auto response = std::move(*response_);
+    response_ = nullptr;
+    return response;
 }
 
 }  // namespace ruvia

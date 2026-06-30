@@ -83,11 +83,11 @@ struct ContextAccess final {
     }
 
     static void setResponse(Context& context, HttpResponse&& response) {
-        context.res(std::move(response));
+        context.storeResponse(std::move(response));
     }
 
     [[nodiscard]] static bool hasResponse(const Context& context) noexcept {
-        return context.res() != nullptr;
+        return context.hasResponse();
     }
 
     [[nodiscard]] static HttpResponse takeResponse(Context& context) {
