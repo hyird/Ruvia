@@ -36,7 +36,7 @@ struct NextAccess final {
 
 using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
-using RouteMiddleware = CallableRef<HttpResponse, Context&, const Next&>;
+using RouteMiddleware = CallableRef<void, Context&, const Next&>;
 
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
@@ -362,22 +362,23 @@ private:
     [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
-    [[nodiscard]] Task<HttpResponse> invokeMiddlewareAt(
+    [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;
+    [[nodiscard]] Task<void> invokeMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context) const;
-    [[nodiscard]] static Task<HttpResponse> invokeMiddlewareContinuation(void* target, Context& context);
+    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(void* target, Context& context);
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
         ContextServices services) const;
-    [[nodiscard]] Task<HttpResponse> invokeStreamMiddlewareAt(
+    [[nodiscard]] Task<void> invokeStreamMiddlewareAt(
         const RouteEntry& route,
         std::size_t index,
         Context& context,
         RouteStreamDispatchOutcome& outcome) const;
-    [[nodiscard]] static Task<HttpResponse> invokeStreamMiddlewareContinuation(void* target, Context& context);
+    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(void* target, Context& context);
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
         HttpErrorInfo error,

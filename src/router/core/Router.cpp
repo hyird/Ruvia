@@ -9,7 +9,7 @@ namespace ruvia {
 
 using namespace detail;
 
-Task<HttpResponse> Next::operator()(Context& context) const {
+Task<void> Next::operator()(Context& context) const {
     return callable_(context);
 }
 

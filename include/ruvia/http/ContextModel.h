@@ -44,4 +44,14 @@ inline HttpResponse Context::json(
     return jsonSerialized(body, statusCode, statusText);
 }
 
+template <typename T>
+inline HttpResponse Context::json(
+    const T& value,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    auto response = json(value, statusCode);
+    applyExplicitResponseHeaders(response, headers);
+    return response;
+}
+
 }  // namespace ruvia

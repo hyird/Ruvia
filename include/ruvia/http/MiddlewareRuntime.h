@@ -14,18 +14,18 @@ namespace ruvia {
 namespace detail {
 
 template <typename T>
-concept TaskHttpResponse = std::same_as<std::remove_cvref_t<T>, Task<HttpResponse>>;
+concept TaskVoid = std::same_as<std::remove_cvref_t<T>, Task<void>>;
 
 template <typename MiddlewareT>
 concept AwaitableHandleMiddleware = requires(
     MiddlewareT middleware,
     Context& context,
     const Next& next) {
-    { middleware.handle(context, next) } -> TaskHttpResponse;
+    { middleware.handle(context, next) } -> TaskVoid;
 };
 
 template <typename MiddlewareT>
-[[nodiscard]] Task<HttpResponse> invokeMiddleware(
+[[nodiscard]] Task<void> invokeMiddleware(
     void* target,
     Context& context,
     const Next& next) {
@@ -35,7 +35,7 @@ template <typename MiddlewareT>
     } else {
         static_assert(
             AwaitableHandleMiddleware<MiddlewareT>,
-            "middleware must implement async handle(Context&, const ruvia::Next&)");
+            "middleware must implement async Task<void> handle(Context&, const ruvia::Next&)");
     }
 }
 

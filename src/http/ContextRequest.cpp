@@ -53,6 +53,56 @@ namespace {
     return count;
 }
 
+[[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
+    return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
+}
+
+void stripArraySuffix(std::pmr::string& name) {
+    if (fieldNameIsArray(std::string_view(name.data(), name.size()))) {
+        name.resize(name.size() - 2);
+    }
+}
+
+void assignDotPath(
+    Context::RequestFormField& field,
+    std::pmr::memory_resource* resource) {
+    field.path.clear();
+    std::string_view remaining(field.name.data(), field.name.size());
+    while (!remaining.empty()) {
+        const auto dot = remaining.find('.');
+        const auto segment = dot == std::string_view::npos
+            ? remaining
+            : remaining.substr(0, dot);
+        field.path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
+        if (dot == std::string_view::npos) {
+            break;
+        }
+        remaining.remove_prefix(dot + 1);
+    }
+}
+
+void appendParsedBodyField(
+    Context::RequestFormFieldList& fields,
+    Context::RequestFormField&& field,
+    Context::ParseBodyOptions options) {
+    if (options.dot) {
+        assignDotPath(field, fields.get_allocator().resource());
+    }
+
+    if (options.all || field.array) {
+        fields.emplace_back(std::move(field));
+        return;
+    }
+
+    for (auto& existing : fields) {
+        if (existing.name == field.name) {
+            existing = std::move(field);
+            return;
+        }
+    }
+    fields.emplace_back(std::move(field));
+}
+
 }  // namespace
 
 QueryValue Context::query(std::string_view name) const {
@@ -72,6 +122,35 @@ QueryValue Context::query(std::string_view name) const {
     return QueryValue(result, resource(), RequestValue::DecodeMode::kForm);
 }
 
+const Context::RequestNameValueList& Context::param() const {
+    return routeParams();
+}
+
+const Context::RequestNameValueList& Context::params() const {
+    return routeParams();
+}
+
+const Context::RequestNameValueList& Context::query() const {
+    return queryParams();
+}
+
+std::pmr::vector<QueryValue> Context::queries(std::string_view name) const {
+    std::pmr::vector<QueryValue> result(resource());
+    for (const auto& param : queryParams()) {
+        if (detail::urlComponentEquals(param.name, name, detail::UrlDecodeMode::kForm)) {
+            result.emplace_back(
+                std::optional<std::string_view>(param.value),
+                resource(),
+                RequestValue::DecodeMode::kForm);
+        }
+    }
+    return result;
+}
+
+const Context::RequestNameValueList& Context::queries() const {
+    return queryParams();
+}
+
 std::optional<std::string_view> Context::cookie(std::string_view name) const {
     if (cookieParams_ == nullptr && !cookieLookupAttempted_) {
         cookieLookupAttempted_ = true;
@@ -84,6 +163,22 @@ std::optional<std::string_view> Context::cookie(std::string_view name) const {
         }
     }
     return std::nullopt;
+}
+
+const Context::RequestNameValueList& Context::cookies() const {
+    return cookieParams();
+}
+
+const Context::RequestNameValueList& Context::routeParams() const {
+    if (routeParams_ == nullptr) {
+        auto& params = memory_.emplace<RequestNameValueList>(resource());
+        params.reserve(paramCount_);
+        for (std::size_t i = 0; i < paramCount_; ++i) {
+            params.push_back(RequestNameValueView{.name = paramNames_[i], .value = paramValues_[i]});
+        }
+        routeParams_ = &params;
+    }
+    return *routeParams_;
 }
 
 const Context::RequestNameValueList& Context::queryParams() const {
@@ -209,6 +304,70 @@ Task<std::pmr::vector<MultipartPart>> Context::multipart() const {
     }
 
     co_return parts;
+}
+
+Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options) const {
+    const auto requestBody = co_await body();
+
+    if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
+        RequestFormFieldList fields(resource());
+        fields.reserve(delimitedFieldCount(requestBody, '&'));
+        bool valid = true;
+        const bool ok = detail::visitUrlEncodedPairs(
+            requestBody,
+            [this, &fields, &valid, options](std::string_view key, std::string_view value) {
+                auto decodedName = detail::decodeUrlComponentToString(key, resource(), detail::UrlDecodeMode::kForm);
+                auto decodedValue = detail::decodeUrlComponentToString(value, resource(), detail::UrlDecodeMode::kForm);
+                if (!decodedName || !decodedValue) {
+                    valid = false;
+                    return false;
+                }
+
+                const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
+                stripArraySuffix(*decodedName);
+                appendParsedBodyField(
+                    fields,
+                    RequestFormField(
+                        resource(),
+                        std::move(*decodedName),
+                        std::move(*decodedValue),
+                        std::pmr::string(resource()),
+                        std::pmr::string(resource()),
+                        false,
+                        array),
+                    options);
+                return true;
+            });
+        if (!ok || !valid) {
+            throw std::invalid_argument("invalid form body");
+        }
+        co_return fields;
+    }
+
+    if (requestContentTypeMatches("multipart/form-data")) {
+        auto parts = co_await multipart();
+        RequestFormFieldList fields(resource());
+        fields.reserve(parts.size());
+        for (const auto& part : parts) {
+            std::pmr::string name(part.name.data(), part.name.size(), resource());
+            const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
+            stripArraySuffix(name);
+            appendParsedBodyField(
+                fields,
+                RequestFormField(
+                    resource(),
+                    std::move(name),
+                    std::pmr::string(part.body.data(), part.body.size(), resource()),
+                    std::pmr::string(part.filename.data(), part.filename.size(), resource()),
+                    std::pmr::string(part.contentType.data(), part.contentType.size(), resource()),
+                    !part.filename.empty(),
+                    array),
+                options);
+        }
+        co_return fields;
+    }
+
+    throw std::invalid_argument("invalid body content type");
 }
 
 Task<void> Context::discardBody() const {

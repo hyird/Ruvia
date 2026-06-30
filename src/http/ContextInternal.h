@@ -4,6 +4,7 @@
 #include "ContextServices.h"
 
 #include <cstddef>
+#include <utility>
 
 namespace ruvia {
 
@@ -75,6 +76,22 @@ struct ContextAccess final {
 
     [[nodiscard]] static std::uintptr_t routeRateLimitScope(const Context& context) noexcept {
         return context.routeRateLimitScope_;
+    }
+
+    static void setError(Context& context, std::exception_ptr error) noexcept {
+        context.setError(error);
+    }
+
+    static void setResponse(Context& context, HttpResponse&& response) {
+        context.res(std::move(response));
+    }
+
+    [[nodiscard]] static bool hasResponse(const Context& context) noexcept {
+        return context.res() != nullptr;
+    }
+
+    [[nodiscard]] static HttpResponse takeResponse(Context& context) {
+        return context.takeResponse();
     }
 };
 

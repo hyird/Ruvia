@@ -64,7 +64,7 @@ namespace ruvia {
 // Uses the "default" Redis connection.
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
-    Task<HttpResponse> handle(Context& c, const Next& next) {
+    Task<void> handle(Context& c, const Next& next) {
         const auto cookie = c.cookie("sid");
         if (cookie && detail::isValidSessionId(*cookie)) {
             detail::SessionAccess::setId(c, *cookie);
@@ -76,9 +76,10 @@ public:
             }
         }
 
-        auto response = co_await next(c);
+        co_await next(c);
 
         if (detail::SessionAccess::dirty(c)) {
+            auto& response = c.res();
             std::array<char, 64> idBuffer;
             auto id = detail::SessionAccess::id(c);
             if (id.empty()) {
@@ -106,7 +107,6 @@ public:
                 co_await c.redis("default").setEx(key, std::chrono::seconds(86400), data);
             }
         }
-        co_return response;
     }
 };
 

@@ -55,6 +55,7 @@ private:
     std::uint32_t valueSize{0};
     std::uint32_t knownBit{0};
     bool owned{false};
+    bool append{false};
 };
 
 static_assert(std::is_trivially_copyable_v<HttpResponseHeader>);

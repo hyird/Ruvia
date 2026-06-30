@@ -10,20 +10,20 @@
 
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        auto response = co_await next(c);
-        response.setHeader("X-Example", "basic-http");
-        co_return response;
+    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+        co_await next(c);
+        c.res().setHeader("X-Example", "basic-http");
     }
 };
 
 class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        if (c.header("X-Admin-Token") != "secret") {
-            co_return c.error(401, "unauthorized", "missing admin token");
+    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+        if (c.req().header("X-Admin-Token") != "secret") {
+            c.res(c.error(401, "unauthorized", "missing admin token"));
+            co_return;
         }
-        co_return co_await next(c);
+        co_await next(c);
     }
 };
 
@@ -83,7 +83,7 @@ private:
         body.append("remote=");
         body.append(c.remoteAddress());
         body.append("\nuser-agent=");
-        body.append(c.header("User-Agent"));
+        body.append(c.req().header("User-Agent"));
         body.append("\npage=");
         if (const auto page = c.query("page").toUInt32()) {
             char buffer[16]{};
