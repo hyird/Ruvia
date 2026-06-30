@@ -104,16 +104,21 @@ std::string_view jwtFindJsonString(
     std::string_view json,
     std::string_view key,
     std::pmr::memory_resource* resource) {
+    auto* const resolved = pmrResourceOrDefault(resource);
     std::string_view result;
-    (void)visitJsonObjectFields(json, pmrResourceOrDefault(resource), [&](std::string_view member, std::string_view value) {
-        if (member != key) {
-            return true;
-        }
-        if (const auto raw = jwtRawJsonStringValue(value)) {
-            result = *raw;
-        }
-        return false;
-    });
+    (void)visitJsonObjectFields(
+        ResolvedPmrResourceTag{},
+        json,
+        resolved,
+        [&](std::string_view member, std::string_view value) {
+            if (member != key) {
+                return true;
+            }
+            if (const auto raw = jwtRawJsonStringValue(value)) {
+                result = *raw;
+            }
+            return false;
+        });
     return result;
 }
 
@@ -131,72 +136,76 @@ JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::
     bool nbfSeen = false;
     bool iatSeen = false;
 
-    (void)detail::visitJsonObjectFields(json, resolved, [&](std::string_view key, std::string_view value) {
-        if (key == "iss") {
-            if (!issuerSeen) {
-                issuerSeen = true;
-                (void)detail::jwtDecodeJsonStringValue(payload.issuer_, value);
+    (void)detail::visitJsonObjectFields(
+        detail::ResolvedPmrResourceTag{},
+        json,
+        resolved,
+        [&](std::string_view key, std::string_view value) {
+            if (key == "iss") {
+                if (!issuerSeen) {
+                    issuerSeen = true;
+                    (void)detail::jwtDecodeJsonStringValue(payload.issuer_, value);
+                }
+                return true;
             }
-            return true;
-        }
-        if (key == "sub") {
-            if (!subjectSeen) {
-                subjectSeen = true;
-                (void)detail::jwtDecodeJsonStringValue(payload.subject_, value);
+            if (key == "sub") {
+                if (!subjectSeen) {
+                    subjectSeen = true;
+                    (void)detail::jwtDecodeJsonStringValue(payload.subject_, value);
+                }
+                return true;
             }
-            return true;
-        }
-        if (key == "aud") {
-            if (!audienceSeen) {
-                audienceSeen = true;
-                (void)detail::jwtDecodeJsonStringValue(payload.audience_, value);
+            if (key == "aud") {
+                if (!audienceSeen) {
+                    audienceSeen = true;
+                    (void)detail::jwtDecodeJsonStringValue(payload.audience_, value);
+                }
+                return true;
             }
-            return true;
-        }
-        if (key == "jti") {
-            if (!idSeen) {
-                idSeen = true;
-                (void)detail::jwtDecodeJsonStringValue(payload.id_, value);
+            if (key == "jti") {
+                if (!idSeen) {
+                    idSeen = true;
+                    (void)detail::jwtDecodeJsonStringValue(payload.id_, value);
+                }
+                return true;
             }
-            return true;
-        }
-        if (key == "exp") {
-            if (!expSeen) {
-                expSeen = true;
-                if (const auto exp = detail::jwtParseJsonIntegerValue(value)) {
-                    payload.expiresAt_ = detail::jwtFromEpochSeconds(*exp);
+            if (key == "exp") {
+                if (!expSeen) {
+                    expSeen = true;
+                    if (const auto exp = detail::jwtParseJsonIntegerValue(value)) {
+                        payload.expiresAt_ = detail::jwtFromEpochSeconds(*exp);
+                    }
+                }
+                return true;
+            }
+            if (key == "nbf") {
+                if (!nbfSeen) {
+                    nbfSeen = true;
+                    if (const auto nbf = detail::jwtParseJsonIntegerValue(value)) {
+                        payload.notBefore_ = detail::jwtFromEpochSeconds(*nbf);
+                    }
+                }
+                return true;
+            }
+            if (key == "iat") {
+                if (!iatSeen) {
+                    iatSeen = true;
+                    if (const auto iat = detail::jwtParseJsonIntegerValue(value)) {
+                        payload.issuedAt_ = detail::jwtFromEpochSeconds(*iat);
+                    }
+                }
+                return true;
+            }
+            if (!detail::jwtIsReservedClaim(key)) {
+                std::pmr::string claimValue(resolved);
+                if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
+                    std::pmr::string claimName(resolved);
+                    claimName.assign(key.data(), key.size());
+                    payload.claims_.push_back(JwtClaim{std::move(claimName), std::move(claimValue)});
                 }
             }
             return true;
-        }
-        if (key == "nbf") {
-            if (!nbfSeen) {
-                nbfSeen = true;
-                if (const auto nbf = detail::jwtParseJsonIntegerValue(value)) {
-                    payload.notBefore_ = detail::jwtFromEpochSeconds(*nbf);
-                }
-            }
-            return true;
-        }
-        if (key == "iat") {
-            if (!iatSeen) {
-                iatSeen = true;
-                if (const auto iat = detail::jwtParseJsonIntegerValue(value)) {
-                    payload.issuedAt_ = detail::jwtFromEpochSeconds(*iat);
-                }
-            }
-            return true;
-        }
-        if (!detail::jwtIsReservedClaim(key)) {
-            std::pmr::string claimValue(resolved);
-            if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
-                std::pmr::string claimName(resolved);
-                claimName.assign(key.data(), key.size());
-                payload.claims_.push_back(JwtClaim{std::move(claimName), std::move(claimValue)});
-            }
-        }
-        return true;
-    });
+        });
     return payload;
 }
 

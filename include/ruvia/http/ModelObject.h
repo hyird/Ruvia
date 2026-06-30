@@ -45,21 +45,25 @@ public:
         auto* const resource = resource_;
         std::optional<T> result;
         bool parseFailed = false;
-        const bool valid = detail::visitJsonObjectFields(body_, resource, [&](std::string_view key, std::string_view valueView) {
-            if (key != field) {
-                return true;
-            }
+        const bool valid = detail::visitJsonObjectFields(
+            detail::ResolvedPmrResourceTag{},
+            body_,
+            resource,
+            [&](std::string_view key, std::string_view valueView) {
+                if (key != field) {
+                    return true;
+                }
 
-            auto valueInput = valueView;
-            auto value = detail::parseJsonValue<T>(valueInput, resource);
-            detail::skipJsonWhitespace(valueInput);
-            if (!value || !valueInput.empty()) {
-                parseFailed = true;
+                auto valueInput = valueView;
+                auto value = detail::parseJsonValue<T>(valueInput, resource);
+                detail::skipJsonWhitespace(valueInput);
+                if (!value || !valueInput.empty()) {
+                    parseFailed = true;
+                    return false;
+                }
+                result.emplace(std::move(*value));
                 return false;
-            }
-            result.emplace(std::move(*value));
-            return false;
-        });
+            });
 
         if (!valid || parseFailed) {
             return std::nullopt;

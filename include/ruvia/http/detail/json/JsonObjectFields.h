@@ -27,6 +27,7 @@ template <typename Visitor>
 
 template <typename Visitor>
 [[nodiscard]] bool visitJsonObjectFields(
+    ResolvedPmrResourceTag,
     std::string_view body,
     std::pmr::memory_resource* resource,
     Visitor&& visitor) {
@@ -55,7 +56,7 @@ template <typename Visitor>
         const auto consumed = valueStart.size() - input.size();
         const auto value = valueStart.substr(0, consumed);
         if (keyEscaped) {
-            std::pmr::string decodedKey(pmrResourceOrDefault(resource));
+            std::pmr::string decodedKey(resource);
             if (!decodeJsonString(key, decodedKey)) {
                 return false;
             }
@@ -74,6 +75,18 @@ template <typename Visitor>
             return false;
         }
     }
+}
+
+template <typename Visitor>
+[[nodiscard]] bool visitJsonObjectFields(
+    std::string_view body,
+    std::pmr::memory_resource* resource,
+    Visitor&& visitor) {
+    return visitJsonObjectFields(
+        ResolvedPmrResourceTag{},
+        body,
+        pmrResourceOrDefault(resource),
+        std::forward<Visitor>(visitor));
 }
 
 }  // namespace ruvia::detail
