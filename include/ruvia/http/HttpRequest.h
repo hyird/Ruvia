@@ -50,7 +50,10 @@ public:
 
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
+    [[nodiscard]] RequestNameValueList query() const;
+    [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
+    [[nodiscard]] RequestNameValueList cookies() const;
 
     [[nodiscard]] std::string_view remoteAddress() const noexcept {
         return remoteAddress_;

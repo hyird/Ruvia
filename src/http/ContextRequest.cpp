@@ -105,32 +105,11 @@ void appendParsedBodyField(
 
 }  // namespace
 
-const Context::RequestNameValueList& Context::param() const {
+const RequestNameValueList& Context::param() const {
     return routeParams();
 }
 
-const Context::RequestNameValueList& Context::query() const {
-    return queryParams();
-}
-
-std::pmr::vector<QueryValue> Context::queries(std::string_view name) const {
-    std::pmr::vector<QueryValue> result(resource());
-    for (const auto& param : queryParams()) {
-        if (detail::urlComponentEquals(param.name, name, detail::UrlDecodeMode::kForm)) {
-            result.emplace_back(
-                std::optional<std::string_view>(param.value),
-                resource(),
-                RequestValue::DecodeMode::kForm);
-        }
-    }
-    return result;
-}
-
-const Context::RequestNameValueList& Context::cookies() const {
-    return cookieParams();
-}
-
-const Context::RequestNameValueList& Context::routeParams() const {
+const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& params = memory_.emplace<RequestNameValueList>(resource());
         params.reserve(paramCount_);
@@ -140,36 +119,6 @@ const Context::RequestNameValueList& Context::routeParams() const {
         routeParams_ = &params;
     }
     return *routeParams_;
-}
-
-const Context::RequestNameValueList& Context::queryParams() const {
-    if (queryParams_ == nullptr) {
-        auto& params = memory_.emplace<RequestNameValueList>(resource());
-        params.reserve(delimitedFieldCount(request_.queryString(), '&'));
-        (void)detail::visitUrlEncodedPairs(
-            request_.queryString(),
-            [&params](std::string_view key, std::string_view value) {
-                params.push_back(RequestNameValueView{.name = key, .value = value});
-            });
-        queryParams_ = &params;
-    }
-    return *queryParams_;
-}
-
-const Context::RequestNameValueList& Context::cookieParams() const {
-    if (cookieParams_ == nullptr) {
-        auto& params = memory_.emplace<RequestNameValueList>(resource());
-        const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
-        params.reserve(delimitedFieldCount(input, ';'));
-        detail::httpVisitSemicolonParameters(
-            input,
-            [&params](std::string_view key, std::string_view value) {
-                params.push_back(RequestNameValueView{.name = key, .value = value});
-                return true;
-            });
-        cookieParams_ = &params;
-    }
-    return *cookieParams_;
 }
 
 Task<std::string_view> Context::body() const {

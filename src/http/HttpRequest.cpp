@@ -45,6 +45,20 @@ std::optional<T> parseInteger(std::optional<std::string_view> input) noexcept {
     return value;
 }
 
+[[nodiscard]] std::size_t delimitedFieldCount(std::string_view input, char delimiter) noexcept {
+    if (input.empty()) {
+        return 0;
+    }
+
+    std::size_t count = 1;
+    for (const char c : input) {
+        if (c == delimiter) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 }  // namespace
 
 std::optional<std::pmr::string> RequestValue::toString() const {
@@ -129,10 +143,49 @@ QueryValue HttpRequest::query(std::string_view name) const noexcept {
         RequestValue::DecodeMode::kForm);
 }
 
+RequestNameValueList HttpRequest::query() const {
+    RequestNameValueList params(resource());
+    params.reserve(delimitedFieldCount(queryString_, '&'));
+    (void)detail::visitUrlEncodedPairs(
+        queryString_,
+        [&params](std::string_view key, std::string_view value) {
+            params.push_back(RequestNameValueView{.name = key, .value = value});
+        });
+    return params;
+}
+
+std::pmr::vector<QueryValue> HttpRequest::queries(std::string_view name) const {
+    std::pmr::vector<QueryValue> result(resource());
+    (void)detail::visitUrlEncodedPairs(
+        queryString_,
+        [&](std::string_view key, std::string_view value) {
+            if (detail::urlComponentEquals(key, name, detail::UrlDecodeMode::kForm)) {
+                result.emplace_back(
+                    std::optional<std::string_view>(value),
+                    resource(),
+                    RequestValue::DecodeMode::kForm);
+            }
+        });
+    return result;
+}
+
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
     return detail::httpFindSemicolonParameter(
         detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie),
         name);
+}
+
+RequestNameValueList HttpRequest::cookies() const {
+    RequestNameValueList params(resource());
+    const auto input = detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie);
+    params.reserve(delimitedFieldCount(input, ';'));
+    detail::httpVisitSemicolonParameters(
+        input,
+        [&params](std::string_view key, std::string_view value) {
+            params.push_back(RequestNameValueView{.name = key, .value = value});
+            return true;
+        });
+    return params;
 }
 
 std::pmr::memory_resource* HttpRequest::resource() const noexcept {

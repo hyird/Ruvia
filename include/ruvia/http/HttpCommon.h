@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ruvia {
 
@@ -63,6 +64,13 @@ struct MultipartPart {
     std::string_view contentType;
     std::string_view body;
 };
+
+struct RequestNameValueView final {
+    std::string_view name;
+    std::string_view value;
+};
+
+using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
 
 class RequestValue final {
 public:
