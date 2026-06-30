@@ -106,6 +106,12 @@ public:
     [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
 
+    template <typename T>
+    [[nodiscard]] Task<T> json() const;
+
+    template <typename T>
+    [[nodiscard]] Task<T> form() const;
+
 private:
     friend class Context;
 
@@ -232,12 +238,6 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }
-
-    template <typename T>
-    [[nodiscard]] Task<T> json() const;
-
-    template <typename T>
-    [[nodiscard]] Task<T> form() const;
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 

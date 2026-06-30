@@ -136,9 +136,9 @@ namespace detail {
 template <ValidationTarget Target, typename BodyT>
 [[nodiscard]] Task<BodyT> parseValidatedBody(Context& c) {
     if constexpr (Target == ValidationTarget::kJson) {
-        co_return co_await c.template json<BodyT>();
+        co_return co_await c.req().template json<BodyT>();
     } else if constexpr (Target == ValidationTarget::kForm) {
-        co_return co_await c.template form<BodyT>();
+        co_return co_await c.req().template form<BodyT>();
     } else {
         static_assert(alwaysFalse<BodyT>, "unsupported validator target");
     }
