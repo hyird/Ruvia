@@ -570,9 +570,9 @@ public:
 
     [[nodiscard]] HttpResponse notFound() const;
 
+private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
-private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;

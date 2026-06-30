@@ -2,7 +2,7 @@
 
 #include "HttpResponseHeadPolicy.h"
 #include "../../http/HttpResponseHeaderState.h"
-#include "ruvia/http/Context.h"
+#include "../../http/ContextInternal.h"
 #include "ruvia/http/HttpTypes.h"
 
 #include <cstddef>
@@ -46,7 +46,7 @@ private:
     Context& context,
     ResponseBodyMode mode,
     ResponseStreamFraming framing) {
-    auto response = context.streamingHead();
+    auto response = ContextAccess::streamingHead(context);
     const auto policy = responseWritePolicy(response.statusCode());
     const bool needsSseContentType =
         mode == ResponseBodyMode::kSse &&

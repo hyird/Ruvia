@@ -93,6 +93,12 @@ struct ContextAccess final {
     [[nodiscard]] static HttpResponse takeResponse(Context& context) {
         return context.takeResponse();
     }
+
+    [[nodiscard]] static HttpResponse streamingHead(
+        const Context& context,
+        std::string_view contentType = {}) {
+        return context.streamingHead(contentType);
+    }
 };
 
 }  // namespace ruvia::detail
