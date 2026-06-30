@@ -245,7 +245,7 @@ template <typename ApplyResponseState>
         return response;
     };
 
-    const auto& request = context.req();
+    const auto& request = context.req().raw();
     if (request.method() == HttpMethod::kGet || request.method() == HttpMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
         if (enableValidators && !ifMatchAllows(conditional.ifMatch, etag)) {
@@ -417,7 +417,7 @@ HttpResponse Context::staticFile(
     // validators come from the variant, the Content-Type from the base entry.
     detail::StaticRootEntryView variant;
     std::string_view contentEncoding;
-    const auto& served = selectStaticEncodingVariant(root, relative, req(), resource(), variant, contentEncoding)
+    const auto& served = selectStaticEncodingVariant(root, relative, request_, resource(), variant, contentEncoding)
         ? variant
         : entry;
 

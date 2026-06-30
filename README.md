@@ -215,7 +215,7 @@ Use `ruvia::Context` to read request data and construct responses:
 
 | Helper | Purpose |
 | --- | --- |
-| `c.req()` | Access the current `ruvia::HttpRequest`. |
+| `c.req()` / `c.req().raw()` | Access the request facade, or the raw `ruvia::HttpRequest` when framework-level code needs the parser view. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.req().header(name)` | Read a request header. |
 | `c.req().query(name)` / `c.req().queries(name)` | Read query values through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
