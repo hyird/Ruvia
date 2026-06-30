@@ -310,26 +310,6 @@ public:
         return get<T>(key.name());
     }
 
-    template <typename T>
-    [[nodiscard]] T& var(std::string_view name) {
-        return get<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T& var(std::string_view name) const {
-        return get<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T& var(ContextKey<T> key) {
-        return get(key);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T& var(ContextKey<T> key) const {
-        return get(key);
-    }
-
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
 
     Context& header(std::string_view name, std::string_view value) {
