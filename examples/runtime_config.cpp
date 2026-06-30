@@ -27,7 +27,7 @@ class GlobalHeaderMiddleware final : public ruvia::Middleware<GlobalHeaderMiddle
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
         co_await next();
-        c.res().setHeader("X-Runtime-Example", "true");
+        c.header("X-Runtime-Example", "true");
     }
 };
 

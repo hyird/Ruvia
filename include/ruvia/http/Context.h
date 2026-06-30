@@ -346,10 +346,6 @@ public:
 
     Context& res(HttpResponse&& response);
 
-    [[nodiscard]] const HttpResponse* res() const noexcept {
-        return response_;
-    }
-
     [[nodiscard]] HttpResponse body(
         std::string_view body,
         std::uint16_t statusCode = 0,
@@ -604,6 +600,10 @@ private:
     [[nodiscard]] std::pmr::string& sessionDataStorage();
     [[nodiscard]] detail::ContextValueStore& values();
     [[nodiscard]] HttpResponse& responseStorage();
+    void storeResponse(HttpResponse&& response);
+    [[nodiscard]] bool hasResponse() const noexcept {
+        return response_ != nullptr;
+    }
     [[nodiscard]] HttpResponse takeResponse();
     void setError(std::exception_ptr error) noexcept {
         error_ = error;
