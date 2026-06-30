@@ -153,6 +153,10 @@ public:
 
     [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options) const;
 
+    [[nodiscard]] BodyReader& bodyReader() const;
+
+    [[nodiscard]] MultipartReader multipartReader() const;
+
 private:
     friend class Context;
 
@@ -274,10 +278,6 @@ public:
         std::string_view path,
         FetchOptions options = {});
 #endif
-
-    [[nodiscard]] BodyReader& bodyReader() const;
-
-    [[nodiscard]] MultipartReader multipartReader() const;
 
     [[nodiscard]] WebSocket& webSocket() const;
 
@@ -589,6 +589,8 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
     [[nodiscard]] Task<RequestFormFieldList> parseRequestBody(ParseBodyOptions options) const;
+    [[nodiscard]] BodyReader& requestBodyReader() const;
+    [[nodiscard]] MultipartReader requestMultipartReader() const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -757,6 +759,14 @@ inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
 
 inline Task<ContextRequest::RequestFormFieldList> ContextRequest::parseBody(ParseBodyOptions options) const {
     return context_->parseRequestBody(options);
+}
+
+inline BodyReader& ContextRequest::bodyReader() const {
+    return context_->requestBodyReader();
+}
+
+inline MultipartReader ContextRequest::multipartReader() const {
+    return context_->requestMultipartReader();
 }
 
 namespace detail {
