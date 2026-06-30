@@ -36,8 +36,8 @@ struct RouteRateLimitResult final {
     std::int64_t windowMs) noexcept {
     RateLimitRule rule;
     rule.maxRequests = maxRequests;
-    rule.window = std::chrono::milliseconds(windowMs <= 0 ? 1 : windowMs);
-    return RouteRateLimitOptions{.rule = rule};
+    rule.window = std::chrono::milliseconds(windowMs);
+    return RouteRateLimitOptions{.rule = normalizeRateLimitRule(rule)};
 }
 
 inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {

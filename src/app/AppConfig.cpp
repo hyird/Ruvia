@@ -266,13 +266,7 @@ App& App::setGlobalRateLimit(RateLimitRule rule) {
         *state_,
         "cannot change the global rate limit while app is running",
         [rule](detail::AppState& state) mutable {
-            rule.window = rule.window <= std::chrono::milliseconds::zero()
-                ? std::chrono::milliseconds(1)
-                : rule.window;
-            if (rule.slotCount == 0) {
-                rule.slotCount = 1;
-            }
-            state.options.rateLimit = rule;
+            state.options.rateLimit = detail::normalizeRateLimitRule(rule);
         });
 }
 
