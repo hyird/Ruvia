@@ -18,4 +18,24 @@ struct RateLimitRule final {
     bool failClosed{true};
 };
 
+namespace detail {
+
+inline constexpr std::size_t kRateLimitCounterBits = 22;
+inline constexpr std::size_t kMaxRateLimitRequests = (std::size_t{1} << kRateLimitCounterBits) - 1;
+
+[[nodiscard]] constexpr RateLimitRule normalizeRateLimitRule(RateLimitRule rule) noexcept {
+    if (rule.window <= std::chrono::milliseconds::zero()) {
+        rule.window = std::chrono::milliseconds(1);
+    }
+    if (rule.slotCount == 0) {
+        rule.slotCount = 1;
+    }
+    if (rule.maxRequests > kMaxRateLimitRequests) {
+        rule.maxRequests = kMaxRateLimitRequests;
+    }
+    return rule;
+}
+
+}  // namespace detail
+
 }  // namespace ruvia

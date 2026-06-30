@@ -36,7 +36,7 @@ public:
         RateLimitRule appRule,
         std::pmr::memory_resource* resource = std::pmr::get_default_resource())
         : resource_(resource == nullptr ? std::pmr::get_default_resource() : resource),
-          appRule_(normalizeRule(appRule)),
+          appRule_(normalizeRateLimitRule(appRule)),
           slotCount_(nextPowerOfTwo(appRule_.slotCount)),
           slots_(allocateSlots(slotCount_)) {}
 
@@ -66,7 +66,7 @@ public:
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
         RateLimitRule rule) noexcept {
-        rule = normalizeRule(rule);
+        rule = normalizeRateLimitRule(rule);
         rule.slotCount = appRule_.slotCount;
         rule.failClosed = appRule_.failClosed;
         return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule);
@@ -76,8 +76,8 @@ private:
     static constexpr std::size_t kMaxKeyBytes = 64;
     static constexpr std::uint64_t kEmptyHash = 0;
     static constexpr std::uint64_t kInstallingHash = 1;
-    static constexpr std::uint64_t kCountBits = 22;
-    static constexpr std::uint64_t kCountMask = (std::uint64_t{1} << kCountBits) - 1;
+    static constexpr std::uint64_t kCountBits = kRateLimitCounterBits;
+    static constexpr std::uint64_t kCountMask = static_cast<std::uint64_t>(kMaxRateLimitRequests);
     static constexpr std::uintptr_t kGlobalScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
 
@@ -111,19 +111,6 @@ private:
             throw;
         }
         return slots;
-    }
-
-    [[nodiscard]] static RateLimitRule normalizeRule(RateLimitRule rule) noexcept {
-        if (rule.window <= std::chrono::milliseconds::zero()) {
-            rule.window = std::chrono::milliseconds(1);
-        }
-        if (rule.slotCount == 0) {
-            rule.slotCount = 1;
-        }
-        if (rule.maxRequests > kCountMask) {
-            rule.maxRequests = kCountMask;
-        }
-        return rule;
     }
 
     [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept {
