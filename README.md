@@ -225,7 +225,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
-| `co_await c.discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
+| `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
 | `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. |
@@ -294,7 +294,7 @@ ruvia::app()
     .run();
 ```
 
-Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, or `c.discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
+Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, or `c.req().discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
 
 Streaming request bodies are opt-in per route and keep large uploads out of buffered memory:
 

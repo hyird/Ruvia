@@ -293,7 +293,7 @@ Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(ParseBodyOp
     throw std::invalid_argument("invalid body content type");
 }
 
-Task<void> Context::discardBody() const {
+Task<void> Context::requestDiscardBody() const {
     if (bodyLoader_ != nullptr) {
         co_await bodyLoader_->discard();
         co_return;
