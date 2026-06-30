@@ -105,28 +105,7 @@ void appendParsedBodyField(
 
 }  // namespace
 
-QueryValue Context::query(std::string_view name) const {
-    if (queryParams_ == nullptr && !queryLookupAttempted_) {
-        queryLookupAttempted_ = true;
-        return request_.query(name);
-    }
-
-    std::optional<std::string_view> result;
-    for (const auto& param : queryParams()) {
-        if (detail::urlComponentEquals(param.name, name, detail::UrlDecodeMode::kForm)) {
-            result = param.value;
-            break;
-        }
-    }
-
-    return QueryValue(result, resource(), RequestValue::DecodeMode::kForm);
-}
-
 const Context::RequestNameValueList& Context::param() const {
-    return routeParams();
-}
-
-const Context::RequestNameValueList& Context::params() const {
     return routeParams();
 }
 
@@ -145,24 +124,6 @@ std::pmr::vector<QueryValue> Context::queries(std::string_view name) const {
         }
     }
     return result;
-}
-
-const Context::RequestNameValueList& Context::queries() const {
-    return queryParams();
-}
-
-std::optional<std::string_view> Context::cookie(std::string_view name) const {
-    if (cookieParams_ == nullptr && !cookieLookupAttempted_) {
-        cookieLookupAttempted_ = true;
-        return request_.cookie(name);
-    }
-
-    for (const auto& cookie : cookieParams()) {
-        if (cookie.name == name) {
-            return cookie.value;
-        }
-    }
-    return std::nullopt;
 }
 
 const Context::RequestNameValueList& Context::cookies() const {

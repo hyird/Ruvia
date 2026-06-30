@@ -41,7 +41,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     MiddlewareContinuation continuation{this, &route, index + 1};
-    const auto next = NextAccess::make(&continuation, &RouteTable::invokeMiddlewareContinuation);
+    const auto next = NextAccess::make(context, &continuation, &RouteTable::invokeMiddlewareContinuation);
     try {
         auto task = middleware(context, next);
         co_await std::move(task);
@@ -75,7 +75,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     StreamMiddlewareContinuation continuation{this, &route, index + 1, &outcome};
-    const auto next = NextAccess::make(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
+    const auto next = NextAccess::make(context, &continuation, &RouteTable::invokeStreamMiddlewareContinuation);
     try {
         auto task = middleware(context, next);
         co_await std::move(task);

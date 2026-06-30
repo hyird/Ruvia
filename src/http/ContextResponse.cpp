@@ -68,10 +68,6 @@ Context& Context::status(std::uint16_t statusCode, std::string_view statusText) 
 }
 
 Context& Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    return options.append ? appendHeader(name, value) : setHeader(name, value);
-}
-
-Context& Context::setHeader(std::string_view name, std::string_view value) {
     if (!isValidHttpHeaderName(name)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
@@ -79,6 +75,17 @@ Context& Context::setHeader(std::string_view name, std::string_view value) {
         throw std::invalid_argument("invalid HTTP header value");
     }
     const auto knownBit = detail::classifyResponseKnownHeader(name);
+    if (options.append) {
+        const auto index = responseHeaders_.size();
+        auto& header = responseHeaders_.add(name, value, knownBit);
+        detail::setResponseHeaderAppend(header, true);
+        recordResponseKnownHeaderIndex(knownBit, index);
+        if (response_ != nullptr) {
+            detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
+        }
+        return *this;
+    }
+
     if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
         responseHeaders_.assign(*header, name, value, knownBit);
         if (response_ != nullptr) {
@@ -92,24 +99,6 @@ Context& Context::setHeader(std::string_view name, std::string_view value) {
     recordResponseKnownHeaderIndex(knownBit, index);
     if (response_ != nullptr) {
         detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
-    }
-    return *this;
-}
-
-Context& Context::appendHeader(std::string_view name, std::string_view value) {
-    if (!isValidHttpHeaderName(name)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-    if (!isValidHttpHeaderValue(value)) {
-        throw std::invalid_argument("invalid HTTP header value");
-    }
-    const auto knownBit = detail::classifyResponseKnownHeader(name);
-    const auto index = responseHeaders_.size();
-    auto& header = responseHeaders_.add(name, value, knownBit);
-    detail::setResponseHeaderAppend(header, true);
-    recordResponseKnownHeaderIndex(knownBit, index);
-    if (response_ != nullptr) {
-        detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
     }
     return *this;
 }

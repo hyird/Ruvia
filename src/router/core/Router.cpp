@@ -9,8 +9,8 @@ namespace ruvia {
 
 using namespace detail;
 
-Task<void> Next::operator()(Context& context) const {
-    return callable_(context);
+Task<void> Next::operator()() const {
+    return callable_(*context_);
 }
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept

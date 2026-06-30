@@ -154,7 +154,7 @@ Task<void> invokeModelValidator(
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
     c.setValid(Target, std::move(body));
-    co_await next(c);
+    co_await next();
 }
 
 template <typename ControllerT>

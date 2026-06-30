@@ -29,8 +29,11 @@ class RedisRegistry;
 class RouterImpl;
 
 struct NextAccess final {
-    [[nodiscard]] static constexpr Next make(void* target, Next::Invoke invoke) noexcept {
-        return Next(target, invoke);
+    [[nodiscard]] static constexpr Next make(
+        Context& context,
+        void* target,
+        Next::Invoke invoke) noexcept {
+        return Next(context, target, invoke);
     }
 };
 
