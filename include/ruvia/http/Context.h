@@ -117,9 +117,6 @@ public:
     using RequestFormFieldList = std::pmr::vector<RequestFormField>;
 
     [[nodiscard]] const HttpRequest& raw() const noexcept;
-    [[nodiscard]] operator const HttpRequest&() const noexcept {
-        return raw();
-    }
 
     [[nodiscard]] HttpMethod method() const noexcept;
     [[nodiscard]] std::string_view target() const noexcept;
