@@ -201,9 +201,6 @@ private:
 
 public:
     using Renderer = Task<HttpResponse> (*)(Context& context, std::string_view body);
-    using ParseBodyOptions = ContextRequest::ParseBodyOptions;
-    using RequestFormField = ContextRequest::RequestFormField;
-    using RequestFormFieldList = ContextRequest::RequestFormFieldList;
 
     struct HeaderOptions final {
         bool append{false};
@@ -560,7 +557,8 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
-    [[nodiscard]] Task<RequestFormFieldList> parseRequestBody(ParseBodyOptions options) const;
+    [[nodiscard]] Task<ContextRequest::RequestFormFieldList> parseRequestBody(
+        ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;

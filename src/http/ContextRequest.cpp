@@ -65,7 +65,7 @@ void stripArraySuffix(std::pmr::string& name) {
 }
 
 void assignDotPath(
-    Context::RequestFormField& field,
+    ContextRequest::RequestFormField& field,
     std::pmr::memory_resource* resource) {
     field.path.clear();
     std::string_view remaining(field.name.data(), field.name.size());
@@ -229,11 +229,12 @@ Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     co_return parts;
 }
 
-Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(ParseBodyOptions options) const {
+Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(
+    ContextRequest::ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
 
     if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
-        RequestFormFieldList fields(resource());
+        ContextRequest::RequestFormFieldList fields(resource());
         fields.reserve(delimitedFieldCount(requestBody, '&'));
         bool valid = true;
         const bool ok = detail::visitUrlEncodedPairs(
@@ -269,7 +270,7 @@ Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(ParseBodyOp
 
     if (requestContentTypeMatches("multipart/form-data")) {
         auto parts = co_await requestMultipart();
-        RequestFormFieldList fields(resource());
+        ContextRequest::RequestFormFieldList fields(resource());
         fields.reserve(parts.size());
         for (const auto& part : parts) {
             std::pmr::string name(part.name.data(), part.name.size(), resource());
