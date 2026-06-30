@@ -14,7 +14,7 @@ RedisRegistry::RedisRegistry(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const RedisDefinition> redis)
-    : resource_(detail::resolveRedisResource(resource)),
+    : resource_(detail::pmrResourceOrDefault(resource)),
       pools_(resource_) {
     pools_.reserve(redis.size());
     for (const auto& definition : redis) {

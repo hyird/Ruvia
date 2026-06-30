@@ -17,7 +17,7 @@ RedisHandle::RedisHandle(
     detail::RedisPool& pool,
     std::pmr::memory_resource* resource) noexcept
     : pool_(pool),
-      resource_(detail::resolveRedisResource(resource)) {}
+      resource_(detail::pmrResourceOrDefault(resource)) {}
 
 Task<RedisValue> RedisHandle::command(std::initializer_list<std::string_view> args) const {
     return detail::executeOwnedRedisCommand(pool_, detail::ownRedisArgs(args, resource_), resource_);

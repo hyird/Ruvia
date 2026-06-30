@@ -54,20 +54,20 @@ bool DbValue::boolValue() const noexcept {
 }
 
 DbField::DbField(std::pmr::memory_resource* resource)
-    : value_(detail::resolveDbResource(resource)) {}
+    : value_(detail::pmrResourceOrDefault(resource)) {}
 
 DbField::DbField(std::nullptr_t, std::pmr::memory_resource* resource)
     : DbField(resource) {}
 
 DbField::DbField(std::string_view value, std::pmr::memory_resource* resource)
     : isNull_(false),
-      value_(value, detail::resolveDbResource(resource)),
+      value_(value, detail::pmrResourceOrDefault(resource)),
       valueView_(value_),
       ownsValue_(true) {}
 
 DbField::DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource)
     : isNull_(false),
-      value_(detail::resolveDbResource(resource)),
+      value_(detail::pmrResourceOrDefault(resource)),
       valueView_(value),
       ownsValue_(false) {}
 
@@ -110,10 +110,10 @@ void DbField::refreshView() noexcept {
 }
 
 DbRow::DbRow(std::pmr::memory_resource* resource)
-    : ownedFields_(detail::resolveDbResource(resource)) {}
+    : ownedFields_(detail::pmrResourceOrDefault(resource)) {}
 
 DbRow::DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource)
-    : ownedFields_(detail::resolveDbResource(resource)),
+    : ownedFields_(detail::pmrResourceOrDefault(resource)),
       fields_(fields),
       size_(size),
       ownsFields_(false) {}
@@ -186,8 +186,8 @@ void DbRow::refreshView() noexcept {
 }
 
 QueryResult::QueryResult(std::pmr::memory_resource* resource)
-    : rows_(detail::resolveDbResource(resource)),
-      fields_(detail::resolveDbResource(resource)) {}
+    : rows_(detail::pmrResourceOrDefault(resource)),
+      fields_(detail::pmrResourceOrDefault(resource)) {}
 
 QueryResult::QueryResult(QueryResult&& other) noexcept
     : rows_(std::move(other.rows_)),
@@ -241,8 +241,8 @@ std::uint64_t QueryResult::lastInsertId() const noexcept {
 }
 
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)
-    : applied_(detail::resolveDbResource(resource)),
-      skipped_(detail::resolveDbResource(resource)) {}
+    : applied_(detail::pmrResourceOrDefault(resource)),
+      skipped_(detail::pmrResourceOrDefault(resource)) {}
 
 std::span<const std::pmr::string> DbMigrationReport::applied() const noexcept {
     return std::span<const std::pmr::string>(applied_.data(), applied_.size());

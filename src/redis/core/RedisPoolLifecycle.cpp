@@ -18,7 +18,7 @@ void RedisReaderDeleter::operator()(redisReader* reader) const noexcept {
 RedisPool::Connection::Connection(asio::io_context& ioContext, std::pmr::memory_resource* resource)
     : socket(ioContext),
       resolver(ioContext),
-      writeBuffer(detail::resolveRedisResource(resource)),
+      writeBuffer(detail::pmrResourceOrDefault(resource)),
       reader(redisReaderCreate()) {}
 
 RedisPool::Connection::~Connection() = default;
@@ -29,7 +29,7 @@ RedisPool::Connection& RedisPool::Connection::operator=(Connection&&) noexcept =
 RedisPool::RedisPool(asio::io_context& ioContext, RedisConfig config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
-      resource_(detail::resolveRedisResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       connections_(resource_),
       free_(resource_) {
     validateRedisConfig(config_);
