@@ -362,10 +362,6 @@ HttpResponse Context::error(
             .message = message});
 }
 
-HttpResponse Context::notFound() const {
-    return error(404, "not_found", "not found");
-}
-
 HttpResponse Context::streamingHead(std::string_view contentType) const {
     HttpResponse response(resource());
     if (!contentType.empty()) {

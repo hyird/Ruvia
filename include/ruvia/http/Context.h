@@ -568,8 +568,6 @@ public:
         return error_;
     }
 
-    [[nodiscard]] HttpResponse notFound() const;
-
 private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 

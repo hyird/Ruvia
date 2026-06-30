@@ -160,7 +160,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
-        co_return c.notFound();
+        co_return c.error(404, "not_found", "not found");
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
