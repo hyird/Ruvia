@@ -121,7 +121,7 @@ const RequestNameValueList& Context::routeParams() const {
     return *routeParams_;
 }
 
-Task<std::string_view> Context::body() const {
+Task<std::string_view> Context::requestBody() const {
     if (bodyDecoded_) {
         const auto& decoded = *decodedBody_;
         co_return std::string_view(decoded.data(), decoded.size());
@@ -164,7 +164,7 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::multipart() const {
     const auto boundaryValue = multipartBoundary();
 
-    const auto requestBody = co_await body();
+    const auto requestBody = co_await this->requestBody();
 
     std::pmr::vector<MultipartPart> parts(resource());
     auto cursor = detail::httpFindMultipartBoundaryLine(requestBody, boundaryValue);
@@ -217,7 +217,7 @@ Task<std::pmr::vector<MultipartPart>> Context::multipart() const {
 }
 
 Task<Context::RequestFormFieldList> Context::parseBody(ParseBodyOptions options) const {
-    const auto requestBody = co_await body();
+    const auto requestBody = co_await this->requestBody();
 
     if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
         RequestFormFieldList fields(resource());

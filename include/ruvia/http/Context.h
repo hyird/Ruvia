@@ -37,6 +37,7 @@
 namespace ruvia {
 
 class Context;
+class ContextRequest;
 class StaticRoot;
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -68,7 +69,7 @@ void setValidatedBody(Context& context, ValidationTarget target, T&& body);
 // Assign `src` into `dst`, forcing storage in the backing memory resource rather
 // than the small-string optimization's inline buffer. The Context's per-request
 // arena outlives the Context, but a string object's inline SSO bytes do not — so
-// without this, a short c.session()/c.body() value handed to c.text() (a borrowed
+// without this, a short c.session()/c.req().text() value handed to c.text() (a borrowed
 // view) would dangle once the Context is destroyed before the response is written.
 // 32 clears every mainstream SSO threshold (libstdc++/MSVC 15, libc++ 22).
 inline void assignStableString(std::pmr::string& dst, std::string_view src) {
@@ -80,8 +81,43 @@ inline void assignStableString(std::pmr::string& dst, std::string_view src) {
 }
 }
 
+class ContextRequest final {
+public:
+    [[nodiscard]] const HttpRequest& raw() const noexcept;
+    [[nodiscard]] operator const HttpRequest&() const noexcept {
+        return raw();
+    }
+
+    [[nodiscard]] HttpMethod method() const noexcept;
+    [[nodiscard]] std::string_view target() const noexcept;
+    [[nodiscard]] std::string_view path() const noexcept;
+    [[nodiscard]] RequestValue decodedPath() const noexcept;
+    [[nodiscard]] std::string_view queryString() const noexcept;
+    [[nodiscard]] std::string_view httpVersion() const noexcept;
+    [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
+    [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+    [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
+    [[nodiscard]] RequestNameValueList query() const;
+    [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
+    [[nodiscard]] RequestNameValueList cookies() const;
+    [[nodiscard]] std::string_view remoteAddress() const noexcept;
+    [[nodiscard]] std::string_view clientCertificate() const noexcept;
+    [[nodiscard]] bool isSecure() const noexcept;
+    [[nodiscard]] Task<std::string_view> text() const;
+
+private:
+    friend class Context;
+
+    explicit constexpr ContextRequest(const Context& context) noexcept
+        : context_(&context) {}
+
+    const Context* context_{nullptr};
+};
+
 class Context final {
 private:
+    friend class ContextRequest;
     friend struct detail::ContextAccess;
     friend struct detail::SessionAccess;
     friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
@@ -151,8 +187,8 @@ public:
     Context(Context&&) = delete;
     Context& operator=(Context&&) = delete;
 
-    [[nodiscard]] const HttpRequest& req() const noexcept {
-        return request_;
+    [[nodiscard]] ContextRequest req() const noexcept {
+        return ContextRequest(*this);
     }
 
     [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
@@ -196,8 +232,6 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }
-
-    [[nodiscard]] Task<std::string_view> body() const;
 
     template <typename T>
     [[nodiscard]] Task<T> json() const;
@@ -549,6 +583,8 @@ public:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
 private:
+    [[nodiscard]] Task<std::string_view> requestBody() const;
+
     [[nodiscard]] std::string_view multipartBoundary() const;
 
     [[nodiscard]] bool requestContentTypeMatches(std::string_view expected) const noexcept;
@@ -637,6 +673,78 @@ private:
 
     detail::ValidatedValueStore validatedValues_;
 };
+
+inline const HttpRequest& ContextRequest::raw() const noexcept {
+    return context_->request_;
+}
+
+inline HttpMethod ContextRequest::method() const noexcept {
+    return raw().method();
+}
+
+inline std::string_view ContextRequest::target() const noexcept {
+    return raw().target();
+}
+
+inline std::string_view ContextRequest::path() const noexcept {
+    return raw().path();
+}
+
+inline RequestValue ContextRequest::decodedPath() const noexcept {
+    return raw().decodedPath();
+}
+
+inline std::string_view ContextRequest::queryString() const noexcept {
+    return raw().queryString();
+}
+
+inline std::string_view ContextRequest::httpVersion() const noexcept {
+    return raw().httpVersion();
+}
+
+inline std::span<const HttpHeaderView> ContextRequest::headers() const noexcept {
+    return raw().headers();
+}
+
+inline std::string_view ContextRequest::header(std::string_view name) const noexcept {
+    return raw().header(name);
+}
+
+inline QueryValue ContextRequest::query(std::string_view name) const noexcept {
+    return raw().query(name);
+}
+
+inline RequestNameValueList ContextRequest::query() const {
+    return raw().query();
+}
+
+inline std::pmr::vector<QueryValue> ContextRequest::queries(std::string_view name) const {
+    return raw().queries(name);
+}
+
+inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const noexcept {
+    return raw().cookie(name);
+}
+
+inline RequestNameValueList ContextRequest::cookies() const {
+    return raw().cookies();
+}
+
+inline std::string_view ContextRequest::remoteAddress() const noexcept {
+    return raw().remoteAddress();
+}
+
+inline std::string_view ContextRequest::clientCertificate() const noexcept {
+    return raw().clientCertificate();
+}
+
+inline bool ContextRequest::isSecure() const noexcept {
+    return raw().isSecure();
+}
+
+inline Task<std::string_view> ContextRequest::text() const {
+    return context_->requestBody();
+}
 
 namespace detail {
 

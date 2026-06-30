@@ -216,7 +216,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> replaceItem(ruvia::Context& c) {
-        const auto body = co_await c.body();
+        const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("replace id=");
         output.append(c.param("id").toStringView().value_or(""));
@@ -227,7 +227,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> patchItem(ruvia::Context& c) {
-        const auto body = co_await c.body();
+        const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("patch id=");
         output.append(c.param("id").toStringView().value_or(""));

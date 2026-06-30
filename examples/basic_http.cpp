@@ -99,7 +99,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto body = co_await c.body();
+        const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
         co_return c.status(201).header("X-Echo", "true").text(owned);
