@@ -300,28 +300,6 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T* getIf(std::string_view name) noexcept {
-        auto* store = valuesIf();
-        return store == nullptr ? nullptr : store->template getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
-        const auto* store = valuesIf();
-        return store == nullptr ? nullptr : store->template getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T* getIf(ContextKey<T> key) noexcept {
-        return getIf<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
-        return getIf<T>(key.name());
-    }
-
-    template <typename T>
     [[nodiscard]] T& var(std::string_view name) {
         return get<T>(name);
     }
@@ -339,42 +317,6 @@ public:
     template <typename T>
     [[nodiscard]] const T& var(ContextKey<T> key) const {
         return get(key);
-    }
-
-    [[nodiscard]] bool has(std::string_view name) const noexcept;
-
-    template <typename T>
-    [[nodiscard]] bool has(std::string_view name) const noexcept {
-        return getIf<T>(name) != nullptr;
-    }
-
-    template <typename T>
-    [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
-        return has<T>(key.name());
-    }
-
-    [[nodiscard]] Bindings& env() {
-        return values();
-    }
-
-    [[nodiscard]] const Bindings* env() const noexcept {
-        return valuesIf();
-    }
-
-    [[nodiscard]] Bindings& executionCtx() {
-        return values();
-    }
-
-    [[nodiscard]] const Bindings* executionCtx() const noexcept {
-        return valuesIf();
-    }
-
-    [[nodiscard]] Bindings& event() {
-        return values();
-    }
-
-    [[nodiscard]] const Bindings* event() const noexcept {
-        return valuesIf();
     }
 
     template <typename T>
