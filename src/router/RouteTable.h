@@ -258,8 +258,11 @@ private:
             : RadixNode(nullptr) {}
 
         explicit RadixNode(std::pmr::memory_resource* resource)
-            : label(detail::pmrResourceOrDefault(resource)),
-              children(detail::pmrResourceOrDefault(resource)) {}
+            : RadixNode(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+        RadixNode(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+            : label(resource),
+              children(resource) {}
 
         std::pmr::string label;
         std::pmr::vector<RadixNode> children;
@@ -278,7 +281,10 @@ private:
             : DynamicNode(nullptr) {}
 
         explicit DynamicNode(std::pmr::memory_resource* resource)
-            : staticChildren(detail::pmrResourceOrDefault(resource)) {}
+            : DynamicNode(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+        DynamicNode(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+            : staticChildren(resource) {}
 
         std::pmr::vector<DynamicStaticChild> staticChildren;
         DynamicNode* paramChild{nullptr};
