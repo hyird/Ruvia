@@ -7,13 +7,13 @@
 namespace ruvia {
 
 template <typename T>
-Task<T> Context::json() const {
+Task<T> ContextRequest::json() const {
     static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
-    if (!requestContentTypeMatches("application/json")) {
+    if (!context_->requestContentTypeMatches("application/json")) {
         detail::throwInvalidJsonContentType();
     }
-    const auto requestBody = co_await this->requestBody();
-    auto parsed = JsonBody<T>::parse(requestBody, resource());
+    const auto requestBody = co_await text();
+    auto parsed = JsonBody<T>::parse(requestBody, context_->resource());
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
@@ -21,13 +21,13 @@ Task<T> Context::json() const {
 }
 
 template <typename T>
-Task<T> Context::form() const {
+Task<T> ContextRequest::form() const {
     static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
-    if (!requestContentTypeMatches("application/x-www-form-urlencoded")) {
+    if (!context_->requestContentTypeMatches("application/x-www-form-urlencoded")) {
         detail::throwInvalidFormContentType();
     }
-    const auto requestBody = co_await this->requestBody();
-    auto parsed = FormBody<T>::parse(requestBody, resource());
+    const auto requestBody = co_await text();
+    auto parsed = FormBody<T>::parse(requestBody, context_->resource());
     if (!parsed) {
         detail::throwInvalidFormBody();
     }
