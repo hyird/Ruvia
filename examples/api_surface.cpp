@@ -101,11 +101,11 @@ private:
         body.append("\nparams=");
         appendUnsigned(body, c.param().size());
         body.append("\nquery-fields=");
-        appendUnsigned(body, c.query().size());
+        appendUnsigned(body, request.query().size());
         body.append("\ncookies=");
-        appendUnsigned(body, c.cookies().size());
+        appendUnsigned(body, request.cookies().size());
         body.append("\ntag-values=");
-        appendUnsigned(body, c.queries("tag").size());
+        appendUnsigned(body, request.queries("tag").size());
         body.append("\nversion=");
         body.append(request.httpVersion());
         body.append("\naccepts-json=");

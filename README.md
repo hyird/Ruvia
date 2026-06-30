@@ -207,7 +207,7 @@ private:
 };
 ```
 
-`RUVIA_ROUTE_RATE_LIMIT(name, maxRequests, windowMs)` keys by `Context::remoteAddress()`, returns JSON `429` with `Retry-After` and `X-RateLimit-*` headers, and keeps worker-local/thread-local buckets so request dispatch stays lock-free. Use the server-level Redis/global limiter when a cross-worker or distributed limit is required.
+`RUVIA_ROUTE_RATE_LIMIT(name, maxRequests, windowMs)` keys by the request remote address, returns JSON `429` with `Retry-After` and `X-RateLimit-*` headers, and keeps worker-local/thread-local buckets so request dispatch stays lock-free. Use the server-level Redis/global limiter when a cross-worker or distributed limit is required.
 
 ## Context Helpers
 
@@ -216,10 +216,10 @@ Use `ruvia::Context` to read request data and construct responses:
 | Helper | Purpose |
 | --- | --- |
 | `c.req()` | Access the current `ruvia::HttpRequest`. |
-| `c.decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
+| `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.req().header(name)` | Read a request header. |
-| `c.query(name)` | Read a query value through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
-| `c.cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
+| `c.req().query(name)` / `c.req().queries(name)` | Read query values through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
+| `c.req().cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
 | `c.param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.param("*")` for wildcard routes. |
 | `co_await c.body()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
@@ -233,7 +233,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
-| `c.header(name, value)` / `c.setHeader(name, value)` | Add or replace a response header. |
+| `c.header(name, value)` | Add or replace a response header. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |

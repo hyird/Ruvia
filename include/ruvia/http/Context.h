@@ -102,7 +102,6 @@ private:
 
 public:
     using Renderer = Task<HttpResponse> (*)(Context& context, std::string_view body);
-    using Bindings = detail::ContextValueStore;
 
     struct HeaderOptions final {
         bool append{false};
@@ -112,13 +111,6 @@ public:
         bool all{false};
         bool dot{false};
     };
-
-    struct RequestNameValueView final {
-        std::string_view name;
-        std::string_view value;
-    };
-
-    using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
 
     struct RequestFormField final {
         RequestFormField(
@@ -170,12 +162,6 @@ public:
     }
 
     [[nodiscard]] const RequestNameValueList& param() const;
-
-    [[nodiscard]] const RequestNameValueList& query() const;
-
-    [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
-
-    [[nodiscard]] const RequestNameValueList& cookies() const;
 
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
@@ -613,8 +599,6 @@ private:
         std::string_view statusText) const;
 
     [[nodiscard]] const RequestNameValueList& routeParams() const;
-    [[nodiscard]] const RequestNameValueList& queryParams() const;
-    [[nodiscard]] const RequestNameValueList& cookieParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] std::pmr::string& sessionIdStorage();
     [[nodiscard]] std::pmr::string& sessionDataStorage();
@@ -655,8 +639,6 @@ private:
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
-    mutable RequestNameValueList* queryParams_{nullptr};
-    mutable RequestNameValueList* cookieParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
