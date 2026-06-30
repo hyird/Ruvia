@@ -13,11 +13,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::pmr::memory_resource* resolveRedisResource(
-    std::pmr::memory_resource* resource) noexcept {
-    return pmrResourceOrDefault(resource);
-}
-
 inline void emplaceRedisString(std::pmr::vector<std::pmr::string>& target, std::string_view value) {
     target.emplace_back(value.data(), value.size());
 }
@@ -33,7 +28,7 @@ inline void appendRedisNumber(std::pmr::string& output, std::int64_t value) {
 [[nodiscard]] inline std::pmr::string redisIntString(
     std::int64_t value,
     std::pmr::memory_resource* resource) {
-    std::pmr::string output(resolveRedisResource(resource));
+    std::pmr::string output(pmrResourceOrDefault(resource));
     appendRedisNumber(output, value);
     return output;
 }
@@ -41,7 +36,7 @@ inline void appendRedisNumber(std::pmr::string& output, std::int64_t value) {
 [[nodiscard]] inline std::pmr::string redisScoreString(
     double value,
     std::pmr::memory_resource* resource) {
-    std::pmr::string output(resolveRedisResource(resource));
+    std::pmr::string output(pmrResourceOrDefault(resource));
     appendFormattedFiniteNumber(
         output,
         value,

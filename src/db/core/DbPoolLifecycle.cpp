@@ -11,7 +11,7 @@
 namespace ruvia {
 
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(std::pmr::memory_resource* resource) noexcept
-    : waitSocket(nullptr, SlotSocketDeleter{detail::resolveDbResource(resource)}) {}
+    : waitSocket(nullptr, SlotSocketDeleter{detail::pmrResourceOrDefault(resource)}) {}
 
 detail::MariaDbPool::ConnectionSlot::~ConnectionSlot() = default;
 detail::MariaDbPool::ConnectionSlot::ConnectionSlot(ConnectionSlot&&) noexcept = default;
@@ -20,7 +20,7 @@ detail::MariaDbPool::ConnectionSlot& detail::MariaDbPool::ConnectionSlot::operat
 detail::MariaDbPool::MariaDbPool(asio::io_context& ioContext, DbConfig config, std::pmr::memory_resource* resource)
     : ioContext_(ioContext),
       config_(std::move(config)),
-      resource_(detail::resolveDbResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       slots_(resource_),
       freeSlots_(resource_) {
     detail::validateDbConfig(config_);

@@ -135,7 +135,7 @@ public:
         DbMigrationOptions options,
         DbMigrationReport& report,
         std::pmr::memory_resource* resource) {
-        auto* resolved = detail::resolveDbResource(resource);
+        auto* resolved = detail::pmrResourceOrDefault(resource);
         validateMigrationList(migrations);
         if (!isValidMigrationTableName(options.table)) {
             throw std::invalid_argument("database migration table must contain only letters, digits and underscores");
@@ -220,7 +220,7 @@ DbMigrator::DbMigrator(
     std::pmr::memory_resource* resource)
     : config_(std::move(config)),
       options_(std::move(options)),
-      resource_(detail::resolveDbResource(resource)) {}
+      resource_(detail::pmrResourceOrDefault(resource)) {}
 
 DbMigrationReport DbMigrator::migrate(std::span<const DbMigration> migrations) const {
     return migrate(config_, migrations, options_, resource_);
@@ -231,7 +231,7 @@ DbMigrationReport DbMigrator::migrate(
     std::span<const DbMigration> migrations,
     DbMigrationOptions options,
     std::pmr::memory_resource* resource) {
-    auto* resolved = detail::resolveDbResource(resource);
+    auto* resolved = detail::pmrResourceOrDefault(resource);
     DbMigrationReport report(resolved);
     asio::io_context ioContext(1);
     auto future = asio::co_spawn(

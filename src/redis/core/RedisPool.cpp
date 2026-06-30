@@ -75,7 +75,7 @@ template <typename CommandSource>
 Task<std::pmr::vector<RedisValue>> RedisPool::executePipelineImpl(
     CommandSource commands,
     std::pmr::memory_resource* resource) {
-    const auto resolved = detail::resolveRedisResource(resource);
+    const auto resolved = detail::pmrResourceOrDefault(resource);
     std::pmr::vector<RedisValue> replies(resolved);
     replies.reserve(commands.size());
     if (commands.empty()) {

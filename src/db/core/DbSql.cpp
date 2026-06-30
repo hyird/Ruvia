@@ -103,7 +103,7 @@ std::pmr::string interpolateSql(
     std::string_view sql,
     std::span<const DbValue> params,
     std::pmr::memory_resource* resource) {
-    std::pmr::string output(resolveDbResource(resource));
+    std::pmr::string output(pmrResourceOrDefault(resource));
     std::size_t sizeHint = sql.size();
     for (const auto& param : params) {
         sizeHint += valueLiteralSizeHint(param);

@@ -15,7 +15,7 @@ detail::DbRegistry::DbRegistry(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const detail::DbDefinition> databases)
-    : resource_(detail::resolveDbResource(resource)),
+    : resource_(detail::pmrResourceOrDefault(resource)),
       clients_(resource_) {
     clients_.reserve(databases.size());
     for (const auto& definition : databases) {

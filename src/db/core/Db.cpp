@@ -49,7 +49,7 @@ Task<DbStreamResult> detail::MariaDbPool::stream(
         }
 
         OperationDeadline deadline(config_.queryTimeout);
-        std::pmr::string interpolatedSql(detail::resolveDbResource(resource));
+        std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
         if (!params.empty()) {
             interpolatedSql = interpolateSql(
                 *slot.connection,
@@ -189,7 +189,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
     }
     OperationDeadline deadline(config_.queryTimeout);
 
-    std::pmr::string interpolatedSql(detail::resolveDbResource(resource));
+    std::pmr::string interpolatedSql(detail::pmrResourceOrDefault(resource));
     if (!params.empty()) {
         interpolatedSql = interpolateSql(
             *slot.connection,

@@ -14,11 +14,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::pmr::memory_resource* resolveDbResource(
-    std::pmr::memory_resource* resource) noexcept {
-    return pmrResourceOrDefault(resource);
-}
-
 inline void appendDbNumber(std::pmr::string& output, std::int64_t value) {
     appendFormattedNumber(output, value, "failed to format signed database value");
 }
@@ -62,7 +57,7 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
 [[nodiscard]] inline std::pmr::vector<DbValue> cloneDbValues(
     std::span<const DbValue> values,
     std::pmr::memory_resource* resource) {
-    auto* resolved = resolveDbResource(resource);
+    auto* resolved = pmrResourceOrDefault(resource);
     std::pmr::vector<DbValue> output(resolved);
     output.reserve(values.size());
     for (const auto& value : values) {

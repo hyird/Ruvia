@@ -11,7 +11,7 @@ RedisPipeline::RedisPipeline(
     detail::RedisPool& pool,
     std::pmr::memory_resource* resource) noexcept
     : pool_(&pool),
-      resource_(detail::resolveRedisResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       commands_(resource_) {}
 
 RedisPipeline::Command RedisPipeline::makeCommand(

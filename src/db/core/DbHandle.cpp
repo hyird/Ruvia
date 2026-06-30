@@ -31,7 +31,7 @@ DbHandle::DbHandle(
     std::pmr::memory_resource* resource,
     RequestMemory* requestMemory) noexcept
     : client_(client),
-      resource_(detail::resolveDbResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       requestMemory_(requestMemory) {}
 
 QueryResult DbHandle::mountResult(QueryResult result) const {
@@ -91,7 +91,7 @@ DbStreamResult::DbStreamResult(
     : client_(&client),
       slot_(slot),
       result_(result),
-      resource_(detail::resolveDbResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       active_(result != nullptr) {}
 
 DbStreamResult::DbStreamResult(DbStreamResult&& other) noexcept
@@ -178,7 +178,7 @@ DbTransaction::DbTransaction(
     RequestMemory* requestMemory) noexcept
     : client_(&client),
       slot_(slot),
-      resource_(detail::resolveDbResource(resource)),
+      resource_(detail::pmrResourceOrDefault(resource)),
       requestMemory_(requestMemory),
       active_(true) {}
 

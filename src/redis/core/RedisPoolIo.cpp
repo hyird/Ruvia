@@ -113,7 +113,7 @@ Task<RedisValue> RedisPool::readReply(
                 static_cast<redisReply*>(rawReply),
                 freeReplyObject);
             connection.replyBytes = 0;
-            co_return hiredisReplyToValue(*reply, 0, config_.maxArrayDepth, detail::resolveRedisResource(resource));
+            co_return hiredisReplyToValue(*reply, 0, config_.maxArrayDepth, detail::pmrResourceOrDefault(resource));
         }
 
         const auto [readEc, bytesRead] = co_await asyncSocketReadSome(
