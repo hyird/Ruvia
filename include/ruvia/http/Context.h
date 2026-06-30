@@ -330,18 +330,6 @@ public:
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
 
-    [[nodiscard]] std::uint16_t statusCode() const noexcept {
-        return responseStatusCode_;
-    }
-
-    [[nodiscard]] std::string_view statusText() const noexcept {
-        return responseStatusText_;
-    }
-
-    [[nodiscard]] const HttpResponseHeaders& responseHeaders() const noexcept {
-        return responseHeaders_;
-    }
-
     [[nodiscard]] HttpResponse& res();
 
     Context& res(HttpResponse&& response);
