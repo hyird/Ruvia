@@ -23,10 +23,11 @@ struct Http2StoredHeaderView final {
 };
 
 class Http2HeaderList final {
+    struct ResolvedResourceTag final {};
+
 public:
     explicit Http2HeaderList(std::pmr::memory_resource* resource = nullptr)
-        : overflowStorage_(pmrResourceOrDefault(resource)),
-          overflowFields_(pmrResourceOrDefault(resource)) {}
+        : Http2HeaderList(ResolvedResourceTag{}, pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
         return count_;
@@ -88,6 +89,10 @@ public:
     }
 
 private:
+    Http2HeaderList(ResolvedResourceTag, std::pmr::memory_resource* resource)
+        : overflowStorage_(resource),
+          overflowFields_(resource) {}
+
     static constexpr std::size_t kInlineHeaderFields = 16;
     static constexpr std::size_t kInlineHeaderStorageBytes = 512;
     static constexpr std::size_t kMaxStoredHeaderViewSize =

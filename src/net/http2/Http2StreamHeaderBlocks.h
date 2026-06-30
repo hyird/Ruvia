@@ -8,10 +8,11 @@
 namespace ruvia::detail {
 
 class Http2StreamHeaderBlocks final {
+    struct ResolvedResourceTag final {};
+
 public:
     explicit Http2StreamHeaderBlocks(std::pmr::memory_resource* resource = nullptr)
-        : request_(pmrResourceOrDefault(resource)),
-          response_(pmrResourceOrDefault(resource)) {}
+        : Http2StreamHeaderBlocks(ResolvedResourceTag{}, pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::pmr::string& request() noexcept {
         return request_;
@@ -30,6 +31,10 @@ public:
     }
 
 private:
+    Http2StreamHeaderBlocks(ResolvedResourceTag, std::pmr::memory_resource* resource)
+        : request_(resource),
+          response_(resource) {}
+
     std::pmr::string request_;
     std::pmr::string response_;
 };
