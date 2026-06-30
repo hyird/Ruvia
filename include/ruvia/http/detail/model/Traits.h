@@ -86,12 +86,12 @@ template <typename T>
     ResolvedPmrResourceTag,
     std::pmr::memory_resource* resource) {
     if constexpr (isRuviaString<T>) {
-        return T(resource);
+        return ModelValueFactory::makeString(resource);
     } else if constexpr (isRuviaArray<T>) {
         using ValueT = typename RuviaArrayTraits<std::remove_cvref_t<T>>::value_type;
         return T(std::pmr::polymorphic_allocator<ValueT>(resource));
     } else if constexpr (isRuviaList<T>) {
-        return T(resource);
+        return ModelValueFactory::makeList<T>(resource);
     } else if constexpr (JsonBody<std::remove_cvref_t<T>>::value) {
         return T(resource);
     } else {

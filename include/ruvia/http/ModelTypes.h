@@ -18,6 +18,12 @@
 
 namespace ruvia {
 
+namespace detail {
+
+struct ModelValueFactory;
+
+}  // namespace detail
+
 template <typename T, typename = void>
 struct JsonBody {
     static constexpr bool value = false;
@@ -103,12 +109,12 @@ template <std::size_t LeftN, std::size_t RightN>
 class String final {
 public:
     explicit String(std::pmr::memory_resource* resource = nullptr)
-        : owned_(detail::pmrResourceOrDefault(resource)) {}
+        : String(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     String(
         std::string_view value,
         std::pmr::memory_resource* resource = nullptr)
-        : view_(value), owned_(detail::pmrResourceOrDefault(resource)) {}
+        : String(detail::ResolvedPmrResourceTag{}, value, detail::pmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::string_view view() const noexcept {
         if (ownedActive_) {
@@ -158,6 +164,19 @@ public:
     }
 
 private:
+    friend struct detail::ModelValueFactory;
+
+    String(
+        detail::ResolvedPmrResourceTag,
+        std::pmr::memory_resource* resource)
+        : owned_(resource) {}
+
+    String(
+        detail::ResolvedPmrResourceTag,
+        std::string_view value,
+        std::pmr::memory_resource* resource)
+        : view_(value), owned_(resource) {}
+
     std::string_view view_;
     std::pmr::string owned_;
     bool ownedActive_{false};
@@ -221,8 +240,7 @@ public:
     using value_type = T;
 
     explicit List(std::pmr::memory_resource* resource = nullptr)
-        : resource_(detail::pmrResourceOrDefault(resource)),
-          items_(resource_) {}
+        : List(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
 
     List(const List&) = delete;
     List& operator=(const List&) = delete;
@@ -290,6 +308,12 @@ public:
     }
 
 private:
+    friend struct detail::ModelValueFactory;
+
+    List(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+        : resource_(resource),
+          items_(resource_) {}
+
     class Iterator final {
     public:
         using InnerIterator = typename std::pmr::vector<T*>::const_iterator;
@@ -331,6 +355,27 @@ private:
     std::pmr::memory_resource* resource_;
     std::pmr::vector<T*> items_;
 };
+
+namespace detail {
+
+struct ModelValueFactory final {
+    [[nodiscard]] static String makeString(std::pmr::memory_resource* resource) {
+        return String(ResolvedPmrResourceTag{}, resource);
+    }
+
+    [[nodiscard]] static String makeString(
+        std::string_view value,
+        std::pmr::memory_resource* resource) {
+        return String(ResolvedPmrResourceTag{}, value, resource);
+    }
+
+    template <typename ListT>
+    [[nodiscard]] static ListT makeList(std::pmr::memory_resource* resource) {
+        return ListT(ResolvedPmrResourceTag{}, resource);
+    }
+};
+
+}  // namespace detail
 
 class JsonObject;
 class FormObject;
