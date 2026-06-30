@@ -2,6 +2,7 @@
 
 #include "ruvia/detail/NativePath.h"
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <array>
 #include <cstddef>
@@ -95,6 +96,7 @@ private:
     using iterator = HttpResponseHeader*;
 
     explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
+    HttpResponseHeaders(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     ~HttpResponseHeaders();
 
     HttpResponseHeaders(const HttpResponseHeaders&) = delete;
@@ -225,6 +227,7 @@ private:
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
     void appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
     void reserveHeaders(std::size_t count);
+    HttpResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
