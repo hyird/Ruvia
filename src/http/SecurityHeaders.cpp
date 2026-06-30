@@ -94,11 +94,10 @@ void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& 
     }
 }
 
-Task<HttpResponse> SecurityHeadersMiddleware::handle(Context& context, const Next& next) {
+Task<void> SecurityHeadersMiddleware::handle(Context& context, const Next& next) {
     applySecurityHeaders(context);
-    auto response = co_await next(context);
-    applySecurityHeaders(response);
-    co_return response;
+    co_await next(context);
+    applySecurityHeaders(context.res());
 }
 
 }  // namespace ruvia

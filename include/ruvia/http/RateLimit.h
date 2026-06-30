@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include "ruvia/app/RateLimitRule.h"
 #include "ruvia/app/Task.h"
@@ -57,7 +58,7 @@ inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std
 template <typename Derived>
 class RouteRateLimitMiddleware : public Middleware<Derived> {
 public:
-    Task<HttpResponse> handle(Context& context, const Next& next) {
+    Task<void> handle(Context& context, const Next& next) {
         static_assert(
             Derived::ruviaRateLimitMaxRequests > 0,
             "route rate limit max requests must be greater than 0");
@@ -72,10 +73,11 @@ public:
             detail::setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
             detail::setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
             detail::setUnsignedHeader(response, "X-RateLimit-Reset", detail::retryAfterSeconds(check.resetAfterMs));
-            co_return response;
+            context.res(std::move(response));
+            co_return;
         }
 
-        co_return co_await next(context);
+        co_await next(context);
     }
 
 private:

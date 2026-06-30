@@ -165,11 +165,13 @@ Applications define middleware with `ruvia::Middleware<T>` and attach it to cont
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        if (c.header("X-Api-Key") != "secret") {
-            co_return c.error(401, "unauthorized", "unauthorized");
+    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+        if (c.req().header("X-Api-Key") != "secret") {
+            c.res(c.error(401, "unauthorized", "unauthorized"));
+            co_return;
         }
-        co_return co_await next(c);
+        co_await next(c);
+        c.res().setHeader("X-Auth", "ok");
     }
 };
 
@@ -185,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next(c)` advances the chain, `c.res()` reads or mutates the final downstream response, and `c.res(response)` short-circuits with a prepared response.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 
@@ -215,7 +217,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | --- | --- |
 | `c.req()` | Access the current `ruvia::HttpRequest`. |
 | `c.decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
-| `c.header(name)` | Read a request header. |
+| `c.req().header(name)` | Read a request header. |
 | `c.query(name)` | Read a query value through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
 | `c.cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
 | `c.param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.param("*")` for wildcard routes. |
@@ -231,10 +233,14 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
-| `c.setHeader(name, value)` | Add or replace a response header. |
+| `c.header(name, value)` / `c.setHeader(name, value)` | Add or replace a response header. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
+| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. |
+| `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |
+| `c.body(...)` | Return a raw response body without setting a content type. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
+| `c.html(...)` / `co_await c.render(...)` | Return HTML directly or through a middleware-installed renderer. |
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
 | `c.redirect(location)` | Return a redirect response. |
@@ -244,7 +250,7 @@ Use `ruvia::Context` to read request data and construct responses:
 
 A few lifetime and ownership rules are worth keeping close:
 
-- `c.header(...)` is for reading request headers. Use `c.setHeader(...)` for response headers.
+- Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics and mutates `c.res()` once a downstream response exists.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Request body I/O lives on `Context`. Use `co_await c.body()`, `co_await c.json<T>()`, `co_await c.form<T>()`, or `co_await c.multipart()` rather than reading body data from `c.req()`.
 - `co_await c.multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.
@@ -313,7 +319,7 @@ Streaming responses are also explicit and bypass normal response-body buffering:
 - `RUVIA_GET_STREAM(...)` sends HTTP/1.1 chunked data or HTTP/2 DATA frames depending on the connection protocol.
 - `RUVIA_GET_SSE(...)` sets `Content-Type: text/event-stream` and formats SSE frames with `writeSSE(...)`.
 - Streaming route macros accept the same middleware arguments as ordinary routes.
-- Middleware can set status/headers before `next(c)` or short-circuit with a normal `HttpResponse`.
+- Middleware can set status/headers before `next(c)`, mutate `c.res()` after `next(c)`, or short-circuit by assigning `c.res(response)`.
 - Post-`next(c)` response mutations do not change an already committed stream.
 - Set status and headers before the first `write()` because the response head is committed on the first chunk.
 - `HEAD` does not implicitly run a streaming `GET` handler.
@@ -342,7 +348,7 @@ RUVIA_POST_DYNAMIC("/mcp", mcp);
 
 ruvia::Task<ruvia::HttpResponse> mcp(ruvia::Context& c) {
     const auto request = co_await c.json<RpcRequest>();
-    if (c.header("Accept") == "text/event-stream") {
+    if (c.req().header("Accept") == "text/event-stream") {
         auto stream = c.streamSSE();
         co_await stream.writeSSE({.data = "{\"echo\":true}", .event = "message"});
         co_return c.text("");  // ignored: the stream is the response

@@ -192,7 +192,7 @@ public: \
         ::ruvia::Validator& validator) const { \
         RUVIA_MODEL_FOR_EACH(RUVIA_VALIDATE_RULE_FIELD, body_type, __VA_ARGS__) \
     } \
-    [[nodiscard]] ::ruvia::Task<::ruvia::HttpResponse> handle( \
+    [[nodiscard]] ::ruvia::Task<void> handle( \
         ::ruvia::Context& c, \
         const ::ruvia::Next& next) { \
         return ::ruvia::detail::invokeModelValidator< \

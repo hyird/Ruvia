@@ -1,13 +1,25 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 #include "ruvia/app/App.h"
 #include "ruvia/http/Controller.h"
 
 namespace {
+
+struct CurrentUser final {
+    std::uint32_t id{0};
+    std::string_view name;
+};
+
+inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
+inline constexpr ruvia::HttpHeaderView kRawHeaders[] = {
+    {"X-Raw-Init", "true"}
+};
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};
@@ -19,13 +31,48 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
 
 }  // namespace
 
+ruvia::Task<ruvia::HttpResponse> surfaceRenderer(ruvia::Context& c, std::string_view body) {
+    std::pmr::string html(c.allocator<char>());
+    html.append("<!doctype html><html><body><main>");
+    html.append(body);
+    html.append("</main></body></html>");
+    co_return c.html(html);
+}
+
+class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+        c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
+        c.set("traceId", std::string_view("surface-trace"));
+        c.setRenderer(&surfaceRenderer);
+        try {
+            co_await next(c);
+            c.header("X-Surface-Middleware", "after-next");
+        } catch (...) {
+            if (c.error()) {
+                c.res(c.text("caught by middleware\n", 500));
+                co_return;
+            }
+            throw;
+        }
+    }
+};
+
 class ApiSurfaceController final : public ruvia::Controller<ApiSurfaceController> {
 public:
-    RUVIA_CONTROLLER_GROUP("/surface")
+    RUVIA_CONTROLLER_GROUP("/surface", SurfaceContextMiddleware)
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/request", requestInfo);
+    RUVIA_GET("/context", contextInfo);
+    RUVIA_GET("/raw", rawBody);
+    RUVIA_GET("/res", responseSlot);
+    RUVIA_GET("/html", htmlBody);
+    RUVIA_GET("/render", renderBody);
+    RUVIA_GET("/throw", throwError);
+    RUVIA_GET("/missing", missing);
     RUVIA_POST("/multipart", bufferedMultipart);
+    RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/discard", discard);
     RUVIA_PUT("/items/:id", replaceItem);
     RUVIA_PATCH("/items/:id", patchItem);
@@ -49,6 +96,16 @@ private:
         body.append(request.path());
         body.append("\nquery=");
         body.append(request.queryString());
+        body.append("\nheaders=");
+        appendUnsigned(body, c.req().headers().size());
+        body.append("\nparams=");
+        appendUnsigned(body, c.params().size());
+        body.append("\nquery-fields=");
+        appendUnsigned(body, c.query().size());
+        body.append("\ncookies=");
+        appendUnsigned(body, c.cookies().size());
+        body.append("\ntag-values=");
+        appendUnsigned(body, c.queries("tag").size());
         body.append("\nversion=");
         body.append(request.httpVersion());
         body.append("\naccepts-json=");
@@ -59,6 +116,51 @@ private:
         }
         body.push_back('\n');
         co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
+        const auto& user = c.get(kCurrentUser);
+        const auto traceId = c.var<std::string_view>("traceId");
+        std::pmr::string body(c.allocator<char>());
+        body.append("user=");
+        body.append(user.name);
+        body.append("\nid=");
+        appendUnsigned(body, user.id);
+        body.append("\ntrace=");
+        body.append(traceId);
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
+        co_return c
+            .header("X-Raw", "first")
+            .header("X-Raw", "second", {.append = true})
+            .body("raw body\n", 202, kRawHeaders);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
+        auto& response = c.res();
+        response.setStatus(203, {});
+        response.setHeader("X-Response-Slot", "true");
+        response.setBodyCopy("response slot\n");
+        co_return std::move(response);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> htmlBody(ruvia::Context& c) {
+        co_return c.html("<strong>html body</strong>\n");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
+        co_return co_await c.render("<h1>rendered body</h1>");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
+        throw std::runtime_error("surface route failed");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
+        co_return c.notFound();
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
@@ -75,6 +177,34 @@ private:
             body.append(part.contentType);
             body.append(";bytes=");
             appendUnsigned(body, part.body.size());
+        }
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> parsedBody(ruvia::Context& c) {
+        auto fields = co_await c.parseBody({.all = true, .dot = true});
+        std::pmr::string body(c.allocator<char>());
+        body.append("fields=");
+        appendUnsigned(body, fields.size());
+        for (const auto& field : fields) {
+            body.append("\n");
+            body.append(field.name);
+            body.push_back('=');
+            body.append(field.value);
+            if (field.file) {
+                body.append(";filename=");
+                body.append(field.filename);
+            }
+            if (!field.path.empty()) {
+                body.append(";path=");
+                for (std::size_t i = 0; i < field.path.size(); ++i) {
+                    if (i != 0) {
+                        body.push_back('/');
+                    }
+                    body.append(field.path[i]);
+                }
+            }
         }
         body.push_back('\n');
         co_return c.text(body);

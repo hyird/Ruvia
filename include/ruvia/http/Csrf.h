@@ -30,23 +30,24 @@ namespace detail {
 // or on a controller group.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    Task<HttpResponse> handle(Context& c, const Next& next) {
+    Task<void> handle(Context& c, const Next& next) {
         const auto method = c.req().method();
         const bool safe = method == HttpMethod::kGet ||
             method == HttpMethod::kHead ||
             method == HttpMethod::kOptions;
         const auto cookie = c.cookie("XSRF-TOKEN");
         if (!safe) {
-            const auto header = c.header("X-XSRF-TOKEN");
+            const auto header = c.req().header("X-XSRF-TOKEN");
             if (!cookie || cookie->empty() || header.empty() || *cookie != header) {
-                co_return c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid");
+                c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
+                co_return;
             }
         } else if (!cookie) {
             std::array<char, 64> buffer;
             const auto token = detail::generateCsrfToken(buffer);
             c.setCookie("XSRF-TOKEN", token, CookieOptions{.path = "/", .sameSite = "Lax", .secure = c.isSecure()});
         }
-        co_return co_await next(c);
+        co_await next(c);
     }
 };
 

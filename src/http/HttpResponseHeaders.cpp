@@ -90,6 +90,7 @@ void HttpResponseHeaders::releaseHeader(HttpResponseHeader& header) noexcept {
     header.valueSize = 0;
     header.knownBit = 0;
     header.owned = false;
+    header.append = false;
 }
 
 HttpResponseHeader& HttpResponseHeaders::appendHeader(HttpResponseHeader header) {
@@ -143,6 +144,7 @@ HttpResponseHeader& HttpResponseHeaders::assignUninitializedValue(
         header.nameSize = static_cast<std::uint32_t>(name.size());
         header.valueSize = static_cast<std::uint32_t>(valueSize);
         header.knownBit = knownBit;
+        header.append = false;
         return header;
     }
 
@@ -171,6 +173,7 @@ bool HttpResponseHeaders::tryAssignOwnedInPlace(
     header.nameSize = static_cast<std::uint32_t>(name.size());
     header.valueSize = static_cast<std::uint32_t>(value.size());
     header.knownBit = knownBit;
+    header.append = false;
     return true;
 }
 

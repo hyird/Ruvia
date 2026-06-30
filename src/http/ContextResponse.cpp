@@ -61,7 +61,14 @@ Context& Context::status(std::uint16_t statusCode, std::string_view statusText) 
     } else {
         responseStatusText_.assign(statusText.data(), statusText.size());
     }
+    if (response_ != nullptr) {
+        response_->setStatus(statusCode, statusText);
+    }
     return *this;
+}
+
+Context& Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
+    return options.append ? appendHeader(name, value) : setHeader(name, value);
 }
 
 Context& Context::setHeader(std::string_view name, std::string_view value) {
@@ -74,12 +81,36 @@ Context& Context::setHeader(std::string_view name, std::string_view value) {
     const auto knownBit = detail::classifyResponseKnownHeader(name);
     if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
         responseHeaders_.assign(*header, name, value, knownBit);
+        if (response_ != nullptr) {
+            detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
+        }
         return *this;
     }
 
     const auto index = responseHeaders_.size();
     responseHeaders_.add(name, value, knownBit);
     recordResponseKnownHeaderIndex(knownBit, index);
+    if (response_ != nullptr) {
+        detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
+    }
+    return *this;
+}
+
+Context& Context::appendHeader(std::string_view name, std::string_view value) {
+    if (!isValidHttpHeaderName(name)) {
+        throw std::invalid_argument("invalid HTTP header name");
+    }
+    if (!isValidHttpHeaderValue(value)) {
+        throw std::invalid_argument("invalid HTTP header value");
+    }
+    const auto knownBit = detail::classifyResponseKnownHeader(name);
+    const auto index = responseHeaders_.size();
+    auto& header = responseHeaders_.add(name, value, knownBit);
+    detail::setResponseHeaderAppend(header, true);
+    recordResponseKnownHeaderIndex(knownBit, index);
+    if (response_ != nullptr) {
+        detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
+    }
     return *this;
 }
 
@@ -153,7 +184,54 @@ Context& Context::setCookie(std::string_view name, std::string_view value, const
         append("; SameSite=");
         append(options.sameSite);
     }
+    if (response_ != nullptr) {
+        detail::appendResponseHeaderValidated(
+            responseStorage(),
+            "Set-Cookie",
+            header.value(),
+            detail::kResponseHeaderSetCookie);
+    }
     return *this;
+}
+
+HttpResponse Context::body(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    response.setBodyView(body);
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::body(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    response.setBodyView(body);
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::body(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::body(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
 }
 
 HttpResponse Context::text(
@@ -168,6 +246,17 @@ HttpResponse Context::text(
 }
 
 HttpResponse Context::text(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    response.setBodyView(body);
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::text(
     std::pmr::string& body,
     std::uint16_t statusCode,
     std::string_view statusText) const {
@@ -175,6 +264,17 @@ HttpResponse Context::text(
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::text(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, statusCode, {}, headers);
     return response;
 }
 
@@ -200,6 +300,62 @@ HttpResponse Context::jsonSerialized(
     return response;
 }
 
+HttpResponse Context::html(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyView(body);
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::html(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyView(body);
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::html(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::html(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+Context& Context::setRenderer(Renderer renderer) noexcept {
+    renderer_ = renderer;
+    return *this;
+}
+
+Task<HttpResponse> Context::render(std::string_view body) {
+    if (renderer_ == nullptr) {
+        co_return html(body);
+    }
+    co_return co_await renderer_(*this, body);
+}
+
 HttpResponse Context::redirect(
     std::string_view location,
     std::uint16_t statusCode,
@@ -222,6 +378,10 @@ HttpResponse Context::error(
             .statusText = statusText,
             .code = code,
             .message = message});
+}
+
+HttpResponse Context::notFound() const {
+    return error(404, "not_found", "not found");
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {
@@ -249,7 +409,8 @@ Context& Context::setStableResponseHeader(std::string_view name, std::string_vie
 void Context::applyResponseState(
     HttpResponse& response,
     std::uint16_t statusCode,
-    std::string_view statusText) const {
+    std::string_view statusText,
+    std::span<const HttpHeaderView> headers) const {
     const auto finalStatusCode = statusCode == 0 ? responseStatusCode_ : statusCode;
     if (!statusText.empty()) {
         if (finalStatusCode != 200 || statusText != "OK") {
@@ -269,11 +430,24 @@ void Context::applyResponseState(
     }
     for (const auto& header : responseHeaders_) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
-        if (knownBit == detail::kResponseHeaderSetCookie) {
+        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
             detail::appendResponseHeaderValidated(response, header.name(), header.value(), knownBit);
         } else {
             detail::setResponseHeaderValidated(response, header.name(), header.value(), knownBit);
         }
+    }
+    applyExplicitResponseHeaders(response, headers);
+}
+
+void Context::applyExplicitResponseHeaders(
+    HttpResponse& response,
+    std::span<const HttpHeaderView> headers) const {
+    if (headers.empty()) {
+        return;
+    }
+    detail::reserveResponseHeaders(response, response.headers().size() + headers.size());
+    for (const auto& header : headers) {
+        response.setHeader(header.name, header.value);
     }
 }
 

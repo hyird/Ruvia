@@ -35,7 +35,7 @@ void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& 
 
 class SecurityHeadersMiddleware final : public Middleware<SecurityHeadersMiddleware> {
 public:
-    Task<HttpResponse> handle(Context& context, const Next& next);
+    Task<void> handle(Context& context, const Next& next);
 };
 
 }  // namespace ruvia

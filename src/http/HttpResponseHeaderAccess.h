@@ -19,6 +19,7 @@ struct HttpResponseHeaderAccess final {
         header.valueSize = valueSize;
         header.knownBit = knownBit;
         header.owned = owned;
+        header.append = false;
         return header;
     }
 
@@ -36,6 +37,14 @@ struct HttpResponseHeaderAccess final {
 
     [[nodiscard]] static std::uint32_t knownBit(const HttpResponseHeader& header) noexcept {
         return header.knownBit;
+    }
+
+    [[nodiscard]] static bool append(const HttpResponseHeader& header) noexcept {
+        return header.append;
+    }
+
+    static void setAppend(HttpResponseHeader& header, bool value) noexcept {
+        header.append = value;
     }
 };
 
@@ -58,6 +67,14 @@ struct HttpResponseHeaderAccess final {
 
 [[nodiscard]] inline std::uint32_t responseHeaderKnownBit(const HttpResponseHeader& header) noexcept {
     return HttpResponseHeaderAccess::knownBit(header);
+}
+
+[[nodiscard]] inline bool responseHeaderAppend(const HttpResponseHeader& header) noexcept {
+    return HttpResponseHeaderAccess::append(header);
+}
+
+inline void setResponseHeaderAppend(HttpResponseHeader& header, bool value) noexcept {
+    HttpResponseHeaderAccess::setAppend(header, value);
 }
 
 }  // namespace ruvia::detail

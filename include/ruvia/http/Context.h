@@ -3,11 +3,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -19,6 +22,7 @@
 #include "ruvia/http/Streaming.h"
 #include "ruvia/http/ValidationTypes.h"
 #include "ruvia/http/WebSocket.h"
+#include "ruvia/http/detail/ContextValues.h"
 #include "ruvia/http/detail/ValidatedValues.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -97,6 +101,53 @@ private:
         detail::ContextServices services) noexcept;
 
 public:
+    using Renderer = Task<HttpResponse> (*)(Context& context, std::string_view body);
+    using Bindings = detail::ContextValueStore;
+
+    struct HeaderOptions final {
+        bool append{false};
+    };
+
+    struct ParseBodyOptions final {
+        bool all{false};
+        bool dot{false};
+    };
+
+    struct RequestNameValueView final {
+        std::string_view name;
+        std::string_view value;
+    };
+
+    using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
+
+    struct RequestFormField final {
+        RequestFormField(
+            std::pmr::memory_resource* resource,
+            std::pmr::string&& fieldName,
+            std::pmr::string&& fieldValue,
+            std::pmr::string&& fieldFilename = {},
+            std::pmr::string&& fieldContentType = {},
+            bool fieldFile = false,
+            bool fieldArray = false)
+            : name(std::move(fieldName)),
+              value(std::move(fieldValue)),
+              filename(std::move(fieldFilename)),
+              contentType(std::move(fieldContentType)),
+              path(resource),
+              file(fieldFile),
+              array(fieldArray) {}
+
+        std::pmr::string name;
+        std::pmr::string value;
+        std::pmr::string filename;
+        std::pmr::string contentType;
+        std::pmr::vector<std::pmr::string> path;
+        bool file{false};
+        bool array{false};
+    };
+
+    using RequestFormFieldList = std::pmr::vector<RequestFormField>;
+
     ~Context() = default;
 
     Context(const Context&) = delete;
@@ -122,13 +173,21 @@ public:
         return ParamValue(std::nullopt, resource(), RequestValue::DecodeMode::kPercent);
     }
 
-    [[nodiscard]] std::string_view header(std::string_view name) const noexcept {
-        return request_.header(name);
-    }
+    [[nodiscard]] const RequestNameValueList& param() const;
+
+    [[nodiscard]] const RequestNameValueList& params() const;
 
     [[nodiscard]] QueryValue query(std::string_view name) const;
 
+    [[nodiscard]] const RequestNameValueList& query() const;
+
+    [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
+
+    [[nodiscard]] const RequestNameValueList& queries() const;
+
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
+
+    [[nodiscard]] const RequestNameValueList& cookies() const;
 
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
 
@@ -176,6 +235,10 @@ public:
 
     [[nodiscard]] Task<std::string_view> body() const;
 
+    [[nodiscard]] Task<std::string_view> arrayBuffer() const {
+        return body();
+    }
+
     template <typename T>
     [[nodiscard]] Task<T> json() const;
 
@@ -183,6 +246,8 @@ public:
     [[nodiscard]] Task<T> form() const;
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
+
+    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options = {}) const;
 
     Task<void> discardBody() const;
 
@@ -227,6 +292,118 @@ public:
     }
 
     template <typename T>
+    std::decay_t<T>& set(std::string_view name, T&& value) {
+        return values().set(name, std::forward<T>(value));
+    }
+
+    template <typename T, typename ValueT>
+    T& set(ContextKey<T> key, ValueT&& value) {
+        return values().template setAs<T>(key.name(), std::forward<ValueT>(value));
+    }
+
+    template <typename T>
+    [[nodiscard]] T& get(std::string_view name) {
+        return values().template get<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] const T& get(std::string_view name) const {
+        const auto* store = valuesIf();
+        if (store == nullptr) {
+            throw std::logic_error("context value is not available");
+        }
+        return store->template get<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T& get(ContextKey<T> key) {
+        return get<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] const T& get(ContextKey<T> key) const {
+        return get<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] T* getIf(std::string_view name) noexcept {
+        auto* store = valuesIf();
+        return store == nullptr ? nullptr : store->template getIf<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
+        const auto* store = valuesIf();
+        return store == nullptr ? nullptr : store->template getIf<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T* getIf(ContextKey<T> key) noexcept {
+        return getIf<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
+        return getIf<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] T& var(std::string_view name) {
+        return get<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] const T& var(std::string_view name) const {
+        return get<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T& var(ContextKey<T> key) {
+        return get(key);
+    }
+
+    template <typename T>
+    [[nodiscard]] const T& var(ContextKey<T> key) const {
+        return get(key);
+    }
+
+    [[nodiscard]] bool has(std::string_view name) const noexcept;
+
+    template <typename T>
+    [[nodiscard]] bool has(std::string_view name) const noexcept {
+        return getIf<T>(name) != nullptr;
+    }
+
+    template <typename T>
+    [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
+        return has<T>(key.name());
+    }
+
+    [[nodiscard]] Bindings& env() {
+        return values();
+    }
+
+    [[nodiscard]] const Bindings* env() const noexcept {
+        return valuesIf();
+    }
+
+    [[nodiscard]] Bindings& executionCtx() {
+        return values();
+    }
+
+    [[nodiscard]] const Bindings* executionCtx() const noexcept {
+        return valuesIf();
+    }
+
+    [[nodiscard]] Bindings& event() {
+        return values();
+    }
+
+    [[nodiscard]] const Bindings* event() const noexcept {
+        return valuesIf();
+    }
+
+    template <typename T>
     [[nodiscard]] const T& valid() const {
         return valid<T>(ValidationTarget::kJson);
     }
@@ -243,9 +420,90 @@ public:
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
 
+    Context& header(std::string_view name, std::string_view value, HeaderOptions options = {});
+
     Context& setHeader(std::string_view name, std::string_view value);
 
+    Context& appendHeader(std::string_view name, std::string_view value);
+
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
+
+    [[nodiscard]] std::uint16_t statusCode() const noexcept {
+        return responseStatusCode_;
+    }
+
+    [[nodiscard]] std::string_view statusText() const noexcept {
+        return responseStatusText_;
+    }
+
+    [[nodiscard]] const HttpResponseHeaders& responseHeaders() const noexcept {
+        return responseHeaders_;
+    }
+
+    [[nodiscard]] HttpResponse& res();
+
+    Context& res(HttpResponse&& response);
+
+    [[nodiscard]] const HttpResponse* res() const noexcept {
+        return response_;
+    }
+
+    [[nodiscard]] HttpResponse body(
+        std::string_view body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse body(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(
+        std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse body(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(
+        const std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse body(
+        std::pmr::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse body(
+        std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse body(
+        const std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse body(
+        std::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse body(
+        const char (&body)[N],
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse body(
+        const char (&body)[N],
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
 
     [[nodiscard]] HttpResponse text(
         std::string_view body,
@@ -253,9 +511,19 @@ public:
         std::string_view statusText = {}) const;
 
     [[nodiscard]] HttpResponse text(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse text(
         std::pmr::string& body,
         std::uint16_t statusCode = 0,
         std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse text(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
 
     [[nodiscard]] HttpResponse text(
         const std::pmr::string& body,
@@ -288,11 +556,84 @@ public:
         std::uint16_t statusCode = 0,
         std::string_view statusText = {}) const;
 
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse text(
+        const char (&body)[N],
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
     template <typename T>
     [[nodiscard]] HttpResponse json(
         const T& value,
         std::uint16_t statusCode = 0,
         std::string_view statusText = {}) const;
+
+    template <typename T>
+    [[nodiscard]] HttpResponse json(
+        const T& value,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse html(
+        std::string_view body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse html(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse html(
+        std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse html(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse html(
+        const std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse html(
+        std::pmr::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse html(
+        std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse html(
+        const std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse html(
+        std::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse html(
+        const char (&body)[N],
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse html(
+        const char (&body)[N],
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    Context& setRenderer(Renderer renderer) noexcept;
+
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body);
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
@@ -314,6 +655,12 @@ public:
         std::string_view message,
         std::string_view statusText = {}) const;
 
+    [[nodiscard]] std::exception_ptr error() const noexcept {
+        return error_;
+    }
+
+    [[nodiscard]] HttpResponse notFound() const;
+
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
 
 private:
@@ -332,7 +679,12 @@ private:
     void applyResponseState(
         HttpResponse& response,
         std::uint16_t statusCode,
-        std::string_view statusText) const;
+        std::string_view statusText,
+        std::span<const HttpHeaderView> headers = {}) const;
+
+    void applyExplicitResponseHeaders(
+        HttpResponse& response,
+        std::span<const HttpHeaderView> headers) const;
 
     [[nodiscard]] HttpResponse textStaticView(
         std::string_view body,
@@ -344,18 +696,24 @@ private:
         std::uint16_t statusCode,
         std::string_view statusText) const;
 
-    struct RequestNameValueView final {
-        std::string_view name;
-        std::string_view value;
-    };
-
-    using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
-
+    [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] const RequestNameValueList& queryParams() const;
     [[nodiscard]] const RequestNameValueList& cookieParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] std::pmr::string& sessionIdStorage();
     [[nodiscard]] std::pmr::string& sessionDataStorage();
+    [[nodiscard]] detail::ContextValueStore& values();
+    [[nodiscard]] HttpResponse& responseStorage();
+    [[nodiscard]] HttpResponse takeResponse();
+    void setError(std::exception_ptr error) noexcept {
+        error_ = error;
+    }
+    [[nodiscard]] detail::ContextValueStore* valuesIf() noexcept {
+        return values_;
+    }
+    [[nodiscard]] const detail::ContextValueStore* valuesIf() const noexcept {
+        return values_;
+    }
 
     static constexpr std::size_t kResponseIndexSlots = 22;
 
@@ -373,16 +731,21 @@ private:
     detail::RequestBodyLoader* bodyLoader_{nullptr};
     WebSocket* webSocket_{nullptr};
     ResponseStreamWriter* responseStream_{nullptr};
+    Renderer renderer_{nullptr};
     std::uint16_t responseStatusCode_{200};
     std::pmr::string responseStatusText_;
     HttpResponseHeaders responseHeaders_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
+    mutable RequestNameValueList* routeParams_{nullptr};
     mutable RequestNameValueList* queryParams_{nullptr};
     mutable RequestNameValueList* cookieParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
+    detail::ContextValueStore* values_{nullptr};
+    HttpResponse* response_{nullptr};
+    std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     mutable bool queryLookupAttempted_ : 1 {false};
     mutable bool cookieLookupAttempted_ : 1 {false};

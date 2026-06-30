@@ -5,7 +5,6 @@
 namespace ruvia {
 
 class Context;
-class HttpResponse;
 
 namespace detail {
 struct NextAccess;
@@ -13,9 +12,9 @@ struct NextAccess;
 
 class Next final {
 public:
-    using Invoke = detail::CallableRef<HttpResponse, Context&>::Invoke;
+    using Invoke = detail::CallableRef<void, Context&>::Invoke;
 
-    [[nodiscard]] Task<HttpResponse> operator()(Context& context) const;
+    [[nodiscard]] Task<void> operator()(Context& context) const;
 
 private:
     friend struct detail::NextAccess;
@@ -23,7 +22,7 @@ private:
     constexpr Next(void* target, Invoke invoke) noexcept
         : callable_(target, invoke) {}
 
-    detail::CallableRef<HttpResponse, Context&> callable_;
+    detail::CallableRef<void, Context&> callable_;
 };
 
 }  // namespace ruvia

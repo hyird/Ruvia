@@ -145,7 +145,7 @@ template <ValidationTarget Target, typename BodyT>
 }
 
 template <ValidationTarget Target, typename BodyT, typename ValidatorT>
-Task<HttpResponse> invokeModelValidator(
+Task<void> invokeModelValidator(
     const ValidatorT& validatorMiddleware,
     Context& c,
     const Next& next) {
@@ -154,7 +154,7 @@ Task<HttpResponse> invokeModelValidator(
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
     c.setValid(Target, std::move(body));
-    co_return co_await next(c);
+    co_await next(c);
 }
 
 template <typename ControllerT>

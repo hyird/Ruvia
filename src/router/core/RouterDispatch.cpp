@@ -179,7 +179,10 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             HttpResponse(context.resource()),
             RouteStreamDispatchOutcome::kStreamHandled);
     }
-    auto response = co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
+    co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
+    auto response = detail::ContextAccess::hasResponse(context)
+        ? detail::ContextAccess::takeResponse(context)
+        : HttpResponse(context.resource());
     co_return StreamDispatchResult(
         std::move(response),
         outcome);
@@ -217,6 +220,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         co_return co_await invokeRoute(route, context);
     } catch (...) {
         exception = std::current_exception();
+        detail::ContextAccess::setError(context, exception);
     }
     co_return co_await handleException(context, exception, true);
 }
