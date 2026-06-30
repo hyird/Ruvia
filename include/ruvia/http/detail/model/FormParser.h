@@ -32,17 +32,30 @@ template <typename StringT>
 
 template <typename Visitor>
 [[nodiscard]] bool withDecodedFormView(
+    ResolvedPmrResourceTag,
     std::string_view input,
     std::pmr::memory_resource* resource,
     Visitor&& visitor) {
     if (!hasFormEncoding(input)) {
         return std::forward<Visitor>(visitor)(input);
     }
-    std::pmr::string scratch(pmrResourceOrDefault(resource));
+    std::pmr::string scratch(resource);
     if (!decodeFormComponent(input, scratch)) {
         return false;
     }
     return std::forward<Visitor>(visitor)(std::string_view(scratch));
+}
+
+template <typename Visitor>
+[[nodiscard]] bool withDecodedFormView(
+    std::string_view input,
+    std::pmr::memory_resource* resource,
+    Visitor&& visitor) {
+    return withDecodedFormView(
+        ResolvedPmrResourceTag{},
+        input,
+        pmrResourceOrDefault(resource),
+        std::forward<Visitor>(visitor));
 }
 
 [[nodiscard]] inline bool parseFormBool(std::string_view decoded, bool& value) noexcept {
@@ -73,6 +86,7 @@ template <typename NumberT>
 
 template <typename T>
 [[nodiscard]] bool parseFormValue(
+    ResolvedPmrResourceTag,
     std::string_view input,
     T& value,
     std::pmr::memory_resource* resource) {
@@ -93,25 +107,53 @@ template <typename T>
     } else if constexpr (isRuviaScalar<FieldT>) {
         using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
         if constexpr (std::is_same_v<ScalarT, bool>) {
-            return withDecodedFormView(input, resource, [&value](std::string_view decoded) {
-                return parseFormBool(decoded, value.value);
-            });
+            return withDecodedFormView(
+                ResolvedPmrResourceTag{},
+                input,
+                resource,
+                [&value](std::string_view decoded) {
+                    return parseFormBool(decoded, value.value);
+                });
         } else {
-            return withDecodedFormView(input, resource, [&value](std::string_view decoded) {
-                return parseFormNumber(decoded, value.value);
-            });
+            return withDecodedFormView(
+                ResolvedPmrResourceTag{},
+                input,
+                resource,
+                [&value](std::string_view decoded) {
+                    return parseFormNumber(decoded, value.value);
+                });
         }
     } else if constexpr (std::is_same_v<FieldT, bool>) {
-        return withDecodedFormView(input, resource, [&value](std::string_view decoded) {
-            return parseFormBool(decoded, value);
-        });
+        return withDecodedFormView(
+            ResolvedPmrResourceTag{},
+            input,
+            resource,
+            [&value](std::string_view decoded) {
+                return parseFormBool(decoded, value);
+            });
     } else if constexpr (std::is_integral_v<FieldT> || std::is_floating_point_v<FieldT>) {
-        return withDecodedFormView(input, resource, [&value](std::string_view decoded) {
-            return parseFormNumber(decoded, value);
-        });
+        return withDecodedFormView(
+            ResolvedPmrResourceTag{},
+            input,
+            resource,
+            [&value](std::string_view decoded) {
+                return parseFormNumber(decoded, value);
+            });
     } else {
         static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL form field type is not supported");
     }
+}
+
+template <typename T>
+[[nodiscard]] bool parseFormValue(
+    std::string_view input,
+    T& value,
+    std::pmr::memory_resource* resource) {
+    return parseFormValue(
+        ResolvedPmrResourceTag{},
+        input,
+        value,
+        pmrResourceOrDefault(resource));
 }
 
 }  // namespace ruvia::detail
