@@ -99,7 +99,7 @@ private:
         body.append("\nheaders=");
         appendUnsigned(body, c.req().headers().size());
         body.append("\nparams=");
-        appendUnsigned(body, c.param().size());
+        appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");
         appendUnsigned(body, request.query().size());
         body.append("\ncookies=");
@@ -219,7 +219,7 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("replace id=");
-        output.append(c.param("id").toStringView().value_or(""));
+        output.append(c.req().param("id").toStringView().value_or(""));
         output.append(" bytes=");
         appendUnsigned(output, body.size());
         output.push_back('\n');
@@ -230,7 +230,7 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string output(c.allocator<char>());
         output.append("patch id=");
-        output.append(c.param("id").toStringView().value_or(""));
+        output.append(c.req().param("id").toStringView().value_or(""));
         output.append(" bytes=");
         appendUnsigned(output, body.size());
         output.push_back('\n');
@@ -240,7 +240,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> deleteItem(ruvia::Context& c) {
         std::pmr::string output(c.allocator<char>());
         output.append("deleted id=");
-        output.append(c.param("id").toStringView().value_or(""));
+        output.append(c.req().param("id").toStringView().value_or(""));
         output.push_back('\n');
         co_return c.text(output);
     }
@@ -291,7 +291,7 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append(verb);
         body.append(" stream id=");
-        body.append(c.param("id").toStringView().value_or(""));
+        body.append(c.req().param("id").toStringView().value_or(""));
         body.append(" bytes=");
         appendUnsigned(body, bytes);
         body.push_back('\n');

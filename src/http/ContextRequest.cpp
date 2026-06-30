@@ -105,10 +105,6 @@ void appendParsedBodyField(
 
 }  // namespace
 
-const RequestNameValueList& Context::param() const {
-    return routeParams();
-}
-
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& params = memory_.emplace<RequestNameValueList>(resource());
@@ -119,6 +115,16 @@ const RequestNameValueList& Context::routeParams() const {
         routeParams_ = &params;
     }
     return *routeParams_;
+}
+
+ParamValue Context::routeParam(std::string_view name) const noexcept {
+    for (std::size_t i = 0; i < paramCount_; ++i) {
+        if (paramNames_[i] == name) {
+            return ParamValue(paramValues_[i], resource(), RequestValue::DecodeMode::kPercent);
+        }
+    }
+
+    return ParamValue(std::nullopt, resource(), RequestValue::DecodeMode::kPercent);
 }
 
 Task<std::string_view> Context::requestBody() const {

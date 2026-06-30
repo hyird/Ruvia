@@ -30,7 +30,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> asset(ruvia::Context& c) {
-        co_return c.staticFile(*gAssets, c.param("*").toStringView().value_or("index.html"));
+        co_return c.staticFile(*gAssets, c.req().param("*").toStringView().value_or("index.html"));
     }
 };
 
