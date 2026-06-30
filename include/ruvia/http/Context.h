@@ -221,13 +221,8 @@ public:
     }
 
     // Server-side session blob (persisted by a SessionMiddleware via Redis; the
-    // application owns the blob's format). sessionId() is empty until a session
-    // exists. setSession/clearSession mark it for persistence on the way out.
-    [[nodiscard]] std::string_view sessionId() const noexcept {
-        return sessionId_ == nullptr
-            ? std::string_view{}
-            : std::string_view(sessionId_->data(), sessionId_->size());
-    }
+    // application owns the blob's format). setSession/clearSession mark it for
+    // persistence on the way out.
     [[nodiscard]] std::string_view session() const noexcept {
         return sessionData_ == nullptr
             ? std::string_view{}
@@ -605,6 +600,11 @@ private:
 
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
+    [[nodiscard]] std::string_view sessionId() const noexcept {
+        return sessionId_ == nullptr
+            ? std::string_view{}
+            : std::string_view(sessionId_->data(), sessionId_->size());
+    }
     [[nodiscard]] std::pmr::string& sessionIdStorage();
     [[nodiscard]] std::pmr::string& sessionDataStorage();
     [[nodiscard]] detail::ContextValueStore& values();
