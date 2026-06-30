@@ -9,7 +9,14 @@
 namespace ruvia {
 
 HttpResponseHeaders::HttpResponseHeaders(std::pmr::memory_resource* resource)
-    : resource_(detail::pmrResourceOrDefault(resource)),
+    : HttpResponseHeaders(
+          detail::ResolvedPmrResourceTag{},
+          detail::pmrResourceOrDefault(resource)) {}
+
+HttpResponseHeaders::HttpResponseHeaders(
+    detail::ResolvedPmrResourceTag,
+    std::pmr::memory_resource* resource)
+    : resource_(resource),
       heap_(resource_) {}
 
 HttpResponseHeaders::~HttpResponseHeaders() {
