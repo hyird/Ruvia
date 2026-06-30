@@ -2,6 +2,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/db/DbTypes.h"
+#include "ruvia/memory/PmrResource.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,8 @@ private:
     friend class detail::MariaDbPool;
     friend class DbHandle;
     friend class DbTransaction;
+
+    QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<DbRow> rows_;
     std::pmr::vector<DbField> fields_;

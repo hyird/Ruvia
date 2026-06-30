@@ -24,8 +24,11 @@ std::string_view RedisError::message() const noexcept {
 }
 
 RedisValue::RedisValue(std::pmr::memory_resource* resource)
-    : string_(detail::pmrResourceOrDefault(resource)),
-      array_(detail::pmrResourceOrDefault(resource)) {}
+    : RedisValue(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+RedisValue::RedisValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    : string_(resource),
+      array_(resource) {}
 
 RedisValue::Kind RedisValue::kind() const noexcept {
     return kind_;
