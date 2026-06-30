@@ -10,7 +10,7 @@ namespace ruvia {
 using namespace detail;
 
 Task<void> Next::operator()() const {
-    return callable_(*context_);
+    return callable_();
 }
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept
