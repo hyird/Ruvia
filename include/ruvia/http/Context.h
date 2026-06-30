@@ -139,6 +139,7 @@ public:
     [[nodiscard]] std::string_view clientCertificate() const noexcept;
     [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
+    Task<void> discardBody() const;
 
     template <typename T>
     [[nodiscard]] Task<T> json() const;
@@ -244,8 +245,6 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }
-
-    Task<void> discardBody() const;
 
 #ifdef RUVIA_ENABLE_MARIADB
     [[nodiscard]] DbHandle db() const;
@@ -578,6 +577,7 @@ public:
 
 private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
+    Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
     [[nodiscard]] Task<RequestFormFieldList> parseRequestBody(ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
@@ -748,6 +748,10 @@ inline bool ContextRequest::isSecure() const noexcept {
 
 inline Task<std::string_view> ContextRequest::text() const {
     return context_->requestBody();
+}
+
+inline Task<void> ContextRequest::discardBody() const {
+    return context_->requestDiscardBody();
 }
 
 inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {

@@ -211,7 +211,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> discard(ruvia::Context& c) {
-        co_await c.discardBody();
+        co_await c.req().discardBody();
         co_return c.status(204).text("");
     }
 
