@@ -37,7 +37,7 @@ std::pmr::string& responseStreamScratchThunk(void* target) noexcept {
 
 template <typename Sink>
 [[nodiscard]] ResponseStreamWriter makeResponseStreamWriter(Sink& sink) noexcept {
-    return ResponseStreamWriter(
+    return StreamingAccess::makeResponseStreamWriter(
         &sink,
         &responseStreamWriteThunk<Sink>,
         &responseStreamEndThunk<Sink>,
