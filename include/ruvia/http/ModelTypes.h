@@ -262,14 +262,20 @@ public:
     T& emplace(Args&&... args) {
         T* value = nullptr;
         if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, std::pmr::memory_resource*>) {
-            value = detail::constructPmrObject<T>(resource_, resource_);
+            value = detail::constructPmrObject<T>(
+                detail::ResolvedPmrResourceTag{},
+                resource_,
+                resource_);
         } else {
-            value = detail::constructPmrObject<T>(resource_, std::forward<Args>(args)...);
+            value = detail::constructPmrObject<T>(
+                detail::ResolvedPmrResourceTag{},
+                resource_,
+                std::forward<Args>(args)...);
         }
         try {
             items_.push_back(value);
         } catch (...) {
-            detail::destroyPmrObject(value, resource_);
+            detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, value, resource_);
             throw;
         }
         return *value;
