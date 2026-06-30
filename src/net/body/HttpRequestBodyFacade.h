@@ -16,7 +16,7 @@ template <typename Reader>
 
 template <typename Reader>
 void emplaceBodyReaderFacade(std::optional<BodyReader>& storage, Reader& reader) {
-    storage.emplace(&reader, &bodyReaderReadThunk<Reader>);
+    StreamingAccess::emplaceBodyReader(storage, &reader, &bodyReaderReadThunk<Reader>);
 }
 
 template <typename Loader>

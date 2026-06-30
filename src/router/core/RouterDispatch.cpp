@@ -161,7 +161,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         resolution,
         services);
     if (auto* responseStream = services.responseStream(); responseStream != nullptr) {
-        responseStream->bindContext(context);
+        detail::StreamingAccess::bindContext(*responseStream, context);
     }
     // A kDynamic route runs the ordinary buffered handler chain with the stream
     // writer bound: if the handler streams, the sink commits and that is the
