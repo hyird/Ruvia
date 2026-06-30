@@ -110,7 +110,7 @@ public:
 
     [[nodiscard]] T& ensure() {
         if (!*value_) {
-            value_->emplace(detail::makeRequestValue<T>(resource_));
+            emplaceMissingValue();
         }
         *state_ = detail::ModelFieldState::kParsed;
         return **value_;
@@ -151,7 +151,7 @@ public:
         requires detail::isRuviaString<T>
     {
         if (!*value_) {
-            value_->emplace(resource_);
+            emplaceMissingValue();
         }
         (*value_)->assignView(value);
         *state_ = detail::ModelFieldState::kParsed;
@@ -161,7 +161,7 @@ public:
         requires detail::isRuviaString<T>
     {
         if (!*value_) {
-            value_->emplace(resource_);
+            emplaceMissingValue();
         }
         (*value_)->assignOwned(value);
         *state_ = detail::ModelFieldState::kParsed;
@@ -171,13 +171,19 @@ public:
         requires detail::isRuviaString<T>
     {
         if (!*value_) {
-            value_->emplace(resource_);
+            emplaceMissingValue();
         }
         (*value_)->assignOwned(std::move(value));
         *state_ = detail::ModelFieldState::kParsed;
     }
 
 private:
+    void emplaceMissingValue() {
+        value_->emplace(detail::makeRequestValue<T>(
+            detail::ResolvedPmrResourceTag{},
+            resource_));
+    }
+
     std::optional<T>* value_{nullptr};
     detail::ModelFieldState* state_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
