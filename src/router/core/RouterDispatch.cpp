@@ -33,13 +33,14 @@ Context makeRouteContext(
     const auto routeRateLimitScope = reinterpret_cast<std::uintptr_t>(&route);
     const auto* match = resolution.match();
     if (match == nullptr) {
-        return detail::ContextAccess::make(memory, request, routeRateLimitScope, services);
+        return detail::ContextAccess::make(memory, request, route.path(), routeRateLimitScope, services);
     }
 
     const auto values = match->values();
     return detail::ContextAccess::make(
         memory,
         request,
+        route.path(),
         route.paramNames().data(),
         values.data(),
         values.size(),
