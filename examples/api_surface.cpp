@@ -28,6 +28,11 @@ concept HasLvalueAwait = requires(T& value) {
     value.operator co_await();
 };
 
+template <typename T>
+concept HasDefaultValid = requires(const ruvia::ContextRequest& request) {
+    request.template valid<T>();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(std::is_move_constructible_v<ruvia::Next>);
@@ -54,6 +59,7 @@ static_assert(std::is_move_assignable_v<ruvia::RequestValueGroupList>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
+static_assert(!HasDefaultValid<CurrentUser>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
