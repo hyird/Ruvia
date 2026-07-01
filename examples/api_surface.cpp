@@ -192,11 +192,13 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
-        auto& response = c.res();
+        c.header("X-Response-Prepared", "true");
+        ruvia::HttpResponse response(c.resource());
         response.setStatus(203, {});
-        response.responseHeaders().set("X-Response-Slot", "true");
         response.setBodyCopy("response slot\n");
-        co_return std::move(response);
+        c.res(std::move(response));
+        c.res().responseHeaders().append("X-Response-Slot", "true");
+        co_return std::move(c.res());
     }
 
     ruvia::Task<ruvia::HttpResponse> htmlBody(ruvia::Context& c) {

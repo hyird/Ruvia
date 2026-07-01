@@ -17,6 +17,23 @@
 
 namespace ruvia {
 
+namespace {
+
+[[nodiscard]] bool responseHasHeaderValue(
+    const HttpResponse& response,
+    std::string_view name,
+    std::string_view value) noexcept {
+    for (const auto& header : response.headers()) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) &&
+            header.value() == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 HttpResponseHeader* Context::findResponseHeaderForUpdate(
     std::string_view name,
     std::uint32_t knownBit) noexcept {
@@ -179,6 +196,36 @@ Context& Context::setCookie(std::string_view name, std::string_view value, const
 Context& Context::deleteCookie(std::string_view name, CookieOptions options) {
     options.maxAge = 0;
     return setCookie(name, "", options);
+}
+
+void Context::storeResponse(HttpResponse&& response) {
+    if (!responseStatusText_.empty()) {
+        const auto statusText = std::string_view(responseStatusText_);
+        if (responseStatusCode_ != 200 || statusText != "OK") {
+            response.setStatus(responseStatusCode_, statusText);
+        }
+    } else if (responseStatusCode_ != 200) {
+        response.setStatus(responseStatusCode_, {});
+    }
+
+    const auto contextHeaderCount = responseHeaders_.size();
+    if (contextHeaderCount > 0) {
+        detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
+    }
+    for (const auto& header : responseHeaders_) {
+        const auto knownBit = detail::responseHeaderKnownBit(header);
+        const auto name = header.name();
+        const auto value = header.value();
+        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
+            if (!responseHasHeaderValue(response, name, value)) {
+                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            }
+        } else {
+            detail::setResponseHeaderValidated(response, name, value, knownBit);
+        }
+    }
+
+    responseStorage() = std::move(response);
 }
 
 HttpResponse Context::body(
