@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/app/App.h"
@@ -20,6 +21,15 @@ inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
 inline constexpr ruvia::HttpHeaderView kRawHeaders[] = {
     {"X-Raw-Init", "true"}
 };
+
+static_assert(!std::is_copy_constructible_v<ruvia::Next>);
+static_assert(!std::is_copy_assignable_v<ruvia::Next>);
+static_assert(!std::is_move_constructible_v<ruvia::Next>);
+static_assert(!std::is_move_assignable_v<ruvia::Next>);
+static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};

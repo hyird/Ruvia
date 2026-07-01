@@ -207,7 +207,7 @@ private:
 };
 ```
 
-`RUVIA_ROUTE_RATE_LIMIT(name, maxRequests, windowMs)` keys by the request remote address, returns JSON `429` with `Retry-After` and `X-RateLimit-*` headers, and keeps worker-local/thread-local buckets so request dispatch stays lock-free. Use the server-level Redis/global limiter when a cross-worker or distributed limit is required.
+`RUVIA_ROUTE_RATE_LIMIT(name, maxRequests, windowMs)` keys by the request remote address, returns JSON `429` with `Retry-After` and `X-RateLimit-*` headers, and uses the same single-process shared atomic slot table as the app-level `setGlobalRateLimit(...)` rule. Ruvia no longer ships a Redis-backed distributed limiter; use application middleware backed by `c.redis(...)` or another external coordinator when a cross-instance limit is required.
 
 ## Context Helpers
 

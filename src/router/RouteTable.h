@@ -30,9 +30,9 @@ class RouterImpl;
 
 struct NextAccess final {
     [[nodiscard]] static constexpr Next make(
-        void* target,
+        Next::State state,
         Next::Invoke invoke) noexcept {
-        return Next(target, invoke);
+        return Next(state, invoke);
     }
 };
 
@@ -295,23 +295,6 @@ private:
         const RouteEntry* wildcardRoute{nullptr};
     };
 
-    struct MiddlewareContinuation {
-        const RouteTable* table{nullptr};
-        const RouteEntry* route{nullptr};
-        Context* context{nullptr};
-        std::size_t index{0};
-        bool invoked{false};
-    };
-
-    struct StreamMiddlewareContinuation {
-        const RouteTable* table{nullptr};
-        const RouteEntry* route{nullptr};
-        Context* context{nullptr};
-        std::size_t index{0};
-        RouteStreamDispatchOutcome* outcome{nullptr};
-        bool invoked{false};
-    };
-
     void buildPerfectHash();
     void buildRadix();
     void buildDynamicRoutes();
@@ -373,7 +356,7 @@ private:
         const RouteEntry& route,
         std::size_t index,
         Context& context) const;
-    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(void* target);
+    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(Next::State state);
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
         const RouteResolution& resolution,
@@ -384,7 +367,7 @@ private:
         std::size_t index,
         Context& context,
         RouteStreamDispatchOutcome& outcome) const;
-    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(void* target);
+    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(Next::State state);
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
         HttpErrorInfo error,
