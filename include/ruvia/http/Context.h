@@ -297,7 +297,7 @@ public:
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
-    [[nodiscard]] RequestNameValueList query() const;
+    [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
     [[nodiscard]] RequestNameValueList cookie() const;
@@ -792,6 +792,7 @@ private:
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
+    [[nodiscard]] const RequestNameValueList& requestQuery() const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -877,6 +878,8 @@ private:
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
     mutable RequestNameValueList* requestHeaders_{nullptr};
+    mutable std::pmr::vector<std::pmr::string>* requestQueryStorage_{nullptr};
+    mutable RequestNameValueList* requestQuery_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
@@ -967,8 +970,8 @@ inline QueryValue ContextRequest::query(std::string_view name) const noexcept {
     return raw().query(name);
 }
 
-inline RequestNameValueList ContextRequest::query() const {
-    return raw().query();
+inline const RequestNameValueList& ContextRequest::query() const {
+    return context_->requestQuery();
 }
 
 inline std::pmr::vector<QueryValue> ContextRequest::queries(std::string_view name) const {

@@ -80,6 +80,18 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     }
 }
 
+void assignUrlDecodedOrCopy(
+    std::pmr::string& output,
+    std::string_view input,
+    detail::UrlDecodeMode mode) {
+    if (detail::hasUrlEncoding(input, mode)) {
+        if (detail::decodeUrlComponent(input, output, mode)) {
+            return;
+        }
+    }
+    output.assign(input.data(), input.size());
+}
+
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
     return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
 }
@@ -144,6 +156,43 @@ const RequestNameValueList& Context::requestHeaders() const {
         requestHeaders_ = &headers;
     }
     return *requestHeaders_;
+}
+
+const RequestNameValueList& Context::requestQuery() const {
+    if (requestQuery_ == nullptr) {
+        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+        storage.reserve(delimitedFieldCount(request_.queryString(), '&') * 2);
+        (void)detail::visitUrlEncodedPairs(
+            request_.queryString(),
+            [this, &storage](std::string_view key, std::string_view value) {
+                std::pmr::string decodedName(resource());
+                std::pmr::string decodedValue(resource());
+                assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
+                assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
+
+                for (std::size_t i = 0; i + 1 < storage.size(); i += 2) {
+                    if (storage[i] == decodedName) {
+                        storage[i + 1] = std::move(decodedValue);
+                        return true;
+                    }
+                }
+
+                storage.push_back(std::move(decodedName));
+                storage.push_back(std::move(decodedValue));
+                return true;
+            });
+
+        auto& query = memory_.emplace<RequestNameValueList>(resource());
+        query.reserve(storage.size() / 2);
+        for (std::size_t i = 0; i + 1 < storage.size(); i += 2) {
+            query.push_back(RequestNameValueView{
+                .name = std::string_view(storage[i].data(), storage[i].size()),
+                .value = std::string_view(storage[i + 1].data(), storage[i + 1].size())});
+        }
+        requestQueryStorage_ = &storage;
+        requestQuery_ = &query;
+    }
+    return *requestQuery_;
 }
 
 const RequestNameValueList& Context::routeParams() const {
