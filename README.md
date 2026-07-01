@@ -636,9 +636,9 @@ Configure a custom error handler when an application wants to shape framework er
 
 ```cpp
 ruvia::Task<ruvia::HttpResponse> errors(ruvia::Context& c, ruvia::HttpErrorInfo error) {
-    co_return c.status(error.statusCode)
-        .setHeader("X-Error-Code", error.code)
-        .json(ErrorResponse{.code = error.code, .message = error.message});
+    c.status(error.statusCode);
+    c.setHeader("X-Error-Code", error.code);
+    co_return c.json(ErrorResponse{.code = error.code, .message = error.message});
 }
 
 ruvia::app()

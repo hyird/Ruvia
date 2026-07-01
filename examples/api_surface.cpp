@@ -193,6 +193,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().setLayout(static_cast<ruvia::Context::Layout>(nullptr))),
     ruvia::Context::Layout>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().status(204)),
+    void>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -887,7 +890,8 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> discard(ruvia::Context& c) {
         co_await c.req().discardBody();
-        co_return c.status(204).text("");
+        c.status(204);
+        co_return c.text("");
     }
 
     ruvia::Task<ruvia::HttpResponse> replaceItem(ruvia::Context& c) {

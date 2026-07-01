@@ -1781,7 +1781,7 @@ public:
         return ConstVars(*this);
     }
 
-    Context& status(std::uint16_t statusCode, std::string_view statusText = {});
+    void status(std::uint16_t statusCode, std::string_view statusText = {});
 
     Context& header(std::string_view name, std::string_view value) {
         return header(name, value, HeaderOptions{});
