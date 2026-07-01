@@ -222,6 +222,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
 | `c.req().param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.req().param("*")` for wildcard routes. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
+| `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
@@ -254,7 +255,7 @@ A few lifetime and ownership rules are worth keeping close:
 
 - Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics and mutates `c.res()` once a downstream response exists.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
-- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().json<T>()` for JSON models, and `co_await c.req().form<T>()` for URL-encoded form models.
+- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().json<T>()` for JSON models, and `co_await c.req().form<T>()` for URL-encoded form models.
 - `co_await c.req().multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.
 - Response status codes, reason phrases, header names, header values, cookie names, and cookie values are validated when set. Invalid output metadata throws `std::invalid_argument` before it reaches the writer.
 - File bodies are constructed through `c.file(...)` and `c.staticFile(...)`; application code should not build raw file-body responses directly.
@@ -296,7 +297,7 @@ ruvia::app()
     .run();
 ```
 
-Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, or `c.req().discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
+Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().arrayBuffer()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, or `c.req().discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
 
 Streaming request bodies are opt-in per route and keep large uploads out of buffered memory:
 

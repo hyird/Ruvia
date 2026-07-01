@@ -136,6 +136,7 @@ public:
     [[nodiscard]] std::string_view clientCertificate() const noexcept;
     [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
+    [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     Task<void> discardBody() const;
 
     template <typename T>
@@ -722,6 +723,13 @@ inline bool ContextRequest::isSecure() const noexcept {
 
 inline Task<std::string_view> ContextRequest::text() const {
     return context_->requestBody();
+}
+
+inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {
+    const auto body = co_await text();
+    co_return std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(body.data()),
+        body.size());
 }
 
 inline Task<void> ContextRequest::discardBody() const {
