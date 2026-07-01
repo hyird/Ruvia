@@ -102,7 +102,7 @@ private:
         body.append("\npath=");
         body.append(request.path());
         body.append("\nroute-path=");
-        body.append(request.routePath());
+        body.append(ruvia::routePath(c));
         body.append("\nquery=");
         body.append(request.queryString());
         body.append("\nheaders=");
