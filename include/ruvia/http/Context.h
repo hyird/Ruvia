@@ -414,6 +414,10 @@ public:
 
     Context& res(HttpResponse&& response);
 
+    [[nodiscard]] bool finalized() const noexcept {
+        return response_ != nullptr;
+    }
+
     [[nodiscard]] HttpResponse body(
         std::string_view body,
         std::uint16_t statusCode = 0,

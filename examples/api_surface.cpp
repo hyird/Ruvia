@@ -55,6 +55,7 @@ public:
             c.res(c.text("caught by middleware\n", 500));
             co_return;
         }
+        c.header("X-Surface-Finalized", c.finalized() ? "true" : "false");
         c.header("X-Surface-Middleware", "after-next");
     }
 };
