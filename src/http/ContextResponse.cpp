@@ -331,6 +331,10 @@ Context& Context::setRenderer(Renderer renderer) noexcept {
     return *this;
 }
 
+Task<HttpResponse> Context::render(std::string_view body) {
+    return render(body, RenderOptions{});
+}
+
 Task<HttpResponse> Context::render(std::string_view body, RenderOptions options) {
     if (renderer_ == nullptr) {
         co_return html(body);
