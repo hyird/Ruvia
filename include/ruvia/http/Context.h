@@ -597,7 +597,9 @@ public:
 
     Context& setRenderer(Renderer renderer) noexcept;
 
-    [[nodiscard]] Task<HttpResponse> render(std::string_view body, RenderOptions options = RenderOptions{});
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body);
+
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body, RenderOptions options);
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
