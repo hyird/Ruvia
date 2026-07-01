@@ -184,6 +184,9 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         if (auto exception = context.error()) {
             std::rethrow_exception(exception);
         }
+        if (outcome != RouteStreamDispatchOutcome::kStreamHandled) {
+            throw std::logic_error("context is not finalized; stream middleware must set a response, write the stream, or await next()");
+        }
     }
     auto response = detail::ContextAccess::hasResponse(context)
         ? detail::ContextAccess::takeResponse(context)
