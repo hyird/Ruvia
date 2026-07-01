@@ -90,6 +90,72 @@ void assignResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot)
     }
 }
 
+[[nodiscard]] bool redirectLocationNeedsEncoding(std::string_view location) noexcept {
+    for (const auto ch : location) {
+        if (static_cast<unsigned char>(ch) >= 0x80) {
+            return true;
+        }
+    }
+    return false;
+}
+
+[[nodiscard]] bool encodeUriKeepsByte(unsigned char ch) noexcept {
+    if ((ch >= 'A' && ch <= 'Z') ||
+        (ch >= 'a' && ch <= 'z') ||
+        (ch >= '0' && ch <= '9')) {
+        return true;
+    }
+
+    switch (ch) {
+        case ';':
+        case ',':
+        case '/':
+        case '?':
+        case ':':
+        case '@':
+        case '&':
+        case '=':
+        case '+':
+        case '$':
+        case '-':
+        case '_':
+        case '.':
+        case '!':
+        case '~':
+        case '*':
+        case '\'':
+        case '(':
+        case ')':
+        case '#':
+            return true;
+        default:
+            return false;
+    }
+}
+
+void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    output.push_back('%');
+    output.push_back(kHex[ch >> 4]);
+    output.push_back(kHex[ch & 0x0F]);
+}
+
+[[nodiscard]] std::pmr::string encodeRedirectLocation(
+    std::string_view location,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string encoded(resource);
+    encoded.reserve(location.size());
+    for (const auto raw : location) {
+        const auto ch = static_cast<unsigned char>(raw);
+        if (encodeUriKeepsByte(ch)) {
+            encoded.push_back(static_cast<char>(ch));
+            continue;
+        }
+        appendPercentEncodedByte(encoded, ch);
+    }
+    return encoded;
+}
+
 }  // namespace
 
 HttpResponseHeader* Context::findResponseHeaderForUpdate(
@@ -730,7 +796,12 @@ HttpResponse Context::redirect(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    response.setHeader("Location", location);
+    if (redirectLocationNeedsEncoding(location)) {
+        auto encodedLocation = encodeRedirectLocation(location, resource());
+        response.setHeader("Location", encodedLocation);
+    } else {
+        response.setHeader("Location", location);
+    }
     applyResponseState(response, statusCode, statusText);
     return response;
 }

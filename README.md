@@ -257,7 +257,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.text(body, 201, {{"X-Trace", "..."}})` / `c.text(body, {.status = ..., .headers = ...})` | Use Hono-style response init options with `body`, `text`, `json`, or `html`. |
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
-| `c.redirect(location)` | Return a redirect response. |
+| `c.redirect(location)` | Return a redirect response; non-ASCII `Location` values are URI-encoded before the header is written. |
 | `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
 | `c.jsonError(status, code, message)` | Compatibility alias for `c.error(status, code, message)`. |
