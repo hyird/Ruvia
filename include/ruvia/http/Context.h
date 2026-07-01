@@ -1811,7 +1811,7 @@ public:
     Context& res(HttpResponse&& response);
 
     [[nodiscard]] bool finalized() const noexcept {
-        return response_ != nullptr;
+        return responseFinalized_;
     }
 
     [[nodiscard]] HttpResponse body(
@@ -2243,7 +2243,7 @@ private:
         error_ = std::move(exception);
     }
     [[nodiscard]] bool hasResponse() const noexcept {
-        return response_ != nullptr;
+        return responseFinalized_;
     }
     [[nodiscard]] HttpResponse takeResponse();
     [[nodiscard]] detail::ContextValueStore* valuesIf() noexcept {
@@ -2298,6 +2298,7 @@ private:
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
+    bool responseFinalized_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;

@@ -60,6 +60,7 @@ HttpResponse Context::takeResponse() {
 
     auto response = std::move(*response_);
     response_ = nullptr;
+    responseFinalized_ = false;
     return response;
 }
 

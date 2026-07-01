@@ -324,6 +324,14 @@ public:
     }
 };
 
+class SurfaceResSlotOnlyMiddleware final : public ruvia::Middleware<SurfaceResSlotOnlyMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next&) {
+        c.res().headers().set("X-Surface-Res-Slot-Only", "true");
+        co_return;
+    }
+};
+
 class ApiSurfaceController final : public ruvia::Controller<ApiSurfaceController> {
 public:
     RUVIA_CONTROLLER_GROUP("/surface", SurfaceContextMiddleware)
@@ -333,6 +341,7 @@ public:
     RUVIA_GET("/context", contextInfo);
     RUVIA_GET("/raw", rawBody);
     RUVIA_GET("/res", responseSlot);
+    RUVIA_GET("/res-slot-only", resSlotOnly, SurfaceResSlotOnlyMiddleware);
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
@@ -515,6 +524,10 @@ private:
         c.res().headers().append("X-Response-Slot", "true");
         c.res().headers().remove("X-Response-Remove");
         co_return std::move(c.res());
+    }
+
+    ruvia::Task<ruvia::HttpResponse> resSlotOnly(ruvia::Context& c) {
+        co_return c.text("handler should not run\n", 500);
     }
 
     ruvia::Task<ruvia::HttpResponse> htmlBody(ruvia::Context& c) {
