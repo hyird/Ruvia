@@ -69,6 +69,11 @@ concept HasRequestBytesAlias = requires(const T& request) {
 };
 
 template <typename T>
+concept HasRequestJsonObjectAlias = requires(const T& request) {
+    request.json();
+};
+
+template <typename T>
 concept HasMemberCloneRawRequestAlias = requires(const T& request) {
     request.cloneRawRequest();
 };
@@ -166,6 +171,7 @@ static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
 static_assert(HasRequestBytesAlias<ruvia::ContextRequest>);
+static_assert(HasRequestJsonObjectAlias<ruvia::ContextRequest>);
 static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
@@ -295,6 +301,7 @@ public:
     RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
+    RUVIA_POST("/json-object", jsonObjectBody);
     RUVIA_POST("/clone-raw", cloneRawRequest);
     RUVIA_POST("/clone-raw-form", cloneRawFormRequest);
     RUVIA_POST("/discard", discard);
@@ -722,6 +729,19 @@ private:
         appendUnsigned(body, blob.size());
         body.append("\ntype=");
         body.append(blob.type());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> jsonObjectBody(ruvia::Context& c) {
+        const auto json = co_await c.req().json();
+        std::pmr::string body(c.allocator<char>());
+        body.append("json-object bytes=");
+        appendUnsigned(body, json.view().size());
+        if (auto message = json.get<ruvia::String>("message")) {
+            body.append("\nmessage=");
+            body.append(message->view());
+        }
         body.push_back('\n');
         co_return c.text(body);
     }

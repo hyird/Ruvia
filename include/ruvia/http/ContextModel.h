@@ -2,9 +2,22 @@
 
 #include "ruvia/http/Context.h"
 #include "ruvia/http/ModelJson.h"
+#include "ruvia/http/ModelObject.h"
 #include "ruvia/http/ModelTypes.h"
 
 namespace ruvia {
+
+inline Task<JsonObject> ContextRequest::json() const {
+    if (!context_->requestContentTypeMatches("application/json")) {
+        detail::throwInvalidJsonContentType();
+    }
+    const auto requestBody = co_await text();
+    auto parsed = JsonObject::parse(requestBody, context_->resource());
+    if (!parsed) {
+        detail::throwInvalidJsonBody();
+    }
+    co_return std::move(*parsed);
+}
 
 template <typename T>
 Task<T> ContextRequest::json() const {
