@@ -22,6 +22,7 @@ struct HttpErrorInfo {
 };
 
 using HttpErrorHandler = Task<HttpResponse> (*)(Context&, HttpErrorInfo);
+using HttpNotFoundHandler = Task<HttpResponse> (*)(Context&);
 
 class HttpError final : public std::exception {
 public:

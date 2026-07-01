@@ -135,4 +135,18 @@ App& App::setErrorHandler(HttpErrorHandler handler) {
         });
 }
 
+App& App::notFound(HttpNotFoundHandler handler) {
+    return setNotFoundHandler(handler);
+}
+
+App& App::setNotFoundHandler(HttpNotFoundHandler handler) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change not found handler while app is running",
+        [handler](detail::AppState& state) {
+            state.notFoundHandler = handler;
+        });
+}
+
 }  // namespace ruvia

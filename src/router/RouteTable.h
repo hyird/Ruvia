@@ -198,6 +198,7 @@ public:
     RouteTable& operator=(RouteTable&&) noexcept = default;
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
+    void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request, RouteMatch& match) const noexcept;
     [[nodiscard]] RouteResolution resolve(HttpMethod method, std::string_view path, RouteMatch& match) const noexcept;
     Task<HttpResponse> dispatch(
@@ -375,6 +376,11 @@ private:
         Context& context,
         HttpErrorInfo error,
         bool closeConnection) const;
+    [[nodiscard]] Task<HttpResponse> handleNotFound(
+        const HttpRequest& request,
+        RequestMemory& memory,
+        bool closeConnection,
+        ContextServices services) const;
     [[nodiscard]] Task<HttpResponse> handleException(
         Context& context,
         std::exception_ptr exception,
@@ -394,6 +400,7 @@ private:
     std::uint64_t exactSeed_{0};
     std::size_t exactMask_{0};
     HttpErrorHandler errorHandler_{nullptr};
+    HttpNotFoundHandler notFoundHandler_{nullptr};
 };
 
 }  // namespace ruvia::detail

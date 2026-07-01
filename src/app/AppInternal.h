@@ -41,6 +41,7 @@ struct AppState final {
     std::optional<AppDocumentRootConfig> documentRootConfig;
     MemoryPoolConfig memoryConfig{};
     HttpErrorHandler errorHandler{nullptr};
+    HttpNotFoundHandler notFoundHandler{nullptr};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
     std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{
