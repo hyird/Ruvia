@@ -230,7 +230,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
-| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into an object with Hono-style single-value `value()` semantics, `values()` arrays, `isArray()`, grouped `entries()`, and raw `fields()`; repeated scalar names expose the last value through `value()`, while `foo[]` keeps the `[]` key and is marked as an array entry. With `{.dot = true}`, use `valueAt("obj.key")` / `valuesAt("obj.key")` for Hono-style dot notation access. |
+| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into an object with Hono-style single-value `value()` semantics, `values()` arrays, `isArray()`, grouped `entries()`, and raw `fields()`; repeated scalar names expose the last value through `value()`, while `foo[]` keeps the `[]` key and is marked as an array entry. File fields expose `text()`, `arrayBuffer()`, `blob()`, `fileName()`, and `mediaType()`. With `{.dot = true}`, use `valueAt("obj.key")` / `valuesAt("obj.key")` for Hono-style dot notation access. |
 | `co_await c.req().formData()` | Web FormData-style form parsing that preserves duplicate field names by default. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |

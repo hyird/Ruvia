@@ -276,6 +276,36 @@ public:
         std::pmr::vector<std::pmr::string> path;
         bool file{false};
         bool array{false};
+
+        [[nodiscard]] bool isFile() const noexcept {
+            return file;
+        }
+
+        [[nodiscard]] bool isArray() const noexcept {
+            return array;
+        }
+
+        [[nodiscard]] std::string_view text() const noexcept {
+            return std::string_view(value.data(), value.size());
+        }
+
+        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
+            return std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(value.data()),
+                value.size());
+        }
+
+        [[nodiscard]] RequestBlob blob() const noexcept {
+            return RequestBlob(arrayBuffer(), mediaType());
+        }
+
+        [[nodiscard]] std::string_view fileName() const noexcept {
+            return std::string_view(filename.data(), filename.size());
+        }
+
+        [[nodiscard]] std::string_view mediaType() const noexcept {
+            return std::string_view(contentType.data(), contentType.size());
+        }
     };
 
     class RequestFormData final {
