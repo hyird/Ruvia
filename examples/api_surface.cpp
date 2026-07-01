@@ -88,6 +88,11 @@ concept HasRequestHeadersAlias = requires(const T& request) {
     request.headers();
 };
 
+template <typename T>
+concept HasRequestQueryStringAlias = requires(const T& request) {
+    request.queryString();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -125,6 +130,7 @@ static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestQueryStringAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -268,8 +274,6 @@ private:
         body.append(ruvia::routePath(c, 0));
         body.append("\nroute-path-last=");
         body.append(ruvia::routePath(c, -1));
-        body.append("\nquery=");
-        body.append(request.queryString());
         body.append("\nheaders=");
         appendUnsigned(body, c.req().header().size());
         body.append("\nheader-entries=");
