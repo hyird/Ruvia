@@ -94,6 +94,17 @@ public:
         bool dot{false};
     };
 
+    enum class MatchedRouteKind {
+        kMiddleware,
+        kHandler
+    };
+
+    struct MatchedRoute final {
+        std::string_view method;
+        std::string_view path;
+        MatchedRouteKind kind{MatchedRouteKind::kHandler};
+    };
+
     class RequestBlob final {
     public:
         constexpr RequestBlob(std::span<const std::byte> bytes, std::string_view type) noexcept
@@ -411,6 +422,8 @@ public:
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
     [[nodiscard]] std::string_view routePath() const noexcept;
+    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
+    [[nodiscard]] std::size_t routeIndex() const noexcept;
     [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
@@ -498,7 +511,9 @@ private:
         const std::string_view* paramValues,
         std::size_t paramCount,
         std::uintptr_t routeRateLimitScope,
-        detail::ContextServices services) noexcept;
+        detail::ContextServices services,
+        HttpMethod routeMethod = HttpMethod::kUnknown,
+        std::size_t routeMiddlewareCount = 0) noexcept;
 
 public:
     struct RenderOptions final {
@@ -918,6 +933,7 @@ private:
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
+    [[nodiscard]] const std::pmr::vector<ContextRequest::MatchedRoute>& requestMatchedRoutes() const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -983,9 +999,11 @@ private:
     RequestMemory& memory_;
     const HttpRequest& request_;
     std::string_view routePath_;
+    HttpMethod routeMethod_{HttpMethod::kUnknown};
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
+    std::size_t routeMiddlewareCount_{0};
     [[maybe_unused]] detail::DbRegistry* db_{nullptr};
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
@@ -1009,6 +1027,7 @@ private:
     mutable RequestValueGroupList* requestQueries_{nullptr};
     mutable std::pmr::vector<std::pmr::string>* routeParamStorage_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
+    mutable std::pmr::vector<ContextRequest::MatchedRoute>* matchedRoutes_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
@@ -1064,6 +1083,14 @@ inline std::string_view ContextRequest::path() const noexcept {
 
 inline std::string_view ContextRequest::routePath() const noexcept {
     return context_->routePath_;
+}
+
+inline std::span<const ContextRequest::MatchedRoute> ContextRequest::matchedRoutes() const {
+    return context_->requestMatchedRoutes();
+}
+
+inline std::size_t ContextRequest::routeIndex() const noexcept {
+    return context_->routePath_.empty() ? 0 : context_->routeMiddlewareCount_;
 }
 
 inline std::string_view routePath(const Context& context) noexcept {

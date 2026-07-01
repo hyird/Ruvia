@@ -265,6 +265,28 @@ const RequestValueGroupList& Context::requestQueries() const {
     return *requestQueries_;
 }
 
+const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRoutes() const {
+    if (matchedRoutes_ == nullptr) {
+        auto& routes = memory_.emplace<std::pmr::vector<ContextRequest::MatchedRoute>>(resource());
+        if (!routePath_.empty() && routeMethod_ != HttpMethod::kUnknown) {
+            const auto method = methodName(routeMethod_);
+            routes.reserve(routeMiddlewareCount_ + 1);
+            for (std::size_t i = 0; i < routeMiddlewareCount_; ++i) {
+                routes.push_back(ContextRequest::MatchedRoute{
+                    .method = method,
+                    .path = routePath_,
+                    .kind = ContextRequest::MatchedRouteKind::kMiddleware});
+            }
+            routes.push_back(ContextRequest::MatchedRoute{
+                .method = method,
+                .path = routePath_,
+                .kind = ContextRequest::MatchedRouteKind::kHandler});
+        }
+        matchedRoutes_ = &routes;
+    }
+    return *matchedRoutes_;
+}
+
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
