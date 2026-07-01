@@ -101,6 +101,8 @@ private:
         body.append(request.url());
         body.append("\npath=");
         body.append(request.path());
+        body.append("\nroute-path=");
+        body.append(request.routePath());
         body.append("\nquery=");
         body.append(request.queryString());
         body.append("\nheaders=");

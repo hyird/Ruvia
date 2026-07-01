@@ -196,6 +196,7 @@ public:
     [[nodiscard]] std::string_view target() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
+    [[nodiscard]] std::string_view routePath() const noexcept;
     [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
@@ -275,6 +276,7 @@ private:
     Context(
         RequestMemory& memory,
         const HttpRequest& request,
+        std::string_view routePath,
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
@@ -757,6 +759,7 @@ private:
 
     RequestMemory& memory_;
     const HttpRequest& request_;
+    std::string_view routePath_;
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
@@ -823,6 +826,10 @@ inline std::pmr::string ContextRequest::url() const {
 
 inline std::string_view ContextRequest::path() const noexcept {
     return raw().path();
+}
+
+inline std::string_view ContextRequest::routePath() const noexcept {
+    return context_->routePath_;
 }
 
 inline RequestValue ContextRequest::decodedPath() const noexcept {

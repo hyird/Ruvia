@@ -13,11 +13,12 @@ inline Context::Context(
     RequestMemory& memory,
     const HttpRequest& request,
     detail::ContextServices services) noexcept
-    : Context(memory, request, nullptr, nullptr, 0, 0, services) {}
+    : Context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
 
 inline Context::Context(
     RequestMemory& memory,
     const HttpRequest& request,
+    std::string_view routePath,
     const std::string_view* paramNames,
     const std::string_view* paramValues,
     std::size_t paramCount,
@@ -25,6 +26,7 @@ inline Context::Context(
     detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
+      routePath_(routePath),
       paramNames_(paramNames),
       paramValues_(paramValues),
       paramCount_(paramCount < kMaxRouteParams ? paramCount : kMaxRouteParams),
@@ -57,18 +59,28 @@ struct ContextAccess final {
         const HttpRequest& request,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
-        return Context(memory, request, nullptr, nullptr, 0, routeRateLimitScope, services);
+        return Context(memory, request, {}, nullptr, nullptr, 0, routeRateLimitScope, services);
     }
 
     [[nodiscard]] static Context make(
         RequestMemory& memory,
         const HttpRequest& request,
+        std::string_view routePath,
+        std::uintptr_t routeRateLimitScope,
+        ContextServices services = {}) noexcept {
+        return Context(memory, request, routePath, nullptr, nullptr, 0, routeRateLimitScope, services);
+    }
+
+    [[nodiscard]] static Context make(
+        RequestMemory& memory,
+        const HttpRequest& request,
+        std::string_view routePath,
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
-        return Context(memory, request, paramNames, paramValues, paramCount, routeRateLimitScope, services);
+        return Context(memory, request, routePath, paramNames, paramValues, paramCount, routeRateLimitScope, services);
     }
 
     [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {
