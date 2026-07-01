@@ -297,7 +297,7 @@ private:
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
         const auto title = form["title"];
-        if (auto titleText = title.value()) {
+        if (auto titleText = title.toStringView()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
@@ -314,7 +314,7 @@ private:
         body.append("\ntag-array=");
         body.append(form["tag[]"].isArray() ? "true" : "false");
         const auto nested = form.object("obj")["key1"];
-        if (auto nestedText = nested.text()) {
+        if (auto nestedText = nested.toStringView()) {
             body.append("\nobj.key1=");
             body.append(*nestedText);
         }
@@ -383,7 +383,7 @@ private:
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         const auto title = form["title"];
-        if (auto titleText = title.text()) {
+        if (auto titleText = title.toStringView()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
