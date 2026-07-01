@@ -256,7 +256,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
     return *this;
 }
 
-Context& Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
+void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
     if (!isValidHttpHeaderName(name)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
@@ -272,7 +272,7 @@ Context& Context::header(std::string_view name, std::string_view value, HeaderOp
         if (response_ != nullptr) {
             detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
         }
-        return *this;
+        return;
     }
 
     if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
@@ -280,7 +280,7 @@ Context& Context::header(std::string_view name, std::string_view value, HeaderOp
         if (response_ != nullptr) {
             detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
         }
-        return *this;
+        return;
     }
 
     const auto index = responseHeaders_.size();
@@ -289,11 +289,10 @@ Context& Context::header(std::string_view name, std::string_view value, HeaderOp
     if (response_ != nullptr) {
         detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
     }
-    return *this;
 }
 
-Context& Context::header(std::string_view name, std::nullopt_t) {
-    return removeResponseHeader(name);
+void Context::header(std::string_view name, std::nullopt_t) {
+    removeResponseHeader(name);
 }
 
 Context& Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
