@@ -9,13 +9,25 @@ namespace ruvia {
 
 using namespace detail;
 
+namespace {
+
+Task<void> ignoreExpiredNext(Next::State) {
+    co_return;
+}
+
+}  // namespace
+
 Next::Awaitable Next::operator()() & {
     auto state = state_;
-    state.repeated = state.control == nullptr ||
-        !state.control->active ||
-        state.control->invoked;
-    if (state.control != nullptr && state.control->active) {
-        state.control->invoked = true;
+    auto* control = state.control;
+    if (control == nullptr || !control->active) {
+        state.repeated = true;
+        return Awaitable(state, &ignoreExpiredNext);
+    }
+
+    state.repeated = control->invoked;
+    if (!control->invoked) {
+        control->invoked = true;
     }
     return Awaitable(state, invoke_);
 }
