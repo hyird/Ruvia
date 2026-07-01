@@ -84,12 +84,6 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
 }
 
-void stripArraySuffix(std::pmr::string& name) {
-    if (fieldNameIsArray(std::string_view(name.data(), name.size()))) {
-        name.resize(name.size() - 2);
-    }
-}
-
 void assignDotPath(
     ContextRequest::RequestFormField& field,
     std::pmr::memory_resource* resource) {
@@ -294,7 +288,6 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
                 }
 
                 const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
-                stripArraySuffix(*decodedName);
                 appendParsedBodyField(
                     fields,
                         ContextRequest::RequestFormField(
@@ -321,7 +314,6 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
         for (const auto& part : parts) {
             std::pmr::string name(part.name.data(), part.name.size(), resource());
             const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
-            stripArraySuffix(name);
             appendParsedBodyField(
                 fields,
                     ContextRequest::RequestFormField(
