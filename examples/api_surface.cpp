@@ -23,6 +23,11 @@ concept HasPlainAddressOf = requires(T& value) {
     &value;
 };
 
+template <typename T>
+concept HasLvalueAwait = requires(T& value) {
+    value.operator co_await();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -33,8 +38,15 @@ static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!HasPlainAddressOf<const ruvia::Next>);
 static_assert(!HasPlainAddressOf<ruvia::Next::Awaitable>);
+static_assert(!HasLvalueAwait<ruvia::Next::Awaitable>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
+    const ruvia::RequestNameValueList&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().cookies()),
+    const ruvia::RequestNameValueList&>);
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};
@@ -178,6 +190,12 @@ private:
         }
         body.append("\ncookies=");
         appendUnsigned(body, request.cookie().size());
+        body.append("\ncookie-entries=");
+        appendUnsigned(body, request.cookie().entries().size());
+        body.append("\ncookie-keys=");
+        appendUnsigned(body, request.cookie().keys().size());
+        body.append("\ncookie-values=");
+        appendUnsigned(body, request.cookie().values().size());
         body.append("\nmatched-routes=");
         appendUnsigned(body, request.matchedRoutes().size());
         body.append("\nmatched-routes-helper=");
