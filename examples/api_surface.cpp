@@ -60,6 +60,13 @@ public:
     }
 };
 
+class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
+public:
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next&) {
+        co_return c.text("returned by middleware\n", 209);
+    }
+};
+
 class ApiSurfaceController final : public ruvia::Controller<ApiSurfaceController> {
 public:
     RUVIA_CONTROLLER_GROUP("/surface", SurfaceContextMiddleware)
@@ -73,6 +80,7 @@ public:
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/throw", throwError);
     RUVIA_GET("/missing", missing);
+    RUVIA_GET("/middleware-return", middlewareReturnHandler, SurfaceReturnMiddleware);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
@@ -183,6 +191,10 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
         co_return c.notFound();
+    }
+
+    ruvia::Task<ruvia::HttpResponse> middlewareReturnHandler(ruvia::Context& c) {
+        co_return c.text("handler should not run\n", 500);
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
