@@ -113,6 +113,11 @@ concept HasRequestHttpVersionAlias = requires(const T& request) {
     request.httpVersion();
 };
 
+template <typename T>
+concept HasRequestDecodedPathAlias = requires(const T& request) {
+    request.decodedPath();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -155,6 +160,7 @@ static_assert(!HasRequestRoutePathAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRouteIndexAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHttpVersionAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -383,10 +389,6 @@ private:
         }
         body.append("\naccepts-json=");
         body.append(c.req().accepts("application/json") ? "true" : "false");
-        body.append("\ndecoded-path=");
-        if (auto decoded = c.req().decodedPath().toString()) {
-            body.append(*decoded);
-        }
         body.push_back('\n');
         co_return c.text(body);
     }
