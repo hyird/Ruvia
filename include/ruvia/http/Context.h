@@ -1222,7 +1222,7 @@ public:
     [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] const RequestValueGroupList& queries() const;
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& cookie() const;
     [[nodiscard]] const RequestNameValueList& cookies() const;
     [[nodiscard]] std::string_view remoteAddress() const noexcept;
@@ -1629,8 +1629,8 @@ public:
         return req().query(name);
     }
 
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept {
-        return request_.cookie(name);
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const {
+        return requestCookies().get(name);
     }
 
     [[nodiscard]] ParamValue param(std::string_view name) const {
@@ -2204,8 +2204,8 @@ inline const RequestValueGroupList& ContextRequest::queries() const {
     return context_->requestQueries();
 }
 
-inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const noexcept {
-    return raw().cookie(name);
+inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const {
+    return context_->requestCookies().get(name);
 }
 
 inline const RequestNameValueList& ContextRequest::cookie() const {
