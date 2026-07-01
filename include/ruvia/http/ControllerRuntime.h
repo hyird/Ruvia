@@ -187,7 +187,7 @@ inline void appendRequestHeadersAsForm(Context& c, std::pmr::string& output) {
 }
 
 inline void appendRequestCookiesAsForm(Context& c, std::pmr::string& output) {
-    const auto cookies = c.req().cookie();
+    const auto& cookies = c.req().cookie();
     for (std::size_t i = 0; i < cookies.size(); ++i) {
         const auto& cookie = cookies[i];
         if (i != 0) {
