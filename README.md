@@ -230,7 +230,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
-| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into an object with Hono-style single-value `get()` semantics, `getAll()` arrays, `count()`, grouped `entries()`, and raw `fields()`; repeated scalar names expose the last value through `get()`, while `foo[]` keeps the `[]` key and is marked as an array entry. |
+| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into an object with Hono-style single-value `value()` semantics, `values()` arrays, `isArray()`, grouped `entries()`, and raw `fields()`; repeated scalar names expose the last value through `value()`, while `foo[]` keeps the `[]` key and is marked as an array entry. |
 | `co_await c.req().formData()` | Web FormData-style form parsing that preserves duplicate field names by default. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
@@ -243,7 +243,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.header(name, value)` | Add or replace a response header. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.deleteCookie(name, options)` | Expire a response cookie with `Max-Age=0`. |
-| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().appendHeader(...)` to append a response header after `co_await next()`. |
+| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().responseHeaders().append(...)` to append a response header after `co_await next()`, mirroring Hono's `c.res.headers.append(...)` shape. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |

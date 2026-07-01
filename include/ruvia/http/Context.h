@@ -318,6 +318,23 @@ public:
                 return fields_.size() > 1;
             }
 
+            [[nodiscard]] std::optional<std::string_view> value() const noexcept {
+                const auto* const selected = field();
+                if (selected == nullptr) {
+                    return std::nullopt;
+                }
+                return std::string_view(selected->value.data(), selected->value.size());
+            }
+
+            [[nodiscard]] std::pmr::vector<std::string_view> values() const {
+                std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+                result.reserve(fields_.size());
+                for (const auto* field : fields_) {
+                    result.emplace_back(field->value.data(), field->value.size());
+                }
+                return result;
+            }
+
         private:
             friend class RequestFormData;
 
@@ -373,6 +390,28 @@ public:
         [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
             const auto* formEntry = entry(name);
             return formEntry == nullptr ? 0 : formEntry->size();
+        }
+
+        [[nodiscard]] bool isArray(std::string_view name) const noexcept {
+            const auto* formEntry = entry(name);
+            return formEntry != nullptr && formEntry->array();
+        }
+
+        [[nodiscard]] std::optional<std::string_view> value(std::string_view name) const noexcept {
+            const auto* formEntry = entry(name);
+            if (formEntry == nullptr) {
+                return std::nullopt;
+            }
+            return formEntry->value();
+        }
+
+        [[nodiscard]] std::pmr::vector<std::string_view> values(std::string_view name) const {
+            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+            const auto* formEntry = entry(name);
+            if (formEntry == nullptr) {
+                return result;
+            }
+            return formEntry->values();
         }
 
         [[nodiscard]] std::pmr::vector<const RequestFormField*> getAll(std::string_view name) const {

@@ -56,7 +56,7 @@ public:
             co_return;
         }
         c.header("X-Surface-Finalized", c.finalized() ? "true" : "false");
-        c.res().appendHeader("X-Surface-Middleware", "after-next");
+        c.res().responseHeaders().append("X-Surface-Middleware", "after-next");
     }
 };
 
@@ -170,7 +170,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
         auto& response = c.res();
         response.setStatus(203, {});
-        response.setHeader("X-Response-Slot", "true");
+        response.responseHeaders().set("X-Response-Slot", "true");
         response.setBodyCopy("response slot\n");
         co_return std::move(response);
     }
@@ -223,18 +223,20 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
-        if (const auto* title = form.get("title")) {
+        if (const auto title = form.value("title")) {
             body.append("\ntitle=");
-            body.append(title->value);
+            body.append(*title);
         }
         body.append("\ntag-count=");
-        appendUnsigned(body, form.count("tag"));
-        if (const auto* tag = form.get("tag")) {
+        appendUnsigned(body, form.values("tag").size());
+        if (const auto tag = form.value("tag")) {
             body.append("\ntag-single=");
-            body.append(tag->value);
+            body.append(*tag);
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
+        body.append("\ntag-array=");
+        body.append(form.isArray("tag[]") ? "true" : "false");
         for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);
@@ -276,15 +278,15 @@ private:
         appendUnsigned(body, form.entries().size());
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
-        if (const auto* tag = form.get("tag")) {
+        if (const auto tag = form.value("tag")) {
             body.append("\ntag-single=");
-            body.append(tag->value);
+            body.append(*tag);
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
-        if (const auto* title = form.get("title")) {
+        if (const auto title = form.value("title")) {
             body.append("\ntitle=");
-            body.append(title->value);
+            body.append(*title);
         }
         body.push_back('\n');
         co_return c.text(body);

@@ -157,6 +157,10 @@ std::string_view HttpResponse::header(std::string_view name) const noexcept {
     return {};
 }
 
+bool HttpResponse::hasHeader(std::string_view name) const noexcept {
+    return findHeaderForRead(name, detail::classifyResponseHeaderName(name)) != nullptr;
+}
+
 void HttpResponse::setHeader(std::string_view key, std::string_view value) {
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");
