@@ -160,7 +160,7 @@ Route registration is macro-only:
 
 `HEAD` falls back to an existing `GET` route when no explicit `HEAD` route is registered. `Allow` headers include `HEAD` whenever `GET` is allowed, and framework-generated `OPTIONS` remains distinct from user-defined `RUVIA_OPTIONS(...)` routes.
 
-Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a request-lifetime, copyable, one-shot continuation token passed by value as `Next`; middleware should `co_await next()` from work that completes within the same request. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
+Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a request-lifetime, non-copyable, one-shot continuation token passed as `Next&`; middleware should `co_await next()` from work that completes within the same middleware invocation, and must not store `next` or its awaitable for later use. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
 
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
@@ -187,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain once, `c.setHeader(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. `co_await next()` advances the chain once, `c.setHeader(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 

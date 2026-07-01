@@ -312,7 +312,8 @@ void compactParsedBodyFields(
 [[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
     std::string_view requestBody,
     std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
+    ContextRequest::ParseBodyOptions options,
+    ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) {
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(delimitedFieldCount(requestBody, '&'));
     bool valid = true;
@@ -344,14 +345,15 @@ void compactParsedBodyFields(
         throw std::invalid_argument("invalid form body");
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return ContextRequest::RequestFormData(std::move(fields), singleValueSelection);
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(
     std::string_view requestBody,
     std::string_view boundaryValue,
     std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
+    ContextRequest::ParseBodyOptions options,
+    ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) {
     auto parts = parseMultipartPartsFromBody(requestBody, boundaryValue, resource);
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(parts.size());
@@ -371,24 +373,26 @@ void compactParsedBodyFields(
             options);
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return ContextRequest::RequestFormData(std::move(fields), singleValueSelection);
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(
     std::string_view contentType,
     std::string_view requestBody,
     std::pmr::memory_resource* resource,
-    ContextRequest::ParseBodyOptions options) {
+    ContextRequest::ParseBodyOptions options,
+    ContextRequest::RequestFormData::SingleValueSelection singleValueSelection =
+        ContextRequest::RequestFormData::SingleValueSelection::kLast) {
     if (detail::contentTypeMatches(contentType, "application/x-www-form-urlencoded")) {
-        return parseUrlEncodedFormBody(requestBody, resource, options);
+        return parseUrlEncodedFormBody(requestBody, resource, options, singleValueSelection);
     }
 
     std::string_view boundary;
     switch (detail::httpParseMultipartBoundary(contentType, boundary)) {
         case detail::HttpMultipartBoundaryStatus::kOk:
-            return parseMultipartFormBody(requestBody, boundary, resource, options);
+            return parseMultipartFormBody(requestBody, boundary, resource, options, singleValueSelection);
         case detail::HttpMultipartBoundaryStatus::kInvalidContentType:
-            return ContextRequest::RequestFormData(resource);
+            return ContextRequest::RequestFormData(resource, singleValueSelection);
         case detail::HttpMultipartBoundaryStatus::kInvalidBoundary:
             throw std::invalid_argument("invalid multipart boundary");
     }
@@ -415,7 +419,12 @@ ContextRequest::RequestFormData ContextRequest::RawRequestClone::parseBody(Parse
 }
 
 ContextRequest::RequestFormData ContextRequest::RawRequestClone::formData() const {
-    return parseBody(ParseBodyOptions{.all = true});
+    return parseFormBodyFromView(
+        header("Content-Type"),
+        body(),
+        body_.get_allocator().resource(),
+        ParseBodyOptions{.all = true},
+        ContextRequest::RequestFormData::SingleValueSelection::kFirst);
 }
 
 const RequestNameValueList& Context::requestHeaders() const {
@@ -660,13 +669,15 @@ Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(
-    ContextRequest::ParseBodyOptions options) const {
+    ContextRequest::ParseBodyOptions options,
+    ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) const {
     const auto requestBody = co_await this->requestBody();
     co_return parseFormBodyFromView(
         detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType),
         requestBody,
         resource(),
-        options);
+        options,
+        singleValueSelection);
 }
 
 Task<void> Context::requestDiscardBody() const {

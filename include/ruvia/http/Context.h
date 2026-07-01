@@ -333,14 +333,21 @@ public:
 
     class RequestFormData final {
     public:
+        enum class SingleValueSelection : unsigned char {
+            kFirst,
+            kLast
+        };
+
         class Entry final {
         public:
             Entry(
                 std::pmr::memory_resource* resource,
                 std::string_view name,
-                bool array)
+                bool array,
+                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
                 : name_(name),
                   fields_(resource),
+                  singleValueSelection_(singleValueSelection),
                   array_(array) {}
 
             [[nodiscard]] std::string_view name() const noexcept {
@@ -348,7 +355,12 @@ public:
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
-                return fields_.empty() ? nullptr : fields_.back();
+                if (fields_.empty()) {
+                    return nullptr;
+                }
+                return singleValueSelection_ == SingleValueSelection::kFirst
+                    ? fields_.front()
+                    : fields_.back();
             }
 
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
@@ -398,6 +410,7 @@ public:
 
             std::string_view name_;
             std::pmr::vector<const RequestFormField*> fields_;
+            SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
             bool array_{false};
         };
 
@@ -513,8 +526,11 @@ public:
 
         class PathValue final {
         public:
-            explicit PathValue(std::pmr::vector<const RequestFormField*>&& fields)
-                : fields_(std::move(fields)) {
+            explicit PathValue(
+                std::pmr::vector<const RequestFormField*>&& fields,
+                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
+                : fields_(std::move(fields)),
+                  singleValueSelection_(singleValueSelection) {
                 for (const auto* field : fields_) {
                     array_ = array_ || (field != nullptr && field->array);
                 }
@@ -529,7 +545,12 @@ public:
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
-                return fields_.empty() ? nullptr : fields_.back();
+                if (fields_.empty()) {
+                    return nullptr;
+                }
+                return singleValueSelection_ == SingleValueSelection::kFirst
+                    ? fields_.front()
+                    : fields_.back();
             }
 
             [[nodiscard]] const RequestFormField* operator->() const noexcept {
@@ -625,6 +646,7 @@ public:
 
         private:
             std::pmr::vector<const RequestFormField*> fields_;
+            SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
             bool array_{false};
         };
 
@@ -646,9 +668,9 @@ public:
                     if (form_ == nullptr) {
                         return emptyPathValue();
                     }
-                    return PathValue(form_->getAllAtChild(path(), name));
+                    return PathValue(form_->getAllAtChild(path(), name), singleValueSelection());
                 }
-                return PathValue(fieldsForName(name));
+                return PathValue(fieldsForName(name), singleValueSelection());
             }
 
             [[nodiscard]] PathValue get(std::string_view name) const {
@@ -748,7 +770,13 @@ public:
             }
 
             [[nodiscard]] PathValue emptyPathValue() const {
-                return PathValue(std::pmr::vector<const RequestFormField*>(resource()));
+                return PathValue(
+                    std::pmr::vector<const RequestFormField*>(resource()),
+                    singleValueSelection());
+            }
+
+            [[nodiscard]] SingleValueSelection singleValueSelection() const noexcept {
+                return form_ == nullptr ? SingleValueSelection::kLast : form_->singleValueSelection_;
             }
 
             [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
@@ -850,7 +878,8 @@ public:
                     auto& formEntry = entries_.emplace_back(
                         currentResource,
                         directChildName(form_->fields_[build.firstIndex], path()),
-                        false);
+                        false,
+                        singleValueSelection());
                     for (std::size_t i = build.begin; i < build.end; ++i) {
                         formEntry.add(form_->fields_[order[i]]);
                     }
@@ -862,13 +891,19 @@ public:
             std::pmr::vector<Entry> entries_;
         };
 
-        explicit RequestFormData(std::pmr::memory_resource* resource)
-            : fields_(resource),
+        explicit RequestFormData(
+            std::pmr::memory_resource* resource,
+            SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
+            : singleValueSelection_(singleValueSelection),
+              fields_(resource),
               entries_(resource),
               pathEntries_(resource) {}
 
-        explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields)
-            : fields_(std::move(fields)),
+        explicit RequestFormData(
+            std::pmr::vector<RequestFormField>&& fields,
+            SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
+            : singleValueSelection_(singleValueSelection),
+              fields_(std::move(fields)),
               entries_(fields_.get_allocator().resource()),
               pathEntries_(fields_.get_allocator().resource()) {
             rebuildEntries();
@@ -947,7 +982,7 @@ public:
         }
 
         [[nodiscard]] PathValue at(std::string_view dotPath) const {
-            return PathValue(getAllAt(dotPath));
+            return PathValue(getAllAt(dotPath), singleValueSelection_);
         }
 
         [[nodiscard]] Object object(std::string_view dotPath) const {
@@ -1233,7 +1268,8 @@ public:
                 auto& entry = entries_.emplace_back(
                     resource,
                     entryName(fields_[build.firstIndex]),
-                    false);
+                    false,
+                    singleValueSelection_);
                 for (std::size_t i = build.begin; i < build.end; ++i) {
                     entry.add(fields_[order[i]]);
                 }
@@ -1297,7 +1333,8 @@ public:
                 auto& entry = pathEntries_.emplace_back(
                     resource,
                     pathEntryName(fields_[build.firstIndex]),
-                    false);
+                    false,
+                    singleValueSelection_);
                 for (std::size_t i = build.begin; i < build.end; ++i) {
                     entry.add(fields_[order[i]]);
                 }
@@ -1308,6 +1345,7 @@ public:
             return std::string_view(field.name.data(), field.name.size());
         }
 
+        SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
         std::pmr::vector<RequestFormField> fields_;
         std::pmr::vector<Entry> entries_;
         std::pmr::vector<Entry> pathEntries_;
@@ -2124,7 +2162,9 @@ private:
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
     [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(
-        ContextRequest::ParseBodyOptions options) const;
+        ContextRequest::ParseBodyOptions options,
+        ContextRequest::RequestFormData::SingleValueSelection singleValueSelection =
+            ContextRequest::RequestFormData::SingleValueSelection::kLast) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] ParamValue routeParam(std::string_view name) const;
@@ -2390,7 +2430,9 @@ inline Task<ContextRequest::RequestFormData> ContextRequest::parseBody(ParseBody
 }
 
 inline Task<ContextRequest::RequestFormData> ContextRequest::formData() const {
-    return parseBody(ParseBodyOptions{.all = true});
+    return context_->parseRequestBody(
+        ParseBodyOptions{.all = true},
+        RequestFormData::SingleValueSelection::kFirst);
 }
 
 inline BodyReader& ContextRequest::bodyReader() const {
