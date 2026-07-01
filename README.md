@@ -221,9 +221,9 @@ Use `ruvia::Context` to read request data and construct responses:
 | `ruvia::routePath(c)` / `ruvia::routePath(c, index)` / `ruvia::matchedRoutes(c)` | Read Hono Route Helper-style route metadata; negative indexes address from the end, and route paths are returned without copying. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. The no-arg object supports `headers["x-foo"]`, `headers.get("x-foo")`, and `headers.values("set-cookie")`; use `c.req().headers()` for the raw parser header view. |
-| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value, or all decoded single-value query params as an object supporting `query["q"]` / `query.get("q")`; `queries(name)` returns a decoded string-view span, and `queries()` exposes multi-value params as an object supporting `queries["tag"]`, `queries.get("tag")`, and `queries.first("tag")`. |
+| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value as a zero-copy view helper with `value_or(...)` / `toString()` / typed conversions, or all decoded single-value query params as an object supporting `query["q"]` / `query.get("q")`; `queries(name)` returns a decoded string-view span, and `queries()` exposes multi-value params as an object supporting `queries["tag"]`, `queries.get("tag")`, and `queries.first("tag")`. |
 | `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie object with `cookies["session"]` / `cookies.get("session")`. |
-| `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter through typed helpers, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")`. |
+| `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter as a zero-copy view helper with `value_or(...)` / `toString()` / typed conversions, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")`. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy byte span plus its `Content-Type`. |
@@ -824,7 +824,7 @@ static constexpr std::string_view kFindUserQuery =
     "SELECT id, name FROM users WHERE id = ?";
 
 ruvia::Task<ruvia::HttpResponse> findUser(ruvia::Context& c) {
-    auto result = co_await c.db().query(kFindUserQuery, {c.req().param("id").toStringView().value_or("")});
+    auto result = co_await c.db().query(kFindUserQuery, {c.req().param("id").value_or("")});
     (void)result;
     co_return c.text("user query completed\n");
 }
