@@ -1010,6 +1010,94 @@ public:
         std::span<const HttpHeaderView> headers{};
     };
 
+    class Vars final {
+    public:
+        explicit constexpr Vars(Context& context) noexcept
+            : context_(&context) {}
+
+        template <typename T>
+        [[nodiscard]] T& get(std::string_view name) const {
+            return context_->template get<T>(name);
+        }
+
+        template <typename T>
+        [[nodiscard]] T* getIf(std::string_view name) const noexcept {
+            return context_->template getIf<T>(name);
+        }
+
+        template <typename T>
+        [[nodiscard]] bool has(std::string_view name) const noexcept {
+            return getIf<T>(name) != nullptr;
+        }
+
+        template <typename T>
+        [[nodiscard]] T& get(ContextKey<T> key) const {
+            return context_->template get<T>(key);
+        }
+
+        template <typename T>
+        [[nodiscard]] T* getIf(ContextKey<T> key) const noexcept {
+            return context_->template getIf<T>(key);
+        }
+
+        template <typename T>
+        [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
+            return getIf<T>(key) != nullptr;
+        }
+
+        template <typename T>
+        [[nodiscard]] T& operator[](ContextKey<T> key) const {
+            return get(key);
+        }
+
+    private:
+        Context* context_;
+    };
+
+    class ConstVars final {
+    public:
+        explicit constexpr ConstVars(const Context& context) noexcept
+            : context_(&context) {}
+
+        template <typename T>
+        [[nodiscard]] const T& get(std::string_view name) const {
+            return context_->template get<T>(name);
+        }
+
+        template <typename T>
+        [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
+            return context_->template getIf<T>(name);
+        }
+
+        template <typename T>
+        [[nodiscard]] bool has(std::string_view name) const noexcept {
+            return getIf<T>(name) != nullptr;
+        }
+
+        template <typename T>
+        [[nodiscard]] const T& get(ContextKey<T> key) const {
+            return context_->template get<T>(key);
+        }
+
+        template <typename T>
+        [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
+            return context_->template getIf<T>(key);
+        }
+
+        template <typename T>
+        [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
+            return getIf<T>(key) != nullptr;
+        }
+
+        template <typename T>
+        [[nodiscard]] const T& operator[](ContextKey<T> key) const {
+            return get(key);
+        }
+
+    private:
+        const Context* context_;
+    };
+
     ~Context() = default;
 
     Context(const Context&) = delete;
@@ -1180,6 +1268,14 @@ public:
     template <typename T>
     [[nodiscard]] const T* varIf(ContextKey<T> key) const noexcept {
         return getIf<T>(key.name());
+    }
+
+    [[nodiscard]] Vars var() noexcept {
+        return Vars(*this);
+    }
+
+    [[nodiscard]] ConstVars var() const noexcept {
+        return ConstVars(*this);
     }
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
