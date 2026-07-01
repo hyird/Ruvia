@@ -348,7 +348,7 @@ HttpResponse Context::redirect(
     return response;
 }
 
-HttpResponse Context::error(
+HttpResponse Context::jsonError(
     std::uint16_t statusCode,
     std::string_view code,
     std::string_view message,

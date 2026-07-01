@@ -68,7 +68,7 @@ public:
 
         const auto check = detail::checkRouteRateLimit(context, routeRateLimitOptions());
         if (!check.allowed) {
-            auto response = context.error(429, "too_many_requests", "rate limit exceeded");
+            auto response = context.jsonError(429, "too_many_requests", "rate limit exceeded");
             detail::setUnsignedHeader(response, "Retry-After", detail::retryAfterSeconds(check.resetAfterMs));
             detail::setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
             detail::setUnsignedHeader(response, "X-RateLimit-Remaining", 0);

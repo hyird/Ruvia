@@ -37,7 +37,7 @@ public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
         const auto token = ruvia::jwtBearerToken(c.req().header("Authorization"));
         if (!token) {
-            c.res(c.error(401, "missing_token", "missing bearer token"));
+            c.res(c.jsonError(401, "missing_token", "missing bearer token"));
             co_return;
         }
 
@@ -45,7 +45,7 @@ public:
             const auto payload = ruvia::jwtVerify(*token, verifyOptions(), c.resource());
             c.header("X-Jwt-Subject", payload.subject());
         } catch (...) {
-            c.res(c.error(401, "invalid_token", "invalid bearer token"));
+            c.res(c.jsonError(401, "invalid_token", "invalid bearer token"));
             co_return;
         }
 

@@ -20,7 +20,7 @@ class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
         if (c.req().header("X-Admin-Token") != "secret") {
-            c.res(c.error(401, "unauthorized", "missing admin token"));
+            c.res(c.jsonError(401, "unauthorized", "missing admin token"));
             co_return;
         }
         co_await next();

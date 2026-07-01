@@ -613,7 +613,7 @@ public:
         std::string_view relativePath,
         std::string_view contentType = {}) const;
 
-    [[nodiscard]] HttpResponse error(
+    [[nodiscard]] HttpResponse jsonError(
         std::uint16_t statusCode,
         std::string_view code,
         std::string_view message,
