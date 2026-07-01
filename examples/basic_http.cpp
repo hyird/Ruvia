@@ -10,7 +10,7 @@
 
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
         c.setHeader("X-Example", "basic-http");
     }
@@ -18,7 +18,7 @@ public:
 
 class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Admin-Token") != "secret") {
             c.res(c.error(401, "unauthorized", "missing admin token"));
             co_return;

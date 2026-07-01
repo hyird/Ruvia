@@ -196,10 +196,10 @@ public: \
     } \
     [[nodiscard]] ::ruvia::Task<void> handle( \
         ::ruvia::Context& c, \
-        ::ruvia::Next next) { \
+        ::ruvia::Next& next) { \
         return ::ruvia::detail::invokeModelValidator< \
             target, \
-            body_type>(*this, c, ::std::move(next)); \
+            body_type>(*this, c, next); \
     }
 
 #define RUVIA_VALIDATE_JSON(body_type, ...) \

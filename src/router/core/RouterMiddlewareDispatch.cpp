@@ -64,7 +64,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     auto next = NextAccess::make(
         Next::State{.table = this, .route = &route, .context = &context, .index = index + 1},
         &RouteTable::invokeMiddlewareContinuation);
-    auto task = middleware(context, std::move(next));
+    auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
 }
@@ -111,7 +111,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .outcome = &outcome,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
-    auto task = middleware(context, std::move(next));
+    auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
 }
