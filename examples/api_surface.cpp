@@ -118,6 +118,21 @@ concept HasRequestDecodedPathAlias = requires(const T& request) {
     request.decodedPath();
 };
 
+template <typename T>
+concept HasRequestRemoteAddressAlias = requires(const T& request) {
+    request.remoteAddress();
+};
+
+template <typename T>
+concept HasRequestClientCertificateAlias = requires(const T& request) {
+    request.clientCertificate();
+};
+
+template <typename T>
+concept HasRequestIsSecureAlias = requires(const T& request) {
+    request.isSecure();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -161,6 +176,9 @@ static_assert(!HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRouteIndexAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHttpVersionAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
