@@ -94,7 +94,7 @@ private:
         const auto& request = c.req();
         std::pmr::string body(c.allocator<char>());
         body.append("method=");
-        body.append(ruvia::methodName(request.method()));
+        body.append(request.method());
         body.append("\ntarget=");
         body.append(request.target());
         body.append("\nurl=");

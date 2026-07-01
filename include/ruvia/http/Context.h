@@ -284,7 +284,8 @@ public:
 
     [[nodiscard]] const HttpRequest& raw() const noexcept;
 
-    [[nodiscard]] HttpMethod method() const noexcept;
+    [[nodiscard]] std::string_view method() const noexcept;
+    [[nodiscard]] HttpMethod methodEnum() const noexcept;
     [[nodiscard]] std::string_view target() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
@@ -903,7 +904,11 @@ inline const HttpRequest& ContextRequest::raw() const noexcept {
     return context_->request_;
 }
 
-inline HttpMethod ContextRequest::method() const noexcept {
+inline std::string_view ContextRequest::method() const noexcept {
+    return methodName(raw().method());
+}
+
+inline HttpMethod ContextRequest::methodEnum() const noexcept {
     return raw().method();
 }
 
