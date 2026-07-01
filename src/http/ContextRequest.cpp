@@ -291,19 +291,16 @@ const RequestNameValueList& Context::requestQuery() const {
         const auto order = sortedPairOrder(storage, resource());
         struct QueryValueBuild final {
             std::size_t firstIndex;
-            std::size_t lastIndex;
         };
         std::pmr::vector<QueryValueBuild> builds(resource());
         builds.reserve(order.size());
         for (std::size_t offset = 0; offset < order.size();) {
             const auto firstIndex = order[offset];
-            auto lastIndex = firstIndex;
             const auto name = pairNameAt(storage, firstIndex);
             do {
-                lastIndex = order[offset];
                 ++offset;
             } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
-            builds.push_back(QueryValueBuild{.firstIndex = firstIndex, .lastIndex = lastIndex});
+            builds.push_back(QueryValueBuild{.firstIndex = firstIndex});
         }
         std::stable_sort(builds.begin(), builds.end(), [](const QueryValueBuild& left, const QueryValueBuild& right) noexcept {
             return left.firstIndex < right.firstIndex;
@@ -313,7 +310,7 @@ const RequestNameValueList& Context::requestQuery() const {
         for (const auto& build : builds) {
             query.push_back(RequestNameValueView{
                 .name = storedStringView(storage[build.firstIndex * 2]),
-                .value = storedStringView(storage[build.lastIndex * 2 + 1])});
+                .value = storedStringView(storage[build.firstIndex * 2 + 1])});
         }
         requestQueryStorage_ = &storage;
         requestQuery_ = &query;
