@@ -55,7 +55,7 @@ public:
             c.res(c.text("caught by middleware\n", 500));
             co_return;
         }
-        c.header("X-Surface-Finalized", c.finalized() ? "true" : "false");
+        c.setHeader("X-Surface-Finalized", c.finalized() ? "true" : "false");
         c.res().responseHeaders().append("X-Surface-Middleware", "after-next");
     }
 };
@@ -193,7 +193,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
-        c.header("X-Response-Prepared", "true");
+        c.setHeader("X-Response-Prepared", "true");
         ruvia::HttpResponse response(c.resource());
         response.setStatus(203, {});
         response.setHeader("X-Response-Remove", "drop");
@@ -215,7 +215,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
-        c.header("X-Error-Prepared", "true");
+        c.setHeader("X-Error-Prepared", "true");
         co_return c.error(418, "teapot", "short and stout", "I'm a Teapot");
     }
 
@@ -224,7 +224,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
-        c.header("X-Not-Found-Prepared", "true");
+        c.setHeader("X-Not-Found-Prepared", "true");
         co_return co_await c.notFound();
     }
 

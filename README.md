@@ -170,7 +170,7 @@ public:
             co_return c.error(401, "unauthorized", "unauthorized");
         }
         co_await next();
-        c.header("X-Auth", "ok");
+        c.setHeader("X-Auth", "ok");
         co_return std::move(c.res());
     }
 };
@@ -187,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain once, `c.header(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain once, `c.setHeader(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 
@@ -240,7 +240,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
-| `c.header(name, value)` | Add or replace a response header. |
+| `c.setHeader(name, value)` | Add or replace a response header. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.deleteCookie(name, options)` | Expire a response cookie with `Max-Age=0`. |
 | `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().responseHeaders().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape. |
@@ -264,7 +264,7 @@ Use `ruvia::Context` to read request data and construct responses:
 
 A few lifetime and ownership rules are worth keeping close:
 
-- Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics. Context response helpers, including `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
+- Request headers are read through `c.req().header(...)`; response headers are written through `c.setHeader(...)` or the Hono-compatible `c.header(...)` alias. Context response helpers, including `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
 - Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await c.req().cloneRawRequest()` for a request-arena metadata/body snapshot after validation or body reads, `ruvia::matchedRoutes(c)` / `ruvia::routePath(c, -1)` / `c.req().routeIndex()` for Hono-style route debugging metadata, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access including dot notation through `body.at(...)` / `body.object(...)`, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.
