@@ -200,6 +200,7 @@ public:
     [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
+    [[nodiscard]] std::span<const HttpHeaderView> header() const noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
@@ -837,6 +838,10 @@ inline std::string_view ContextRequest::httpVersion() const noexcept {
 
 inline std::span<const HttpHeaderView> ContextRequest::headers() const noexcept {
     return raw().headers();
+}
+
+inline std::span<const HttpHeaderView> ContextRequest::header() const noexcept {
+    return headers();
 }
 
 inline std::string_view ContextRequest::header(std::string_view name) const noexcept {
