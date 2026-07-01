@@ -176,6 +176,7 @@ public:
     RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/clone-raw", cloneRawRequest);
+    RUVIA_POST("/clone-raw-form", cloneRawFormRequest);
     RUVIA_POST("/discard", discard);
     RUVIA_PUT("/items/:id", replaceItem);
     RUVIA_PATCH("/items/:id", patchItem);
@@ -613,6 +614,34 @@ private:
         body.append(consumed);
         body.append("\ntype=");
         body.append(clone.blob().type());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> cloneRawFormRequest(ruvia::Context& c) {
+        const auto consumed = co_await c.req().text();
+        auto clone = co_await ruvia::cloneRawRequest(c.req());
+        auto form = clone.formData();
+        auto parsed = clone.parseBody({.all = true, .dot = true});
+        std::pmr::string body(c.allocator<char>());
+        body.append("fields=");
+        appendUnsigned(body, form.fields().size());
+        body.append("\nentries=");
+        appendUnsigned(body, form.entries().size());
+        if (auto title = form.get("title").toStringView()) {
+            body.append("\ntitle=");
+            body.append(*title);
+        }
+        body.append("\ntag-count=");
+        appendUnsigned(body, form.getAll("tag").values().size());
+        body.append("\ntag-array-count=");
+        appendUnsigned(body, form.count("tag[]"));
+        if (auto nested = parsed.object("obj").value("key1")) {
+            body.append("\nobj.key1=");
+            body.append(*nested);
+        }
+        body.append("\nconsumed=");
+        body.append(consumed);
         body.push_back('\n');
         co_return c.text(body);
     }
