@@ -137,6 +137,14 @@ private:
         appendUnsigned(body, request.query().entries().size());
         body.append("\nquery-tag=");
         body.append(request.query()["tag"]);
+        body.append("\nshortcut-header-host=");
+        body.append(c.header("Host"));
+        body.append("\nshortcut-query-tag=");
+        body.append(c.query("tag").value_or(""));
+        body.append("\nshortcut-cookie-surface=");
+        if (auto surfaceCookie = c.cookie("surface")) {
+            body.append(*surfaceCookie);
+        }
         body.append("\nquery-groups=");
         appendUnsigned(body, request.queries().size());
         body.append("\nquery-tag-group=");
@@ -155,6 +163,8 @@ private:
         appendUnsigned(body, request.routeIndex());
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
+        body.append("\nshortcut-param-id=");
+        body.append(c.param("id").value_or(""));
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
         appendUnsigned(body, tags.size());
