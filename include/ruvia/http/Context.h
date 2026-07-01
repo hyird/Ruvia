@@ -2130,9 +2130,9 @@ public:
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(const char (&body)[N], ResponseInit init) const;
 
-    Context& setRenderer(Renderer renderer) noexcept;
+    void setRenderer(Renderer renderer) noexcept;
 
-    Context& setLayout(Layout layout) noexcept;
+    [[nodiscard]] Layout setLayout(Layout layout) noexcept;
 
     [[nodiscard]] Layout getLayout() const noexcept;
 

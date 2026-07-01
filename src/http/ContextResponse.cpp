@@ -764,14 +764,13 @@ HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {
     return response;
 }
 
-Context& Context::setRenderer(Renderer renderer) noexcept {
+void Context::setRenderer(Renderer renderer) noexcept {
     renderer_ = renderer;
-    return *this;
 }
 
-Context& Context::setLayout(Layout layout) noexcept {
+Context::Layout Context::setLayout(Layout layout) noexcept {
     layout_ = layout;
-    return *this;
+    return layout_;
 }
 
 Context::Layout Context::getLayout() const noexcept {

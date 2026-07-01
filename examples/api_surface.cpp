@@ -187,6 +187,12 @@ static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setRenderer(static_cast<ruvia::Context::Renderer>(nullptr))),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setLayout(static_cast<ruvia::Context::Layout>(nullptr))),
+    ruvia::Context::Layout>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -319,7 +325,7 @@ public:
 class SurfaceLayoutMiddleware final : public ruvia::Middleware<SurfaceLayoutMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        c.setLayout(&surfaceLayout);
+        [[maybe_unused]] const auto installedLayout = c.setLayout(&surfaceLayout);
         co_await next();
     }
 };
