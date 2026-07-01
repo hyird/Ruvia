@@ -516,6 +516,10 @@ Task<HttpResponse> Context::render(std::string_view body) {
     return render(body, RenderOptions{});
 }
 
+Task<HttpResponse> Context::render(std::string_view body, std::string_view head) {
+    return render(body, RenderOptions{.head = head});
+}
+
 Task<HttpResponse> Context::render(std::string_view body, RenderOptions options) {
     if (renderer_ == nullptr) {
         co_return html(body);

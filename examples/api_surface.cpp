@@ -132,6 +132,7 @@ public:
     RUVIA_GET("/res", responseSlot);
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/render", renderBody);
+    RUVIA_GET("/render-head", renderHeadBody);
     RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
     RUVIA_GET_STREAM("/stream-throw", streamThrow);
@@ -312,6 +313,12 @@ private:
         co_return co_await c.render(
             "<h1>rendered body</h1>",
             {.title = "surface"});
+    }
+
+    ruvia::Task<ruvia::HttpResponse> renderHeadBody(ruvia::Context& c) {
+        co_return co_await c.render(
+            "<h1>rendered head body</h1>",
+            "<title>surface head</title>");
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {

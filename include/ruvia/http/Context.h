@@ -1929,6 +1929,8 @@ public:
 
     [[nodiscard]] Task<HttpResponse> render(std::string_view body);
 
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body, std::string_view head);
+
     [[nodiscard]] Task<HttpResponse> render(std::string_view body, RenderOptions options);
 
     [[nodiscard]] HttpResponse redirect(
