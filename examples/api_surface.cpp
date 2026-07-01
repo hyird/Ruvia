@@ -148,7 +148,12 @@ private:
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
         body.append("\ntag-values=");
-        appendUnsigned(body, request.queries("tag").size());
+        const auto tags = request.queries("tag");
+        appendUnsigned(body, tags.size());
+        body.append("\ntag-first=");
+        if (!tags.empty()) {
+            body.append(tags.front());
+        }
         body.append("\nversion=");
         body.append(request.httpVersion());
         body.append("\naccepts-json=");
