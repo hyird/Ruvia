@@ -48,6 +48,14 @@ RUVIA_MODEL(CategoryParams,
     RUVIA_FIELD(id, ruvia::String)
 );
 
+RUVIA_MODEL(RequestHeaders,
+    RUVIA_FIELD_NAME("x-request-id", requestId, ruvia::String)
+);
+
+RUVIA_MODEL(PreferencesCookie,
+    RUVIA_FIELD(theme, ruvia::String)
+);
+
 RUVIA_MODEL(Category,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(children, ruvia::List<Category>)
@@ -136,6 +144,22 @@ public:
             RUVIA_MIN(2, "category id is too short")))
 };
 
+class RequestHeaderValidator final : public ruvia::Middleware<RequestHeaderValidator> {
+public:
+    RUVIA_VALIDATE_HEADER(RequestHeaders,
+        RUVIA_RULE_NAME("x-request-id", requestId,
+            RUVIA_REQUIRED("request id is required"),
+            RUVIA_MIN(8, "request id is too short")))
+};
+
+class PreferencesCookieValidator final : public ruvia::Middleware<PreferencesCookieValidator> {
+public:
+    RUVIA_VALIDATE_COOKIE(PreferencesCookie,
+        RUVIA_RULE(theme,
+            RUVIA_REQUIRED("theme cookie is required"),
+            RUVIA_ONE_OF("theme is not allowed", "light", "dark")))
+};
+
 class ModelController final : public ruvia::Controller<ModelController> {
 public:
     RUVIA_CONTROLLER_GROUP("/models")
@@ -146,6 +170,8 @@ public:
     RUVIA_GET("/search", search, SearchQueryValidator);
     RUVIA_GET("/category", category);
     RUVIA_GET("/category/:id", categoryById, CategoryParamValidator);
+    RUVIA_GET("/headers", headers, RequestHeaderValidator);
+    RUVIA_GET("/cookies", cookies, PreferencesCookieValidator);
     RUVIA_ROUTES_END
 
 private:
@@ -200,6 +226,24 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
         body.append(params.id()->view());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
+        const auto& headers = c.req().valid<RequestHeaders>(ruvia::Header);
+        std::pmr::string body(c.allocator<char>());
+        body.append("request-id=");
+        body.append(headers.requestId()->view());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
+        const auto& cookies = c.req().valid<PreferencesCookie>(ruvia::Cookie);
+        std::pmr::string body(c.allocator<char>());
+        body.append("theme=");
+        body.append(cookies.theme()->view());
         body.push_back('\n');
         co_return c.text(body);
     }

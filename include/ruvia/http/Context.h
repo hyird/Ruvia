@@ -69,6 +69,8 @@ void setValidatedBody(Context& context, ValidationTarget target, T&& body);
 [[noreturn]] void throwInvalidFormBody();
 [[noreturn]] void throwInvalidQuery();
 [[noreturn]] void throwInvalidParam();
+[[noreturn]] void throwInvalidHeader();
+[[noreturn]] void throwInvalidCookie();
 
 // Assign `src` into `dst`, forcing storage in the backing memory resource rather
 // than the small-string optimization's inline buffer. The Context's per-request

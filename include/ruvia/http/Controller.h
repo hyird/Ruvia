@@ -211,3 +211,9 @@ public: \
 
 #define RUVIA_VALIDATE_PARAM(body_type, ...) \
     RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kParam, body_type, __VA_ARGS__)
+
+#define RUVIA_VALIDATE_HEADER(body_type, ...) \
+    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kHeader, body_type, __VA_ARGS__)
+
+#define RUVIA_VALIDATE_COOKIE(body_type, ...) \
+    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kCookie, body_type, __VA_ARGS__)
