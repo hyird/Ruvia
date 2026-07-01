@@ -31,7 +31,7 @@ namespace detail {
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
     Task<void> handle(Context& c, const Next& next) {
-        const auto method = c.req().method();
+        const auto method = c.req().methodEnum();
         const bool safe = method == HttpMethod::kGet ||
             method == HttpMethod::kHead ||
             method == HttpMethod::kOptions;
