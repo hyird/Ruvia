@@ -118,6 +118,10 @@ private:
         appendUnsigned(body, request.queries().size());
         body.append("\ncookies=");
         appendUnsigned(body, request.cookie().size());
+        body.append("\nmatched-routes=");
+        appendUnsigned(body, request.matchedRoutes().size());
+        body.append("\nroute-index=");
+        appendUnsigned(body, request.routeIndex());
         body.append("\ntag-values=");
         appendUnsigned(body, request.queries("tag").size());
         body.append("\nversion=");
