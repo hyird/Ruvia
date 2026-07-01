@@ -173,7 +173,7 @@ static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestQueryStringAlias<ruvia::ContextRequest>);
 static_assert(HasRequestRoutePathAlias<ruvia::ContextRequest>);
 static_assert(HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
-static_assert(!HasRequestRouteIndexAlias<ruvia::ContextRequest>);
+static_assert(HasRequestRouteIndexAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHttpVersionAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
@@ -397,6 +397,8 @@ private:
         appendUnsigned(body, ruvia::matchedRoutes(c).size());
         body.append("\nrequest-matched-routes=");
         appendUnsigned(body, request.matchedRoutes().size());
+        body.append("\nrequest-route-index=");
+        appendUnsigned(body, request.routeIndex());
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
         body.append("\nrequest-param-id=");
