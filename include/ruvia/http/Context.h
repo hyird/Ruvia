@@ -1334,7 +1334,6 @@ public:
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
-    [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
     Task<void> discardBody() const;
 
     template <typename T>
@@ -1372,11 +1371,14 @@ public:
 
 private:
     friend class Context;
+    friend Task<RawRequestClone> cloneRawRequest(const ContextRequest& request);
 
     explicit constexpr ContextRequest(const Context& context) noexcept
         : context_(&context) {}
 
     const Context* context_{nullptr};
+
+    [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
 };
 
 [[nodiscard]] inline Task<ContextRequest::RawRequestClone> cloneRawRequest(const ContextRequest& request) {
