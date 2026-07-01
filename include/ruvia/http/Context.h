@@ -133,6 +133,9 @@ public:
         std::string_view type_;
     };
 
+    struct RequestFormField;
+    class RequestFormData;
+
     class RawRequestClone final {
     public:
         class Header final {
@@ -229,6 +232,10 @@ public:
         [[nodiscard]] RequestBlob blob() const noexcept {
             return RequestBlob(arrayBuffer(), header("Content-Type"));
         }
+
+        [[nodiscard]] RequestFormData parseBody(ParseBodyOptions options = {}) const;
+
+        [[nodiscard]] RequestFormData formData() const;
 
         template <typename T>
         [[nodiscard]] T json() const {

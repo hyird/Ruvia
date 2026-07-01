@@ -255,6 +255,146 @@ void compactParsedBodyFields(
     fields.erase(fields.begin() + write, fields.end());
 }
 
+[[nodiscard]] std::pmr::vector<MultipartPart> parseMultipartPartsFromBody(
+    std::string_view requestBody,
+    std::string_view boundaryValue,
+    std::pmr::memory_resource* resource) {
+    std::pmr::vector<MultipartPart> parts(resource);
+    auto cursor = detail::httpFindMultipartBoundaryLine(requestBody, boundaryValue);
+    if (cursor == std::string_view::npos) {
+        throw std::invalid_argument("invalid multipart body");
+    }
+
+    cursor += detail::httpMultipartBoundaryLineSize(boundaryValue);
+    for (;;) {
+        if (requestBody.substr(cursor, 2) == "--") {
+            break;
+        }
+        if (requestBody.substr(cursor, 2) != "\r\n") {
+            throw std::invalid_argument("invalid multipart body");
+        }
+        cursor += 2;
+
+        const auto headersEnd = requestBody.find("\r\n\r\n", cursor);
+        if (headersEnd == std::string_view::npos) {
+            throw std::invalid_argument("invalid multipart body");
+        }
+
+        const auto headerBlock = requestBody.substr(cursor, headersEnd - cursor);
+        detail::HttpMultipartPartHeaders partHeaders;
+        switch (detail::httpParseMultipartPartHeaders(headerBlock, partHeaders)) {
+            case detail::HttpMultipartPartHeaderStatus::kOk:
+                break;
+            case detail::HttpMultipartPartHeaderStatus::kInvalidDisposition:
+                throw std::invalid_argument("invalid multipart content disposition");
+            case detail::HttpMultipartPartHeaderStatus::kMissingName:
+                throw std::invalid_argument("invalid multipart field name");
+        }
+
+        cursor = headersEnd + 4;
+        const auto nextDelimiterPrefix = detail::httpFindMultipartBoundaryPrefix(requestBody, boundaryValue, cursor);
+        if (nextDelimiterPrefix == std::string_view::npos) {
+            throw std::invalid_argument("invalid multipart body");
+        }
+
+        parts.emplace_back(MultipartPart{
+            .name = partHeaders.name,
+            .filename = partHeaders.filename,
+            .contentType = partHeaders.contentType,
+            .body = requestBody.substr(cursor, nextDelimiterPrefix - cursor)});
+
+        cursor = nextDelimiterPrefix + detail::httpMultipartBoundaryPrefixSize(boundaryValue);
+    }
+
+    return parts;
+}
+
+[[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
+    std::string_view requestBody,
+    std::pmr::memory_resource* resource,
+    ContextRequest::ParseBodyOptions options) {
+    std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
+    fields.reserve(delimitedFieldCount(requestBody, '&'));
+    bool valid = true;
+    const bool ok = detail::visitUrlEncodedPairs(
+        requestBody,
+        [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
+            auto decodedName = detail::decodeUrlComponentToString(key, resource, detail::UrlDecodeMode::kForm);
+            auto decodedValue = detail::decodeUrlComponentToString(value, resource, detail::UrlDecodeMode::kForm);
+            if (!decodedName || !decodedValue) {
+                valid = false;
+                return false;
+            }
+
+            const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
+            appendParsedBodyField(
+                fields,
+                ContextRequest::RequestFormField(
+                    resource,
+                    std::move(*decodedName),
+                    std::move(*decodedValue),
+                    std::pmr::string(resource),
+                    std::pmr::string(resource),
+                    false,
+                    array),
+                options);
+            return true;
+        });
+    if (!ok || !valid) {
+        throw std::invalid_argument("invalid form body");
+    }
+    compactParsedBodyFields(fields, options);
+    return ContextRequest::RequestFormData(std::move(fields));
+}
+
+[[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(
+    std::string_view requestBody,
+    std::string_view boundaryValue,
+    std::pmr::memory_resource* resource,
+    ContextRequest::ParseBodyOptions options) {
+    auto parts = parseMultipartPartsFromBody(requestBody, boundaryValue, resource);
+    std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
+    fields.reserve(parts.size());
+    for (const auto& part : parts) {
+        std::pmr::string name(part.name.data(), part.name.size(), resource);
+        const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
+        appendParsedBodyField(
+            fields,
+            ContextRequest::RequestFormField(
+                resource,
+                std::move(name),
+                std::pmr::string(part.body.data(), part.body.size(), resource),
+                std::pmr::string(part.filename.data(), part.filename.size(), resource),
+                std::pmr::string(part.contentType.data(), part.contentType.size(), resource),
+                !part.filename.empty(),
+                array),
+            options);
+    }
+    compactParsedBodyFields(fields, options);
+    return ContextRequest::RequestFormData(std::move(fields));
+}
+
+[[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(
+    std::string_view contentType,
+    std::string_view requestBody,
+    std::pmr::memory_resource* resource,
+    ContextRequest::ParseBodyOptions options) {
+    if (detail::contentTypeMatches(contentType, "application/x-www-form-urlencoded")) {
+        return parseUrlEncodedFormBody(requestBody, resource, options);
+    }
+
+    std::string_view boundary;
+    switch (detail::httpParseMultipartBoundary(contentType, boundary)) {
+        case detail::HttpMultipartBoundaryStatus::kOk:
+            return parseMultipartFormBody(requestBody, boundary, resource, options);
+        case detail::HttpMultipartBoundaryStatus::kInvalidContentType:
+            return ContextRequest::RequestFormData(resource);
+        case detail::HttpMultipartBoundaryStatus::kInvalidBoundary:
+            throw std::invalid_argument("invalid multipart boundary");
+    }
+    throw std::invalid_argument("invalid multipart boundary");
+}
+
 }  // namespace
 
 std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
@@ -264,6 +404,18 @@ std::string_view ContextRequest::RawRequestClone::header(std::string_view name) 
         }
     }
     return {};
+}
+
+ContextRequest::RequestFormData ContextRequest::RawRequestClone::parseBody(ParseBodyOptions options) const {
+    return parseFormBodyFromView(
+        header("Content-Type"),
+        body(),
+        body_.get_allocator().resource(),
+        options);
+}
+
+ContextRequest::RequestFormData ContextRequest::RawRequestClone::formData() const {
+    return parseBody(ParseBodyOptions{.all = true});
 }
 
 const RequestNameValueList& Context::requestHeaders() const {
@@ -504,122 +656,18 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundaryValue = multipartBoundary();
-
     const auto requestBody = co_await this->requestBody();
-
-    std::pmr::vector<MultipartPart> parts(resource());
-    auto cursor = detail::httpFindMultipartBoundaryLine(requestBody, boundaryValue);
-    if (cursor == std::string_view::npos) {
-        throw std::invalid_argument("invalid multipart body");
-    }
-
-    cursor += detail::httpMultipartBoundaryLineSize(boundaryValue);
-    for (;;) {
-        if (requestBody.substr(cursor, 2) == "--") {
-            break;
-        }
-        if (requestBody.substr(cursor, 2) != "\r\n") {
-            throw std::invalid_argument("invalid multipart body");
-        }
-        cursor += 2;
-
-        const auto headersEnd = requestBody.find("\r\n\r\n", cursor);
-        if (headersEnd == std::string_view::npos) {
-            throw std::invalid_argument("invalid multipart body");
-        }
-
-        const auto headerBlock = requestBody.substr(cursor, headersEnd - cursor);
-        detail::HttpMultipartPartHeaders partHeaders;
-        switch (detail::httpParseMultipartPartHeaders(headerBlock, partHeaders)) {
-            case detail::HttpMultipartPartHeaderStatus::kOk:
-                break;
-            case detail::HttpMultipartPartHeaderStatus::kInvalidDisposition:
-                throw std::invalid_argument("invalid multipart content disposition");
-            case detail::HttpMultipartPartHeaderStatus::kMissingName:
-                throw std::invalid_argument("invalid multipart field name");
-        }
-
-        cursor = headersEnd + 4;
-        const auto nextDelimiterPrefix = detail::httpFindMultipartBoundaryPrefix(requestBody, boundaryValue, cursor);
-        if (nextDelimiterPrefix == std::string_view::npos) {
-            throw std::invalid_argument("invalid multipart body");
-        }
-
-        parts.emplace_back(MultipartPart{
-            .name = partHeaders.name,
-            .filename = partHeaders.filename,
-            .contentType = partHeaders.contentType,
-            .body = requestBody.substr(cursor, nextDelimiterPrefix - cursor)});
-
-        cursor = nextDelimiterPrefix + detail::httpMultipartBoundaryPrefixSize(boundaryValue);
-    }
-
-    co_return parts;
+    co_return parseMultipartPartsFromBody(requestBody, boundaryValue, resource());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(
     ContextRequest::ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
-
-    if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
-        std::pmr::vector<ContextRequest::RequestFormField> fields(resource());
-        fields.reserve(delimitedFieldCount(requestBody, '&'));
-        bool valid = true;
-        const bool ok = detail::visitUrlEncodedPairs(
-            requestBody,
-            [this, &fields, &valid, options](std::string_view key, std::string_view value) {
-                auto decodedName = detail::decodeUrlComponentToString(key, resource(), detail::UrlDecodeMode::kForm);
-                auto decodedValue = detail::decodeUrlComponentToString(value, resource(), detail::UrlDecodeMode::kForm);
-                if (!decodedName || !decodedValue) {
-                    valid = false;
-                    return false;
-                }
-
-                const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
-                appendParsedBodyField(
-                    fields,
-                        ContextRequest::RequestFormField(
-                        resource(),
-                        std::move(*decodedName),
-                        std::move(*decodedValue),
-                        std::pmr::string(resource()),
-                        std::pmr::string(resource()),
-                        false,
-                        array),
-                    options);
-                return true;
-            });
-        if (!ok || !valid) {
-            throw std::invalid_argument("invalid form body");
-        }
-        compactParsedBodyFields(fields, options);
-        co_return ContextRequest::RequestFormData(std::move(fields));
-    }
-
-    if (requestContentTypeMatches("multipart/form-data")) {
-        auto parts = co_await requestMultipart();
-        std::pmr::vector<ContextRequest::RequestFormField> fields(resource());
-        fields.reserve(parts.size());
-        for (const auto& part : parts) {
-            std::pmr::string name(part.name.data(), part.name.size(), resource());
-            const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
-            appendParsedBodyField(
-                fields,
-                    ContextRequest::RequestFormField(
-                    resource(),
-                    std::move(name),
-                    std::pmr::string(part.body.data(), part.body.size(), resource()),
-                    std::pmr::string(part.filename.data(), part.filename.size(), resource()),
-                    std::pmr::string(part.contentType.data(), part.contentType.size(), resource()),
-                    !part.filename.empty(),
-                    array),
-                options);
-        }
-        compactParsedBodyFields(fields, options);
-        co_return ContextRequest::RequestFormData(std::move(fields));
-    }
-
-    co_return ContextRequest::RequestFormData(resource());
+    co_return parseFormBodyFromView(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType),
+        requestBody,
+        resource(),
+        options);
 }
 
 Task<void> Context::requestDiscardBody() const {
