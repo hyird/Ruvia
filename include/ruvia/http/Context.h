@@ -623,6 +623,14 @@ public:
                 return PathValue(form_->getAllAtChild(dotPath_, name));
             }
 
+            [[nodiscard]] PathValue get(std::string_view name) const {
+                return at(name);
+            }
+
+            [[nodiscard]] PathValue getAll(std::string_view name) const {
+                return at(name);
+            }
+
             [[nodiscard]] bool has(std::string_view name) const noexcept {
                 return form_ != nullptr && form_->countAtChild(dotPath_, name) != 0;
             }
