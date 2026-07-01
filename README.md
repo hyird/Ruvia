@@ -226,7 +226,6 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter as a zero-copy view helper with `value_or(...)` / `toString()` / typed conversions, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")` / `params.getAll("id")` plus `entries()` / `keys()` / `values()` iteration. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
-| `co_await c.req().bytes()` | Hono-style alias for `arrayBuffer()` that returns the same zero-copy byte span. |
 | `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy byte span plus its `Content-Type`. |
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |

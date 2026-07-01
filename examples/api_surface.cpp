@@ -63,6 +63,11 @@ concept HasResponseHeadersAlias = requires(T& response) {
     response.responseHeaders();
 };
 
+template <typename T>
+concept HasRequestBytesAlias = requires(const T& request) {
+    request.bytes();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -95,6 +100,7 @@ static_assert(!HasUnaryContextQuery<ruvia::Context>);
 static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
+static_assert(!HasRequestBytesAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -606,12 +612,9 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> arrayBufferBody(ruvia::Context& c) {
         const auto bytes = co_await c.req().arrayBuffer();
-        const auto byteView = co_await c.req().bytes();
         std::pmr::string body(c.allocator<char>());
         body.append("array-buffer bytes=");
         appendUnsigned(body, bytes.size());
-        body.append("\nbytes=");
-        appendUnsigned(body, byteView.size());
         body.push_back('\n');
         co_return c.text(body);
     }
