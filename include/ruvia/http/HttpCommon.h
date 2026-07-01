@@ -380,6 +380,18 @@ public:
         return value_.has_value();
     }
 
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return exists();
+    }
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return exists();
+    }
+
+    [[nodiscard]] std::string_view value_or(std::string_view fallback) const noexcept {
+        return value_.has_value() ? *value_ : fallback;
+    }
+
     [[nodiscard]] std::optional<std::string_view> toStringView() const noexcept {
         return value_;
     }
