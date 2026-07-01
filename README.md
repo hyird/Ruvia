@@ -160,12 +160,12 @@ Route registration is macro-only:
 
 `HEAD` falls back to an existing `GET` route when no explicit `HEAD` route is registered. `Allow` headers include `HEAD` whenever `GET` is allowed, and framework-generated `OPTIONS` remains distinct from user-defined `RUVIA_OPTIONS(...)` routes.
 
-Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a borrowed, one-shot continuation token passed as `Next&`; middleware must `co_await next()` inside its own `handle` coroutine and cannot take ownership of the continuation. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
+Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a request-lifetime, copyable, one-shot continuation token passed by value as `Next`; middleware should `co_await next()` from work that completes within the same request. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
 
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next& next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next next) {
         if (c.req().header("X-Api-Key").value_or("") != "secret") {
             co_return c.error(401, "unauthorized", "unauthorized");
         }
@@ -231,7 +231,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into a Hono-style object facade, or return an empty form object for other content types: use `body["title"].value()` or `body.get("title").toStringView()` for the last field, `body.getAll("tag").values()` for repeated fields, `body["tag[]"].values()` for array fields, and `isArray()` to inspect `[]` fields or multi-value fields retained by `{.all = true}`. `field()` / `fields()` remain available as lower-level field metadata helpers. With `{.dot = true}`, use `body.at("obj.key").value()`, `body.object("obj").value("key")`, `body.object("obj").values("key")`, `body.object("obj").getAll("key").values()`, `body.object("obj").entries()` / `.groups()` / `.keys()`, or chained `body.object("obj").object("child")` for dot notation access; nested `__proto__` paths are ignored. |
-| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `get()`, `getAll()`, `has()`, duplicate-preserving `entries()` / `keys()` / `values()` that keep file/blob metadata, `field()` / `fields()` for raw field metadata, and grouped `groups()` access for per-name summaries. |
+| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `get()`, `getAll()`, `has()`, duplicate-preserving `entries()` / `keys()` / `values()` that keep file/blob metadata, first-value `get()` selection, all-value `getAll(...).values()` access, `field()` / `fields()` for raw field metadata, and grouped `groups()` access for per-name summaries. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |

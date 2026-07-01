@@ -30,7 +30,7 @@ namespace detail {
 // or on a controller group.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    Task<void> handle(Context& c, Next& next) {
+    Task<void> handle(Context& c, Next next) {
         const auto method = c.req().method();
         const bool safe = method == "GET" ||
             method == "HEAD" ||
