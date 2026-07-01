@@ -331,11 +331,11 @@ Context& Context::setRenderer(Renderer renderer) noexcept {
     return *this;
 }
 
-Task<HttpResponse> Context::render(std::string_view body, std::string_view head) {
+Task<HttpResponse> Context::render(std::string_view body, RenderOptions options) {
     if (renderer_ == nullptr) {
         co_return html(body);
     }
-    co_return co_await renderer_(*this, body, head);
+    co_return co_await renderer_(*this, body, options);
 }
 
 HttpResponse Context::redirect(
