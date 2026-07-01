@@ -376,6 +376,22 @@ const RequestValueGroupList& Context::requestQueries() const {
     return *requestQueries_;
 }
 
+const RequestNameValueList& Context::requestCookies() const {
+    if (requestCookies_ == nullptr) {
+        const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
+        auto& cookies = memory_.emplace<RequestNameValueList>(resource());
+        cookies.reserve(delimitedFieldCount(input, ';'));
+        detail::httpVisitSemicolonParameters(
+            input,
+            [&cookies](std::string_view key, std::string_view value) {
+                cookies.push_back(RequestNameValueView{.name = key, .value = value});
+                return true;
+            });
+        requestCookies_ = &cookies;
+    }
+    return *requestCookies_;
+}
+
 const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRoutes() const {
     if (matchedRoutes_ == nullptr) {
         auto& routes = memory_.emplace<std::pmr::vector<ContextRequest::MatchedRoute>>(resource());

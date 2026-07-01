@@ -1029,8 +1029,8 @@ public:
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] const RequestValueGroupList& queries() const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
-    [[nodiscard]] RequestNameValueList cookie() const;
-    [[nodiscard]] RequestNameValueList cookies() const;
+    [[nodiscard]] const RequestNameValueList& cookie() const;
+    [[nodiscard]] const RequestNameValueList& cookies() const;
     [[nodiscard]] std::string_view remoteAddress() const noexcept;
     [[nodiscard]] std::string_view clientCertificate() const noexcept;
     [[nodiscard]] bool isSecure() const noexcept;
@@ -1777,6 +1777,7 @@ private:
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
+    [[nodiscard]] const RequestNameValueList& requestCookies() const;
     [[nodiscard]] const std::pmr::vector<ContextRequest::MatchedRoute>& requestMatchedRoutes() const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
@@ -1870,6 +1871,7 @@ private:
     mutable RequestNameValueList* requestQuery_{nullptr};
     mutable std::pmr::vector<std::pmr::string>* requestQueriesStorage_{nullptr};
     mutable RequestValueGroupList* requestQueries_{nullptr};
+    mutable RequestNameValueList* requestCookies_{nullptr};
     mutable std::pmr::vector<std::pmr::string>* routeParamStorage_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     mutable std::pmr::vector<ContextRequest::MatchedRoute>* matchedRoutes_{nullptr};
@@ -2010,12 +2012,12 @@ inline std::optional<std::string_view> ContextRequest::cookie(std::string_view n
     return raw().cookie(name);
 }
 
-inline RequestNameValueList ContextRequest::cookie() const {
-    return cookies();
+inline const RequestNameValueList& ContextRequest::cookie() const {
+    return context_->requestCookies();
 }
 
-inline RequestNameValueList ContextRequest::cookies() const {
-    return raw().cookies();
+inline const RequestNameValueList& ContextRequest::cookies() const {
+    return context_->requestCookies();
 }
 
 inline std::string_view ContextRequest::remoteAddress() const noexcept {
