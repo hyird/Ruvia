@@ -832,6 +832,10 @@ inline std::string_view ContextRequest::routePath() const noexcept {
     return context_->routePath_;
 }
 
+inline std::string_view routePath(const Context& context) noexcept {
+    return context.req().routePath();
+}
+
 inline RequestValue ContextRequest::decodedPath() const noexcept {
     return raw().decodedPath();
 }
