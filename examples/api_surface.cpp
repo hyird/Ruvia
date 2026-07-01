@@ -83,6 +83,11 @@ concept HasRequestTargetAlias = requires(const T& request) {
     request.target();
 };
 
+template <typename T>
+concept HasRequestHeadersAlias = requires(const T& request) {
+    request.headers();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -119,6 +124,7 @@ static_assert(!HasRequestBytesAlias<ruvia::ContextRequest>);
 static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -272,8 +278,6 @@ private:
         appendUnsigned(body, c.req().header().keys().size());
         body.append("\nheader-values=");
         appendUnsigned(body, c.req().header().values().size());
-        body.append("\nraw-headers=");
-        appendUnsigned(body, c.req().headers().size());
         body.append("\nheader-host-all=");
         appendUnsigned(body, request.header().getAll("host").size());
         body.append("\nheader-x-dupe-object=");

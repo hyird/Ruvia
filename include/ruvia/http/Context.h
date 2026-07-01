@@ -1315,7 +1315,6 @@ public:
     [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
-    [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
@@ -2251,10 +2250,6 @@ inline std::string_view ContextRequest::queryString() const noexcept {
 
 inline std::string_view ContextRequest::httpVersion() const noexcept {
     return raw().httpVersion();
-}
-
-inline std::span<const HttpHeaderView> ContextRequest::headers() const noexcept {
-    return raw().headers();
 }
 
 inline const RequestNameValueList& ContextRequest::header() const {
