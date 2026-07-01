@@ -228,6 +228,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into an object with `get()`, `getAll()`, `count()`, and `fields()`. |
+| `co_await c.req().formData()` | Web FormData-style form parsing that preserves duplicate field names by default. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
@@ -257,7 +258,7 @@ A few lifetime and ownership rules are worth keeping close:
 
 - Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics and mutates `c.res()` once a downstream response exists.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
-- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, and `co_await c.req().parseBody()` for Hono-style form object access.
+- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.
 - `co_await c.req().multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.
 - Response status codes, reason phrases, header names, header values, cookie names, and cookie values are validated when set. Invalid output metadata throws `std::invalid_argument` before it reaches the writer.
 - File bodies are constructed through `c.file(...)` and `c.staticFile(...)`; application code should not build raw file-body responses directly.
@@ -299,7 +300,7 @@ ruvia::app()
     .run();
 ```
 
-Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().arrayBuffer()`, `c.req().blob()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, `c.req().parseBody()`, or `c.req().discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
+Ordinary request bodies are lazy: Ruvia dispatches middleware and handlers after headers, and reads the body only when code explicitly awaits `c.req().text()`, `c.req().arrayBuffer()`, `c.req().blob()`, `c.req().json<T>()`, `c.req().form<T>()`, `c.req().multipart()`, `c.req().parseBody()`, `c.req().formData()`, or `c.req().discardBody()`. If a request declares a body and the route returns without consuming or discarding it, Ruvia closes the connection instead of draining bytes just to preserve keep-alive. `Expect: 100-continue` is answered only when body reading actually starts, so middleware can reject large uploads without encouraging the client to send the body.
 
 Streaming request bodies are opt-in per route and keep large uploads out of buffered memory:
 

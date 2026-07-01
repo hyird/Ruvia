@@ -74,6 +74,7 @@ public:
     RUVIA_GET("/missing", missing);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
+    RUVIA_POST("/form-data", formDataBody);
     RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/discard", discard);
@@ -216,6 +217,22 @@ private:
                     body.append(field.path[i]);
                 }
             }
+        }
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> formDataBody(ruvia::Context& c) {
+        auto form = co_await c.req().formData();
+        auto tags = form.getAll("tag");
+        std::pmr::string body(c.allocator<char>());
+        body.append("fields=");
+        appendUnsigned(body, form.fields().size());
+        body.append("\ntag-count=");
+        appendUnsigned(body, tags.size());
+        if (const auto* title = form.get("title")) {
+            body.append("\ntitle=");
+            body.append(title->value);
         }
         body.push_back('\n');
         co_return c.text(body);
