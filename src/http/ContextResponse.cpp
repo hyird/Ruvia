@@ -417,6 +417,7 @@ void Context::storeResponse(HttpResponse&& response) {
     }
 
     responseStorage() = std::move(response);
+    responseFinalized_ = true;
 }
 
 void Context::storeAssignedResponse(HttpResponse&& response) {
@@ -454,6 +455,7 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
     }
 
     responseStorage() = std::move(response);
+    responseFinalized_ = true;
 }
 
 HttpResponse Context::body(
