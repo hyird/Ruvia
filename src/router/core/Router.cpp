@@ -11,8 +11,12 @@ using namespace detail;
 
 Next::Awaitable Next::operator()() & {
     auto state = state_;
-    state.repeated = invoked_;
-    invoked_ = true;
+    state.repeated = state.control == nullptr ||
+        !state.control->active ||
+        state.control->invoked;
+    if (state.control != nullptr && state.control->active) {
+        state.control->invoked = true;
+    }
     return Awaitable(state, invoke_);
 }
 

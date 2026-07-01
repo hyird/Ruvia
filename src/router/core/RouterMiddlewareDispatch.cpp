@@ -4,6 +4,7 @@
 #include "ruvia/http/Error.h"
 
 #include <exception>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -23,6 +24,33 @@ void storeRepeatedNextError(Context& context) {
                 .statusCode = 500,
                 .code = "next_called_multiple_times",
                 .message = "next() called multiple times"}));
+}
+
+Next::State::Control* makeNextControl(Context& context) {
+    auto* control = static_cast<Next::State::Control*>(
+        context.resource()->allocate(sizeof(Next::State::Control), alignof(Next::State::Control)));
+    std::construct_at(control);
+    return control;
+}
+
+class NextControlScope final {
+public:
+    explicit NextControlScope(Next::State::Control& control) noexcept
+        : control_(&control) {}
+
+    NextControlScope(const NextControlScope&) = delete;
+    NextControlScope& operator=(const NextControlScope&) = delete;
+
+    ~NextControlScope() {
+        control_->active = false;
+    }
+
+private:
+    Next::State::Control* control_;
+};
+
+NextControlScope makeNextControlScope(Next::State::Control& control) noexcept {
+    return NextControlScope(control);
 }
 
 }  // namespace
@@ -61,8 +89,15 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
+    auto& control = *makeNextControl(context);
+    auto controlScope = makeNextControlScope(control);
     auto next = NextAccess::make(
-        Next::State{.table = this, .route = &route, .context = &context, .index = index + 1},
+        Next::State{
+            .table = this,
+            .route = &route,
+            .context = &context,
+            .control = &control,
+            .index = index + 1},
         &RouteTable::invokeMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
@@ -103,12 +138,15 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
+    auto& control = *makeNextControl(context);
+    auto controlScope = makeNextControlScope(control);
     auto next = NextAccess::make(
         Next::State{
             .table = this,
             .route = &route,
             .context = &context,
             .outcome = &outcome,
+            .control = &control,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
     auto task = middleware(context, next);

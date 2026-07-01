@@ -17,10 +17,16 @@ struct NextAccess;
 class Next final {
 public:
     struct State final {
+        struct Control final {
+            bool invoked{false};
+            bool active{true};
+        };
+
         const void* table{nullptr};
         const void* route{nullptr};
         Context* context{nullptr};
         void* outcome{nullptr};
+        Control* control{nullptr};
         std::size_t index{0};
         bool repeated{false};
     };
@@ -90,10 +96,10 @@ public:
         bool awaited_{false};
     };
 
-    Next(const Next&) = delete;
-    Next& operator=(const Next&) = delete;
-    Next(Next&&) = delete;
-    Next& operator=(Next&&) = delete;
+    Next(const Next&) noexcept = default;
+    Next& operator=(const Next&) noexcept = default;
+    Next(Next&&) noexcept = default;
+    Next& operator=(Next&&) noexcept = default;
 
     [[nodiscard]] Awaitable operator()() &;
     [[nodiscard]] Awaitable operator()() const& = delete;
@@ -111,7 +117,6 @@ private:
 
     State state_;
     Invoke invoke_{nullptr};
-    mutable bool invoked_{false};
 };
 
 }  // namespace ruvia

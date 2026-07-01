@@ -133,10 +133,10 @@ concept HasRequestIsSecureAlias = requires(const T& request) {
     request.isSecure();
 };
 
-static_assert(!std::is_copy_constructible_v<ruvia::Next>);
-static_assert(!std::is_copy_assignable_v<ruvia::Next>);
-static_assert(!std::is_move_constructible_v<ruvia::Next>);
-static_assert(!std::is_move_assignable_v<ruvia::Next>);
+static_assert(std::is_copy_constructible_v<ruvia::Next>);
+static_assert(std::is_copy_assignable_v<ruvia::Next>);
+static_assert(std::is_move_constructible_v<ruvia::Next>);
+static_assert(std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
@@ -227,7 +227,7 @@ ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
 
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
         c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
         c.set("traceId", std::string_view("surface-trace"));
         c.setRenderer(&surfaceRenderer);
@@ -255,14 +255,14 @@ public:
 
 class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next&) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next) {
         co_return c.text("returned by middleware\n", 209);
     }
 };
 
 class SurfacePreDirectResponseMiddleware final : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
         c.res().setHeader("X-Surface-Pre-Direct", "true");
         co_await next();
     }

@@ -9,8 +9,10 @@ concept HasStorableNextAwaiter = requires(T& next) {
     requires std::is_move_constructible_v<decltype(next().operator co_await())>;
 };
 
-static_assert(!std::is_move_constructible_v<ruvia::Next>);
-static_assert(!std::is_move_assignable_v<ruvia::Next>);
+static_assert(std::is_copy_constructible_v<ruvia::Next>);
+static_assert(std::is_copy_assignable_v<ruvia::Next>);
+static_assert(std::is_move_constructible_v<ruvia::Next>);
+static_assert(std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
@@ -32,23 +34,23 @@ public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&&);
 };
 
-static_assert(!ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>);
+static_assert(ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>);
 static_assert(!ruvia::detail::VoidHandleMiddleware<ConstNextMiddleware>);
 static_assert(!ruvia::detail::VoidHandleMiddleware<RvalueNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<ByValueNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<ConstNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<RvalueNextMiddleware>);
 
-class BorrowedNextMiddleware final : public ruvia::Middleware<BorrowedNextMiddleware> {
+class ValueNextMiddleware final : public ruvia::Middleware<ValueNextMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next next) {
         co_await next();
     }
 };
 
 class ReusedNextAwaitableMiddleware final : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next next) {
         auto downstream = next();
         co_await std::move(downstream);
         co_await std::move(downstream);
@@ -57,7 +59,7 @@ public:
 
 class MiddlewareNextController final : public ruvia::Controller<MiddlewareNextController> {
 public:
-    RUVIA_CONTROLLER_GROUP("/middleware-next", BorrowedNextMiddleware)
+    RUVIA_CONTROLLER_GROUP("/middleware-next", ValueNextMiddleware)
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", ok);
