@@ -31,10 +31,10 @@ namespace detail {
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
     Task<void> handle(Context& c, Next& next) {
-        const auto method = c.req().methodEnum();
-        const bool safe = method == HttpMethod::kGet ||
-            method == HttpMethod::kHead ||
-            method == HttpMethod::kOptions;
+        const auto method = c.req().method();
+        const bool safe = method == "GET" ||
+            method == "HEAD" ||
+            method == "OPTIONS";
         const auto cookie = c.req().cookie("XSRF-TOKEN");
         if (!safe) {
             const auto header = c.req().header("X-XSRF-TOKEN");
