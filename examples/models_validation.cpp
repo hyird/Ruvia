@@ -189,7 +189,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
-        const auto& form = c.req().valid<ContactForm>(ruvia::Form);
+        const auto& form = c.req().valid<ContactForm>("form");
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
         body.append(form.name()->view());
@@ -198,7 +198,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
-        const auto& query = c.req().valid<SearchQuery>(ruvia::Query);
+        const auto& query = c.req().valid<SearchQuery>("query");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
         body.append(query.q()->view());
@@ -222,7 +222,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> categoryById(ruvia::Context& c) {
-        const auto& params = c.req().valid<CategoryParams>(ruvia::Param);
+        const auto& params = c.req().valid<CategoryParams>("param");
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
         body.append(params.id()->view());
@@ -231,7 +231,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
-        const auto& headers = c.req().valid<RequestHeaders>(ruvia::Header);
+        const auto& headers = c.req().valid<RequestHeaders>("header");
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
         body.append(headers.requestId()->view());
@@ -240,7 +240,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
-        const auto& cookies = c.req().valid<PreferencesCookie>(ruvia::Cookie);
+        const auto& cookies = c.req().valid<PreferencesCookie>("cookie");
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
         body.append(cookies.theme()->view());

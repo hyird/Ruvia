@@ -605,6 +605,9 @@ public:
     template <typename T>
     [[nodiscard]] const T& valid(ValidationTarget target) const;
 
+    template <typename T>
+    [[nodiscard]] const T& valid(std::string_view target) const;
+
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
     [[nodiscard]] Task<RequestFormData> parseBody() const {
@@ -1415,6 +1418,11 @@ inline const T& ContextRequest::valid() const {
 template <typename T>
 inline const T& ContextRequest::valid(ValidationTarget target) const {
     return context_->validatedValues_.get<T>(target);
+}
+
+template <typename T>
+inline const T& ContextRequest::valid(std::string_view target) const {
+    return valid<T>(validationTargetFromName(target));
 }
 
 namespace detail {
