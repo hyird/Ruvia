@@ -246,7 +246,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.header(name, value)` / `c.setHeader(name, value)` | Add or replace a response header; pass `std::nullopt` to remove a prepared response header, matching Hono's undefined-value deletion behavior. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.deleteCookie(name, options)` | Expire a response cookie with `Max-Age=0`. |
-| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape. |
+| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape; when replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. Use `c.var()[typedKey]`, `c.var().get<T>("name")`, or `c.var().getIf<T>("name")` for the Hono-style variable facade; `c.getIf<T>(key)` / `c.varIf<T>(key)` remain available when missing values should not throw. |

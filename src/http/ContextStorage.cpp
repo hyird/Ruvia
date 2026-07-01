@@ -49,7 +49,7 @@ HttpResponse& Context::res() {
 }
 
 Context& Context::res(HttpResponse&& response) {
-    storeResponse(std::move(response));
+    storeAssignedResponse(std::move(response));
     return *this;
 }
 

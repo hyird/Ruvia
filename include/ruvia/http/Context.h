@@ -2238,6 +2238,7 @@ private:
     [[nodiscard]] detail::ContextValueStore& values();
     [[nodiscard]] HttpResponse& responseStorage();
     void storeResponse(HttpResponse&& response);
+    void storeAssignedResponse(HttpResponse&& response);
     void storeError(std::exception_ptr exception) noexcept {
         error_ = std::move(exception);
     }
