@@ -136,6 +136,19 @@ public:
             RUVIA_MIN(1, "page is too small")))
 };
 
+class ManualSearchQueryValidator final : public ruvia::Middleware<ManualSearchQueryValidator> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        SearchQuery query(c);
+        query.q(c.req().query("q").toStringView().value_or("manual"));
+        if (auto page = c.req().query("page").toUInt32()) {
+            query.page(ruvia::UInt32{*page});
+        }
+        c.req().addValidatedData("query", std::move(query));
+        co_await next();
+    }
+};
+
 class CategoryParamValidator final : public ruvia::Middleware<CategoryParamValidator> {
 public:
     RUVIA_VALIDATE_PARAM(CategoryParams,
@@ -168,6 +181,7 @@ public:
     RUVIA_POST("/register", registerUser, RegisterValidator);
     RUVIA_POST("/contact", contact, ContactFormValidator);
     RUVIA_GET("/search", search, SearchQueryValidator);
+    RUVIA_GET("/manual-search", search, ManualSearchQueryValidator);
     RUVIA_GET("/category", category);
     RUVIA_GET("/category/:id", categoryById, CategoryParamValidator);
     RUVIA_GET("/headers", headers, RequestHeaderValidator);
