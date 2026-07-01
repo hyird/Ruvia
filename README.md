@@ -216,7 +216,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | Helper | Purpose |
 | --- | --- |
 | `c.req()` / `c.req().raw()` | Access the request facade, or the raw `ruvia::HttpRequest` when framework-level code needs the parser view. |
-| `c.req().method()` / `c.req().methodEnum()` | Read the request method as a Hono-style method string, or as the Ruvia `HttpMethod` enum when C++ control flow needs it. |
+| `c.req().method()` | Read the request method as a Hono-style method string. |
 | `c.req().url()` | Return the absolute request URL, synthesizing it from scheme, `Host`, and target when the request uses origin-form. |
 | `ruvia::routePath(c)` / `ruvia::routePath(c, index)` / `ruvia::matchedRoutes(c)` | Read Hono Route Helper-style route metadata; negative indexes address from the end, and route paths are returned without copying. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
