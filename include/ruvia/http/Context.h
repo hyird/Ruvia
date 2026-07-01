@@ -413,6 +413,10 @@ public:
             return formEntry->field();
         }
 
+        [[nodiscard]] const RequestFormField* operator[](std::string_view name) const noexcept {
+            return get(name);
+        }
+
         [[nodiscard]] bool has(std::string_view name) const noexcept {
             return entry(name) != nullptr;
         }
@@ -491,6 +495,17 @@ public:
             for (const auto& field : fields_) {
                 if (pathMatches(field, dotPath)) {
                     result.emplace_back(field.value.data(), field.value.size());
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] std::pmr::vector<const RequestFormField*> getAllAt(std::string_view dotPath) const {
+            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
+            result.reserve(countAt(dotPath));
+            for (const auto& field : fields_) {
+                if (pathMatches(field, dotPath)) {
+                    result.push_back(&field);
                 }
             }
             return result;
