@@ -71,6 +71,7 @@ private:
     using BindContext = void (*)(void*, Context*) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
     using AddTrailer = void (*)(void*, std::string_view, std::string_view);
+    using Committed = bool (*)(void*) noexcept;
 
     constexpr ResponseStreamWriter(
         void* target,
@@ -78,13 +79,15 @@ private:
         End end,
         BindContext bindContext,
         Scratch scratch,
-        AddTrailer addTrailer) noexcept
+        AddTrailer addTrailer,
+        Committed committed) noexcept
         : target_(target),
           write_(write),
           end_(end),
           bindContext_(bindContext),
           scratch_(scratch),
-          addTrailer_(addTrailer) {}
+          addTrailer_(addTrailer),
+          committed_(committed) {}
 
     void bindContext(Context& context) noexcept {
         bindContext_(target_, &context);
@@ -94,12 +97,17 @@ private:
         return scratch_(target_);
     }
 
+    [[nodiscard]] bool committed() const noexcept {
+        return committed_(target_);
+    }
+
     void* target_;
     Write write_;
     End end_;
     BindContext bindContext_;
     Scratch scratch_;
     AddTrailer addTrailer_;
+    Committed committed_;
 };
 
 namespace detail {
@@ -111,6 +119,7 @@ struct StreamingAccess final {
     using StreamBindContext = ResponseStreamWriter::BindContext;
     using StreamScratch = ResponseStreamWriter::Scratch;
     using StreamAddTrailer = ResponseStreamWriter::AddTrailer;
+    using StreamCommitted = ResponseStreamWriter::Committed;
 
     static void emplaceBodyReader(
         std::optional<BodyReader>& storage,
@@ -125,8 +134,9 @@ struct StreamingAccess final {
         StreamEnd end,
         StreamBindContext bindContext,
         StreamScratch scratch,
-        StreamAddTrailer addTrailer) noexcept {
-        return ResponseStreamWriter(target, write, end, bindContext, scratch, addTrailer);
+        StreamAddTrailer addTrailer,
+        StreamCommitted committed) noexcept {
+        return ResponseStreamWriter(target, write, end, bindContext, scratch, addTrailer, committed);
     }
 
     static void bindContext(ResponseStreamWriter& writer, Context& context) noexcept {
@@ -135,6 +145,10 @@ struct StreamingAccess final {
 
     [[nodiscard]] static std::pmr::string& scratch(const ResponseStreamWriter& writer) noexcept {
         return writer.scratch();
+    }
+
+    [[nodiscard]] static bool committed(const ResponseStreamWriter& writer) noexcept {
+        return writer.committed();
     }
 };
 

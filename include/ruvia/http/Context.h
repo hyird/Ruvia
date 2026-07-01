@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -892,22 +893,55 @@ public:
 
         void rebuildEntries() {
             entries_.clear();
-            entries_.reserve(fields_.size());
-            for (const auto& field : fields_) {
-                Entry* target = nullptr;
-                for (auto& entry : entries_) {
-                    if (entry.name() == field.name) {
-                        target = &entry;
-                        break;
-                    }
+            if (fields_.empty()) {
+                return;
+            }
+
+            auto* const resource = fields_.get_allocator().resource();
+            std::pmr::vector<std::size_t> order(resource);
+            order.reserve(fields_.size());
+            for (std::size_t i = 0; i < fields_.size(); ++i) {
+                order.push_back(i);
+            }
+            std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+                const auto leftName = std::string_view(fields_[left].name.data(), fields_[left].name.size());
+                const auto rightName = std::string_view(fields_[right].name.data(), fields_[right].name.size());
+                if (leftName == rightName) {
+                    return left < right;
                 }
-                if (target == nullptr) {
-                    target = &entries_.emplace_back(
-                        fields_.get_allocator().resource(),
-                        std::string_view(field.name.data(), field.name.size()),
-                        field.array);
+                return leftName < rightName;
+            });
+
+            struct EntryBuild final {
+                std::size_t firstIndex;
+                std::size_t begin;
+                std::size_t end;
+            };
+            std::pmr::vector<EntryBuild> builds(resource);
+            builds.reserve(order.size());
+            for (std::size_t offset = 0; offset < order.size();) {
+                const auto begin = offset;
+                const auto firstIndex = order[offset];
+                const auto name = std::string_view(fields_[firstIndex].name.data(), fields_[firstIndex].name.size());
+                do {
+                    ++offset;
+                } while (offset < order.size() &&
+                    std::string_view(fields_[order[offset]].name.data(), fields_[order[offset]].name.size()) == name);
+                builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
+            }
+            std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
+                return left.firstIndex < right.firstIndex;
+            });
+
+            entries_.reserve(builds.size());
+            for (const auto& build : builds) {
+                auto& entry = entries_.emplace_back(
+                    resource,
+                    std::string_view(fields_[build.firstIndex].name.data(), fields_[build.firstIndex].name.size()),
+                    false);
+                for (std::size_t i = build.begin; i < build.end; ++i) {
+                    entry.add(fields_[order[i]]);
                 }
-                target->add(field);
             }
         }
 

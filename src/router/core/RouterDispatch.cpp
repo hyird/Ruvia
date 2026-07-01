@@ -170,34 +170,53 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         request,
         resolution,
         services.withErrorHandler(errorHandler_));
-    if (auto* responseStream = services.responseStream(); responseStream != nullptr) {
+    auto* responseStream = services.responseStream();
+    if (responseStream != nullptr) {
         detail::StreamingAccess::bindContext(*responseStream, context);
     }
-    // A kDynamic route runs the ordinary buffered handler chain with the stream
-    // writer bound: if the handler streams, the sink commits and that is the
-    // response; otherwise the returned HttpResponse is sent buffered. outcome
-    // stays kBufferedResponse so the caller lets committed() decide.
-    if (route.isDynamicResponse()) {
-        auto response = co_await invokeRoute(route, context);
+
+    std::exception_ptr exception;
+    try {
+        // A kDynamic route runs the ordinary buffered handler chain with the
+        // stream writer bound: if the handler streams, the sink commits and that
+        // is the response; otherwise the returned HttpResponse is sent buffered.
+        // outcome stays kBufferedResponse so the caller lets committed() decide.
+        if (route.isDynamicResponse()) {
+            auto response = co_await invokeRoute(route, context);
+            co_return StreamDispatchResult(
+                std::move(response),
+                RouteStreamDispatchOutcome::kBufferedResponse);
+        }
+        if (!route.hasMiddleware()) {
+            co_await route.streamHandler()(context);
+            co_return StreamDispatchResult(
+                HttpResponse(context.resource()),
+                RouteStreamDispatchOutcome::kStreamHandled);
+        }
+        co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
+        if (!detail::ContextAccess::hasResponse(context)) {
+            if (auto contextException = context.error()) {
+                std::rethrow_exception(contextException);
+            }
+            if (outcome != RouteStreamDispatchOutcome::kStreamHandled) {
+                throw std::logic_error("context is not finalized; stream middleware must set a response, write the stream, or await next()");
+            }
+        }
+    } catch (...) {
+        exception = std::current_exception();
+    }
+
+    if (exception != nullptr) {
+        if (services.webSocket() != nullptr ||
+            (responseStream != nullptr && detail::StreamingAccess::committed(*responseStream))) {
+            std::rethrow_exception(exception);
+        }
+        auto response = co_await handleException(context, exception, true);
         co_return StreamDispatchResult(
             std::move(response),
             RouteStreamDispatchOutcome::kBufferedResponse);
     }
-    if (!route.hasMiddleware()) {
-        co_await route.streamHandler()(context);
-        co_return StreamDispatchResult(
-            HttpResponse(context.resource()),
-            RouteStreamDispatchOutcome::kStreamHandled);
-    }
-    co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
-    if (!detail::ContextAccess::hasResponse(context)) {
-        if (auto exception = context.error()) {
-            std::rethrow_exception(exception);
-        }
-        if (outcome != RouteStreamDispatchOutcome::kStreamHandled) {
-            throw std::logic_error("context is not finalized; stream middleware must set a response, write the stream, or await next()");
-        }
-    }
+
     auto response = detail::ContextAccess::hasResponse(context)
         ? detail::ContextAccess::takeResponse(context)
         : HttpResponse(context.resource());

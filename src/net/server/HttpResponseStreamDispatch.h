@@ -36,6 +36,11 @@ std::pmr::string& responseStreamScratchThunk(void* target) noexcept {
 }
 
 template <typename Sink>
+bool responseStreamCommittedThunk(void* target) noexcept {
+    return static_cast<Sink*>(target)->committed();
+}
+
+template <typename Sink>
 [[nodiscard]] ResponseStreamWriter makeResponseStreamWriter(Sink& sink) noexcept {
     return StreamingAccess::makeResponseStreamWriter(
         &sink,
@@ -43,7 +48,8 @@ template <typename Sink>
         &responseStreamEndThunk<Sink>,
         &responseStreamBindContextThunk<Sink>,
         &responseStreamScratchThunk<Sink>,
-        &responseStreamAddTrailerThunk<Sink>);
+        &responseStreamAddTrailerThunk<Sink>,
+        &responseStreamCommittedThunk<Sink>);
 }
 
 class ResponseStreamDispatchResult final {
