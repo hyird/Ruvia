@@ -196,9 +196,11 @@ private:
         c.header("X-Response-Prepared", "true");
         ruvia::HttpResponse response(c.resource());
         response.setStatus(203, {});
+        response.setHeader("X-Response-Remove", "drop");
         response.setBodyCopy("response slot\n");
         c.res(std::move(response));
         c.res().responseHeaders().append("X-Response-Slot", "true");
+        c.res().responseHeaders().remove("X-Response-Remove");
         co_return std::move(c.res());
     }
 

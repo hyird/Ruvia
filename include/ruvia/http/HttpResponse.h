@@ -161,6 +161,10 @@ public:
 
         void append(std::string_view name, std::string_view value) const;
 
+        bool remove(std::string_view name) const;
+
+        bool erase(std::string_view name) const;
+
     private:
         HttpResponse* response_;
     };
@@ -176,6 +180,7 @@ public:
     void setStatus(std::uint16_t statusCode, std::string_view statusText);
     void setHeader(std::string_view key, std::string_view value);
     void appendHeader(std::string_view key, std::string_view value);
+    bool removeHeader(std::string_view key);
     void setBodyCopy(std::string_view value);
     void setBodyView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
@@ -247,6 +252,8 @@ private:
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
     void appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
+    bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
+    void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);
     HttpResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
@@ -295,6 +302,14 @@ inline void HttpResponse::ResponseHeaders::set(std::string_view name, std::strin
 
 inline void HttpResponse::ResponseHeaders::append(std::string_view name, std::string_view value) const {
     response_->appendHeader(name, value);
+}
+
+inline bool HttpResponse::ResponseHeaders::remove(std::string_view name) const {
+    return response_->removeHeader(name);
+}
+
+inline bool HttpResponse::ResponseHeaders::erase(std::string_view name) const {
+    return remove(name);
 }
 
 inline HttpResponse::ResponseHeaders HttpResponse::responseHeaders() noexcept {
