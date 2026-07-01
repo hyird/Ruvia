@@ -230,26 +230,26 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
-        if (const auto title = form.value("title")) {
+        if (const auto* title = form["title"]) {
             body.append("\ntitle=");
-            body.append(*title);
+            body.append(title->text());
         }
         body.append("\ntag-count=");
-        appendUnsigned(body, form.values("tag").size());
-        if (const auto tag = form.value("tag")) {
+        appendUnsigned(body, form.getAll("tag").size());
+        if (const auto* tag = form.get("tag")) {
             body.append("\ntag-single=");
-            body.append(*tag);
+            body.append(tag->text());
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         body.append("\ntag-array=");
         body.append(form.isArray("tag[]") ? "true" : "false");
-        if (const auto nested = form.valueAt("obj.key1")) {
+        if (const auto* nested = form.getAt("obj.key1")) {
             body.append("\nobj.key1=");
-            body.append(*nested);
+            body.append(nested->text());
         }
         body.append("\nobj.key-count=");
-        appendUnsigned(body, form.valuesAt("obj.key1").size());
+        appendUnsigned(body, form.getAllAt("obj.key1").size());
         for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);
@@ -296,15 +296,15 @@ private:
         appendUnsigned(body, form.entries().size());
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
-        if (const auto tag = form.value("tag")) {
+        if (const auto* tag = form.get("tag")) {
             body.append("\ntag-single=");
-            body.append(*tag);
+            body.append(tag->text());
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
-        if (const auto title = form.value("title")) {
+        if (const auto* title = form["title"]) {
             body.append("\ntitle=");
-            body.append(*title);
+            body.append(title->text());
         }
         body.push_back('\n');
         co_return c.text(body);
