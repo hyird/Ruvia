@@ -160,18 +160,18 @@ Route registration is macro-only:
 
 `HEAD` falls back to an existing `GET` route when no explicit `HEAD` route is registered. `Allow` headers include `HEAD` whenever `GET` is allowed, and framework-generated `OPTIONS` remains distinct from user-defined `RUVIA_OPTIONS(...)` routes.
 
-Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes:
+Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; a `Task<HttpResponse>` middleware can return a response directly to early-exit:
 
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
         if (c.req().header("X-Api-Key") != "secret") {
-            c.res(c.jsonError(401, "unauthorized", "unauthorized"));
-            co_return;
+            co_return c.jsonError(401, "unauthorized", "unauthorized");
         }
         co_await next();
         c.header("X-Auth", "ok");
+        co_return std::move(c.res());
     }
 };
 
