@@ -9,15 +9,20 @@ concept HasStorableNextAwaiter = requires(T& next) {
     requires std::is_move_constructible_v<decltype(next().operator co_await())>;
 };
 
-static_assert(std::is_copy_constructible_v<ruvia::Next>);
-static_assert(std::is_copy_assignable_v<ruvia::Next>);
-static_assert(std::is_move_constructible_v<ruvia::Next>);
-static_assert(std::is_move_assignable_v<ruvia::Next>);
+static_assert(!std::is_copy_constructible_v<ruvia::Next>);
+static_assert(!std::is_copy_assignable_v<ruvia::Next>);
+static_assert(!std::is_move_constructible_v<ruvia::Next>);
+static_assert(!std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!HasStorableNextAwaiter<ruvia::Next>);
+
+class ByRefNextMiddleware final : public ruvia::Middleware<ByRefNextMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&);
+};
 
 class ByValueNextMiddleware final : public ruvia::Middleware<ByValueNextMiddleware> {
 public:
@@ -34,7 +39,8 @@ public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&&);
 };
 
-static_assert(ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>);
+static_assert(ruvia::detail::VoidHandleMiddleware<ByRefNextMiddleware>);
+static_assert(!ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>);
 static_assert(!ruvia::detail::VoidHandleMiddleware<ConstNextMiddleware>);
 static_assert(!ruvia::detail::VoidHandleMiddleware<RvalueNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<ByValueNextMiddleware>);
@@ -43,14 +49,14 @@ static_assert(!ruvia::detail::ResponseHandleMiddleware<RvalueNextMiddleware>);
 
 class ValueNextMiddleware final : public ruvia::Middleware<ValueNextMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
     }
 };
 
 class ReusedNextAwaitableMiddleware final : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         auto downstream = next();
         co_await std::move(downstream);
         co_await std::move(downstream);
