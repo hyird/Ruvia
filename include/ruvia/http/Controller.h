@@ -208,3 +208,6 @@ public: \
 
 #define RUVIA_VALIDATE_QUERY(body_type, ...) \
     RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kQuery, body_type, __VA_ARGS__)
+
+#define RUVIA_VALIDATE_PARAM(body_type, ...) \
+    RUVIA_VALIDATE_BODY(::ruvia::ValidationTarget::kParam, body_type, __VA_ARGS__)

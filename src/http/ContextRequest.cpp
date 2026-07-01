@@ -40,6 +40,10 @@ namespace detail {
     throw std::invalid_argument("invalid query");
 }
 
+[[noreturn]] void throwInvalidParam() {
+    throw std::invalid_argument("invalid route parameter");
+}
+
 }  // namespace detail
 
 namespace {
