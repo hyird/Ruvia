@@ -1370,6 +1370,8 @@ public:
 
     [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
 
+    [[nodiscard]] std::size_t routeIndex() const noexcept;
+
 private:
     friend class Context;
     friend Task<RawRequestClone> cloneRawRequest(const ContextRequest& request);
@@ -2279,6 +2281,13 @@ inline std::string_view ContextRequest::routePath() const noexcept {
 
 inline std::span<const ContextRequest::MatchedRoute> ContextRequest::matchedRoutes() const {
     return context_->requestMatchedRoutes();
+}
+
+inline std::size_t ContextRequest::routeIndex() const noexcept {
+    if (context_->routePath_.empty() || context_->routeMethod_ == HttpMethod::kUnknown) {
+        return 0;
+    }
+    return context_->routeMiddlewareCount_;
 }
 
 inline std::string_view routePath(const Context& context) noexcept {
