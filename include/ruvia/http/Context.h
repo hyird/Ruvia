@@ -1792,6 +1792,61 @@ public:
 
     [[nodiscard]] HttpResponse body(std::pmr::string& body, ResponseInit init) const;
 
+    [[nodiscard]] HttpResponse newResponse(
+        std::string_view body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::string_view body,
+        std::uint16_t statusCode,
+        std::initializer_list<HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(std::string_view body, ResponseInit init) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::pmr::string& body,
+        std::uint16_t statusCode,
+        std::initializer_list<HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(std::pmr::string& body, ResponseInit init) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse newResponse(
+        const char (&body)[N],
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse newResponse(
+        const char (&body)[N],
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse newResponse(
+        const char (&body)[N],
+        std::uint16_t statusCode,
+        std::initializer_list<HttpHeaderView> headers) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse newResponse(const char (&body)[N], ResponseInit init) const;
+
     [[nodiscard]] HttpResponse body(
         const std::pmr::string& body,
         std::uint16_t statusCode = 0,

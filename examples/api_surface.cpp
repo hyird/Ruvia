@@ -855,6 +855,32 @@ private:
     }
 };
 
+class FastSurfaceController final : public ruvia::Controller<FastSurfaceController> {
+public:
+    RUVIA_CONTROLLER_GROUP("/surface-fast")
+
+    RUVIA_ROUTES_BEGIN
+    RUVIA_GET("/res-slot-merge", responseSlotMerge);
+    RUVIA_GET("/new-response", newResponseBody);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::Task<ruvia::HttpResponse> responseSlotMerge(ruvia::Context& c) {
+        c.res().headers().set("X-Res-Slot", "kept");
+        co_return c.text("response slot merge\n");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> newResponseBody(ruvia::Context& c) {
+        c.header("X-New-Prepared", "true");
+        const ruvia::HttpHeaderView headers[] = {{"X-New-Response", "true"}};
+        co_return c.newResponse(
+            "new response\n",
+            ruvia::Context::ResponseInit{
+                .status = 201,
+                .headers = headers});
+    }
+};
+
 int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0", 8088)
