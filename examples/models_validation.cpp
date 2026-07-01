@@ -176,7 +176,7 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
-        const auto& request = c.req().valid<RegisterRequest>();
+        const auto& request = c.req().valid<RegisterRequest>("json");
 
         RegisterResponse response(c);
         response.username(request.username()->view());

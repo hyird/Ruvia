@@ -1242,7 +1242,7 @@ public:
     [[nodiscard]] Task<T> form() const;
 
     template <typename T>
-    [[nodiscard]] const T& valid() const;
+    [[nodiscard]] const T& valid() const = delete;
 
     template <typename T>
     [[nodiscard]] const T& valid(ValidationTarget target) const;
@@ -2281,11 +2281,6 @@ inline ParamValue ContextRequest::param(std::string_view name) const {
 
 inline const RequestNameValueList& ContextRequest::param() const {
     return context_->routeParams();
-}
-
-template <typename T>
-inline const T& ContextRequest::valid() const {
-    return valid<T>(ValidationTarget::kJson);
 }
 
 template <typename T>
