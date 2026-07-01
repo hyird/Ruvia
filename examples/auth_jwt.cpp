@@ -43,7 +43,7 @@ public:
 
         try {
             const auto payload = ruvia::jwtVerify(*token, verifyOptions(), c.resource());
-            c.header("X-Jwt-Subject", payload.subject());
+            c.setHeader("X-Jwt-Subject", payload.subject());
         } catch (...) {
             c.res(c.error(401, "invalid_token", "invalid bearer token"));
             co_return;

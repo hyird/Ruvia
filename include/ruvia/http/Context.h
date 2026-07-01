@@ -1286,6 +1286,14 @@ public:
 
     Context& header(std::string_view name, std::string_view value, HeaderOptions options);
 
+    Context& setHeader(std::string_view name, std::string_view value) {
+        return header(name, value);
+    }
+
+    Context& setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
+        return header(name, value, options);
+    }
+
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
     Context& deleteCookie(std::string_view name, CookieOptions options = {});
 

@@ -12,7 +12,7 @@ class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
         co_await next();
-        c.header("X-Example", "basic-http");
+        c.setHeader("X-Example", "basic-http");
     }
 };
 
