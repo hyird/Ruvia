@@ -39,6 +39,18 @@ static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!HasPlainAddressOf<const ruvia::Next>);
 static_assert(!HasPlainAddressOf<ruvia::Next::Awaitable>);
 static_assert(!HasLvalueAwait<ruvia::Next::Awaitable>);
+static_assert(!std::is_copy_constructible_v<ruvia::RequestNameValueList>);
+static_assert(!std::is_copy_assignable_v<ruvia::RequestNameValueList>);
+static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);
+static_assert(std::is_move_assignable_v<ruvia::RequestNameValueList>);
+static_assert(!std::is_copy_constructible_v<ruvia::RequestValueGroup>);
+static_assert(!std::is_copy_assignable_v<ruvia::RequestValueGroup>);
+static_assert(std::is_move_constructible_v<ruvia::RequestValueGroup>);
+static_assert(std::is_move_assignable_v<ruvia::RequestValueGroup>);
+static_assert(!std::is_copy_constructible_v<ruvia::RequestValueGroupList>);
+static_assert(!std::is_copy_assignable_v<ruvia::RequestValueGroupList>);
+static_assert(std::is_move_constructible_v<ruvia::RequestValueGroupList>);
+static_assert(std::is_move_assignable_v<ruvia::RequestValueGroupList>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 static_assert(std::is_same_v<

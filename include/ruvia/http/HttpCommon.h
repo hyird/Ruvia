@@ -81,8 +81,8 @@ public:
     explicit RequestNameValueList(std::pmr::memory_resource* resource = nullptr)
         : items_(detail::pmrResourceOrDefault(resource)) {}
 
-    RequestNameValueList(const RequestNameValueList&) = default;
-    RequestNameValueList& operator=(const RequestNameValueList&) = default;
+    RequestNameValueList(const RequestNameValueList&) = delete;
+    RequestNameValueList& operator=(const RequestNameValueList&) = delete;
     RequestNameValueList(RequestNameValueList&&) noexcept = default;
     RequestNameValueList& operator=(RequestNameValueList&&) noexcept = default;
 
@@ -225,6 +225,11 @@ public:
         : name_(name),
           values_(detail::pmrResourceOrDefault(resource)) {}
 
+    RequestValueGroup(const RequestValueGroup&) = delete;
+    RequestValueGroup& operator=(const RequestValueGroup&) = delete;
+    RequestValueGroup(RequestValueGroup&&) noexcept = default;
+    RequestValueGroup& operator=(RequestValueGroup&&) noexcept = default;
+
     [[nodiscard]] std::string_view name() const noexcept {
         return name_;
     }
@@ -266,8 +271,8 @@ public:
     explicit RequestValueGroupList(std::pmr::memory_resource* resource = nullptr)
         : groups_(detail::pmrResourceOrDefault(resource)) {}
 
-    RequestValueGroupList(const RequestValueGroupList&) = default;
-    RequestValueGroupList& operator=(const RequestValueGroupList&) = default;
+    RequestValueGroupList(const RequestValueGroupList&) = delete;
+    RequestValueGroupList& operator=(const RequestValueGroupList&) = delete;
     RequestValueGroupList(RequestValueGroupList&&) noexcept = default;
     RequestValueGroupList& operator=(RequestValueGroupList&&) noexcept = default;
 
