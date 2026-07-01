@@ -900,6 +900,9 @@ public:
         }
 
         [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
+            if (isPathName(name)) {
+                return pathEntry(name);
+            }
             for (const auto& entry : entries_) {
                 if (entry.name() == name) {
                     return &entry;
@@ -1030,6 +1033,10 @@ public:
         }
 
     private:
+        [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
+            return name.find('.') != std::string_view::npos;
+        }
+
         [[nodiscard]] std::pmr::vector<const RequestFormField*> getAllAtChild(
             std::string_view dotPath,
             std::string_view name) const {
