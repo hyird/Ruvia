@@ -1,6 +1,7 @@
 #include "../RouteTable.h"
 
 #include "../../http/ContextInternal.h"
+#include "ruvia/http/Error.h"
 
 #include <exception>
 #include <stdexcept>
@@ -14,6 +15,14 @@ void storeRepeatedNextError(Context& context) {
     detail::ContextAccess::setError(
         context,
         std::make_exception_ptr(std::logic_error("next() called multiple times")));
+    detail::ContextAccess::setResponse(
+        context,
+        makeErrorResponse(
+            context.resource(),
+            HttpErrorInfo{
+                .statusCode = 500,
+                .code = "next_called_multiple_times",
+                .message = "next() called multiple times"}));
 }
 
 }  // namespace
