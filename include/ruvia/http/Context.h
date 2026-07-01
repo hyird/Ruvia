@@ -148,52 +148,138 @@ public:
 
     class RequestFormData final {
     public:
-        explicit RequestFormData(std::pmr::memory_resource* resource)
-            : fields_(resource) {}
+        class Entry final {
+        public:
+            Entry(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                bool array)
+                : name_(name),
+                  fields_(resource),
+                  array_(array) {}
 
-        explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields) noexcept
-            : fields_(std::move(fields)) {}
+            [[nodiscard]] std::string_view name() const noexcept {
+                return name_;
+            }
+
+            [[nodiscard]] const RequestFormField* field() const noexcept {
+                return fields_.empty() ? nullptr : fields_.front();
+            }
+
+            [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
+                return std::span<const RequestFormField* const>(fields_.data(), fields_.size());
+            }
+
+            [[nodiscard]] std::size_t size() const noexcept {
+                return fields_.size();
+            }
+
+            [[nodiscard]] bool empty() const noexcept {
+                return fields_.empty();
+            }
+
+            [[nodiscard]] bool array() const noexcept {
+                return array_;
+            }
+
+            [[nodiscard]] bool multiple() const noexcept {
+                return fields_.size() > 1;
+            }
+
+        private:
+            friend class RequestFormData;
+
+            void add(const RequestFormField& field) {
+                fields_.push_back(&field);
+                array_ = array_ || field.array;
+            }
+
+            std::string_view name_;
+            std::pmr::vector<const RequestFormField*> fields_;
+            bool array_{false};
+        };
+
+        explicit RequestFormData(std::pmr::memory_resource* resource)
+            : fields_(resource),
+              entries_(resource) {}
+
+        explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields)
+            : fields_(std::move(fields)),
+              entries_(fields_.get_allocator().resource()) {
+            rebuildEntries();
+        }
 
         [[nodiscard]] std::span<const RequestFormField> fields() const noexcept {
             return fields_;
         }
 
-        [[nodiscard]] const RequestFormField* get(std::string_view name) const noexcept {
-            for (const auto& field : fields_) {
-                if (field.name == name) {
-                    return &field;
+        [[nodiscard]] std::span<const Entry> entries() const noexcept {
+            return entries_;
+        }
+
+        [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
+            for (const auto& entry : entries_) {
+                if (entry.name() == name) {
+                    return &entry;
                 }
             }
             return nullptr;
         }
 
+        [[nodiscard]] const RequestFormField* get(std::string_view name) const noexcept {
+            const auto* formEntry = entry(name);
+            if (formEntry == nullptr) {
+                return nullptr;
+            }
+            return formEntry->field();
+        }
+
         [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return get(name) != nullptr;
+            return entry(name) != nullptr;
         }
 
         [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
-            std::size_t result = 0;
-            for (const auto& field : fields_) {
-                if (field.name == name) {
-                    ++result;
-                }
-            }
-            return result;
+            const auto* formEntry = entry(name);
+            return formEntry == nullptr ? 0 : formEntry->size();
         }
 
         [[nodiscard]] std::pmr::vector<const RequestFormField*> getAll(std::string_view name) const {
             std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            result.reserve(count(name));
-            for (const auto& field : fields_) {
-                if (field.name == name) {
-                    result.push_back(&field);
-                }
+            const auto* formEntry = entry(name);
+            if (formEntry == nullptr) {
+                return result;
+            }
+            result.reserve(formEntry->size());
+            for (const auto* field : formEntry->fields()) {
+                result.push_back(field);
             }
             return result;
         }
 
     private:
+        void rebuildEntries() {
+            entries_.clear();
+            entries_.reserve(fields_.size());
+            for (const auto& field : fields_) {
+                Entry* target = nullptr;
+                for (auto& entry : entries_) {
+                    if (entry.name() == field.name) {
+                        target = &entry;
+                        break;
+                    }
+                }
+                if (target == nullptr) {
+                    target = &entries_.emplace_back(
+                        fields_.get_allocator().resource(),
+                        std::string_view(field.name.data(), field.name.size()),
+                        field.array);
+                }
+                target->add(field);
+            }
+        }
+
         std::pmr::vector<RequestFormField> fields_;
+        std::pmr::vector<Entry> entries_;
     };
 
     [[nodiscard]] const HttpRequest& raw() const noexcept;
