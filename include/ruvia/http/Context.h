@@ -1389,6 +1389,12 @@ public:
     template <typename T>
     [[nodiscard]] const T& valid(std::string_view target) const;
 
+    template <typename T>
+    void addValidatedData(ValidationTarget target, T&& data) const;
+
+    template <typename T>
+    void addValidatedData(std::string_view target, T&& data) const;
+
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
     [[nodiscard]] Task<RequestFormData> parseBody() const {
@@ -2469,6 +2475,19 @@ void setValidatedBody(Context& context, ValidationTarget target, T&& body) {
 }
 
 }  // namespace detail
+
+template <typename T>
+inline void ContextRequest::addValidatedData(ValidationTarget target, T&& data) const {
+    detail::setValidatedBody(
+        const_cast<Context&>(*context_),
+        target,
+        std::forward<T>(data));
+}
+
+template <typename T>
+inline void ContextRequest::addValidatedData(std::string_view target, T&& data) const {
+    addValidatedData(validationTargetFromName(target), std::forward<T>(data));
+}
 
 }  // namespace ruvia
 
