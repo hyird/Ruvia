@@ -246,7 +246,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().responseHeaders().append(...)` to append a response header after `co_await next()`, mirroring Hono's `c.res.headers.append(...)` shape. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
-| `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |
+| `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. Use `c.getIf<T>(key)` / `c.varIf<T>(key)` when Hono-like missing-value semantics are needed instead of throwing. |
 | `c.body(...)` | Return a raw response body without setting a content type. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
