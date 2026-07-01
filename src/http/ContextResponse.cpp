@@ -636,6 +636,15 @@ Context& Context::setRenderer(Renderer renderer) noexcept {
     return *this;
 }
 
+Context& Context::setLayout(Layout layout) noexcept {
+    layout_ = layout;
+    return *this;
+}
+
+Context::Layout Context::getLayout() const noexcept {
+    return layout_;
+}
+
 Task<HttpResponse> Context::render(std::string_view body) {
     return render(body, RenderOptions{});
 }

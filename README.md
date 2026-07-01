@@ -253,7 +253,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; `newResponse` is the Hono-named alias for the same response-init shape. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
-| `c.html(...)` / `co_await c.render(body, {.title = ...})` / `co_await c.render(body, {.head = ...})` | Return HTML directly or through a middleware-installed renderer with explicit title or head metadata. |
+| `c.html(...)` / `c.setRenderer(...)` / `c.setLayout(...)` / `c.getLayout()` / `co_await c.render(body, {.title = ...})` / `co_await c.render(body, {.head = ...})` | Return HTML directly or through middleware-installed Hono-style renderer/layout hooks with explicit title or head metadata. |
 | `c.text(body, 201, {{"X-Trace", "..."}})` / `c.text(body, {.status = ..., .headers = ...})` | Use Hono-style response init options with `body`, `text`, `json`, or `html`. |
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
