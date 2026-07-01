@@ -33,7 +33,10 @@ public:
         Awaitable& operator=(Awaitable&&) = delete;
 
         [[nodiscard]] auto operator co_await() && {
-            return invoke_(state_).operator co_await();
+            auto state = state_;
+            state.repeated = state.repeated || awaited_;
+            awaited_ = true;
+            return invoke_(state).operator co_await();
         }
         [[nodiscard]] auto operator co_await() & = delete;
         [[nodiscard]] auto operator co_await() const& = delete;
@@ -50,6 +53,7 @@ public:
 
         State state_;
         Invoke invoke_{nullptr};
+        bool awaited_{false};
     };
 
     Next(const Next&) = delete;

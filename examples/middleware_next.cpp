@@ -2,14 +2,28 @@
 #include "ruvia/http/Controller.h"
 
 #include <type_traits>
+#include <utility>
 
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
 static_assert(!std::is_move_assignable_v<ruvia::Next>);
+static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
+static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 
 class BorrowedNextMiddleware final : public ruvia::Middleware<BorrowedNextMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
         co_await next();
+    }
+};
+
+class ReusedNextAwaitableMiddleware final : public ruvia::Middleware<ReusedNextAwaitableMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        auto downstream = next();
+        co_await std::move(downstream);
+        co_await std::move(downstream);
     }
 };
 
@@ -19,6 +33,7 @@ public:
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/", ok);
+    RUVIA_GET("/reused-awaitable", ok, ReusedNextAwaitableMiddleware);
     RUVIA_ROUTES_END
 
 private:
