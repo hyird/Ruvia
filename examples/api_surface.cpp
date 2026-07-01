@@ -380,6 +380,12 @@ private:
         appendUnsigned(body, nestedObject.values("key1").size());
         body.append("\nobj.key-count=");
         appendUnsigned(body, nestedObject.count("key1"));
+        body.append("\nobj.entries=");
+        appendUnsigned(body, nestedObject.entries().size());
+        body.append("\nobj.groups=");
+        appendUnsigned(body, nestedObject.groups().size());
+        body.append("\nobj.keys=");
+        appendUnsigned(body, nestedObject.keys().size());
         for (const auto& field : form.entries()) {
             body.append("\n");
             body.append(field.name);
