@@ -978,6 +978,10 @@ private:
     const Context* context_{nullptr};
 };
 
+[[nodiscard]] inline Task<ContextRequest::RawRequestClone> cloneRawRequest(const ContextRequest& request) {
+    return request.cloneRawRequest();
+}
+
 class Context final {
 private:
     friend class ContextRequest;
