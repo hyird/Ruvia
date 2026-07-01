@@ -156,6 +156,7 @@ public:
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     void setStatus(std::uint16_t statusCode, std::string_view statusText);
     void setHeader(std::string_view key, std::string_view value);
+    void appendHeader(std::string_view key, std::string_view value);
     void setBodyCopy(std::string_view value);
     void setBodyView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
