@@ -80,6 +80,26 @@ void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     }
 }
 
+[[nodiscard]] bool equalsIgnoreAsciiCase(std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        auto a = static_cast<unsigned char>(left[i]);
+        auto b = static_cast<unsigned char>(right[i]);
+        if (a >= 'A' && a <= 'Z') {
+            a = static_cast<unsigned char>(a - 'A' + 'a');
+        }
+        if (b >= 'A' && b <= 'Z') {
+            b = static_cast<unsigned char>(b - 'A' + 'a');
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void assignUrlDecodedOrCopy(
     std::pmr::string& output,
     std::string_view input,
@@ -137,6 +157,15 @@ void appendParsedBodyField(
 }
 
 }  // namespace
+
+std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
+    for (const auto& header : headers_) {
+        if (equalsIgnoreAsciiCase(header.name(), name)) {
+            return header.value();
+        }
+    }
+    return {};
+}
 
 const RequestNameValueList& Context::requestHeaders() const {
     if (requestHeaders_ == nullptr) {
@@ -307,6 +336,27 @@ Task<std::string_view> Context::requestBody() const {
     }
     bodyDecoded_ = true;
     co_return std::string_view(decoded.data(), decoded.size());
+}
+
+Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
+    RawRequestClone clone(context_->resource());
+    clone.method_ = raw().method();
+    clone.target_.assign(raw().target().data(), raw().target().size());
+    const auto requestUrl = url();
+    clone.url_.assign(requestUrl.data(), requestUrl.size());
+    clone.path_.assign(raw().path().data(), raw().path().size());
+    clone.queryString_.assign(raw().queryString().data(), raw().queryString().size());
+    clone.httpVersion_.assign(raw().httpVersion().data(), raw().httpVersion().size());
+    clone.headers_.reserve(raw().headers().size());
+    for (const auto& header : raw().headers()) {
+        clone.headers_.emplace_back(context_->resource(), header.name, header.value);
+    }
+    const auto requestBody = co_await text();
+    clone.body_.assign(requestBody.data(), requestBody.size());
+    clone.remoteAddress_.assign(raw().remoteAddress().data(), raw().remoteAddress().size());
+    clone.clientCertificate_.assign(raw().clientCertificate().data(), raw().clientCertificate().size());
+    clone.secure_ = raw().isSecure();
+    co_return std::move(clone);
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {

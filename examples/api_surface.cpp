@@ -78,6 +78,7 @@ public:
     RUVIA_POST("/form-data", formDataBody);
     RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/blob", blobBody);
+    RUVIA_POST("/clone-raw", cloneRawRequest);
     RUVIA_POST("/discard", discard);
     RUVIA_PUT("/items/:id", replaceItem);
     RUVIA_PATCH("/items/:id", patchItem);
@@ -281,6 +282,26 @@ private:
         appendUnsigned(body, blob.size());
         body.append("\ntype=");
         body.append(blob.type());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> cloneRawRequest(ruvia::Context& c) {
+        const auto consumed = co_await c.req().text();
+        auto clone = co_await c.req().cloneRawRequest();
+        std::pmr::string body(c.allocator<char>());
+        body.append("method=");
+        body.append(clone.method());
+        body.append("\npath=");
+        body.append(clone.path());
+        body.append("\nheaders=");
+        appendUnsigned(body, clone.headers().size());
+        body.append("\nbody=");
+        body.append(clone.body());
+        body.append("\nconsumed=");
+        body.append(consumed);
+        body.append("\ntype=");
+        body.append(clone.blob().type());
         body.push_back('\n');
         co_return c.text(body);
     }
