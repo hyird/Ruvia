@@ -162,7 +162,6 @@ inline void appendFormEncodedComponent(std::pmr::string& output, std::string_vie
 
 inline void appendRouteParamsAsForm(Context& c, std::pmr::string& output) {
     const auto& params = c.req().param();
-    std::pmr::string scratch(c.resource());
     for (std::size_t i = 0; i < params.size(); ++i) {
         const auto& param = params[i];
         if (i != 0) {
@@ -170,14 +169,7 @@ inline void appendRouteParamsAsForm(Context& c, std::pmr::string& output) {
         }
         appendFormEncodedComponent(output, param.name);
         output.push_back('=');
-        if (hasUrlEncoding(param.value, UrlDecodeMode::kPercent)) {
-            if (!decodeUrlComponent(param.value, scratch, UrlDecodeMode::kPercent)) {
-                throwInvalidParam();
-            }
-            appendFormEncodedComponent(output, scratch);
-        } else {
-            appendFormEncodedComponent(output, param.value);
-        }
+        appendFormEncodedComponent(output, param.value);
     }
 }
 

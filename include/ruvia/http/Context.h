@@ -884,6 +884,7 @@ private:
     mutable RequestNameValueList* requestQuery_{nullptr};
     mutable std::pmr::vector<std::pmr::string>* requestQueriesStorage_{nullptr};
     mutable RequestValueGroupList* requestQueries_{nullptr};
+    mutable std::pmr::vector<std::pmr::string>* routeParamStorage_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
