@@ -43,6 +43,21 @@ concept HasUnaryContextHeader = requires(const T& context) {
     context.header(std::string_view{});
 };
 
+template <typename T>
+concept HasUnaryContextQuery = requires(const T& context) {
+    context.query(std::string_view{});
+};
+
+template <typename T>
+concept HasUnaryContextCookie = requires(const T& context) {
+    context.cookie(std::string_view{});
+};
+
+template <typename T>
+concept HasUnaryContextParam = requires(const T& context) {
+    context.param(std::string_view{});
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -71,6 +86,9 @@ static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().header(std:
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 static_assert(!HasDefaultValid<CurrentUser>);
 static_assert(!HasUnaryContextHeader<ruvia::Context>);
+static_assert(!HasUnaryContextQuery<ruvia::Context>);
+static_assert(!HasUnaryContextCookie<ruvia::Context>);
+static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -248,10 +266,10 @@ private:
         body.append(request.header("X-Dupe").value_or(""));
         body.append("\nrequest-header-missing=");
         body.append(request.header("X-Missing").has_value() ? "present" : "missing");
-        body.append("\nshortcut-query-tag=");
-        body.append(c.query("tag").value_or(""));
-        body.append("\nshortcut-cookie-surface=");
-        if (auto surfaceCookie = c.cookie("surface")) {
+        body.append("\nrequest-query-tag=");
+        body.append(c.req().query("tag").value_or(""));
+        body.append("\nrequest-cookie-surface=");
+        if (auto surfaceCookie = c.req().cookie("surface")) {
             body.append(*surfaceCookie);
         }
         body.append("\nquery-groups=");
@@ -296,8 +314,8 @@ private:
         appendUnsigned(body, request.routeIndex());
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
-        body.append("\nshortcut-param-id=");
-        body.append(c.param("id").value_or(""));
+        body.append("\nrequest-param-id=");
+        body.append(c.req().param("id").value_or(""));
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
         appendUnsigned(body, tags.size());
