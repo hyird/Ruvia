@@ -303,6 +303,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     Context& context,
     std::exception_ptr exception,
     bool closeConnection) const {
+    detail::ContextAccess::setError(context, exception);
     OwnedHttpErrorInfo errorInfo(context.resource(), exception);
 
     co_return co_await handleError(context, errorInfo.info, closeConnection);
