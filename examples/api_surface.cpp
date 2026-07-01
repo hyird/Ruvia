@@ -328,8 +328,14 @@ private:
             body.append("\nobj.key1=");
             body.append(*nestedText);
         }
+        if (auto nestedValue = nestedObject.value("key1")) {
+            body.append("\nobj.key1-value=");
+            body.append(*nestedValue);
+        }
         body.append("\nobj.key1-all=");
         appendUnsigned(body, nestedObject.getAll("key1").size());
+        body.append("\nobj.key1-values=");
+        appendUnsigned(body, nestedObject.values("key1").size());
         body.append("\nobj.key-count=");
         appendUnsigned(body, nestedObject.count("key1"));
         for (const auto& field : form.entries()) {

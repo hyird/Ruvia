@@ -631,6 +631,17 @@ public:
                 return at(name);
             }
 
+            [[nodiscard]] std::optional<std::string_view> value(std::string_view name) const noexcept {
+                return form_ == nullptr ? std::nullopt : form_->valueAtChild(dotPath_, name);
+            }
+
+            [[nodiscard]] std::pmr::vector<std::string_view> values(std::string_view name) const {
+                if (form_ == nullptr) {
+                    return std::pmr::vector<std::string_view>(std::pmr::get_default_resource());
+                }
+                return form_->valuesAtChild(dotPath_, name);
+            }
+
             [[nodiscard]] bool has(std::string_view name) const noexcept {
                 return form_ != nullptr && form_->countAtChild(dotPath_, name) != 0;
             }
@@ -832,6 +843,41 @@ public:
             for (const auto& field : fields_) {
                 if (pathMatchesChild(field, dotPath, name)) {
                     result.push_back(&field);
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] const RequestFormField* getAtChild(
+            std::string_view dotPath,
+            std::string_view name) const noexcept {
+            const RequestFormField* selected = nullptr;
+            for (const auto& field : fields_) {
+                if (pathMatchesChild(field, dotPath, name)) {
+                    selected = &field;
+                }
+            }
+            return selected;
+        }
+
+        [[nodiscard]] std::optional<std::string_view> valueAtChild(
+            std::string_view dotPath,
+            std::string_view name) const noexcept {
+            const auto* field = getAtChild(dotPath, name);
+            if (field == nullptr) {
+                return std::nullopt;
+            }
+            return std::string_view(field->value.data(), field->value.size());
+        }
+
+        [[nodiscard]] std::pmr::vector<std::string_view> valuesAtChild(
+            std::string_view dotPath,
+            std::string_view name) const {
+            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+            result.reserve(countAtChild(dotPath, name));
+            for (const auto& field : fields_) {
+                if (pathMatchesChild(field, dotPath, name)) {
+                    result.emplace_back(field.value.data(), field.value.size());
                 }
             }
             return result;
