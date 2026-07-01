@@ -82,14 +82,23 @@ private:
     static constexpr std::uint64_t kMaxStateTimeMs = UINT64_MAX >> kCountBits;
     static constexpr std::uintptr_t kGlobalScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
+    static constexpr std::size_t kSlotAlignment = 64;
 
-    struct Slot final {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
+    struct alignas(kSlotAlignment) Slot final {
         std::atomic<std::uintptr_t> scope{0};
         std::atomic<std::uint64_t> keyHash{kEmptyHash};
         std::atomic<std::uint16_t> keySize{0};
         std::array<std::atomic<std::uint64_t>, kMaxKeyWords> keyWords{};
         std::atomic<std::uint64_t> state{0};
     };
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+    static_assert(alignof(Slot) >= kSlotAlignment, "rate limit slots must not share a cache line");
 
     [[nodiscard]] static std::pmr::polymorphic_allocator<Slot> allocatorFor(
         std::pmr::memory_resource* resource) noexcept {

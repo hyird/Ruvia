@@ -32,6 +32,17 @@ namespace {
     return false;
 }
 
+[[nodiscard]] bool responseHasHeaderName(
+    const HttpResponse& response,
+    std::string_view name) noexcept {
+    for (const auto& header : response.headers()) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void mergeResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) {
     const auto slotHeaderCount = slot.headers().size();
     if (slotHeaderCount > 0) {
@@ -45,7 +56,7 @@ void mergeResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) 
             if (!responseHasHeaderValue(response, name, value)) {
                 detail::appendResponseHeaderValidated(response, name, value, knownBit);
             }
-        } else {
+        } else if (!responseHasHeaderName(response, name)) {
             detail::setResponseHeaderValidated(response, name, value, knownBit);
         }
     }
