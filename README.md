@@ -247,6 +247,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
 | `c.html(...)` / `co_await c.render(body, {.head = ...})` | Return HTML directly or through a middleware-installed renderer with explicit head metadata. |
+| `c.text(body, {.status = ..., .headers = ...})` | Use Hono-style response init options with `body`, `text`, `json`, or `html`. |
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
 | `c.redirect(location)` | Return a redirect response. |

@@ -54,4 +54,11 @@ inline HttpResponse Context::json(
     return response;
 }
 
+template <typename T>
+inline HttpResponse Context::json(const T& value, ResponseInit init) const {
+    auto response = json(value, init.status, init.statusText);
+    applyExplicitResponseHeaders(response, init.headers);
+    return response;
+}
+
 }  // namespace ruvia

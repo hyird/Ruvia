@@ -143,7 +143,7 @@ private:
         co_return c
             .header("X-Raw", "first")
             .header("X-Raw", "second", {.append = true})
-            .body("raw body\n", 202, kRawHeaders);
+            .body("raw body\n", {.status = 202, .headers = kRawHeaders});
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {

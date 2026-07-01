@@ -196,6 +196,13 @@ HttpResponse Context::body(
     return response;
 }
 
+HttpResponse Context::body(std::string_view body, ResponseInit init) const {
+    HttpResponse response(resource());
+    response.setBodyView(body);
+    applyResponseState(response, init.status, init.statusText, init.headers);
+    return response;
+}
+
 HttpResponse Context::body(
     std::pmr::string& body,
     std::uint16_t statusCode,
@@ -213,6 +220,13 @@ HttpResponse Context::body(
     HttpResponse response(resource());
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
+    HttpResponse response(resource());
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
 
@@ -238,6 +252,14 @@ HttpResponse Context::text(
     return response;
 }
 
+HttpResponse Context::text(std::string_view body, ResponseInit init) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    response.setBodyView(body);
+    applyResponseState(response, init.status, init.statusText, init.headers);
+    return response;
+}
+
 HttpResponse Context::text(
     std::pmr::string& body,
     std::uint16_t statusCode,
@@ -257,6 +279,14 @@ HttpResponse Context::text(
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
 
@@ -304,6 +334,14 @@ HttpResponse Context::html(
     return response;
 }
 
+HttpResponse Context::html(std::string_view body, ResponseInit init) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyView(body);
+    applyResponseState(response, init.status, init.statusText, init.headers);
+    return response;
+}
+
 HttpResponse Context::html(
     std::pmr::string& body,
     std::uint16_t statusCode,
@@ -323,6 +361,14 @@ HttpResponse Context::html(
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {
+    HttpResponse response(resource());
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    response.setBodyOwned(std::move(body));
+    applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
 

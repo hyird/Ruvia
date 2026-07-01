@@ -293,6 +293,12 @@ public:
         bool append{false};
     };
 
+    struct ResponseInit final {
+        std::uint16_t status{0};
+        std::string_view statusText{};
+        std::span<const HttpHeaderView> headers{};
+    };
+
     ~Context() = default;
 
     Context(const Context&) = delete;
@@ -449,6 +455,8 @@ public:
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
 
+    [[nodiscard]] HttpResponse body(std::string_view body, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse body(
         std::pmr::string& body,
         std::uint16_t statusCode = 0,
@@ -458,6 +466,8 @@ public:
         std::pmr::string& body,
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(std::pmr::string& body, ResponseInit init) const;
 
     [[nodiscard]] HttpResponse body(
         const std::pmr::string& body,
@@ -496,6 +506,9 @@ public:
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
 
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse body(const char (&body)[N], ResponseInit init) const;
+
     [[nodiscard]] HttpResponse text(
         std::string_view body,
         std::uint16_t statusCode = 0,
@@ -506,6 +519,8 @@ public:
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
 
+    [[nodiscard]] HttpResponse text(std::string_view body, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse text(
         std::pmr::string& body,
         std::uint16_t statusCode = 0,
@@ -515,6 +530,8 @@ public:
         std::pmr::string& body,
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse text(std::pmr::string& body, ResponseInit init) const;
 
     [[nodiscard]] HttpResponse text(
         const std::pmr::string& body,
@@ -552,6 +569,9 @@ public:
         const char (&body)[N],
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse text(const char (&body)[N], ResponseInit init) const;
 
     template <typename T>
     [[nodiscard]] HttpResponse json(
@@ -565,6 +585,9 @@ public:
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
 
+    template <typename T>
+    [[nodiscard]] HttpResponse json(const T& value, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse html(
         std::string_view body,
         std::uint16_t statusCode = 0,
@@ -575,6 +598,8 @@ public:
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
 
+    [[nodiscard]] HttpResponse html(std::string_view body, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse html(
         std::pmr::string& body,
         std::uint16_t statusCode = 0,
@@ -584,6 +609,8 @@ public:
         std::pmr::string& body,
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse html(std::pmr::string& body, ResponseInit init) const;
 
     [[nodiscard]] HttpResponse html(
         const std::pmr::string& body,
@@ -621,6 +648,9 @@ public:
         const char (&body)[N],
         std::uint16_t statusCode,
         std::span<const HttpHeaderView> headers) const;
+
+    template <std::size_t N>
+    [[nodiscard]] HttpResponse html(const char (&body)[N], ResponseInit init) const;
 
     Context& setRenderer(Renderer renderer) noexcept;
 

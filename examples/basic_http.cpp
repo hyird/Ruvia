@@ -8,6 +8,14 @@
 #include "ruvia/http/Controller.h"
 #include "ruvia/http/Error.h"
 
+namespace {
+
+inline constexpr ruvia::HttpHeaderView kEchoHeaders[] = {
+    {"X-Echo", "true"}
+};
+
+}  // namespace
+
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
@@ -102,7 +110,7 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        co_return c.status(201).header("X-Echo", "true").text(owned);
+        co_return c.text(owned, {.status = 201, .headers = kEchoHeaders});
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
