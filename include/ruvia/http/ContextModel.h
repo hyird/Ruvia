@@ -55,6 +55,17 @@ inline HttpResponse Context::json(
 }
 
 template <typename T>
+inline HttpResponse Context::json(
+    const T& value,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return json(
+        value,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
+}
+
+template <typename T>
 inline HttpResponse Context::json(const T& value, ResponseInit init) const {
     auto response = json(value, init.status, init.statusText);
     applyExplicitResponseHeaders(response, init.headers);

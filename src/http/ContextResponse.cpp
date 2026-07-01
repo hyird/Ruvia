@@ -201,6 +201,16 @@ HttpResponse Context::body(
     return response;
 }
 
+HttpResponse Context::body(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
+}
+
 HttpResponse Context::body(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
     response.setBodyView(body);
@@ -226,6 +236,16 @@ HttpResponse Context::body(
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
+}
+
+HttpResponse Context::body(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
@@ -257,6 +277,16 @@ HttpResponse Context::text(
     return response;
 }
 
+HttpResponse Context::text(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return text(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
+}
+
 HttpResponse Context::text(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
@@ -285,6 +315,16 @@ HttpResponse Context::text(
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
+}
+
+HttpResponse Context::text(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return text(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
@@ -339,6 +379,16 @@ HttpResponse Context::html(
     return response;
 }
 
+HttpResponse Context::html(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return html(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
+}
+
 HttpResponse Context::html(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
@@ -367,6 +417,16 @@ HttpResponse Context::html(
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
+}
+
+HttpResponse Context::html(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return html(
+        body,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {
