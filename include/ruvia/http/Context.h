@@ -207,6 +207,7 @@ public:
     [[nodiscard]] RequestNameValueList query() const;
     [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
+    [[nodiscard]] RequestNameValueList cookie() const;
     [[nodiscard]] RequestNameValueList cookies() const;
     [[nodiscard]] std::string_view remoteAddress() const noexcept;
     [[nodiscard]] std::string_view clientCertificate() const noexcept;
@@ -866,6 +867,10 @@ inline std::pmr::vector<QueryValue> ContextRequest::queries(std::string_view nam
 
 inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const noexcept {
     return raw().cookie(name);
+}
+
+inline RequestNameValueList ContextRequest::cookie() const {
+    return cookies();
 }
 
 inline RequestNameValueList ContextRequest::cookies() const {
