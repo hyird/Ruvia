@@ -308,6 +308,7 @@ private:
         co_return c
             .setCookie("session", "example", options)
             .setCookie("theme", "light")
+            .deleteCookie("legacy-session")
             .text("cookies set\n");
     }
 
