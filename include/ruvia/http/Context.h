@@ -688,7 +688,24 @@ public:
             return formEntry->field();
         }
 
+        [[nodiscard]] std::pmr::vector<const RequestFormField*> fields(std::string_view name) const {
+            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
+            const auto* formEntry = entry(name);
+            if (formEntry == nullptr) {
+                return result;
+            }
+            result.reserve(formEntry->size());
+            for (const auto* field : formEntry->fields()) {
+                result.push_back(field);
+            }
+            return result;
+        }
+
         [[nodiscard]] Value get(std::string_view name) const noexcept {
+            return (*this)[name];
+        }
+
+        [[nodiscard]] Value getAll(std::string_view name) const noexcept {
             return (*this)[name];
         }
 
@@ -794,19 +811,6 @@ public:
                 if (pathMatches(field, dotPath)) {
                     result.push_back(&field);
                 }
-            }
-            return result;
-        }
-
-        [[nodiscard]] std::pmr::vector<const RequestFormField*> getAll(std::string_view name) const {
-            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            const auto* formEntry = entry(name);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            result.reserve(formEntry->size());
-            for (const auto* field : formEntry->fields()) {
-                result.push_back(field);
             }
             return result;
         }
