@@ -218,7 +218,8 @@ Context& Context::deleteCookie(std::string_view name, CookieOptions options) {
 }
 
 void Context::storeResponse(HttpResponse&& response) {
-    if (response_ != nullptr && response_ != &response) {
+    const bool hadResponseSlot = response_ != nullptr;
+    if (hadResponseSlot && response_ != &response) {
         mergeResponseSlotHeaders(response, *response_);
     }
 
@@ -231,20 +232,22 @@ void Context::storeResponse(HttpResponse&& response) {
         response.setStatus(responseStatusCode_, {});
     }
 
-    const auto contextHeaderCount = responseHeaders_.size();
-    if (contextHeaderCount > 0) {
-        detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
-    }
-    for (const auto& header : responseHeaders_) {
-        const auto knownBit = detail::responseHeaderKnownBit(header);
-        const auto name = header.name();
-        const auto value = header.value();
-        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-            if (!responseHasHeaderValue(response, name, value)) {
-                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+    if (!hadResponseSlot) {
+        const auto contextHeaderCount = responseHeaders_.size();
+        if (contextHeaderCount > 0) {
+            detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
+        }
+        for (const auto& header : responseHeaders_) {
+            const auto knownBit = detail::responseHeaderKnownBit(header);
+            const auto name = header.name();
+            const auto value = header.value();
+            if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
+                if (!responseHasHeaderValue(response, name, value)) {
+                    detail::appendResponseHeaderValidated(response, name, value, knownBit);
+                }
+            } else {
+                detail::setResponseHeaderValidated(response, name, value, knownBit);
             }
-        } else {
-            detail::setResponseHeaderValidated(response, name, value, knownBit);
         }
     }
 

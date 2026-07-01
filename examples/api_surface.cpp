@@ -164,6 +164,8 @@ public:
     RUVIA_GET("/missing", missing);
     RUVIA_GET("/middleware-return", middlewareReturnHandler, SurfaceReturnMiddleware);
     RUVIA_GET("/pre-direct-res", preDirectResponse, SurfacePreDirectResponseMiddleware);
+    RUVIA_GET("/res-direct-buffered", directBufferedResponse);
+    RUVIA_GET("/res-remove-buffered", removeBufferedResponse);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
@@ -370,6 +372,21 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> preDirectResponse(ruvia::Context& c) {
         co_return c.text("pre direct response\n");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> directBufferedResponse(ruvia::Context& c) {
+        c.setHeader("X-Direct-Buffered", "true");
+        c.res().setBodyCopy("direct buffered response\n");
+        co_return std::move(c.res());
+    }
+
+    ruvia::Task<ruvia::HttpResponse> removeBufferedResponse(ruvia::Context& c) {
+        c.setHeader("X-Remove-Buffered", "drop");
+        c.res().headers().remove("X-Remove-Buffered");
+        ruvia::HttpResponse response(c.resource());
+        response.setBodyCopy("removed buffered response\n");
+        c.res(std::move(response));
+        co_return std::move(c.res());
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
