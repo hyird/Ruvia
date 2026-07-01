@@ -44,6 +44,10 @@ RUVIA_MODEL(SearchQuery,
     RUVIA_FIELD(page, ruvia::UInt32)
 );
 
+RUVIA_MODEL(CategoryParams,
+    RUVIA_FIELD(id, ruvia::String)
+);
+
 RUVIA_MODEL(Category,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(children, ruvia::List<Category>)
@@ -124,6 +128,14 @@ public:
             RUVIA_MIN(1, "page is too small")))
 };
 
+class CategoryParamValidator final : public ruvia::Middleware<CategoryParamValidator> {
+public:
+    RUVIA_VALIDATE_PARAM(CategoryParams,
+        RUVIA_RULE(id,
+            RUVIA_REQUIRED("category id is required"),
+            RUVIA_MIN(2, "category id is too short")))
+};
+
 class ModelController final : public ruvia::Controller<ModelController> {
 public:
     RUVIA_CONTROLLER_GROUP("/models")
@@ -133,6 +145,7 @@ public:
     RUVIA_POST("/contact", contact, ContactFormValidator);
     RUVIA_GET("/search", search, SearchQueryValidator);
     RUVIA_GET("/category", category);
+    RUVIA_GET("/category/:id", categoryById, CategoryParamValidator);
     RUVIA_ROUTES_END
 
 private:
@@ -180,6 +193,15 @@ private:
         root.name("root");
         root.children().emplace().name("leaf");
         co_return c.json(root);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> categoryById(ruvia::Context& c) {
+        const auto& params = c.req().valid<CategoryParams>(ruvia::Param);
+        std::pmr::string body(c.allocator<char>());
+        body.append("category=");
+        body.append(params.id()->view());
+        body.push_back('\n');
+        co_return c.text(body);
     }
 };
 

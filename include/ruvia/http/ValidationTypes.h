@@ -7,11 +7,13 @@ namespace ruvia {
 enum class ValidationTarget : std::uint8_t {
     kJson,
     kForm,
-    kQuery
+    kQuery,
+    kParam
 };
 
 inline constexpr ValidationTarget Json = ValidationTarget::kJson;
 inline constexpr ValidationTarget Form = ValidationTarget::kForm;
 inline constexpr ValidationTarget Query = ValidationTarget::kQuery;
+inline constexpr ValidationTarget Param = ValidationTarget::kParam;
 
 }  // namespace ruvia
