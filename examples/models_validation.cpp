@@ -199,9 +199,17 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
         const auto& query = c.req().valid<SearchQuery>("query");
+        const auto requestQuery = c.req().query().get("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
         body.append(query.q()->view());
+        body.append("\nquery-shared=");
+        const auto queryValue = query.q()->view();
+        body.append(
+            requestQuery.has_value() && requestQuery->data() == queryValue.data()
+                    && requestQuery->size() == queryValue.size()
+                ? "true"
+                : "false");
         if (query.page()) {
             body.append("\npage=");
             char buffer[16]{};
