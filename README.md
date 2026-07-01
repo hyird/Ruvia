@@ -241,7 +241,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
-| `c.set(key, value)` / `c.get<T>(key)` | Store and read request-local values across middleware and handlers. |
+| `c.set(key, value)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |
 | `c.body(...)` | Return a raw response body without setting a content type. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
