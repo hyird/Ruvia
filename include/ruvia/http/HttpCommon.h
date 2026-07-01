@@ -231,7 +231,131 @@ private:
     std::pmr::vector<std::string_view> values_;
 };
 
-using RequestValueGroupList = std::pmr::vector<RequestValueGroup>;
+class RequestValueGroupList final {
+public:
+    using value_type = RequestValueGroup;
+    using iterator = std::pmr::vector<RequestValueGroup>::iterator;
+    using const_iterator = std::pmr::vector<RequestValueGroup>::const_iterator;
+
+    explicit RequestValueGroupList(std::pmr::memory_resource* resource = nullptr)
+        : groups_(detail::pmrResourceOrDefault(resource)) {}
+
+    RequestValueGroupList(const RequestValueGroupList&) = default;
+    RequestValueGroupList& operator=(const RequestValueGroupList&) = default;
+    RequestValueGroupList(RequestValueGroupList&&) noexcept = default;
+    RequestValueGroupList& operator=(RequestValueGroupList&&) noexcept = default;
+
+    [[nodiscard]] iterator begin() noexcept {
+        return groups_.begin();
+    }
+
+    [[nodiscard]] const_iterator begin() const noexcept {
+        return groups_.begin();
+    }
+
+    [[nodiscard]] const_iterator cbegin() const noexcept {
+        return groups_.cbegin();
+    }
+
+    [[nodiscard]] iterator end() noexcept {
+        return groups_.end();
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept {
+        return groups_.end();
+    }
+
+    [[nodiscard]] const_iterator cend() const noexcept {
+        return groups_.cend();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return groups_.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return groups_.empty();
+    }
+
+    [[nodiscard]] RequestValueGroup* data() noexcept {
+        return groups_.data();
+    }
+
+    [[nodiscard]] const RequestValueGroup* data() const noexcept {
+        return groups_.data();
+    }
+
+    [[nodiscard]] RequestValueGroup& operator[](std::size_t index) noexcept {
+        return groups_[index];
+    }
+
+    [[nodiscard]] const RequestValueGroup& operator[](std::size_t index) const noexcept {
+        return groups_[index];
+    }
+
+    [[nodiscard]] std::span<const std::string_view> operator[](std::string_view name) const noexcept {
+        return values(name);
+    }
+
+    [[nodiscard]] const RequestValueGroup* group(std::string_view name) const noexcept {
+        for (auto it = groups_.rbegin(); it != groups_.rend(); ++it) {
+            if (it->name() == name) {
+                return &*it;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] std::optional<std::span<const std::string_view>> get(std::string_view name) const noexcept {
+        const auto* requestGroup = group(name);
+        if (requestGroup == nullptr) {
+            return std::nullopt;
+        }
+        return requestGroup->values();
+    }
+
+    [[nodiscard]] bool has(std::string_view name) const noexcept {
+        return group(name) != nullptr;
+    }
+
+    [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
+        const auto* requestGroup = group(name);
+        return requestGroup == nullptr ? 0 : requestGroup->size();
+    }
+
+    [[nodiscard]] std::optional<std::string_view> first(std::string_view name) const noexcept {
+        const auto* requestGroup = group(name);
+        return requestGroup == nullptr ? std::nullopt : requestGroup->first();
+    }
+
+    [[nodiscard]] std::span<const std::string_view> values(std::string_view name) const noexcept {
+        const auto* requestGroup = group(name);
+        if (requestGroup == nullptr) {
+            return {};
+        }
+        return requestGroup->values();
+    }
+
+    [[nodiscard]] std::span<const RequestValueGroup> span() const noexcept {
+        return std::span<const RequestValueGroup>(groups_.data(), groups_.size());
+    }
+
+    void reserve(std::size_t count) {
+        groups_.reserve(count);
+    }
+
+    void push_back(RequestValueGroup value) {
+        groups_.push_back(std::move(value));
+    }
+
+    template <typename... Args>
+    RequestValueGroup& emplace_back(Args&&... args) {
+        return groups_.emplace_back(std::forward<Args>(args)...);
+    }
+
+private:
+    std::pmr::vector<RequestValueGroup> groups_;
+};
 
 class RequestValue final {
 public:
