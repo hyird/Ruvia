@@ -231,7 +231,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into a Hono-style object facade: use `body["title"].value()` for the last field, `body["tag[]"].values()` for array fields, and `body["tag[]"].isArray()` to inspect `[]` fields. `get()` / `getAll()` remain available as lower-level field helpers. With `{.dot = true}`, use `body.at("obj.key").value()` or `body.object("obj")["key"].value()` for dot notation access. |
-| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `has()`, `get()` / `getAll()`, duplicate-preserving `entries()` / `keys()` / `values()`, and grouped `groups()` access for per-name summaries. |
+| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `has()`, `get()` / `getAll()`, duplicate-preserving `entries()` / `keys()` / `values()` that keep file/blob metadata, and grouped `groups()` access for per-name summaries. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |

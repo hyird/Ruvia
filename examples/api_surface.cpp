@@ -264,6 +264,8 @@ private:
         appendUnsigned(body, form.keys().size());
         body.append("\nvalues=");
         appendUnsigned(body, form.values().size());
+        body.append("\nfirst-value-file=");
+        body.append(!form.values().empty() && form.values().front().isFile() ? "true" : "false");
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
         const auto title = form["title"];
@@ -340,6 +342,8 @@ private:
         appendUnsigned(body, form.keys().size());
         body.append("\nvalues=");
         appendUnsigned(body, form.values().size());
+        body.append("\nfirst-value-file=");
+        body.append(!form.values().empty() && form.values().front().isFile() ? "true" : "false");
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
         body.append("\ntag-count=");
