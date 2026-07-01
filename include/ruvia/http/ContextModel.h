@@ -7,12 +7,12 @@
 
 namespace ruvia {
 
-inline Task<JsonObject> ContextRequest::json() const {
+inline Task<JsonValue> ContextRequest::json() const {
     if (!context_->requestContentTypeMatches("application/json")) {
         detail::throwInvalidJsonContentType();
     }
     const auto requestBody = co_await text();
-    auto parsed = JsonObject::parse(requestBody, context_->resource());
+    auto parsed = JsonValue::parse(requestBody, context_->resource());
     if (!parsed) {
         detail::throwInvalidJsonBody();
     }
