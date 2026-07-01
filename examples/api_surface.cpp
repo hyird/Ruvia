@@ -403,7 +403,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> cloneRawRequest(ruvia::Context& c) {
         const auto consumed = co_await c.req().text();
-        auto clone = co_await c.req().cloneRawRequest();
+        auto clone = co_await ruvia::cloneRawRequest(c.req());
         std::pmr::string body(c.allocator<char>());
         body.append("method=");
         body.append(clone.method());
