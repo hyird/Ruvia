@@ -443,6 +443,7 @@ public:
     Context& header(std::string_view name, std::string_view value, HeaderOptions options);
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
+    Context& deleteCookie(std::string_view name, CookieOptions options = {});
 
     [[nodiscard]] HttpResponse& res();
 

@@ -176,6 +176,11 @@ Context& Context::setCookie(std::string_view name, std::string_view value, const
     return *this;
 }
 
+Context& Context::deleteCookie(std::string_view name, CookieOptions options) {
+    options.maxAge = 0;
+    return setCookie(name, "", options);
+}
+
 HttpResponse Context::body(
     std::string_view body,
     std::uint16_t statusCode,
