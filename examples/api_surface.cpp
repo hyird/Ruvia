@@ -296,16 +296,16 @@ private:
         body.append(!form.values().empty() && form.values().front().isFile() ? "true" : "false");
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
-        const auto title = form["title"];
+        const auto title = form.get("title");
         if (auto titleText = title.toStringView()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
         body.append("\ntag-count=");
         appendUnsigned(body, form.getAll("tag").size());
-        if (const auto* tag = form.get("tag")) {
+        if (auto tag = form.get("tag").toStringView()) {
             body.append("\ntag-single=");
-            body.append(tag->text());
+            body.append(*tag);
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
@@ -376,13 +376,13 @@ private:
         body.append(form.has("title") ? "true" : "false");
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
-        if (const auto* tag = form.get("tag")) {
+        if (auto tag = form.get("tag").toStringView()) {
             body.append("\ntag-single=");
-            body.append(tag->text());
+            body.append(*tag);
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
-        const auto title = form["title"];
+        const auto title = form.get("title");
         if (auto titleText = title.toStringView()) {
             body.append("\ntitle=");
             body.append(*titleText);
