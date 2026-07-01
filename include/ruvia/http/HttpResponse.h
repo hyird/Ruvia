@@ -192,7 +192,6 @@ public:
     [[nodiscard]] std::string_view statusText() const noexcept;
     [[nodiscard]] ResponseHeaders headers() noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
-    [[nodiscard]] ResponseHeaders responseHeaders() noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] bool hasHeader(std::string_view name) const noexcept;
     void setStatus(std::uint16_t statusCode, std::string_view statusText);
@@ -359,10 +358,6 @@ inline bool HttpResponse::ResponseHeaders::erase(std::string_view name) const {
 }
 
 inline HttpResponse::ResponseHeaders HttpResponse::headers() noexcept {
-    return ResponseHeaders(*this);
-}
-
-inline HttpResponse::ResponseHeaders HttpResponse::responseHeaders() noexcept {
     return ResponseHeaders(*this);
 }
 

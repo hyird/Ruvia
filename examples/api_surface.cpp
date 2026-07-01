@@ -58,6 +58,11 @@ concept HasUnaryContextParam = requires(const T& context) {
     context.param(std::string_view{});
 };
 
+template <typename T>
+concept HasResponseHeadersAlias = requires(T& response) {
+    response.responseHeaders();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -89,6 +94,7 @@ static_assert(!HasUnaryContextHeader<ruvia::Context>);
 static_assert(!HasUnaryContextQuery<ruvia::Context>);
 static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
+static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -370,8 +376,8 @@ private:
         response.setHeader("X-Response-Remove", "drop");
         response.setBodyCopy("response slot\n");
         c.res(std::move(response));
-        c.res().responseHeaders().append("X-Response-Slot", "true");
-        c.res().responseHeaders().remove("X-Response-Remove");
+        c.res().headers().append("X-Response-Slot", "true");
+        c.res().headers().remove("X-Response-Remove");
         co_return std::move(c.res());
     }
 
