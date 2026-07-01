@@ -1364,6 +1364,26 @@ inline std::string_view routePath(const Context& context) noexcept {
     return context.req().routePath();
 }
 
+inline std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context) {
+    return context.req().matchedRoutes();
+}
+
+inline std::string_view routePath(const Context& context, std::ptrdiff_t index) {
+    const auto routes = matchedRoutes(context);
+    if (routes.empty()) {
+        return {};
+    }
+
+    auto resolved = index;
+    if (resolved < 0) {
+        resolved += static_cast<std::ptrdiff_t>(routes.size());
+    }
+    if (resolved < 0 || static_cast<std::size_t>(resolved) >= routes.size()) {
+        return {};
+    }
+    return routes[static_cast<std::size_t>(resolved)].path;
+}
+
 inline RequestValue ContextRequest::decodedPath() const noexcept {
     return raw().decodedPath();
 }
