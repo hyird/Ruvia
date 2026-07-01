@@ -551,6 +551,10 @@ private:
         body.append(form.has("obj") ? "true" : "false");
         body.append("\nhas-obj-key1=");
         body.append(form.has("obj.key1") ? "true" : "false");
+        if (auto directNested = form.get("obj.key1").toStringView()) {
+            body.append("\nobj.key1-direct=");
+            body.append(*directNested);
+        }
         body.append("\ntag-count=");
         appendUnsigned(body, form.getAll("tag").values().size());
         if (auto tag = form.get("tag").toStringView()) {
