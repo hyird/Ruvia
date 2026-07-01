@@ -842,11 +842,13 @@ public:
 
         explicit RequestFormData(std::pmr::memory_resource* resource)
             : fields_(resource),
-              entries_(resource) {}
+              entries_(resource),
+              pathEntries_(resource) {}
 
         explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields)
             : fields_(std::move(fields)),
-              entries_(fields_.get_allocator().resource()) {
+              entries_(fields_.get_allocator().resource()),
+              pathEntries_(fields_.get_allocator().resource()) {
             rebuildEntries();
         }
 
@@ -957,36 +959,22 @@ public:
         }
 
         [[nodiscard]] const RequestFormField* getAt(std::string_view dotPath) const noexcept {
-            const RequestFormField* selected = nullptr;
-            for (const auto& field : fields_) {
-                if (pathMatches(field, dotPath)) {
-                    selected = &field;
-                }
-            }
-            return selected;
+            const auto* formEntry = pathEntry(dotPath);
+            return formEntry == nullptr ? nullptr : formEntry->field();
         }
 
         [[nodiscard]] bool hasAt(std::string_view dotPath) const noexcept {
-            return getAt(dotPath) != nullptr;
+            return pathEntry(dotPath) != nullptr;
         }
 
         [[nodiscard]] std::size_t countAt(std::string_view dotPath) const noexcept {
-            std::size_t count = 0;
-            for (const auto& field : fields_) {
-                if (pathMatches(field, dotPath)) {
-                    ++count;
-                }
-            }
-            return count;
+            const auto* formEntry = pathEntry(dotPath);
+            return formEntry == nullptr ? 0 : formEntry->size();
         }
 
         [[nodiscard]] bool isArrayAt(std::string_view dotPath) const noexcept {
-            for (const auto& field : fields_) {
-                if (pathMatches(field, dotPath) && field.array) {
-                    return true;
-                }
-            }
-            return false;
+            const auto* formEntry = pathEntry(dotPath);
+            return formEntry != nullptr && formEntry->array();
         }
 
         [[nodiscard]] std::optional<std::string_view> valueAt(std::string_view dotPath) const noexcept {
@@ -999,22 +987,22 @@ public:
 
         [[nodiscard]] std::pmr::vector<std::string_view> valuesAt(std::string_view dotPath) const {
             std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            result.reserve(countAt(dotPath));
-            for (const auto& field : fields_) {
-                if (pathMatches(field, dotPath)) {
-                    result.emplace_back(field.value.data(), field.value.size());
-                }
+            const auto* formEntry = pathEntry(dotPath);
+            if (formEntry == nullptr) {
+                return result;
             }
-            return result;
+            return formEntry->values();
         }
 
         [[nodiscard]] std::pmr::vector<const RequestFormField*> getAllAt(std::string_view dotPath) const {
             std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            result.reserve(countAt(dotPath));
-            for (const auto& field : fields_) {
-                if (pathMatches(field, dotPath)) {
-                    result.push_back(&field);
-                }
+            const auto* formEntry = pathEntry(dotPath);
+            if (formEntry == nullptr) {
+                return result;
+            }
+            result.reserve(formEntry->size());
+            for (const auto* field : formEntry->fields()) {
+                result.push_back(field);
             }
             return result;
         }
@@ -1024,11 +1012,13 @@ public:
             std::string_view dotPath,
             std::string_view name) const {
             std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            result.reserve(countAtChild(dotPath, name));
-            for (const auto& field : fields_) {
-                if (pathMatchesChild(field, dotPath, name)) {
-                    result.push_back(&field);
-                }
+            const auto* formEntry = pathEntryChild(dotPath, name);
+            if (formEntry == nullptr) {
+                return result;
+            }
+            result.reserve(formEntry->size());
+            for (const auto* field : formEntry->fields()) {
+                result.push_back(field);
             }
             return result;
         }
@@ -1036,13 +1026,8 @@ public:
         [[nodiscard]] const RequestFormField* getAtChild(
             std::string_view dotPath,
             std::string_view name) const noexcept {
-            const RequestFormField* selected = nullptr;
-            for (const auto& field : fields_) {
-                if (pathMatchesChild(field, dotPath, name)) {
-                    selected = &field;
-                }
-            }
-            return selected;
+            const auto* formEntry = pathEntryChild(dotPath, name);
+            return formEntry == nullptr ? nullptr : formEntry->field();
         }
 
         [[nodiscard]] std::optional<std::string_view> valueAtChild(
@@ -1059,13 +1044,11 @@ public:
             std::string_view dotPath,
             std::string_view name) const {
             std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            result.reserve(countAtChild(dotPath, name));
-            for (const auto& field : fields_) {
-                if (pathMatchesChild(field, dotPath, name)) {
-                    result.emplace_back(field.value.data(), field.value.size());
-                }
+            const auto* formEntry = pathEntryChild(dotPath, name);
+            if (formEntry == nullptr) {
+                return result;
             }
-            return result;
+            return formEntry->values();
         }
 
         [[nodiscard]] static bool consumePath(
@@ -1122,20 +1105,58 @@ public:
                 index == field.path.size();
         }
 
+        [[nodiscard]] const Entry* pathEntry(std::string_view dotPath) const noexcept {
+            if (dotPath.empty()) {
+                return nullptr;
+            }
+            for (const auto& formEntry : pathEntries_) {
+                if (formEntry.name() == dotPath) {
+                    return &formEntry;
+                }
+            }
+            return nullptr;
+        }
+
+        [[nodiscard]] const Entry* pathEntryChild(
+            std::string_view dotPath,
+            std::string_view name) const noexcept {
+            if (name.empty()) {
+                return nullptr;
+            }
+            for (const auto& formEntry : pathEntries_) {
+                if (pathNameMatchesChild(formEntry.name(), dotPath, name)) {
+                    return &formEntry;
+                }
+            }
+            return nullptr;
+        }
+
+        [[nodiscard]] static bool pathNameMatchesChild(
+            std::string_view pathName,
+            std::string_view dotPath,
+            std::string_view name) noexcept {
+            if (name.empty()) {
+                return false;
+            }
+            if (dotPath.empty()) {
+                return pathName == name;
+            }
+            return pathName.size() == dotPath.size() + 1 + name.size() &&
+                pathName.substr(0, dotPath.size()) == dotPath &&
+                pathName[dotPath.size()] == '.' &&
+                pathName.substr(dotPath.size() + 1) == name;
+        }
+
         [[nodiscard]] std::size_t countAtChild(
             std::string_view dotPath,
             std::string_view name) const noexcept {
-            std::size_t count = 0;
-            for (const auto& field : fields_) {
-                if (pathMatchesChild(field, dotPath, name)) {
-                    ++count;
-                }
-            }
-            return count;
+            const auto* formEntry = pathEntryChild(dotPath, name);
+            return formEntry == nullptr ? 0 : formEntry->size();
         }
 
         void rebuildEntries() {
             entries_.clear();
+            pathEntries_.clear();
             if (fields_.empty()) {
                 return;
             }
@@ -1186,6 +1207,8 @@ public:
                     entry.add(fields_[order[i]]);
                 }
             }
+
+            rebuildPathEntries(resource);
         }
 
         [[nodiscard]] static std::string_view entryName(const RequestFormField& field) noexcept {
@@ -1196,8 +1219,67 @@ public:
             return std::string_view(field.name.data(), field.name.size());
         }
 
+        void rebuildPathEntries(std::pmr::memory_resource* resource) {
+            std::pmr::vector<std::size_t> order(resource);
+            order.reserve(fields_.size());
+            for (std::size_t i = 0; i < fields_.size(); ++i) {
+                if (!fields_[i].path.empty()) {
+                    order.push_back(i);
+                }
+            }
+            if (order.empty()) {
+                return;
+            }
+
+            std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
+                const auto leftName = pathEntryName(fields_[left]);
+                const auto rightName = pathEntryName(fields_[right]);
+                if (leftName == rightName) {
+                    return left < right;
+                }
+                return leftName < rightName;
+            });
+
+            struct EntryBuild final {
+                std::size_t firstIndex;
+                std::size_t begin;
+                std::size_t end;
+            };
+            std::pmr::vector<EntryBuild> builds(resource);
+            builds.reserve(order.size());
+            for (std::size_t offset = 0; offset < order.size();) {
+                const auto begin = offset;
+                const auto firstIndex = order[offset];
+                const auto name = pathEntryName(fields_[firstIndex]);
+                do {
+                    ++offset;
+                } while (offset < order.size() &&
+                    pathEntryName(fields_[order[offset]]) == name);
+                builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
+            }
+            std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
+                return left.firstIndex < right.firstIndex;
+            });
+
+            pathEntries_.reserve(builds.size());
+            for (const auto& build : builds) {
+                auto& entry = pathEntries_.emplace_back(
+                    resource,
+                    pathEntryName(fields_[build.firstIndex]),
+                    false);
+                for (std::size_t i = build.begin; i < build.end; ++i) {
+                    entry.add(fields_[order[i]]);
+                }
+            }
+        }
+
+        [[nodiscard]] static std::string_view pathEntryName(const RequestFormField& field) noexcept {
+            return std::string_view(field.name.data(), field.name.size());
+        }
+
         std::pmr::vector<RequestFormField> fields_;
         std::pmr::vector<Entry> entries_;
+        std::pmr::vector<Entry> pathEntries_;
     };
 
     [[nodiscard]] const HttpRequest& raw() const noexcept;
@@ -1971,6 +2053,7 @@ private:
     [[nodiscard]] MultipartReader requestMultipartReader() const;
     [[nodiscard]] ParamValue routeParam(std::string_view name) const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
+    void ensureRequestQuery() const;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
     [[nodiscard]] const RequestNameValueList& requestCookies() const;

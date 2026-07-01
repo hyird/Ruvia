@@ -295,107 +295,78 @@ std::string_view Context::requestHeader(std::string_view name) const {
         .value_or(std::string_view{});
 }
 
-const RequestNameValueList& Context::requestQuery() const {
-    if (requestQuery_ == nullptr) {
-        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
-        storage.reserve(pairCount * 2);
-        (void)detail::visitUrlEncodedPairs(
-            request_.queryString(),
-            [this, &storage](std::string_view key, std::string_view value) {
-                std::pmr::string decodedName(resource());
-                std::pmr::string decodedValue(resource());
-                assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
-                assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
+void Context::ensureRequestQuery() const {
+    if (requestQuery_ != nullptr) {
+        return;
+    }
 
-                storage.push_back(std::move(decodedName));
-                storage.push_back(std::move(decodedValue));
-                return true;
-            });
+    const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
+    auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+    storage.reserve(pairCount * 2);
+    (void)detail::visitUrlEncodedPairs(
+        request_.queryString(),
+        [this, &storage](std::string_view key, std::string_view value) {
+            std::pmr::string decodedName(resource());
+            std::pmr::string decodedValue(resource());
+            assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
+            assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
 
-        auto& query = memory_.emplace<RequestNameValueList>(resource());
-        const auto order = sortedPairOrder(storage, resource());
-        struct QueryValueBuild final {
-            std::size_t firstIndex;
-        };
-        std::pmr::vector<QueryValueBuild> builds(resource());
-        builds.reserve(order.size());
-        for (std::size_t offset = 0; offset < order.size();) {
-            const auto firstIndex = order[offset];
-            const auto name = pairNameAt(storage, firstIndex);
-            do {
-                ++offset;
-            } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
-            builds.push_back(QueryValueBuild{.firstIndex = firstIndex});
-        }
-        std::stable_sort(builds.begin(), builds.end(), [](const QueryValueBuild& left, const QueryValueBuild& right) noexcept {
-            return left.firstIndex < right.firstIndex;
+            storage.push_back(std::move(decodedName));
+            storage.push_back(std::move(decodedValue));
+            return true;
         });
 
-        query.reserve(builds.size());
-        for (const auto& build : builds) {
-            query.push_back(RequestNameValueView{
-                .name = storedStringView(storage[build.firstIndex * 2]),
-                .value = storedStringView(storage[build.firstIndex * 2 + 1])});
-        }
-        requestQueryStorage_ = &storage;
-        requestQuery_ = &query;
+    struct QueryBuild final {
+        std::size_t firstIndex;
+        std::size_t begin;
+        std::size_t end;
+    };
+
+    const auto order = sortedPairOrder(storage, resource());
+    std::pmr::vector<QueryBuild> builds(resource());
+    builds.reserve(order.size());
+    for (std::size_t offset = 0; offset < order.size();) {
+        const auto begin = offset;
+        const auto firstIndex = order[offset];
+        const auto name = pairNameAt(storage, firstIndex);
+        do {
+            ++offset;
+        } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
+        builds.push_back(QueryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
     }
+    std::stable_sort(builds.begin(), builds.end(), [](const QueryBuild& left, const QueryBuild& right) noexcept {
+        return left.firstIndex < right.firstIndex;
+    });
+
+    auto& query = memory_.emplace<RequestNameValueList>(resource());
+    auto& groups = memory_.emplace<RequestValueGroupList>(resource());
+    query.reserve(builds.size());
+    groups.reserve(builds.size());
+    for (const auto& build : builds) {
+        query.push_back(RequestNameValueView{
+            .name = storedStringView(storage[build.firstIndex * 2]),
+            .value = storedStringView(storage[build.firstIndex * 2 + 1])});
+
+        auto& group = groups.emplace_back(resource(), pairNameAt(storage, build.firstIndex));
+        for (std::size_t i = build.begin; i < build.end; ++i) {
+            const auto pairIndex = order[i];
+            group.add(storedStringView(storage[pairIndex * 2 + 1]));
+        }
+    }
+
+    requestQueryStorage_ = &storage;
+    requestQueriesStorage_ = &storage;
+    requestQuery_ = &query;
+    requestQueries_ = &groups;
+}
+
+const RequestNameValueList& Context::requestQuery() const {
+    ensureRequestQuery();
     return *requestQuery_;
 }
 
 const RequestValueGroupList& Context::requestQueries() const {
-    if (requestQueries_ == nullptr) {
-        const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
-        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& groups = memory_.emplace<RequestValueGroupList>(resource());
-        storage.reserve(pairCount * 2);
-        (void)detail::visitUrlEncodedPairs(
-            request_.queryString(),
-            [this, &storage](std::string_view key, std::string_view value) {
-                std::pmr::string decodedName(resource());
-                std::pmr::string decodedValue(resource());
-                assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
-                assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
-
-                storage.push_back(std::move(decodedName));
-                storage.push_back(std::move(decodedValue));
-                return true;
-            });
-
-        struct QueryGroupBuild final {
-            std::size_t firstIndex;
-            std::size_t begin;
-            std::size_t end;
-        };
-        const auto order = sortedPairOrder(storage, resource());
-        std::pmr::vector<QueryGroupBuild> builds(resource());
-        builds.reserve(order.size());
-        for (std::size_t offset = 0; offset < order.size();) {
-            const auto begin = offset;
-            const auto firstIndex = order[offset];
-            const auto name = pairNameAt(storage, firstIndex);
-            do {
-                ++offset;
-            } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
-            builds.push_back(QueryGroupBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
-        }
-        std::stable_sort(builds.begin(), builds.end(), [](const QueryGroupBuild& left, const QueryGroupBuild& right) noexcept {
-            return left.firstIndex < right.firstIndex;
-        });
-
-        groups.reserve(builds.size());
-        for (const auto& build : builds) {
-            auto& group = groups.emplace_back(resource(), pairNameAt(storage, build.firstIndex));
-            for (std::size_t i = build.begin; i < build.end; ++i) {
-                const auto pairIndex = order[i];
-                group.add(storedStringView(storage[pairIndex * 2 + 1]));
-            }
-        }
-
-        requestQueriesStorage_ = &storage;
-        requestQueries_ = &groups;
-    }
+    ensureRequestQuery();
     return *requestQueries_;
 }
 
