@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -71,6 +72,46 @@ struct RequestNameValueView final {
 };
 
 using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
+
+class RequestValueGroup final {
+public:
+    RequestValueGroup(std::pmr::memory_resource* resource, std::string_view name)
+        : name_(name),
+          values_(detail::pmrResourceOrDefault(resource)) {}
+
+    [[nodiscard]] std::string_view name() const noexcept {
+        return name_;
+    }
+
+    [[nodiscard]] std::span<const std::string_view> values() const noexcept {
+        return std::span<const std::string_view>(values_.data(), values_.size());
+    }
+
+    [[nodiscard]] std::optional<std::string_view> first() const noexcept {
+        if (values_.empty()) {
+            return std::nullopt;
+        }
+        return values_.front();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return values_.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return values_.empty();
+    }
+
+    void add(std::string_view value) {
+        values_.push_back(value);
+    }
+
+private:
+    std::string_view name_;
+    std::pmr::vector<std::string_view> values_;
+};
+
+using RequestValueGroupList = std::pmr::vector<RequestValueGroup>;
 
 class RequestValue final {
 public:

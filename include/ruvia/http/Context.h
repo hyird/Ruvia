@@ -299,6 +299,7 @@ public:
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
     [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
+    [[nodiscard]] const RequestValueGroupList& queries() const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
     [[nodiscard]] RequestNameValueList cookie() const;
     [[nodiscard]] RequestNameValueList cookies() const;
@@ -793,6 +794,7 @@ private:
     [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
+    [[nodiscard]] const RequestValueGroupList& requestQueries() const;
 
     [[nodiscard]] std::string_view multipartBoundary() const;
 
@@ -880,6 +882,8 @@ private:
     mutable RequestNameValueList* requestHeaders_{nullptr};
     mutable std::pmr::vector<std::pmr::string>* requestQueryStorage_{nullptr};
     mutable RequestNameValueList* requestQuery_{nullptr};
+    mutable std::pmr::vector<std::pmr::string>* requestQueriesStorage_{nullptr};
+    mutable RequestValueGroupList* requestQueries_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
@@ -976,6 +980,10 @@ inline const RequestNameValueList& ContextRequest::query() const {
 
 inline std::pmr::vector<QueryValue> ContextRequest::queries(std::string_view name) const {
     return raw().queries(name);
+}
+
+inline const RequestValueGroupList& ContextRequest::queries() const {
+    return context_->requestQueries();
 }
 
 inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const noexcept {

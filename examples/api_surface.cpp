@@ -113,6 +113,8 @@ private:
         appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");
         appendUnsigned(body, request.query().size());
+        body.append("\nquery-groups=");
+        appendUnsigned(body, request.queries().size());
         body.append("\ncookies=");
         appendUnsigned(body, request.cookie().size());
         body.append("\ntag-values=");

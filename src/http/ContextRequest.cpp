@@ -195,6 +195,47 @@ const RequestNameValueList& Context::requestQuery() const {
     return *requestQuery_;
 }
 
+const RequestValueGroupList& Context::requestQueries() const {
+    if (requestQueries_ == nullptr) {
+        const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
+        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+        auto& groups = memory_.emplace<RequestValueGroupList>(resource());
+        storage.reserve(pairCount * 2);
+        groups.reserve(pairCount);
+        (void)detail::visitUrlEncodedPairs(
+            request_.queryString(),
+            [this, &storage, &groups](std::string_view key, std::string_view value) {
+                std::pmr::string decodedName(resource());
+                std::pmr::string decodedValue(resource());
+                assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
+                assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
+
+                const auto nameIndex = storage.size();
+                storage.push_back(std::move(decodedName));
+                storage.push_back(std::move(decodedValue));
+                const auto name = std::string_view(storage[nameIndex].data(), storage[nameIndex].size());
+                const auto queryValue = std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size());
+
+                RequestValueGroup* target = nullptr;
+                for (auto& group : groups) {
+                    if (group.name() == name) {
+                        target = &group;
+                        break;
+                    }
+                }
+                if (target == nullptr) {
+                    target = &groups.emplace_back(resource(), name);
+                }
+                target->add(queryValue);
+                return true;
+            });
+
+        requestQueriesStorage_ = &storage;
+        requestQueries_ = &groups;
+    }
+    return *requestQueries_;
+}
+
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& params = memory_.emplace<RequestNameValueList>(resource());
