@@ -1329,6 +1329,7 @@ public:
     [[nodiscard]] const RequestNameValueList& cookie() const;
     [[nodiscard]] const RequestNameValueList& cookies() const;
     [[nodiscard]] Task<std::string_view> text() const;
+    [[nodiscard]] Task<std::span<const std::byte>> bytes() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
     Task<void> discardBody() const;
@@ -2356,6 +2357,10 @@ inline const RequestNameValueList& ContextRequest::cookies() const {
 
 inline Task<std::string_view> ContextRequest::text() const {
     return context_->requestBody();
+}
+
+inline Task<std::span<const std::byte>> ContextRequest::bytes() const {
+    return arrayBuffer();
 }
 
 inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {

@@ -165,7 +165,7 @@ static_assert(!HasUnaryContextQuery<ruvia::Context>);
 static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
-static_assert(!HasRequestBytesAlias<ruvia::ContextRequest>);
+static_assert(HasRequestBytesAlias<ruvia::ContextRequest>);
 static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
@@ -293,6 +293,7 @@ public:
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
     RUVIA_POST("/array-buffer", arrayBufferBody);
+    RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/clone-raw", cloneRawRequest);
     RUVIA_POST("/clone-raw-form", cloneRawFormRequest);
@@ -700,6 +701,15 @@ private:
         const auto bytes = co_await c.req().arrayBuffer();
         std::pmr::string body(c.allocator<char>());
         body.append("array-buffer bytes=");
+        appendUnsigned(body, bytes.size());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> bytesBody(ruvia::Context& c) {
+        const auto bytes = co_await c.req().bytes();
+        std::pmr::string body(c.allocator<char>());
+        body.append("bytes bytes=");
         appendUnsigned(body, bytes.size());
         body.push_back('\n');
         co_return c.text(body);
