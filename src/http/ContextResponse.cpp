@@ -32,6 +32,25 @@ namespace {
     return false;
 }
 
+void mergeResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot) {
+    const auto slotHeaderCount = slot.headers().size();
+    if (slotHeaderCount > 0) {
+        detail::reserveResponseHeaders(response, response.headers().size() + slotHeaderCount);
+    }
+    for (const auto& header : slot.headers()) {
+        const auto knownBit = detail::responseHeaderKnownBit(header);
+        const auto name = header.name();
+        const auto value = header.value();
+        if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
+            if (!responseHasHeaderValue(response, name, value)) {
+                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            }
+        } else {
+            detail::setResponseHeaderValidated(response, name, value, knownBit);
+        }
+    }
+}
+
 }  // namespace
 
 HttpResponseHeader* Context::findResponseHeaderForUpdate(
@@ -199,6 +218,10 @@ Context& Context::deleteCookie(std::string_view name, CookieOptions options) {
 }
 
 void Context::storeResponse(HttpResponse&& response) {
+    if (response_ != nullptr && response_ != &response) {
+        mergeResponseSlotHeaders(response, *response_);
+    }
+
     if (!responseStatusText_.empty()) {
         const auto statusText = std::string_view(responseStatusText_);
         if (responseStatusCode_ != 200 || statusText != "OK") {
