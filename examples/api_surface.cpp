@@ -34,10 +34,10 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
 ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
     ruvia::Context& c,
     std::string_view body,
-    std::string_view head) {
+    ruvia::Context::RenderOptions options) {
     std::pmr::string html(c.allocator<char>());
     html.append("<!doctype html><html><head>");
-    html.append(head);
+    html.append(options.head);
     html.append("</head><body><main>");
     html.append(body);
     html.append("</main></body></html>");
@@ -154,7 +154,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
-        co_return co_await c.render("<h1>rendered body</h1>", "<title>surface</title>");
+        co_return co_await c.render(
+            "<h1>rendered body</h1>",
+            {.head = "<title>surface</title>"});
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {

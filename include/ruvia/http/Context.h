@@ -202,10 +202,14 @@ private:
         detail::ContextServices services) noexcept;
 
 public:
+    struct RenderOptions final {
+        std::string_view head{};
+    };
+
     using Renderer = Task<HttpResponse> (*)(
         Context& context,
         std::string_view body,
-        std::string_view head);
+        RenderOptions options);
 
     struct HeaderOptions final {
         bool append{false};
@@ -518,7 +522,7 @@ public:
 
     Context& setRenderer(Renderer renderer) noexcept;
 
-    [[nodiscard]] Task<HttpResponse> render(std::string_view body, std::string_view head = {});
+    [[nodiscard]] Task<HttpResponse> render(std::string_view body, RenderOptions options = {});
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
