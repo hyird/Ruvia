@@ -307,7 +307,7 @@ private:
             body.append(*titleText);
         }
         body.append("\ntag-count=");
-        appendUnsigned(body, form.getAll("tag").size());
+        appendUnsigned(body, form.getAll("tag").values().size());
         if (auto tag = form.get("tag").toStringView()) {
             body.append("\ntag-single=");
             body.append(*tag);
@@ -380,7 +380,7 @@ private:
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
         body.append("\ntag-count=");
-        appendUnsigned(body, tags.size());
+        appendUnsigned(body, tags.values().size());
         if (auto tag = form.get("tag").toStringView()) {
             body.append("\ntag-single=");
             body.append(*tag);
