@@ -88,6 +88,19 @@ void Context::recordResponseKnownHeaderIndex(
         index);
 }
 
+void Context::rebuildResponseHeaderIndexes() noexcept {
+    responseHeaderIndexes_.fill(detail::kMissingResponseHeaderIndexSlot);
+    const auto* const begin = responseHeaders_.begin();
+    const auto* const end = responseHeaders_.end();
+    for (auto* cursor = begin; cursor != end; ++cursor) {
+        const auto knownBit = detail::responseHeaderKnownBit(*cursor);
+        if (knownBit == 0) {
+            continue;
+        }
+        recordResponseKnownHeaderIndex(knownBit, static_cast<std::size_t>(cursor - begin));
+    }
+}
+
 Context& Context::status(std::uint16_t statusCode, std::string_view statusText) {
     if (statusCode < 100 || statusCode > 999) {
         throw std::invalid_argument("invalid HTTP status code");
@@ -103,6 +116,49 @@ Context& Context::status(std::uint16_t statusCode, std::string_view statusText) 
     }
     if (response_ != nullptr) {
         response_->setStatus(statusCode, statusText);
+    }
+    return *this;
+}
+
+Context& Context::removeResponseHeader(std::string_view name) {
+    if (!isValidHttpHeaderName(name)) {
+        throw std::invalid_argument("invalid HTTP header name");
+    }
+
+    const auto knownBit = detail::classifyResponseKnownHeader(name);
+    auto* const begin = responseHeaders_.begin();
+    auto* const end = responseHeaders_.end();
+    auto* write = begin;
+    bool removed = false;
+
+    for (auto* read = begin; read != end; ++read) {
+        const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
+        const bool matches = knownBit != 0
+            ? headerKnownBit == knownBit
+            : detail::httpAsciiEqualsIgnoreCase(read->name(), name);
+        if (matches) {
+            responseHeaders_.releaseHeader(*read);
+            removed = true;
+            continue;
+        }
+        if (write != read) {
+            *write = *read;
+        }
+        ++write;
+    }
+
+    if (removed) {
+        if (responseHeaders_.spilled_) {
+            responseHeaders_.heap_.erase(
+                responseHeaders_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
+                responseHeaders_.heap_.end());
+        } else {
+            responseHeaders_.size_ = static_cast<std::size_t>(write - begin);
+        }
+        rebuildResponseHeaderIndexes();
+    }
+    if (response_ != nullptr) {
+        responseStorage().removeHeader(name);
     }
     return *this;
 }
@@ -141,6 +197,10 @@ Context& Context::header(std::string_view name, std::string_view value, HeaderOp
         detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
     }
     return *this;
+}
+
+Context& Context::header(std::string_view name, std::nullopt_t) {
+    return removeResponseHeader(name);
 }
 
 Context& Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {

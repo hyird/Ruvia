@@ -280,6 +280,7 @@ public:
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
+    RUVIA_GET("/header-remove", headerRemove);
     RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
     RUVIA_GET_STREAM("/stream-throw", streamThrow);
@@ -463,6 +464,15 @@ private:
         co_return co_await c.render(
             "<h1>rendered head body</h1>",
             "<title>surface head</title>");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> headerRemove(ruvia::Context& c) {
+        c.header("X-Remove-Me", "drop");
+        c.setHeader("X-Remove-Too", "drop");
+        c.header("X-Keep-Me", "keep");
+        c.header("X-Remove-Me", std::nullopt);
+        c.setHeader("X-Remove-Too", std::nullopt);
+        co_return c.text("header remove\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
