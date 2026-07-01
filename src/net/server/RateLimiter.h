@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <memory_resource>
 #include <string_view>
@@ -72,10 +71,15 @@ public:
 
 private:
     static constexpr std::size_t kMaxKeyBytes = 64;
+    static constexpr std::size_t kKeyWordBytes = sizeof(std::uint64_t);
+    static constexpr std::size_t kMaxKeyWords = (kMaxKeyBytes + kKeyWordBytes - 1) / kKeyWordBytes;
+    static constexpr std::size_t kLazyReclaimProbeStart = 4;
     static constexpr std::uint64_t kEmptyHash = 0;
     static constexpr std::uint64_t kInstallingHash = 1;
+    static constexpr std::uint64_t kReclaimingState = 0;
     static constexpr std::uint64_t kCountBits = kRateLimitCounterBits;
     static constexpr std::uint64_t kCountMask = static_cast<std::uint64_t>(kMaxRateLimitRequests);
+    static constexpr std::uint64_t kMaxStateTimeMs = UINT64_MAX >> kCountBits;
     static constexpr std::uintptr_t kGlobalScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
 
@@ -83,7 +87,7 @@ private:
         std::atomic<std::uintptr_t> scope{0};
         std::atomic<std::uint64_t> keyHash{kEmptyHash};
         std::atomic<std::uint16_t> keySize{0};
-        std::array<char, kMaxKeyBytes> keyBytes{};
+        std::array<std::atomic<std::uint64_t>, kMaxKeyWords> keyWords{};
         std::atomic<std::uint64_t> state{0};
     };
 
@@ -135,30 +139,73 @@ private:
         return hash <= kInstallingHash ? hash + kInstallingHash + 1 : hash;
     }
 
-    [[nodiscard]] static std::uint64_t currentWindow(std::int64_t nowMs, const RateLimitRule& rule) noexcept {
-        const auto safeNow = nowMs < 0 ? std::int64_t{0} : nowMs;
-        return static_cast<std::uint64_t>(safeNow / rule.window.count());
+    [[nodiscard]] static std::uint64_t currentResetAtMs(std::int64_t nowMs, const RateLimitRule& rule) noexcept {
+        const auto safeNow = nowMs < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(nowMs);
+        const auto windowMs = static_cast<std::uint64_t>(rule.window.count());
+        const auto bucket = safeNow / windowMs;
+        if (bucket >= kMaxStateTimeMs / windowMs) {
+            return kMaxStateTimeMs;
+        }
+        return (bucket + 1) * windowMs;
     }
 
-    [[nodiscard]] static std::int64_t windowResetAfter(
+    [[nodiscard]] static std::int64_t resetAfterMs(
         std::int64_t nowMs,
-        std::uint64_t window,
-        const RateLimitRule& rule) noexcept {
-        const auto nextWindowMs = static_cast<std::int64_t>(window + 1) * rule.window.count();
-        const auto remaining = nextWindowMs - nowMs;
+        std::uint64_t resetAtMs) noexcept {
+        const auto remaining = static_cast<std::int64_t>(resetAtMs) - nowMs;
         return remaining <= 0 ? 1 : remaining;
     }
 
-    [[nodiscard]] static std::uint64_t packState(std::uint64_t window, std::uint64_t count) noexcept {
-        return (window << kCountBits) | (count & kCountMask);
+    [[nodiscard]] static std::uint64_t packState(std::uint64_t resetAtMs, std::uint64_t count) noexcept {
+        return (resetAtMs << kCountBits) | (count & kCountMask);
     }
 
-    [[nodiscard]] static std::uint64_t stateWindow(std::uint64_t state) noexcept {
+    [[nodiscard]] static std::uint64_t stateResetAtMs(std::uint64_t state) noexcept {
         return state >> kCountBits;
     }
 
     [[nodiscard]] static std::uint64_t stateCount(std::uint64_t state) noexcept {
         return state & kCountMask;
+    }
+
+    [[nodiscard]] static bool stateExpired(std::uint64_t state, std::int64_t nowMs) noexcept {
+        if (state == kReclaimingState) {
+            return true;
+        }
+        const auto safeNow = nowMs < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(nowMs);
+        return stateResetAtMs(state) <= safeNow;
+    }
+
+    [[nodiscard]] static std::size_t keyWordCount(std::size_t keySize) noexcept {
+        return (keySize + kKeyWordBytes - 1) / kKeyWordBytes;
+    }
+
+    [[nodiscard]] static std::uint64_t keyWord(std::string_view key, std::size_t wordIndex) noexcept {
+        std::uint64_t word = 0;
+        const auto offset = wordIndex * kKeyWordBytes;
+        const auto remaining = key.size() - offset;
+        const auto bytes = std::min(kKeyWordBytes, remaining);
+        for (std::size_t i = 0; i < bytes; ++i) {
+            word |= static_cast<std::uint64_t>(static_cast<unsigned char>(key[offset + i])) << (i * 8U);
+        }
+        return word;
+    }
+
+    static void writeKeyWords(Slot& slot, std::string_view key) noexcept {
+        const auto words = keyWordCount(key.size());
+        for (std::size_t i = 0; i < words; ++i) {
+            slot.keyWords[i].store(keyWord(key, i), std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] static bool keyWordsEqual(const Slot& slot, std::string_view key) noexcept {
+        const auto words = keyWordCount(key.size());
+        for (std::size_t i = 0; i < words; ++i) {
+            if (slot.keyWords[i].load(std::memory_order_relaxed) != keyWord(key, i)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     [[nodiscard]] static bool keyEquals(
@@ -176,7 +223,24 @@ private:
         if (size != key.size()) {
             return false;
         }
-        return std::memcmp(slot.keyBytes.data(), key.data(), size) == 0;
+        if (!keyWordsEqual(slot, key)) {
+            return false;
+        }
+        return slot.keyHash.load(std::memory_order_acquire) == hash;
+    }
+
+    static void publishSlot(
+        Slot& slot,
+        std::uintptr_t scope,
+        std::string_view key,
+        std::uint64_t hash,
+        std::uint64_t resetAtMs,
+        std::uint64_t initialCount) noexcept {
+        writeKeyWords(slot, key);
+        slot.scope.store(scope, std::memory_order_release);
+        slot.keySize.store(static_cast<std::uint16_t>(key.size()), std::memory_order_release);
+        slot.state.store(packState(resetAtMs, initialCount), std::memory_order_release);
+        slot.keyHash.store(hash, std::memory_order_release);
     }
 
     [[nodiscard]] bool tryInstall(
@@ -184,7 +248,7 @@ private:
         std::uintptr_t scope,
         std::string_view key,
         std::uint64_t hash,
-        std::uint64_t window,
+        std::uint64_t resetAtMs,
         std::uint64_t expectedHash) noexcept {
         if (!slot.keyHash.compare_exchange_strong(
                 expectedHash,
@@ -194,48 +258,94 @@ private:
             return false;
         }
 
-        std::memcpy(slot.keyBytes.data(), key.data(), key.size());
-        slot.scope.store(scope, std::memory_order_release);
-        slot.keySize.store(static_cast<std::uint16_t>(key.size()), std::memory_order_release);
-        slot.state.store(packState(window, 0), std::memory_order_release);
-        slot.keyHash.store(hash, std::memory_order_release);
+        publishSlot(slot, scope, key, hash, resetAtMs, 1);
         return true;
     }
 
-    [[nodiscard]] static RateLimitCheck consume(
+    [[nodiscard]] bool tryReclaimExpired(
         Slot& slot,
-        std::int64_t nowMs,
-        const RateLimitRule& rule,
-        std::uint64_t window) noexcept {
-        for (;;) {
-            auto observed = slot.state.load(std::memory_order_acquire);
-            const auto observedWindow = stateWindow(observed);
-            const auto observedCount = stateCount(observed);
-            const auto resetAfterMs = windowResetAfter(nowMs, window, rule);
+        std::uintptr_t scope,
+        std::string_view key,
+        std::uint64_t hash,
+        std::uint64_t observedHash,
+        std::uint64_t resetAtMs,
+        std::int64_t nowMs) noexcept {
+        if (observedHash <= kInstallingHash) {
+            return false;
+        }
+        if (!slot.keyHash.compare_exchange_strong(
+                observedHash,
+                kInstallingHash,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            return false;
+        }
 
-            if (observedWindow != window) {
-                const auto desired = packState(window, 1);
+        auto observedState = slot.state.load(std::memory_order_acquire);
+        for (;;) {
+            if (!stateExpired(observedState, nowMs)) {
+                slot.keyHash.store(observedHash, std::memory_order_release);
+                return false;
+            }
+            if (slot.state.compare_exchange_weak(
+                    observedState,
+                    kReclaimingState,
+                    std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                publishSlot(slot, scope, key, hash, resetAtMs, 1);
+                return true;
+            }
+        }
+    }
+
+    struct ConsumeResult final {
+        RateLimitCheck check{};
+        bool retry{false};
+    };
+
+    [[nodiscard]] static ConsumeResult consume(
+        Slot& slot,
+        std::uint64_t hash,
+        const RateLimitRule& rule,
+        std::uint64_t resetAtMs,
+        std::int64_t resetAfter) noexcept {
+        for (;;) {
+            if (slot.keyHash.load(std::memory_order_acquire) != hash) {
+                return ConsumeResult{.retry = true};
+            }
+            auto observed = slot.state.load(std::memory_order_acquire);
+            if (observed == kReclaimingState) {
+                return ConsumeResult{.retry = true};
+            }
+            const auto observedResetAtMs = stateResetAtMs(observed);
+            const auto observedCount = stateCount(observed);
+
+            if (observedResetAtMs != resetAtMs) {
+                const auto desired = packState(resetAtMs, 1);
                 if (slot.state.compare_exchange_weak(
                         observed,
                         desired,
                         std::memory_order_acq_rel,
                         std::memory_order_acquire)) {
-                    return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfterMs};
+                    return ConsumeResult{.check = RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter}};
                 }
                 continue;
             }
 
             if (observedCount >= rule.maxRequests) {
-                return RateLimitCheck{.allowed = false, .resetAfterMs = resetAfterMs};
+                if (slot.keyHash.load(std::memory_order_acquire) != hash) {
+                    return ConsumeResult{.retry = true};
+                }
+                return ConsumeResult{.check = RateLimitCheck{.allowed = false, .resetAfterMs = resetAfter}};
             }
 
-            const auto desired = packState(window, observedCount + 1);
+            const auto desired = packState(resetAtMs, observedCount + 1);
             if (slot.state.compare_exchange_weak(
                     observed,
                     desired,
                     std::memory_order_acq_rel,
                     std::memory_order_acquire)) {
-                return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfterMs};
+                return ConsumeResult{.check = RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter}};
             }
         }
     }
@@ -253,24 +363,64 @@ private:
         }
 
         const auto nowMs = rateLimiterNowMs();
-        const auto window = currentWindow(nowMs, rule);
+        const auto resetAtMs = currentResetAtMs(nowMs, rule);
+        const auto resetAfter = resetAfterMs(nowMs, resetAtMs);
         const auto hash = keyHash(scope, key);
         const auto start = static_cast<std::size_t>(hash) & (slotCount_ - 1);
+        Slot* expiredSlot = nullptr;
+        std::uint64_t expiredHash = kEmptyHash;
 
         for (std::size_t probe = 0; probe < slotCount_; ++probe) {
             auto& slot = slots_[(start + probe) & (slotCount_ - 1)];
             const auto observedHash = slot.keyHash.load(std::memory_order_acquire);
             if (observedHash == hash && keyEquals(slot, scope, key, hash)) {
-                return consume(slot, nowMs, rule, window);
+                const auto result = consume(slot, hash, rule, resetAtMs, resetAfter);
+                if (!result.retry) {
+                    return result.check;
+                }
+                continue;
             }
             if (observedHash == kInstallingHash) {
                 std::this_thread::yield();
                 --probe;
                 continue;
             }
-            if (observedHash == kEmptyHash &&
-                tryInstall(slot, scope, key, hash, window, observedHash)) {
-                return consume(slot, nowMs, rule, window);
+            if (observedHash == kEmptyHash) {
+                if (expiredSlot != nullptr &&
+                    tryReclaimExpired(*expiredSlot, scope, key, hash, expiredHash, resetAtMs, nowMs)) {
+                    return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter};
+                }
+                if (tryInstall(slot, scope, key, hash, resetAtMs, observedHash)) {
+                    return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter};
+                }
+                --probe;
+                continue;
+            }
+            if (expiredSlot == nullptr &&
+                probe >= kLazyReclaimProbeStart &&
+                stateExpired(slot.state.load(std::memory_order_acquire), nowMs)) {
+                expiredSlot = &slot;
+                expiredHash = observedHash;
+            }
+        }
+
+        if (expiredSlot != nullptr &&
+            tryReclaimExpired(*expiredSlot, scope, key, hash, expiredHash, resetAtMs, nowMs)) {
+            return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter};
+        }
+
+        const auto skippedProbes = std::min(kLazyReclaimProbeStart, slotCount_);
+        for (std::size_t probe = 0; probe < skippedProbes; ++probe) {
+            auto& slot = slots_[(start + probe) & (slotCount_ - 1)];
+            const auto observedHash = slot.keyHash.load(std::memory_order_acquire);
+            if (observedHash == kInstallingHash) {
+                std::this_thread::yield();
+                --probe;
+                continue;
+            }
+            if (stateExpired(slot.state.load(std::memory_order_acquire), nowMs) &&
+                tryReclaimExpired(slot, scope, key, hash, observedHash, resetAtMs, nowMs)) {
+                return RateLimitCheck{.allowed = true, .resetAfterMs = resetAfter};
             }
         }
 
