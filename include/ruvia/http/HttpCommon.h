@@ -172,6 +172,28 @@ public:
         return result;
     }
 
+    [[nodiscard]] std::span<const RequestNameValueView> entries() const noexcept {
+        return span();
+    }
+
+    [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
+        std::pmr::vector<std::string_view> result(items_.get_allocator().resource());
+        result.reserve(items_.size());
+        for (const auto& item : items_) {
+            result.push_back(item.name);
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::pmr::vector<std::string_view> values() const {
+        std::pmr::vector<std::string_view> result(items_.get_allocator().resource());
+        result.reserve(items_.size());
+        for (const auto& item : items_) {
+            result.push_back(item.value);
+        }
+        return result;
+    }
+
     [[nodiscard]] std::span<const RequestNameValueView> span() const noexcept {
         return std::span<const RequestNameValueView>(items_.data(), items_.size());
     }
