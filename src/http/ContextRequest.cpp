@@ -622,7 +622,7 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
         co_return ContextRequest::RequestFormData(std::move(fields));
     }
 
-    throw std::invalid_argument("invalid body content type");
+    co_return ContextRequest::RequestFormData(resource());
 }
 
 Task<void> Context::requestDiscardBody() const {
