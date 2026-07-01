@@ -247,10 +247,15 @@ private:
             body.append("\n");
             body.append(field.name);
             body.push_back('=');
-            body.append(field.value);
-            if (field.file) {
+            body.append(field.text());
+            if (field.isFile()) {
+                const auto blob = field.blob();
                 body.append(";filename=");
-                body.append(field.filename);
+                body.append(field.fileName());
+                body.append(";type=");
+                body.append(blob.type());
+                body.append(";bytes=");
+                appendUnsigned(body, blob.size());
             }
             if (!field.path.empty()) {
                 body.append(";path=");
