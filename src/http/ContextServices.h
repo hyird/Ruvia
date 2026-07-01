@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/Error.h"
+
 namespace ruvia {
 
 class BodyReader;
@@ -42,6 +44,10 @@ public:
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
+    }
+
+    [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
+        return errorHandler_;
     }
 
     [[nodiscard]] BodyReader* bodyReader() const noexcept {
@@ -88,11 +94,18 @@ public:
         return services;
     }
 
+    [[nodiscard]] ContextServices withErrorHandler(HttpErrorHandler value) const noexcept {
+        auto services = *this;
+        services.errorHandler_ = value;
+        return services;
+    }
+
 private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
     HttpClientRegistry* httpClients_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
+    HttpErrorHandler errorHandler_{nullptr};
 
     BodyReader* bodyReader_{nullptr};
     RequestBodyLoader* bodyLoader_{nullptr};

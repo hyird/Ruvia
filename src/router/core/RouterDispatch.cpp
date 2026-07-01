@@ -169,7 +169,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         memory,
         request,
         resolution,
-        services);
+        services.withErrorHandler(errorHandler_));
     if (auto* responseStream = services.responseStream(); responseStream != nullptr) {
         detail::StreamingAccess::bindContext(*responseStream, context);
     }
@@ -231,7 +231,11 @@ Task<HttpResponse> detail::RouteTable::dispatch(
         co_return co_await handleError(request, memory, error, false, services);
     }
 
-    auto context = makeRouteContext(memory, request, resolution, services);
+    auto context = makeRouteContext(
+        memory,
+        request,
+        resolution,
+        services.withErrorHandler(errorHandler_));
     std::exception_ptr exception;
     try {
         const auto& route = resolution.route();
@@ -270,7 +274,7 @@ Task<HttpResponse> detail::RouteTable::handleError(
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        services);
+        services.withErrorHandler(errorHandler_));
     co_return co_await handleError(context, error, closeConnection);
 }
 
@@ -288,7 +292,7 @@ Task<HttpResponse> detail::RouteTable::handleException(
     auto context = detail::ContextAccess::make(
         memory,
         request,
-        services);
+        services.withErrorHandler(errorHandler_));
     co_return co_await handleException(context, exception, closeConnection);
 }
 

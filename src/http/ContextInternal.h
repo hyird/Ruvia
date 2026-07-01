@@ -38,6 +38,7 @@ inline Context::Context(
       redis_(services.redis()),
       httpClients_(services.httpClients()),
       rateLimiter_(services.rateLimiter()),
+      errorHandler_(services.errorHandler()),
       routeRateLimitScope_(routeRateLimitScope),
       bodyReader_(services.bodyReader()),
       bodyLoader_(services.bodyLoader()),

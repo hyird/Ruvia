@@ -222,7 +222,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
         c.header("X-Not-Found-Prepared", "true");
-        co_return c.notFound();
+        co_return co_await c.notFound();
     }
 
     ruvia::Task<ruvia::HttpResponse> middlewareReturnHandler(ruvia::Context& c) {
