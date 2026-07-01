@@ -295,7 +295,7 @@ public:
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
-                return fields_.empty() ? nullptr : fields_.front();
+                return fields_.empty() ? nullptr : fields_.back();
             }
 
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
