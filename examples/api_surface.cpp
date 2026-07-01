@@ -113,6 +113,10 @@ private:
         body.append(request.path());
         body.append("\nroute-path=");
         body.append(ruvia::routePath(c));
+        body.append("\nroute-path-first=");
+        body.append(ruvia::routePath(c, 0));
+        body.append("\nroute-path-last=");
+        body.append(ruvia::routePath(c, -1));
         body.append("\nquery=");
         body.append(request.queryString());
         body.append("\nheaders=");
@@ -131,6 +135,8 @@ private:
         appendUnsigned(body, request.cookie().size());
         body.append("\nmatched-routes=");
         appendUnsigned(body, request.matchedRoutes().size());
+        body.append("\nmatched-routes-helper=");
+        appendUnsigned(body, ruvia::matchedRoutes(c).size());
         body.append("\nroute-index=");
         appendUnsigned(body, request.routeIndex());
         body.append("\nparam-id=");
