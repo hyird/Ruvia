@@ -202,6 +202,8 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("fields=");
         appendUnsigned(body, form.fields().size());
+        body.append("\nentries=");
+        appendUnsigned(body, form.entries().size());
         if (const auto* title = form.get("title")) {
             body.append("\ntitle=");
             body.append(title->value);
@@ -227,6 +229,14 @@ private:
                 }
             }
         }
+        for (const auto& entry : form.entries()) {
+            body.append("\nentry=");
+            body.append(entry.name());
+            body.append(";values=");
+            appendUnsigned(body, entry.size());
+            body.append(";array=");
+            body.append(entry.array() ? "true" : "false");
+        }
         body.push_back('\n');
         co_return c.text(body);
     }
@@ -237,6 +247,8 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("fields=");
         appendUnsigned(body, form.fields().size());
+        body.append("\nentries=");
+        appendUnsigned(body, form.entries().size());
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
         if (const auto* title = form.get("title")) {
