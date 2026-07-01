@@ -2,7 +2,9 @@
 
 #include "ruvia/app/Task.h"
 
+#include <coroutine>
 #include <cstddef>
+#include <utility>
 
 namespace ruvia {
 
@@ -26,17 +28,49 @@ public:
     using Invoke = Task<void> (*)(State);
 
     class Awaitable final {
+        class Awaiter final {
+        public:
+            Awaiter(const Awaiter&) = delete;
+            Awaiter& operator=(const Awaiter&) = delete;
+            Awaiter(Awaiter&&) = delete;
+            Awaiter& operator=(Awaiter&&) = delete;
+
+            [[nodiscard]] bool await_ready() const noexcept {
+                return awaiter_.await_ready();
+            }
+
+            [[nodiscard]] std::coroutine_handle<> await_suspend(
+                std::coroutine_handle<> continuation) noexcept {
+                return awaiter_.await_suspend(continuation);
+            }
+
+            void await_resume() {
+                awaiter_.await_resume();
+            }
+
+            const Awaiter* operator&() const = delete;
+            Awaiter* operator&() = delete;
+
+        private:
+            friend class Awaitable;
+
+            explicit Awaiter(Task<void>&& task)
+                : awaiter_(std::move(task).operator co_await()) {}
+
+            detail::TaskAwaiter<void> awaiter_;
+        };
+
     public:
         Awaitable(const Awaitable&) = delete;
         Awaitable& operator=(const Awaitable&) = delete;
         Awaitable(Awaitable&&) = delete;
         Awaitable& operator=(Awaitable&&) = delete;
 
-        [[nodiscard]] auto operator co_await() && {
+        [[nodiscard]] Awaiter operator co_await() && {
             auto state = state_;
             state.repeated = state.repeated || awaited_;
             awaited_ = true;
-            return invoke_(state).operator co_await();
+            return Awaiter(invoke_(state));
         }
         [[nodiscard]] auto operator co_await() & = delete;
         [[nodiscard]] auto operator co_await() const& = delete;

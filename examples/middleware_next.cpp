@@ -4,12 +4,18 @@
 #include <type_traits>
 #include <utility>
 
+template <typename T>
+concept HasStorableNextAwaiter = requires(T& next) {
+    requires std::is_move_constructible_v<decltype(next().operator co_await())>;
+};
+
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
 static_assert(!std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
+static_assert(!HasStorableNextAwaiter<ruvia::Next>);
 
 class ByValueNextMiddleware final : public ruvia::Middleware<ByValueNextMiddleware> {
 public:
