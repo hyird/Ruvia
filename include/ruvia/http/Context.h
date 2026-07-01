@@ -1733,12 +1733,18 @@ public:
 
     Context& header(std::string_view name, std::string_view value, HeaderOptions options);
 
+    Context& header(std::string_view name, std::nullopt_t);
+
     Context& setHeader(std::string_view name, std::string_view value) {
         return header(name, value);
     }
 
     Context& setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
         return header(name, value, options);
+    }
+
+    Context& setHeader(std::string_view name, std::nullopt_t value) {
+        return header(name, value);
     }
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
@@ -2072,6 +2078,8 @@ private:
     [[nodiscard]] bool requestContentTypeMatches(std::string_view expected) const noexcept;
 
     Context& setStableResponseHeader(std::string_view name, std::string_view value);
+    Context& removeResponseHeader(std::string_view name);
+    void rebuildResponseHeaderIndexes() noexcept;
 
     [[nodiscard]] HttpResponseHeader* findResponseHeaderForUpdate(
         std::string_view name,
