@@ -215,6 +215,10 @@ public:
             return std::string_view(body_.data(), body_.size());
         }
 
+        [[nodiscard]] std::string_view text() const noexcept {
+            return body();
+        }
+
         [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
             return std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(body_.data()),
