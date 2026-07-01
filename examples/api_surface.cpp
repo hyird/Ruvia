@@ -256,7 +256,7 @@ private:
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
         const auto title = form["title"];
-        if (auto titleText = title.text()) {
+        if (auto titleText = title.value()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
@@ -269,16 +269,16 @@ private:
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         body.append("\ntag-array-values=");
-        appendUnsigned(body, form["tag[]"].texts().size());
+        appendUnsigned(body, form["tag[]"].values().size());
         body.append("\ntag-array=");
         body.append(form["tag[]"].isArray() ? "true" : "false");
-        const auto nested = form.at("obj.key1");
+        const auto nested = form.object("obj")["key1"];
         if (auto nestedText = nested.text()) {
             body.append("\nobj.key1=");
             body.append(*nestedText);
         }
         body.append("\nobj.key-count=");
-        appendUnsigned(body, nested.size());
+        appendUnsigned(body, form.object("obj").count("key1"));
         for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);
