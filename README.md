@@ -165,7 +165,7 @@ Applications define middleware with `ruvia::Middleware<T>` and attach it to cont
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Api-Key").value_or("") != "secret") {
             co_return c.error(401, "unauthorized", "unauthorized");
         }

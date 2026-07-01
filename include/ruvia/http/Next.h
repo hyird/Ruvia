@@ -96,10 +96,10 @@ public:
         bool awaited_{false};
     };
 
-    Next(const Next&) noexcept = default;
-    Next& operator=(const Next&) noexcept = default;
-    Next(Next&&) noexcept = default;
-    Next& operator=(Next&&) noexcept = default;
+    Next(const Next&) = delete;
+    Next& operator=(const Next&) = delete;
+    Next(Next&&) = delete;
+    Next& operator=(Next&&) = delete;
 
     [[nodiscard]] Awaitable operator()() &;
     [[nodiscard]] Awaitable operator()() const& = delete;
