@@ -166,12 +166,7 @@ template <ValidationTarget Target, typename BodyT>
     } else if constexpr (Target == ValidationTarget::kForm) {
         co_return co_await c.req().template form<BodyT>();
     } else if constexpr (Target == ValidationTarget::kQuery) {
-        static_assert(FormBody<BodyT>::value, "query validator body type must use RUVIA_MODEL");
-        auto parsed = FormBody<BodyT>::parse(c.req().queryString(), c.resource());
-        if (!parsed) {
-            detail::throwInvalidQuery();
-        }
-        co_return std::move(*parsed);
+        co_return parseValidatedFields<Target, BodyT>(c, c.req().query());
     } else if constexpr (Target == ValidationTarget::kParam) {
         co_return parseValidatedFields<Target, BodyT>(c, c.req().param());
     } else if constexpr (Target == ValidationTarget::kHeader) {
