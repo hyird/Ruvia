@@ -379,6 +379,97 @@ public:
             bool array_{false};
         };
 
+        class Value final {
+        public:
+            Value(std::pmr::memory_resource* resource, const Entry* entry) noexcept
+                : resource_(resource),
+                  entry_(entry) {}
+
+            [[nodiscard]] explicit operator bool() const noexcept {
+                return exists();
+            }
+
+            [[nodiscard]] bool exists() const noexcept {
+                return field() != nullptr;
+            }
+
+            [[nodiscard]] const RequestFormField* field() const noexcept {
+                return entry_ == nullptr ? nullptr : entry_->field();
+            }
+
+            [[nodiscard]] const RequestFormField* operator->() const noexcept {
+                return field();
+            }
+
+            [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
+                return entry_ == nullptr ? std::span<const RequestFormField* const>{} : entry_->fields();
+            }
+
+            [[nodiscard]] std::size_t size() const noexcept {
+                return entry_ == nullptr ? 0 : entry_->size();
+            }
+
+            [[nodiscard]] bool empty() const noexcept {
+                return size() == 0;
+            }
+
+            [[nodiscard]] bool multiple() const noexcept {
+                return entry_ != nullptr && entry_->multiple();
+            }
+
+            [[nodiscard]] bool isArray() const noexcept {
+                return entry_ != nullptr && entry_->array();
+            }
+
+            [[nodiscard]] bool isFile() const noexcept {
+                const auto* selected = field();
+                return selected != nullptr && selected->isFile();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> text() const noexcept {
+                return entry_ == nullptr ? std::nullopt : entry_->value();
+            }
+
+            [[nodiscard]] std::pmr::vector<std::string_view> texts() const {
+                if (entry_ == nullptr) {
+                    return std::pmr::vector<std::string_view>(resource());
+                }
+                return entry_->values();
+            }
+
+            [[nodiscard]] std::optional<RequestBlob> blob() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr) {
+                    return std::nullopt;
+                }
+                return selected->blob();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> fileName() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr || !selected->isFile()) {
+                    return std::nullopt;
+                }
+                return selected->fileName();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> mediaType() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr || !selected->isFile()) {
+                    return std::nullopt;
+                }
+                return selected->mediaType();
+            }
+
+        private:
+            [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+                return resource_ == nullptr ? std::pmr::get_default_resource() : resource_;
+            }
+
+            std::pmr::memory_resource* resource_{nullptr};
+            const Entry* entry_{nullptr};
+        };
+
         explicit RequestFormData(std::pmr::memory_resource* resource)
             : fields_(resource),
               entries_(resource) {}
@@ -414,8 +505,8 @@ public:
             return formEntry->field();
         }
 
-        [[nodiscard]] const RequestFormField* operator[](std::string_view name) const noexcept {
-            return get(name);
+        [[nodiscard]] Value operator[](std::string_view name) const noexcept {
+            return Value(fields_.get_allocator().resource(), entry(name));
         }
 
         [[nodiscard]] bool has(std::string_view name) const noexcept {

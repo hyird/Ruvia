@@ -246,9 +246,10 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
-        if (const auto* title = form["title"]) {
+        const auto title = form["title"];
+        if (auto titleText = title.text()) {
             body.append("\ntitle=");
-            body.append(title->text());
+            body.append(*titleText);
         }
         body.append("\ntag-count=");
         appendUnsigned(body, form.getAll("tag").size());
@@ -258,8 +259,10 @@ private:
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
+        body.append("\ntag-array-values=");
+        appendUnsigned(body, form["tag[]"].texts().size());
         body.append("\ntag-array=");
-        body.append(form.isArray("tag[]") ? "true" : "false");
+        body.append(form["tag[]"].isArray() ? "true" : "false");
         if (const auto* nested = form.getAt("obj.key1")) {
             body.append("\nobj.key1=");
             body.append(nested->text());
@@ -318,9 +321,10 @@ private:
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
-        if (const auto* title = form["title"]) {
+        const auto title = form["title"];
+        if (auto titleText = title.text()) {
             body.append("\ntitle=");
-            body.append(title->text());
+            body.append(*titleText);
         }
         body.push_back('\n');
         co_return c.text(body);
