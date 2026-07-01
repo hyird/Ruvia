@@ -110,7 +110,7 @@ private:
         body.append("\nquery-fields=");
         appendUnsigned(body, request.query().size());
         body.append("\ncookies=");
-        appendUnsigned(body, request.cookies().size());
+        appendUnsigned(body, request.cookie().size());
         body.append("\ntag-values=");
         appendUnsigned(body, request.queries("tag").size());
         body.append("\nversion=");

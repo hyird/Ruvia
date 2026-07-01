@@ -220,7 +220,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.req().header(name)` / `c.req().header()` | Read one request header or the current request header view. |
 | `c.req().query(name)` / `c.req().queries(name)` | Read query values through `toStringView()`, `toString()`, `toInt()`, `toBool()`, and related typed helpers. |
-| `c.req().cookie(name)` | Read a cookie value as `std::optional<std::string_view>`. |
+| `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie list. |
 | `c.req().param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.req().param("*")` for wildcard routes. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
