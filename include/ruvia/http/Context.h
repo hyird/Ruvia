@@ -153,9 +153,9 @@ public:
         }
 
         [[nodiscard]] const RequestFormField* get(std::string_view name) const noexcept {
-            for (auto it = fields_.rbegin(); it != fields_.rend(); ++it) {
-                if (it->name == name) {
-                    return &*it;
+            for (const auto& field : fields_) {
+                if (field.name == name) {
+                    return &field;
                 }
             }
             return nullptr;
@@ -233,6 +233,8 @@ public:
     }
 
     [[nodiscard]] Task<RequestFormData> parseBody(ParseBodyOptions options) const;
+
+    [[nodiscard]] Task<RequestFormData> formData() const;
 
     [[nodiscard]] BodyReader& bodyReader() const;
 
@@ -828,6 +830,10 @@ inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
 
 inline Task<ContextRequest::RequestFormData> ContextRequest::parseBody(ParseBodyOptions options) const {
     return context_->parseRequestBody(options);
+}
+
+inline Task<ContextRequest::RequestFormData> ContextRequest::formData() const {
+    return parseBody(ParseBodyOptions{.all = true});
 }
 
 inline BodyReader& ContextRequest::bodyReader() const {
