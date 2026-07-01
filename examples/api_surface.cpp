@@ -386,6 +386,9 @@ private:
         appendUnsigned(body, nestedObject.groups().size());
         body.append("\nobj.keys=");
         appendUnsigned(body, nestedObject.keys().size());
+        const auto childObject = nestedObject.object("child");
+        body.append("\nobj.child.keys=");
+        appendUnsigned(body, childObject.keys().size());
         for (const auto& field : form.entries()) {
             body.append("\n");
             body.append(field.name);
