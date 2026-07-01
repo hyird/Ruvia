@@ -66,6 +66,7 @@ void setValidatedBody(Context& context, ValidationTarget target, T&& body);
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
 [[noreturn]] void throwInvalidFormBody();
+[[noreturn]] void throwInvalidQuery();
 
 // Assign `src` into `dst`, forcing storage in the backing memory resource rather
 // than the small-string optimization's inline buffer. The Context's per-request
