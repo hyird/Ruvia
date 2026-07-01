@@ -52,10 +52,6 @@ Context& Context::res(HttpResponse&& response) {
     return *this;
 }
 
-void Context::storeResponse(HttpResponse&& response) {
-    responseStorage() = std::move(response);
-}
-
 HttpResponse Context::takeResponse() {
     if (response_ == nullptr) {
         return HttpResponse(resource());
