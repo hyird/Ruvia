@@ -38,6 +38,11 @@ concept HasDefaultValid = requires(const ruvia::ContextRequest& request) {
     request.template valid<T>();
 };
 
+template <typename T>
+concept HasUnaryContextHeader = requires(const T& context) {
+    context.header(std::string_view{});
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -65,6 +70,7 @@ static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 static_assert(!HasDefaultValid<CurrentUser>);
+static_assert(!HasUnaryContextHeader<ruvia::Context>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -235,9 +241,9 @@ private:
         body.append("\nquery-tag=");
         body.append(request.query()["tag"]);
         body.append("\nshortcut-header-host=");
-        body.append(c.header("Host"));
+        body.append(c.req().header("Host").value_or(""));
         body.append("\nshortcut-header-x-dupe=");
-        body.append(c.header("X-Dupe"));
+        body.append(c.req().header("X-Dupe").value_or(""));
         body.append("\nrequest-header-x-dupe=");
         body.append(request.header("X-Dupe").value_or(""));
         body.append("\nrequest-header-missing=");

@@ -1723,10 +1723,6 @@ public:
         return ConstVars(*this);
     }
 
-    [[nodiscard]] std::string_view header(std::string_view name) const {
-        return requestHeader(name).value_or(std::string_view{});
-    }
-
     [[nodiscard]] QueryValue query(std::string_view name) const {
         return req().query(name);
     }
