@@ -146,14 +146,16 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         const auto& user = c.var(kCurrentUser);
-        const auto traceId = c.var<std::string_view>("traceId");
+        const auto* traceId = c.varIf<std::string_view>("traceId");
         std::pmr::string body(c.allocator<char>());
         body.append("user=");
         body.append(user.name);
         body.append("\nid=");
         appendUnsigned(body, user.id);
         body.append("\ntrace=");
-        body.append(traceId);
+        body.append(traceId == nullptr ? "missing" : *traceId);
+        body.append("\nmissing-var=");
+        body.append(c.getIf<std::uint32_t>("missing") == nullptr ? "true" : "false");
         body.append("\nenv-vars=");
         appendUnsigned(body, c.env().size());
         body.push_back('\n');

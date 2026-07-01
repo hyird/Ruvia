@@ -773,6 +773,12 @@ public:
     }
 
     template <typename T>
+    [[nodiscard]] T* getIf(std::string_view name) noexcept {
+        auto* store = valuesIf();
+        return store == nullptr ? nullptr : store->template getIf<T>(name);
+    }
+
+    template <typename T>
     [[nodiscard]] const T& get(std::string_view name) const {
         const auto* store = valuesIf();
         if (store == nullptr) {
@@ -782,8 +788,19 @@ public:
     }
 
     template <typename T>
+    [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
+        const auto* store = valuesIf();
+        return store == nullptr ? nullptr : store->template getIf<T>(name);
+    }
+
+    template <typename T>
     [[nodiscard]] T& get(ContextKey<T> key) {
         return get<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] T* getIf(ContextKey<T> key) noexcept {
+        return getIf<T>(key.name());
     }
 
     template <typename T>
@@ -792,8 +809,18 @@ public:
     }
 
     template <typename T>
+    [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
+        return getIf<T>(key.name());
+    }
+
+    template <typename T>
     [[nodiscard]] T& var(std::string_view name) {
         return get<T>(name);
+    }
+
+    template <typename T>
+    [[nodiscard]] T* varIf(std::string_view name) noexcept {
+        return getIf<T>(name);
     }
 
     template <typename T>
@@ -802,13 +829,28 @@ public:
     }
 
     template <typename T>
+    [[nodiscard]] const T* varIf(std::string_view name) const noexcept {
+        return getIf<T>(name);
+    }
+
+    template <typename T>
     [[nodiscard]] T& var(ContextKey<T> key) {
         return get<T>(key.name());
     }
 
     template <typename T>
+    [[nodiscard]] T* varIf(ContextKey<T> key) noexcept {
+        return getIf<T>(key.name());
+    }
+
+    template <typename T>
     [[nodiscard]] const T& var(ContextKey<T> key) const {
         return get<T>(key.name());
+    }
+
+    template <typename T>
+    [[nodiscard]] const T* varIf(ContextKey<T> key) const noexcept {
+        return getIf<T>(key.name());
     }
 
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
