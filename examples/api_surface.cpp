@@ -52,6 +52,7 @@ static_assert(!std::is_copy_assignable_v<ruvia::RequestValueGroupList>);
 static_assert(std::is_move_constructible_v<ruvia::RequestValueGroupList>);
 static_assert(std::is_move_assignable_v<ruvia::RequestValueGroupList>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
+static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
@@ -186,6 +187,8 @@ private:
         appendUnsigned(body, c.req().headers().size());
         body.append("\nheader-host-all=");
         appendUnsigned(body, request.header().getAll("host").size());
+        body.append("\nheader-x-dupe-object=");
+        body.append(request.header()["x-dupe"]);
         body.append("\nparams=");
         appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");
@@ -196,6 +199,10 @@ private:
         body.append(request.query()["tag"]);
         body.append("\nshortcut-header-host=");
         body.append(c.header("Host"));
+        body.append("\nshortcut-header-x-dupe=");
+        body.append(c.header("X-Dupe"));
+        body.append("\nrequest-header-x-dupe=");
+        body.append(request.header("X-Dupe"));
         body.append("\nshortcut-query-tag=");
         body.append(c.query("tag").value_or(""));
         body.append("\nshortcut-cookie-surface=");
