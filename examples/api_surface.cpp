@@ -1,6 +1,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -70,6 +71,9 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookies()),
     const ruvia::RequestNameValueList&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})),
+    std::optional<std::string_view>>);
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};
@@ -235,7 +239,9 @@ private:
         body.append("\nshortcut-header-x-dupe=");
         body.append(c.header("X-Dupe"));
         body.append("\nrequest-header-x-dupe=");
-        body.append(request.header("X-Dupe"));
+        body.append(request.header("X-Dupe").value_or(""));
+        body.append("\nrequest-header-missing=");
+        body.append(request.header("X-Missing").has_value() ? "present" : "missing");
         body.append("\nshortcut-query-tag=");
         body.append(c.query("tag").value_or(""));
         body.append("\nshortcut-cookie-surface=");

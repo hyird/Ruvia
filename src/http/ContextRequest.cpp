@@ -438,13 +438,12 @@ const RequestNameValueList& Context::requestHeaders() const {
     return *requestHeaders_;
 }
 
-std::string_view Context::requestHeader(std::string_view name) const {
+std::optional<std::string_view> Context::requestHeader(std::string_view name) const {
     std::pmr::string lowered(resource());
     lowered.reserve(name.size());
     appendLowerAscii(lowered, name);
     return requestHeaders()
-        .get(std::string_view(lowered.data(), lowered.size()))
-        .value_or(std::string_view{});
+        .get(std::string_view(lowered.data(), lowered.size()));
 }
 
 void Context::ensureRequestQuery() const {

@@ -166,7 +166,7 @@ Applications define middleware with `ruvia::Middleware<T>` and attach it to cont
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
     ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next& next) {
-        if (c.req().header("X-Api-Key") != "secret") {
+        if (c.req().header("X-Api-Key").value_or("") != "secret") {
             co_return c.error(401, "unauthorized", "unauthorized");
         }
         co_await next();
@@ -221,7 +221,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `ruvia::routePath(c)` / `ruvia::routePath(c, index)` / `ruvia::matchedRoutes(c)` | Read Hono Route Helper-style route metadata; negative indexes address from the end, and route paths are returned without copying. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.header(name)` / `c.query(name)` / `c.cookie(name)` / `c.param(name)` | Shorthand request readers for common handler input. Use `c.header(name, value)` or `c.setHeader(name, value)` only when setting response headers. |
-| `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. The no-arg object supports `headers["x-foo"]`, `headers.get("x-foo")`, `headers.getAll("set-cookie")`, `headers.entries()`, `headers.keys()`, and `headers.values()`; use `c.req().headers()` for the raw parser header view. |
+| `c.req().header(name)` / `c.req().header()` | Read one request header as `std::optional<std::string_view>`, or all request headers with lowercase names. The no-arg object supports `headers["x-foo"]`, `headers.get("x-foo")`, `headers.getAll("set-cookie")`, `headers.entries()`, `headers.keys()`, and `headers.values()`; use `c.req().headers()` for the raw parser header view. |
 | `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value as a zero-copy view helper with `value_or(...)` / `toString()` / typed conversions, or all decoded single-value query params as an object supporting `query["q"]` / `query.get("q")` plus `entries()` / `keys()` / `values()`; single-value query access keeps the first duplicate key, matching Hono. `queries(name)` returns a decoded string-view span, and `queries()` exposes multi-value params as an object supporting `queries["tag"]`, `queries.get("tag")`, `queries.getAll("tag")`, `queries.first("tag")`, `entries()`, `keys()`, and `values()`. |
 | `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie object with `cookies["session"]`, `cookies.get("session")`, `cookies.getAll("session")`, and `entries()` / `keys()` / `values()` iteration. |
 | `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter as a zero-copy view helper with `value_or(...)` / `toString()` / typed conversions, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")` / `params.getAll("id")` plus `entries()` / `keys()` / `values()` iteration. |
@@ -366,7 +366,7 @@ RUVIA_POST_DYNAMIC("/mcp", mcp);
 
 ruvia::Task<ruvia::HttpResponse> mcp(ruvia::Context& c) {
     const auto request = co_await c.req().json<RpcRequest>();
-    if (c.req().header("Accept") == "text/event-stream") {
+    if (c.req().header("Accept").value_or("") == "text/event-stream") {
         auto stream = c.streamSSE();
         co_await stream.writeSSE({.data = "{\"echo\":true}", .event = "message"});
         co_return c.text("");  // ignored: the stream is the response
