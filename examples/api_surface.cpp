@@ -598,6 +598,8 @@ private:
         appendUnsigned(body, clone.headers().size());
         body.append("\nbody=");
         body.append(clone.body());
+        body.append("\ntext=");
+        body.append(clone.text());
         body.append("\nconsumed=");
         body.append(consumed);
         body.append("\ntype=");
