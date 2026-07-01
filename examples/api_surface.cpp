@@ -144,6 +144,8 @@ private:
         appendUnsigned(body, c.req().header().values().size());
         body.append("\nraw-headers=");
         appendUnsigned(body, c.req().headers().size());
+        body.append("\nheader-host-all=");
+        appendUnsigned(body, request.header().getAll("host").size());
         body.append("\nparams=");
         appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");
@@ -183,6 +185,8 @@ private:
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
         appendUnsigned(body, tags.size());
+        body.append("\ntag-group-get-all=");
+        appendUnsigned(body, request.queries().getAll("tag").size());
         body.append("\ntag-first=");
         if (!tags.empty()) {
             body.append(tags.front());

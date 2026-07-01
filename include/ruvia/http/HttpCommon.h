@@ -172,6 +172,10 @@ public:
         return result;
     }
 
+    [[nodiscard]] std::pmr::vector<std::string_view> getAll(std::string_view name) const {
+        return values(name);
+    }
+
     [[nodiscard]] std::span<const RequestNameValueView> entries() const noexcept {
         return span();
     }
@@ -356,6 +360,10 @@ public:
             return {};
         }
         return requestGroup->values();
+    }
+
+    [[nodiscard]] std::span<const std::string_view> getAll(std::string_view name) const noexcept {
+        return values(name);
     }
 
     [[nodiscard]] std::span<const RequestValueGroup> span() const noexcept {
