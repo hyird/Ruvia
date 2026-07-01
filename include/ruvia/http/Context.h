@@ -120,6 +120,127 @@ public:
         std::string_view type_;
     };
 
+    class RawRequestClone final {
+    public:
+        class Header final {
+        public:
+            Header(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                std::string_view value)
+                : name_(name, resource),
+                  value_(value, resource) {}
+
+            Header(const Header&) = delete;
+            Header& operator=(const Header&) = delete;
+            Header(Header&&) noexcept = default;
+            Header& operator=(Header&&) noexcept = default;
+
+            [[nodiscard]] std::string_view name() const noexcept {
+                return std::string_view(name_.data(), name_.size());
+            }
+
+            [[nodiscard]] std::string_view value() const noexcept {
+                return std::string_view(value_.data(), value_.size());
+            }
+
+        private:
+            std::pmr::string name_;
+            std::pmr::string value_;
+        };
+
+        explicit RawRequestClone(std::pmr::memory_resource* resource)
+            : target_(resource),
+              url_(resource),
+              path_(resource),
+              queryString_(resource),
+              httpVersion_(resource),
+              headers_(resource),
+              body_(resource),
+              remoteAddress_(resource),
+              clientCertificate_(resource) {}
+
+        RawRequestClone(const RawRequestClone&) = delete;
+        RawRequestClone& operator=(const RawRequestClone&) = delete;
+        RawRequestClone(RawRequestClone&&) noexcept = default;
+        RawRequestClone& operator=(RawRequestClone&&) noexcept = default;
+
+        [[nodiscard]] std::string_view method() const noexcept {
+            return methodName(method_);
+        }
+
+        [[nodiscard]] HttpMethod methodEnum() const noexcept {
+            return method_;
+        }
+
+        [[nodiscard]] std::string_view target() const noexcept {
+            return std::string_view(target_.data(), target_.size());
+        }
+
+        [[nodiscard]] std::string_view url() const noexcept {
+            return std::string_view(url_.data(), url_.size());
+        }
+
+        [[nodiscard]] std::string_view path() const noexcept {
+            return std::string_view(path_.data(), path_.size());
+        }
+
+        [[nodiscard]] std::string_view queryString() const noexcept {
+            return std::string_view(queryString_.data(), queryString_.size());
+        }
+
+        [[nodiscard]] std::string_view httpVersion() const noexcept {
+            return std::string_view(httpVersion_.data(), httpVersion_.size());
+        }
+
+        [[nodiscard]] std::span<const Header> headers() const noexcept {
+            return headers_;
+        }
+
+        [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+
+        [[nodiscard]] std::string_view body() const noexcept {
+            return std::string_view(body_.data(), body_.size());
+        }
+
+        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
+            return std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(body_.data()),
+                body_.size());
+        }
+
+        [[nodiscard]] RequestBlob blob() const noexcept {
+            return RequestBlob(arrayBuffer(), header("Content-Type"));
+        }
+
+        [[nodiscard]] std::string_view remoteAddress() const noexcept {
+            return std::string_view(remoteAddress_.data(), remoteAddress_.size());
+        }
+
+        [[nodiscard]] std::string_view clientCertificate() const noexcept {
+            return std::string_view(clientCertificate_.data(), clientCertificate_.size());
+        }
+
+        [[nodiscard]] bool isSecure() const noexcept {
+            return secure_;
+        }
+
+    private:
+        friend class ContextRequest;
+
+        HttpMethod method_{HttpMethod::kUnknown};
+        std::pmr::string target_;
+        std::pmr::string url_;
+        std::pmr::string path_;
+        std::pmr::string queryString_;
+        std::pmr::string httpVersion_;
+        std::pmr::vector<Header> headers_;
+        std::pmr::string body_;
+        std::pmr::string remoteAddress_;
+        std::pmr::string clientCertificate_;
+        bool secure_{false};
+    };
+
     struct RequestFormField final {
         RequestFormField(
             std::pmr::memory_resource* resource,
@@ -310,6 +431,7 @@ public:
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
+    [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
     Task<void> discardBody() const;
 
     template <typename T>
