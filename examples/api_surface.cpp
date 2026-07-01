@@ -322,13 +322,16 @@ private:
         appendUnsigned(body, form["tag[]"].values().size());
         body.append("\ntag-array=");
         body.append(form["tag[]"].isArray() ? "true" : "false");
-        const auto nested = form.object("obj")["key1"];
+        const auto nestedObject = form.object("obj");
+        const auto nested = nestedObject.get("key1");
         if (auto nestedText = nested.toStringView()) {
             body.append("\nobj.key1=");
             body.append(*nestedText);
         }
+        body.append("\nobj.key1-all=");
+        appendUnsigned(body, nestedObject.getAll("key1").size());
         body.append("\nobj.key-count=");
-        appendUnsigned(body, form.object("obj").count("key1"));
+        appendUnsigned(body, nestedObject.count("key1"));
         for (const auto& field : form.entries()) {
             body.append("\n");
             body.append(field.name);
