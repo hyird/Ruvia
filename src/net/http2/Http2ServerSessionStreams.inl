@@ -154,6 +154,8 @@ void Http2ServerSession<Stream>::resumeBodyWaiter(Http2StreamState& stream) noex
 
 template <typename Stream>
 void Http2ServerSession<Stream>::resumeAllBodyWaiters() noexcept {
+    // forEach holds Http2StreamTable's snapshot guard: a resumed waiter may
+    // synchronously close streams and trigger removeReset().
     streams_.forEach([this](Http2StreamState& stream) noexcept {
         resumeBodyWaiter(stream);
     });

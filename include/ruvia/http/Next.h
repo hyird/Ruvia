@@ -55,10 +55,16 @@ public:
 
     Next(const Next&) = delete;
     Next& operator=(const Next&) = delete;
-    Next(Next&&) = delete;
+    Next(Next&& other) noexcept
+        : state_(other.state_),
+          invoke_(other.invoke_),
+          invoked_(std::exchange(other.invoked_, true)) {}
     Next& operator=(Next&&) = delete;
 
-    [[nodiscard]] Awaitable operator()() const;
+    [[nodiscard]] Awaitable operator()() &;
+    [[nodiscard]] Awaitable operator()() const& = delete;
+    [[nodiscard]] Awaitable operator()() && = delete;
+    [[nodiscard]] Awaitable operator()() const&& = delete;
     const Next* operator&() const = delete;
     Next* operator&() = delete;
 

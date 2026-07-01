@@ -160,12 +160,12 @@ Route registration is macro-only:
 
 `HEAD` falls back to an existing `GET` route when no explicit `HEAD` route is registered. `Allow` headers include `HEAD` whenever `GET` is allowed, and framework-generated `OPTIONS` remains distinct from user-defined `RUVIA_OPTIONS(...)` routes.
 
-Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
+Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a move-only, one-shot token passed by value; middleware must `co_await next()` inside its own `handle` coroutine and must not save it for background use. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
 
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next next) {
         if (c.req().header("X-Api-Key") != "secret") {
             co_return c.error(401, "unauthorized", "unauthorized");
         }

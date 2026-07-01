@@ -9,7 +9,7 @@ namespace ruvia {
 
 using namespace detail;
 
-Next::Awaitable Next::operator()() const {
+Next::Awaitable Next::operator()() & {
     auto state = state_;
     state.repeated = invoked_;
     invoked_ = true;

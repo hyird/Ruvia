@@ -17,6 +17,7 @@ ruvia_add_example(ruvia_example_files_static files_static.cpp)
 ruvia_add_example(ruvia_example_websocket websocket.cpp)
 ruvia_add_example(ruvia_example_runtime_config runtime_config.cpp)
 ruvia_add_example(ruvia_example_ops ops.cpp)
+ruvia_add_example(ruvia_example_middleware_next middleware_next.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt auth_jwt.cpp)

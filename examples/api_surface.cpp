@@ -30,7 +30,7 @@ concept HasLvalueAwait = requires(T& value) {
 
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
-static_assert(!std::is_move_constructible_v<ruvia::Next>);
+static_assert(std::is_move_constructible_v<ruvia::Next>);
 static_assert(!std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
@@ -91,7 +91,7 @@ ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
 
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
         c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
         c.set("traceId", std::string_view("surface-trace"));
         c.setRenderer(&surfaceRenderer);
@@ -107,7 +107,7 @@ public:
 
 class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next&) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next) {
         co_return c.text("returned by middleware\n", 209);
     }
 };
@@ -125,6 +125,7 @@ public:
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
+    RUVIA_GET_STREAM("/stream-throw", streamThrow);
     RUVIA_GET("/missing", missing);
     RUVIA_GET("/middleware-return", middlewareReturnHandler, SurfaceReturnMiddleware);
     RUVIA_POST("/multipart", bufferedMultipart);
@@ -300,6 +301,10 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
         throw std::runtime_error("surface route failed");
+    }
+
+    ruvia::Task<void> streamThrow(ruvia::Context&) {
+        throw std::runtime_error("surface stream failed");
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
