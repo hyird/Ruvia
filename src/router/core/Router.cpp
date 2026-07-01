@@ -9,8 +9,11 @@ namespace ruvia {
 
 using namespace detail;
 
-Task<void> Next::operator()() const {
-    return callable_();
+Next::Awaitable Next::operator()() const {
+    auto state = state_;
+    state.repeated = invoked_;
+    invoked_ = true;
+    return Awaitable(invoke_(state));
 }
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept

@@ -61,35 +61,37 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    MiddlewareContinuation continuation{this, &route, &context, index + 1};
-    const auto next = NextAccess::make(&continuation, &RouteTable::invokeMiddlewareContinuation);
+    const auto next = NextAccess::make(
+        Next::State{.table = this, .route = &route, .context = &context, .index = index + 1},
+        &RouteTable::invokeMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
 }
 
-Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
-    auto* continuation = static_cast<MiddlewareContinuation*>(target);
-    if (continuation->invoked) {
-        storeRepeatedNextError(*continuation->context);
+Task<void> detail::RouteTable::invokeMiddlewareContinuation(Next::State state) {
+    auto* context = state.context;
+    if (state.repeated) {
+        storeRepeatedNextError(*context);
         co_return;
     }
-    continuation->invoked = true;
+    auto* table = static_cast<const RouteTable*>(state.table);
+    auto* route = static_cast<const RouteEntry*>(state.route);
     std::exception_ptr exception;
     try {
-        co_await continuation->table->invokeMiddlewareAt(
-            *continuation->route,
-            continuation->index,
-            *continuation->context);
+        co_await table->invokeMiddlewareAt(
+            *route,
+            state.index,
+            *context);
     } catch (...) {
         exception = std::current_exception();
     }
     if (exception != nullptr) {
-        auto response = co_await continuation->table->handleException(
-            *continuation->context,
+        auto response = co_await table->handleException(
+            *context,
             exception,
             true);
-        detail::ContextAccess::setResponse(*continuation->context, std::move(response));
+        detail::ContextAccess::setResponse(*context, std::move(response));
     }
 }
 
@@ -105,28 +107,44 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    StreamMiddlewareContinuation continuation{this, &route, &context, index + 1, &outcome};
-    const auto next = NextAccess::make(&continuation, &RouteTable::invokeStreamMiddlewareContinuation);
+    const auto next = NextAccess::make(
+        Next::State{
+            .table = this,
+            .route = &route,
+            .context = &context,
+            .outcome = &outcome,
+            .index = index + 1},
+        &RouteTable::invokeStreamMiddlewareContinuation);
     auto task = middleware(context, next);
     co_await std::move(task);
     co_return;
 }
 
-Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target) {
-    auto* continuation = static_cast<StreamMiddlewareContinuation*>(target);
-    if (continuation->invoked) {
-        storeRepeatedNextError(*continuation->context);
+Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State state) {
+    auto* context = state.context;
+    if (state.repeated) {
+        storeRepeatedNextError(*context);
         co_return;
     }
-    continuation->invoked = true;
+    auto* table = static_cast<const RouteTable*>(state.table);
+    auto* route = static_cast<const RouteEntry*>(state.route);
+    auto* outcome = static_cast<RouteStreamDispatchOutcome*>(state.outcome);
+    std::exception_ptr exception;
     try {
-        co_await continuation->table->invokeStreamMiddlewareAt(
-            *continuation->route,
-            continuation->index,
-            *continuation->context,
-            *continuation->outcome);
+        co_await table->invokeStreamMiddlewareAt(
+            *route,
+            state.index,
+            *context,
+            *outcome);
     } catch (...) {
-        detail::ContextAccess::setError(*continuation->context, std::current_exception());
+        exception = std::current_exception();
+    }
+    if (exception != nullptr) {
+        auto response = co_await table->handleException(
+            *context,
+            exception,
+            true);
+        detail::ContextAccess::setResponse(*context, std::move(response));
     }
 }
 

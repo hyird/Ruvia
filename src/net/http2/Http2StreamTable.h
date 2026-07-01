@@ -96,12 +96,15 @@ public:
 
     template <typename Callback>
     void forEach(Callback&& callback) {
+        SnapshotIterationGuard guard(*this);
         for (auto& slot : inline_) {
             if (slot) {
                 callback(*slot);
             }
         }
-        for (auto& stream : overflow_) {
+        const auto overflowEnd = overflow_.size();
+        for (std::size_t i = 0; i < overflowEnd; ++i) {
+            auto& stream = overflow_[i];
             if (stream != nullptr) {
                 callback(*stream);
             }
@@ -148,17 +151,60 @@ private:
     static constexpr std::size_t kInlineCapacity = 16;
     using OverflowStream = std::unique_ptr<Http2StreamState, PmrObjectDeleter<Http2StreamState>>;
 
+    class SnapshotIterationGuard final {
+    public:
+        explicit SnapshotIterationGuard(Http2StreamTable& table) noexcept
+            : table_(table) {
+            ++table_.snapshotIterationDepth_;
+        }
+
+        SnapshotIterationGuard(const SnapshotIterationGuard&) = delete;
+        SnapshotIterationGuard& operator=(const SnapshotIterationGuard&) = delete;
+
+        ~SnapshotIterationGuard() {
+            --table_.snapshotIterationDepth_;
+            table_.compactOverflowIfIdle();
+        }
+
+    private:
+        Http2StreamTable& table_;
+    };
+
     void eraseOverflowAt(std::size_t index) noexcept {
+        if (snapshotIterationDepth_ != 0) {
+            overflow_[index].reset();
+            overflowNeedsCompact_ = true;
+            return;
+        }
         if (index + 1 != overflow_.size()) {
             overflow_[index] = std::move(overflow_.back());
         }
         overflow_.pop_back();
     }
 
+    void compactOverflowIfIdle() noexcept {
+        if (snapshotIterationDepth_ != 0 || !overflowNeedsCompact_) {
+            return;
+        }
+        for (std::size_t i = 0; i < overflow_.size();) {
+            if (overflow_[i] == nullptr) {
+                if (i + 1 != overflow_.size()) {
+                    overflow_[i] = std::move(overflow_.back());
+                }
+                overflow_.pop_back();
+                continue;
+            }
+            ++i;
+        }
+        overflowNeedsCompact_ = false;
+    }
+
     std::pmr::memory_resource* resource_;
     std::array<std::optional<Http2StreamState>, kInlineCapacity> inline_{};
     std::pmr::vector<OverflowStream> overflow_;
     std::size_t size_{0};
+    std::size_t snapshotIterationDepth_{0};
+    bool overflowNeedsCompact_{false};
 };
 
 [[nodiscard]] inline bool http2IsIdleStream(std::uint32_t streamId, std::uint32_t lastStreamId) noexcept {
