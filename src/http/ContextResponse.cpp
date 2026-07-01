@@ -195,7 +195,7 @@ void Context::rebuildResponseHeaderIndexes() noexcept {
     }
 }
 
-Context& Context::status(std::uint16_t statusCode, std::string_view statusText) {
+void Context::status(std::uint16_t statusCode, std::string_view statusText) {
     if (statusCode < 100 || statusCode > 999) {
         throw std::invalid_argument("invalid HTTP status code");
     }
@@ -211,7 +211,6 @@ Context& Context::status(std::uint16_t statusCode, std::string_view statusText) 
     if (response_ != nullptr) {
         response_->setStatus(statusCode, statusText);
     }
-    return *this;
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {

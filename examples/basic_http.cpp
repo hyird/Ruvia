@@ -118,7 +118,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
-        co_return c.status(204).header("Allow", "GET, HEAD, OPTIONS").text("");
+        c.status(204);
+        c.header("Allow", "GET, HEAD, OPTIONS");
+        co_return c.text("");
     }
 
     ruvia::Task<ruvia::HttpResponse> adminStatus(ruvia::Context& c) {
