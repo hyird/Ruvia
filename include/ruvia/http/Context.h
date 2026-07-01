@@ -1334,6 +1334,8 @@ public:
     [[nodiscard]] Task<RequestBlob> blob() const;
     Task<void> discardBody() const;
 
+    [[nodiscard]] Task<JsonObject> json() const;
+
     template <typename T>
     [[nodiscard]] Task<T> json() const;
 
