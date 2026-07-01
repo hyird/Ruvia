@@ -1,4 +1,5 @@
 #include <charconv>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -69,8 +70,8 @@ concept HasRequestBytesAlias = requires(const T& request) {
 };
 
 template <typename T>
-concept HasRequestJsonObjectAlias = requires(const T& request) {
-    request.json();
+concept HasRequestJsonValueAlias = requires(const T& request) {
+    { request.json() } -> std::same_as<ruvia::Task<ruvia::JsonValue>>;
 };
 
 template <typename T>
@@ -171,7 +172,7 @@ static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
 static_assert(HasRequestBytesAlias<ruvia::ContextRequest>);
-static_assert(HasRequestJsonObjectAlias<ruvia::ContextRequest>);
+static_assert(HasRequestJsonValueAlias<ruvia::ContextRequest>);
 static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
@@ -201,6 +202,24 @@ void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     if (ec == std::errc{}) {
         output.append(buffer, static_cast<std::size_t>(ptr - buffer));
     }
+}
+
+std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
+    switch (kind) {
+        case ruvia::JsonValue::Kind::kObject:
+            return "object";
+        case ruvia::JsonValue::Kind::kArray:
+            return "array";
+        case ruvia::JsonValue::Kind::kString:
+            return "string";
+        case ruvia::JsonValue::Kind::kNumber:
+            return "number";
+        case ruvia::JsonValue::Kind::kBoolean:
+            return "boolean";
+        case ruvia::JsonValue::Kind::kNull:
+            return "null";
+    }
+    return "unknown";
 }
 
 }  // namespace
@@ -301,7 +320,8 @@ public:
     RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
-    RUVIA_POST("/json-object", jsonObjectBody);
+    RUVIA_POST("/json-object", jsonValueBody);
+    RUVIA_POST("/json-value", jsonValueBody);
     RUVIA_POST("/clone-raw", cloneRawRequest);
     RUVIA_POST("/clone-raw-form", cloneRawFormRequest);
     RUVIA_POST("/discard", discard);
@@ -733,10 +753,12 @@ private:
         co_return c.text(body);
     }
 
-    ruvia::Task<ruvia::HttpResponse> jsonObjectBody(ruvia::Context& c) {
+    ruvia::Task<ruvia::HttpResponse> jsonValueBody(ruvia::Context& c) {
         const auto json = co_await c.req().json();
         std::pmr::string body(c.allocator<char>());
-        body.append("json-object bytes=");
+        body.append("json-value kind=");
+        body.append(jsonKindName(json.kind()));
+        body.append(" bytes=");
         appendUnsigned(body, json.view().size());
         if (auto message = json.get<ruvia::String>("message")) {
             body.append("\nmessage=");

@@ -14,6 +14,103 @@
 
 namespace ruvia {
 
+class JsonValue final {
+public:
+    enum class Kind : unsigned char {
+        kObject,
+        kArray,
+        kString,
+        kNumber,
+        kBoolean,
+        kNull
+    };
+
+    JsonValue() noexcept = default;
+
+    explicit JsonValue(
+        std::string_view body,
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
+
+    [[nodiscard]] static std::optional<JsonValue> parse(
+        std::string_view body,
+        std::pmr::memory_resource* resource = nullptr) noexcept {
+        auto input = body;
+        if (!detail::skipJsonValue(input)) {
+            return std::nullopt;
+        }
+        detail::skipJsonWhitespace(input);
+        if (!input.empty()) {
+            return std::nullopt;
+        }
+        return JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource));
+    }
+
+    [[nodiscard]] std::string_view view() const noexcept {
+        return body_;
+    }
+
+    [[nodiscard]] Kind kind() const noexcept {
+        auto input = body_;
+        detail::skipJsonWhitespace(input);
+        if (input.empty()) {
+            return Kind::kNull;
+        }
+        switch (input.front()) {
+            case '{':
+                return Kind::kObject;
+            case '[':
+                return Kind::kArray;
+            case '"':
+                return Kind::kString;
+            case 't':
+            case 'f':
+                return Kind::kBoolean;
+            case 'n':
+                return Kind::kNull;
+            default:
+                return Kind::kNumber;
+        }
+    }
+
+    [[nodiscard]] bool isObject() const noexcept {
+        return kind() == Kind::kObject;
+    }
+
+    [[nodiscard]] bool isArray() const noexcept {
+        return kind() == Kind::kArray;
+    }
+
+    [[nodiscard]] bool isString() const noexcept {
+        return kind() == Kind::kString;
+    }
+
+    [[nodiscard]] bool isNumber() const noexcept {
+        return kind() == Kind::kNumber;
+    }
+
+    [[nodiscard]] bool isBoolean() const noexcept {
+        return kind() == Kind::kBoolean;
+    }
+
+    [[nodiscard]] bool isNull() const noexcept {
+        return kind() == Kind::kNull;
+    }
+
+    template <typename T>
+    [[nodiscard]] std::optional<T> get(std::string_view field) const;
+
+private:
+    JsonValue(
+        detail::ResolvedPmrResourceTag,
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept
+        : body_(body), resource_(resource) {}
+
+    std::string_view body_;
+    std::pmr::memory_resource* resource_{nullptr};
+};
+
 class JsonObject final {
 public:
     JsonObject() noexcept = default;
@@ -84,6 +181,14 @@ private:
     std::string_view body_;
     std::pmr::memory_resource* resource_{nullptr};
 };
+
+template <typename T>
+[[nodiscard]] inline std::optional<T> JsonValue::get(std::string_view field) const {
+    if (!isObject()) {
+        return std::nullopt;
+    }
+    return JsonObject(body_, resource_).get<T>(field);
+}
 
 class FormObject final {
 public:

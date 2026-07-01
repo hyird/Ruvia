@@ -19,6 +19,7 @@
 namespace ruvia {
 
 class RequestNameValueList;
+class JsonValue;
 
 namespace detail {
 
