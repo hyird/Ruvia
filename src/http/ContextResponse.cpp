@@ -515,13 +515,15 @@ HttpResponse Context::error(
     std::string_view code,
     std::string_view message,
     std::string_view statusText) const {
-    return makeErrorResponse(
+    auto response = makeErrorResponse(
         resource(),
         HttpErrorInfo{
             .statusCode = statusCode,
             .statusText = statusText,
             .code = code,
             .message = message});
+    applyResponseState(response, statusCode, statusText);
+    return response;
 }
 
 HttpResponse Context::jsonError(
@@ -533,7 +535,9 @@ HttpResponse Context::jsonError(
 }
 
 HttpResponse Context::notFound() const {
-    return makeErrorResponse(resource(), HttpErrorInfo{.statusCode = 404});
+    auto response = makeErrorResponse(resource(), HttpErrorInfo{.statusCode = 404});
+    applyResponseState(response, 404, {});
+    return response;
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {

@@ -212,6 +212,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
+        c.header("X-Error-Prepared", "true");
         co_return c.error(418, "teapot", "short and stout", "I'm a Teapot");
     }
 
@@ -220,6 +221,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
+        c.header("X-Not-Found-Prepared", "true");
         co_return c.notFound();
     }
 
