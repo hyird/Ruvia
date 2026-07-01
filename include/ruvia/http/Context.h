@@ -1309,7 +1309,6 @@ public:
     [[nodiscard]] std::string_view method() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
-    [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
@@ -2233,10 +2232,6 @@ inline std::string_view routePath(const Context& context, std::ptrdiff_t index) 
         return {};
     }
     return routes[static_cast<std::size_t>(resolved)].path;
-}
-
-inline RequestValue ContextRequest::decodedPath() const noexcept {
-    return raw().decodedPath();
 }
 
 inline const RequestNameValueList& ContextRequest::header() const {
