@@ -343,7 +343,7 @@ public:
             }
 
             [[nodiscard]] bool array() const noexcept {
-                return array_;
+                return array_ || multiple();
             }
 
             [[nodiscard]] bool multiple() const noexcept {
@@ -532,7 +532,7 @@ public:
             }
 
             [[nodiscard]] bool isArray() const noexcept {
-                return array_;
+                return array_ || multiple();
             }
 
             [[nodiscard]] bool isFile() const noexcept {
