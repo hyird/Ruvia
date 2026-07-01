@@ -19,7 +19,7 @@ public:
 class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        if (c.req().header("X-Admin-Token") != "secret") {
+        if (c.req().header("X-Admin-Token").value_or("") != "secret") {
             c.res(c.error(401, "unauthorized", "missing admin token"));
             co_return;
         }
@@ -83,7 +83,7 @@ private:
         body.append("remote=");
         body.append(c.req().remoteAddress());
         body.append("\nuser-agent=");
-        body.append(c.req().header("User-Agent"));
+        body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
         if (const auto page = c.req().query("page").toUInt32()) {
             char buffer[16]{};

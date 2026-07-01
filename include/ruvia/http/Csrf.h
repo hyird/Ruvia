@@ -38,7 +38,7 @@ public:
         const auto cookie = c.req().cookie("XSRF-TOKEN");
         if (!safe) {
             const auto header = c.req().header("X-XSRF-TOKEN");
-            if (!cookie || cookie->empty() || header.empty() || *cookie != header) {
+            if (!cookie || cookie->empty() || !header || header->empty() || *cookie != *header) {
                 c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
                 co_return;
             }

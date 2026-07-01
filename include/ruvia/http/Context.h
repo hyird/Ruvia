@@ -1319,7 +1319,7 @@ public:
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
-    [[nodiscard]] std::string_view header(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& query() const;
@@ -1724,7 +1724,7 @@ public:
     }
 
     [[nodiscard]] std::string_view header(std::string_view name) const {
-        return requestHeader(name);
+        return requestHeader(name).value_or(std::string_view{});
     }
 
     [[nodiscard]] QueryValue query(std::string_view name) const {
@@ -2114,7 +2114,7 @@ private:
         std::string_view statusText) const;
 
     [[nodiscard]] const RequestNameValueList& requestHeaders() const;
-    [[nodiscard]] std::string_view requestHeader(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> requestHeader(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] std::string_view sessionId() const noexcept {
@@ -2215,13 +2215,13 @@ inline std::pmr::string ContextRequest::url() const {
     }
 
     const auto host = header("Host");
-    if (host.empty() || requestTarget.empty() || requestTarget.front() != '/') {
+    if (!host || host->empty() || requestTarget.empty() || requestTarget.front() != '/') {
         result.assign(requestTarget.data(), requestTarget.size());
         return result;
     }
 
     result.append(isSecure() ? "https://" : "http://");
-    result.append(host.data(), host.size());
+    result.append(host->data(), host->size());
     result.append(requestTarget.data(), requestTarget.size());
     return result;
 }
@@ -2286,7 +2286,7 @@ inline const RequestNameValueList& ContextRequest::header() const {
     return context_->requestHeaders();
 }
 
-inline std::string_view ContextRequest::header(std::string_view name) const {
+inline std::optional<std::string_view> ContextRequest::header(std::string_view name) const {
     return context_->requestHeader(name);
 }
 
@@ -2351,7 +2351,7 @@ inline Task<std::span<const std::byte>> ContextRequest::bytes() const {
 
 inline Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
     auto bytes = co_await arrayBuffer();
-    co_return RequestBlob(bytes, header("Content-Type"));
+    co_return RequestBlob(bytes, header("Content-Type").value_or(std::string_view{}));
 }
 
 inline Task<void> ContextRequest::discardBody() const {
