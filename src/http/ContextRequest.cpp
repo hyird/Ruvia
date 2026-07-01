@@ -118,6 +118,20 @@ void assignUrlDecodedOrCopy(
     return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
 }
 
+[[nodiscard]] bool fieldNameHasProtoObject(std::string_view name) noexcept {
+    std::size_t offset = 0;
+    for (;;) {
+        const auto found = name.find("__proto__.", offset);
+        if (found == std::string_view::npos) {
+            return false;
+        }
+        if (found == 0 || name[found - 1] == '.') {
+            return true;
+        }
+        offset = found + 1;
+    }
+}
+
 void assignDotPath(
     ContextRequest::RequestFormField& field,
     std::pmr::memory_resource* resource) {
@@ -190,6 +204,9 @@ void appendParsedBodyField(
     ContextRequest::RequestFormField&& field,
     ContextRequest::ParseBodyOptions options) {
     if (options.dot) {
+        if (fieldNameHasProtoObject(std::string_view(field.name.data(), field.name.size()))) {
+            return;
+        }
         assignDotPath(field, fields.get_allocator().resource());
     }
 
