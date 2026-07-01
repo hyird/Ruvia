@@ -1723,18 +1723,6 @@ public:
         return ConstVars(*this);
     }
 
-    [[nodiscard]] QueryValue query(std::string_view name) const {
-        return req().query(name);
-    }
-
-    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const {
-        return requestCookies().get(name);
-    }
-
-    [[nodiscard]] ParamValue param(std::string_view name) const {
-        return routeParam(name);
-    }
-
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
 
     Context& header(std::string_view name, std::string_view value) {
