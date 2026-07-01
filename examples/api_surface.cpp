@@ -137,6 +137,8 @@ private:
         appendUnsigned(body, user.id);
         body.append("\ntrace=");
         body.append(traceId);
+        body.append("\nenv-vars=");
+        appendUnsigned(body, c.env().size());
         body.push_back('\n');
         co_return c.text(body);
     }

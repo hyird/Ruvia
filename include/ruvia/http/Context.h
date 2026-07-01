@@ -38,6 +38,7 @@ namespace ruvia {
 
 class Context;
 class ContextRequest;
+class Env;
 class StaticRoot;
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -340,6 +341,8 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
     }
+
+    [[nodiscard]] const Env& env() const noexcept;
 
 #ifdef RUVIA_ENABLE_MARIADB
     [[nodiscard]] DbHandle db() const;

@@ -1,6 +1,12 @@
 #include "ruvia/http/Context.h"
 
+#include "ruvia/app/App.h"
+
 namespace ruvia {
+
+const Env& Context::env() const noexcept {
+    return app().env();
+}
 
 std::pmr::string& Context::decodedBody() const {
     if (decodedBody_ == nullptr) {
