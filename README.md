@@ -260,6 +260,7 @@ Use `ruvia::Context` to read request data and construct responses:
 A few lifetime and ownership rules are worth keeping close:
 
 - Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics and mutates `c.res()` once a downstream response exists.
+- Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.
 - `co_await c.req().multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.

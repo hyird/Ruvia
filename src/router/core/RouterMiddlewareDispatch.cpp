@@ -3,6 +3,7 @@
 #include "../../http/ContextInternal.h"
 
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia {
@@ -27,7 +28,7 @@ Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(
     if (auto exception = context.error()) {
         co_return co_await handleException(context, exception, true);
     }
-    co_return detail::ContextAccess::takeResponse(context);
+    throw std::logic_error("context is not finalized; middleware must set a response or await next()");
 }
 
 Task<void> detail::RouteTable::invokeMiddlewareAt(
