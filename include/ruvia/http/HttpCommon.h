@@ -366,6 +366,28 @@ public:
         return values(name);
     }
 
+    [[nodiscard]] std::span<const RequestValueGroup> entries() const noexcept {
+        return span();
+    }
+
+    [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
+        std::pmr::vector<std::string_view> result(groups_.get_allocator().resource());
+        result.reserve(groups_.size());
+        for (const auto& group : groups_) {
+            result.push_back(group.name());
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::pmr::vector<std::span<const std::string_view>> values() const {
+        std::pmr::vector<std::span<const std::string_view>> result(groups_.get_allocator().resource());
+        result.reserve(groups_.size());
+        for (const auto& group : groups_) {
+            result.push_back(group.values());
+        }
+        return result;
+    }
+
     [[nodiscard]] std::span<const RequestValueGroup> span() const noexcept {
         return std::span<const RequestValueGroup>(groups_.data(), groups_.size());
     }
