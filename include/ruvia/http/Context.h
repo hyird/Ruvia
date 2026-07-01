@@ -1216,7 +1216,7 @@ public:
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
-    [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+    [[nodiscard]] std::string_view header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& query() const;
@@ -1621,8 +1621,8 @@ public:
         return ConstVars(*this);
     }
 
-    [[nodiscard]] std::string_view header(std::string_view name) const noexcept {
-        return request_.header(name);
+    [[nodiscard]] std::string_view header(std::string_view name) const {
+        return requestHeader(name);
     }
 
     [[nodiscard]] QueryValue query(std::string_view name) const {
@@ -2009,6 +2009,7 @@ private:
         std::string_view statusText) const;
 
     [[nodiscard]] const RequestNameValueList& requestHeaders() const;
+    [[nodiscard]] std::string_view requestHeader(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] std::string_view sessionId() const noexcept {
@@ -2180,8 +2181,8 @@ inline const RequestNameValueList& ContextRequest::header() const {
     return context_->requestHeaders();
 }
 
-inline std::string_view ContextRequest::header(std::string_view name) const noexcept {
-    return raw().header(name);
+inline std::string_view ContextRequest::header(std::string_view name) const {
+    return context_->requestHeader(name);
 }
 
 inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {

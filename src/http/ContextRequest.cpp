@@ -286,6 +286,15 @@ const RequestNameValueList& Context::requestHeaders() const {
     return *requestHeaders_;
 }
 
+std::string_view Context::requestHeader(std::string_view name) const {
+    std::pmr::string lowered(resource());
+    lowered.reserve(name.size());
+    appendLowerAscii(lowered, name);
+    return requestHeaders()
+        .get(std::string_view(lowered.data(), lowered.size()))
+        .value_or(std::string_view{});
+}
+
 const RequestNameValueList& Context::requestQuery() const {
     if (requestQuery_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
