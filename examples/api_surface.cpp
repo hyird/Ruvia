@@ -196,6 +196,18 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().status(204)),
     void>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::string_view{})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().header(
+        std::string_view{},
+        std::string_view{},
+        ruvia::Context::HeaderOptions{.append = true})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::nullopt)),
+    void>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -517,10 +529,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
-        co_return c
-            .header("X-Raw", "first")
-            .header("X-Raw", "second", {.append = true})
-            .body("raw body\n", {.status = 202, .headers = {{"X-Raw-Init", "true"}}});
+        c.header("X-Raw", "first");
+        c.header("X-Raw", "second", {.append = true});
+        co_return c.body("raw body\n", {.status = 202, .headers = {{"X-Raw-Init", "true"}}});
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {

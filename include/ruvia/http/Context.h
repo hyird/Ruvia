@@ -1783,24 +1783,27 @@ public:
 
     void status(std::uint16_t statusCode, std::string_view statusText = {});
 
-    Context& header(std::string_view name, std::string_view value) {
-        return header(name, value, HeaderOptions{});
+    void header(std::string_view name, std::string_view value) {
+        header(name, value, HeaderOptions{});
     }
 
-    Context& header(std::string_view name, std::string_view value, HeaderOptions options);
+    void header(std::string_view name, std::string_view value, HeaderOptions options);
 
-    Context& header(std::string_view name, std::nullopt_t);
+    void header(std::string_view name, std::nullopt_t);
 
     Context& setHeader(std::string_view name, std::string_view value) {
-        return header(name, value);
+        header(name, value);
+        return *this;
     }
 
     Context& setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
-        return header(name, value, options);
+        header(name, value, options);
+        return *this;
     }
 
     Context& setHeader(std::string_view name, std::nullopt_t value) {
-        return header(name, value);
+        header(name, value);
+        return *this;
     }
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
