@@ -187,7 +187,7 @@ template <ValidationTarget Target, typename BodyT, typename ValidatorT>
 Task<void> invokeModelValidator(
     const ValidatorT& validatorMiddleware,
     Context& c,
-    Next next) {
+    Next& next) {
     BodyT body = co_await parseValidatedBody<Target, BodyT>(c);
     Validator validator(c.resource());
     validatorMiddleware.validate(body, validator);

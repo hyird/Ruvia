@@ -35,7 +35,7 @@ concept HasDefaultValid = requires(const ruvia::ContextRequest& request) {
 
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
-static_assert(std::is_move_constructible_v<ruvia::Next>);
+static_assert(!std::is_move_constructible_v<ruvia::Next>);
 static_assert(!std::is_move_assignable_v<ruvia::Next>);
 static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
@@ -105,13 +105,25 @@ ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
 
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         c.set(kCurrentUser, CurrentUser{.id = 7, .name = "surface-user"});
         c.set("traceId", std::string_view("surface-trace"));
         c.setRenderer(&surfaceRenderer);
         co_await next();
         if (c.error()) {
-            c.res(c.text("caught by middleware\n", 500));
+            const bool hadDownstreamErrorResponse = c.finalized();
+            const auto downstreamStatus = hadDownstreamErrorResponse
+                ? c.res().statusCode()
+                : 0;
+            auto response = c.text("caught by middleware\n", 500);
+            response.setHeader("X-Surface-Error", "true");
+            response.setHeader(
+                "X-Surface-Error-Response",
+                hadDownstreamErrorResponse ? "true" : "false");
+            response.setHeader(
+                "X-Surface-Error-Status",
+                downstreamStatus == 500 ? "500" : "other");
+            c.res(std::move(response));
             co_return;
         }
         c.setHeader("X-Surface-Finalized", c.finalized() ? "true" : "false");
@@ -121,14 +133,14 @@ public:
 
 class SurfaceReturnMiddleware final : public ruvia::Middleware<SurfaceReturnMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next&) {
         co_return c.text("returned by middleware\n", 209);
     }
 };
 
 class SurfacePreDirectResponseMiddleware final : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
 public:
-    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         c.res().setHeader("X-Surface-Pre-Direct", "true");
         co_await next();
     }

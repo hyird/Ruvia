@@ -3,7 +3,6 @@
 #include "ruvia/app/Task.h"
 
 #include <cstddef>
-#include <utility>
 
 namespace ruvia {
 
@@ -55,10 +54,7 @@ public:
 
     Next(const Next&) = delete;
     Next& operator=(const Next&) = delete;
-    Next(Next&& other) noexcept
-        : state_(other.state_),
-          invoke_(other.invoke_),
-          invoked_(std::exchange(other.invoked_, true)) {}
+    Next(Next&&) = delete;
     Next& operator=(Next&&) = delete;
 
     [[nodiscard]] Awaitable operator()() &;

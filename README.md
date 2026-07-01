@@ -160,12 +160,12 @@ Route registration is macro-only:
 
 `HEAD` falls back to an existing `GET` route when no explicit `HEAD` route is registered. `Allow` headers include `HEAD` whenever `GET` is allowed, and framework-generated `OPTIONS` remains distinct from user-defined `RUVIA_OPTIONS(...)` routes.
 
-Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a move-only, one-shot token passed by value; middleware must `co_await next()` inside its own `handle` coroutine and must not save it for background use. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
+Applications define middleware with `ruvia::Middleware<T>` and attach it to controller groups, nested groups, or individual routes. `Next` is a borrowed, one-shot continuation token passed as `Next&`; middleware must `co_await next()` inside its own `handle` coroutine and cannot take ownership of the continuation. A `Task<void>` middleware uses Hono-style `await next()` and mutates `c.res()` after dispatch; downstream exceptions do not escape `next()`, and instead populate `c.error()` plus an error response in `c.res()`. A `Task<HttpResponse>` middleware can return a response directly to early-exit:
 
 ```cpp
 class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next next) {
+    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next& next) {
         if (c.req().header("X-Api-Key") != "secret") {
             co_return c.error(401, "unauthorized", "unauthorized");
         }
@@ -268,7 +268,7 @@ A few lifetime and ownership rules are worth keeping close:
 
 - Request headers are read through `c.req().header(...)`; response headers are written through `c.setHeader(...)` or the Hono-compatible `c.header(...)` alias. Context response helpers, including `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
 - Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
-- `next` is a request-local continuation token. Use it as `co_await next()` inside the current middleware invocation; do not store `Next`, its awaitable, or a pointer/reference for later use.
+- `next` is a request-local borrowed continuation token. Use it as `co_await next()` inside the current middleware invocation; `ruvia::Next` is non-copyable and non-movable so middleware cannot take ownership of it. Do not store its awaitable or a pointer/reference for later use.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await ruvia::cloneRawRequest(c.req())` (or the member alias) for a request-arena metadata/body snapshot after validation or body reads, `ruvia::matchedRoutes(c)` / `ruvia::routePath(c, -1)` / `c.req().routeIndex()` for Hono-style route debugging metadata, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access including dot notation through `body.at(...)` / `body.object(...)`, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.
 - `co_await c.req().multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.

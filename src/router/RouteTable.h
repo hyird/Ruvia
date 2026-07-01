@@ -38,7 +38,7 @@ struct NextAccess final {
 
 using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
-using RouteMiddleware = CallableRef<void, Context&, Next>;
+using RouteMiddleware = CallableRef<void, Context&, Next&>;
 
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
