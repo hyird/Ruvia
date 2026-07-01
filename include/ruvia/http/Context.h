@@ -88,6 +88,32 @@ public:
         bool dot{false};
     };
 
+    class RequestBlob final {
+    public:
+        constexpr RequestBlob(std::span<const std::byte> bytes, std::string_view type) noexcept
+            : bytes_(bytes), type_(type) {}
+
+        [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
+            return bytes_;
+        }
+
+        [[nodiscard]] std::string_view type() const noexcept {
+            return type_;
+        }
+
+        [[nodiscard]] std::size_t size() const noexcept {
+            return bytes_.size();
+        }
+
+        [[nodiscard]] bool empty() const noexcept {
+            return bytes_.empty();
+        }
+
+    private:
+        std::span<const std::byte> bytes_;
+        std::string_view type_;
+    };
+
     struct RequestFormField final {
         RequestFormField(
             std::pmr::memory_resource* resource,
@@ -185,6 +211,7 @@ public:
     [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
+    [[nodiscard]] Task<RequestBlob> blob() const;
     Task<void> discardBody() const;
 
     template <typename T>
@@ -782,6 +809,11 @@ inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {
     co_return std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(body.data()),
         body.size());
+}
+
+inline Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
+    auto bytes = co_await arrayBuffer();
+    co_return RequestBlob(bytes, header("Content-Type"));
 }
 
 inline Task<void> ContextRequest::discardBody() const {
