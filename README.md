@@ -230,8 +230,8 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
-| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into a Hono-style object facade: use `body["title"]` or `body.get("title")` for the last field, `body.getAll("tag[]")` for arrays/files, and `body.isArray("tag[]")` to inspect `[]` fields. `value()` / `values()` remain available as string-view convenience helpers. With `{.dot = true}`, use `getAt("obj.key")` / `getAllAt("obj.key")` for dot notation access. |
-| `co_await c.req().formData()` | Web FormData-style form parsing with `get()` / `getAll()` access that preserves duplicate field names by default. |
+| `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into a Hono-style object facade: use `body["title"].text()` for the last field, `body["tag[]"].texts()` for array fields, and `body["tag[]"].isArray()` to inspect `[]` fields. `get()` / `getAll()` and `value()` / `values()` remain available as lower-level field and string-view helpers. With `{.dot = true}`, use `getAt("obj.key")` / `getAllAt("obj.key")` for dot notation access. |
+| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `get()` / `getAll()` access that preserves duplicate field names by default. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
