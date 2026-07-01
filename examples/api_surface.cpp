@@ -56,7 +56,7 @@ public:
             co_return;
         }
         c.setHeader("X-Surface-Finalized", c.finalized() ? "true" : "false");
-        c.res().responseHeaders().append("X-Surface-Middleware", "after-next");
+        c.res().headers().append("X-Surface-Middleware", "after-next");
     }
 };
 
