@@ -957,6 +957,7 @@ public:
 
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/res-slot-merge", responseSlotMerge);
+    RUVIA_GET("/res-setter-headers", responseSetterHeaders);
     RUVIA_GET("/new-response", newResponseBody);
     RUVIA_ROUTES_END
 
@@ -964,6 +965,16 @@ private:
     ruvia::Task<ruvia::HttpResponse> responseSlotMerge(ruvia::Context& c) {
         c.res().headers().set("X-Res-Slot", "kept");
         co_return c.text("response slot merge\n");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> responseSetterHeaders(ruvia::Context& c) {
+        c.res().headers().set("X-Setter-Override", "slot");
+        c.res().headers().set("Content-Type", "application/slot");
+        auto response = c.text("response setter headers\n");
+        response.setHeader("X-Setter-Override", "response");
+        response.setHeader("X-Assigned-Only", "response");
+        c.res(std::move(response));
+        co_return std::move(c.res());
     }
 
     ruvia::Task<ruvia::HttpResponse> newResponseBody(ruvia::Context& c) {
