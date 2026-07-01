@@ -338,6 +338,7 @@ public:
     RUVIA_GET("/render-head", renderHeadBody);
     RUVIA_GET("/render-layout", renderLayoutBody, SurfaceLayoutMiddleware);
     RUVIA_GET("/header-remove", headerRemove);
+    RUVIA_GET("/redirect-unicode", redirectUnicode);
     RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
     RUVIA_GET_STREAM("/stream-throw", streamThrow);
@@ -545,6 +546,10 @@ private:
         c.header("X-Remove-Me", std::nullopt);
         c.setHeader("X-Remove-Too", std::nullopt);
         co_return c.text("header remove\n");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> redirectUnicode(ruvia::Context& c) {
+        co_return c.redirect("/目标?x=值", 303);
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
