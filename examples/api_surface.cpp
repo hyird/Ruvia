@@ -187,11 +187,17 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> parsedBody(ruvia::Context& c) {
-        auto fields = co_await c.req().parseBody({.all = true, .dot = true});
+        auto form = co_await c.req().parseBody({.all = true, .dot = true});
         std::pmr::string body(c.allocator<char>());
         body.append("fields=");
-        appendUnsigned(body, fields.size());
-        for (const auto& field : fields) {
+        appendUnsigned(body, form.fields().size());
+        if (const auto* title = form.get("title")) {
+            body.append("\ntitle=");
+            body.append(title->value);
+        }
+        body.append("\ntag-count=");
+        appendUnsigned(body, form.count("tag"));
+        for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);
             body.push_back('=');

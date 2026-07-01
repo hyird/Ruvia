@@ -83,7 +83,7 @@ void assignDotPath(
 }
 
 void appendParsedBodyField(
-    ContextRequest::RequestFormFieldList& fields,
+    std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::RequestFormField&& field,
     ContextRequest::ParseBodyOptions options) {
     if (options.dot) {
@@ -229,12 +229,12 @@ Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     co_return parts;
 }
 
-Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(
+Task<ContextRequest::RequestFormData> Context::parseRequestBody(
     ContextRequest::ParseBodyOptions options) const {
     const auto requestBody = co_await this->requestBody();
 
     if (requestContentTypeMatches("application/x-www-form-urlencoded")) {
-        ContextRequest::RequestFormFieldList fields(resource());
+        std::pmr::vector<ContextRequest::RequestFormField> fields(resource());
         fields.reserve(delimitedFieldCount(requestBody, '&'));
         bool valid = true;
         const bool ok = detail::visitUrlEncodedPairs(
@@ -265,12 +265,12 @@ Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(
         if (!ok || !valid) {
             throw std::invalid_argument("invalid form body");
         }
-        co_return fields;
+        co_return ContextRequest::RequestFormData(std::move(fields));
     }
 
     if (requestContentTypeMatches("multipart/form-data")) {
         auto parts = co_await requestMultipart();
-        ContextRequest::RequestFormFieldList fields(resource());
+        std::pmr::vector<ContextRequest::RequestFormField> fields(resource());
         fields.reserve(parts.size());
         for (const auto& part : parts) {
             std::pmr::string name(part.name.data(), part.name.size(), resource());
@@ -288,7 +288,7 @@ Task<ContextRequest::RequestFormFieldList> Context::parseRequestBody(
                     array),
                 options);
         }
-        co_return fields;
+        co_return ContextRequest::RequestFormData(std::move(fields));
     }
 
     throw std::invalid_argument("invalid body content type");
