@@ -641,7 +641,11 @@ public:
             return fields_;
         }
 
-        [[nodiscard]] std::span<const Entry> entries() const noexcept {
+        [[nodiscard]] std::span<const RequestFormField> entries() const noexcept {
+            return fields_;
+        }
+
+        [[nodiscard]] std::span<const Entry> groups() const noexcept {
             return entries_;
         }
 
