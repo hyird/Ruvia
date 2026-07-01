@@ -75,13 +75,21 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
         co_return;
     }
     continuation->invoked = true;
+    std::exception_ptr exception;
     try {
         co_await continuation->table->invokeMiddlewareAt(
             *continuation->route,
             continuation->index,
             *continuation->context);
     } catch (...) {
-        detail::ContextAccess::setError(*continuation->context, std::current_exception());
+        exception = std::current_exception();
+    }
+    if (exception != nullptr) {
+        auto response = co_await continuation->table->handleException(
+            *continuation->context,
+            exception,
+            true);
+        detail::ContextAccess::setResponse(*continuation->context, std::move(response));
     }
 }
 
