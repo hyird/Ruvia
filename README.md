@@ -222,7 +222,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. Use `c.req().headers()` for the raw parser header view. |
 | `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value, all decoded single-value query params with last-wins duplicate semantics, all values for one key, or all decoded query params grouped by key. |
 | `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie list. |
-| `c.req().param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.req().param("*")` for wildcard routes. |
+| `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter through typed helpers, or all decoded route parameters as a request-arena collection. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy byte span plus its `Content-Type`. |

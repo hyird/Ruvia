@@ -238,11 +238,22 @@ const RequestValueGroupList& Context::requestQueries() const {
 
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
+        auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
         auto& params = memory_.emplace<RequestNameValueList>(resource());
+        storage.reserve(paramCount_ * 2);
         params.reserve(paramCount_);
         for (std::size_t i = 0; i < paramCount_; ++i) {
-            params.push_back(RequestNameValueView{.name = paramNames_[i], .value = paramValues_[i]});
+            std::pmr::string name(paramNames_[i].data(), paramNames_[i].size(), resource());
+            std::pmr::string value(resource());
+            assignUrlDecodedOrCopy(value, paramValues_[i], detail::UrlDecodeMode::kPercent);
+            storage.push_back(std::move(name));
+            storage.push_back(std::move(value));
+            const auto nameIndex = storage.size() - 2;
+            params.push_back(RequestNameValueView{
+                .name = std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
+                .value = std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())});
         }
+        routeParamStorage_ = &storage;
         routeParams_ = &params;
     }
     return *routeParams_;
