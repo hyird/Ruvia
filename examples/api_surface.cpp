@@ -462,9 +462,12 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> arrayBufferBody(ruvia::Context& c) {
         const auto bytes = co_await c.req().arrayBuffer();
+        const auto byteView = co_await c.req().bytes();
         std::pmr::string body(c.allocator<char>());
         body.append("array-buffer bytes=");
         appendUnsigned(body, bytes.size());
+        body.append("\nbytes=");
+        appendUnsigned(body, byteView.size());
         body.push_back('\n');
         co_return c.text(body);
     }
