@@ -1307,7 +1307,6 @@ public:
     [[nodiscard]] const HttpRequest& raw() const noexcept;
 
     [[nodiscard]] std::string_view method() const noexcept;
-    [[nodiscard]] std::string_view target() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
     [[nodiscard]] std::string_view routePath() const noexcept;
@@ -2182,12 +2181,8 @@ inline std::string_view ContextRequest::method() const noexcept {
     return methodName(raw().method());
 }
 
-inline std::string_view ContextRequest::target() const noexcept {
-    return raw().target();
-}
-
 inline std::pmr::string ContextRequest::url() const {
-    const auto requestTarget = target();
+    const auto requestTarget = raw().target();
     std::pmr::string result(context_->resource());
     if (requestTarget.starts_with("http://") || requestTarget.starts_with("https://")) {
         result.assign(requestTarget.data(), requestTarget.size());
