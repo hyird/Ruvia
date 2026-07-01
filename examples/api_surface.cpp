@@ -78,6 +78,11 @@ concept HasRequestMethodEnumAlias = requires(const T& request) {
     request.methodEnum();
 };
 
+template <typename T>
+concept HasRequestTargetAlias = requires(const T& request) {
+    request.target();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -113,6 +118,7 @@ static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
 static_assert(!HasRequestBytesAlias<ruvia::ContextRequest>);
 static_assert(!HasMemberCloneRawRequestAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -246,8 +252,6 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("method=");
         body.append(request.method());
-        body.append("\ntarget=");
-        body.append(request.target());
         body.append("\nurl=");
         body.append(request.url());
         body.append("\npath=");
