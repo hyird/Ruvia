@@ -114,7 +114,55 @@ public:
         bool array{false};
     };
 
-    using RequestFormFieldList = std::pmr::vector<RequestFormField>;
+    class RequestFormData final {
+    public:
+        explicit RequestFormData(std::pmr::memory_resource* resource)
+            : fields_(resource) {}
+
+        explicit RequestFormData(std::pmr::vector<RequestFormField>&& fields) noexcept
+            : fields_(std::move(fields)) {}
+
+        [[nodiscard]] std::span<const RequestFormField> fields() const noexcept {
+            return fields_;
+        }
+
+        [[nodiscard]] const RequestFormField* get(std::string_view name) const noexcept {
+            for (auto it = fields_.rbegin(); it != fields_.rend(); ++it) {
+                if (it->name == name) {
+                    return &*it;
+                }
+            }
+            return nullptr;
+        }
+
+        [[nodiscard]] bool has(std::string_view name) const noexcept {
+            return get(name) != nullptr;
+        }
+
+        [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
+            std::size_t result = 0;
+            for (const auto& field : fields_) {
+                if (field.name == name) {
+                    ++result;
+                }
+            }
+            return result;
+        }
+
+        [[nodiscard]] std::pmr::vector<const RequestFormField*> getAll(std::string_view name) const {
+            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
+            result.reserve(count(name));
+            for (const auto& field : fields_) {
+                if (field.name == name) {
+                    result.push_back(&field);
+                }
+            }
+            return result;
+        }
+
+    private:
+        std::pmr::vector<RequestFormField> fields_;
+    };
 
     [[nodiscard]] const HttpRequest& raw() const noexcept;
 
@@ -153,11 +201,11 @@ public:
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
-    [[nodiscard]] Task<RequestFormFieldList> parseBody() const {
+    [[nodiscard]] Task<RequestFormData> parseBody() const {
         return parseBody(ParseBodyOptions{});
     }
 
-    [[nodiscard]] Task<RequestFormFieldList> parseBody(ParseBodyOptions options) const;
+    [[nodiscard]] Task<RequestFormData> parseBody(ParseBodyOptions options) const;
 
     [[nodiscard]] BodyReader& bodyReader() const;
 
@@ -552,7 +600,7 @@ private:
     [[nodiscard]] Task<std::string_view> requestBody() const;
     Task<void> requestDiscardBody() const;
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> requestMultipart() const;
-    [[nodiscard]] Task<ContextRequest::RequestFormFieldList> parseRequestBody(
+    [[nodiscard]] Task<ContextRequest::RequestFormData> parseRequestBody(
         ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
@@ -744,7 +792,7 @@ inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
     return context_->requestMultipart();
 }
 
-inline Task<ContextRequest::RequestFormFieldList> ContextRequest::parseBody(ParseBodyOptions options) const {
+inline Task<ContextRequest::RequestFormData> ContextRequest::parseBody(ParseBodyOptions options) const {
     return context_->parseRequestBody(options);
 }
 
