@@ -251,6 +251,14 @@ private:
         if (auto tag = request.queries().first("tag")) {
             body.append(*tag);
         }
+        body.append("\nquery-shared-first=");
+        const auto singleTag = request.query().get("tag");
+        const auto groupedTag = request.queries().first("tag");
+        body.append(
+            singleTag.has_value() && groupedTag.has_value() && singleTag->data() == groupedTag->data()
+                    && singleTag->size() == groupedTag->size()
+                ? "true"
+                : "false");
         body.append("\ncookies=");
         appendUnsigned(body, request.cookie().size());
         body.append("\ncookie-entries=");
@@ -458,6 +466,15 @@ private:
             body.append("\nobj.key1-value=");
             body.append(*nestedValue);
         }
+        const auto exactNested = form.at("obj.key1");
+        if (auto exactNestedText = exactNested.toStringView()) {
+            body.append("\nobj.key1-at=");
+            body.append(*exactNestedText);
+        }
+        body.append("\nobj.key1-at-all=");
+        appendUnsigned(body, form.getAllAt("obj.key1").size());
+        body.append("\nobj.key1-at-array=");
+        body.append(form.isArrayAt("obj.key1") ? "true" : "false");
         body.append("\nobj.key1-all=");
         appendUnsigned(body, nestedObject.getAll("key1").size());
         body.append("\nobj.key1-values=");
