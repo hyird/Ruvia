@@ -17,6 +17,10 @@ struct CurrentUser final {
     std::string_view name;
 };
 
+RUVIA_MODEL(ClonePayload,
+    RUVIA_FIELD(message, ruvia::String)
+);
+
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
 template <typename T>
 concept HasPlainAddressOf = requires(T& value) {
@@ -600,6 +604,11 @@ private:
         body.append(clone.body());
         body.append("\ntext=");
         body.append(clone.text());
+        const auto parsed = clone.json<ClonePayload>();
+        if (auto message = parsed.message()) {
+            body.append("\njson-message=");
+            body.append(message->view());
+        }
         body.append("\nconsumed=");
         body.append(consumed);
         body.append("\ntype=");

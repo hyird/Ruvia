@@ -20,6 +20,7 @@
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/MultipartReader.h"
 #include "ruvia/http/Streaming.h"
 #include "ruvia/http/ValidationTypes.h"
@@ -227,6 +228,16 @@ public:
 
         [[nodiscard]] RequestBlob blob() const noexcept {
             return RequestBlob(arrayBuffer(), header("Content-Type"));
+        }
+
+        template <typename T>
+        [[nodiscard]] T json() const {
+            static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
+            auto parsed = JsonBody<T>::parse(body(), body_.get_allocator().resource());
+            if (!parsed) {
+                detail::throwInvalidJsonBody();
+            }
+            return std::move(*parsed);
         }
 
         [[nodiscard]] std::string_view remoteAddress() const noexcept {
