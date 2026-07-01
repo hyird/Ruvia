@@ -1476,6 +1476,11 @@ public:
         std::string_view body,
         RenderOptions options);
 
+    using Layout = Task<HttpResponse> (*)(
+        Context& context,
+        std::string_view body,
+        RenderOptions options);
+
     struct HeaderOptions final {
         bool append{false};
     };
@@ -2127,6 +2132,10 @@ public:
 
     Context& setRenderer(Renderer renderer) noexcept;
 
+    Context& setLayout(Layout layout) noexcept;
+
+    [[nodiscard]] Layout getLayout() const noexcept;
+
     [[nodiscard]] Task<HttpResponse> render(std::string_view body);
 
     [[nodiscard]] Task<HttpResponse> render(std::string_view body, std::string_view head);
@@ -2265,6 +2274,7 @@ private:
     WebSocket* webSocket_{nullptr};
     ResponseStreamWriter* responseStream_{nullptr};
     Renderer renderer_{nullptr};
+    Layout layout_{nullptr};
     std::uint16_t responseStatusCode_{200};
     std::pmr::string responseStatusText_;
     HttpResponseHeaders responseHeaders_;

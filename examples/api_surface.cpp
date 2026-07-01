@@ -224,10 +224,33 @@ std::string_view jsonKindName(ruvia::JsonValue::Kind kind) noexcept {
 
 }  // namespace
 
+ruvia::Task<ruvia::HttpResponse> surfaceLayout(
+    ruvia::Context& c,
+    std::string_view body,
+    ruvia::Context::RenderOptions options) {
+    std::pmr::string html(c.allocator<char>());
+    html.append("<!doctype html><html><head>");
+    if (!options.head.empty()) {
+        html.append(options.head);
+    } else if (!options.title.empty()) {
+        html.append("<title>");
+        html.append(options.title);
+        html.append("</title>");
+    }
+    html.append("</head><body><section data-layout=\"surface\"><main>");
+    html.append(body);
+    html.append("</main></section></body></html>");
+    co_return c.html(html);
+}
+
 ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
     ruvia::Context& c,
     std::string_view body,
     ruvia::Context::RenderOptions options) {
+    if (const auto layout = c.getLayout(); layout != nullptr) {
+        co_return co_await layout(c, body, options);
+    }
+
     std::pmr::string html(c.allocator<char>());
     html.append("<!doctype html><html><head>");
     if (!options.head.empty()) {
@@ -293,6 +316,14 @@ public:
     }
 };
 
+class SurfaceLayoutMiddleware final : public ruvia::Middleware<SurfaceLayoutMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        c.setLayout(&surfaceLayout);
+        co_await next();
+    }
+};
+
 class ApiSurfaceController final : public ruvia::Controller<ApiSurfaceController> {
 public:
     RUVIA_CONTROLLER_GROUP("/surface", SurfaceContextMiddleware)
@@ -305,6 +336,7 @@ public:
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
+    RUVIA_GET("/render-layout", renderLayoutBody, SurfaceLayoutMiddleware);
     RUVIA_GET("/header-remove", headerRemove);
     RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
@@ -498,6 +530,12 @@ private:
         co_return co_await c.render(
             "<h1>rendered head body</h1>",
             "<title>surface head</title>");
+    }
+
+    ruvia::Task<ruvia::HttpResponse> renderLayoutBody(ruvia::Context& c) {
+        co_return co_await c.render(
+            "<h1>rendered layout body</h1>",
+            {.title = "surface layout"});
     }
 
     ruvia::Task<ruvia::HttpResponse> headerRemove(ruvia::Context& c) {
