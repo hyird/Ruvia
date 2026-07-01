@@ -1222,6 +1222,7 @@ public:
     [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
+    [[nodiscard]] Task<std::span<const std::byte>> bytes() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
     [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
     Task<void> discardBody() const;
@@ -2228,6 +2229,10 @@ inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {
     co_return std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(body.data()),
         body.size());
+}
+
+inline Task<std::span<const std::byte>> ContextRequest::bytes() const {
+    co_return co_await arrayBuffer();
 }
 
 inline Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
