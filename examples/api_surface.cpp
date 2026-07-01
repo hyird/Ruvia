@@ -97,6 +97,8 @@ private:
         body.append(ruvia::methodName(request.method()));
         body.append("\ntarget=");
         body.append(request.target());
+        body.append("\nurl=");
+        body.append(request.url());
         body.append("\npath=");
         body.append(request.path());
         body.append("\nquery=");

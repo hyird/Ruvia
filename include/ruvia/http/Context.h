@@ -194,6 +194,7 @@ public:
 
     [[nodiscard]] HttpMethod method() const noexcept;
     [[nodiscard]] std::string_view target() const noexcept;
+    [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
     [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] std::string_view queryString() const noexcept;
@@ -766,6 +767,26 @@ inline HttpMethod ContextRequest::method() const noexcept {
 
 inline std::string_view ContextRequest::target() const noexcept {
     return raw().target();
+}
+
+inline std::pmr::string ContextRequest::url() const {
+    const auto requestTarget = target();
+    std::pmr::string result(context_->resource());
+    if (requestTarget.starts_with("http://") || requestTarget.starts_with("https://")) {
+        result.assign(requestTarget.data(), requestTarget.size());
+        return result;
+    }
+
+    const auto host = header("Host");
+    if (host.empty() || requestTarget.empty() || requestTarget.front() != '/') {
+        result.assign(requestTarget.data(), requestTarget.size());
+        return result;
+    }
+
+    result.append(isSecure() ? "https://" : "http://");
+    result.append(host.data(), host.size());
+    result.append(requestTarget.data(), requestTarget.size());
+    return result;
 }
 
 inline std::string_view ContextRequest::path() const noexcept {
