@@ -18,6 +18,8 @@
 
 namespace ruvia {
 
+class RequestNameValueList;
+
 namespace detail {
 
 struct ModelValueFactory;
@@ -69,6 +71,18 @@ struct FormBody<T, std::void_t<decltype(T::ruviaParseFormBody(
         std::string_view body,
         std::pmr::memory_resource* resource) {
         return T::ruviaParseFormBody(body, resource);
+    }
+
+    static std::optional<T> parseFields(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource) {
+        if constexpr (requires { T::ruviaParseFormFields(fields, resource); }) {
+            return T::ruviaParseFormFields(fields, resource);
+        } else {
+            (void)fields;
+            (void)resource;
+            return std::nullopt;
+        }
     }
 };
 

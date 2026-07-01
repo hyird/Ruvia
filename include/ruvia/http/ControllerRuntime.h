@@ -134,69 +134,29 @@ private:
 
 namespace detail {
 
-[[nodiscard]] inline bool isFormEncodeSafe(unsigned char c) noexcept {
-    return (c >= 'A' && c <= 'Z') ||
-        (c >= 'a' && c <= 'z') ||
-        (c >= '0' && c <= '9') ||
-        c == '*' ||
-        c == '-' ||
-        c == '.' ||
-        c == '_';
-}
-
-inline void appendFormEncodedComponent(std::pmr::string& output, std::string_view input) {
-    constexpr char kHex[] = "0123456789ABCDEF";
-    for (const auto ch : input) {
-        const auto c = static_cast<unsigned char>(ch);
-        if (c == ' ') {
-            output.push_back('+');
-        } else if (isFormEncodeSafe(c)) {
-            output.push_back(static_cast<char>(c));
-        } else {
-            output.push_back('%');
-            output.push_back(kHex[c >> 4]);
-            output.push_back(kHex[c & 0x0f]);
-        }
+template <ValidationTarget Target>
+[[noreturn]] inline void throwInvalidValidationTarget() {
+    if constexpr (Target == ValidationTarget::kQuery) {
+        detail::throwInvalidQuery();
+    } else if constexpr (Target == ValidationTarget::kParam) {
+        detail::throwInvalidParam();
+    } else if constexpr (Target == ValidationTarget::kHeader) {
+        detail::throwInvalidHeader();
+    } else if constexpr (Target == ValidationTarget::kCookie) {
+        detail::throwInvalidCookie();
+    } else {
+        static_assert(alwaysFalse<std::integral_constant<ValidationTarget, Target>>, "unsupported validator target");
     }
 }
 
-inline void appendRouteParamsAsForm(Context& c, std::pmr::string& output) {
-    const auto& params = c.req().param();
-    for (std::size_t i = 0; i < params.size(); ++i) {
-        const auto& param = params[i];
-        if (i != 0) {
-            output.push_back('&');
-        }
-        appendFormEncodedComponent(output, param.name);
-        output.push_back('=');
-        appendFormEncodedComponent(output, param.value);
+template <ValidationTarget Target, typename BodyT>
+[[nodiscard]] BodyT parseValidatedFields(Context& c, const RequestNameValueList& fields) {
+    static_assert(FormBody<BodyT>::value, "field validator body type must use RUVIA_MODEL");
+    auto parsed = FormBody<BodyT>::parseFields(fields, c.resource());
+    if (!parsed) {
+        throwInvalidValidationTarget<Target>();
     }
-}
-
-inline void appendRequestHeadersAsForm(Context& c, std::pmr::string& output) {
-    const auto& headers = c.req().header();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto& header = headers[i];
-        if (i != 0) {
-            output.push_back('&');
-        }
-        appendFormEncodedComponent(output, header.name);
-        output.push_back('=');
-        appendFormEncodedComponent(output, header.value);
-    }
-}
-
-inline void appendRequestCookiesAsForm(Context& c, std::pmr::string& output) {
-    const auto& cookies = c.req().cookie();
-    for (std::size_t i = 0; i < cookies.size(); ++i) {
-        const auto& cookie = cookies[i];
-        if (i != 0) {
-            output.push_back('&');
-        }
-        appendFormEncodedComponent(output, cookie.name);
-        output.push_back('=');
-        appendFormEncodedComponent(output, cookie.value);
-    }
+    return std::move(*parsed);
 }
 
 template <ValidationTarget Target, typename BodyT>
@@ -213,32 +173,11 @@ template <ValidationTarget Target, typename BodyT>
         }
         co_return std::move(*parsed);
     } else if constexpr (Target == ValidationTarget::kParam) {
-        static_assert(FormBody<BodyT>::value, "param validator body type must use RUVIA_MODEL");
-        std::pmr::string params(c.resource());
-        appendRouteParamsAsForm(c, params);
-        auto parsed = FormBody<BodyT>::parse(detail::storeValidationInput(c, std::move(params)), c.resource());
-        if (!parsed) {
-            detail::throwInvalidParam();
-        }
-        co_return std::move(*parsed);
+        co_return parseValidatedFields<Target, BodyT>(c, c.req().param());
     } else if constexpr (Target == ValidationTarget::kHeader) {
-        static_assert(FormBody<BodyT>::value, "header validator body type must use RUVIA_MODEL");
-        std::pmr::string headers(c.resource());
-        appendRequestHeadersAsForm(c, headers);
-        auto parsed = FormBody<BodyT>::parse(detail::storeValidationInput(c, std::move(headers)), c.resource());
-        if (!parsed) {
-            detail::throwInvalidHeader();
-        }
-        co_return std::move(*parsed);
+        co_return parseValidatedFields<Target, BodyT>(c, c.req().header());
     } else if constexpr (Target == ValidationTarget::kCookie) {
-        static_assert(FormBody<BodyT>::value, "cookie validator body type must use RUVIA_MODEL");
-        std::pmr::string cookies(c.resource());
-        appendRequestCookiesAsForm(c, cookies);
-        auto parsed = FormBody<BodyT>::parse(detail::storeValidationInput(c, std::move(cookies)), c.resource());
-        if (!parsed) {
-            detail::throwInvalidCookie();
-        }
-        co_return std::move(*parsed);
+        co_return parseValidatedFields<Target, BodyT>(c, c.req().cookie());
     } else {
         static_assert(alwaysFalse<BodyT>, "unsupported validator target");
     }

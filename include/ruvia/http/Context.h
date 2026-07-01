@@ -58,7 +58,6 @@ class RateLimiter;
 class RequestBodyLoader;
 struct ContextAccess;
 class ContextServices;
-std::string_view storeValidationInput(Context& context, std::pmr::string&& input);
 struct RouteRateLimitOptions;
 struct RouteRateLimitResult;
 RouteRateLimitResult checkRouteRateLimit(Context& context, const RouteRateLimitOptions& options) noexcept;
@@ -1286,7 +1285,6 @@ private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
     friend struct detail::SessionAccess;
-    friend std::string_view detail::storeValidationInput(Context& context, std::pmr::string&& input);
     friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
         Context& context,
         const detail::RouteRateLimitOptions& options) noexcept;
@@ -2077,7 +2075,6 @@ private:
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
     detail::ContextValueStore* values_{nullptr};
-    std::pmr::vector<std::pmr::string>* validationInputs_{nullptr};
     HttpResponse* response_{nullptr};
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
@@ -2298,17 +2295,6 @@ namespace detail {
 template <typename T>
 void setValidatedBody(Context& context, ValidationTarget target, T&& body) {
     context.validatedValues_.set(target, std::forward<T>(body), context.resource());
-}
-
-inline std::string_view storeValidationInput(Context& context, std::pmr::string&& input) {
-    if (input.size() < 32) {
-        input.reserve(32);
-    }
-    if (context.validationInputs_ == nullptr) {
-        context.validationInputs_ = &context.memory_.emplace<std::pmr::vector<std::pmr::string>>(context.resource());
-    }
-    auto& stored = context.validationInputs_->emplace_back(std::move(input));
-    return std::string_view(stored.data(), stored.size());
 }
 
 }  // namespace detail

@@ -59,6 +59,15 @@
             }                                                               \
             return ::std::move(request);                                     \
         }                                                                   \
+        static ::std::optional<T> ruviaParseFormFields(                      \
+            const ::ruvia::RequestNameValueList& fields,                    \
+            ::std::pmr::memory_resource* resource) {                        \
+            T request{::ruvia::RequestObject(fields, resource)};             \
+            if (!request.ruviaEnsureParsed()) {                              \
+                return ::std::nullopt;                                      \
+            }                                                               \
+            return ::std::move(request);                                     \
+        }                                                                   \
         [[nodiscard]] const ::ruvia::RequestObject& body() const noexcept {   \
             return body_;                                                    \
         }                                                                   \

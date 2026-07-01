@@ -19,6 +19,12 @@ template <typename Visitor>
 
 template <typename Visitor>
 [[nodiscard]] bool visitRequestFormFields(const RequestObject& body, Visitor&& visitor) {
+    if (body.kind() == RequestObjectKind::kFormFields) {
+        const auto* const fields = body.fields();
+        return fields == nullptr
+            ? true
+            : visitDecodedFormFields(*fields, std::forward<Visitor>(visitor));
+    }
     return visitFormObjectFields(
         ResolvedPmrResourceTag{},
         body.view(),
