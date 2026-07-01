@@ -16,6 +16,7 @@ struct HttpStatusEntry final {
         case 200: { static constexpr HttpStatusEntry entry{200, "OK", "HTTP/1.1 200 OK\r\n"}; return &entry; }
         case 201: { static constexpr HttpStatusEntry entry{201, "Created", "HTTP/1.1 201 Created\r\n"}; return &entry; }
         case 202: { static constexpr HttpStatusEntry entry{202, "Accepted", "HTTP/1.1 202 Accepted\r\n"}; return &entry; }
+        case 203: { static constexpr HttpStatusEntry entry{203, "Non-Authoritative Information", "HTTP/1.1 203 Non-Authoritative Information\r\n"}; return &entry; }
         case 204: { static constexpr HttpStatusEntry entry{204, "No Content", "HTTP/1.1 204 No Content\r\n"}; return &entry; }
         case 206: { static constexpr HttpStatusEntry entry{206, "Partial Content", "HTTP/1.1 206 Partial Content\r\n"}; return &entry; }
         case 301: { static constexpr HttpStatusEntry entry{301, "Moved Permanently", "HTTP/1.1 301 Moved Permanently\r\n"}; return &entry; }
