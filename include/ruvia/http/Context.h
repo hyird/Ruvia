@@ -865,9 +865,9 @@ public:
 
         [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
             std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            result.reserve(fields_.size());
-            for (const auto& field : fields_) {
-                result.emplace_back(field.name.data(), field.name.size());
+            result.reserve(entries_.size());
+            for (const auto& entry : entries_) {
+                result.push_back(entry.name());
             }
             return result;
         }
@@ -1148,8 +1148,8 @@ public:
                 order.push_back(i);
             }
             std::stable_sort(order.begin(), order.end(), [this](std::size_t left, std::size_t right) noexcept {
-                const auto leftName = std::string_view(fields_[left].name.data(), fields_[left].name.size());
-                const auto rightName = std::string_view(fields_[right].name.data(), fields_[right].name.size());
+                const auto leftName = entryName(fields_[left]);
+                const auto rightName = entryName(fields_[right]);
                 if (leftName == rightName) {
                     return left < right;
                 }
@@ -1166,11 +1166,11 @@ public:
             for (std::size_t offset = 0; offset < order.size();) {
                 const auto begin = offset;
                 const auto firstIndex = order[offset];
-                const auto name = std::string_view(fields_[firstIndex].name.data(), fields_[firstIndex].name.size());
+                const auto name = entryName(fields_[firstIndex]);
                 do {
                     ++offset;
                 } while (offset < order.size() &&
-                    std::string_view(fields_[order[offset]].name.data(), fields_[order[offset]].name.size()) == name);
+                    entryName(fields_[order[offset]]) == name);
                 builds.push_back(EntryBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
             }
             std::stable_sort(builds.begin(), builds.end(), [](const EntryBuild& left, const EntryBuild& right) noexcept {
@@ -1181,12 +1181,20 @@ public:
             for (const auto& build : builds) {
                 auto& entry = entries_.emplace_back(
                     resource,
-                    std::string_view(fields_[build.firstIndex].name.data(), fields_[build.firstIndex].name.size()),
+                    entryName(fields_[build.firstIndex]),
                     false);
                 for (std::size_t i = build.begin; i < build.end; ++i) {
                     entry.add(fields_[order[i]]);
                 }
             }
+        }
+
+        [[nodiscard]] static std::string_view entryName(const RequestFormField& field) noexcept {
+            if (!field.path.empty()) {
+                const auto& name = field.path.front();
+                return std::string_view(name.data(), name.size());
+            }
+            return std::string_view(field.name.data(), field.name.size());
         }
 
         std::pmr::vector<RequestFormField> fields_;
