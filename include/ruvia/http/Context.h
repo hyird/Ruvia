@@ -207,7 +207,7 @@ public:
     [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept;
-    [[nodiscard]] std::span<const HttpHeaderView> header() const noexcept;
+    [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
@@ -739,6 +739,7 @@ private:
         std::uint16_t statusCode,
         std::string_view statusText) const;
 
+    [[nodiscard]] const RequestNameValueList& requestHeaders() const;
     [[nodiscard]] const RequestNameValueList& routeParams() const;
     [[nodiscard]] std::pmr::string& decodedBody() const;
     [[nodiscard]] std::string_view sessionId() const noexcept {
@@ -789,6 +790,7 @@ private:
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
+    mutable RequestNameValueList* requestHeaders_{nullptr};
     mutable RequestNameValueList* routeParams_{nullptr};
     std::pmr::string* sessionId_{nullptr};
     std::pmr::string* sessionData_{nullptr};
@@ -863,8 +865,8 @@ inline std::span<const HttpHeaderView> ContextRequest::headers() const noexcept 
     return raw().headers();
 }
 
-inline std::span<const HttpHeaderView> ContextRequest::header() const noexcept {
-    return headers();
+inline const RequestNameValueList& ContextRequest::header() const {
+    return context_->requestHeaders();
 }
 
 inline std::string_view ContextRequest::header(std::string_view name) const noexcept {

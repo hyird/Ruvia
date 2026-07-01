@@ -107,6 +107,8 @@ private:
         body.append(request.queryString());
         body.append("\nheaders=");
         appendUnsigned(body, c.req().header().size());
+        body.append("\nraw-headers=");
+        appendUnsigned(body, c.req().headers().size());
         body.append("\nparams=");
         appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");

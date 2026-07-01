@@ -160,25 +160,6 @@ inline void appendFormEncodedComponent(std::pmr::string& output, std::string_vie
     }
 }
 
-inline void appendLowerFormEncodedComponent(std::pmr::string& output, std::string_view input) {
-    constexpr char kHex[] = "0123456789ABCDEF";
-    for (const auto ch : input) {
-        auto c = static_cast<unsigned char>(ch);
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<unsigned char>(c - 'A' + 'a');
-        }
-        if (c == ' ') {
-            output.push_back('+');
-        } else if (isFormEncodeSafe(c)) {
-            output.push_back(static_cast<char>(c));
-        } else {
-            output.push_back('%');
-            output.push_back(kHex[c >> 4]);
-            output.push_back(kHex[c & 0x0f]);
-        }
-    }
-}
-
 inline void appendRouteParamsAsForm(Context& c, std::pmr::string& output) {
     const auto& params = c.req().param();
     std::pmr::string scratch(c.resource());
@@ -201,13 +182,13 @@ inline void appendRouteParamsAsForm(Context& c, std::pmr::string& output) {
 }
 
 inline void appendRequestHeadersAsForm(Context& c, std::pmr::string& output) {
-    const auto headers = c.req().header();
+    const auto& headers = c.req().header();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
         if (i != 0) {
             output.push_back('&');
         }
-        appendLowerFormEncodedComponent(output, header.name);
+        appendFormEncodedComponent(output, header.name);
         output.push_back('=');
         appendFormEncodedComponent(output, header.value);
     }
