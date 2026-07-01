@@ -18,10 +18,6 @@ struct CurrentUser final {
 };
 
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
-inline constexpr ruvia::HttpHeaderView kRawHeaders[] = {
-    {"X-Raw-Init", "true"}
-};
-
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -219,7 +215,7 @@ private:
         co_return c
             .header("X-Raw", "first")
             .header("X-Raw", "second", {.append = true})
-            .body("raw body\n", {.status = 202, .headers = kRawHeaders});
+            .body("raw body\n", {.status = 202, .headers = {{"X-Raw-Init", "true"}}});
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {

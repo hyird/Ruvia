@@ -1037,10 +1037,32 @@ public:
         bool append{false};
     };
 
+    class ResponseHeaderInit final {
+    public:
+        constexpr ResponseHeaderInit() noexcept = default;
+
+        constexpr ResponseHeaderInit(std::span<const HttpHeaderView> headers) noexcept
+            : headers_(headers) {}
+
+        template <std::size_t N>
+        constexpr ResponseHeaderInit(const HttpHeaderView (&headers)[N]) noexcept
+            : headers_(headers, N) {}
+
+        constexpr ResponseHeaderInit(std::initializer_list<HttpHeaderView> headers) noexcept
+            : headers_(headers.begin(), headers.size()) {}
+
+        [[nodiscard]] constexpr operator std::span<const HttpHeaderView>() const noexcept {
+            return headers_;
+        }
+
+    private:
+        std::span<const HttpHeaderView> headers_{};
+    };
+
     struct ResponseInit final {
         std::uint16_t status{0};
         std::string_view statusText{};
-        std::span<const HttpHeaderView> headers{};
+        ResponseHeaderInit headers{};
     };
 
     class Vars final {
