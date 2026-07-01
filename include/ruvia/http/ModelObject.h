@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/ModelJson.h"
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/model/Parser.h"
@@ -148,9 +149,45 @@ private:
     std::pmr::memory_resource* resource_{nullptr};
 };
 
+namespace detail {
+
+template <typename T>
+[[nodiscard]] std::optional<T> getDecodedFormField(
+    const RequestNameValueList& fields,
+    std::string_view field,
+    std::pmr::memory_resource* resource) {
+    std::optional<T> result;
+    bool parseFailed = false;
+    for (const auto& item : fields) {
+        if (item.name != field) {
+            continue;
+        }
+
+        T value = makeRequestValue<T>(ResolvedPmrResourceTag{}, resource);
+        if (!parseDecodedFormValue(
+                ResolvedPmrResourceTag{},
+                item.value,
+                value,
+                resource)) {
+            parseFailed = true;
+            break;
+        }
+        result.emplace(std::move(value));
+        break;
+    }
+
+    if (parseFailed) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+}  // namespace detail
+
 enum class RequestObjectKind {
     kJson,
-    kForm
+    kForm,
+    kFormFields
 };
 
 class RequestObject final {
@@ -167,9 +204,17 @@ public:
               body,
               detail::pmrResourceOrDefault(resource)) {}
 
+    RequestObject(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : kind_(RequestObjectKind::kFormFields),
+          fields_(&fields),
+          resource_(detail::pmrResourceOrDefault(resource)) {}
+
     RequestObject(const RequestObject& other)
         : kind_(other.kind_),
           body_(other.body_),
+          fields_(other.fields_),
           resource_(other.resource_) {}
 
     RequestObject& operator=(const RequestObject& other) {
@@ -178,6 +223,7 @@ public:
         }
         kind_ = other.kind_;
         body_ = other.body_;
+        fields_ = other.fields_;
         resource_ = other.resource_;
         return *this;
     }
@@ -193,6 +239,10 @@ public:
         return body_;
     }
 
+    [[nodiscard]] const RequestNameValueList* fields() const noexcept {
+        return fields_;
+    }
+
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return detail::pmrResourceOrDefault(resource_);
     }
@@ -204,6 +254,12 @@ public:
             return JsonObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
         }
         if constexpr (detail::isFormField<T>) {
+            if (kind_ == RequestObjectKind::kFormFields) {
+                if (fields_ == nullptr) {
+                    return std::nullopt;
+                }
+                return detail::getDecodedFormField<T>(*fields_, field, resource);
+            }
             return FormObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
         } else {
             (void)field;
@@ -223,6 +279,7 @@ private:
 
     RequestObjectKind kind_{RequestObjectKind::kJson};
     std::string_view body_;
+    const RequestNameValueList* fields_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

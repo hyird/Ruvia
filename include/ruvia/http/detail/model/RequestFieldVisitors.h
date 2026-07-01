@@ -5,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/model/FormParser.h"
 #include "ruvia/http/detail/json/JsonObjectFields.h"
 #include "ruvia/memory/PmrResource.h"
@@ -55,6 +56,19 @@ template <typename Visitor>
         body,
         pmrResourceOrDefault(resource),
         std::forward<Visitor>(visitor));
+}
+
+template <typename Visitor>
+[[nodiscard]] bool visitDecodedFormFields(
+    const RequestNameValueList& fields,
+    Visitor&& visitor) {
+    auto& visitorRef = visitor;
+    for (const auto& field : fields) {
+        if (!dispatchJsonObjectFieldVisitor(visitorRef, field.name, field.value)) {
+            break;
+        }
+    }
+    return true;
 }
 
 }  // namespace ruvia::detail

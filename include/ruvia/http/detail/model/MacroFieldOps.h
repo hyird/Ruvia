@@ -74,11 +74,18 @@
             RUVIA_MODEL_UNPAREN type ruviaValue = ::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
                 ::ruvia::detail::ResolvedPmrResourceTag{}, \
                 ruviaResource); \
-            if (::ruvia::detail::parseFormValue( \
+            const bool ruviaParsedValue = body_.kind() == ::ruvia::RequestObjectKind::kFormFields \
+                ? ::ruvia::detail::parseDecodedFormValue( \
                     ::ruvia::detail::ResolvedPmrResourceTag{}, \
                     value, \
                     ruviaValue, \
-                    ruviaResource)) { \
+                    ruviaResource) \
+                : ::ruvia::detail::parseFormValue( \
+                    ::ruvia::detail::ResolvedPmrResourceTag{}, \
+                    value, \
+                    ruviaValue, \
+                    ruviaResource); \
+            if (ruviaParsedValue) { \
                 ruviaField_##field##_.emplace(::std::move(ruviaValue)); \
                 ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
             } else { \

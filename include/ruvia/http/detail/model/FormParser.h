@@ -145,11 +145,52 @@ template <typename T>
 }
 
 template <typename T>
+[[nodiscard]] bool parseDecodedFormValue(
+    ResolvedPmrResourceTag,
+    std::string_view input,
+    T& value,
+    std::pmr::memory_resource*) {
+    using FieldT = std::remove_cvref_t<T>;
+    if constexpr (isRuviaString<FieldT>) {
+        value.assignView(input);
+        return true;
+    } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
+        value = input;
+        return true;
+    } else if constexpr (isRuviaScalar<FieldT>) {
+        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
+        if constexpr (std::is_same_v<ScalarT, bool>) {
+            return parseFormBool(input, value.value);
+        } else {
+            return parseFormNumber(input, value.value);
+        }
+    } else if constexpr (std::is_same_v<FieldT, bool>) {
+        return parseFormBool(input, value);
+    } else if constexpr (std::is_integral_v<FieldT> || std::is_floating_point_v<FieldT>) {
+        return parseFormNumber(input, value);
+    } else {
+        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL form field type is not supported");
+    }
+}
+
+template <typename T>
 [[nodiscard]] bool parseFormValue(
     std::string_view input,
     T& value,
     std::pmr::memory_resource* resource) {
     return parseFormValue(
+        ResolvedPmrResourceTag{},
+        input,
+        value,
+        pmrResourceOrDefault(resource));
+}
+
+template <typename T>
+[[nodiscard]] bool parseDecodedFormValue(
+    std::string_view input,
+    T& value,
+    std::pmr::memory_resource* resource) {
+    return parseDecodedFormValue(
         ResolvedPmrResourceTag{},
         input,
         value,
