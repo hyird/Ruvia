@@ -167,7 +167,7 @@ class AuthMiddleware final : public ruvia::Middleware<AuthMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, const ruvia::Next& next) {
         if (c.req().header("X-Api-Key") != "secret") {
-            c.res(c.error(401, "unauthorized", "unauthorized"));
+            c.res(c.jsonError(401, "unauthorized", "unauthorized"));
             co_return;
         }
         co_await next();
@@ -247,8 +247,8 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.file(path)` | Return a file response without loading the whole file into memory. |
 | `c.staticFile(staticRoot, relative)` | Return a static file under a startup-built `ruvia::StaticRoot` with traversal checks. |
 | `c.redirect(location)` | Return a redirect response. |
-| `c.error(status, code, message)` | Return a unified JSON error response. |
 | `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
+| `c.jsonError(status, code, message)` | Return a unified JSON error response. |
 | `c.notFound()` | Return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |
@@ -438,7 +438,7 @@ ruvia::Task<ruvia::HttpResponse> login(ruvia::Context& c) {
     const auto& username = request.username();
     const auto& password = request.password();
     if (!username || !password) {
-        co_return c.error(400, "invalid_login_body", "username and password are required");
+        co_return c.jsonError(400, "invalid_login_body", "username and password are required");
     }
 
     LoginResponse response(c);
