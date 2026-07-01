@@ -148,12 +148,31 @@ private:
 
 class HttpResponse final {
 public:
+    class ResponseHeaders final {
+    public:
+        explicit constexpr ResponseHeaders(HttpResponse& response) noexcept
+            : response_(&response) {}
+
+        [[nodiscard]] std::string_view get(std::string_view name) const noexcept;
+
+        [[nodiscard]] bool has(std::string_view name) const noexcept;
+
+        void set(std::string_view name, std::string_view value) const;
+
+        void append(std::string_view name, std::string_view value) const;
+
+    private:
+        HttpResponse* response_;
+    };
+
     explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] std::uint16_t statusCode() const noexcept;
     [[nodiscard]] std::string_view statusText() const noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
+    [[nodiscard]] ResponseHeaders responseHeaders() noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
+    [[nodiscard]] bool hasHeader(std::string_view name) const noexcept;
     void setStatus(std::uint16_t statusCode, std::string_view statusText);
     void setHeader(std::string_view key, std::string_view value);
     void appendHeader(std::string_view key, std::string_view value);
@@ -261,5 +280,25 @@ private:
     BodyKind bodyKind_{BodyKind::kEmpty};
     std::optional<FileBody> fileBody_;
 };
+
+inline std::string_view HttpResponse::ResponseHeaders::get(std::string_view name) const noexcept {
+    return response_->header(name);
+}
+
+inline bool HttpResponse::ResponseHeaders::has(std::string_view name) const noexcept {
+    return response_->hasHeader(name);
+}
+
+inline void HttpResponse::ResponseHeaders::set(std::string_view name, std::string_view value) const {
+    response_->setHeader(name, value);
+}
+
+inline void HttpResponse::ResponseHeaders::append(std::string_view name, std::string_view value) const {
+    response_->appendHeader(name, value);
+}
+
+inline HttpResponse::ResponseHeaders HttpResponse::responseHeaders() noexcept {
+    return ResponseHeaders(*this);
+}
 
 }  // namespace ruvia
