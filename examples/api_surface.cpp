@@ -672,6 +672,10 @@ private:
             body.append("\ntitle=");
             body.append(*titleText);
         }
+        if (auto literalDot = form.get("obj.key1").toStringView()) {
+            body.append("\nliteral-obj-key1=");
+            body.append(*literalDot);
+        }
         body.push_back('\n');
         co_return c.text(body);
     }

@@ -901,7 +901,9 @@ public:
 
         [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
             if (isPathName(name)) {
-                return pathEntry(name);
+                if (const auto* formEntry = pathEntry(name)) {
+                    return formEntry;
+                }
             }
             for (const auto& entry : entries_) {
                 if (entry.name() == name) {
