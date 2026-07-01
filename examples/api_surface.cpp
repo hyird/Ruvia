@@ -237,6 +237,12 @@ private:
         appendUnsigned(body, form.count("tag[]"));
         body.append("\ntag-array=");
         body.append(form.isArray("tag[]") ? "true" : "false");
+        if (const auto nested = form.valueAt("obj.key1")) {
+            body.append("\nobj.key1=");
+            body.append(*nested);
+        }
+        body.append("\nobj.key-count=");
+        appendUnsigned(body, form.valuesAt("obj.key1").size());
         for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);

@@ -414,6 +414,58 @@ public:
             return formEntry->values();
         }
 
+        [[nodiscard]] const RequestFormField* getAt(std::string_view dotPath) const noexcept {
+            const RequestFormField* selected = nullptr;
+            for (const auto& field : fields_) {
+                if (pathMatches(field, dotPath)) {
+                    selected = &field;
+                }
+            }
+            return selected;
+        }
+
+        [[nodiscard]] bool hasAt(std::string_view dotPath) const noexcept {
+            return getAt(dotPath) != nullptr;
+        }
+
+        [[nodiscard]] std::size_t countAt(std::string_view dotPath) const noexcept {
+            std::size_t count = 0;
+            for (const auto& field : fields_) {
+                if (pathMatches(field, dotPath)) {
+                    ++count;
+                }
+            }
+            return count;
+        }
+
+        [[nodiscard]] bool isArrayAt(std::string_view dotPath) const noexcept {
+            for (const auto& field : fields_) {
+                if (pathMatches(field, dotPath) && field.array) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::optional<std::string_view> valueAt(std::string_view dotPath) const noexcept {
+            const auto* field = getAt(dotPath);
+            if (field == nullptr) {
+                return std::nullopt;
+            }
+            return std::string_view(field->value.data(), field->value.size());
+        }
+
+        [[nodiscard]] std::pmr::vector<std::string_view> valuesAt(std::string_view dotPath) const {
+            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+            result.reserve(countAt(dotPath));
+            for (const auto& field : fields_) {
+                if (pathMatches(field, dotPath)) {
+                    result.emplace_back(field.value.data(), field.value.size());
+                }
+            }
+            return result;
+        }
+
         [[nodiscard]] std::pmr::vector<const RequestFormField*> getAll(std::string_view name) const {
             std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
             const auto* formEntry = entry(name);
@@ -428,6 +480,31 @@ public:
         }
 
     private:
+        [[nodiscard]] static bool pathMatches(
+            const RequestFormField& field,
+            std::string_view dotPath) noexcept {
+            if (field.path.empty() || dotPath.empty()) {
+                return false;
+            }
+
+            std::size_t offset = 0;
+            for (std::size_t i = 0; i < field.path.size(); ++i) {
+                const auto dot = dotPath.find('.', offset);
+                const auto segment = dot == std::string_view::npos
+                    ? dotPath.substr(offset)
+                    : dotPath.substr(offset, dot - offset);
+                const auto stored = std::string_view(field.path[i].data(), field.path[i].size());
+                if (segment.empty() || stored != segment) {
+                    return false;
+                }
+                if (dot == std::string_view::npos) {
+                    return i + 1 == field.path.size();
+                }
+                offset = dot + 1;
+            }
+            return false;
+        }
+
         void rebuildEntries() {
             entries_.clear();
             entries_.reserve(fields_.size());
