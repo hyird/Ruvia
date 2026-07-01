@@ -224,6 +224,10 @@ private:
         appendUnsigned(body, request.cookie().keys().size());
         body.append("\ncookie-values=");
         appendUnsigned(body, request.cookie().values().size());
+        body.append("\ncookie-surface-object=");
+        body.append(request.cookie()["surface"]);
+        body.append("\ncookie-surface-all=");
+        appendUnsigned(body, request.cookie().getAll("surface").size());
         body.append("\nmatched-routes=");
         appendUnsigned(body, request.matchedRoutes().size());
         body.append("\nmatched-routes-helper=");
