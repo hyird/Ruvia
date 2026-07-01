@@ -1118,6 +1118,7 @@ private:
 public:
     struct RenderOptions final {
         std::string_view head{};
+        std::string_view title{};
     };
 
     using Renderer = Task<HttpResponse> (*)(
