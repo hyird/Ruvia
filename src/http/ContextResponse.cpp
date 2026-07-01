@@ -399,6 +399,56 @@ HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
     return response;
 }
 
+HttpResponse Context::newResponse(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    return this->body(body, statusCode, statusText);
+}
+
+HttpResponse Context::newResponse(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    return this->body(body, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(
+    std::string_view body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(body, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(std::string_view body, ResponseInit init) const {
+    return this->body(body, init);
+}
+
+HttpResponse Context::newResponse(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    return this->body(body, statusCode, statusText);
+}
+
+HttpResponse Context::newResponse(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    return this->body(body, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(
+    std::pmr::string& body,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(body, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(std::pmr::string& body, ResponseInit init) const {
+    return this->body(body, init);
+}
+
 HttpResponse Context::text(
     std::string_view body,
     std::uint16_t statusCode,
@@ -688,6 +738,9 @@ void Context::applyResponseState(
         }
     } else if (finalStatusCode != 200) {
         response.setStatus(finalStatusCode, {});
+    }
+    if (response_ != nullptr && response_ != &response) {
+        mergeResponseSlotHeaders(response, *response_);
     }
     const auto contextHeaderCount = responseHeaders_.size();
     if (contextHeaderCount > 0) {

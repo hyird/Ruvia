@@ -247,7 +247,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. Use `c.var()[typedKey]`, `c.var().get<T>("name")`, or `c.var().getIf<T>("name")` for the Hono-style variable facade; `c.getIf<T>(key)` / `c.varIf<T>(key)` remain available when missing values should not throw. |
-| `c.body(...)` | Return a raw response body without setting a content type. |
+| `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; `newResponse` is the Hono-named alias for the same response-init shape. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
 | `c.html(...)` / `co_await c.render(body, {.title = ...})` / `co_await c.render(body, {.head = ...})` | Return HTML directly or through a middleware-installed renderer with explicit title or head metadata. |
@@ -264,7 +264,7 @@ Use `ruvia::Context` to read request data and construct responses:
 
 A few lifetime and ownership rules are worth keeping close:
 
-- Request headers are read through `c.req().header(...)`; response headers are written through `c.setHeader(...)` or the Hono-compatible `c.header(...)` alias. Use `std::nullopt` with either response-header setter to delete a prepared header. Context response helpers, including `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
+- Request headers are read through `c.req().header(...)`; response headers are written through `c.setHeader(...)` or the Hono-compatible `c.header(...)` alias. Use `std::nullopt` with either response-header setter to delete a prepared header. Context response helpers, including `c.body()` / `c.newResponse()` / `c.text()`, `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, cookies, and direct `c.res().headers()` mutations.
 - Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
 - `next` is a request-lifetime continuation token passed by value. Use it as `co_await next()` from work that completes within the current middleware invocation; copied tokens share one one-shot control slot, so repeated calls or calls after that middleware invocation has returned are finalized as a `next_called_multiple_times` error. Do not store its awaitable for later use.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
