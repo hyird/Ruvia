@@ -1295,6 +1295,22 @@ public:
         return ConstVars(*this);
     }
 
+    [[nodiscard]] std::string_view header(std::string_view name) const noexcept {
+        return request_.header(name);
+    }
+
+    [[nodiscard]] QueryValue query(std::string_view name) const noexcept {
+        return request_.query(name);
+    }
+
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept {
+        return request_.cookie(name);
+    }
+
+    [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
+        return routeParam(name);
+    }
+
     Context& status(std::uint16_t statusCode, std::string_view statusText = {});
 
     Context& header(std::string_view name, std::string_view value) {
