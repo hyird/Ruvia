@@ -10,7 +10,9 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/model/Parser.h"
 
+#include <algorithm>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -134,6 +136,55 @@ void assignDotPath(
     }
 }
 
+[[nodiscard]] std::string_view storedStringView(const std::pmr::string& value) noexcept {
+    return std::string_view(value.data(), value.size());
+}
+
+[[nodiscard]] std::string_view pairNameAt(
+    const std::pmr::vector<std::pmr::string>& storage,
+    std::size_t index) noexcept {
+    return storedStringView(storage[index * 2]);
+}
+
+[[nodiscard]] std::pmr::vector<std::size_t> sortedPairOrder(
+    const std::pmr::vector<std::pmr::string>& storage,
+    std::pmr::memory_resource* resource) {
+    std::pmr::vector<std::size_t> order(resource);
+    const auto count = storage.size() / 2;
+    order.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        order.push_back(i);
+    }
+    std::stable_sort(order.begin(), order.end(), [&storage](std::size_t left, std::size_t right) noexcept {
+        const auto leftName = pairNameAt(storage, left);
+        const auto rightName = pairNameAt(storage, right);
+        if (leftName == rightName) {
+            return left < right;
+        }
+        return leftName < rightName;
+    });
+    return order;
+}
+
+[[nodiscard]] std::pmr::vector<std::size_t> sortedFormFieldOrder(
+    const std::pmr::vector<ContextRequest::RequestFormField>& fields,
+    std::pmr::memory_resource* resource) {
+    std::pmr::vector<std::size_t> order(resource);
+    order.reserve(fields.size());
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        order.push_back(i);
+    }
+    std::stable_sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
+        const auto leftName = storedStringView(fields[left].name);
+        const auto rightName = storedStringView(fields[right].name);
+        if (leftName == rightName) {
+            return left < right;
+        }
+        return leftName < rightName;
+    });
+    return order;
+}
+
 void appendParsedBodyField(
     std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::RequestFormField&& field,
@@ -142,18 +193,49 @@ void appendParsedBodyField(
         assignDotPath(field, fields.get_allocator().resource());
     }
 
-    if (options.all || field.array) {
-        fields.emplace_back(std::move(field));
+    fields.emplace_back(std::move(field));
+}
+
+void compactParsedBodyFields(
+    std::pmr::vector<ContextRequest::RequestFormField>& fields,
+    ContextRequest::ParseBodyOptions options) {
+    if (options.all || fields.size() < 2) {
         return;
     }
 
-    for (auto& existing : fields) {
-        if (existing.name == field.name) {
-            existing = std::move(field);
-            return;
+    auto* const resource = fields.get_allocator().resource();
+    const auto order = sortedFormFieldOrder(fields, resource);
+    std::pmr::vector<unsigned char> keep(resource);
+    keep.resize(fields.size(), 0);
+
+    for (std::size_t offset = 0; offset < order.size();) {
+        const auto name = storedStringView(fields[order[offset]].name);
+        std::optional<std::size_t> lastScalar;
+        do {
+            const auto index = order[offset];
+            if (fields[index].array) {
+                keep[index] = 1;
+            } else {
+                lastScalar = index;
+            }
+            ++offset;
+        } while (offset < order.size() && storedStringView(fields[order[offset]].name) == name);
+        if (lastScalar.has_value()) {
+            keep[*lastScalar] = 1;
         }
     }
-    fields.emplace_back(std::move(field));
+
+    std::size_t write = 0;
+    for (std::size_t read = 0; read < fields.size(); ++read) {
+        if (keep[read] == 0) {
+            continue;
+        }
+        if (write != read) {
+            fields[write] = std::move(fields[read]);
+        }
+        ++write;
+    }
+    fields.erase(fields.begin() + write, fields.end());
 }
 
 }  // namespace
@@ -190,7 +272,8 @@ const RequestNameValueList& Context::requestHeaders() const {
 const RequestNameValueList& Context::requestQuery() const {
     if (requestQuery_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        storage.reserve(delimitedFieldCount(request_.queryString(), '&') * 2);
+        const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
+        storage.reserve(pairCount * 2);
         (void)detail::visitUrlEncodedPairs(
             request_.queryString(),
             [this, &storage](std::string_view key, std::string_view value) {
@@ -199,24 +282,38 @@ const RequestNameValueList& Context::requestQuery() const {
                 assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
                 assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
 
-                for (std::size_t i = 0; i + 1 < storage.size(); i += 2) {
-                    if (storage[i] == decodedName) {
-                        storage[i + 1] = std::move(decodedValue);
-                        return true;
-                    }
-                }
-
                 storage.push_back(std::move(decodedName));
                 storage.push_back(std::move(decodedValue));
                 return true;
             });
 
         auto& query = memory_.emplace<RequestNameValueList>(resource());
-        query.reserve(storage.size() / 2);
-        for (std::size_t i = 0; i + 1 < storage.size(); i += 2) {
+        const auto order = sortedPairOrder(storage, resource());
+        struct QueryValueBuild final {
+            std::size_t firstIndex;
+            std::size_t lastIndex;
+        };
+        std::pmr::vector<QueryValueBuild> builds(resource());
+        builds.reserve(order.size());
+        for (std::size_t offset = 0; offset < order.size();) {
+            const auto firstIndex = order[offset];
+            auto lastIndex = firstIndex;
+            const auto name = pairNameAt(storage, firstIndex);
+            do {
+                lastIndex = order[offset];
+                ++offset;
+            } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
+            builds.push_back(QueryValueBuild{.firstIndex = firstIndex, .lastIndex = lastIndex});
+        }
+        std::stable_sort(builds.begin(), builds.end(), [](const QueryValueBuild& left, const QueryValueBuild& right) noexcept {
+            return left.firstIndex < right.firstIndex;
+        });
+
+        query.reserve(builds.size());
+        for (const auto& build : builds) {
             query.push_back(RequestNameValueView{
-                .name = std::string_view(storage[i].data(), storage[i].size()),
-                .value = std::string_view(storage[i + 1].data(), storage[i + 1].size())});
+                .name = storedStringView(storage[build.firstIndex * 2]),
+                .value = storedStringView(storage[build.lastIndex * 2 + 1])});
         }
         requestQueryStorage_ = &storage;
         requestQuery_ = &query;
@@ -230,34 +327,48 @@ const RequestValueGroupList& Context::requestQueries() const {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
         auto& groups = memory_.emplace<RequestValueGroupList>(resource());
         storage.reserve(pairCount * 2);
-        groups.reserve(pairCount);
         (void)detail::visitUrlEncodedPairs(
             request_.queryString(),
-            [this, &storage, &groups](std::string_view key, std::string_view value) {
+            [this, &storage](std::string_view key, std::string_view value) {
                 std::pmr::string decodedName(resource());
                 std::pmr::string decodedValue(resource());
                 assignUrlDecodedOrCopy(decodedName, key, detail::UrlDecodeMode::kForm);
                 assignUrlDecodedOrCopy(decodedValue, value, detail::UrlDecodeMode::kForm);
 
-                const auto nameIndex = storage.size();
                 storage.push_back(std::move(decodedName));
                 storage.push_back(std::move(decodedValue));
-                const auto name = std::string_view(storage[nameIndex].data(), storage[nameIndex].size());
-                const auto queryValue = std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size());
-
-                RequestValueGroup* target = nullptr;
-                for (auto& group : groups) {
-                    if (group.name() == name) {
-                        target = &group;
-                        break;
-                    }
-                }
-                if (target == nullptr) {
-                    target = &groups.emplace_back(resource(), name);
-                }
-                target->add(queryValue);
                 return true;
             });
+
+        struct QueryGroupBuild final {
+            std::size_t firstIndex;
+            std::size_t begin;
+            std::size_t end;
+        };
+        const auto order = sortedPairOrder(storage, resource());
+        std::pmr::vector<QueryGroupBuild> builds(resource());
+        builds.reserve(order.size());
+        for (std::size_t offset = 0; offset < order.size();) {
+            const auto begin = offset;
+            const auto firstIndex = order[offset];
+            const auto name = pairNameAt(storage, firstIndex);
+            do {
+                ++offset;
+            } while (offset < order.size() && pairNameAt(storage, order[offset]) == name);
+            builds.push_back(QueryGroupBuild{.firstIndex = firstIndex, .begin = begin, .end = offset});
+        }
+        std::stable_sort(builds.begin(), builds.end(), [](const QueryGroupBuild& left, const QueryGroupBuild& right) noexcept {
+            return left.firstIndex < right.firstIndex;
+        });
+
+        groups.reserve(builds.size());
+        for (const auto& build : builds) {
+            auto& group = groups.emplace_back(resource(), pairNameAt(storage, build.firstIndex));
+            for (std::size_t i = build.begin; i < build.end; ++i) {
+                const auto pairIndex = order[i];
+                group.add(storedStringView(storage[pairIndex * 2 + 1]));
+            }
+        }
 
         requestQueriesStorage_ = &storage;
         requestQueries_ = &groups;
@@ -471,6 +582,7 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
         if (!ok || !valid) {
             throw std::invalid_argument("invalid form body");
         }
+        compactParsedBodyFields(fields, options);
         co_return ContextRequest::RequestFormData(std::move(fields));
     }
 
@@ -493,6 +605,7 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
                     array),
                 options);
         }
+        compactParsedBodyFields(fields, options);
         co_return ContextRequest::RequestFormData(std::move(fields));
     }
 

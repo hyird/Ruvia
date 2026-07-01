@@ -13,7 +13,7 @@ Next::Awaitable Next::operator()() const {
     auto state = state_;
     state.repeated = invoked_;
     invoked_ = true;
-    return Awaitable(invoke_(state));
+    return Awaitable(state, invoke_);
 }
 
 detail::RouterImpl::RouterImpl(Router& router) noexcept

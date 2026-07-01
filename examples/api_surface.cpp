@@ -18,6 +18,11 @@ struct CurrentUser final {
 };
 
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
+template <typename T>
+concept HasPlainAddressOf = requires(T& value) {
+    &value;
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -26,6 +31,8 @@ static_assert(!std::is_copy_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
+static_assert(!HasPlainAddressOf<const ruvia::Next>);
+static_assert(!HasPlainAddressOf<ruvia::Next::Awaitable>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 

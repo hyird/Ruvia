@@ -34,19 +34,23 @@ public:
         Awaitable& operator=(Awaitable&&) = delete;
 
         [[nodiscard]] auto operator co_await() && {
-            return std::move(task_).operator co_await();
+            return invoke_(state_).operator co_await();
         }
         [[nodiscard]] auto operator co_await() & = delete;
         [[nodiscard]] auto operator co_await() const& = delete;
         [[nodiscard]] auto operator co_await() const&& = delete;
+        const Awaitable* operator&() const = delete;
+        Awaitable* operator&() = delete;
 
     private:
         friend class Next;
 
-        explicit Awaitable(Task<void>&& task) noexcept
-            : task_(std::move(task)) {}
+        constexpr Awaitable(State state, Invoke invoke) noexcept
+            : state_(state),
+              invoke_(invoke) {}
 
-        Task<void> task_;
+        State state_;
+        Invoke invoke_{nullptr};
     };
 
     Next(const Next&) = delete;
@@ -55,6 +59,8 @@ public:
     Next& operator=(Next&&) = delete;
 
     [[nodiscard]] Awaitable operator()() const;
+    const Next* operator&() const = delete;
+    Next* operator&() = delete;
 
 private:
     friend struct detail::NextAccess;
