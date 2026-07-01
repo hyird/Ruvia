@@ -493,11 +493,11 @@ private:
 };
 ```
 
-`RUVIA_VALIDATE_FORM(Body, rules...)` validates `application/x-www-form-urlencoded` bodies and exposes the result through `c.req().valid<Body>(ruvia::Form)`. `RUVIA_VALIDATE_QUERY(Body, rules...)` applies the same flat model parser to the URL query string and exposes the result through `c.req().valid<Body>(ruvia::Query)`. `RUVIA_VALIDATE_PARAM(Body, rules...)` validates route parameters and exposes them through `c.req().valid<Body>(ruvia::Param)`.
+`RUVIA_VALIDATE_FORM(Body, rules...)` validates `application/x-www-form-urlencoded` bodies and exposes the result through `c.req().valid<Body>(ruvia::Form)`. `RUVIA_VALIDATE_QUERY(Body, rules...)` applies the same flat model parser to the URL query string and exposes the result through `c.req().valid<Body>(ruvia::Query)`. `RUVIA_VALIDATE_PARAM(Body, rules...)`, `RUVIA_VALIDATE_HEADER(Body, rules...)`, and `RUVIA_VALIDATE_COOKIE(Body, rules...)` validate route parameters, request headers, and cookies through `ruvia::Param`, `ruvia::Header`, and `ruvia::Cookie`.
 
 Model field options support `RUVIA_DEFAULT(value)`, `RUVIA_OMIT_EMPTY`, and `RUVIA_EMIT_NULL`. `RUVIA_FIELD_NAME("wire_name", field, type, options...)` maps a JSON/form wire name to a C++ field getter/setter, while `RUVIA_RULE_NAME("wire_name", field, rules...)` maps validation errors to that wire name. Field parse state is tracked explicitly, so type mismatches and duplicate known fields are reported by validator middleware as field issues instead of requiring a second body scan. Recursive JSON parsing is depth-limited to protect the request path from excessive nesting.
 
-Validator rules are declared only inside `RUVIA_VALIDATE_JSON` or `RUVIA_VALIDATE_FORM`:
+Validator rules are declared inside validation middleware macros such as `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_VALIDATE_QUERY`, `RUVIA_VALIDATE_PARAM`, `RUVIA_VALIDATE_HEADER`, and `RUVIA_VALIDATE_COOKIE`:
 
 | Rule | Applies to | Issue code | Notes |
 | --- | --- | --- | --- |
@@ -709,6 +709,8 @@ Field model types are Ruvia model types only: `ruvia::String`, `ruvia::Array<T>`
 | `RUVIA_VALIDATE_FORM(Body, rules...)` | Validate an `application/x-www-form-urlencoded` body; result through `c.req().valid<Body>(ruvia::Form)`. |
 | `RUVIA_VALIDATE_QUERY(Body, rules...)` | Validate URL query parameters with the flat form-model parser; result through `c.req().valid<Body>(ruvia::Query)`. |
 | `RUVIA_VALIDATE_PARAM(Body, rules...)` | Validate matched route parameters; result through `c.req().valid<Body>(ruvia::Param)`. |
+| `RUVIA_VALIDATE_HEADER(Body, rules...)` | Validate request headers using lowercase header names; result through `c.req().valid<Body>(ruvia::Header)`. |
+| `RUVIA_VALIDATE_COOKIE(Body, rules...)` | Validate request cookies; result through `c.req().valid<Body>(ruvia::Cookie)`. |
 | `RUVIA_VALIDATE_BODY(target, Body, rules...)` | Lower-level form of the two above with an explicit `ruvia::ValidationTarget`. |
 | `RUVIA_RULE(field, rules...)` | Bind a rule set to a model field; issues are reported under the field's wire name. |
 | `RUVIA_RULE_NAME("wire_name", field, rules...)` | Bind rules and report issues under a custom wire name. |

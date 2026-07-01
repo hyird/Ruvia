@@ -44,6 +44,14 @@ namespace detail {
     throw std::invalid_argument("invalid route parameter");
 }
 
+[[noreturn]] void throwInvalidHeader() {
+    throw std::invalid_argument("invalid request header");
+}
+
+[[noreturn]] void throwInvalidCookie() {
+    throw std::invalid_argument("invalid cookie");
+}
+
 }  // namespace detail
 
 namespace {
