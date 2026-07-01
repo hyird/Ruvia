@@ -258,6 +258,8 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
+        body.append("\ngroups=");
+        appendUnsigned(body, form.groups().size());
         body.append("\nkeys=");
         appendUnsigned(body, form.keys().size());
         body.append("\nvalues=");
@@ -288,7 +290,7 @@ private:
         }
         body.append("\nobj.key-count=");
         appendUnsigned(body, form.object("obj").count("key1"));
-        for (const auto& field : form.fields()) {
+        for (const auto& field : form.entries()) {
             body.append("\n");
             body.append(field.name);
             body.push_back('=');
@@ -312,13 +314,13 @@ private:
                 }
             }
         }
-        for (const auto& entry : form.entries()) {
-            body.append("\nentry=");
-            body.append(entry.name());
+        for (const auto& group : form.groups()) {
+            body.append("\ngroup=");
+            body.append(group.name());
             body.append(";values=");
-            appendUnsigned(body, entry.size());
+            appendUnsigned(body, group.size());
             body.append(";array=");
-            body.append(entry.array() ? "true" : "false");
+            body.append(group.array() ? "true" : "false");
         }
         body.push_back('\n');
         co_return c.text(body);
@@ -332,6 +334,8 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
+        body.append("\ngroups=");
+        appendUnsigned(body, form.groups().size());
         body.append("\nkeys=");
         appendUnsigned(body, form.keys().size());
         body.append("\nvalues=");
