@@ -220,7 +220,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `ruvia::routePath(c)` / `c.req().routePath()` | Read the matched route pattern, such as `/users/:id`, without copying. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
 | `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. Use `c.req().headers()` for the raw parser header view. |
-| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` | Read one decoded query value, all decoded single-value query params with last-wins duplicate semantics, or all values for one key. |
+| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value, all decoded single-value query params with last-wins duplicate semantics, all values for one key, or all decoded query params grouped by key. |
 | `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie list. |
 | `c.req().param(name)` | Read a dynamic route parameter through the same typed helpers, including `c.req().param("*")` for wildcard routes. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
