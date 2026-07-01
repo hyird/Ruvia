@@ -76,7 +76,13 @@ ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
     ruvia::Context::RenderOptions options) {
     std::pmr::string html(c.allocator<char>());
     html.append("<!doctype html><html><head>");
-    html.append(options.head);
+    if (!options.head.empty()) {
+        html.append(options.head);
+    } else if (!options.title.empty()) {
+        html.append("<title>");
+        html.append(options.title);
+        html.append("</title>");
+    }
     html.append("</head><body><main>");
     html.append(body);
     html.append("</main></body></html>");
@@ -284,7 +290,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
         co_return co_await c.render(
             "<h1>rendered body</h1>",
-            {.head = "<title>surface</title>"});
+            {.title = "surface"});
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
