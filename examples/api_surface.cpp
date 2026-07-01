@@ -268,12 +268,13 @@ private:
         appendUnsigned(body, form["tag[]"].texts().size());
         body.append("\ntag-array=");
         body.append(form["tag[]"].isArray() ? "true" : "false");
-        if (const auto* nested = form.getAt("obj.key1")) {
+        const auto nested = form.at("obj.key1");
+        if (auto nestedText = nested.text()) {
             body.append("\nobj.key1=");
-            body.append(nested->text());
+            body.append(*nestedText);
         }
         body.append("\nobj.key-count=");
-        appendUnsigned(body, form.getAllAt("obj.key1").size());
+        appendUnsigned(body, nested.size());
         for (const auto& field : form.fields()) {
             body.append("\n");
             body.append(field.name);
