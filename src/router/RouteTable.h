@@ -300,6 +300,7 @@ private:
         const RouteEntry* route{nullptr};
         Context* context{nullptr};
         std::size_t index{0};
+        bool invoked{false};
     };
 
     struct StreamMiddlewareContinuation {
@@ -308,6 +309,7 @@ private:
         Context* context{nullptr};
         std::size_t index{0};
         RouteStreamDispatchOutcome* outcome{nullptr};
+        bool invoked{false};
     };
 
     void buildPerfectHash();

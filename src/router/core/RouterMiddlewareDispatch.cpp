@@ -8,6 +8,16 @@
 
 namespace ruvia {
 
+namespace {
+
+void storeRepeatedNextError(Context& context) {
+    detail::ContextAccess::setError(
+        context,
+        std::make_exception_ptr(std::logic_error("next() called multiple times")));
+}
+
+}  // namespace
+
 Task<HttpResponse> detail::RouteTable::invokeRoute(const RouteEntry& route, Context& context) const {
     // Hot path: a route with no middleware goes straight to the handler. The
     // Context response slot is only needed when middleware can observe or mutate
@@ -50,7 +60,12 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
 }
 
 Task<void> detail::RouteTable::invokeMiddlewareContinuation(void* target) {
-    const auto* continuation = static_cast<const MiddlewareContinuation*>(target);
+    auto* continuation = static_cast<MiddlewareContinuation*>(target);
+    if (continuation->invoked) {
+        storeRepeatedNextError(*continuation->context);
+        co_return;
+    }
+    continuation->invoked = true;
     try {
         co_await continuation->table->invokeMiddlewareAt(
             *continuation->route,
@@ -81,7 +96,12 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
 }
 
 Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(void* target) {
-    const auto* continuation = static_cast<const StreamMiddlewareContinuation*>(target);
+    auto* continuation = static_cast<StreamMiddlewareContinuation*>(target);
+    if (continuation->invoked) {
+        storeRepeatedNextError(*continuation->context);
+        co_return;
+    }
+    continuation->invoked = true;
     try {
         co_await continuation->table->invokeStreamMiddlewareAt(
             *continuation->route,
