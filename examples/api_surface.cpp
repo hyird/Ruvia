@@ -131,6 +131,12 @@ private:
         body.append(request.query()["tag"]);
         body.append("\nquery-groups=");
         appendUnsigned(body, request.queries().size());
+        body.append("\nquery-tag-group=");
+        appendUnsigned(body, request.queries()["tag"].size());
+        body.append("\nquery-tag-first=");
+        if (auto tag = request.queries().first("tag")) {
+            body.append(*tag);
+        }
         body.append("\ncookies=");
         appendUnsigned(body, request.cookie().size());
         body.append("\nmatched-routes=");
