@@ -1099,6 +1099,12 @@ public:
         std::string_view relativePath,
         std::string_view contentType = {}) const;
 
+    [[nodiscard]] HttpResponse error(
+        std::uint16_t statusCode,
+        std::string_view code,
+        std::string_view message,
+        std::string_view statusText = {}) const;
+
     [[nodiscard]] HttpResponse jsonError(
         std::uint16_t statusCode,
         std::string_view code,

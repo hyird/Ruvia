@@ -403,7 +403,7 @@ HttpResponse Context::redirect(
     return response;
 }
 
-HttpResponse Context::jsonError(
+HttpResponse Context::error(
     std::uint16_t statusCode,
     std::string_view code,
     std::string_view message,
@@ -415,6 +415,14 @@ HttpResponse Context::jsonError(
             .statusText = statusText,
             .code = code,
             .message = message});
+}
+
+HttpResponse Context::jsonError(
+    std::uint16_t statusCode,
+    std::string_view code,
+    std::string_view message,
+    std::string_view statusText) const {
+    return error(statusCode, code, message, statusText);
 }
 
 HttpResponse Context::notFound() const {

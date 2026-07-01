@@ -78,6 +78,7 @@ public:
     RUVIA_GET("/res", responseSlot);
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/render", renderBody);
+    RUVIA_GET("/error", appError);
     RUVIA_GET("/throw", throwError);
     RUVIA_GET("/missing", missing);
     RUVIA_GET("/middleware-return", middlewareReturnHandler, SurfaceReturnMiddleware);
@@ -185,6 +186,10 @@ private:
         co_return co_await c.render(
             "<h1>rendered body</h1>",
             {.head = "<title>surface</title>"});
+    }
+
+    ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
+        co_return c.error(418, "teapot", "short and stout", "I'm a Teapot");
     }
 
     ruvia::Task<ruvia::HttpResponse> throwError(ruvia::Context&) {
