@@ -38,7 +38,7 @@ struct NextAccess final {
 
 using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
-using RouteMiddleware = CallableRef<void, Context&, const Next&>;
+using RouteMiddleware = CallableRef<void, Context&, Next>;
 
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
@@ -368,6 +368,9 @@ private:
         Context& context,
         RouteStreamDispatchOutcome& outcome) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(Next::State state);
+    [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
+        Context& context,
+        std::exception_ptr exception) const;
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
         HttpErrorInfo error,

@@ -58,7 +58,7 @@ inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std
 template <typename Derived>
 class RouteRateLimitMiddleware : public Middleware<Derived> {
 public:
-    Task<void> handle(Context& context, const Next& next) {
+    Task<void> handle(Context& context, Next next) {
         static_assert(
             Derived::ruviaRateLimitMaxRequests > 0,
             "route rate limit max requests must be greater than 0");

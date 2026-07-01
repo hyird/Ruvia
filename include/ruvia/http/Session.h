@@ -64,7 +64,7 @@ namespace ruvia {
 // Uses the "default" Redis connection.
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
-    Task<void> handle(Context& c, const Next& next) {
+    Task<void> handle(Context& c, Next next) {
         const auto cookie = c.req().cookie("sid");
         if (cookie && detail::isValidSessionId(*cookie)) {
             detail::SessionAccess::setId(c, *cookie);

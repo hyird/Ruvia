@@ -2,6 +2,8 @@
 
 #include "ruvia/app/Task.h"
 
+#include <utility>
+
 namespace ruvia::detail {
 
 template <typename Result, typename... Args>
@@ -27,7 +29,7 @@ public:
     }
 
     [[nodiscard]] Task<Result> operator()(Args... args) const {
-        return invoke_(target_, args...);
+        return invoke_(target_, std::forward<Args>(args)...);
     }
 
 private:

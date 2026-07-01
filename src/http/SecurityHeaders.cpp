@@ -94,7 +94,7 @@ void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& 
     }
 }
 
-Task<void> SecurityHeadersMiddleware::handle(Context& context, const Next& next) {
+Task<void> SecurityHeadersMiddleware::handle(Context& context, Next next) {
     applySecurityHeaders(context);
     co_await next();
     applySecurityHeaders(context.res());

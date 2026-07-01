@@ -11,7 +11,7 @@ namespace detail {
 
 class ControllerMiddlewareDescriptor final {
 public:
-    using Invoke = Task<void> (*)(void*, Context&, const Next&);
+    using Invoke = Task<void> (*)(void*, Context&, Next);
     using Create = void* (*)();
     using Destroy = void (*)(void*) noexcept;
 

@@ -22,28 +22,22 @@ template <typename T>
 concept TaskHttpResponse = std::same_as<std::remove_cvref_t<T>, Task<HttpResponse>>;
 
 template <typename MiddlewareT>
-concept VoidHandleMiddleware = requires(
-    MiddlewareT middleware,
-    Context& context,
-    const Next& next) {
-    { middleware.handle(context, next) } -> TaskVoid;
+concept VoidHandleMiddleware = requires {
+    static_cast<Task<void> (MiddlewareT::*)(Context&, Next)>(&MiddlewareT::handle);
 };
 
 template <typename MiddlewareT>
-concept ResponseHandleMiddleware = requires(
-    MiddlewareT middleware,
-    Context& context,
-    const Next& next) {
-    { middleware.handle(context, next) } -> TaskHttpResponse;
+concept ResponseHandleMiddleware = requires {
+    static_cast<Task<HttpResponse> (MiddlewareT::*)(Context&, Next)>(&MiddlewareT::handle);
 };
 
 template <typename MiddlewareT>
 [[nodiscard]] Task<void> invokeResponseMiddleware(
     void* target,
     Context& context,
-    const Next& next) {
+    Next next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
-    auto response = co_await middleware->handle(context, next);
+    auto response = co_await middleware->handle(context, std::move(next));
     context.res(std::move(response));
 }
 
@@ -51,16 +45,16 @@ template <typename MiddlewareT>
 [[nodiscard]] Task<void> invokeMiddleware(
     void* target,
     Context& context,
-    const Next& next) {
+    Next next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
     if constexpr (VoidHandleMiddleware<MiddlewareT>) {
-        return middleware->handle(context, next);
+        return middleware->handle(context, std::move(next));
     } else if constexpr (ResponseHandleMiddleware<MiddlewareT>) {
-        return invokeResponseMiddleware<MiddlewareT>(target, context, next);
+        return invokeResponseMiddleware<MiddlewareT>(target, context, std::move(next));
     } else {
         static_assert(
             VoidHandleMiddleware<MiddlewareT> || ResponseHandleMiddleware<MiddlewareT>,
-            "middleware must implement async Task<void> or Task<HttpResponse> handle(Context&, const ruvia::Next&)");
+            "middleware must implement async Task<void> or Task<HttpResponse> handle(Context&, ruvia::Next)");
     }
 }
 

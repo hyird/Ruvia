@@ -61,10 +61,10 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    const auto next = NextAccess::make(
+    auto next = NextAccess::make(
         Next::State{.table = this, .route = &route, .context = &context, .index = index + 1},
         &RouteTable::invokeMiddlewareContinuation);
-    auto task = middleware(context, next);
+    auto task = middleware(context, std::move(next));
     co_await std::move(task);
     co_return;
 }
@@ -87,11 +87,7 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(Next::State state) {
         exception = std::current_exception();
     }
     if (exception != nullptr) {
-        auto response = co_await table->handleException(
-            *context,
-            exception,
-            true);
-        detail::ContextAccess::setResponse(*context, std::move(response));
+        co_await table->storeMiddlewareExceptionResponse(*context, exception);
     }
 }
 
@@ -107,7 +103,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     }
 
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
-    const auto next = NextAccess::make(
+    auto next = NextAccess::make(
         Next::State{
             .table = this,
             .route = &route,
@@ -115,7 +111,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .outcome = &outcome,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
-    auto task = middleware(context, next);
+    auto task = middleware(context, std::move(next));
     co_await std::move(task);
     co_return;
 }
@@ -140,12 +136,18 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State st
         exception = std::current_exception();
     }
     if (exception != nullptr) {
-        auto response = co_await table->handleException(
-            *context,
-            exception,
-            true);
-        detail::ContextAccess::setResponse(*context, std::move(response));
+        co_await table->storeMiddlewareExceptionResponse(*context, exception);
     }
+}
+
+Task<void> detail::RouteTable::storeMiddlewareExceptionResponse(
+    Context& context,
+    std::exception_ptr exception) const {
+    auto response = co_await handleException(
+        context,
+        exception,
+        true);
+    detail::ContextAccess::setResponse(context, std::move(response));
 }
 
 }  // namespace ruvia

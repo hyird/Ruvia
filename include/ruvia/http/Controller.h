@@ -2,6 +2,8 @@
 
 #include "ruvia/http/ControllerTypes.h"
 
+#include <utility>
+
 #define RUVIA_CONTROLLER_GROUP(prefix, ...) \
     [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept { \
         return prefix; \
@@ -194,10 +196,10 @@ public: \
     } \
     [[nodiscard]] ::ruvia::Task<void> handle( \
         ::ruvia::Context& c, \
-        const ::ruvia::Next& next) { \
+        ::ruvia::Next next) { \
         return ::ruvia::detail::invokeModelValidator< \
             target, \
-            body_type>(*this, c, next); \
+            body_type>(*this, c, ::std::move(next)); \
     }
 
 #define RUVIA_VALIDATE_JSON(body_type, ...) \
