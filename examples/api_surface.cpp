@@ -164,6 +164,12 @@ private:
         }
         body.append("\nquery-groups=");
         appendUnsigned(body, request.queries().size());
+        body.append("\nquery-group-entries=");
+        appendUnsigned(body, request.queries().entries().size());
+        body.append("\nquery-group-keys=");
+        appendUnsigned(body, request.queries().keys().size());
+        body.append("\nquery-group-values=");
+        appendUnsigned(body, request.queries().values().size());
         body.append("\nquery-tag-group=");
         appendUnsigned(body, request.queries()["tag"].size());
         body.append("\nquery-tag-first=");
