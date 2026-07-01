@@ -690,6 +690,21 @@ public:
                 return result;
             }
 
+            [[nodiscard]] Object object(std::string_view name) const {
+                if (path().empty()) {
+                    return Object(form_, name);
+                }
+
+                std::pmr::string childPath(resource());
+                childPath.reserve(path().size() + (name.empty() ? 0 : 1 + name.size()));
+                childPath.append(path());
+                if (!name.empty()) {
+                    childPath.push_back('.');
+                    childPath.append(name);
+                }
+                return Object(form_, std::string_view(childPath.data(), childPath.size()));
+            }
+
         private:
             [[nodiscard]] static std::pmr::memory_resource* resourceFor(
                 const RequestFormData* form) noexcept {
