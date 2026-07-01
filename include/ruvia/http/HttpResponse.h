@@ -150,8 +150,25 @@ class HttpResponse final {
 public:
     class ResponseHeaders final {
     public:
+        using value_type = HttpResponseHeader;
+        using const_iterator = HttpResponseHeaders::const_iterator;
+
         explicit constexpr ResponseHeaders(HttpResponse& response) noexcept
             : response_(&response) {}
+
+        [[nodiscard]] const_iterator begin() const noexcept;
+
+        [[nodiscard]] const_iterator end() const noexcept;
+
+        [[nodiscard]] const_iterator cbegin() const noexcept;
+
+        [[nodiscard]] const_iterator cend() const noexcept;
+
+        [[nodiscard]] std::size_t size() const noexcept;
+
+        [[nodiscard]] bool empty() const noexcept;
+
+        [[nodiscard]] const HttpResponseHeaders& entries() const noexcept;
 
         [[nodiscard]] std::string_view get(std::string_view name) const noexcept;
 
@@ -173,6 +190,7 @@ public:
 
     [[nodiscard]] std::uint16_t statusCode() const noexcept;
     [[nodiscard]] std::string_view statusText() const noexcept;
+    [[nodiscard]] ResponseHeaders headers() noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
     [[nodiscard]] ResponseHeaders responseHeaders() noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
@@ -288,6 +306,34 @@ private:
     std::optional<FileBody> fileBody_;
 };
 
+inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::begin() const noexcept {
+    return entries().begin();
+}
+
+inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::end() const noexcept {
+    return entries().end();
+}
+
+inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::cbegin() const noexcept {
+    return begin();
+}
+
+inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::cend() const noexcept {
+    return end();
+}
+
+inline std::size_t HttpResponse::ResponseHeaders::size() const noexcept {
+    return entries().size();
+}
+
+inline bool HttpResponse::ResponseHeaders::empty() const noexcept {
+    return entries().empty();
+}
+
+inline const HttpResponseHeaders& HttpResponse::ResponseHeaders::entries() const noexcept {
+    return response_->headers_;
+}
+
 inline std::string_view HttpResponse::ResponseHeaders::get(std::string_view name) const noexcept {
     return response_->header(name);
 }
@@ -310,6 +356,10 @@ inline bool HttpResponse::ResponseHeaders::remove(std::string_view name) const {
 
 inline bool HttpResponse::ResponseHeaders::erase(std::string_view name) const {
     return remove(name);
+}
+
+inline HttpResponse::ResponseHeaders HttpResponse::headers() noexcept {
+    return ResponseHeaders(*this);
 }
 
 inline HttpResponse::ResponseHeaders HttpResponse::responseHeaders() noexcept {
