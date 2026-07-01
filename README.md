@@ -220,10 +220,10 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().url()` | Return the absolute request URL, synthesizing it from scheme, `Host`, and target when the request uses origin-form. |
 | `ruvia::routePath(c)` / `c.req().routePath()` | Read the matched route pattern, such as `/users/:id`, without copying. |
 | `c.req().decodedPath()` | Read the request path through the same lazy decoding helpers as params; call `.toString()` only when a decoded string is needed. |
-| `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. Use `c.req().headers()` for the raw parser header view. |
-| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value, all decoded single-value query params with last-wins duplicate semantics, all values for one key, or all decoded query params grouped by key. |
-| `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie list. |
-| `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter through typed helpers, or all decoded route parameters as a request-arena collection. |
+| `c.req().header(name)` / `c.req().header()` | Read one request header, or all request headers with lowercase names. The no-arg object supports `headers["x-foo"]`, `headers.get("x-foo")`, and `headers.values("set-cookie")`; use `c.req().headers()` for the raw parser header view. |
+| `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value, or all decoded single-value query params as an object supporting `query["q"]` / `query.get("q")`; `queries(name)` and `queries()` expose multi-value query parameters. |
+| `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie object with `cookies["session"]` / `cookies.get("session")`. |
+| `c.req().param(name)` / `c.req().param()` | Read one dynamic route parameter through typed helpers, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")`. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy byte span plus its `Content-Type`. |

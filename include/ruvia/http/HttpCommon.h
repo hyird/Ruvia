@@ -9,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ruvia {
@@ -71,7 +72,126 @@ struct RequestNameValueView final {
     std::string_view value;
 };
 
-using RequestNameValueList = std::pmr::vector<RequestNameValueView>;
+class RequestNameValueList final {
+public:
+    using value_type = RequestNameValueView;
+    using iterator = std::pmr::vector<RequestNameValueView>::iterator;
+    using const_iterator = std::pmr::vector<RequestNameValueView>::const_iterator;
+
+    explicit RequestNameValueList(std::pmr::memory_resource* resource = nullptr)
+        : items_(detail::pmrResourceOrDefault(resource)) {}
+
+    RequestNameValueList(const RequestNameValueList&) = default;
+    RequestNameValueList& operator=(const RequestNameValueList&) = default;
+    RequestNameValueList(RequestNameValueList&&) noexcept = default;
+    RequestNameValueList& operator=(RequestNameValueList&&) noexcept = default;
+
+    [[nodiscard]] iterator begin() noexcept {
+        return items_.begin();
+    }
+
+    [[nodiscard]] const_iterator begin() const noexcept {
+        return items_.begin();
+    }
+
+    [[nodiscard]] const_iterator cbegin() const noexcept {
+        return items_.cbegin();
+    }
+
+    [[nodiscard]] iterator end() noexcept {
+        return items_.end();
+    }
+
+    [[nodiscard]] const_iterator end() const noexcept {
+        return items_.end();
+    }
+
+    [[nodiscard]] const_iterator cend() const noexcept {
+        return items_.cend();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return items_.size();
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return items_.empty();
+    }
+
+    [[nodiscard]] RequestNameValueView* data() noexcept {
+        return items_.data();
+    }
+
+    [[nodiscard]] const RequestNameValueView* data() const noexcept {
+        return items_.data();
+    }
+
+    [[nodiscard]] RequestNameValueView& operator[](std::size_t index) noexcept {
+        return items_[index];
+    }
+
+    [[nodiscard]] const RequestNameValueView& operator[](std::size_t index) const noexcept {
+        return items_[index];
+    }
+
+    [[nodiscard]] std::string_view operator[](std::string_view name) const noexcept {
+        return get(name).value_or(std::string_view{});
+    }
+
+    [[nodiscard]] std::optional<std::string_view> get(std::string_view name) const noexcept {
+        for (auto it = items_.rbegin(); it != items_.rend(); ++it) {
+            if (it->name == name) {
+                return it->value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] bool has(std::string_view name) const noexcept {
+        return get(name).has_value();
+    }
+
+    [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
+        std::size_t result = 0;
+        for (const auto& item : items_) {
+            if (item.name == name) {
+                ++result;
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::pmr::vector<std::string_view> values(std::string_view name) const {
+        std::pmr::vector<std::string_view> result(items_.get_allocator().resource());
+        result.reserve(count(name));
+        for (const auto& item : items_) {
+            if (item.name == name) {
+                result.push_back(item.value);
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::span<const RequestNameValueView> span() const noexcept {
+        return std::span<const RequestNameValueView>(items_.data(), items_.size());
+    }
+
+    void reserve(std::size_t count) {
+        items_.reserve(count);
+    }
+
+    void push_back(RequestNameValueView value) {
+        items_.push_back(value);
+    }
+
+    template <typename... Args>
+    RequestNameValueView& emplace_back(Args&&... args) {
+        return items_.emplace_back(std::forward<Args>(args)...);
+    }
+
+private:
+    std::pmr::vector<RequestNameValueView> items_;
+};
 
 class RequestValueGroup final {
 public:

@@ -123,6 +123,8 @@ private:
         appendUnsigned(body, c.req().param().size());
         body.append("\nquery-fields=");
         appendUnsigned(body, request.query().size());
+        body.append("\nquery-tag=");
+        body.append(request.query()["tag"]);
         body.append("\nquery-groups=");
         appendUnsigned(body, request.queries().size());
         body.append("\ncookies=");
@@ -131,6 +133,8 @@ private:
         appendUnsigned(body, request.matchedRoutes().size());
         body.append("\nroute-index=");
         appendUnsigned(body, request.routeIndex());
+        body.append("\nparam-id=");
+        body.append(request.param()["id"]);
         body.append("\ntag-values=");
         appendUnsigned(body, request.queries("tag").size());
         body.append("\nversion=");
