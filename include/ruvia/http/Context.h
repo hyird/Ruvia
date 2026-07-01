@@ -1309,9 +1309,6 @@ public:
     [[nodiscard]] std::string_view method() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
-    [[nodiscard]] std::string_view routePath() const noexcept;
-    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
-    [[nodiscard]] std::size_t routeIndex() const noexcept;
     [[nodiscard]] RequestValue decodedPath() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
@@ -1368,12 +1365,16 @@ public:
 private:
     friend class Context;
     friend Task<RawRequestClone> cloneRawRequest(const ContextRequest& request);
+    friend std::string_view routePath(const Context& context) noexcept;
+    friend std::span<const MatchedRoute> matchedRoutes(const Context& context);
 
     explicit constexpr ContextRequest(const Context& context) noexcept
         : context_(&context) {}
 
     const Context* context_{nullptr};
 
+    [[nodiscard]] std::string_view routePath() const noexcept;
+    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
     [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
 };
 
@@ -2209,10 +2210,6 @@ inline std::string_view ContextRequest::routePath() const noexcept {
 
 inline std::span<const ContextRequest::MatchedRoute> ContextRequest::matchedRoutes() const {
     return context_->requestMatchedRoutes();
-}
-
-inline std::size_t ContextRequest::routeIndex() const noexcept {
-    return context_->routePath_.empty() ? 0 : context_->routeMiddlewareCount_;
 }
 
 inline std::string_view routePath(const Context& context) noexcept {

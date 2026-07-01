@@ -93,6 +93,21 @@ concept HasRequestQueryStringAlias = requires(const T& request) {
     request.queryString();
 };
 
+template <typename T>
+concept HasRequestRoutePathAlias = requires(const T& request) {
+    request.routePath();
+};
+
+template <typename T>
+concept HasRequestMatchedRoutesAlias = requires(const T& request) {
+    request.matchedRoutes();
+};
+
+template <typename T>
+concept HasRequestRouteIndexAlias = requires(const T& request) {
+    request.routeIndex();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -131,6 +146,9 @@ static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestQueryStringAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestRoutePathAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestRouteIndexAlias<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
@@ -343,11 +361,7 @@ private:
         body.append("\ncookie-surface-all=");
         appendUnsigned(body, request.cookie().getAll("surface").size());
         body.append("\nmatched-routes=");
-        appendUnsigned(body, request.matchedRoutes().size());
-        body.append("\nmatched-routes-helper=");
         appendUnsigned(body, ruvia::matchedRoutes(c).size());
-        body.append("\nroute-index=");
-        appendUnsigned(body, request.routeIndex());
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
         body.append("\nrequest-param-id=");
