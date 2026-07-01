@@ -214,6 +214,18 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().set(std::string_view{}, std::string_view{})),
     void>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().get<CurrentUser>(kCurrentUser)),
+    CurrentUser*>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().get<CurrentUser>(kCurrentUser)),
+    const CurrentUser*>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().get<std::string_view>(std::string_view{})),
+    std::string_view*>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().var().get<CurrentUser>(kCurrentUser)),
+    const CurrentUser*>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -517,17 +529,18 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> contextInfo(ruvia::Context& c) {
         const auto vars = c.var();
-        const auto& user = vars[kCurrentUser];
-        const auto* traceId = vars.getIf<std::string_view>("traceId");
+        const auto* user = c.get<CurrentUser>(kCurrentUser);
+        const auto* traceId = c.get<std::string_view>("traceId");
+        const auto* missing = c.get<std::uint32_t>("missing");
         std::pmr::string body(c.allocator<char>());
         body.append("user=");
-        body.append(user.name);
+        body.append(user == nullptr ? "missing" : user->name);
         body.append("\nid=");
-        appendUnsigned(body, user.id);
+        appendUnsigned(body, user == nullptr ? 0 : user->id);
         body.append("\ntrace=");
         body.append(traceId == nullptr ? "missing" : *traceId);
         body.append("\nmissing-var=");
-        body.append(vars.has<std::uint32_t>("missing") ? "false" : "true");
+        body.append(missing == nullptr && !vars.has<std::uint32_t>("missing") ? "true" : "false");
         body.append("\nenv-vars=");
         appendUnsigned(body, c.env().size());
         body.push_back('\n');

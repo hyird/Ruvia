@@ -1519,7 +1519,7 @@ public:
             : context_(&context) {}
 
         template <typename T>
-        [[nodiscard]] T& get(std::string_view name) const {
+        [[nodiscard]] T* get(std::string_view name) const noexcept {
             return context_->template get<T>(name);
         }
 
@@ -1534,7 +1534,7 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] T& get(ContextKey<T> key) const {
+        [[nodiscard]] T* get(ContextKey<T> key) const noexcept {
             return context_->template get<T>(key);
         }
 
@@ -1550,7 +1550,10 @@ public:
 
         template <typename T>
         [[nodiscard]] T& operator[](ContextKey<T> key) const {
-            return get(key);
+            if (auto* value = getIf(key)) {
+                return *value;
+            }
+            throw std::logic_error("context value is not available");
         }
 
     private:
@@ -1563,7 +1566,7 @@ public:
             : context_(&context) {}
 
         template <typename T>
-        [[nodiscard]] const T& get(std::string_view name) const {
+        [[nodiscard]] const T* get(std::string_view name) const noexcept {
             return context_->template get<T>(name);
         }
 
@@ -1578,7 +1581,7 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] const T& get(ContextKey<T> key) const {
+        [[nodiscard]] const T* get(ContextKey<T> key) const noexcept {
             return context_->template get<T>(key);
         }
 
@@ -1594,7 +1597,10 @@ public:
 
         template <typename T>
         [[nodiscard]] const T& operator[](ContextKey<T> key) const {
-            return get(key);
+            if (const auto* value = getIf(key)) {
+                return *value;
+            }
+            throw std::logic_error("context value is not available");
         }
 
     private:
@@ -1688,8 +1694,8 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T& get(std::string_view name) {
-        return values().template get<T>(name);
+    [[nodiscard]] T* get(std::string_view name) noexcept {
+        return getIf<T>(name);
     }
 
     template <typename T>
@@ -1699,12 +1705,8 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] const T& get(std::string_view name) const {
-        const auto* store = valuesIf();
-        if (store == nullptr) {
-            throw std::logic_error("context value is not available");
-        }
-        return store->template get<T>(name);
+    [[nodiscard]] const T* get(std::string_view name) const noexcept {
+        return getIf<T>(name);
     }
 
     template <typename T>
@@ -1714,7 +1716,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T& get(ContextKey<T> key) {
+    [[nodiscard]] T* get(ContextKey<T> key) noexcept {
         return get<T>(key.name());
     }
 
@@ -1724,7 +1726,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] const T& get(ContextKey<T> key) const {
+    [[nodiscard]] const T* get(ContextKey<T> key) const noexcept {
         return get<T>(key.name());
     }
 
@@ -1734,7 +1736,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T& var(std::string_view name) {
+    [[nodiscard]] T* var(std::string_view name) noexcept {
         return get<T>(name);
     }
 
@@ -1744,7 +1746,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] const T& var(std::string_view name) const {
+    [[nodiscard]] const T* var(std::string_view name) const noexcept {
         return get<T>(name);
     }
 
@@ -1754,7 +1756,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T& var(ContextKey<T> key) {
+    [[nodiscard]] T* var(ContextKey<T> key) noexcept {
         return get<T>(key.name());
     }
 
@@ -1764,7 +1766,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] const T& var(ContextKey<T> key) const {
+    [[nodiscard]] const T* var(ContextKey<T> key) const noexcept {
         return get<T>(key.name());
     }
 
