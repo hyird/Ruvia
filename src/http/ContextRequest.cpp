@@ -310,14 +310,8 @@ const RequestNameValueList& Context::routeParams() const {
     return *routeParams_;
 }
 
-ParamValue Context::routeParam(std::string_view name) const noexcept {
-    for (std::size_t i = 0; i < paramCount_; ++i) {
-        if (paramNames_[i] == name) {
-            return ParamValue(paramValues_[i], resource(), RequestValue::DecodeMode::kPercent);
-        }
-    }
-
-    return ParamValue(std::nullopt, resource(), RequestValue::DecodeMode::kPercent);
+ParamValue Context::routeParam(std::string_view name) const {
+    return ParamValue(routeParams().get(name), resource());
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {

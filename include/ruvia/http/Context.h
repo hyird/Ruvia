@@ -977,7 +977,7 @@ public:
 
     [[nodiscard]] MultipartReader multipartReader() const;
 
-    [[nodiscard]] ParamValue param(std::string_view name) const noexcept;
+    [[nodiscard]] ParamValue param(std::string_view name) const;
 
     [[nodiscard]] const RequestNameValueList& param() const;
 
@@ -1323,7 +1323,7 @@ public:
         return request_.cookie(name);
     }
 
-    [[nodiscard]] ParamValue param(std::string_view name) const noexcept {
+    [[nodiscard]] ParamValue param(std::string_view name) const {
         return routeParam(name);
     }
 
@@ -1659,7 +1659,7 @@ private:
         ContextRequest::ParseBodyOptions options) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
-    [[nodiscard]] ParamValue routeParam(std::string_view name) const noexcept;
+    [[nodiscard]] ParamValue routeParam(std::string_view name) const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
@@ -1956,7 +1956,7 @@ inline MultipartReader ContextRequest::multipartReader() const {
     return context_->requestMultipartReader();
 }
 
-inline ParamValue ContextRequest::param(std::string_view name) const noexcept {
+inline ParamValue ContextRequest::param(std::string_view name) const {
     return context_->routeParam(name);
 }
 

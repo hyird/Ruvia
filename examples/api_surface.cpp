@@ -31,6 +31,7 @@ static_assert(!std::is_copy_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_constructible_v<ruvia::Next::Awaitable>);
 static_assert(!std::is_move_assignable_v<ruvia::Next::Awaitable>);
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
+static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};
