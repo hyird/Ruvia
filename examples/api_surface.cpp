@@ -75,6 +75,7 @@ public:
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/array-buffer", arrayBufferBody);
+    RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/discard", discard);
     RUVIA_PUT("/items/:id", replaceItem);
     RUVIA_PATCH("/items/:id", patchItem);
@@ -225,6 +226,17 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("array-buffer bytes=");
         appendUnsigned(body, bytes.size());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> blobBody(ruvia::Context& c) {
+        const auto blob = co_await c.req().blob();
+        std::pmr::string body(c.allocator<char>());
+        body.append("blob bytes=");
+        appendUnsigned(body, blob.size());
+        body.append("\ntype=");
+        body.append(blob.type());
         body.push_back('\n');
         co_return c.text(body);
     }
