@@ -112,6 +112,14 @@ public:
     }
 };
 
+class SurfacePreDirectResponseMiddleware final : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
+        c.res().setHeader("X-Surface-Pre-Direct", "true");
+        co_await next();
+    }
+};
+
 class ApiSurfaceController final : public ruvia::Controller<ApiSurfaceController> {
 public:
     RUVIA_CONTROLLER_GROUP("/surface", SurfaceContextMiddleware)
@@ -128,6 +136,7 @@ public:
     RUVIA_GET_STREAM("/stream-throw", streamThrow);
     RUVIA_GET("/missing", missing);
     RUVIA_GET("/middleware-return", middlewareReturnHandler, SurfaceReturnMiddleware);
+    RUVIA_GET("/pre-direct-res", preDirectResponse, SurfacePreDirectResponseMiddleware);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
@@ -314,6 +323,10 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> middlewareReturnHandler(ruvia::Context& c) {
         co_return c.text("handler should not run\n", 500);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> preDirectResponse(ruvia::Context& c) {
+        co_return c.text("pre direct response\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
