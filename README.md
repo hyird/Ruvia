@@ -243,7 +243,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.header(name, value)` | Add or replace a response header. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
 | `c.deleteCookie(name, options)` | Expire a response cookie with `Max-Age=0`. |
-| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. |
+| `c.res()` / `c.res(response)` | Access the final response object or replace it to short-circuit middleware. Use `c.res().appendHeader(...)` to append a response header after `co_await next()`. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var<T>(key)` | Store and read request-local values across middleware and handlers. |

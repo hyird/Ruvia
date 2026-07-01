@@ -167,6 +167,16 @@ void HttpResponse::setHeader(std::string_view key, std::string_view value) {
     setHeaderValidated(key, value, detail::classifyResponseHeaderName(key));
 }
 
+void HttpResponse::appendHeader(std::string_view key, std::string_view value) {
+    if (!isValidHttpHeaderName(key)) {
+        throw std::invalid_argument("invalid HTTP header name");
+    }
+    if (!isValidHttpHeaderValue(value)) {
+        throw std::invalid_argument("invalid HTTP header value");
+    }
+    appendHeaderValidated(key, value, detail::classifyResponseHeaderName(key));
+}
+
 void HttpResponse::setHeaderValidated(
     std::string_view key,
     std::string_view value,
