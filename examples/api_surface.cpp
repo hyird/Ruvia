@@ -217,6 +217,10 @@ private:
         }
         body.append("\ntag-count=");
         appendUnsigned(body, form.count("tag"));
+        if (const auto* tag = form.get("tag")) {
+            body.append("\ntag-single=");
+            body.append(tag->value);
+        }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         for (const auto& field : form.fields()) {
@@ -260,6 +264,10 @@ private:
         appendUnsigned(body, form.entries().size());
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
+        if (const auto* tag = form.get("tag")) {
+            body.append("\ntag-single=");
+            body.append(tag->value);
+        }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         if (const auto* title = form.get("title")) {
