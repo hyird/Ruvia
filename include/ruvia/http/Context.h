@@ -470,6 +470,104 @@ public:
             const Entry* entry_{nullptr};
         };
 
+        class PathValue final {
+        public:
+            explicit PathValue(std::pmr::vector<const RequestFormField*>&& fields)
+                : fields_(std::move(fields)) {
+                for (const auto* field : fields_) {
+                    array_ = array_ || (field != nullptr && field->array);
+                }
+            }
+
+            [[nodiscard]] explicit operator bool() const noexcept {
+                return exists();
+            }
+
+            [[nodiscard]] bool exists() const noexcept {
+                return field() != nullptr;
+            }
+
+            [[nodiscard]] const RequestFormField* field() const noexcept {
+                return fields_.empty() ? nullptr : fields_.back();
+            }
+
+            [[nodiscard]] const RequestFormField* operator->() const noexcept {
+                return field();
+            }
+
+            [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
+                return std::span<const RequestFormField* const>(fields_.data(), fields_.size());
+            }
+
+            [[nodiscard]] std::size_t size() const noexcept {
+                return fields_.size();
+            }
+
+            [[nodiscard]] bool empty() const noexcept {
+                return fields_.empty();
+            }
+
+            [[nodiscard]] bool multiple() const noexcept {
+                return fields_.size() > 1;
+            }
+
+            [[nodiscard]] bool isArray() const noexcept {
+                return array_;
+            }
+
+            [[nodiscard]] bool isFile() const noexcept {
+                const auto* selected = field();
+                return selected != nullptr && selected->isFile();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> text() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr) {
+                    return std::nullopt;
+                }
+                return std::string_view(selected->value.data(), selected->value.size());
+            }
+
+            [[nodiscard]] std::pmr::vector<std::string_view> texts() const {
+                std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+                result.reserve(fields_.size());
+                for (const auto* field : fields_) {
+                    if (field != nullptr) {
+                        result.emplace_back(field->value.data(), field->value.size());
+                    }
+                }
+                return result;
+            }
+
+            [[nodiscard]] std::optional<RequestBlob> blob() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr) {
+                    return std::nullopt;
+                }
+                return selected->blob();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> fileName() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr || !selected->isFile()) {
+                    return std::nullopt;
+                }
+                return selected->fileName();
+            }
+
+            [[nodiscard]] std::optional<std::string_view> mediaType() const noexcept {
+                const auto* selected = field();
+                if (selected == nullptr || !selected->isFile()) {
+                    return std::nullopt;
+                }
+                return selected->mediaType();
+            }
+
+        private:
+            std::pmr::vector<const RequestFormField*> fields_;
+            bool array_{false};
+        };
+
         explicit RequestFormData(std::pmr::memory_resource* resource)
             : fields_(resource),
               entries_(resource) {}
@@ -507,6 +605,10 @@ public:
 
         [[nodiscard]] Value operator[](std::string_view name) const noexcept {
             return Value(fields_.get_allocator().resource(), entry(name));
+        }
+
+        [[nodiscard]] PathValue at(std::string_view dotPath) const {
+            return PathValue(getAllAt(dotPath));
         }
 
         [[nodiscard]] bool has(std::string_view name) const noexcept {
