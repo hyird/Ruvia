@@ -1319,9 +1319,6 @@ public:
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& cookie() const;
     [[nodiscard]] const RequestNameValueList& cookies() const;
-    [[nodiscard]] std::string_view remoteAddress() const noexcept;
-    [[nodiscard]] std::string_view clientCertificate() const noexcept;
-    [[nodiscard]] bool isSecure() const noexcept;
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
@@ -2192,7 +2189,7 @@ inline std::pmr::string ContextRequest::url() const {
         return result;
     }
 
-    result.append(isSecure() ? "https://" : "http://");
+    result.append(raw().isSecure() ? "https://" : "http://");
     result.append(host->data(), host->size());
     result.append(requestTarget.data(), requestTarget.size());
     return result;
@@ -2272,18 +2269,6 @@ inline const RequestNameValueList& ContextRequest::cookie() const {
 
 inline const RequestNameValueList& ContextRequest::cookies() const {
     return context_->requestCookies();
-}
-
-inline std::string_view ContextRequest::remoteAddress() const noexcept {
-    return raw().remoteAddress();
-}
-
-inline std::string_view ContextRequest::clientCertificate() const noexcept {
-    return raw().clientCertificate();
-}
-
-inline bool ContextRequest::isSecure() const noexcept {
-    return raw().isSecure();
 }
 
 inline Task<std::string_view> ContextRequest::text() const {
