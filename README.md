@@ -258,13 +258,13 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
 | `c.jsonError(status, code, message)` | Compatibility alias for `c.error(status, code, message)`. |
-| `c.notFound()` | Return the framework JSON 404 response. |
+| `co_await c.notFound()` | Return a 404 response through the configured error handler when one is installed; otherwise return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |
 
 A few lifetime and ownership rules are worth keeping close:
 
-- Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics. Context response helpers, including `c.error()` / `c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
+- Request headers are read through `c.req().header(...)`; `c.header(...)` follows Hono-style response header semantics. Context response helpers, including `c.error()` / `co_await c.notFound()`, and `c.res(response)` preserve prepared status, headers, and cookies.
 - Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
 - Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await c.req().cloneRawRequest()` for a request-arena metadata/body snapshot after validation or body reads, `ruvia::matchedRoutes(c)` / `ruvia::routePath(c, -1)` / `c.req().routeIndex()` for Hono-style route debugging metadata, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access including dot notation through `body.at(...)`, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.

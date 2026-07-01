@@ -534,10 +534,14 @@ HttpResponse Context::jsonError(
     return error(statusCode, code, message, statusText);
 }
 
-HttpResponse Context::notFound() const {
-    auto response = makeErrorResponse(resource(), HttpErrorInfo{.statusCode = 404});
+Task<HttpResponse> Context::notFound() {
+    auto response = co_await makeErrorResponse(
+        *this,
+        HttpErrorInfo{.statusCode = 404, .message = "route not found"},
+        false,
+        errorHandler_);
     applyResponseState(response, 404, {});
-    return response;
+    co_return response;
 }
 
 HttpResponse Context::streamingHead(std::string_view contentType) const {

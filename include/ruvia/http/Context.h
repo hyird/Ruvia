@@ -1377,7 +1377,7 @@ public:
         std::string_view message,
         std::string_view statusText = {}) const;
 
-    [[nodiscard]] HttpResponse notFound() const;
+    [[nodiscard]] Task<HttpResponse> notFound();
 
 private:
     [[nodiscard]] HttpResponse streamingHead(std::string_view contentType = {}) const;
@@ -1468,6 +1468,7 @@ private:
     [[maybe_unused]] detail::RedisRegistry* redis_{nullptr};
     [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
+    HttpErrorHandler errorHandler_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     BodyReader* bodyReader_{nullptr};
     detail::RequestBodyLoader* bodyLoader_{nullptr};
