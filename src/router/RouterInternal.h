@@ -60,6 +60,7 @@ public:
     }
 
     Router& setErrorHandler(HttpErrorHandler handler) noexcept;
+    Router& setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
     void finalize();
     [[nodiscard]] const RouteTable& routeTable() const;
 
@@ -208,6 +209,7 @@ private:
     std::pmr::vector<MiddlewareLifetime> middlewareLifetimes_;
     std::unique_ptr<RouteTable, RouteTableDeleter> routeTable_;
     HttpErrorHandler errorHandler_{nullptr};
+    HttpNotFoundHandler notFoundHandler_{nullptr};
     bool finalized_{false};
 };
 

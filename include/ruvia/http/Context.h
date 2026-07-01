@@ -2051,6 +2051,7 @@ private:
     [[maybe_unused]] detail::HttpClientRegistry* httpClients_{nullptr};
     detail::RateLimiter* rateLimiter_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
+    HttpNotFoundHandler notFoundHandler_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
     BodyReader* bodyReader_{nullptr};
     detail::RequestBodyLoader* bodyLoader_{nullptr};

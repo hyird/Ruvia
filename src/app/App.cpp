@@ -124,6 +124,7 @@ void App::run() {
         }
         auto& routes = detail::RouterImpl::from(state.router);
         routes.setErrorHandler(state.errorHandler);
+        routes.setNotFoundHandler(state.notFoundHandler);
         if (!state.routeGraphFinalized) {
             routes.prependMiddlewares(state.globalMiddlewares);
             routes.finalize();

@@ -45,8 +45,20 @@ Router& detail::RouterImpl::setErrorHandler(HttpErrorHandler handler) noexcept {
     return owner;
 }
 
+Router& detail::RouterImpl::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
+    notFoundHandler_ = handler;
+    if (routeTable_) {
+        routeTable_->setNotFoundHandler(handler);
+    }
+    return owner;
+}
+
 void detail::RouteTable::setErrorHandler(HttpErrorHandler handler) noexcept {
     errorHandler_ = handler;
+}
+
+void detail::RouteTable::setNotFoundHandler(HttpNotFoundHandler handler) noexcept {
+    notFoundHandler_ = handler;
 }
 
 detail::RouterImpl::MiddlewareLifetime::MiddlewareLifetime(
@@ -134,6 +146,7 @@ void detail::RouterImpl::finalize() {
     routeTable_.reset(constructPmrObject<RouteTable>(resource_, buildRouteTable()));
     routeTable_.get_deleter().resource = resource_;
     routeTable_->setErrorHandler(errorHandler_);
+    routeTable_->setNotFoundHandler(notFoundHandler_);
     finalized_ = true;
 }
 

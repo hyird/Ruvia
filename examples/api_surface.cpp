@@ -96,6 +96,13 @@ ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
     co_return c.html(html);
 }
 
+ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
+    co_return c.text(
+        "surface not found\n",
+        404,
+        {{"X-Surface-Not-Found", "true"}});
+}
+
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next next) {
@@ -647,5 +654,6 @@ int main() {
     ruvia::app()
         .setListenAddress("0.0.0.0", 8088)
         .setThreadNum(2)
+        .notFound(&surfaceNotFound)
         .run();
 }

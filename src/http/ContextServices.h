@@ -50,6 +50,10 @@ public:
         return errorHandler_;
     }
 
+    [[nodiscard]] HttpNotFoundHandler notFoundHandler() const noexcept {
+        return notFoundHandler_;
+    }
+
     [[nodiscard]] BodyReader* bodyReader() const noexcept {
         return bodyReader_;
     }
@@ -100,12 +104,19 @@ public:
         return services;
     }
 
+    [[nodiscard]] ContextServices withNotFoundHandler(HttpNotFoundHandler value) const noexcept {
+        auto services = *this;
+        services.notFoundHandler_ = value;
+        return services;
+    }
+
 private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
     HttpClientRegistry* httpClients_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
+    HttpNotFoundHandler notFoundHandler_{nullptr};
 
     BodyReader* bodyReader_{nullptr};
     RequestBodyLoader* bodyLoader_{nullptr};

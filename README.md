@@ -260,7 +260,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
 | `c.jsonError(status, code, message)` | Compatibility alias for `c.error(status, code, message)`. |
-| `co_await c.notFound()` | Return a 404 response through the configured error handler when one is installed; otherwise return the framework JSON 404 response. |
+| `co_await c.notFound()` | Return the configured Not Found response from `app().notFound(...)`; otherwise return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |
 
@@ -642,6 +642,18 @@ ruvia::Task<ruvia::HttpResponse> errors(ruvia::Context& c, ruvia::HttpErrorInfo 
 
 ruvia::app()
     .setErrorHandler(&errors)
+    .run();
+```
+
+Configure a Not Found handler separately when route misses or explicit `co_await c.notFound()` should use an application 404 response:
+
+```cpp
+ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
+    co_return c.text("not found\n", 404);
+}
+
+ruvia::app()
+    .notFound(&missing)
     .run();
 ```
 

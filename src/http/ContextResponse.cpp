@@ -562,11 +562,15 @@ HttpResponse Context::jsonError(
 }
 
 Task<HttpResponse> Context::notFound() {
+    if (notFoundHandler_ != nullptr) {
+        co_return co_await notFoundHandler_(*this);
+    }
+
     auto response = co_await makeErrorResponse(
         *this,
         HttpErrorInfo{.statusCode = 404, .message = "route not found"},
         false,
-        errorHandler_);
+        nullptr);
     applyResponseState(response, 404, {});
     co_return response;
 }

@@ -39,6 +39,7 @@ inline Context::Context(
       httpClients_(services.httpClients()),
       rateLimiter_(services.rateLimiter()),
       errorHandler_(services.errorHandler()),
+      notFoundHandler_(services.notFoundHandler()),
       routeRateLimitScope_(routeRateLimitScope),
       bodyReader_(services.bodyReader()),
       bodyLoader_(services.bodyLoader()),
