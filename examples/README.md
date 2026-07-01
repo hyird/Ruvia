@@ -12,6 +12,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled. They double as 
 | `ruvia_example_websocket` | `websocket.cpp` | WebSocket upgrade routes, subprotocol options, heartbeat options, text/binary echo and close. |
 | `ruvia_example_ops` | `ops.cpp` | Security headers middleware, route-level per-IP rate limiting, and health/readiness response helpers wired through controller macros. |
 | `ruvia_example_middleware_next` | `middleware_next.cpp` | Middleware value `Next` and one-shot `co_await next()` signature coverage. |
+| `ruvia_example_middleware_next_guard` | `middleware_next_guard.cpp` | Regression guard for expired middleware `Next` continuations. |
 | `ruvia_example_http2_stream_table_guard` | `http2_stream_table_guard.cpp` | Internal HTTP/2 stream-table snapshot coverage for waiter-resume reentrancy. |
 | `ruvia_example_auth_jwt` | `auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
 | `ruvia_example_database` | `database.cpp` | DB configuration, query, execute, streaming query, transaction and optional migration. Built only with `RUVIA_ENABLE_MARIADB=ON`. |

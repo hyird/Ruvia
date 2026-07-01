@@ -91,7 +91,8 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto next = NextAccess::make(
+    auto& next = NextAccess::makeIn(
+        context.resource(),
         Next::State{
             .table = this,
             .route = &route,
@@ -140,7 +141,8 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     const auto& middleware = middlewareFrames_[route.middlewareOffset() + index];
     auto& control = *makeNextControl(context);
     auto controlScope = makeNextControlScope(control);
-    auto next = NextAccess::make(
+    auto& next = NextAccess::makeIn(
+        context.resource(),
         Next::State{
             .table = this,
             .route = &route,

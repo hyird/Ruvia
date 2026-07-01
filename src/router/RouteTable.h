@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -33,6 +34,15 @@ struct NextAccess final {
         Next::State state,
         Next::Invoke invoke) noexcept {
         return Next(state, invoke);
+    }
+
+    [[nodiscard]] static Next& makeIn(
+        std::pmr::memory_resource* resource,
+        Next::State state,
+        Next::Invoke invoke) {
+        auto* resolved = pmrResourceOrDefault(resource);
+        auto* storage = resolved->allocate(sizeof(Next), alignof(Next));
+        return *new (storage) Next(state, invoke);
     }
 };
 
