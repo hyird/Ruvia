@@ -679,12 +679,16 @@ public:
             return nullptr;
         }
 
-        [[nodiscard]] const RequestFormField* get(std::string_view name) const noexcept {
+        [[nodiscard]] const RequestFormField* field(std::string_view name) const noexcept {
             const auto* formEntry = entry(name);
             if (formEntry == nullptr) {
                 return nullptr;
             }
             return formEntry->field();
+        }
+
+        [[nodiscard]] Value get(std::string_view name) const noexcept {
+            return (*this)[name];
         }
 
         [[nodiscard]] Value operator[](std::string_view name) const noexcept {
