@@ -1678,13 +1678,13 @@ public:
     }
 
     template <typename T>
-    std::decay_t<T>& set(std::string_view name, T&& value) {
-        return values().set(name, std::forward<T>(value));
+    void set(std::string_view name, T&& value) {
+        values().set(name, std::forward<T>(value));
     }
 
     template <typename T, typename ValueT>
-    T& set(ContextKey<T> key, ValueT&& value) {
-        return values().template setAs<T>(key.name(), std::forward<ValueT>(value));
+    void set(ContextKey<T> key, ValueT&& value) {
+        values().template setAs<T>(key.name(), std::forward<ValueT>(value));
     }
 
     template <typename T>

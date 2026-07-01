@@ -249,7 +249,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.res()` / `c.res(response)` | Access the current response slot or replace it to short-circuit middleware. Reading `c.res()` does not by itself finalize the context; handler returns, downstream responses, and `c.res(response)` do. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape; when replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
-| `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. Use `c.var()[typedKey]`, `c.var().get<T>("name")`, or `c.var().getIf<T>("name")` for the Hono-style variable facade; `c.getIf<T>(key)` / `c.varIf<T>(key)` remain available when missing values should not throw. |
+| `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. `c.set(...)` returns `void`, matching Hono's non-chainable setter shape. Use `c.var()[typedKey]`, `c.var().get<T>("name")`, or `c.var().getIf<T>("name")` for the Hono-style variable facade; `c.getIf<T>(key)` / `c.varIf<T>(key)` remain available when missing values should not throw. |
 | `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; `newResponse` is the Hono-named alias for the same response-init shape. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
