@@ -171,8 +171,8 @@ static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestQueryStringAlias<ruvia::ContextRequest>);
-static_assert(!HasRequestRoutePathAlias<ruvia::ContextRequest>);
-static_assert(!HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
+static_assert(HasRequestRoutePathAlias<ruvia::ContextRequest>);
+static_assert(HasRequestMatchedRoutesAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRouteIndexAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHttpVersionAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
@@ -323,6 +323,8 @@ private:
         body.append(ruvia::routePath(c, 0));
         body.append("\nroute-path-last=");
         body.append(ruvia::routePath(c, -1));
+        body.append("\nrequest-route-path=");
+        body.append(request.routePath());
         body.append("\nheaders=");
         appendUnsigned(body, c.req().header().size());
         body.append("\nheader-entries=");
@@ -393,6 +395,8 @@ private:
         appendUnsigned(body, request.cookie().getAll("surface").size());
         body.append("\nmatched-routes=");
         appendUnsigned(body, ruvia::matchedRoutes(c).size());
+        body.append("\nrequest-matched-routes=");
+        appendUnsigned(body, request.matchedRoutes().size());
         body.append("\nparam-id=");
         body.append(request.param()["id"]);
         body.append("\nrequest-param-id=");

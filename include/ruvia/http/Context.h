@@ -1366,6 +1366,10 @@ public:
 
     [[nodiscard]] const RequestNameValueList& param() const;
 
+    [[nodiscard]] std::string_view routePath() const noexcept;
+
+    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
+
 private:
     friend class Context;
     friend Task<RawRequestClone> cloneRawRequest(const ContextRequest& request);
@@ -1377,8 +1381,6 @@ private:
 
     const Context* context_{nullptr};
 
-    [[nodiscard]] std::string_view routePath() const noexcept;
-    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
     [[nodiscard]] Task<RawRequestClone> cloneRawRequest() const;
 };
 
