@@ -139,6 +139,13 @@ template <ValidationTarget Target, typename BodyT>
         co_return co_await c.req().template json<BodyT>();
     } else if constexpr (Target == ValidationTarget::kForm) {
         co_return co_await c.req().template form<BodyT>();
+    } else if constexpr (Target == ValidationTarget::kQuery) {
+        static_assert(FormBody<BodyT>::value, "query validator body type must use RUVIA_MODEL");
+        auto parsed = FormBody<BodyT>::parse(c.req().queryString(), c.resource());
+        if (!parsed) {
+            detail::throwInvalidQuery();
+        }
+        co_return std::move(*parsed);
     } else {
         static_assert(alwaysFalse<BodyT>, "unsupported validator target");
     }

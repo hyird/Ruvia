@@ -36,6 +36,10 @@ namespace detail {
     throw std::invalid_argument("invalid form body");
 }
 
+[[noreturn]] void throwInvalidQuery() {
+    throw std::invalid_argument("invalid query");
+}
+
 }  // namespace detail
 
 namespace {

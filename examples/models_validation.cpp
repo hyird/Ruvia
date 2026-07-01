@@ -1,5 +1,7 @@
+#include <charconv>
 #include <cstdint>
 #include <string_view>
+#include <system_error>
 
 #include "ruvia/app/App.h"
 #include "ruvia/http/Controller.h"
@@ -35,6 +37,11 @@ RUVIA_MODEL(ContactForm,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(email, ruvia::String),
     RUVIA_FIELD(message, ruvia::String)
+);
+
+RUVIA_MODEL(SearchQuery,
+    RUVIA_FIELD(q, ruvia::String),
+    RUVIA_FIELD(page, ruvia::UInt32)
 );
 
 RUVIA_MODEL(Category,
@@ -107,6 +114,16 @@ public:
             RUVIA_MIN(10, "message is too short")))
 };
 
+class SearchQueryValidator final : public ruvia::Middleware<SearchQueryValidator> {
+public:
+    RUVIA_VALIDATE_QUERY(SearchQuery,
+        RUVIA_RULE(q,
+            RUVIA_REQUIRED("query is required"),
+            RUVIA_MIN(2, "query is too short")),
+        RUVIA_RULE(page,
+            RUVIA_MIN(1, "page is too small")))
+};
+
 class ModelController final : public ruvia::Controller<ModelController> {
 public:
     RUVIA_CONTROLLER_GROUP("/models")
@@ -114,6 +131,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_POST("/register", registerUser, RegisterValidator);
     RUVIA_POST("/contact", contact, ContactFormValidator);
+    RUVIA_GET("/search", search, SearchQueryValidator);
     RUVIA_GET("/category", category);
     RUVIA_ROUTES_END
 
@@ -136,6 +154,23 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
         body.append(form.name()->view());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
+        const auto& query = c.req().valid<SearchQuery>(ruvia::Query);
+        std::pmr::string body(c.allocator<char>());
+        body.append("search=");
+        body.append(query.q()->view());
+        if (query.page()) {
+            body.append("\npage=");
+            char buffer[16]{};
+            const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), query.page()->value);
+            if (ec == std::errc{}) {
+                body.append(buffer, static_cast<std::size_t>(ptr - buffer));
+            }
+        }
         body.push_back('\n');
         co_return c.text(body);
     }
