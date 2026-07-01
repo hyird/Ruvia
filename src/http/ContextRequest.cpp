@@ -70,6 +70,16 @@ namespace {
     return count;
 }
 
+void appendLowerAscii(std::pmr::string& output, std::string_view input) {
+    for (const char ch : input) {
+        auto c = static_cast<unsigned char>(ch);
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<unsigned char>(c - 'A' + 'a');
+        }
+        output.push_back(static_cast<char>(c));
+    }
+}
+
 [[nodiscard]] bool fieldNameIsArray(std::string_view name) noexcept {
     return name.size() >= 2 && name.substr(name.size() - 2) == "[]";
 }
@@ -121,6 +131,26 @@ void appendParsedBodyField(
 }
 
 }  // namespace
+
+const RequestNameValueList& Context::requestHeaders() const {
+    if (requestHeaders_ == nullptr) {
+        const auto rawHeaders = request_.headers();
+        auto& names = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
+        auto& headers = memory_.emplace<RequestNameValueList>(resource());
+        names.reserve(rawHeaders.size());
+        headers.reserve(rawHeaders.size());
+        for (const auto& rawHeader : rawHeaders) {
+            auto& name = names.emplace_back();
+            name.reserve(rawHeader.name.size());
+            appendLowerAscii(name, rawHeader.name);
+            headers.push_back(RequestNameValueView{
+                .name = std::string_view(name.data(), name.size()),
+                .value = rawHeader.value});
+        }
+        requestHeaders_ = &headers;
+    }
+    return *requestHeaders_;
+}
 
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
