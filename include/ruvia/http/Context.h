@@ -932,7 +932,7 @@ public:
     [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
-    [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
+    [[nodiscard]] QueryValue query(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
     [[nodiscard]] const RequestValueGroupList& queries() const;
@@ -1315,8 +1315,8 @@ public:
         return request_.header(name);
     }
 
-    [[nodiscard]] QueryValue query(std::string_view name) const noexcept {
-        return request_.query(name);
+    [[nodiscard]] QueryValue query(std::string_view name) const {
+        return req().query(name);
     }
 
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept {
@@ -1876,8 +1876,8 @@ inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
     return context_->requestAccepts(mediaType);
 }
 
-inline QueryValue ContextRequest::query(std::string_view name) const noexcept {
-    return raw().query(name);
+inline QueryValue ContextRequest::query(std::string_view name) const {
+    return QueryValue(context_->requestQuery().get(name), context_->resource());
 }
 
 inline const RequestNameValueList& ContextRequest::query() const {
