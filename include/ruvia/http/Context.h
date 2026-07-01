@@ -1313,7 +1313,6 @@ public:
     [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
     [[nodiscard]] std::size_t routeIndex() const noexcept;
     [[nodiscard]] RequestValue decodedPath() const noexcept;
-    [[nodiscard]] std::string_view queryString() const noexcept;
     [[nodiscard]] std::string_view httpVersion() const noexcept;
     [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
@@ -2242,10 +2241,6 @@ inline std::string_view routePath(const Context& context, std::ptrdiff_t index) 
 
 inline RequestValue ContextRequest::decodedPath() const noexcept {
     return raw().decodedPath();
-}
-
-inline std::string_view ContextRequest::queryString() const noexcept {
-    return raw().queryString();
 }
 
 inline std::string_view ContextRequest::httpVersion() const noexcept {
