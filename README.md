@@ -187,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain once, `c.header(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()` and does not re-enter the downstream handler.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. Middleware returns `ruvia::Task<void>`: `co_await next()` advances the chain once, `c.header(...)` mutates response headers, and `c.res(response)` short-circuits with a prepared response. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 
