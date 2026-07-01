@@ -645,6 +645,24 @@ public:
             return entries_;
         }
 
+        [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
+            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+            result.reserve(fields_.size());
+            for (const auto& field : fields_) {
+                result.emplace_back(field.name.data(), field.name.size());
+            }
+            return result;
+        }
+
+        [[nodiscard]] std::pmr::vector<std::string_view> values() const {
+            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
+            result.reserve(fields_.size());
+            for (const auto& field : fields_) {
+                result.emplace_back(field.value.data(), field.value.size());
+            }
+            return result;
+        }
+
         [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
             for (const auto& entry : entries_) {
                 if (entry.name() == name) {

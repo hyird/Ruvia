@@ -258,6 +258,12 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
+        body.append("\nkeys=");
+        appendUnsigned(body, form.keys().size());
+        body.append("\nvalues=");
+        appendUnsigned(body, form.values().size());
+        body.append("\nhas-title=");
+        body.append(form.has("title") ? "true" : "false");
         const auto title = form["title"];
         if (auto titleText = title.value()) {
             body.append("\ntitle=");
@@ -326,6 +332,12 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
+        body.append("\nkeys=");
+        appendUnsigned(body, form.keys().size());
+        body.append("\nvalues=");
+        appendUnsigned(body, form.values().size());
+        body.append("\nhas-title=");
+        body.append(form.has("title") ? "true" : "false");
         body.append("\ntag-count=");
         appendUnsigned(body, tags.size());
         if (const auto* tag = form.get("tag")) {
