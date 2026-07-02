@@ -1361,7 +1361,7 @@ public:
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] QueryValue query(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& query() const;
-    [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
+    [[nodiscard]] std::optional<std::span<const std::string_view>> queries(std::string_view name) const;
     [[nodiscard]] const RequestValueGroupList& queries() const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& cookie() const;
@@ -2397,8 +2397,8 @@ inline const RequestNameValueList& ContextRequest::query() const {
     return context_->requestQuery();
 }
 
-inline std::span<const std::string_view> ContextRequest::queries(std::string_view name) const {
-    return context_->requestQueries().values(name);
+inline std::optional<std::span<const std::string_view>> ContextRequest::queries(std::string_view name) const {
+    return context_->requestQueries().get(name);
 }
 
 inline const RequestValueGroupList& ContextRequest::queries() const {

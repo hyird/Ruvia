@@ -259,6 +259,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookies()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().queries(std::string_view{})),
+    std::optional<std::span<const std::string_view>>>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})),
     std::optional<std::string_view>>);
 
@@ -541,13 +544,15 @@ private:
         body.append(c.req().param("id").value_or(""));
         body.append("\ntag-values=");
         const auto tags = request.queries("tag");
-        appendUnsigned(body, tags.size());
+        appendUnsigned(body, tags.has_value() ? tags->size() : 0);
         body.append("\ntag-group-get-all=");
         appendUnsigned(body, request.queries().getAll("tag").size());
         body.append("\ntag-first=");
-        if (!tags.empty()) {
-            body.append(tags.front());
+        if (tags.has_value() && !tags->empty()) {
+            body.append(tags->front());
         }
+        body.append("\ntag-missing=");
+        body.append(request.queries("missing").has_value() ? "present" : "missing");
         body.append("\naccepts-json=");
         body.append(c.req().accepts("application/json") ? "true" : "false");
         body.push_back('\n');
