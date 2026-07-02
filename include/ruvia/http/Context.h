@@ -1409,7 +1409,7 @@ public:
 
     [[nodiscard]] MultipartReader multipartReader() const;
 
-    [[nodiscard]] ParamValue param(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
 
     [[nodiscard]] const RequestNameValueList& param() const;
 
@@ -2184,7 +2184,7 @@ private:
             ContextRequest::RequestFormData::SingleValueSelection::kLast) const;
     [[nodiscard]] BodyReader& requestBodyReader() const;
     [[nodiscard]] MultipartReader requestMultipartReader() const;
-    [[nodiscard]] ParamValue routeParam(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     void ensureRequestQuery() const;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
@@ -2463,7 +2463,7 @@ inline MultipartReader ContextRequest::multipartReader() const {
     return context_->requestMultipartReader();
 }
 
-inline ParamValue ContextRequest::param(std::string_view name) const {
+inline std::optional<std::string_view> ContextRequest::param(std::string_view name) const {
     return context_->routeParam(name);
 }
 
