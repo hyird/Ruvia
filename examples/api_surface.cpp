@@ -208,6 +208,18 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::nullopt)),
     void>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setHeader(std::string_view{}, std::string_view{})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setHeader(
+        std::string_view{},
+        std::string_view{},
+        ruvia::Context::HeaderOptions{.append = true})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setHeader(std::string_view{}, std::nullopt)),
+    void>);
+static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().set(kCurrentUser, CurrentUser{})),
     void>);
 static_assert(std::is_same_v<
