@@ -65,7 +65,7 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
         auto options = signOptions(c);
-        options.subject.assign(c.req().query("sub").toStringView().value_or("example-user"));
+        options.subject.assign(c.req().query("sub").value_or("example-user"));
         auto jwt = ruvia::jwtSign(options, c.resource());
         co_return c.text(jwt);
     }

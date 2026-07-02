@@ -2,7 +2,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <system_error>
 
 #include "ruvia/app/App.h"
 #include "ruvia/http/Controller.h"
@@ -35,6 +37,21 @@ RUVIA_MODEL(UserResponse,
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
     return ruvia::makeErrorResponse(c, error, true, nullptr);
+}
+
+std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
+    if (!input || input->empty()) {
+        return std::nullopt;
+    }
+
+    std::uint32_t value{};
+    const auto* const begin = input->data();
+    const auto* const end = begin + input->size();
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
+    if (ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 class BasicHttpController final : public ruvia::Controller<BasicHttpController> {
@@ -85,7 +102,7 @@ private:
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
-        if (const auto page = c.req().query("page").toUInt32()) {
+        if (const auto page = parseUInt32(c.req().query("page"))) {
             char buffer[16]{};
             const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), *page);
             if (ec == std::errc{}) {

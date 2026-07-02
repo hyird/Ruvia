@@ -22,7 +22,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> ready(ruvia::Context& c) {
-        const bool databaseReady = c.req().query("db").toStringView().value_or("up") != "down";
+        const bool databaseReady = c.req().query("db").value_or("up") != "down";
         co_return ruvia::makeReadyResponse(c, databaseReady, "database is not ready");
     }
 };
