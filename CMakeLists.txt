@@ -318,6 +318,13 @@ if(RUVIA_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
+option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
+
+if(RUVIA_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 install(
     TARGETS
         ruvia
