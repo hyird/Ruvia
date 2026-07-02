@@ -20,6 +20,7 @@ ruvia_add_example(ruvia_example_ops ops.cpp)
 ruvia_add_example(ruvia_example_middleware_next middleware_next.cpp)
 ruvia_add_example(ruvia_example_middleware_next_guard middleware_next_guard.cpp)
 ruvia_add_example(ruvia_example_http2_stream_table_guard http2_stream_table_guard.cpp)
+ruvia_add_example(ruvia_example_context_response_state_guard context_response_state_guard.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt auth_jwt.cpp)
