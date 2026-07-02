@@ -436,6 +436,7 @@ public:
     RUVIA_GET("/res-slot-only", resSlotOnly, SurfaceResSlotOnlyMiddleware);
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/json-response", jsonResponse);
+    RUVIA_GET("/null-body", nullBody);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
     RUVIA_GET("/render-layout", renderLayoutBody, SurfaceLayoutMiddleware);
@@ -634,6 +635,13 @@ private:
         SurfaceJsonResponse response(c);
         response.message("json response");
         co_return c.json(response);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> nullBody(ruvia::Context& c) {
+        co_return c.newResponse(
+            nullptr,
+            202,
+            {{"X-Null-Body", "true"}});
     }
 
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {

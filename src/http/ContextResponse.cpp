@@ -462,6 +462,40 @@ HttpResponse Context::body(std::string_view body, ResponseInit init) const {
 }
 
 HttpResponse Context::body(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::body(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::body(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(
+        nullptr,
+        statusCode,
+        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
+}
+
+HttpResponse Context::body(std::nullptr_t, ResponseInit init) const {
+    HttpResponse response(resource());
+    applyResponseState(response, init.status, init.statusText, init.headers);
+    return response;
+}
+
+HttpResponse Context::body(
     std::pmr::string& body,
     std::uint16_t statusCode,
     std::string_view statusText) const {
@@ -521,6 +555,31 @@ HttpResponse Context::newResponse(
 
 HttpResponse Context::newResponse(std::string_view body, ResponseInit init) const {
     return this->body(body, init);
+}
+
+HttpResponse Context::newResponse(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    return this->body(nullptr, statusCode, statusText);
+}
+
+HttpResponse Context::newResponse(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    return this->body(nullptr, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(
+    std::nullptr_t,
+    std::uint16_t statusCode,
+    std::initializer_list<HttpHeaderView> headers) const {
+    return this->body(nullptr, statusCode, headers);
+}
+
+HttpResponse Context::newResponse(std::nullptr_t, ResponseInit init) const {
+    return this->body(nullptr, init);
 }
 
 HttpResponse Context::newResponse(
