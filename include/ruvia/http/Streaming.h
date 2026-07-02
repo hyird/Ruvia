@@ -5,6 +5,7 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -51,6 +52,30 @@ public:
         return write_(target_, chunk);
     }
 
+    // Writes chunk followed by "\n" as a single chunk.
+    Task<void> writeln(std::string_view chunk) {
+        auto& buffer = scratch_(target_);
+        buffer.reserve(chunk.size() + 1);
+        if (!chunk.empty()) {
+            buffer.append(chunk.data(), chunk.size());
+        }
+        buffer.push_back('\n');
+        return write_(target_, std::string_view(buffer.data(), buffer.size()));
+    }
+
+    // Suspends the handler on the connection's worker without blocking it.
+    Task<void> sleep(std::chrono::milliseconds duration) {
+        return sleep_(target_, duration);
+    }
+
+    // True once the peer is known gone: an HTTP/2 RST_STREAM, or a failed
+    // write on HTTP/1.1. HTTP/1.1 cannot observe a disconnect until a write
+    // fails, so long-lived producers should keep writing (heartbeats) instead
+    // of expecting this to flip on its own.
+    [[nodiscard]] bool aborted() const noexcept {
+        return aborted_(target_);
+    }
+
     Task<void> end() {
         return end_(target_);
     }
@@ -68,26 +93,32 @@ private:
 
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*);
+    using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
     using BindContext = void (*)(void*, Context*) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
     using AddTrailer = void (*)(void*, std::string_view, std::string_view);
     using Committed = bool (*)(void*) noexcept;
+    using Aborted = bool (*)(void*) noexcept;
 
     constexpr ResponseStreamWriter(
         void* target,
         Write write,
         End end,
+        Sleep sleep,
         BindContext bindContext,
         Scratch scratch,
         AddTrailer addTrailer,
-        Committed committed) noexcept
+        Committed committed,
+        Aborted aborted) noexcept
         : target_(target),
           write_(write),
           end_(end),
+          sleep_(sleep),
           bindContext_(bindContext),
           scratch_(scratch),
           addTrailer_(addTrailer),
-          committed_(committed) {}
+          committed_(committed),
+          aborted_(aborted) {}
 
     void bindContext(Context& context) noexcept {
         bindContext_(target_, &context);
@@ -104,10 +135,12 @@ private:
     void* target_;
     Write write_;
     End end_;
+    Sleep sleep_;
     BindContext bindContext_;
     Scratch scratch_;
     AddTrailer addTrailer_;
     Committed committed_;
+    Aborted aborted_;
 };
 
 namespace detail {
@@ -116,10 +149,12 @@ struct StreamingAccess final {
     using BodyRead = CallableRef<std::optional<std::string_view>>::Invoke;
     using StreamWrite = ResponseStreamWriter::Write;
     using StreamEnd = ResponseStreamWriter::End;
+    using StreamSleep = ResponseStreamWriter::Sleep;
     using StreamBindContext = ResponseStreamWriter::BindContext;
     using StreamScratch = ResponseStreamWriter::Scratch;
     using StreamAddTrailer = ResponseStreamWriter::AddTrailer;
     using StreamCommitted = ResponseStreamWriter::Committed;
+    using StreamAborted = ResponseStreamWriter::Aborted;
 
     static void emplaceBodyReader(
         std::optional<BodyReader>& storage,
@@ -132,11 +167,14 @@ struct StreamingAccess final {
         void* target,
         StreamWrite write,
         StreamEnd end,
+        StreamSleep sleep,
         StreamBindContext bindContext,
         StreamScratch scratch,
         StreamAddTrailer addTrailer,
-        StreamCommitted committed) noexcept {
-        return ResponseStreamWriter(target, write, end, bindContext, scratch, addTrailer, committed);
+        StreamCommitted committed,
+        StreamAborted aborted) noexcept {
+        return ResponseStreamWriter(
+            target, write, end, sleep, bindContext, scratch, addTrailer, committed, aborted);
     }
 
     static void bindContext(ResponseStreamWriter& writer, Context& context) noexcept {
@@ -185,6 +223,14 @@ public:
         appendData(frame, message.data);
         frame.push_back('\n');
         co_await writer_.write(frame);
+    }
+
+    Task<void> sleep(std::chrono::milliseconds duration) {
+        return writer_.sleep(duration);
+    }
+
+    [[nodiscard]] bool aborted() const noexcept {
+        return writer_.aborted();
     }
 
     void addTrailer(std::string_view name, std::string_view value) {

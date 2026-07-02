@@ -2,7 +2,41 @@
 
 #include "ruvia/http/ControllerTypes.h"
 
+#include <concepts>
+#include <cstddef>
 #include <utility>
+
+namespace ruvia::detail {
+
+// Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
+inline constexpr HttpMethod kRuviaAllRouteMethods[] = {
+    Get, Post, Put, Patch, Delete, Options};
+
+// Startup-only holder for the RUVIA_ON method list; the macro pastes the
+// parenthesized list as a constructor call.
+class RuviaMethodList final {
+public:
+    template <std::same_as<HttpMethod>... Methods>
+    constexpr explicit RuviaMethodList(Methods... methods) noexcept
+        : methods_{methods...},
+          count_(sizeof...(Methods)) {
+        static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
+    }
+
+    [[nodiscard]] constexpr const HttpMethod* begin() const noexcept {
+        return methods_;
+    }
+
+    [[nodiscard]] constexpr const HttpMethod* end() const noexcept {
+        return methods_ + count_;
+    }
+
+private:
+    HttpMethod methods_[9]{};
+    std::size_t count_{0};
+};
+
+}  // namespace ruvia::detail
 
 #define RUVIA_CONTROLLER_GROUP(prefix, ...) \
     [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept { \
@@ -144,6 +178,29 @@
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
         ::ruvia::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+
+// Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
+#define RUVIA_ALL(path, handler, ...) \
+    for (const auto ruviaRouteMethod : ::ruvia::detail::kRuviaAllRouteMethods) \
+        RuviaControllerType::ruviaAddRoute( \
+            ruviaRouteScope, \
+            ruviaRouteMethod, \
+            path, \
+            bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+            ::ruvia::RequestBodyMode::kBuffered, \
+            RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+
+// Hono app.on: registers the handler for an explicit method list, e.g.
+// RUVIA_ON((ruvia::Put, ruvia::Delete), "/items/:id", handler).
+#define RUVIA_ON(methods, path, handler, ...) \
+    for (const auto ruviaRouteMethod : ::ruvia::detail::RuviaMethodList methods) \
+        RuviaControllerType::ruviaAddRoute( \
+            ruviaRouteScope, \
+            ruviaRouteMethod, \
+            path, \
+            bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+            ::ruvia::RequestBodyMode::kBuffered, \
+            RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_POST_STREAM(path, handler, ...) \
     RuviaControllerType::ruviaAddRoute( \

@@ -180,6 +180,8 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 应用级响应流式必须显式使用 `RUVIA_GET_STREAM` 或 `RUVIA_GET_SSE`；WebSocket 必须显式使用 `RUVIA_GET_WS` 或 `RUVIA_GET_WS_OPTIONS`；普通 `Task<HttpResponse>` route 不隐式进入 response streaming 或 WebSocket。
 - response streaming 不进入 `HttpResponse` body kind；由 `Context` 绑定连接私有 `ResponseStreamWriter`，首个 `write()` 提交 header，之后按 HTTP/1.1 chunked 写出，结束时发送 `0\r\n\r\n`。
 - response streaming helper 命名对齐 Hono：`c.stream()`、`c.streamText()`、`c.streamSSE()`；SSE 事件通过 `writeSSE({.data = ..., .event = ..., .id = ..., .retry = ...})` 写出。
+- stream writer 支持 `write` / `writeln` / `co_await sleep(ms)` / `aborted()` / `addTrailer` / `end`（SSE writer 同样有 `sleep`/`aborted`）；`sleep` 用连接所属 worker 的 asio timer，不阻塞线程。
+- `aborted()` 语义：HTTP/2 反映对端 RST_STREAM；HTTP/1.1 只能在某次写失败后置位——长时间生产者用周期性写出（心跳）探测断连，不要指望 `aborted()` 自行翻转。
 - `c.stream().write(view)` / `c.streamText().write(view)` 的 view 只需在该次 `co_await` 返回前有效；`c.streamSSE()` 只做 SSE frame 格式化，不引入共享字符串或跨线程引用计数。
 - response streaming route 支持与普通 route 相同的 middleware 参数；middleware 可在 `co_await next()` 前设置 status/header/cookie，或在首写前短路设置 `c.res(...)` / 返回普通 `HttpResponse`；stream 已提交后 middleware 的 post-response 修改不得影响已写出的 stream。
 - response streaming route 不自动补 `Content-Length`，使用 `Transfer-Encoding: chunked`；状态和响应 header 必须在第一次 `write()` 前设置。
@@ -416,6 +418,8 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 支持 `RUVIA_GET("/path", handler, Middleware)`。
 - 支持 `RUVIA_POST_STREAM("/upload", handler, Middleware)`、`RUVIA_PUT_STREAM(...)`、`RUVIA_PATCH_STREAM(...)`。
 - 支持 `RUVIA_GET_STREAM("/chunks", handler, Middleware)`、`RUVIA_GET_SSE("/events", handler, Middleware)`、`RUVIA_GET_WS("/ws", handler, Middleware)` 和 `RUVIA_GET_WS_OPTIONS("/ws", handler, options, Middleware)`。
+- 支持 `RUVIA_ALL("/path", handler, Middleware)`，注册 GET/POST/PUT/PATCH/DELETE/OPTIONS（HEAD 走 GET fallback）；与同路径单方法宏并存会触发启动期重复路由报错，这是有意行为。
+- 支持 `RUVIA_ON((ruvia::Put, ruvia::Delete), "/path", handler, Middleware)` 按显式方法列表注册。
 - 支持 `RUVIA_GROUP_BEGIN("/api", Middleware)`。
 - 支持 `RUVIA_GROUP_END`。
 - 支持 `RUVIA_ROUTES_END`。

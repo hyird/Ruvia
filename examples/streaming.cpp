@@ -1,4 +1,5 @@
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <system_error>
 
@@ -54,14 +55,20 @@ private:
     ruvia::Task<void> chunks(ruvia::Context& c) {
         auto& stream = c.streamText();
         co_await stream.write("part 1\n");
-        co_await stream.write("part 2\n");
-        co_await stream.write("part 3\n");
+        co_await stream.writeln("part 2");
+        co_await stream.sleep(std::chrono::milliseconds(20));
+        if (!stream.aborted()) {
+            co_await stream.write("part 3\n");
+        }
     }
 
     ruvia::Task<void> events(ruvia::Context& c) {
         auto events = c.streamSSE();
         co_await events.writeSSE({.data = "connected", .event = "open", .id = "1"});
-        co_await events.writeSSE({.data = "heartbeat", .event = "tick", .id = "2", .retry = 3000});
+        co_await events.sleep(std::chrono::milliseconds(20));
+        if (!events.aborted()) {
+            co_await events.writeSSE({.data = "heartbeat", .event = "tick", .id = "2", .retry = 3000});
+        }
     }
 
     static void appendUnsigned(std::pmr::string& output, std::size_t value) {

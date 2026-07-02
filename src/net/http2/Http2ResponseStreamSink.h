@@ -1,12 +1,17 @@
 #pragma once
 
+#include <chrono>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+
+#include <asio.hpp>
 
 #include "Http2ResponseHeaders.h"
 #include "Http2StreamState.h"
+#include "../../runtime/AsioAwait.h"
 #include "../server/HttpResponseStreamHead.h"
 #include "../server/HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
@@ -34,10 +39,16 @@ public:
         return state_.committed();
     }
 
+    [[nodiscard]] bool aborted() const noexcept {
+        return stream_.isReset();
+    }
+
     template <typename Sink>
     friend Task<void> responseStreamWriteThunk(void*, std::string_view);
     template <typename Sink>
     friend Task<void> responseStreamEndThunk(void*);
+    template <typename Sink>
+    friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
     template <typename Sink>
     friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
     template <typename Sink>
@@ -80,6 +91,16 @@ private:
         co_await commit();
         state_.ensureBodyAllowed();
         co_await session_.writeData(stream_, chunk, {}, false);
+    }
+
+    Task<void> sleep(std::chrono::milliseconds duration) {
+        asio::steady_timer timer(session_.socket_.get_executor(), duration);
+        const auto ec = co_await asyncError([&timer](auto handler) mutable {
+            timer.async_wait(std::move(handler));
+        });
+        if (ec) {
+            throw std::system_error(ec);
+        }
     }
 
     // RFC 9113 Section 8.1 trailers are queued before the stream ends and HPACK

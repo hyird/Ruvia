@@ -334,6 +334,21 @@ static_assert(std::is_same_v<
         std::string_view{})),
     std::optional<std::string_view>>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::ResponseStreamWriter&>().writeln(std::string_view{})),
+    ruvia::Task<void>>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::ResponseStreamWriter&>().sleep(std::chrono::milliseconds{1})),
+    ruvia::Task<void>>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ResponseStreamWriter&>().aborted()),
+    bool>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})),
+    ruvia::Task<void>>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::SseWriter&>().aborted()),
+    bool>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -530,6 +545,8 @@ public:
     RUVIA_DELETE("/items/:id", deleteItem);
     RUVIA_GET("/cookies", cookies);
     RUVIA_GET("/signed-cookies", signedCookies);
+    RUVIA_ALL("/any", anyMethod);
+    RUVIA_ON((::ruvia::Put, ::ruvia::Delete), "/on-item/:id", onItem);
     RUVIA_GET("/manual/copy", manualCopy);
     RUVIA_GET("/manual/view", manualView);
     RUVIA_PUT_STREAM("/upload/:id", streamPut);
@@ -1140,6 +1157,24 @@ private:
         std::pmr::string body(c.allocator<char>());
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> anyMethod(ruvia::Context& c) {
+        std::pmr::string body(c.allocator<char>());
+        body.append("all method=");
+        body.append(c.req().method());
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> onItem(ruvia::Context& c) {
+        std::pmr::string body(c.allocator<char>());
+        body.append("on method=");
+        body.append(c.req().method());
+        body.append(" id=");
+        body.append(c.req().param("id").value_or(""));
         body.push_back('\n');
         co_return c.text(body);
     }

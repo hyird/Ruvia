@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <exception>
 #include <utility>
 
@@ -18,6 +19,16 @@ Task<void> responseStreamWriteThunk(void* target, std::string_view chunk) {
 template <typename Sink>
 Task<void> responseStreamEndThunk(void* target) {
     co_await static_cast<Sink*>(target)->end();
+}
+
+template <typename Sink>
+Task<void> responseStreamSleepThunk(void* target, std::chrono::milliseconds duration) {
+    co_await static_cast<Sink*>(target)->sleep(duration);
+}
+
+template <typename Sink>
+bool responseStreamAbortedThunk(void* target) noexcept {
+    return static_cast<Sink*>(target)->aborted();
 }
 
 template <typename Sink>
@@ -46,10 +57,12 @@ template <typename Sink>
         &sink,
         &responseStreamWriteThunk<Sink>,
         &responseStreamEndThunk<Sink>,
+        &responseStreamSleepThunk<Sink>,
         &responseStreamBindContextThunk<Sink>,
         &responseStreamScratchThunk<Sink>,
         &responseStreamAddTrailerThunk<Sink>,
-        &responseStreamCommittedThunk<Sink>);
+        &responseStreamCommittedThunk<Sink>,
+        &responseStreamAbortedThunk<Sink>);
 }
 
 class ResponseStreamDispatchResult final {

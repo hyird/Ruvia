@@ -13,6 +13,7 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
@@ -43,10 +44,14 @@ public:
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
+    [[nodiscard]] bool aborted() const noexcept { return aborted_; }
+
     template <typename Sink>
     friend Task<void> responseStreamWriteThunk(void*, std::string_view);
     template <typename Sink>
     friend Task<void> responseStreamEndThunk(void*);
+    template <typename Sink>
+    friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
     template <typename Sink>
     friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
     template <typename Sink>
@@ -83,6 +88,18 @@ private:
             asio::async_write(stream_, asio::buffer(headView), std::move(handler));
         });
         if (ec) {
+            aborted_ = true;
+            throw std::system_error(ec);
+        }
+        scannerEntry_.touch();
+    }
+
+    Task<void> sleep(std::chrono::milliseconds duration) {
+        asio::steady_timer timer(stream_.get_executor(), duration);
+        const auto ec = co_await asyncError([&timer](auto handler) mutable {
+            timer.async_wait(std::move(handler));
+        });
+        if (ec) {
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
@@ -111,6 +128,7 @@ private:
             asio::async_write(stream_, buffers, std::move(handler));
         });
         if (writeEc) {
+            aborted_ = true;
             throw std::system_error(writeEc);
         }
         scannerEntry_.touch();
@@ -150,6 +168,7 @@ private:
         });
         state_.markEnded();
         if (ec) {
+            aborted_ = true;
             throw std::system_error(ec);
         }
         scannerEntry_.touch();
@@ -162,6 +181,7 @@ private:
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
     ResponseStreamState state_;
+    bool aborted_{false};
 };
 
 }  // namespace ruvia::detail
