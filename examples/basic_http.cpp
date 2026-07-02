@@ -14,7 +14,7 @@ class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> 
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         co_await next();
-        c.setHeader("X-Example", "basic-http");
+        c.header("X-Example", "basic-http");
     }
 };
 
@@ -159,6 +159,6 @@ int main() {
         .setMaxConnectionsPerWorker(10000)
         .setMaxRequestsPerConnection(1000)
         .setMemoryPoolConfig(memory)
-        .setErrorHandler(&exampleErrorHandler)
+        .onError(&exampleErrorHandler)
         .run();
 }

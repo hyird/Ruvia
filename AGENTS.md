@@ -264,6 +264,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - Web runtime 模拟指实现 MDN `Request` / `Response` / `Headers` / `FormData` / `Blob` / `ArrayBuffer`、JavaScript property bag、`ReadableStream` body、Cloudflare Workers `executionCtx` / `event` / bindings 等平台对象及其行为；这些不是 Ruvia Context 对齐目标。
 - JS/Web 运行时概念不引入：`c.event`、`c.executionCtx`、MDN `Request`/`Response`/`Headers`/`FormData` 对象语义、`ReadableStream` body。
 - 对齐让位于 Ruvia 自身约束：Context-first 参数顺序、`ruvia::Task<T>` 协程、PMR/零拷贝/启动期构建规则优先于 Hono 形态。
+- 公开 API 一个操作只保留一个名字：不新增别名或包装转发；需要换名时直接改名（允许破坏兼容）。当前入口：`c.header`（响应设置，无 `setHeader`）、`c.get<T>` / `c.var()`（无 `getIf`/`varIf`）、`c.req().cookie(...)`（无 `cookies()`）、`c.error(...)`（无 `jsonError`）、`app().onError(...)` / `notFound(...)`（无 `setErrorHandler`/`setNotFoundHandler`）。
 - 已有 API 的 Hono-like 形态对齐是当前完成边界；JS/Web 运行时概念不当作缺口重新提出。
 
 ### 公共命名空间
@@ -289,7 +290,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 不要提供同步 `ruvia::HttpResponse handler(...)` 重载。
 - 通过 `c.req()` 读取请求。
 - 通过 `c.req().header(...)`、`c.req().query(...)` / `c.req().queries(...)`、`c.req().cookie(...)` / `c.req().signedCookie(name, secret)`、`c.req().param(...)` 读取常用输入；`Context` 不提供请求读取的一元 `header/query/cookie/param`。
-- 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.setSignedCookie(name, value, secret, options)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header，`c.setHeader(...)` 是 `c.header(...)` 的别名。
+- 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.setSignedCookie(name, value, secret, options)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header。
 - 签名 cookie 是 `value.base64(HMAC-SHA256)` 格式（OpenSSL，核心能力）；`signedCookie` 验证失败或缺失都返回 `std::nullopt`，比较必须常量时间。
 - `CookieOptions` 支持 `path`/`domain`/`sameSite`/`priority`/`expires`/`maxAge`/`prefix`(`__Secure-`/`__Host-`)/`httpOnly`/`secure`/`partitioned`；`__Host-` 要求 Secure+Path=/+无 Domain，`partitioned` 要求 Secure，寿命上限 400 天，违规抛 `std::invalid_argument`。
 - 通过 `c.req().bodyReader()` 在显式 stream route 中读取请求体。

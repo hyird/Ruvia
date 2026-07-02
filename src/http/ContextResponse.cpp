@@ -982,14 +982,6 @@ HttpResponse Context::error(
     return response;
 }
 
-HttpResponse Context::jsonError(
-    std::uint16_t statusCode,
-    std::string_view code,
-    std::string_view message,
-    std::string_view statusText) const {
-    return error(statusCode, code, message, statusText);
-}
-
 Task<HttpResponse> Context::notFound() {
     if (notFoundHandler_ != nullptr) {
         co_return co_await notFoundHandler_(*this);
