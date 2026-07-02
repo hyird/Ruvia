@@ -243,7 +243,11 @@ public:
             return RequestBlob(arrayBuffer(), header("Content-Type"));
         }
 
-        [[nodiscard]] RequestFormData parseBody(ParseBodyOptions options = {}) const;
+        [[nodiscard]] RequestFormData parseBody(ParseBodyOptions options) const;
+
+        [[nodiscard]] RequestFormData parseBody() const {
+            return parseBody(ParseBodyOptions{});
+        }
 
         [[nodiscard]] RequestFormData formData() const;
 
