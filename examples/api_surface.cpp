@@ -911,9 +911,15 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> blobBody(ruvia::Context& c) {
         const auto blob = co_await c.req().blob();
+        const auto arrayBuffer = blob.arrayBuffer();
+        const auto text = blob.text();
         std::pmr::string body(c.allocator<char>());
         body.append("blob bytes=");
         appendUnsigned(body, blob.size());
+        body.append("\narray-buffer bytes=");
+        appendUnsigned(body, arrayBuffer.size());
+        body.append("\ntext bytes=");
+        appendUnsigned(body, text.size());
         body.append("\ntype=");
         body.append(blob.type());
         body.push_back('\n');
