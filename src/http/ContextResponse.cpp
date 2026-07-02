@@ -379,7 +379,9 @@ void Context::storeResponse(HttpResponse&& response) {
         mergeResponseSlotHeaders(response, *response_);
     }
 
-    if (responseStatusCode_ != 200) {
+    // The context status is a default: a status already carried by the
+    // response (an explicit helper argument or setStatus call) wins.
+    if (responseStatusCode_ != 200 && response.statusCode() == 200) {
         response.setStatus(responseStatusCode_, {});
     }
 
@@ -412,7 +414,7 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         assignResponseSlotHeaders(response, *response_);
     }
 
-    if (responseStatusCode_ != 200) {
+    if (responseStatusCode_ != 200 && response.statusCode() == 200) {
         response.setStatus(responseStatusCode_, {});
     }
 
@@ -822,13 +824,13 @@ HttpResponse Context::redirect(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
+    applyResponseState(response, statusCode, statusText);
     if (redirectLocationNeedsEncoding(location)) {
         auto encodedLocation = encodeRedirectLocation(location, resource());
         response.setHeader("Location", encodedLocation);
     } else {
         response.setHeader("Location", location);
     }
-    applyResponseState(response, statusCode, statusText);
     return response;
 }
 
@@ -914,10 +916,16 @@ void Context::applyResponseState(
     }
     for (const auto& header : responseHeaders_) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
+        const auto name = header.name();
+        const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-            detail::appendResponseHeaderValidated(response, header.name(), header.value(), knownBit);
+            // Appended headers live in both the context list and a materialized
+            // response slot; the slot merge above may have carried them already.
+            if (!responseHasHeaderValue(response, name, value)) {
+                detail::appendResponseHeaderValidated(response, name, value, knownBit);
+            }
         } else {
-            detail::setResponseHeaderValidated(response, header.name(), header.value(), knownBit);
+            detail::setResponseHeaderValidated(response, name, value, knownBit);
         }
     }
     applyExplicitResponseHeaders(response, headers);
