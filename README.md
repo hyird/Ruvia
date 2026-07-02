@@ -239,7 +239,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
 | `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. |
-| `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=utf-8` and returns the stream writer. |
+| `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=UTF-8` and returns the stream writer. |
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |

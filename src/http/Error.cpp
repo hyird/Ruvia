@@ -176,7 +176,7 @@ HttpResponse makeErrorResponse(
     HttpResponse response(resource);
     detail::reserveResponseHeaders(response, closeConnection ? 2 : 1);
     response.setStatus(error.statusCode, error.statusText);
-    detail::setResponseHeaderStableView(response, "Content-Type", "application/json; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     if (closeConnection) {
         detail::setResponseHeaderStableView(response, "Connection", "close");
     }

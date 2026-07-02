@@ -553,7 +553,7 @@ HttpResponse Context::text(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -564,7 +564,7 @@ HttpResponse Context::text(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, statusCode, {}, headers);
     return response;
@@ -582,7 +582,7 @@ HttpResponse Context::text(
 
 HttpResponse Context::text(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
@@ -593,7 +593,7 @@ HttpResponse Context::text(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -604,7 +604,7 @@ HttpResponse Context::text(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
@@ -622,7 +622,7 @@ HttpResponse Context::text(
 
 HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
@@ -633,7 +633,7 @@ HttpResponse Context::textStaticView(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -644,7 +644,7 @@ HttpResponse Context::jsonSerialized(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "application/json; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -655,7 +655,7 @@ HttpResponse Context::html(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -666,7 +666,7 @@ HttpResponse Context::html(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, statusCode, {}, headers);
     return response;
@@ -684,7 +684,7 @@ HttpResponse Context::html(
 
 HttpResponse Context::html(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyView(body);
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
@@ -695,7 +695,7 @@ HttpResponse Context::html(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
@@ -706,7 +706,7 @@ HttpResponse Context::html(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
@@ -724,7 +724,7 @@ HttpResponse Context::html(
 
 HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {
     HttpResponse response(resource());
-    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=utf-8");
+    detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyOwned(std::move(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;

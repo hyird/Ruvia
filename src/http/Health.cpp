@@ -13,7 +13,7 @@ namespace {
     std::uint16_t statusCode = 200) {
     HttpResponse response(context.resource());
     response.setStatus(statusCode, {});
-    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Content-Type", "application/json");
     response.setBodyOwned(std::move(body));
     return response;
 }

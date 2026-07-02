@@ -23,6 +23,10 @@ RUVIA_MODEL(ClonePayload,
     RUVIA_FIELD(message, ruvia::String)
 );
 
+RUVIA_MODEL(SurfaceJsonResponse,
+    RUVIA_FIELD(message, ruvia::String)
+);
+
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
 template <typename T>
 concept HasPlainAddressOf = requires(T& value) {
@@ -431,6 +435,7 @@ public:
     RUVIA_GET("/res", responseSlot);
     RUVIA_GET("/res-slot-only", resSlotOnly, SurfaceResSlotOnlyMiddleware);
     RUVIA_GET("/html", htmlBody);
+    RUVIA_GET("/json-response", jsonResponse);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
     RUVIA_GET("/render-layout", renderLayoutBody, SurfaceLayoutMiddleware);
@@ -625,6 +630,12 @@ private:
         co_return c.html("<strong>html body</strong>\n");
     }
 
+    ruvia::Task<ruvia::HttpResponse> jsonResponse(ruvia::Context& c) {
+        SurfaceJsonResponse response(c);
+        response.message("json response");
+        co_return c.json(response);
+    }
+
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
         co_return co_await c.render(
             "<h1>rendered body</h1>",
@@ -700,7 +711,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
         c.header("X-Surface-Prepared-Assigned", "true");
         ruvia::HttpResponse response(c.resource());
-        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.setHeader("Content-Type", "text/plain; charset=UTF-8");
         response.setBodyCopy("assigned prepared response\n");
         c.res(std::move(response));
         co_return std::move(c.res());
@@ -1033,7 +1044,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> manualCopy(ruvia::Context& c) {
         ruvia::HttpResponse response(c.resource());
         response.setStatus(202, "Accepted");
-        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.setHeader("Content-Type", "text/plain; charset=UTF-8");
         response.setHeader("X-Manual-Body", "copy");
         response.setBodyCopy(std::string_view("copied body\n"));
         co_return response;
@@ -1041,7 +1052,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> manualView(ruvia::Context& c) {
         ruvia::HttpResponse response(c.resource());
-        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.setHeader("Content-Type", "text/plain; charset=UTF-8");
         response.setHeader("X-Manual-Body", "view");
         response.setBodyView("borrowed static view\n");
         co_return response;
