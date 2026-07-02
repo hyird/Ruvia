@@ -716,7 +716,7 @@ ResponseStreamWriter& Context::stream() const {
 }
 
 ResponseStreamWriter& Context::streamText() {
-    setStableResponseHeader("Content-Type", "text/plain; charset=utf-8");
+    setStableResponseHeader("Content-Type", "text/plain; charset=UTF-8");
     return stream();
 }
 
