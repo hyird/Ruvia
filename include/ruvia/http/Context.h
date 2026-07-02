@@ -1813,7 +1813,7 @@ public:
 
     [[nodiscard]] HttpResponse& res();
 
-    Context& res(HttpResponse&& response);
+    void res(HttpResponse&& response);
 
     [[nodiscard]] bool finalized() const noexcept {
         return responseFinalized_;

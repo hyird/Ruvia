@@ -226,6 +226,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::Context&>().var().get<CurrentUser>(kCurrentUser)),
     const CurrentUser*>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().res(std::declval<ruvia::HttpResponse&&>())),
+    void>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
