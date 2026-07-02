@@ -295,7 +295,7 @@ void Context::header(std::string_view name, std::nullopt_t) {
     removeResponseHeader(name);
 }
 
-Context& Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
+void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     detail::validateCookie(name, value, options);
     const bool hasMaxAge = options.maxAge >= 0;
     const auto maxAgeValue = hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
@@ -372,12 +372,13 @@ Context& Context::setCookie(std::string_view name, std::string_view value, const
             header.value(),
             detail::kResponseHeaderSetCookie);
     }
-    return *this;
 }
 
-Context& Context::deleteCookie(std::string_view name, CookieOptions options) {
+std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {
+    auto deleted = req().cookie(name);
     options.maxAge = 0;
-    return setCookie(name, "", options);
+    setCookie(name, "", options);
+    return deleted;
 }
 
 void Context::storeResponse(HttpResponse&& response) {

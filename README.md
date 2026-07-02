@@ -244,8 +244,8 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
 | `c.header(name, value)` / `c.setHeader(name, value)` | Add or replace a response header; pass `std::nullopt` to remove a prepared response header, matching Hono's undefined-value deletion behavior. Both context header setters return `void`. |
-| `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header. |
-| `c.deleteCookie(name, options)` | Expire a response cookie with `Max-Age=0`. |
+| `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header and return `void`, matching Hono's side-effect cookie setter shape. |
+| `c.deleteCookie(name, options)` | Return the current request cookie value, if present, then expire the response cookie with `Max-Age=0`. |
 | `c.res()` / `c.res(response)` | Access the current response slot or replace it to short-circuit middleware. `c.res(response)` returns `void`, matching Hono's assignment-style response setter. Reading `c.res()` does not by itself finalize the context; handler returns, downstream responses, and `c.res(response)` do. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape; when replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
