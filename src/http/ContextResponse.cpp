@@ -398,7 +398,7 @@ void Context::storeResponse(HttpResponse&& response) {
                 if (!responseHasHeaderValue(response, name, value)) {
                     detail::appendResponseHeaderValidated(response, name, value, knownBit);
                 }
-            } else {
+            } else if (!responseHasHeaderName(response, name)) {
                 detail::setResponseHeaderValidated(response, name, value, knownBit);
             }
         }
