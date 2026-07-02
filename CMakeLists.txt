@@ -90,6 +90,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/ContextRequest.cpp
     src/http/ContextResponse.cpp
     src/http/ContextStorage.cpp
+    src/http/CookieSignature.cpp
     src/http/Csrf.cpp
     src/http/Error.cpp
     src/http/Health.cpp

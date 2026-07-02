@@ -1,5 +1,6 @@
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -292,6 +293,17 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().deleteCookie(std::string_view{})),
     std::optional<std::string_view>>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setSignedCookie(
+        std::string_view{},
+        std::string_view{},
+        std::string_view{})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().signedCookie(
+        std::string_view{},
+        std::string_view{})),
+    std::optional<std::string_view>>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -490,6 +502,7 @@ public:
     RUVIA_PATCH("/items/:id", patchItem);
     RUVIA_DELETE("/items/:id", deleteItem);
     RUVIA_GET("/cookies", cookies);
+    RUVIA_GET("/signed-cookies", signedCookies);
     RUVIA_GET("/manual/copy", manualCopy);
     RUVIA_GET("/manual/view", manualView);
     RUVIA_PUT_STREAM("/upload/:id", streamPut);
@@ -1087,10 +1100,33 @@ private:
         options.maxAge = 3600;
         c.setCookie("session", "example", options);
         c.setCookie("theme", "light");
+        ruvia::CookieOptions hostOptions;
+        hostOptions.secure = true;
+        hostOptions.httpOnly = true;
+        hostOptions.sameSite = "None";
+        hostOptions.priority = "high";
+        hostOptions.partitioned = true;
+        hostOptions.prefix = ruvia::CookiePrefix::kHost;
+        hostOptions.expires = std::chrono::system_clock::now() + std::chrono::hours(1);
+        c.setCookie("chip", "value", hostOptions);
         const auto deleted = c.deleteCookie("legacy-session");
         std::pmr::string body(c.allocator<char>());
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
+        body.push_back('\n');
+        co_return c.text(body);
+    }
+
+    ruvia::Task<ruvia::HttpResponse> signedCookies(ruvia::Context& c) {
+        static constexpr std::string_view kSecret = "surface-signing-secret";
+        c.setSignedCookie("signed-session", "signed-value", kSecret);
+        const auto verified = c.req().signedCookie("signed-session", kSecret);
+        const auto absent = c.req().signedCookie("absent", kSecret);
+        std::pmr::string body(c.allocator<char>());
+        body.append("signed=");
+        body.append(verified.value_or("missing"));
+        body.append("\nabsent=");
+        body.append(absent.has_value() ? "present" : "missing");
         body.push_back('\n');
         co_return c.text(body);
     }

@@ -125,6 +125,10 @@ App& App::setDocumentRoot(const std::filesystem::path& root) {
     return setDocumentRoot(std::move(config));
 }
 
+App& App::onError(HttpErrorHandler handler) {
+    return setErrorHandler(handler);
+}
+
 App& App::setErrorHandler(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(
         *this,

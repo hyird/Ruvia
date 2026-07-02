@@ -1,5 +1,6 @@
 #include "ruvia/http/Context.h"
 
+#include "CookieSignature.h"
 #include "HeaderTokenUtils.h"
 #include "HeaderAcceptUtils.h"
 #include "HttpRequestInternal.h"
@@ -633,6 +634,27 @@ Task<std::string_view> Context::requestBody() const {
     }
     bodyDecoded_ = true;
     co_return std::string_view(decoded.data(), decoded.size());
+}
+
+std::optional<std::string_view> ContextRequest::signedCookie(
+    std::string_view name,
+    std::string_view secret) const {
+    const auto stored = cookie(name);
+    if (!stored.has_value() || stored->size() <= detail::kCookieSignatureSize) {
+        return std::nullopt;
+    }
+    const auto valueSize = stored->size() - detail::kCookieSignatureSize - 1;
+    if ((*stored)[valueSize] != '.') {
+        return std::nullopt;
+    }
+    const auto value = stored->substr(0, valueSize);
+    const auto signature = stored->substr(valueSize + 1);
+    char expected[detail::kCookieSignatureSize];
+    detail::writeCookieSignature(expected, secret, value);
+    if (!detail::cookieSignatureEquals(signature, std::string_view(expected, sizeof(expected)))) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {

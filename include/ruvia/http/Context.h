@@ -1368,6 +1368,11 @@ public:
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& cookie() const;
     [[nodiscard]] const RequestNameValueList& cookies() const;
+    // Verifies the "value.signature" format written by setSignedCookie; returns
+    // the value view on a valid signature, nullopt when missing or tampered.
+    [[nodiscard]] std::optional<std::string_view> signedCookie(
+        std::string_view name,
+        std::string_view secret) const;
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> bytes() const;
     [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
@@ -1808,6 +1813,11 @@ public:
     }
 
     void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
+    void setSignedCookie(
+        std::string_view name,
+        std::string_view value,
+        std::string_view secret,
+        const CookieOptions& options = {});
     [[nodiscard]] std::optional<std::string_view> deleteCookie(std::string_view name, CookieOptions options = {});
 
     [[nodiscard]] HttpResponse& res();
