@@ -1793,19 +1793,16 @@ public:
 
     void header(std::string_view name, std::nullopt_t);
 
-    Context& setHeader(std::string_view name, std::string_view value) {
+    void setHeader(std::string_view name, std::string_view value) {
         header(name, value);
-        return *this;
     }
 
-    Context& setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
+    void setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
         header(name, value, options);
-        return *this;
     }
 
-    Context& setHeader(std::string_view name, std::nullopt_t value) {
+    void setHeader(std::string_view name, std::nullopt_t value) {
         header(name, value);
-        return *this;
     }
 
     Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
