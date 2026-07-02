@@ -195,21 +195,13 @@ void Context::rebuildResponseHeaderIndexes() noexcept {
     }
 }
 
-void Context::status(std::uint16_t statusCode, std::string_view statusText) {
+void Context::status(std::uint16_t statusCode) {
     if (statusCode < 100 || statusCode > 999) {
         throw std::invalid_argument("invalid HTTP status code");
     }
-    if (!isValidHttpStatusText(statusText)) {
-        throw std::invalid_argument("invalid HTTP status text");
-    }
     responseStatusCode_ = statusCode;
-    if (statusText.empty()) {
-        responseStatusText_.clear();
-    } else {
-        responseStatusText_.assign(statusText.data(), statusText.size());
-    }
     if (response_ != nullptr) {
-        response_->setStatus(statusCode, statusText);
+        response_->setStatus(statusCode, {});
     }
 }
 
@@ -387,12 +379,7 @@ void Context::storeResponse(HttpResponse&& response) {
         mergeResponseSlotHeaders(response, *response_);
     }
 
-    if (!responseStatusText_.empty()) {
-        const auto statusText = std::string_view(responseStatusText_);
-        if (responseStatusCode_ != 200 || statusText != "OK") {
-            response.setStatus(responseStatusCode_, statusText);
-        }
-    } else if (responseStatusCode_ != 200) {
+    if (responseStatusCode_ != 200) {
         response.setStatus(responseStatusCode_, {});
     }
 
@@ -425,12 +412,7 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         assignResponseSlotHeaders(response, *response_);
     }
 
-    if (!responseStatusText_.empty()) {
-        const auto statusText = std::string_view(responseStatusText_);
-        if (responseStatusCode_ != 200 || statusText != "OK") {
-            response.setStatus(responseStatusCode_, statusText);
-        }
-    } else if (responseStatusCode_ != 200) {
+    if (responseStatusCode_ != 200) {
         response.setStatus(responseStatusCode_, {});
     }
 
@@ -860,11 +842,6 @@ void Context::applyResponseState(
     if (!statusText.empty()) {
         if (finalStatusCode != 200 || statusText != "OK") {
             response.setStatus(finalStatusCode, statusText);
-        }
-    } else if (statusCode == 0 && !responseStatusText_.empty()) {
-        const auto finalStatusText = std::string_view(responseStatusText_);
-        if (finalStatusCode != 200 || finalStatusText != "OK") {
-            response.setStatus(finalStatusCode, finalStatusText);
         }
     } else if (finalStatusCode != 200) {
         response.setStatus(finalStatusCode, {});

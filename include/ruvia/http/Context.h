@@ -1775,7 +1775,7 @@ public:
         return ConstVars(*this);
     }
 
-    void status(std::uint16_t statusCode, std::string_view statusText = {});
+    void status(std::uint16_t statusCode);
 
     void header(std::string_view name, std::string_view value) {
         header(name, value, HeaderOptions{});
@@ -2271,7 +2271,6 @@ private:
     Renderer renderer_{nullptr};
     Layout layout_{nullptr};
     std::uint16_t responseStatusCode_{200};
-    std::pmr::string responseStatusText_;
     HttpResponseHeaders responseHeaders_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.

@@ -60,6 +60,11 @@ concept HasUnaryContextParam = requires(const T& context) {
 };
 
 template <typename T>
+concept HasContextStatusTextSetter = requires(T& context) {
+    context.status(200, std::string_view{});
+};
+
+template <typename T>
 concept HasResponseHeadersAlias = requires(T& response) {
     response.responseHeaders();
 };
@@ -175,6 +180,7 @@ static_assert(!HasUnaryContextHeader<ruvia::Context>);
 static_assert(!HasUnaryContextQuery<ruvia::Context>);
 static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
+static_assert(!HasContextStatusTextSetter<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
 static_assert(HasRequestBytesAlias<ruvia::ContextRequest>);
 static_assert(HasRequestJsonValueAlias<ruvia::ContextRequest>);
