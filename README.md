@@ -227,7 +227,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().bytes()` | Hono-style alias for reading the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
-| `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy byte span plus its `Content-Type`. |
+| `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy blob with `bytes()` / `arrayBuffer()` / `text()` access plus its `Content-Type`. |
 | `co_await c.req().json()` | Lazily read and validate any JSON body as a zero-copy `ruvia::JsonValue` view. Use `kind()` to distinguish object/array/scalar/null; object bodies can still use `get<T>(field)`. |
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |

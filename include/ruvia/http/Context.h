@@ -116,6 +116,16 @@ public:
             return bytes_;
         }
 
+        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
+            return bytes_;
+        }
+
+        [[nodiscard]] std::string_view text() const noexcept {
+            return std::string_view(
+                reinterpret_cast<const char*>(bytes_.data()),
+                bytes_.size());
+        }
+
         [[nodiscard]] std::string_view type() const noexcept {
             return type_;
         }
