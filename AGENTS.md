@@ -181,6 +181,8 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - response streaming 不进入 `HttpResponse` body kind；由 `Context` 绑定连接私有 `ResponseStreamWriter`，首个 `write()` 提交 header，之后按 HTTP/1.1 chunked 写出，结束时发送 `0\r\n\r\n`。
 - response streaming helper 命名对齐 Hono：`c.stream()`、`c.streamText()`、`c.streamSSE()`；SSE 事件通过 `writeSSE({.data = ..., .event = ..., .id = ..., .retry = ...})` 写出。
 - stream writer 支持 `write` / `writeln` / `co_await sleep(ms)` / `aborted()` / `addTrailer` / `end`（SSE writer 同样有 `sleep`/`aborted`）；`sleep` 用连接所属 worker 的 asio timer，不阻塞线程。
+- `c.streamText()` 同时设置 `Content-Type: text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`（对齐 Hono）。
+- 确认的形态例外：`stream.onAbort(callback)` 以 `aborted()` 轮询代替（协程模型，不引入回调注册）；`stream.pipe(ReadableStream)` 属 Web stream 形态不做；自定义 HTTP method 不支持，method 固定为 `HttpMethod` 枚举。
 - `aborted()` 语义：HTTP/2 反映对端 RST_STREAM；HTTP/1.1 只能在某次写失败后置位——长时间生产者用周期性写出（心跳）探测断连，不要指望 `aborted()` 自行翻转。
 - `c.stream().write(view)` / `c.streamText().write(view)` 的 view 只需在该次 `co_await` 返回前有效；`c.streamSSE()` 只做 SSE frame 格式化，不引入共享字符串或跨线程引用计数。
 - response streaming route 支持与普通 route 相同的 middleware 参数；middleware 可在 `co_await next()` 前设置 status/header/cookie，或在首写前短路设置 `c.res(...)` / 返回普通 `HttpResponse`；stream 已提交后 middleware 的 post-response 修改不得影响已写出的 stream。
@@ -293,6 +295,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 通过 `c.req()` 读取请求。
 - 通过 `c.req().header(...)`、`c.req().query(...)` / `c.req().queries(...)`、`c.req().cookie(...)` / `c.req().signedCookie(name, secret)`、`c.req().param(...)` 读取常用输入；`Context` 不提供请求读取的一元 `header/query/cookie/param`。
 - 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.setSignedCookie(name, value, secret, options)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header。
+- `c.generateCookie(...)` / `c.generateSignedCookie(...)` 只序列化 Set-Cookie 值到 arena `std::pmr::string`，不写响应（对齐 Hono cookie helper 的 generate 形态）。
 - 签名 cookie 是 `value.base64(HMAC-SHA256)` 格式（OpenSSL，核心能力）；`signedCookie` 验证失败或缺失都返回 `std::nullopt`，比较必须常量时间。
 - `CookieOptions` 支持 `path`/`domain`/`sameSite`/`priority`/`expires`/`maxAge`/`prefix`(`__Secure-`/`__Host-`)/`httpOnly`/`secure`/`partitioned`；`__Host-` 要求 Secure+Path=/+无 Domain，`partitioned` 要求 Secure，寿命上限 400 天，违规抛 `std::invalid_argument`。
 - 通过 `c.req().bodyReader()` 在显式 stream route 中读取请求体。
@@ -419,7 +422,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 支持 `RUVIA_POST_STREAM("/upload", handler, Middleware)`、`RUVIA_PUT_STREAM(...)`、`RUVIA_PATCH_STREAM(...)`。
 - 支持 `RUVIA_GET_STREAM("/chunks", handler, Middleware)`、`RUVIA_GET_SSE("/events", handler, Middleware)`、`RUVIA_GET_WS("/ws", handler, Middleware)` 和 `RUVIA_GET_WS_OPTIONS("/ws", handler, options, Middleware)`。
 - 支持 `RUVIA_ALL("/path", handler, Middleware)`，注册 GET/POST/PUT/PATCH/DELETE/OPTIONS（HEAD 走 GET fallback）；与同路径单方法宏并存会触发启动期重复路由报错，这是有意行为。
-- 支持 `RUVIA_ON((ruvia::Put, ruvia::Delete), "/path", handler, Middleware)` 按显式方法列表注册。
+- 支持 `RUVIA_ON((ruvia::Put, ruvia::Delete), ("/path", "/legacy"), handler, Middleware)` 按显式方法列表 × 路径列表注册；两个列表都必须带括号。
 - 支持 `RUVIA_GROUP_BEGIN("/api", Middleware)`。
 - 支持 `RUVIA_GROUP_END`。
 - 支持 `RUVIA_ROUTES_END`。

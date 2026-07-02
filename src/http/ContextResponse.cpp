@@ -297,12 +297,31 @@ void Context::header(std::string_view name, std::nullopt_t) {
     removeResponseHeader(name);
 }
 
-void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
-    detail::validateCookie(name, value, options);
-    const auto prefixText = detail::cookiePrefixText(options.prefix);
-    const auto priorityText = detail::cookiePriorityToken(options.priority);
+namespace {
+
+struct SetCookieSerialization final {
     std::array<char, 32> expiresBuffer{};
-    std::string_view expiresText{};
+    std::size_t expiresSize{0};
+    std::string_view prefixText{};
+    std::string_view priorityText{};
+    std::uint64_t maxAgeValue{0};
+    std::size_t maxAgeSize{0};
+    bool hasMaxAge{false};
+    std::size_t size{0};
+
+    [[nodiscard]] std::string_view expiresText() const noexcept {
+        return std::string_view(expiresBuffer.data(), expiresSize);
+    }
+};
+
+[[nodiscard]] SetCookieSerialization prepareSetCookie(
+    std::string_view name,
+    std::string_view value,
+    const CookieOptions& options) {
+    detail::validateCookie(name, value, options);
+    SetCookieSerialization serialization;
+    serialization.prefixText = detail::cookiePrefixText(options.prefix);
+    serialization.priorityText = detail::cookiePriorityToken(options.priority);
     if (options.expires.has_value()) {
         const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
         std::tm utc{};
@@ -312,30 +331,33 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         gmtime_r(&expiresTime, &utc);
 #endif
         const auto written = std::strftime(
-            expiresBuffer.data(),
-            expiresBuffer.size(),
+            serialization.expiresBuffer.data(),
+            serialization.expiresBuffer.size(),
             "%a, %d %b %Y %H:%M:%S GMT",
             &utc);
         if (written == 0) {
             throw std::invalid_argument("invalid cookie Expires");
         }
-        expiresText = std::string_view(expiresBuffer.data(), written);
+        serialization.expiresSize = written;
     }
-    const bool hasMaxAge = options.maxAge >= 0;
-    const auto maxAgeValue = hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
-    const auto maxAgeSize = hasMaxAge ? detail::unsignedDecimalSize(maxAgeValue) : std::size_t{0};
-    std::size_t cookieSize = prefixText.size() + name.size() + 1 + value.size();
+    serialization.hasMaxAge = options.maxAge >= 0;
+    serialization.maxAgeValue =
+        serialization.hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
+    serialization.maxAgeSize =
+        serialization.hasMaxAge ? detail::unsignedDecimalSize(serialization.maxAgeValue) : std::size_t{0};
+
+    std::size_t cookieSize = serialization.prefixText.size() + name.size() + 1 + value.size();
     if (!options.path.empty()) {
         cookieSize += std::string_view("; Path=").size() + options.path.size();
     }
     if (!options.domain.empty()) {
         cookieSize += std::string_view("; Domain=").size() + options.domain.size();
     }
-    if (hasMaxAge) {
-        cookieSize += std::string_view("; Max-Age=").size() + maxAgeSize;
+    if (serialization.hasMaxAge) {
+        cookieSize += std::string_view("; Max-Age=").size() + serialization.maxAgeSize;
     }
-    if (!expiresText.empty()) {
-        cookieSize += std::string_view("; Expires=").size() + expiresText.size();
+    if (serialization.expiresSize != 0) {
+        cookieSize += std::string_view("; Expires=").size() + serialization.expiresSize;
     }
     if (options.httpOnly) {
         cookieSize += std::string_view("; HttpOnly").size();
@@ -346,21 +368,26 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
     if (!options.sameSite.empty()) {
         cookieSize += std::string_view("; SameSite=").size() + options.sameSite.size();
     }
-    if (!priorityText.empty()) {
-        cookieSize += std::string_view("; Priority=").size() + priorityText.size();
+    if (!serialization.priorityText.empty()) {
+        cookieSize += std::string_view("; Priority=").size() + serialization.priorityText.size();
     }
     if (options.partitioned) {
         cookieSize += std::string_view("; Partitioned").size();
     }
+    serialization.size = cookieSize;
+    return serialization;
+}
 
-    const auto index = responseHeaders_.size();
-    auto& header = responseHeaders_.addUninitializedValue(
-        "Set-Cookie",
-        cookieSize,
-        detail::kResponseHeaderSetCookie);
-    recordResponseKnownHeaderIndex(detail::kResponseHeaderSetCookie, index);
-    auto* cursor = detail::responseHeaderValueBegin(header);
+void writeSetCookie(
+    char* cursor,
+    std::string_view name,
+    std::string_view value,
+    const CookieOptions& options,
+    const SetCookieSerialization& serialization) {
     const auto append = [&cursor](std::string_view text) noexcept {
+        if (text.empty()) {
+            return;
+        }
         std::memcpy(cursor, text.data(), text.size());
         cursor += text.size();
     };
@@ -373,7 +400,7 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         cursor = ptr;
     };
 
-    append(prefixText);
+    append(serialization.prefixText);
     append(name);
     *cursor++ = '=';
     append(value);
@@ -385,13 +412,13 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         append("; Domain=");
         append(options.domain);
     }
-    if (hasMaxAge) {
+    if (serialization.hasMaxAge) {
         append("; Max-Age=");
-        appendUnsigned(maxAgeValue, maxAgeSize);
+        appendUnsigned(serialization.maxAgeValue, serialization.maxAgeSize);
     }
-    if (!expiresText.empty()) {
+    if (serialization.expiresSize != 0) {
         append("; Expires=");
-        append(expiresText);
+        append(serialization.expiresText());
     }
     if (options.httpOnly) {
         append("; HttpOnly");
@@ -403,13 +430,42 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         append("; SameSite=");
         append(options.sameSite);
     }
-    if (!priorityText.empty()) {
+    if (!serialization.priorityText.empty()) {
         append("; Priority=");
-        append(priorityText);
+        append(serialization.priorityText);
     }
     if (options.partitioned) {
         append("; Partitioned");
     }
+}
+
+[[nodiscard]] std::pmr::string composeSignedCookieValue(
+    std::pmr::memory_resource* resource,
+    std::string_view value,
+    std::string_view secret) {
+    std::pmr::string signedValue(resource);
+    signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
+    if (!value.empty()) {
+        signedValue.append(value.data(), value.size());
+    }
+    signedValue.push_back('.');
+    char signature[detail::kCookieSignatureSize];
+    detail::writeCookieSignature(signature, secret, value);
+    signedValue.append(signature, sizeof(signature));
+    return signedValue;
+}
+
+}  // namespace
+
+void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
+    const auto serialization = prepareSetCookie(name, value, options);
+    const auto index = responseHeaders_.size();
+    auto& header = responseHeaders_.addUninitializedValue(
+        "Set-Cookie",
+        serialization.size,
+        detail::kResponseHeaderSetCookie);
+    recordResponseKnownHeaderIndex(detail::kResponseHeaderSetCookie, index);
+    writeSetCookie(detail::responseHeaderValueBegin(header), name, value, options, serialization);
     if (response_ != nullptr) {
         detail::appendResponseHeaderValidated(
             responseStorage(),
@@ -424,16 +480,26 @@ void Context::setSignedCookie(
     std::string_view value,
     std::string_view secret,
     const CookieOptions& options) {
-    std::pmr::string signedValue(resource());
-    signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
-    if (!value.empty()) {
-        signedValue.append(value.data(), value.size());
-    }
-    signedValue.push_back('.');
-    char signature[detail::kCookieSignatureSize];
-    detail::writeCookieSignature(signature, secret, value);
-    signedValue.append(signature, sizeof(signature));
-    setCookie(name, signedValue, options);
+    setCookie(name, composeSignedCookieValue(resource(), value, secret), options);
+}
+
+std::pmr::string Context::generateCookie(
+    std::string_view name,
+    std::string_view value,
+    const CookieOptions& options) const {
+    const auto serialization = prepareSetCookie(name, value, options);
+    std::pmr::string cookie(resource());
+    cookie.resize(serialization.size);
+    writeSetCookie(cookie.data(), name, value, options, serialization);
+    return cookie;
+}
+
+std::pmr::string Context::generateSignedCookie(
+    std::string_view name,
+    std::string_view value,
+    std::string_view secret,
+    const CookieOptions& options) const {
+    return generateCookie(name, composeSignedCookieValue(resource(), value, secret), options);
 }
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {

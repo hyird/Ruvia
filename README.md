@@ -242,13 +242,14 @@ Ruvia's context surface targets Hono-like C++: API shape should be familiar to H
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
 | `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. The writer supports `write`, `writeln`, `co_await sleep(ms)` (asio timer on the connection's worker, non-blocking), `aborted()` (HTTP/2 reflects a peer `RST_STREAM`; HTTP/1.1 latches after a failed write, so long-lived producers should heartbeat), `addTrailer`, and `end`. |
-| `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=UTF-8` and returns the stream writer. |
+| `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=UTF-8` plus `X-Content-Type-Options: nosniff` and returns the stream writer. |
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
 | `c.header(name, value)` | Add or replace a response header; pass `std::nullopt` to remove a prepared response header, matching Hono's undefined-value deletion behavior. Returns `void`. |
 | `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header and return `void`, matching Hono's side-effect cookie setter shape. `CookieOptions` covers `path`, `domain`, `sameSite`, `priority`, `expires`, `maxAge`, `prefix` (`CookiePrefix::kSecure` / `kHost` emit `__Secure-` / `__Host-` names), `httpOnly`, `secure`, and `partitioned`; Hono-matching constraints (`__Host-` requires `Secure` + `Path=/` + no `Domain`, `Partitioned` requires `Secure`, 400-day lifetime cap) throw `std::invalid_argument` at set time. |
 | `c.setSignedCookie(name, value, secret, options)` | Append a signed `Set-Cookie` header whose value is `value.base64(HMAC-SHA256(secret, value))`, matching Hono's signed-cookie format. |
+| `c.generateCookie(name, value, options)` / `c.generateSignedCookie(name, value, secret, options)` | Serialize the `Set-Cookie` header value into a request-arena `std::pmr::string` without touching the response, matching Hono's `generateCookie` / `generateSignedCookie` helpers. |
 | `c.deleteCookie(name, options)` | Return the current request cookie value, if present, then expire the response cookie with `Max-Age=0`. |
 | `c.res()` / `c.res(response)` | Access the current `ruvia::HttpResponse` slot or replace it to short-circuit middleware. `c.res(response)` returns `void`, matching Hono's assignment-style response setter. Reading `c.res()` does not by itself finalize the context; handler returns, downstream responses, and `c.res(response)` do. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape without exposing a Web `Response` or Web `Headers` object. When replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. `c.res(response)` does not consume headers prepared only with `c.header()`; use `c.body()` / `c.newResponse()` / `c.text()` / `c.json()` / `c.html()` when prepared headers should be applied while constructing a new response. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
@@ -687,7 +688,7 @@ Each macro takes `(path, handler, Middleware...)`, registers a buffered route wh
 | `RUVIA_HEAD` | `HEAD` (explicit; otherwise `GET` is reused for `HEAD`) |
 | `RUVIA_OPTIONS` | `OPTIONS` (explicit; distinct from framework-generated `OPTIONS`) |
 | `RUVIA_ALL` | Hono `app.all` analog: registers the handler for `GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` (`HEAD` is served by the `GET` fallback). Combining it with a single-method macro on the same path triggers the startup duplicate-route error. |
-| `RUVIA_ON((ruvia::Put, ruvia::Delete), path, handler, Middleware...)` | Hono `app.on` analog: registers the handler for an explicit method list. |
+| `RUVIA_ON((ruvia::Put, ruvia::Delete), ("/items/:id", "/legacy/:id"), handler, Middleware...)` | Hono `app.on` analog: registers the handler for an explicit method list x path list; both lists are parenthesized. |
 
 ### Streaming, SSE, and WebSocket routes
 
