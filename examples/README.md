@@ -15,6 +15,7 @@ These examples are built when `RUVIA_BUILD_EXAMPLES` is enabled. They double as 
 | `ruvia_example_middleware_next_guard` | `middleware_next_guard.cpp` | Regression guard for expired middleware `Next` continuations. |
 | `ruvia_example_http2_stream_table_guard` | `http2_stream_table_guard.cpp` | Internal HTTP/2 stream-table snapshot coverage for waiter-resume reentrancy. |
 | `ruvia_example_context_response_state_guard` | `context_response_state_guard.cpp` | Regression guard for context response-state merging: no duplicated append/Set-Cookie headers and explicit response status beating the context default. |
+| `ruvia_example_cookie_api_guard` | `cookie_api_guard.cpp` | Regression guard for the cookie surface: full-option `Set-Cookie` serialization, option-constraint validation errors, signed-cookie sign/verify/tamper roundtrips, `generateCookie` / `generateSignedCookie` consistency, `deleteCookie` semantics, and byte-span response bodies. |
 | `ruvia_example_auth_jwt` | `auth_jwt.cpp` | JWT signing, verification, bearer-token middleware and protected routes. Built only with `RUVIA_ENABLE_JWT=ON`. |
 | `ruvia_example_database` | `database.cpp` | DB configuration, query, execute, streaming query, transaction and optional migration. Built only with `RUVIA_ENABLE_MARIADB=ON`. |
 | `ruvia_example_redis` | `redis.cpp` | Redis configuration, aliases, strings, hashes, lists, sets, sorted sets, scans, scripts, blocking pops, pipelines and transactions. Built only with `RUVIA_ENABLE_REDIS=ON`. |
