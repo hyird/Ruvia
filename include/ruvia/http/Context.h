@@ -465,10 +465,6 @@ public:
                 return entry_ == nullptr ? std::nullopt : entry_->value();
             }
 
-            [[nodiscard]] std::optional<std::string_view> toStringView() const noexcept {
-                return text();
-            }
-
             [[nodiscard]] std::optional<std::string_view> value() const noexcept {
                 return text();
             }
@@ -588,10 +584,6 @@ public:
                     return std::nullopt;
                 }
                 return std::string_view(selected->value.data(), selected->value.size());
-            }
-
-            [[nodiscard]] std::optional<std::string_view> toStringView() const noexcept {
-                return text();
             }
 
             [[nodiscard]] std::optional<std::string_view> value() const noexcept {
