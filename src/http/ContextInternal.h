@@ -45,7 +45,6 @@ inline Context::Context(
       bodyLoader_(services.bodyLoader()),
       webSocket_(services.webSocket()),
       responseStream_(services.responseStream()),
-      responseStatusText_(memory.resource()),
       responseHeaders_(memory.resource()) {}
 
 }  // namespace ruvia
