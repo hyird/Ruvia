@@ -48,9 +48,8 @@ HttpResponse& Context::res() {
     return responseStorage();
 }
 
-Context& Context::res(HttpResponse&& response) {
+void Context::res(HttpResponse&& response) {
     storeAssignedResponse(std::move(response));
-    return *this;
 }
 
 HttpResponse Context::takeResponse() {
