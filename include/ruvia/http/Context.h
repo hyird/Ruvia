@@ -1869,6 +1869,23 @@ public:
 
     [[nodiscard]] HttpResponse body(std::pmr::string& body, ResponseInit init) const;
 
+    [[nodiscard]] HttpResponse body(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse body(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode,
+        std::initializer_list<HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(std::span<const std::byte> body, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse newResponse(
         std::string_view body,
         std::uint16_t statusCode = 0,
@@ -1920,6 +1937,23 @@ public:
 
     [[nodiscard]] HttpResponse newResponse(std::pmr::string& body, ResponseInit init) const;
 
+    [[nodiscard]] HttpResponse newResponse(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::span<const std::byte> body,
+        std::uint16_t statusCode,
+        std::initializer_list<HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse newResponse(std::span<const std::byte> body, ResponseInit init) const;
+
     template <std::size_t N>
     [[nodiscard]] HttpResponse newResponse(
         const char (&body)[N],
@@ -1940,6 +1974,31 @@ public:
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse newResponse(const char (&body)[N], ResponseInit init) const;
+
+    [[nodiscard]] HttpResponse newResponse(
+        const std::pmr::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::pmr::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse newResponse(
+        const std::string& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
+
+    [[nodiscard]] HttpResponse newResponse(
+        std::string&& body,
+        std::uint16_t statusCode = 0,
+        std::string_view statusText = {}) const = delete;
 
     [[nodiscard]] HttpResponse body(
         const std::pmr::string& body,

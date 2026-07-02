@@ -157,10 +157,10 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - `Expect: 100-continue` 要在读取 body 前返回 interim 100 响应，避免等待 body 的客户端死锁。
 - 大请求体需要流式处理时必须显式使用 `RUVIA_POST_STREAM`、`RUVIA_PUT_STREAM` 或 `RUVIA_PATCH_STREAM`。
 - 普通 route 仍保持 dispatch 前完整读取 body，不要让所有路由默认进入流式路径。
-- stream route 在 header 完整后进入 handler，通过 `c.bodyReader()` 逐块读取 Content-Length 或 chunked body。
+- stream route 在 header 完整后进入 handler，通过 `c.req().bodyReader()` 逐块读取 Content-Length 或 chunked body。
 - `BodyReader::read()` 返回的 chunk view 只保证有效到下一次 `read()`，不要跨 read 或跨请求保存。
 - multipart/form-data 解析结果默认是指向当前请求 body 的 part view。
-- stream route 可通过 `c.multipartReader()` 逐块读取 multipart/form-data；part body view 同样只保证有效到下一次 `read()`。
+- stream route 可通过 `c.req().multipartReader()` 逐块读取 multipart/form-data；part body view 同样只保证有效到下一次 `read()`。
 - stream multipart 的 part name、filename、contentType、body 都是 view，生命周期只保证到下一次 `read()`。
 - 避免“临时 body 再拷贝到 request”的两段式分配。
 
@@ -249,7 +249,8 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 
 - middleware API 采用 Drogon-like CRTP。
 - middleware 类形如 `class AppMiddleware final : public ruvia::Middleware<AppMiddleware>`。
-- middleware 实现异步 `ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next)`。
+- middleware 实现异步 `ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next)`（Hono-like：`co_await next()` 之后通过 `c.res()` 读改响应、`c.error()` 检查下游异常），或用 `ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, ruvia::Next& next)` 直接返回/短路响应。
+- `next()` 是 single-shot：恰好 `co_await` 一次；未 await 的 `next()` 会在 finalize 校验时报错，重复 await 得到 500。
 - middleware 实例和链在启动期构建。
 - middleware 只提供用户自定义机制；应用自己的 middleware 通过 controller/group/route 宏显式挂载。
 - middleware 不在请求期重建链或创建临时容器。
@@ -278,14 +279,14 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 普通 handler 签名形如 `ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c)`；response streaming/WebSocket handler 签名形如 `ruvia::Task<void> stream(ruvia::Context& c)`。
 - 不要提供同步 `ruvia::HttpResponse handler(...)` 重载。
 - 通过 `c.req()` 读取请求。
-- 通过 `c.header(...)`、`c.query(...)`、`c.cookie(...)`、`c.param(...)` 读取常用输入。
-- 通过 `c.status(...)`、`c.setHeader(...)`、`c.setCookie(...)` 构造响应元数据。
-- 通过 `c.bodyReader()` 在显式 stream route 中读取请求体。
+- 通过 `c.req().header(...)`、`c.req().query(...)` / `c.req().queries(...)`、`c.req().cookie(...)`、`c.req().param(...)` 读取常用输入；`Context` 不提供请求读取的一元 `header/query/cookie/param`。
+- 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header，`c.setHeader(...)` 是 `c.header(...)` 的别名。
+- 通过 `c.req().bodyReader()` 在显式 stream route 中读取请求体。
 - 通过 `c.stream()` / `c.streamText()` / `c.streamSSE()` 在显式 response streaming route 中写出响应块或 SSE frame。
 - 通过 `c.webSocket()` 在显式 WebSocket route 中读写 text/binary/pong/close frame。
-- 通过 `c.text(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(status, code, message)` 构造响应体或错误响应。
-- `c.header(...)` 是请求 header 读取。
-- 响应 header 必须用 `c.setHeader(...)`。
+- 通过 `c.body(...)` / `c.newResponse(...)`（body 支持 `std::string_view`、arena `std::pmr::string&`、`std::span<const std::byte>`、`nullptr` 空 body）、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`co_await c.render(...)`、`co_await c.notFound()`、`c.error(status, code, message)` 构造响应体或错误响应。
+- `c.header(name, value)` 是响应 header 设置（对齐 Hono）；请求 header 读取用 `c.req().header(name)`。
+- 中间件与 handler 可直接读改 `c.res()` 响应槽；`c.set(...)` / `c.get<T>(...)` / `c.var()` 传递请求内变量，`c.env()` 读取启动期环境。
 - 需要临时字符串时优先使用 `c.allocator<char>()` 构造 `std::pmr::string`。
 - 不要回退到普通堆分配。
 
@@ -307,9 +308,9 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - `HttpRequest::header(...)` 返回 header value view。
 - `query(...)` 返回 `std::optional<std::string_view>`。
 - `cookie(...)` 返回 `std::optional<std::string_view>`。
-- 请求 body I/O 只放在 `Context` 上；普通路由通过 `co_await c.body()`、`co_await c.json<T>()`、`co_await c.form<T>()`、`co_await c.multipart()` 懒读取。
+- 请求 body I/O 只放在 `c.req()`（`ContextRequest`）上；普通路由通过 `co_await c.req().text()`、`co_await c.req().json()` / `json<T>()`、`co_await c.req().form<T>()`、`co_await c.req().multipart()`、`co_await c.req().arrayBuffer()` / `bytes()` / `blob()` / `formData()` / `parseBody(...)` 懒读取；`c.body(...)` 是响应构造 helper，不是请求读取。
 - `HttpRequest` 不公开同步 `body/json/form/multipart` 入口；不要恢复这些旧 API。
-- `co_await c.multipart()` 返回请求 arena 中的 part 表，part body 仍指向当前请求 body。
+- `co_await c.req().multipart()` 返回请求 arena 中的 part 表，part body 仍指向当前请求 body。
 - header/query/cookie 按请求原文返回 view。
 - header/query/cookie 返回值仍指向当前请求读缓冲；body/multipart 返回值指向当前请求 arena 或 body 缓冲。
 - 不要跨请求保存返回 view。
@@ -332,7 +333,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 模型内部实现头只放在 `include/ruvia/http/detail/model`；用户代码不要直接 include 内部头。
 - `RUVIA_MODEL` 是请求 body 和响应 JSON 的统一 schema 入口。
 - 示例：`RUVIA_MODEL(Login, RUVIA_FIELD(username, ruvia::String), RUVIA_FIELD(password, ruvia::String))`。
-- 同一模型可用于 `co_await c.json<T>()`、`co_await c.form<T>()` 和 `c.json(model)`。
+- 同一模型可用于 `co_await c.req().json<T>()`、`co_await c.req().form<T>()` 和 `c.json(model)`。
 - `RUVIA_FIELD` / `RUVIA_FIELD_NAME` 只允许字段类型和模型选项；当前模型选项只支持 `RUVIA_DEFAULT(value)`、`RUVIA_OMIT_EMPTY`、`RUVIA_EMIT_NULL`。
 - 字段校验规则禁止写在 `RUVIA_FIELD` / `RUVIA_FIELD_NAME` 上；必须通过 route middleware 的 `RUVIA_VALIDATE_JSON(Model, RUVIA_RULE(...))` 或 `RUVIA_VALIDATE_FORM(Model, RUVIA_RULE(...))` 声明。
 - 当前校验规则支持 `RUVIA_REQUIRED(message)`、`RUVIA_MIN(value, message)`、`RUVIA_MAX(value, message)`、`RUVIA_ONE_OF(message, ...)`、`RUVIA_EMAIL(message)`、`RUVIA_PATTERN(message, "regex")`、`RUVIA_MATCH(message, predicate)`、`RUVIA_CUSTOM(message, predicate)`。
