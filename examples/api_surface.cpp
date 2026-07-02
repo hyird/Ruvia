@@ -334,6 +334,17 @@ static_assert(std::is_same_v<
         std::string_view{})),
     std::optional<std::string_view>>);
 static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().generateCookie(
+        std::string_view{},
+        std::string_view{})),
+    std::pmr::string>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().generateSignedCookie(
+        std::string_view{},
+        std::string_view{},
+        std::string_view{})),
+    std::pmr::string>);
+static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().writeln(std::string_view{})),
     ruvia::Task<void>>);
 static_assert(std::is_same_v<
@@ -546,7 +557,7 @@ public:
     RUVIA_GET("/cookies", cookies);
     RUVIA_GET("/signed-cookies", signedCookies);
     RUVIA_ALL("/any", anyMethod);
-    RUVIA_ON((::ruvia::Put, ::ruvia::Delete), "/on-item/:id", onItem);
+    RUVIA_ON((::ruvia::Put, ::ruvia::Delete), ("/on-item/:id", "/on-legacy/:id"), onItem);
     RUVIA_GET("/manual/copy", manualCopy);
     RUVIA_GET("/manual/view", manualView);
     RUVIA_PUT_STREAM("/upload/:id", streamPut);
@@ -1189,6 +1200,10 @@ private:
         body.append(verified.value_or("missing"));
         body.append("\nabsent=");
         body.append(absent.has_value() ? "present" : "missing");
+        body.append("\ngenerated=");
+        body.append(c.generateCookie("gen", "value", {.httpOnly = true}));
+        body.append("\ngenerated-signed-bytes=");
+        appendUnsigned(body, c.generateSignedCookie("gen-signed", "value", kSecret).size());
         body.push_back('\n');
         co_return c.text(body);
     }

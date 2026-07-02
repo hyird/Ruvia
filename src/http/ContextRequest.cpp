@@ -739,6 +739,7 @@ ResponseStreamWriter& Context::stream() const {
 
 ResponseStreamWriter& Context::streamText() {
     setStableResponseHeader("Content-Type", "text/plain; charset=UTF-8");
+    setStableResponseHeader("X-Content-Type-Options", "nosniff");
     return stream();
 }
 

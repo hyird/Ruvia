@@ -4,6 +4,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <string_view>
 #include <utility>
 
 namespace ruvia::detail {
@@ -33,6 +34,30 @@ public:
 
 private:
     HttpMethod methods_[9]{};
+    std::size_t count_{0};
+};
+
+// Startup-only holder for the RUVIA_ON path list; the macro pastes the
+// parenthesized list as a constructor call.
+class RuviaPathList final {
+public:
+    template <std::convertible_to<std::string_view>... Paths>
+    constexpr explicit RuviaPathList(Paths... paths) noexcept
+        : paths_{paths...},
+          count_(sizeof...(Paths)) {
+        static_assert(sizeof...(Paths) > 0, "RUVIA_ON requires at least one path");
+    }
+
+    [[nodiscard]] constexpr const std::string_view* begin() const noexcept {
+        return paths_;
+    }
+
+    [[nodiscard]] constexpr const std::string_view* end() const noexcept {
+        return paths_ + count_;
+    }
+
+private:
+    std::string_view paths_[8]{};
     std::size_t count_{0};
 };
 
@@ -190,17 +215,18 @@ private:
             ::ruvia::RequestBodyMode::kBuffered, \
             RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
-// Hono app.on: registers the handler for an explicit method list, e.g.
-// RUVIA_ON((ruvia::Put, ruvia::Delete), "/items/:id", handler).
-#define RUVIA_ON(methods, path, handler, ...) \
+// Hono app.on: registers the handler for an explicit method x path list, e.g.
+// RUVIA_ON((ruvia::Put, ruvia::Delete), ("/items/:id", "/legacy/:id"), handler).
+#define RUVIA_ON(methods, paths, handler, ...) \
     for (const auto ruviaRouteMethod : ::ruvia::detail::RuviaMethodList methods) \
-        RuviaControllerType::ruviaAddRoute( \
-            ruviaRouteScope, \
-            ruviaRouteMethod, \
-            path, \
-            bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-            ::ruvia::RequestBodyMode::kBuffered, \
-            RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        for (const auto ruviaRoutePath : ::ruvia::detail::RuviaPathList paths) \
+            RuviaControllerType::ruviaAddRoute( \
+                ruviaRouteScope, \
+                ruviaRouteMethod, \
+                ruviaRoutePath, \
+                bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+                ::ruvia::RequestBodyMode::kBuffered, \
+                RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_POST_STREAM(path, handler, ...) \
     RuviaControllerType::ruviaAddRoute( \

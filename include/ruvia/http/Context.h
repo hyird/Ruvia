@@ -1725,6 +1725,16 @@ public:
         std::string_view value,
         std::string_view secret,
         const CookieOptions& options = {});
+    // Serialize a Set-Cookie header value without touching the response.
+    [[nodiscard]] std::pmr::string generateCookie(
+        std::string_view name,
+        std::string_view value,
+        const CookieOptions& options = {}) const;
+    [[nodiscard]] std::pmr::string generateSignedCookie(
+        std::string_view name,
+        std::string_view value,
+        std::string_view secret,
+        const CookieOptions& options = {}) const;
     [[nodiscard]] std::optional<std::string_view> deleteCookie(std::string_view name, CookieOptions options = {});
 
     [[nodiscard]] HttpResponse& res();
