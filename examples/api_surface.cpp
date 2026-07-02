@@ -1,9 +1,12 @@
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -153,6 +156,22 @@ concept HasFormValueToStringView = requires(const T& value) {
     value.toStringView();
 };
 
+template <typename T>
+concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
+    { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
+    { context.newResponse(body) } -> std::same_as<ruvia::HttpResponse>;
+};
+
+template <typename T>
+concept HasStdStringResponseBody = requires(const T& context, std::string body) {
+    context.body(body);
+};
+
+template <typename T>
+concept HasStdStringNewResponseBody = requires(const T& context, std::string body) {
+    context.newResponse(body);
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -203,6 +222,9 @@ static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::PathValue>);
+static_assert(HasByteSpanResponseBody<ruvia::Context>);
+static_assert(!HasStdStringResponseBody<ruvia::Context>);
+static_assert(!HasStdStringNewResponseBody<ruvia::Context>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().setRenderer(static_cast<ruvia::Context::Renderer>(nullptr))),
     void>);
@@ -437,6 +459,7 @@ public:
     RUVIA_GET("/html", htmlBody);
     RUVIA_GET("/json-response", jsonResponse);
     RUVIA_GET("/null-body", nullBody);
+    RUVIA_GET("/binary-body", binaryBody);
     RUVIA_GET("/render", renderBody);
     RUVIA_GET("/render-head", renderHeadBody);
     RUVIA_GET("/render-layout", renderLayoutBody, SurfaceLayoutMiddleware);
@@ -643,6 +666,17 @@ private:
             nullptr,
             202,
             {{"X-Null-Body", "true"}});
+    }
+
+    ruvia::Task<ruvia::HttpResponse> binaryBody(ruvia::Context& c) {
+        static constexpr std::array<std::byte, 3> bytes{
+            std::byte{0x00},
+            std::byte{0x41},
+            std::byte{0xff}};
+        co_return c.newResponse(
+            std::span<const std::byte>(bytes),
+            206,
+            {{"X-Binary-Body", "true"}});
     }
 
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {
