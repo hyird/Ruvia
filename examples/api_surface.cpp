@@ -241,6 +241,18 @@ static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().res(std::declval<ruvia::HttpResponse&&>())),
     void>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setCookie(std::string_view{}, std::string_view{})),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().setCookie(
+        std::string_view{},
+        std::string_view{},
+        std::declval<const ruvia::CookieOptions&>())),
+    void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().deleteCookie(std::string_view{})),
+    std::optional<std::string_view>>);
+static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
@@ -974,11 +986,14 @@ private:
         options.httpOnly = true;
         options.sameSite = "Lax";
         options.maxAge = 3600;
-        co_return c
-            .setCookie("session", "example", options)
-            .setCookie("theme", "light")
-            .deleteCookie("legacy-session")
-            .text("cookies set\n");
+        c.setCookie("session", "example", options);
+        c.setCookie("theme", "light");
+        const auto deleted = c.deleteCookie("legacy-session");
+        std::pmr::string body(c.allocator<char>());
+        body.append("cookies set\nlegacy-session=");
+        body.append(deleted.value_or(""));
+        body.push_back('\n');
+        co_return c.text(body);
     }
 
     ruvia::Task<ruvia::HttpResponse> manualCopy(ruvia::Context& c) {

@@ -1805,8 +1805,8 @@ public:
         header(name, value);
     }
 
-    Context& setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
-    Context& deleteCookie(std::string_view name, CookieOptions options = {});
+    void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
+    [[nodiscard]] std::optional<std::string_view> deleteCookie(std::string_view name, CookieOptions options = {});
 
     [[nodiscard]] HttpResponse& res();
 
