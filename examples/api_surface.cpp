@@ -139,6 +139,11 @@ concept HasRequestIsSecureAlias = requires(const T& request) {
     request.isSecure();
 };
 
+template <typename T>
+concept HasFormValueToStringView = requires(const T& value) {
+    value.toStringView();
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -186,6 +191,8 @@ static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
+static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::Value>);
+static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::PathValue>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().setRenderer(static_cast<ruvia::Context::Renderer>(nullptr))),
     void>);
@@ -720,7 +727,7 @@ private:
         body.append("\nhas-title=");
         body.append(form.has("title") ? "true" : "false");
         const auto title = form.get("title");
-        if (auto titleText = title.toStringView()) {
+        if (auto titleText = title.value()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
@@ -728,13 +735,13 @@ private:
         body.append(form.has("obj") ? "true" : "false");
         body.append("\nhas-obj-key1=");
         body.append(form.has("obj.key1") ? "true" : "false");
-        if (auto directNested = form.get("obj.key1").toStringView()) {
+        if (auto directNested = form.get("obj.key1").value()) {
             body.append("\nobj.key1-direct=");
             body.append(*directNested);
         }
         body.append("\ntag-count=");
         appendUnsigned(body, form.getAll("tag").values().size());
-        if (auto tag = form.get("tag").toStringView()) {
+        if (auto tag = form.get("tag").value()) {
             body.append("\ntag-single=");
             body.append(*tag);
         }
@@ -748,7 +755,7 @@ private:
         body.append(form["tag"].isArray() ? "true" : "false");
         const auto nestedObject = form.object("obj");
         const auto nested = nestedObject.get("key1");
-        if (auto nestedText = nested.toStringView()) {
+        if (auto nestedText = nested.value()) {
             body.append("\nobj.key1=");
             body.append(*nestedText);
         }
@@ -757,7 +764,7 @@ private:
             body.append(*nestedValue);
         }
         const auto exactNested = form.at("obj.key1");
-        if (auto exactNestedText = exactNested.toStringView()) {
+        if (auto exactNestedText = exactNested.value()) {
             body.append("\nobj.key1-at=");
             body.append(*exactNestedText);
         }
@@ -838,18 +845,18 @@ private:
         body.append(form.has("title") ? "true" : "false");
         body.append("\ntag-count=");
         appendUnsigned(body, tags.values().size());
-        if (auto tag = form.get("tag").toStringView()) {
+        if (auto tag = form.get("tag").value()) {
             body.append("\ntag-single=");
             body.append(*tag);
         }
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
         const auto title = form.get("title");
-        if (auto titleText = title.toStringView()) {
+        if (auto titleText = title.value()) {
             body.append("\ntitle=");
             body.append(*titleText);
         }
-        if (auto literalDot = form.get("obj.key1").toStringView()) {
+        if (auto literalDot = form.get("obj.key1").value()) {
             body.append("\nliteral-obj-key1=");
             body.append(*literalDot);
         }
@@ -938,7 +945,7 @@ private:
         appendUnsigned(body, form.fields().size());
         body.append("\nentries=");
         appendUnsigned(body, form.entries().size());
-        if (auto title = form.get("title").toStringView()) {
+        if (auto title = form.get("title").value()) {
             body.append("\ntitle=");
             body.append(*title);
         }
