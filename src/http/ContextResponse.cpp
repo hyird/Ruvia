@@ -489,8 +489,10 @@ std::pmr::string Context::generateCookie(
     const CookieOptions& options) const {
     const auto serialization = prepareSetCookie(name, value, options);
     std::pmr::string cookie(resource());
-    cookie.resize(serialization.size);
-    writeSetCookie(cookie.data(), name, value, options, serialization);
+    cookie.resize_and_overwrite(serialization.size, [&](char* out, std::size_t size) {
+        writeSetCookie(out, name, value, options, serialization);
+        return size;
+    });
     return cookie;
 }
 
