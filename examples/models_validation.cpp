@@ -1,5 +1,6 @@
 #include <charconv>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
@@ -63,6 +64,21 @@ RUVIA_MODEL(Category,
 
 static bool hasRuviaCodePrefix(const ruvia::String& code) {
     return code.view().starts_with("CY-");
+}
+
+std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
+    if (!input || input->empty()) {
+        return std::nullopt;
+    }
+
+    std::uint32_t value{};
+    const auto* const begin = input->data();
+    const auto* const end = begin + input->size();
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
+    if (ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 class ProfileValidator final : public ruvia::Middleware<ProfileValidator> {
@@ -140,8 +156,8 @@ class ManualSearchQueryValidator final : public ruvia::Middleware<ManualSearchQu
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
         SearchQuery query(c);
-        query.q(c.req().query("q").toStringView().value_or("manual"));
-        if (auto page = c.req().query("page").toUInt32()) {
+        query.q(c.req().query("q").value_or("manual"));
+        if (auto page = parseUInt32(c.req().query("page"))) {
             query.page(ruvia::UInt32{*page});
         }
         c.req().addValidatedData("query", std::move(query));

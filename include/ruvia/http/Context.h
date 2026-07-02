@@ -1359,7 +1359,7 @@ public:
     [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
-    [[nodiscard]] QueryValue query(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::optional<std::span<const std::string_view>> queries(std::string_view name) const;
     [[nodiscard]] const RequestValueGroupList& queries() const;
@@ -2389,8 +2389,8 @@ inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
     return context_->requestAccepts(mediaType);
 }
 
-inline QueryValue ContextRequest::query(std::string_view name) const {
-    return QueryValue(context_->requestQuery().get(name), context_->resource());
+inline std::optional<std::string_view> ContextRequest::query(std::string_view name) const {
+    return context_->requestQuery().get(name);
 }
 
 inline const RequestNameValueList& ContextRequest::query() const {
