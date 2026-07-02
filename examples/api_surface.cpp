@@ -438,6 +438,7 @@ public:
     RUVIA_GET("/pre-direct-res", preDirectResponse, SurfacePreDirectResponseMiddleware);
     RUVIA_GET("/res-direct-buffered", directBufferedResponse);
     RUVIA_GET("/res-remove-buffered", removeBufferedResponse);
+    RUVIA_GET("/res-assigned-prepared", assignedPreparedResponse);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
@@ -686,6 +687,15 @@ private:
         c.res().headers().remove("X-Remove-Buffered");
         ruvia::HttpResponse response(c.resource());
         response.setBodyCopy("removed buffered response\n");
+        c.res(std::move(response));
+        co_return std::move(c.res());
+    }
+
+    ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
+        c.header("X-Surface-Prepared-Assigned", "true");
+        ruvia::HttpResponse response(c.resource());
+        response.setHeader("Content-Type", "text/plain; charset=utf-8");
+        response.setBodyCopy("assigned prepared response\n");
         c.res(std::move(response));
         co_return std::move(c.res());
     }

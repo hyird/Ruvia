@@ -434,26 +434,11 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         response.setStatus(responseStatusCode_, {});
     }
 
-    if (!hadResponseSlot) {
-        const auto contextHeaderCount = responseHeaders_.size();
-        if (contextHeaderCount > 0) {
-            detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
-        }
-        for (const auto& header : responseHeaders_) {
-            const auto knownBit = detail::responseHeaderKnownBit(header);
-            const auto name = header.name();
-            const auto value = header.value();
-            if (knownBit == detail::kResponseHeaderSetCookie || detail::responseHeaderAppend(header)) {
-                if (!responseHasHeaderValue(response, name, value)) {
-                    detail::appendResponseHeaderValidated(response, name, value, knownBit);
-                }
-            } else {
-                detail::setResponseHeaderValidated(response, name, value, knownBit);
-            }
-        }
+    if (response_ == nullptr) {
+        response_ = &memory_.emplace<HttpResponse>(std::move(response));
+    } else {
+        *response_ = std::move(response);
     }
-
-    responseStorage() = std::move(response);
     responseFinalized_ = true;
 }
 
