@@ -267,6 +267,9 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})),
     std::optional<std::string_view>>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})),
+    std::optional<std::string_view>>);
 
 void appendUnsigned(std::pmr::string& output, std::uint64_t value) {
     char buffer[32]{};

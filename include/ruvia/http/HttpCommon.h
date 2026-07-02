@@ -482,7 +482,6 @@ private:
 };
 
 using QueryValue = RequestValue;
-using ParamValue = RequestValue;
 
 HttpMethod parseMethod(std::string_view method);
 std::string_view methodName(HttpMethod method);

@@ -591,8 +591,8 @@ const RequestNameValueList& Context::routeParams() const {
     return *routeParams_;
 }
 
-ParamValue Context::routeParam(std::string_view name) const {
-    return ParamValue(routeParams().get(name), resource());
+std::optional<std::string_view> Context::routeParam(std::string_view name) const {
+    return routeParams().get(name);
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {

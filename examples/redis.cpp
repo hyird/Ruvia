@@ -81,7 +81,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
-        auto value = co_await c.redis().get(c.req().param("key").toStringView().value_or(""));
+        auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
             co_return c.error(404, "not_found", "redis key not found");
         }
@@ -90,12 +90,12 @@ public:
 
     ruvia::Task<ruvia::HttpResponse> setValue(ruvia::Context& c) {
         auto body = co_await c.req().text();
-        co_await c.redis().set(c.req().param("key").toStringView().value_or(""), body);
+        co_await c.redis().set(c.req().param("key").value_or(""), body);
         co_return c.text("OK\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> increment(ruvia::Context& c) {
-        const auto value = co_await c.redis().incr(c.req().param("key").toStringView().value_or(""));
+        const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
         std::pmr::string body(c.allocator<char>());
         appendSigned(body, value);
         body.push_back('\n');
@@ -103,7 +103,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> keyMetadata(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto exists = co_await c.redis().exists(key);
         const auto touched = co_await c.redis().touch(key);
         const auto type = co_await c.redis().type(key);
@@ -129,7 +129,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto value = co_await c.req().text();
         const std::array<std::pair<std::string_view, std::string_view>, 2> items{{
             {"ruvia:example:mset:a", "one"},
@@ -179,7 +179,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> hashes(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const std::array<std::pair<std::string_view, std::string_view>, 2> fields{{
             {"name", "ruvia"},
             {"kind", "framework"},
@@ -224,7 +224,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> lists(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto left = co_await c.redis().lpush(key, "left");
         const auto right = co_await c.redis().rpush(key, "right");
         const auto length = co_await c.redis().llen(key);
@@ -258,7 +258,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> sets(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto added = co_await c.redis().sadd(key, "one");
         const auto alsoAdded = co_await c.redis().sadd("ruvia:example:set:other", "one");
         auto members = co_await c.redis().smembers(key);
@@ -298,7 +298,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> sortedSets(ruvia::Context& c) {
-        const auto key = c.req().param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto added = co_await c.redis().zadd(key, 1.0, "one");
         const auto addedTwo = co_await c.redis().zadd(key, 2.0, "two");
         auto values = co_await c.redis().zrange(key, 0, -1);
@@ -427,7 +427,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> aliasValue(ruvia::Context& c) {
-        auto value = co_await c.redis("cache").get(c.req().param("key").toStringView().value_or(""));
+        auto value = co_await c.redis("cache").get(c.req().param("key").value_or(""));
         std::pmr::string body(c.allocator<char>());
         if (value) {
             body.append(*value);
