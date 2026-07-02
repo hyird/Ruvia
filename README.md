@@ -250,7 +250,7 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
 | `c.env()` | Read application environment values from the current context. |
 | `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. `c.set(...)` returns `void`, matching Hono's non-chainable setter shape. `c.get<T>(...)` and `c.var().get<T>(...)` return nullable pointers, matching Hono's missing-value flow; use `c.var()[typedKey]` only when a missing value should be treated as a logic error. `c.getIf<T>(key)` / `c.varIf<T>(key)` remain aliases for pointer-style checks. |
-| `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; `newResponse` is the Hono-named alias for the same response-init shape. |
+| `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; pass `nullptr` for a Hono-style null body. `newResponse` is the Hono-named alias for the same response-init shape. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
 | `c.html(...)` / `c.setRenderer(...)` / `c.setLayout(...)` / `c.getLayout()` / `co_await c.render(body, {.title = ...})` / `co_await c.render(body, {.head = ...})` | Return HTML directly or through middleware-installed Hono-style renderer/layout hooks with explicit title or head metadata. `setRenderer()` returns `void`; `setLayout()` returns the installed layout, matching Hono's hook shape. |
