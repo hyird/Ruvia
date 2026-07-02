@@ -257,6 +257,14 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 
 ## 6. Controller API
 
+### Hono 对齐边界
+
+- 公开 Context / middleware / 路由 API 以 Hono 为命名与用法参照：API 形态与使用方法大致一致即可。
+- 不要求与 Hono 功能逐项对齐；Hono 专属能力（签名 cookie、cookie `expires`/`priority`/`partitioned`/`prefix` 选项、stream `onAbort`/`sleep`、`app.all`/`app.on` 多方法注册、内置中间件生态）不主动补齐，除非用户明确要求。
+- JS/Web 运行时概念不引入：`c.event`、`c.executionCtx`、MDN `Request`/`Response`/`Headers`/`FormData` 对象语义、`ReadableStream` body。
+- 对齐让位于 Ruvia 自身约束：Context-first 参数顺序、`ruvia::Task<T>` 协程、PMR/零拷贝/启动期构建规则优先于 Hono 形态。
+- 形态对齐已是完成态；不要把上述非目标当作缺口或待办重新提出。
+
 ### 公共命名空间
 
 - 项目公开 API 采用扁平命名空间。
