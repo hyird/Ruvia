@@ -1367,7 +1367,6 @@ public:
     [[nodiscard]] const RequestValueGroupList& queries() const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& cookie() const;
-    [[nodiscard]] const RequestNameValueList& cookies() const;
     // Verifies the "value.signature" format written by setSignedCookie; returns
     // the value view on a valid signature, nullopt when missing or tampered.
     [[nodiscard]] std::optional<std::string_view> signedCookie(
@@ -1531,13 +1530,8 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] T* getIf(std::string_view name) const noexcept {
-            return context_->template getIf<T>(name);
-        }
-
-        template <typename T>
         [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return getIf<T>(name) != nullptr;
+            return get<T>(name) != nullptr;
         }
 
         template <typename T>
@@ -1546,18 +1540,13 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] T* getIf(ContextKey<T> key) const noexcept {
-            return context_->template getIf<T>(key);
-        }
-
-        template <typename T>
         [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
-            return getIf<T>(key) != nullptr;
+            return get<T>(key) != nullptr;
         }
 
         template <typename T>
         [[nodiscard]] T& operator[](ContextKey<T> key) const {
-            if (auto* value = getIf(key)) {
+            if (auto* value = get(key)) {
                 return *value;
             }
             throw std::logic_error("context value is not available");
@@ -1578,13 +1567,8 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
-            return context_->template getIf<T>(name);
-        }
-
-        template <typename T>
         [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return getIf<T>(name) != nullptr;
+            return get<T>(name) != nullptr;
         }
 
         template <typename T>
@@ -1593,18 +1577,13 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
-            return context_->template getIf<T>(key);
-        }
-
-        template <typename T>
         [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
-            return getIf<T>(key) != nullptr;
+            return get<T>(key) != nullptr;
         }
 
         template <typename T>
         [[nodiscard]] const T& operator[](ContextKey<T> key) const {
-            if (const auto* value = getIf(key)) {
+            if (const auto* value = get(key)) {
                 return *value;
             }
             throw std::logic_error("context value is not available");
@@ -1702,22 +1681,12 @@ public:
 
     template <typename T>
     [[nodiscard]] T* get(std::string_view name) noexcept {
-        return getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T* getIf(std::string_view name) noexcept {
         auto* store = valuesIf();
         return store == nullptr ? nullptr : store->template getIf<T>(name);
     }
 
     template <typename T>
     [[nodiscard]] const T* get(std::string_view name) const noexcept {
-        return getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* getIf(std::string_view name) const noexcept {
         const auto* store = valuesIf();
         return store == nullptr ? nullptr : store->template getIf<T>(name);
     }
@@ -1728,58 +1697,8 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] T* getIf(ContextKey<T> key) noexcept {
-        return getIf<T>(key.name());
-    }
-
-    template <typename T>
     [[nodiscard]] const T* get(ContextKey<T> key) const noexcept {
         return get<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* getIf(ContextKey<T> key) const noexcept {
-        return getIf<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] T* var(std::string_view name) noexcept {
-        return get<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T* varIf(std::string_view name) noexcept {
-        return getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* var(std::string_view name) const noexcept {
-        return get<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* varIf(std::string_view name) const noexcept {
-        return getIf<T>(name);
-    }
-
-    template <typename T>
-    [[nodiscard]] T* var(ContextKey<T> key) noexcept {
-        return get<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] T* varIf(ContextKey<T> key) noexcept {
-        return getIf<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* var(ContextKey<T> key) const noexcept {
-        return get<T>(key.name());
-    }
-
-    template <typename T>
-    [[nodiscard]] const T* varIf(ContextKey<T> key) const noexcept {
-        return getIf<T>(key.name());
     }
 
     [[nodiscard]] Vars var() noexcept {
@@ -1799,18 +1718,6 @@ public:
     void header(std::string_view name, std::string_view value, HeaderOptions options);
 
     void header(std::string_view name, std::nullopt_t);
-
-    void setHeader(std::string_view name, std::string_view value) {
-        header(name, value);
-    }
-
-    void setHeader(std::string_view name, std::string_view value, HeaderOptions options) {
-        header(name, value, options);
-    }
-
-    void setHeader(std::string_view name, std::nullopt_t value) {
-        header(name, value);
-    }
 
     void setCookie(std::string_view name, std::string_view value, const CookieOptions& options = {});
     void setSignedCookie(
@@ -2269,12 +2176,6 @@ public:
         std::string_view message,
         std::string_view statusText = {}) const;
 
-    [[nodiscard]] HttpResponse jsonError(
-        std::uint16_t statusCode,
-        std::string_view code,
-        std::string_view message,
-        std::string_view statusText = {}) const;
-
     [[nodiscard]] Task<HttpResponse> notFound();
 
 private:
@@ -2517,9 +2418,6 @@ inline const RequestNameValueList& ContextRequest::cookie() const {
     return context_->requestCookies();
 }
 
-inline const RequestNameValueList& ContextRequest::cookies() const {
-    return context_->requestCookies();
-}
 
 inline Task<std::string_view> ContextRequest::text() const {
     return context_->requestBody();

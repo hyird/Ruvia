@@ -173,6 +173,41 @@ concept HasStdStringNewResponseBody = requires(const T& context, std::string bod
     context.newResponse(body);
 };
 
+template <typename T>
+concept HasContextSetHeaderAlias = requires(T& context) {
+    context.setHeader(std::string_view{}, std::string_view{});
+};
+
+template <typename T>
+concept HasContextGetIfAlias = requires(T& context) {
+    context.template getIf<std::string_view>(std::string_view{});
+};
+
+template <typename T>
+concept HasContextVarIfAlias = requires(T& context) {
+    context.template varIf<std::string_view>(std::string_view{});
+};
+
+template <typename T>
+concept HasContextJsonErrorAlias = requires(const T& context) {
+    context.jsonError(std::uint16_t{500}, std::string_view{}, std::string_view{});
+};
+
+template <typename T>
+concept HasRequestCookiesAlias = requires(const T& request) {
+    request.cookies();
+};
+
+template <typename T>
+concept HasAppErrorHandlerSetterAlias = requires(T& app) {
+    app.setErrorHandler(static_cast<ruvia::HttpErrorHandler>(nullptr));
+};
+
+template <typename T>
+concept HasAppNotFoundHandlerSetterAlias = requires(T& app) {
+    app.setNotFoundHandler(static_cast<ruvia::HttpNotFoundHandler>(nullptr));
+};
+
 static_assert(!std::is_copy_constructible_v<ruvia::Next>);
 static_assert(!std::is_copy_assignable_v<ruvia::Next>);
 static_assert(!std::is_move_constructible_v<ruvia::Next>);
@@ -226,6 +261,13 @@ static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(!HasStdStringNewResponseBody<ruvia::Context>);
+static_assert(!HasContextSetHeaderAlias<ruvia::Context>);
+static_assert(!HasContextGetIfAlias<ruvia::Context>);
+static_assert(!HasContextVarIfAlias<ruvia::Context>);
+static_assert(!HasContextJsonErrorAlias<ruvia::Context>);
+static_assert(!HasRequestCookiesAlias<ruvia::ContextRequest>);
+static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
+static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().setRenderer(static_cast<ruvia::Context::Renderer>(nullptr))),
     void>);
@@ -246,18 +288,6 @@ static_assert(std::is_same_v<
     void>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().header(std::string_view{}, std::nullopt)),
-    void>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().setHeader(std::string_view{}, std::string_view{})),
-    void>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().setHeader(
-        std::string_view{},
-        std::string_view{},
-        ruvia::Context::HeaderOptions{.append = true})),
-    void>);
-static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().setHeader(std::string_view{}, std::nullopt)),
     void>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().set(kCurrentUser, CurrentUser{})),
@@ -305,9 +335,6 @@ static_assert(std::is_same_v<
     std::optional<std::string_view>>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().cookie()),
-    const ruvia::RequestNameValueList&>);
-static_assert(std::is_same_v<
-    decltype(std::declval<const ruvia::ContextRequest&>().cookies()),
     const ruvia::RequestNameValueList&>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().queries(std::string_view{})),
@@ -422,7 +449,7 @@ public:
             c.res(std::move(response));
             co_return;
         }
-        c.setHeader("X-Surface-Finalized", c.finalized() ? "true" : "false");
+        c.header("X-Surface-Finalized", c.finalized() ? "true" : "false");
         c.res().headers().append("X-Surface-Middleware", "after-next");
     }
 };
@@ -649,7 +676,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
-        c.setHeader("X-Response-Prepared", "true");
+        c.header("X-Response-Prepared", "true");
         ruvia::HttpResponse response(c.resource());
         response.setStatus(203, {});
         response.setHeader("X-Response-Remove", "drop");
@@ -712,10 +739,10 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> headerRemove(ruvia::Context& c) {
         c.header("X-Remove-Me", "drop");
-        c.setHeader("X-Remove-Too", "drop");
+        c.header("X-Remove-Too", "drop");
         c.header("X-Keep-Me", "keep");
         c.header("X-Remove-Me", std::nullopt);
-        c.setHeader("X-Remove-Too", std::nullopt);
+        c.header("X-Remove-Too", std::nullopt);
         co_return c.text("header remove\n");
     }
 
@@ -729,7 +756,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> appError(ruvia::Context& c) {
-        c.setHeader("X-Error-Prepared", "true");
+        c.header("X-Error-Prepared", "true");
         co_return c.error(418, "teapot", "short and stout", "I'm a Teapot");
     }
 
@@ -742,7 +769,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> missing(ruvia::Context& c) {
-        c.setHeader("X-Not-Found-Prepared", "true");
+        c.header("X-Not-Found-Prepared", "true");
         co_return co_await c.notFound();
     }
 
@@ -755,13 +782,13 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> directBufferedResponse(ruvia::Context& c) {
-        c.setHeader("X-Direct-Buffered", "true");
+        c.header("X-Direct-Buffered", "true");
         c.res().setBodyCopy("direct buffered response\n");
         co_return std::move(c.res());
     }
 
     ruvia::Task<ruvia::HttpResponse> removeBufferedResponse(ruvia::Context& c) {
-        c.setHeader("X-Remove-Buffered", "drop");
+        c.header("X-Remove-Buffered", "drop");
         c.res().headers().remove("X-Remove-Buffered");
         ruvia::HttpResponse response(c.resource());
         response.setBodyCopy("removed buffered response\n");

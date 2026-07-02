@@ -126,10 +126,6 @@ App& App::setDocumentRoot(const std::filesystem::path& root) {
 }
 
 App& App::onError(HttpErrorHandler handler) {
-    return setErrorHandler(handler);
-}
-
-App& App::setErrorHandler(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
@@ -140,10 +136,6 @@ App& App::setErrorHandler(HttpErrorHandler handler) {
 }
 
 App& App::notFound(HttpNotFoundHandler handler) {
-    return setNotFoundHandler(handler);
-}
-
-App& App::setNotFoundHandler(HttpNotFoundHandler handler) {
     return detail::mutateStoppedApp(
         *this,
         *state_,

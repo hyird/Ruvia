@@ -188,9 +188,7 @@ public:
     App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
-    App& setErrorHandler(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setNotFoundHandler(HttpNotFoundHandler handler);
     App& setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
     App& setRateLimit(RateLimitRule rule);
     App& setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
