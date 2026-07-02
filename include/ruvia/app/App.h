@@ -187,6 +187,7 @@ public:
     App& setDocumentRoot(DocumentRootConfig config);
     App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
+    App& onError(HttpErrorHandler handler);
     App& setErrorHandler(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     App& setNotFoundHandler(HttpNotFoundHandler handler);

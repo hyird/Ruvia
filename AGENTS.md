@@ -181,7 +181,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - response streaming 不进入 `HttpResponse` body kind；由 `Context` 绑定连接私有 `ResponseStreamWriter`，首个 `write()` 提交 header，之后按 HTTP/1.1 chunked 写出，结束时发送 `0\r\n\r\n`。
 - response streaming helper 命名对齐 Hono：`c.stream()`、`c.streamText()`、`c.streamSSE()`；SSE 事件通过 `writeSSE({.data = ..., .event = ..., .id = ..., .retry = ...})` 写出。
 - `c.stream().write(view)` / `c.streamText().write(view)` 的 view 只需在该次 `co_await` 返回前有效；`c.streamSSE()` 只做 SSE frame 格式化，不引入共享字符串或跨线程引用计数。
-- response streaming route 支持与普通 route 相同的 middleware 参数；middleware 可在 `next(c)` 前设置 status/header/cookie，或在首写前短路返回普通 `HttpResponse`；stream 已提交后 middleware 的 post-response 修改不得影响已写出的 stream。
+- response streaming route 支持与普通 route 相同的 middleware 参数；middleware 可在 `co_await next()` 前设置 status/header/cookie，或在首写前短路设置 `c.res(...)` / 返回普通 `HttpResponse`；stream 已提交后 middleware 的 post-response 修改不得影响已写出的 stream。
 - response streaming route 不自动补 `Content-Length`，使用 `Transfer-Encoding: chunked`；状态和响应 header 必须在第一次 `write()` 前设置。
 - `HEAD` 不 fallback 到 response streaming `GET` route；需要 HEAD 语义时显式注册 `RUVIA_HEAD`。
 - WebSocket handler 签名同 response streaming：`ruvia::Task<void> ws(ruvia::Context& c)`，通过 `c.webSocket()` 读写；当前实现支持 RFC 6455 upgrade、text/binary、客户端 fragmented message 重组、route 级 subprotocol 协商、route 级自动 heartbeat ping、ping/pong/close、close code/reason 校验、text UTF-8 校验和 WebSocket 专用 idle timeout phase。
@@ -260,10 +260,11 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 ### Hono 对齐边界
 
 - 公开 Context / middleware / 路由 API 以 Hono 为参照：API 形态类似 Hono，语义尽量对应，但返回 Ruvia 自己的 C++ 类型（请求 arena 生命周期的 facade / view，如 `std::string_view`、`std::optional`、`std::span`、`RequestNameValueList`、`HttpResponse`），不模拟 Web 对象。
-- 不要求与 Hono 功能逐项对齐；Hono 专属能力（签名 cookie、cookie `expires`/`priority`/`partitioned`/`prefix` 选项、stream `onAbort`/`sleep`、`app.all`/`app.on` 多方法注册、内置中间件生态）不主动补齐，除非用户明确要求。
+- Hono 能力可以补齐（签名 cookie、cookie 选项、stream 辅助、多方法注册等），但只要求 API 形态类似 Hono、语义尽量对应；不要求行为逐项复刻。
+- Web runtime 模拟指实现 MDN `Request` / `Response` / `Headers` / `FormData` / `Blob` / `ArrayBuffer`、JavaScript property bag、`ReadableStream` body、Cloudflare Workers `executionCtx` / `event` / bindings 等平台对象及其行为；这些不是 Ruvia Context 对齐目标。
 - JS/Web 运行时概念不引入：`c.event`、`c.executionCtx`、MDN `Request`/`Response`/`Headers`/`FormData` 对象语义、`ReadableStream` body。
 - 对齐让位于 Ruvia 自身约束：Context-first 参数顺序、`ruvia::Task<T>` 协程、PMR/零拷贝/启动期构建规则优先于 Hono 形态。
-- 形态对齐已是完成态；不要把上述非目标当作缺口或待办重新提出。
+- 已有 API 的 Hono-like 形态对齐是当前完成边界；JS/Web 运行时概念不当作缺口重新提出。
 
 ### 公共命名空间
 
@@ -272,7 +273,7 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 不要新增 `ruvia::http`、`ruvia::router`、`ruvia::app` 这类二级业务命名空间。
 - 协程返回类型统一使用 `ruvia::Task<T>`。
 - 公开接口和示例不要直接写 `asio::awaitable<T>`。
-- 公开 handler/middleware 内部直接 `co_await ruvia::Task<T>`，例如 `co_await next(c)` 和 `co_await c.bodyReader().read()`。
+- 公开 handler/middleware 内部直接 `co_await ruvia::Task<T>`，例如 `co_await next()` 和 `co_await c.req().bodyReader().read()`。
 - `ruvia::Task<T>` 是 single-shot；临时 task 可直接 `co_await`，存入局部变量后必须 `co_await std::move(task)`。
 - 公开 `ruvia::Task<T>` 不提供 `.asAwaitable()`，也不暴露 Asio awaitable 转换 API。
 - `ruvia::Task<T>` 必须是 Ruvia 自己的协程 handle/promise 设计，不继承或依赖 `asio::detail::awaitable_frame`。
@@ -287,8 +288,10 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 - 普通 handler 签名形如 `ruvia::Task<ruvia::HttpResponse> hello(ruvia::Context& c)`；response streaming/WebSocket handler 签名形如 `ruvia::Task<void> stream(ruvia::Context& c)`。
 - 不要提供同步 `ruvia::HttpResponse handler(...)` 重载。
 - 通过 `c.req()` 读取请求。
-- 通过 `c.req().header(...)`、`c.req().query(...)` / `c.req().queries(...)`、`c.req().cookie(...)`、`c.req().param(...)` 读取常用输入；`Context` 不提供请求读取的一元 `header/query/cookie/param`。
-- 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header，`c.setHeader(...)` 是 `c.header(...)` 的别名。
+- 通过 `c.req().header(...)`、`c.req().query(...)` / `c.req().queries(...)`、`c.req().cookie(...)` / `c.req().signedCookie(name, secret)`、`c.req().param(...)` 读取常用输入；`Context` 不提供请求读取的一元 `header/query/cookie/param`。
+- 通过 `c.status(...)`、`c.header(name, value, {.append = ...})`、`c.setCookie(...)` / `c.setSignedCookie(name, value, secret, options)` / `c.deleteCookie(...)` 构造响应元数据；`c.header(name, std::nullopt)` 删除已准备的响应 header，`c.setHeader(...)` 是 `c.header(...)` 的别名。
+- 签名 cookie 是 `value.base64(HMAC-SHA256)` 格式（OpenSSL，核心能力）；`signedCookie` 验证失败或缺失都返回 `std::nullopt`，比较必须常量时间。
+- `CookieOptions` 支持 `path`/`domain`/`sameSite`/`priority`/`expires`/`maxAge`/`prefix`(`__Secure-`/`__Host-`)/`httpOnly`/`secure`/`partitioned`；`__Host-` 要求 Secure+Path=/+无 Domain，`partitioned` 要求 Secure，寿命上限 400 天，违规抛 `std::invalid_argument`。
 - 通过 `c.req().bodyReader()` 在显式 stream route 中读取请求体。
 - 通过 `c.stream()` / `c.streamText()` / `c.streamSSE()` 在显式 response streaming route 中写出响应块或 SSE frame。
 - 通过 `c.webSocket()` 在显式 WebSocket route 中读写 text/binary/pong/close frame。
@@ -302,8 +305,8 @@ Ruvia 是小而美的 C++23 HTTP/1.1 Web 框架，核心范围是 HTTP server、
 
 - 动态路由采用 Hono-like `RUVIA_GET("/users/:id", handler)`。
 - 通配路由采用 Hono-like `RUVIA_GET("/files/*", handler)`。
-- 通过 `c.param("id")` 读取命名参数。
-- 通过 `c.param("*")` 读取通配剩余路径。
+- 通过 `c.req().param("id")` 读取命名参数。
+- 通过 `c.req().param("*")` 读取通配剩余路径。
 - 参数返回值是指向当前请求 path 的 `std::string_view`。
 - 不要跨请求保存参数 view。
 

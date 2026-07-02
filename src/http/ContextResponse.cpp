@@ -1,5 +1,6 @@
 #include "ruvia/http/Context.h"
 
+#include "CookieSignature.h"
 #include "CookieValidation.h"
 #include "HttpRequestInternal.h"
 #include "HttpResponseBodyAccess.h"
@@ -8,8 +9,11 @@
 #include "ruvia/detail/NumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
 
+#include <array>
 #include <charconv>
+#include <chrono>
 #include <cstring>
+#include <ctime>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -295,10 +299,32 @@ void Context::header(std::string_view name, std::nullopt_t) {
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     detail::validateCookie(name, value, options);
+    const auto prefixText = detail::cookiePrefixText(options.prefix);
+    const auto priorityText = detail::cookiePriorityToken(options.priority);
+    std::array<char, 32> expiresBuffer{};
+    std::string_view expiresText{};
+    if (options.expires.has_value()) {
+        const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
+        std::tm utc{};
+#if defined(_WIN32)
+        gmtime_s(&utc, &expiresTime);
+#else
+        gmtime_r(&expiresTime, &utc);
+#endif
+        const auto written = std::strftime(
+            expiresBuffer.data(),
+            expiresBuffer.size(),
+            "%a, %d %b %Y %H:%M:%S GMT",
+            &utc);
+        if (written == 0) {
+            throw std::invalid_argument("invalid cookie Expires");
+        }
+        expiresText = std::string_view(expiresBuffer.data(), written);
+    }
     const bool hasMaxAge = options.maxAge >= 0;
     const auto maxAgeValue = hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
     const auto maxAgeSize = hasMaxAge ? detail::unsignedDecimalSize(maxAgeValue) : std::size_t{0};
-    std::size_t cookieSize = name.size() + 1 + value.size();
+    std::size_t cookieSize = prefixText.size() + name.size() + 1 + value.size();
     if (!options.path.empty()) {
         cookieSize += std::string_view("; Path=").size() + options.path.size();
     }
@@ -308,6 +334,9 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
     if (hasMaxAge) {
         cookieSize += std::string_view("; Max-Age=").size() + maxAgeSize;
     }
+    if (!expiresText.empty()) {
+        cookieSize += std::string_view("; Expires=").size() + expiresText.size();
+    }
     if (options.httpOnly) {
         cookieSize += std::string_view("; HttpOnly").size();
     }
@@ -316,6 +345,12 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
     }
     if (!options.sameSite.empty()) {
         cookieSize += std::string_view("; SameSite=").size() + options.sameSite.size();
+    }
+    if (!priorityText.empty()) {
+        cookieSize += std::string_view("; Priority=").size() + priorityText.size();
+    }
+    if (options.partitioned) {
+        cookieSize += std::string_view("; Partitioned").size();
     }
 
     const auto index = responseHeaders_.size();
@@ -338,6 +373,7 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         cursor = ptr;
     };
 
+    append(prefixText);
     append(name);
     *cursor++ = '=';
     append(value);
@@ -353,6 +389,10 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         append("; Max-Age=");
         appendUnsigned(maxAgeValue, maxAgeSize);
     }
+    if (!expiresText.empty()) {
+        append("; Expires=");
+        append(expiresText);
+    }
     if (options.httpOnly) {
         append("; HttpOnly");
     }
@@ -363,6 +403,13 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
         append("; SameSite=");
         append(options.sameSite);
     }
+    if (!priorityText.empty()) {
+        append("; Priority=");
+        append(priorityText);
+    }
+    if (options.partitioned) {
+        append("; Partitioned");
+    }
     if (response_ != nullptr) {
         detail::appendResponseHeaderValidated(
             responseStorage(),
@@ -370,6 +417,23 @@ void Context::setCookie(std::string_view name, std::string_view value, const Coo
             header.value(),
             detail::kResponseHeaderSetCookie);
     }
+}
+
+void Context::setSignedCookie(
+    std::string_view name,
+    std::string_view value,
+    std::string_view secret,
+    const CookieOptions& options) {
+    std::pmr::string signedValue(resource());
+    signedValue.reserve(value.size() + 1 + detail::kCookieSignatureSize);
+    if (!value.empty()) {
+        signedValue.append(value.data(), value.size());
+    }
+    signedValue.push_back('.');
+    char signature[detail::kCookieSignatureSize];
+    detail::writeCookieSignature(signature, secret, value);
+    signedValue.append(signature, sizeof(signature));
+    setCookie(name, signedValue, options);
 }
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {

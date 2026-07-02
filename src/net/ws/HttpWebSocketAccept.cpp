@@ -3,39 +3,13 @@
 #include <array>
 #include <span>
 
+#include "../../core/Base64.h"
 #include "../../http/HeaderTokenUtils.h"
 
 namespace ruvia::detail {
 namespace {
 
 constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-void encodeBase64(char* output, std::span<const std::uint8_t> input) noexcept {
-    static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::size_t i = 0;
-    std::size_t out = 0;
-    while (i + 3 <= input.size()) {
-        const auto value =
-            (static_cast<std::uint32_t>(input[i]) << 16) |
-            (static_cast<std::uint32_t>(input[i + 1]) << 8) |
-            static_cast<std::uint32_t>(input[i + 2]);
-        output[out++] = table[(value >> 18) & 0x3F];
-        output[out++] = table[(value >> 12) & 0x3F];
-        output[out++] = table[(value >> 6) & 0x3F];
-        output[out++] = table[value & 0x3F];
-        i += 3;
-    }
-    if (i == input.size()) {
-        return;
-    }
-    const auto remaining = input.size() - i;
-    const auto value = static_cast<std::uint32_t>(input[i]) << 16 |
-        (remaining == 2 ? static_cast<std::uint32_t>(input[i + 1]) << 8 : 0U);
-    output[out++] = table[(value >> 18) & 0x3F];
-    output[out++] = table[(value >> 12) & 0x3F];
-    output[out++] = remaining == 2 ? table[(value >> 6) & 0x3F] : '=';
-    output[out] = '=';
-}
 
 [[nodiscard]] std::uint32_t sha1RotateLeft(std::uint32_t value, std::uint32_t bits) noexcept {
     return (value << bits) | (value >> (32 - bits));
