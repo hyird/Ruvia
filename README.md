@@ -170,7 +170,7 @@ public:
             co_return c.error(401, "unauthorized", "unauthorized");
         }
         co_await next();
-        c.setHeader("X-Auth", "ok");
+        c.header("X-Auth", "ok");
         co_return std::move(c.res());
     }
 };
@@ -187,7 +187,7 @@ private:
 };
 ```
 
-Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. `co_await next()` advances the chain once, `c.setHeader(...)` prepares response headers for response helpers, and `c.res(response)` short-circuits by assigning the response slot. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
+Middleware instances and chains are built before workers start, so request dispatch uses prebuilt route metadata and direct thunks. `co_await next()` advances the chain once, `c.header(...)` prepares response headers for response helpers, and `c.res(response)` short-circuits by assigning the response slot. Calling the same `next` continuation more than once records an error on `c.error()`, does not re-enter the downstream handler, and falls back to a JSON `500` response unless middleware replaces `c.res()`.
 
 Route-specific per-IP limits can be declared as middleware and attached only to the routes that need them:
 
@@ -213,43 +213,47 @@ private:
 
 Use `ruvia::Context` to read request data and construct responses:
 
+Ruvia's context surface targets Hono-like C++: API shape should be familiar to Hono users, and behavior should match Hono semantics where those semantics are HTTP/framework semantics rather than Web runtime object semantics. Web runtime simulation would mean implementing MDN `Request` / `Response` / `Headers` / `FormData` / `Blob` / `ArrayBuffer`, JavaScript property bags, and Cloudflare Workers-only `executionCtx` / `event` / binding objects with their platform behavior; Ruvia intentionally does not do that. APIs with Web or Hono names return Ruvia-owned C++ facades and views designed for request-arena lifetimes and HTTP server hot paths; platform-specific Workers features should be implemented as application middleware or feature-specific services instead of being treated as missing context APIs.
+
 | Helper | Purpose |
 | --- | --- |
-| `c.req()` / `c.req().raw()` | Access the request facade, or the raw `ruvia::HttpRequest` when framework-level code needs the parser view. |
+| `c.req()` / `c.req().raw()` | Access the request facade, or the raw `ruvia::HttpRequest` parser view. This is the Ruvia request view, not a Web `Request` object. |
 | `c.req().method()` | Read the request method as a Hono-style method string. |
 | `c.req().url()` | Return the absolute request URL, synthesizing it from scheme, `Host`, and target when the request uses origin-form. |
-| `ruvia::routePath(c)` / `ruvia::routePath(c, index)` / `ruvia::matchedRoutes(c)` / `c.req().routeIndex()` | Read Hono Route Helper-style route metadata and HonoRequest-compatible route index metadata; negative indexes address from the end, and route paths are returned without copying. |
+| `ruvia::routePath(c)` / `ruvia::routePath(c, index)` / `ruvia::matchedRoutes(c)` / `c.req().routeIndex()` | Read Hono Route Helper-style route metadata and HonoRequest-like route index metadata; negative indexes address from the end, and route paths are returned without copying. |
 | `c.req().path()` | Read the request path as the Hono-style path string. |
 | `c.req().header(name)` / `c.req().header()` | Read one request header as `std::optional<std::string_view>`, or all request headers with lowercase names. The no-arg object supports `headers["x-foo"]`, `headers.get("x-foo")`, `headers.getAll("set-cookie")`, `headers.entries()`, `headers.keys()`, and `headers.values()`; use `c.req().raw().headers()` only when framework-level code needs the raw parser header view. |
 | `c.req().query(name)` / `c.req().query()` / `c.req().queries(name)` / `c.req().queries()` | Read one decoded query value as `std::optional<std::string_view>`, or all decoded single-value query params as an object supporting `query["q"]` / `query.get("q")` plus `entries()` / `keys()` / `values()`; single-value query access keeps the first duplicate key, matching Hono. `queries(name)` returns `std::nullopt` when the key is missing, otherwise a decoded string-view span, and `queries()` exposes multi-value params as an object supporting `queries["tag"]`, `queries.get("tag")`, `queries.getAll("tag")`, `queries.first("tag")`, `entries()`, `keys()`, and `values()`. |
 | `c.req().cookie(name)` / `c.req().cookie()` | Read one cookie value or parse the current request cookie object with `cookies["session"]`, `cookies.get("session")`, `cookies.getAll("session")`, and `entries()` / `keys()` / `values()` iteration. |
+| `c.req().signedCookie(name, secret)` | Verify a `value.base64(HMAC-SHA256)` cookie written by `c.setSignedCookie(...)` with a constant-time compare; returns the zero-copy value view, or `std::nullopt` when the cookie is missing or the signature does not match. |
 | `c.req().param(name)` / `c.req().param()` | Read one decoded dynamic route parameter as `std::optional<std::string_view>`, or all decoded route parameters as an object supporting `params["id"]` / `params.get("id")` / `params.getAll("id")` plus `entries()` / `keys()` / `values()` iteration. |
 | `co_await c.req().text()` | Lazily read the full buffered request body into the request arena. |
 | `co_await c.req().bytes()` | Hono-style alias for reading the full buffered request body as a zero-copy byte span. |
 | `co_await c.req().arrayBuffer()` | Lazily read the full buffered request body as a zero-copy byte span. |
-| `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy blob with `bytes()` / `arrayBuffer()` / `text()` access plus its `Content-Type`. |
+| `co_await c.req().blob()` | Lazily read the full buffered request body as a zero-copy Ruvia blob facade with `bytes()` / `arrayBuffer()` / `text()` access plus its `Content-Type`; it is not a Web `Blob` object. |
 | `co_await c.req().json()` | Lazily read and validate any JSON body as a zero-copy `ruvia::JsonValue` view. Use `kind()` to distinguish object/array/scalar/null; object bodies can still use `get<T>(field)`. |
 | `co_await c.req().json<T>()` | Lazily read and parse a `RUVIA_MODEL` JSON body. |
 | `co_await c.req().form<T>()` | Lazily read and parse a `RUVIA_MODEL` URL-encoded form body. |
 | `co_await c.req().multipart()` | Lazily read and parse a buffered multipart/form-data body into part views. |
 | `co_await c.req().parseBody()` | Parse URL-encoded or multipart form data into a Hono-style object facade, or return an empty form object for other content types: use `body["title"].value()` or `body.get("title").value()` for the last field, `body.getAll("tag").values()` for repeated fields, `body["tag[]"].values()` for array fields, and `isArray()` to inspect `[]` fields or multi-value fields retained by `{.all = true}`. `field()` / `fields()` remain available as lower-level field metadata helpers. With `{.dot = true}`, use `body.at("obj.key").value()`, `body.object("obj").value("key")`, `body.object("obj").values("key")`, `body.object("obj").getAll("key").values()`, `body.object("obj").entries()` / `.groups()` / `.keys()`, or chained `body.object("obj").object("child")` for dot notation access; nested `__proto__` paths are ignored. |
-| `co_await c.req().formData()` | Web FormData-style form parsing with `body["field"]`, `get()`, `getAll()`, `has()`, duplicate-preserving `entries()` / `keys()` / `values()` that keep file/blob metadata, first-value `get()` selection, all-value `getAll(...).values()` access, `field()` / `fields()` for raw field metadata, and grouped `groups()` access for per-name summaries. |
+| `co_await c.req().formData()` | FormData-style form parsing with `body["field"]`, `get()`, `getAll()`, `has()`, duplicate-preserving `entries()` / `keys()` / `values()` that keep file/blob metadata, first-value `get()` selection, all-value `getAll(...).values()` access, `field()` / `fields()` for raw field metadata, and grouped `groups()` access for per-name summaries. The return value is a Ruvia form facade, not a Web `FormData` object. |
 | `co_await c.req().discardBody()` | Explicitly drain the request body when a route wants to keep the connection alive without using the body. |
 | `c.req().addValidatedData(target, value)` / `c.req().valid<T>(target)` | Hono-style validated-data slot for custom validation middleware. Built-in validation macros write the same slots; `target` may be `"json"`, `"form"`, `"query"`, `"param"`, `"header"`, or `"cookie"` (or the matching `ruvia::ValidationTarget`). |
 | `c.req().bodyReader()` | Read an explicitly streaming request body chunk by chunk. |
 | `c.req().multipartReader()` | Stream multipart/form-data parts from an explicitly streaming route. |
-| `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. |
+| `c.stream()` | Write an explicitly streaming chunked response from a `RUVIA_GET_STREAM(...)` route. The writer supports `write`, `writeln`, `co_await sleep(ms)` (asio timer on the connection's worker, non-blocking), `aborted()` (HTTP/2 reflects a peer `RST_STREAM`; HTTP/1.1 latches after a failed write, so long-lived producers should heartbeat), `addTrailer`, and `end`. |
 | `c.streamText()` | Hono-like text streaming helper; sets `Content-Type: text/plain; charset=UTF-8` and returns the stream writer. |
 | `c.streamSSE()` | Hono-like Server-Sent Events helper from a `RUVIA_GET_SSE(...)` route. |
 | `c.webSocket()` | Access the upgraded WebSocket connection from a `RUVIA_GET_WS(...)` route. |
 | `c.status(code)` | Set the response status used by subsequent response helpers. |
-| `c.header(name, value)` / `c.setHeader(name, value)` | Add or replace a response header; pass `std::nullopt` to remove a prepared response header, matching Hono's undefined-value deletion behavior. Both context header setters return `void`. |
-| `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header and return `void`, matching Hono's side-effect cookie setter shape. |
+| `c.header(name, value)` | Add or replace a response header; pass `std::nullopt` to remove a prepared response header, matching Hono's undefined-value deletion behavior. Returns `void`. |
+| `c.setCookie(name, value, options)` | Append a `Set-Cookie` response header and return `void`, matching Hono's side-effect cookie setter shape. `CookieOptions` covers `path`, `domain`, `sameSite`, `priority`, `expires`, `maxAge`, `prefix` (`CookiePrefix::kSecure` / `kHost` emit `__Secure-` / `__Host-` names), `httpOnly`, `secure`, and `partitioned`; Hono-matching constraints (`__Host-` requires `Secure` + `Path=/` + no `Domain`, `Partitioned` requires `Secure`, 400-day lifetime cap) throw `std::invalid_argument` at set time. |
+| `c.setSignedCookie(name, value, secret, options)` | Append a signed `Set-Cookie` header whose value is `value.base64(HMAC-SHA256(secret, value))`, matching Hono's signed-cookie format. |
 | `c.deleteCookie(name, options)` | Return the current request cookie value, if present, then expire the response cookie with `Max-Age=0`. |
-| `c.res()` / `c.res(response)` | Access the current response slot or replace it to short-circuit middleware. `c.res(response)` returns `void`, matching Hono's assignment-style response setter. Reading `c.res()` does not by itself finalize the context; handler returns, downstream responses, and `c.res(response)` do. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape; when replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. `c.res(response)` does not consume headers prepared only with `c.header()` / `c.setHeader()`; use `c.body()` / `c.newResponse()` / `c.text()` / `c.json()` / `c.html()` when prepared headers should be applied while constructing a new response. |
+| `c.res()` / `c.res(response)` | Access the current `ruvia::HttpResponse` slot or replace it to short-circuit middleware. `c.res(response)` returns `void`, matching Hono's assignment-style response setter. Reading `c.res()` does not by itself finalize the context; handler returns, downstream responses, and `c.res(response)` do. Use `c.res().headers().get/set/append/remove(...)` after `co_await next()`, mirroring Hono's `c.res.headers` mutation shape without exposing a Web `Response` or Web `Headers` object. When replacing the response, existing `c.res().headers()` override the assigned response headers except `Content-Type`. `c.res(response)` does not consume headers prepared only with `c.header()`; use `c.body()` / `c.newResponse()` / `c.text()` / `c.json()` / `c.html()` when prepared headers should be applied while constructing a new response. |
 | `c.finalized()` | Check whether downstream middleware or the handler has already set the final response. |
-| `c.env()` | Read application environment values from the current context. |
-| `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. `c.set(...)` returns `void`, matching Hono's non-chainable setter shape. `c.get<T>(...)` and `c.var().get<T>(...)` return nullable pointers, matching Hono's missing-value flow; use `c.var()[typedKey]` only when a missing value should be treated as a logic error. `c.getIf<T>(key)` / `c.varIf<T>(key)` remain aliases for pointer-style checks. |
+| `c.env()` | Read Ruvia application environment values from the current context. This is not a Workers binding object, and Ruvia intentionally does not provide `c.executionCtx` or `c.event`. |
+| `c.set(key, value)` / `c.get<T>(key)` / `c.var()` | Store and read request-local values across middleware and handlers. `c.set(...)` returns `void`, matching Hono's non-chainable setter shape. `c.get<T>(...)` and `c.var().get<T>(...)` return nullable pointers, matching Hono's missing-value flow; use `c.var()[typedKey]` only when a missing value should be treated as a logic error. |
 | `c.body(...)` / `c.newResponse(...)` | Return a raw response body without setting a content type; pass `nullptr` for a Hono-style null body. `newResponse` is the Hono-named alias for the same response-init shape. |
 | `c.text(...)` | Return a `text/plain` response. |
 | `c.json(value)` | Serialize a response model as JSON. |
@@ -260,18 +264,17 @@ Use `ruvia::Context` to read request data and construct responses:
 | `c.redirect(location)` | Return a redirect response; non-ASCII `Location` values are URI-encoded before the header is written. |
 | `c.error()` | Read a downstream exception after `co_await next()` in middleware. |
 | `c.error(status, code, message)` | Return a unified JSON error response. |
-| `c.jsonError(status, code, message)` | Compatibility alias for `c.error(status, code, message)`. |
 | `co_await c.notFound()` | Return the configured Not Found response from `app().notFound(...)`; otherwise return the framework JSON 404 response. |
 | `c.db()` / `c.db(alias)` | Access a startup-registered database handle when `RUVIA_ENABLE_MARIADB` is enabled. |
 | `c.redis()` / `c.redis(alias)` | Access a startup-registered Redis handle when `RUVIA_ENABLE_REDIS` is enabled. |
 
 A few lifetime and ownership rules are worth keeping close:
 
-- Request headers are read through `c.req().header(...)`; response headers are written through `c.setHeader(...)` or the Hono-compatible `c.header(...)` alias. Use `std::nullopt` with either response-header setter to delete a prepared header. Context response helpers, including `c.body()` / `c.newResponse()` / `c.text()`, `c.error()` / `co_await c.notFound()`, preserve prepared status, headers, and cookies; direct `c.res(response)` follows Hono's response setter and only merges an existing `c.res()` slot.
+- Request headers are read through `c.req().header(...)`; response headers are written through `c.header(...)`. Use `std::nullopt` to delete a prepared header. Context response helpers, including `c.body()` / `c.newResponse()` / `c.text()`, `c.error()` / `co_await c.notFound()`, preserve prepared status, headers, and cookies; direct `c.res(response)` follows Hono's response setter and only merges an existing `c.res()` slot.
 - Middleware must finalize the context by setting `c.res(...)`, returning through downstream `next()`, or completing a stream route; otherwise Ruvia treats it as an error instead of silently returning an empty response.
 - `next` is a non-copyable request-lifetime continuation token passed as `Next&`. Use it as `co_await next()` from work that completes within the current middleware invocation; repeated calls while the token is active are finalized as a `next_called_multiple_times` error, and expired calls after the middleware invocation has returned are ignored rather than re-entering request state. Do not store `next` or its awaitable for later use.
 - `ruvia::HttpRequest` is a read-only request metadata view for application code. It is populated by the parser/server, and its string views point at the current connection/request buffers.
-- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().bytes()` / `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await ruvia::cloneRawRequest(c.req())` for a request-arena metadata/body snapshot after validation or body reads, `ruvia::matchedRoutes(c)` / `ruvia::routePath(c, -1)` for route debugging metadata, or the HonoRequest-compatible `c.req().matchedRoutes()` / `c.req().routePath()` / `c.req().routeIndex()` aliases when porting Hono code. Use `co_await c.req().json()` for an untyped JSON value view, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access including dot notation through `body.at(...)` / `body.object(...)`, and `co_await c.req().formData()` for Web FormData-style duplicate-preserving access.
+- Raw and model request body I/O lives on `c.req()`. Use `co_await c.req().text()` for raw text, `co_await c.req().bytes()` / `co_await c.req().arrayBuffer()` for raw bytes, `co_await c.req().blob()` when raw bytes also need the request `Content-Type`, `co_await ruvia::cloneRawRequest(c.req())` for a request-arena metadata/body snapshot after validation or body reads, `ruvia::matchedRoutes(c)` / `ruvia::routePath(c, -1)` for route debugging metadata, or the HonoRequest-like `c.req().matchedRoutes()` / `c.req().routePath()` / `c.req().routeIndex()` aliases when porting Hono-shaped code. Use `co_await c.req().json()` for an untyped JSON value view, `co_await c.req().json<T>()` for JSON models, `co_await c.req().form<T>()` for URL-encoded form models, `co_await c.req().parseBody()` for Hono-style form object access including dot notation through `body.at(...)` / `body.object(...)`, and `co_await c.req().formData()` for duplicate-preserving Ruvia form access.
 - `co_await c.req().multipart()` returns a request-arena vector whose `name`, `filename`, `contentType`, and `body` fields are `std::string_view`s into the current request body.
 - Response status codes, reason phrases, header names, header values, cookie names, and cookie values are validated when set. Invalid output metadata throws `std::invalid_argument` before it reaches the writer.
 - File bodies are constructed through `c.file(...)` and `c.staticFile(...)`; application code should not build raw file-body responses directly.
@@ -637,12 +640,12 @@ Configure a custom error handler when an application wants to shape framework er
 ```cpp
 ruvia::Task<ruvia::HttpResponse> errors(ruvia::Context& c, ruvia::HttpErrorInfo error) {
     c.status(error.statusCode);
-    c.setHeader("X-Error-Code", error.code);
+    c.header("X-Error-Code", error.code);
     co_return c.json(ErrorResponse{.code = error.code, .message = error.message});
 }
 
 ruvia::app()
-    .setErrorHandler(&errors)
+    .onError(&errors)
     .run();
 ```
 
@@ -683,6 +686,8 @@ Each macro takes `(path, handler, Middleware...)`, registers a buffered route wh
 | `RUVIA_DELETE` | `DELETE` |
 | `RUVIA_HEAD` | `HEAD` (explicit; otherwise `GET` is reused for `HEAD`) |
 | `RUVIA_OPTIONS` | `OPTIONS` (explicit; distinct from framework-generated `OPTIONS`) |
+| `RUVIA_ALL` | Hono `app.all` analog: registers the handler for `GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` (`HEAD` is served by the `GET` fallback). Combining it with a single-method macro on the same path triggers the startup duplicate-route error. |
+| `RUVIA_ON((ruvia::Put, ruvia::Delete), path, handler, Middleware...)` | Hono `app.on` analog: registers the handler for an explicit method list. |
 
 ### Streaming, SSE, and WebSocket routes
 
