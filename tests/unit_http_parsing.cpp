@@ -87,6 +87,29 @@ RUVIA_TEST(multipart_boundary_quoted_with_semicolon) {
     RUVIA_CHECK_EQ(boundary, std::string_view("a;b"));
 }
 
+// --- Multipart boundary must be a full delimiter line, not a prefix ------
+RUVIA_TEST(multipart_boundary_prefix_requires_delimiter_terminator) {
+    using ruvia::detail::httpFindMultipartBoundaryPrefix;
+    // "abc" appears as a substring of "abcXYZ" in the body; that is NOT a delimiter (a delimiter
+    // must be followed by CRLF or "--"). The scan must skip the false match and find the real one.
+    const std::string_view body = "data\r\n--abcXYZ tail\r\n--abc\r\n";
+    RUVIA_CHECK_EQ(
+        httpFindMultipartBoundaryPrefix(body, "abc"),
+        body.find("\r\n--abc\r\n"));
+}
+
+RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
+    using ruvia::detail::httpFindMultipartBoundaryLine;
+    // Same for the opening delimiter: "--abcXYZ" is not the boundary line; "--abc\r\n" is.
+    const std::string_view body = "--abcXYZ junk--abc\r\nrest";
+    RUVIA_CHECK_EQ(
+        httpFindMultipartBoundaryLine(body, "abc"),
+        body.find("--abc\r\n"));
+    // A close delimiter ("--abc--") is a valid terminator too.
+    const std::string_view closing = "--abc--\r\n";
+    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine(closing, "abc"), std::size_t{0});
+}
+
 // --- zstd request-body decode: truncation must be rejected ---------------
 RUVIA_TEST(zstd_decode_full_frame_succeeds) {
     const std::string plain(4096, 'z');  // compressible payload spanning a block
