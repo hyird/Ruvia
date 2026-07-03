@@ -90,3 +90,23 @@ RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, deflate, chunked\r\n\r\n").error ==
                 HttpParseError::kUnsupportedTransferEncoding);
 }
+
+RUVIA_TEST(header_block_content_length_edge_cases) {
+    // OWS around the value is trimmed.
+    const auto ows = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length:   42  \r\n\r\n");
+    RUVIA_CHECK(ows.error == HttpParseError::kNone);
+    RUVIA_CHECK_EQ(ows.contentLength, std::size_t{42});
+    // Leading zeros parse to the same numeric value (no desync).
+    const auto zeros = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 007\r\n\r\n");
+    RUVIA_CHECK(zeros.error == HttpParseError::kNone);
+    RUVIA_CHECK_EQ(zeros.contentLength, std::size_t{7});
+    // A '+' sign, a hex form, and overflow are all rejected rather than wrapped.
+    RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: +5\r\n\r\n").error ==
+                HttpParseError::kInvalidContentLength);
+    RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 0x10\r\n\r\n").error ==
+                HttpParseError::kInvalidContentLength);
+    RUVIA_CHECK(parse(
+                    "GET / HTTP/1.1\r\nHost: x\r\n"
+                    "Content-Length: 99999999999999999999999999\r\n\r\n")
+                    .error == HttpParseError::kInvalidContentLength);
+}
