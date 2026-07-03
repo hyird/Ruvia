@@ -1,9 +1,28 @@
 #include "test_harness.h"
 
+#include <cstddef>
 #include <ctime>
+#include <filesystem>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 
 #include "http/FileResponseHelpers.h"
+
+namespace {
+
+std::string formatDate(std::time_t time) {
+    const auto out = ruvia::detail::httpFormatDate(std::pmr::get_default_resource(), time);
+    return std::string(out.data(), out.size());
+}
+
+std::string fileEtag(std::uint64_t size, std::filesystem::file_time_type::duration ticks) {
+    const auto out = ruvia::detail::httpMakeFileEtag(
+        std::pmr::get_default_resource(), size, std::filesystem::file_time_type{ticks});
+    return std::string(out.data(), out.size());
+}
+
+}  // namespace
 
 // ETag comparison and IMF-fixdate parsing back the conditional-request handling
 // (If-Match / If-None-Match / If-Range, RFC 7232) for static file responses.
@@ -70,4 +89,36 @@ RUVIA_TEST(imf_fixdate_leap_second_boundary) {
     using ruvia::detail::httpParseImfFixdate;
     RUVIA_CHECK(httpParseImfFixdate("Thu, 01 Jan 1970 23:59:60 GMT").has_value());   // leap second allowed
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 23:59:61 GMT").has_value());  // 61 rejected
+}
+
+// httpFormatDate must emit RFC 7231 IMF-fixdate with English day/month names
+// independent of the process locale (regression: it used strftime %a/%b).
+RUVIA_TEST(http_format_date_known_vectors) {
+    RUVIA_CHECK_EQ(formatDate(0), std::string("Thu, 01 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(86400), std::string("Fri, 02 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(784111777), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
+}
+
+RUVIA_TEST(http_format_date_round_trips_with_parse) {
+    using ruvia::detail::httpParseImfFixdate;
+    const std::time_t samples[] = {
+        0, 1, 59, 3661, 86400, 784111777, 1000000000, 1600000000, 2000000000, 2147483647};
+    for (const auto sample : samples) {
+        const auto formatted = formatDate(sample);
+        RUVIA_CHECK_EQ(formatted.size(), std::size_t{29});
+        const auto parsed = httpParseImfFixdate(formatted);
+        RUVIA_CHECK(parsed.has_value());
+        if (parsed) {
+            RUVIA_CHECK_EQ(*parsed, sample);
+        }
+    }
+}
+
+RUVIA_TEST(file_etag_deterministic_and_sensitive) {
+    using Ticks = std::filesystem::file_time_type::duration;
+    const auto base = fileEtag(100, Ticks{123456});
+    RUVIA_CHECK_EQ(base, fileEtag(100, Ticks{123456}));       // deterministic
+    RUVIA_CHECK(base != fileEtag(101, Ticks{123456}));        // size-sensitive
+    RUVIA_CHECK(base != fileEtag(100, Ticks{123457}));        // mtime-sensitive
+    RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
 }
