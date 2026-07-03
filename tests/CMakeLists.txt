@@ -11,6 +11,7 @@ add_executable(ruvia_unit_tests
     unit_chunk_size.cpp
     unit_conditional_request.cpp
     unit_websocket_deflate.cpp
+    unit_request_body_decoding.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
