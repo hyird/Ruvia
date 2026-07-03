@@ -42,8 +42,19 @@ inline void httpAssignMultipartBoundaryMarkers(
     if (offset > input.size() || input.size() - offset < markerSize) {
         return false;
     }
-    return input.substr(offset, prefix.size()) == prefix &&
-        input.substr(offset + prefix.size(), boundary.size()) == boundary;
+    if (input.substr(offset, prefix.size()) != prefix ||
+        input.substr(offset + prefix.size(), boundary.size()) != boundary) {
+        return false;
+    }
+    // A real delimiter line ends the boundary token with CRLF (next part) or "--" (close);
+    // a boundary that is merely a prefix of a longer content token (e.g. "abc" inside "abcXYZ")
+    // is NOT a delimiter. At end-of-buffer the match is incomplete — leave that to the caller.
+    const auto after = offset + markerSize;
+    if (after == input.size()) {
+        return true;
+    }
+    const char terminator = input[after];
+    return terminator == '\r' || terminator == '-';
 }
 
 [[nodiscard]] inline std::size_t httpFindMultipartBoundaryLine(

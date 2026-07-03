@@ -298,7 +298,7 @@ Task<void> Http2ClientSession::readLoop() {
             break;
         }
     }
-    // Tear down through closeNow() so the socket is actually closed — on a protocol-error exit
+    // Tear down through closeNow() so the socket is actually closed. On a protocol-error exit
     // state_ is not yet kClosed, and leaving the socket open would hang a peer still reading from
     // us (and a later closeNow() would early-return without closing it).
     closeNow();
@@ -643,6 +643,9 @@ bool Http2ClientSession::onFrame(const Http2FrameHeader& header, std::string_vie
         case Http2FrameType::kRstStream:
             return onRstStream(header, payload);
         case Http2FrameType::kGoaway:
+            if (header.streamId != 0 || payload.size() < 8) {
+                return false;
+            }
             onGoaway(payload);
             return true;
         case Http2FrameType::kPriority:
@@ -714,6 +717,9 @@ bool Http2ClientSession::onHeaders(const Http2FrameHeader& header, std::string_v
     Stream* stream = findStream(header.streamId);
     bool discard;
     if (stream != nullptr) {
+        if (stream->remoteEnded) {
+            return false;
+        }
         // A second header block on an active stream is trailers: decode (for HPACK state) but
         // do not apply it to the response.
         discard = stream->headersComplete;
@@ -856,7 +862,7 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
     } else if (stream != nullptr && stream->headersComplete) {
         H2DecodeContext ctx{};
         const auto result = decoder_.decode(headerAssembly_, &ctx, &h2OnDecodedTrailerHeader);
-        ok = result.ok() && !ctx.malformed;
+        ok = result.ok() && !ctx.malformed && endStream;
     } else {
         // Decode purely to advance the connection-global HPACK dynamic table; discard output.
         const auto result = decoder_.decode(
@@ -889,8 +895,30 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
     // The full frame payload (including padding) counts against flow control.
     const auto consumed = static_cast<std::int32_t>(header.length);
     Stream* stream = findStream(header.streamId);
-    if (stream == nullptr || stream->remoteEnded || stream->failed) {
-        // No live stream: still replenish the connection window so the peer isn't stalled.
+    if (stream == nullptr) {
+        if (header.streamId >= nextStreamId_) {
+            return false;
+        }
+        // Already-closed stream: still replenish the connection window so the peer isn't stalled.
+        queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
+        wakeFlusher();
+        return true;
+    }
+    if (stream->failed) {
+        // Failed stream: still replenish the connection window so the peer isn't stalled.
+        queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
+        wakeFlusher();
+        return true;
+    }
+    if (stream->remoteEnded) {
+        failStream(*stream, Http2ErrorCode::kProtocolError);
+        queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
+        wakeFlusher();
+        return true;
+    }
+    if (!stream->headersComplete) {
+        sendRstStream(stream->id, Http2ErrorCode::kProtocolError);
+        failStream(*stream, Http2ErrorCode::kProtocolError);
         queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
         wakeFlusher();
         return true;
