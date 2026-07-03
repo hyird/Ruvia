@@ -40,6 +40,7 @@ add_executable(ruvia_unit_tests
     unit_websocket_assembler.cpp
     unit_websocket_heartbeat.cpp
     unit_websocket_close.cpp
+    unit_config_validation.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
