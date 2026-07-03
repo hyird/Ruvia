@@ -264,9 +264,8 @@ HttpParseError parseHttpHeaderBlock(
                 }
                 break;
             case RequestHeaderKind::kAcceptEncoding:
-                block.gzipEncoding.update(value, "gzip");
-                block.brotliEncoding.update(value, "br");
-                block.zstdEncoding.update(value, "zstd");
+                httpUpdateResponseCodingQualities(
+                    value, block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
                 break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
