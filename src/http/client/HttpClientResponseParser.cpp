@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "../HeaderTokenUtils.h"
+#include "../RequestBodyDecoding.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
@@ -102,8 +103,25 @@ HttpClientResponseHead parseHttpClientResponseHead(
         } else if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
             parsed.closeAfterResponse = parsed.closeAfterResponse || httpHasToken(value, "close");
         } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
-            parsed.hasTransferEncoding = true;
-            parsed.closeAfterResponse = true;
+            if (parsed.hasTransferEncoding) {
+                // A second Transfer-Encoding header forms a coding list we cannot decode.
+                parsed.isChunked = false;
+            } else {
+                parsed.hasTransferEncoding = true;
+                // Only a sole "chunked" coding is self-delimiting and decodable here; any
+                // other coding (gzip, or "gzip, chunked", ...) is treated as unsupported.
+                parsed.isChunked = httpAsciiEqualsIgnoreCase(value, "chunked");
+            }
+        } else if (httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
+            if (parsed.hasContentEncoding) {
+                // A second Content-Encoding header is a coding list we do not decode.
+                parsed.contentCoding = HttpContentCoding::kNone;
+            } else {
+                parsed.hasContentEncoding = true;
+                // requestContentCoding honors only a single known token; identity, a list,
+                // or an unknown coding yields kNone (body delivered as received).
+                parsed.contentCoding = requestContentCoding(value);
+            }
         }
         if (response.headers.empty()) {
             response.headers.reserve(8);
@@ -114,6 +132,21 @@ HttpClientResponseHead parseHttpClientResponseHead(
             break;
         }
         remaining = remaining.substr(lineEnd + 2);
+    }
+
+    // Transfer-Encoding only frames a body; a bodiless response (HEAD, 204, 304, 1xx) has
+    // no framing to resolve, so leave those interoperable rather than rejecting them.
+    if (parsed.responseMayHaveBody && parsed.hasTransferEncoding) {
+        // RFC 7230 §3.3.3: Transfer-Encoding overrides Content-Length, and a message
+        // carrying both is a framing ambiguity (a request-smuggling vector) — reject it.
+        if (parsed.hasContentLength) {
+            throw std::runtime_error(
+                "http client: response has both Content-Length and Transfer-Encoding");
+        }
+        // An undecodable transfer coding leaves the body delimited only by connection close.
+        if (!parsed.isChunked) {
+            parsed.closeAfterResponse = true;
+        }
     }
 
     return parsed;

@@ -44,12 +44,9 @@ public:
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
+#include "HttpClientBackend.h"
 
 namespace ruvia::detail {
-
-class HttpClientPool;
-
-using HttpClientPoolDeleter = PmrObjectDeleter<HttpClientPool>;
 
 class HttpClientRegistry final {
 public:
@@ -67,18 +64,18 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] HttpClientPool* get(std::string_view alias = kDefaultHttpClientAlias) const;
+    [[nodiscard]] HttpClientBackend* get(std::string_view alias = kDefaultHttpClientAlias) const;
     void scanDeadlines() noexcept;
 
 private:
     struct Entry final {
         std::pmr::string alias;
-        std::unique_ptr<HttpClientPool, HttpClientPoolDeleter> pool;
+        HttpClientBackendPtr backend;
     };
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
-    HttpClientPool* defaultPool_{nullptr};
+    HttpClientBackend* defaultBackend_{nullptr};
 };
 
 }  // namespace ruvia::detail
