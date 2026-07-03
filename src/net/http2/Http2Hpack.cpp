@@ -39,10 +39,18 @@ HpackError HpackDecoder::decodeInteger(
             return HpackError::kNeedMore;
         }
         const auto byte = static_cast<std::uint32_t>(*cursor++);
+        // Bound the chunk so the shift itself stays within uint32...
         if (shift >= 28 && (byte & 0x7fU) > 0x0fU) {
             return HpackError::kIntegerOverflow;
         }
-        value += (byte & 0x7fU) << shift;
+        // ...then reject the case where the accumulated sum would still overflow
+        // uint32 (e.g. FF FF FF FF FF 0F): the chunk guard alone permits 0x0f<<28,
+        // which added to a maxed lower value wraps past UINT32_MAX (RFC 7541 5.1).
+        const auto addend = (byte & 0x7fU) << shift;
+        if (value > 0xFFFFFFFFU - addend) {
+            return HpackError::kIntegerOverflow;
+        }
+        value += addend;
         if ((byte & 0x80U) == 0) {
             return HpackError::kNone;
         }

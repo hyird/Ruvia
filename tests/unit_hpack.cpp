@@ -96,3 +96,29 @@ RUVIA_TEST(hpack_rejects_truncated_and_bad_index) {
     Collector out2;
     RUVIA_CHECK(!decodeBlock(bytes({0x80}), out2));
 }
+
+RUVIA_TEST(hpack_integer_overflow_is_rejected) {
+    using ruvia::detail::HpackError;
+    // An indexed field whose index integer overflows uint32 (FF FF FF FF FF 0F)
+    // must be reported as an integer overflow, not silently wrapped to a small
+    // (and possibly valid) index (RFC 7541 5.1).
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    Collector out;
+    const auto block = bytes({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F});
+    const auto result = decoder.decode(block, &out, &collect);
+    RUVIA_CHECK(!result.ok());
+    RUVIA_CHECK(result.error == HpackError::kIntegerOverflow);
+}
+
+RUVIA_TEST(hpack_long_value_round_trips) {
+    // A value longer than 127 bytes forces a multi-byte length prefix, exercising
+    // the continuation-integer decode on the valid (non-overflowing) path.
+    const std::string longValue(300, 'x');
+    std::pmr::string encoded(std::pmr::get_default_resource());
+    HpackEncoder::encodeHeader(encoded, "x-long", longValue);
+    Collector out;
+    RUVIA_CHECK(decodeBlock(std::string_view(encoded.data(), encoded.size()), out));
+    RUVIA_CHECK_EQ(out.headers.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(out.headers[0].first, std::string("x-long"));
+    RUVIA_CHECK_EQ(out.headers[0].second, longValue);
+}
