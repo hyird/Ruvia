@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include "../../http/HeaderTokenUtils.h"
+#include "../../http/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 
@@ -37,6 +38,9 @@ namespace ruvia::detail {
     std::string_view name,
     std::string_view value) noexcept {
     if (name.empty() || name.front() == ':') {
+        return false;
+    }
+    if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
         return false;
     }
     if (http2HeaderNameHasUppercase(name)) {

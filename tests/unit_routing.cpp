@@ -65,6 +65,12 @@ struct Router final {
         return impl.routeTable().resolve(HttpMethod::kGet, p, match).found();
     }
 
+    std::string_view routePathOf(std::string_view p) {
+        RouteMatch match;
+        const auto res = impl.routeTable().resolve(HttpMethod::kGet, p, match);
+        return res.found() ? res.route().path() : "<none>";
+    }
+
     // Returns the single captured param value, or "<none>" if unmatched / no param.
     std::string_view paramOf(std::string_view p) {
         RouteMatch match;
@@ -140,4 +146,43 @@ RUVIA_TEST(routing_root_wildcard_with_static_prefix_allowed) {
     // A root wildcard may coexist with routes distinguished by a static segment.
     RUVIA_CHECK(!finalizeConflicts({"/*", "/users/:id"}));
     RUVIA_CHECK(!finalizeConflicts({"/*", "/health"}));
+}
+
+RUVIA_TEST(routing_deep_wildcard_with_static_prefix_allowed) {
+    // The static-sibling exemption holds at any depth, not just the root: "public" is a static
+    // child tried before the wildcard, so "/files/public/5" -> :id route, "/files/x" -> wildcard,
+    // deterministically. (Same situation as the allowed root case /* + /users/:id, one level down.)
+    RUVIA_CHECK(!finalizeConflicts({"/files/*", "/files/public/:id"}));
+    RUVIA_CHECK(!finalizeConflicts({"/files/*", "/files/list"}));
+    RUVIA_CHECK(!finalizeConflicts({"/a/b/*", "/a/b/c/:id"}));
+    RUVIA_CHECK(!finalizeConflicts({"/:section/*", "/health/live"}));
+    RUVIA_CHECK(!finalizeConflicts({"/files/:bucket/*", "/files/public/:id"}));
+    RUVIA_CHECK(!finalizeConflicts({"/:section/*", "/health/*"}));
+
+    // Guards the fix must NOT regress (these genuinely shadow -> still conflicts):
+    RUVIA_CHECK(finalizeConflicts({"/a/*", "/a/:x"}));   // wildcard vs param sibling at a shared node
+    RUVIA_CHECK(finalizeConflicts({"/a/*", "/:x/b"}));   // after a static/param fork, the wildcard
+                                                         // steals the other route's direct-match path
+    RUVIA_CHECK(finalizeConflicts({"/*", "/:x"}));       // root wildcard vs param
+    RUVIA_CHECK(finalizeConflicts({"/users/:id", "/users/:name"}));  // two params at one position
+}
+
+RUVIA_TEST(routing_allowed_wildcard_overlaps_resolve_to_static_priority_branch) {
+    {
+        Router r;
+        addRoute(r.impl, "/:section/*");
+        addRoute(r.impl, "/health/*");
+        r.finalize();
+        RUVIA_CHECK_EQ(r.routePathOf("/health/live"), std::string_view("/health/*"));
+        RUVIA_CHECK_EQ(r.routePathOf("/users/42"), std::string_view("/:section/*"));
+    }
+
+    {
+        Router r;
+        addRoute(r.impl, "/files/:bucket/*");
+        addRoute(r.impl, "/files/public/:id");
+        r.finalize();
+        RUVIA_CHECK_EQ(r.routePathOf("/files/public/5"), std::string_view("/files/public/:id"));
+        RUVIA_CHECK_EQ(r.routePathOf("/files/private/a/b"), std::string_view("/files/:bucket/*"));
+    }
 }

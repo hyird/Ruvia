@@ -144,10 +144,14 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             body = ctx.path;
         }
 
-        if (ctx.path == "/early-hints") {
+        if (ctx.path == "/early-hints" || ctx.path == "/switching-protocols") {
             std::pmr::string early(resource);
-            HpackEncoder::encodeStatus(early, 103);
-            HpackEncoder::encodeHeader(early, "link", "</style.css>; rel=preload");
+            if (ctx.path == "/switching-protocols") {
+                HpackEncoder::encodeStatus(early, 101);
+            } else {
+                HpackEncoder::encodeStatus(early, 103);
+                HpackEncoder::encodeHeader(early, "link", "</style.css>; rel=preload");
+            }
             char earlyHeaders[kHttp2FrameHeaderBytes];
             http2WriteFrameHeader(
                 earlyHeaders, static_cast<std::uint32_t>(early.size()),
@@ -169,6 +173,8 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
         } else if (ctx.path == "/late-status") {
             HpackEncoder::encodeHeader(block, "x-before-status", "1");
             HpackEncoder::encodeStatus(block, 200);
+        } else if (ctx.path == "/wide-status") {
+            HpackEncoder::encodeHeaderWithNameIndex(block, HpackStaticIndex::kStatus200, "0200");
         } else if (noContentWithData) {
             HpackEncoder::encodeStatus(block, 204);
         } else if (resetContentWithData) {
@@ -181,6 +187,8 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
                 HpackEncoder::encodeHeader(block, "connection", "close");
             } else if (ctx.path == "/bad-te-header") {
                 HpackEncoder::encodeHeader(block, "te", "gzip");
+            } else if (ctx.path == "/bad-cr-header") {
+                HpackEncoder::encodeHeader(block, "x-bad", std::string_view("ok\rbad", 6));
             } else if (ctx.path == "/content-length-short") {
                 HpackEncoder::encodeHeader(block, "content-length", "5");
             }
@@ -1878,6 +1886,13 @@ RUVIA_TEST(http2_request_header_roundtrip) {
     RUVIA_CHECK_EQ(results[0].body, std::string("custom-value"));
 }
 
+RUVIA_TEST(http2_request_te_header_must_be_trailers) {
+    const auto results = runH2Fetches({"/echo"}, {{"te", "gzip"}});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
 // --- Streamed request body uses DATA frames over HTTP/2 ------------------
 RUVIA_TEST(http2_streamed_request_body) {
     const auto body = runH2UploadFetch();
@@ -1930,6 +1945,13 @@ RUVIA_TEST(http2_invalid_te_response_header_is_rejected) {
     RUVIA_CHECK(!results[0].error.empty());
 }
 
+RUVIA_TEST(http2_invalid_response_header_value_is_rejected) {
+    const auto results = runH2Fetches({"/bad-cr-header"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
 RUVIA_TEST(http2_content_length_mismatch_is_rejected) {
     const auto results = runH2Fetches({"/content-length-short"});
     RUVIA_CHECK_EQ(results.size(), std::size_t{1});
@@ -1939,6 +1961,13 @@ RUVIA_TEST(http2_content_length_mismatch_is_rejected) {
 
 RUVIA_TEST(http2_status_after_regular_header_is_rejected) {
     const auto results = runH2Fetches({"/late-status"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
+RUVIA_TEST(http2_status_value_must_be_three_digits) {
+    const auto results = runH2Fetches({"/wide-status"});
     RUVIA_CHECK_EQ(results.size(), std::size_t{1});
     RUVIA_CHECK(!results[0].ok);
     RUVIA_CHECK(!results[0].error.empty());
@@ -1965,6 +1994,13 @@ RUVIA_TEST(http2_informational_headers_do_not_complete_response) {
     RUVIA_CHECK(results[0].ok);
     RUVIA_CHECK_EQ(results[0].status, 200);
     RUVIA_CHECK_EQ(results[0].body, std::string("/early-hints"));
+}
+
+RUVIA_TEST(http2_status_101_switching_protocols_is_rejected) {
+    const auto results = runH2Fetches({"/switching-protocols"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
 }
 
 // --- Response terminated by trailers (must decode the trailer block) -----
