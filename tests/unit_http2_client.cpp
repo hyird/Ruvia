@@ -142,10 +142,32 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             body = ctx.path;
         }
 
+        if (ctx.path == "/early-hints") {
+            std::pmr::string early(resource);
+            HpackEncoder::encodeStatus(early, 103);
+            HpackEncoder::encodeHeader(early, "link", "</style.css>; rel=preload");
+            char earlyHeaders[kHttp2FrameHeaderBytes];
+            http2WriteFrameHeader(
+                earlyHeaders, static_cast<std::uint32_t>(early.size()),
+                Http2FrameType::kHeaders, kHttp2FlagEndHeaders, header.streamId);
+            if (!co_await writeAll(std::string_view(earlyHeaders, sizeof(earlyHeaders)))) {
+                break;
+            }
+            if (!co_await writeAll(std::string_view(early.data(), early.size()))) {
+                break;
+            }
+        }
+
         std::pmr::string block(resource);
+        const bool noContentWithData = ctx.path == "/no-content-data";
+        const bool resetContentWithData = ctx.path == "/reset-content-data";
         if (ctx.path == "/redirect") {
             HpackEncoder::encodeStatus(block, 302);
             HpackEncoder::encodeHeader(block, "location", "/final");
+        } else if (noContentWithData) {
+            HpackEncoder::encodeStatus(block, 204);
+        } else if (resetContentWithData) {
+            HpackEncoder::encodeStatus(block, 205);
         } else {
             HpackEncoder::encodeStatus(block, 200);
             if (ctx.path == "/gzip") {
@@ -176,6 +198,9 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
 
         // "/trailer" ends the stream with a trailing HEADERS block instead of END_STREAM on DATA.
         const bool useTrailer = (ctx.path == "/trailer");
+        if (noContentWithData || resetContentWithData) {
+            body = "illegal-body";
+        }
 
         // Emit the body in <= 16 KiB DATA frames; END_STREAM on the last unless trailers follow.
         constexpr std::size_t kMaxFrame = 16 * 1024;
@@ -637,6 +662,29 @@ RUVIA_TEST(http2_fetch_gzip_content_encoding) {
     RUVIA_CHECK(results[0].ok);
     RUVIA_CHECK_EQ(results[0].status, 200);
     RUVIA_CHECK_EQ(results[0].body, std::string("compressed h2"));
+}
+
+RUVIA_TEST(http2_204_data_is_rejected) {
+    const auto results = runH2Fetches({"/no-content-data"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
+RUVIA_TEST(http2_205_data_is_rejected) {
+    const auto results = runH2Fetches({"/reset-content-data"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
+RUVIA_TEST(http2_informational_headers_do_not_complete_response) {
+    const auto results = runH2Fetches({"/early-hints"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(results[0].error.empty());
+    RUVIA_CHECK(results[0].ok);
+    RUVIA_CHECK_EQ(results[0].status, 200);
+    RUVIA_CHECK_EQ(results[0].body, std::string("/early-hints"));
 }
 
 // --- Response terminated by trailers (must decode the trailer block) -----

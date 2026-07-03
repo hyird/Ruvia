@@ -271,6 +271,12 @@ struct StreamCloseOutcome {
     std::string error;
 };
 
+struct StreamReuseOutcome {
+    bool ok = false;
+    std::string body;
+    std::string error;
+};
+
 ReuseOutcome runReuseFetch(std::string response1, std::string response2) {
     using asio::ip::tcp;
     asio::io_context io;
@@ -375,6 +381,207 @@ StreamCloseOutcome runStreamCloseFetch() {
                 out.beforeClose = static_cast<bool>(stream);
                 stream.close();
                 out.afterClose = static_cast<bool>(stream);
+            } catch (const std::exception& e) {
+                out.error += std::string("client:") + e.what();
+            }
+            pool->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
+StreamReuseOutcome runStreamContentLengthZeroWithExtraThenFetch() {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    StreamReuseOutcome out;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto first = std::make_shared<tcp::socket>(
+                    co_await acceptor.async_accept(asio::use_awaitable));
+                asio::streambuf firstRequest;
+                co_await asio::async_read_until(
+                    *first, firstRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                co_await asio::async_write(
+                    *first,
+                    asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nJUNK")),
+                    asio::use_awaitable);
+
+                asio::co_spawn(
+                    io,
+                    [first, &acceptor]() -> asio::awaitable<void> {
+                        try {
+                            asio::streambuf reusedRequest;
+                            co_await asio::async_read_until(
+                                *first, reusedRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                            co_await asio::async_write(
+                                *first,
+                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nREUSED")),
+                                asio::use_awaitable);
+                            std::error_code ignored;
+                            acceptor.close(ignored);
+                        } catch (...) {
+                        }
+                    },
+                    asio::detached);
+
+                asio::co_spawn(
+                    io,
+                    [&acceptor]() -> asio::awaitable<void> {
+                        try {
+                            auto second = co_await acceptor.async_accept(asio::use_awaitable);
+                            asio::streambuf secondRequest;
+                            co_await asio::async_read_until(
+                                second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                            co_await asio::async_write(
+                                second,
+                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
+                                asio::use_awaitable);
+                        } catch (...) {
+                        }
+                    },
+                    asio::detached);
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto stream = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetchStream("/one", options, std::pmr::get_default_resource()));
+                auto eof = co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
+                if (!eof.empty()) {
+                    out.error += "unexpected-stream-body";
+                }
+
+                auto response = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetch("/two", options, std::pmr::get_default_resource()));
+                out.body.assign(response.body.data(), response.body.size());
+                out.ok = true;
+            } catch (const std::exception& e) {
+                out.error += std::string("client:") + e.what();
+            }
+            pool->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
+StreamReuseOutcome runStreamConnectionCloseThenFetch() {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    StreamReuseOutcome out;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto first = std::make_shared<tcp::socket>(
+                    co_await acceptor.async_accept(asio::use_awaitable));
+                asio::streambuf firstRequest;
+                co_await asio::async_read_until(
+                    *first, firstRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                co_await asio::async_write(
+                    *first,
+                    asio::buffer(std::string(
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello")),
+                    asio::use_awaitable);
+
+                asio::co_spawn(
+                    io,
+                    [first, &acceptor]() -> asio::awaitable<void> {
+                        try {
+                            asio::streambuf reusedRequest;
+                            co_await asio::async_read_until(
+                                *first, reusedRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                            co_await asio::async_write(
+                                *first,
+                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nREUSED")),
+                                asio::use_awaitable);
+                            std::error_code ignored;
+                            acceptor.close(ignored);
+                        } catch (...) {
+                        }
+                    },
+                    asio::detached);
+
+                asio::co_spawn(
+                    io,
+                    [first, &acceptor]() -> asio::awaitable<void> {
+                        try {
+                            auto second = co_await acceptor.async_accept(asio::use_awaitable);
+                            asio::streambuf secondRequest;
+                            co_await asio::async_read_until(
+                                second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                            co_await asio::async_write(
+                                second,
+                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
+                                asio::use_awaitable);
+                            std::error_code ignored;
+                            first->close(ignored);
+                        } catch (...) {
+                        }
+                    },
+                    asio::detached);
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto stream = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetchStream("/one", options, std::pmr::get_default_resource()));
+                for (;;) {
+                    auto chunk = co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
+                    if (chunk.empty()) {
+                        break;
+                    }
+                }
+
+                auto response = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetch("/two", options, std::pmr::get_default_resource()));
+                out.body.assign(response.body.data(), response.body.size());
+                out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
             }
@@ -1098,6 +1305,20 @@ RUVIA_TEST(http_client_stream_close_releases_source) {
     RUVIA_CHECK(out.error.empty());
     RUVIA_CHECK(out.beforeClose);
     RUVIA_CHECK(!out.afterClose);
+}
+
+RUVIA_TEST(http_client_stream_cl0_with_extra_bytes_discards_connection) {
+    const auto out = runStreamContentLengthZeroWithExtraThenFetch();
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.body, std::string("FRESH"));
+}
+
+RUVIA_TEST(http_client_stream_connection_close_discards_connection) {
+    const auto out = runStreamConnectionCloseThenFetch();
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.body, std::string("FRESH"));
 }
 
 // --- Both Content-Length and Transfer-Encoding: rejected (smuggling) ------

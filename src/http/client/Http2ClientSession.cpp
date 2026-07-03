@@ -81,6 +81,10 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
 }
 
+[[nodiscard]] bool http2ResponseStatusMayHaveBody(int status) noexcept {
+    return status >= 200 && status != 204 && status != 205 && status != 304;
+}
+
 }  // namespace
 
 Http2ClientSession::Http2ClientSession(
@@ -769,6 +773,7 @@ struct H2DecodeContext final {
     FetchResponse* response{nullptr};
     std::pmr::memory_resource* resource{nullptr};
     std::size_t headerCount{0};
+    int status{0};
     bool sawStatus{false};
     bool sawRegular{false};
     bool malformed{false};
@@ -787,7 +792,7 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
             ctx->malformed = true;
             return false;
         }
-        ctx->response->statusCode = status;
+        ctx->status = status;
         ctx->sawStatus = true;
         return true;
     }
@@ -803,6 +808,9 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
         return false;
     }
     ctx->sawRegular = true;
+    if (ctx->status < 200) {
+        return true;
+    }
     if (ctx->response->headers.empty()) {
         ctx->response->headers.reserve(8);
     }
@@ -819,7 +827,15 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
         const auto result = decoder_.decode(headerAssembly_, &ctx, &h2OnDecodedHeader);
         ok = result.ok() && !ctx.malformed && ctx.sawStatus;
         if (ok) {
-            stream->headersComplete = true;
+            if (ctx.status < 200) {
+                ok = !endStream;
+            } else {
+                stream->response.statusCode = ctx.status;
+                stream->headersComplete = true;
+                stream->responseBodyAllowed =
+                    stream->responseBodyAllowed &&
+                    http2ResponseStatusMayHaveBody(stream->response.statusCode);
+            }
         }
     } else {
         // Decode purely to advance the connection-global HPACK dynamic table; discard output.
@@ -833,10 +849,10 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
         return false;
     }
     // For a streaming request, deliver the response headers to fetchStream as soon as they arrive.
-    if (apply && stream != nullptr && stream->streaming) {
+    if (apply && stream != nullptr && stream->headersComplete && stream->streaming) {
         signalWaiter(*stream);
     }
-    if (stream != nullptr && endStream) {
+    if (stream != nullptr && stream->headersComplete && endStream) {
         markRemoteEnd(*stream);
     }
     return true;
@@ -862,6 +878,13 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
     if (!stream->flow.consumeReceive(consumed)) {
         sendRstStream(stream->id, Http2ErrorCode::kFlowControlError);
         failStream(*stream, Http2ErrorCode::kFlowControlError);
+        queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
+        wakeFlusher();
+        return true;
+    }
+    if (!stream->responseBodyAllowed && !data.empty()) {
+        sendRstStream(stream->id, Http2ErrorCode::kProtocolError);
+        failStream(*stream, Http2ErrorCode::kProtocolError);
         queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
         wakeFlusher();
         return true;
@@ -1081,6 +1104,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     Stream* stream = constructPmrObject<Stream>(resource_, requestResource);
     stream->id = id;
     stream->streaming = streaming;
+    stream->responseBodyAllowed = !httpAsciiEqualsIgnoreCase(method, "HEAD");
     stream->requestResource = requestResource;
     stream->maxBodyBytes = streaming ? 0 : config_.maxResponseBodyBytes;
     stream->flow.setSendWindow(peerSettings_.initialWindowSize());
