@@ -649,6 +649,9 @@ bool Http2ClientSession::onFrame(const Http2FrameHeader& header, std::string_vie
             onGoaway(payload);
             return true;
         case Http2FrameType::kPriority:
+            if (header.streamId == 0 || payload.size() != 5) {
+                return false;
+            }
             return true;  // accepted and ignored
         case Http2FrameType::kPushPromise:
             return false;  // we advertise ENABLE_PUSH=0; server push is a protocol error
