@@ -48,6 +48,7 @@ add_executable(ruvia_unit_tests
     unit_http2_header_rules.cpp
     unit_http2_continuation_queue.cpp
     unit_response_trailers.cpp
+    unit_http2_frame_payload.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
