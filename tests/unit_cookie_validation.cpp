@@ -72,3 +72,62 @@ RUVIA_TEST(cookie_samesite_none_requires_secure) {
     secureNone.secure = true;
     RUVIA_CHECK(!rejects(secureNone));
 }
+
+RUVIA_TEST(cookie_value_char_validation) {
+    using ruvia::detail::isValidCookieValue;
+    RUVIA_CHECK(isValidCookieValue("abc123"));
+    RUVIA_CHECK(isValidCookieValue("a-b_c.d~e"));
+    RUVIA_CHECK(isValidCookieValue(""));  // an empty value is valid
+    RUVIA_CHECK(!isValidCookieValue("a b"));   // space
+    RUVIA_CHECK(!isValidCookieValue("a;b"));   // ';' would inject an attribute
+    RUVIA_CHECK(!isValidCookieValue("a,b"));   // ','
+    RUVIA_CHECK(!isValidCookieValue("a\"b"));  // '"'
+    RUVIA_CHECK(!isValidCookieValue("a\\b"));  // backslash
+    RUVIA_CHECK(!isValidCookieValue(std::string_view("a\rb", 3)));    // CR
+    RUVIA_CHECK(!isValidCookieValue(std::string_view("a\x7f" "b", 3)));  // DEL
+}
+
+RUVIA_TEST(cookie_attribute_char_validation) {
+    using ruvia::detail::isValidCookieAttribute;
+    RUVIA_CHECK(isValidCookieAttribute("/path/to"));
+    RUVIA_CHECK(isValidCookieAttribute("example.com"));
+    RUVIA_CHECK(isValidCookieAttribute(""));
+    RUVIA_CHECK(!isValidCookieAttribute("a;b"));  // ';' would inject another attribute
+    RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\rb", 3)));  // CR (header injection)
+    RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\nb", 3)));  // LF
+    RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\0b", 3)));  // NUL
+}
+
+RUVIA_TEST(cookie_priority_token_canonicalizes) {
+    using ruvia::detail::cookiePriorityToken;
+    RUVIA_CHECK_EQ(cookiePriorityToken("Low"), std::string_view("Low"));
+    RUVIA_CHECK_EQ(cookiePriorityToken("medium"), std::string_view("Medium"));  // case-insensitive
+    RUVIA_CHECK_EQ(cookiePriorityToken("HIGH"), std::string_view("High"));
+    RUVIA_CHECK(cookiePriorityToken("").empty());
+    RUVIA_CHECK(cookiePriorityToken("Urgent").empty());  // not a valid priority
+}
+
+RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
+    const auto rejectsCookie =
+        [](std::string_view name, std::string_view value, const ruvia::CookieOptions& options) {
+            try {
+                ruvia::detail::validateCookie(name, value, options);
+                return false;
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+        };
+    const ruvia::CookieOptions clean;
+    RUVIA_CHECK(!rejectsCookie("sid", "value", clean));
+    RUVIA_CHECK(rejectsCookie("bad name", "value", clean));  // space -> not a token name
+    RUVIA_CHECK(rejectsCookie("sid", "a;b", clean));         // ';' in value
+    ruvia::CookieOptions badPath;
+    badPath.path = "a;b";
+    RUVIA_CHECK(rejectsCookie("sid", "value", badPath));     // ';' in path attribute
+    ruvia::CookieOptions badPriority;
+    badPriority.priority = "Urgent";
+    RUVIA_CHECK(rejectsCookie("sid", "value", badPriority));
+    ruvia::CookieOptions partitioned;
+    partitioned.partitioned = true;  // partitioned requires Secure
+    RUVIA_CHECK(rejectsCookie("sid", "value", partitioned));
+}
