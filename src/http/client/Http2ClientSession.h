@@ -79,11 +79,14 @@ private:
         std::string_view pendingBody{}; // request body bytes still to send (borrowed)
         std::pmr::memory_resource* requestResource{nullptr};
         std::size_t maxBodyBytes{0};
+        std::size_t responseContentLength{0};
+        std::size_t responseBodyBytes{0};
         std::int32_t flowDebt{0};       // received bytes awaiting a WINDOW_UPDATE on consume (streaming)
         std::chrono::steady_clock::time_point deadline{};
         std::uint32_t id{0};
         bool streaming{false};          // deliver DATA incrementally with flow-control backpressure
         bool responseBodyAllowed{true};
+        bool responseHasContentLength{false};
         bool hasDeadline{false};
         bool headersComplete{false};
         bool localEndSent{false};       // we sent END_STREAM for the request

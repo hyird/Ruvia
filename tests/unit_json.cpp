@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/json/JsonNumber.h"
+#include "ruvia/http/detail/json/JsonSkip.h"
 #include "ruvia/http/detail/json/JsonString.h"
 
 namespace {
@@ -189,4 +190,34 @@ RUVIA_TEST(json_appendUtf8_boundaries) {
     s.clear();
     appendUtf8(s, 0x10FFFF);  // 4-byte max
     RUVIA_CHECK_EQ(s, std::string("\xF4\x8F\xBF\xBF"));
+}
+
+// --- JSON nesting depth is bounded at the documented kMaxJsonDepth --------
+RUVIA_TEST(json_depth_within_documented_limit_accepted) {
+    // 40 nested arrays is within kMaxJsonDepth (64). A prior double-increment enforced ~half
+    // the limit, wrongly rejecting this.
+    std::string arr(40, '[');
+    arr.append(40, ']');
+    std::string_view arrIn(arr);
+    RUVIA_CHECK(ruvia::detail::skipJsonValue(arrIn));
+    RUVIA_CHECK(arrIn.empty());
+
+    // Objects nest the same way.
+    std::string obj;
+    for (int i = 0; i < 40; ++i) {
+        obj += "{\"k\":";
+    }
+    obj += "1";
+    obj.append(40, '}');
+    std::string_view objIn(obj);
+    RUVIA_CHECK(ruvia::detail::skipJsonValue(objIn));
+    RUVIA_CHECK(objIn.empty());
+}
+
+RUVIA_TEST(json_depth_beyond_limit_rejected) {
+    // 200 levels exceeds kMaxJsonDepth (64) and must still be rejected (bounded recursion).
+    std::string tooDeep(200, '[');
+    tooDeep.append(200, ']');
+    std::string_view in(tooDeep);
+    RUVIA_CHECK(!ruvia::detail::skipJsonValue(in));
 }
