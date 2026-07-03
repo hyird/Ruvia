@@ -51,6 +51,19 @@ RUVIA_TEST(cookie_signature_equals_constant_time) {
     RUVIA_CHECK(cookieSignatureEquals("", ""));
 }
 
+RUVIA_TEST(cookie_signature_large_value_spills_past_stack_arena) {
+    // The message buffer uses a fixed stack arena with a heap fallback; a value
+    // larger than the arena must still sign correctly (deterministic, and
+    // sensitive to a single-byte change past the arena boundary).
+    const std::string big(2000, 'x');
+    std::string mutated = big;
+    mutated.back() = 'y';
+    const std::string a = sign("secret", "big", big);
+    RUVIA_CHECK_EQ(a.size(), ruvia::detail::kCookieSignatureSize);
+    RUVIA_CHECK_EQ(a, sign("secret", "big", big));   // deterministic across the fallback
+    RUVIA_CHECK(a != sign("secret", "big", mutated));  // change beyond the stack arena matters
+}
+
 RUVIA_TEST(cookie_signature_roundtrip_verify) {
     const std::string secret = "topsecret";
     const std::string name = "session";
