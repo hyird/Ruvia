@@ -81,3 +81,43 @@ RUVIA_TEST(multipart_part_headers_status_codes) {
     RUVIA_CHECK(httpParseMultipartPartHeaders("Content-Type: text/plain", noDisposition) ==
                 HttpMultipartPartHeaderStatus::kInvalidDisposition);
 }
+
+RUVIA_TEST(multipart_header_value_in_block_lookup) {
+    using ruvia::detail::httpHeaderValueInBlock;
+    const std::string_view block =
+        "Content-Disposition: form-data; name=\"a\"\r\n"
+        "Content-Type: text/plain";
+    // Case-insensitive name match with OWS-trimmed value; the last line has no
+    // trailing CRLF and must still be found.
+    RUVIA_CHECK(httpHeaderValueInBlock(block, "content-type") == std::string_view("text/plain"));
+    RUVIA_CHECK(httpHeaderValueInBlock(block, "CONTENT-TYPE") == std::string_view("text/plain"));
+    RUVIA_CHECK(httpHeaderValueInBlock(block, "Content-Disposition") ==
+                std::string_view("form-data; name=\"a\""));
+    // Missing header -> nullopt.
+    RUVIA_CHECK(!httpHeaderValueInBlock(block, "X-Absent").has_value());
+    // A line without a colon is skipped, not matched by name.
+    RUVIA_CHECK(!httpHeaderValueInBlock("garbageline\r\nX: v", "garbageline").has_value());
+    // Surrounding OWS on the value is trimmed.
+    RUVIA_CHECK(httpHeaderValueInBlock("X:   spaced   ", "X") == std::string_view("spaced"));
+}
+
+RUVIA_TEST(multipart_disposition_parameter_extraction) {
+    using ruvia::detail::httpDispositionParameter;
+    const std::string_view disposition = "form-data; name=\"field\"; filename=\"a.txt\"";
+    RUVIA_CHECK(httpDispositionParameter(disposition, "name") == std::string_view("field"));
+    RUVIA_CHECK(httpDispositionParameter(disposition, "filename") == std::string_view("a.txt"));
+    // An unquoted parameter value is returned as-is.
+    RUVIA_CHECK(httpDispositionParameter("form-data; name=plain", "name") == std::string_view("plain"));
+    // An absent parameter is nullopt.
+    RUVIA_CHECK(!httpDispositionParameter(disposition, "charset").has_value());
+}
+
+RUVIA_TEST(multipart_is_form_data_disposition) {
+    using ruvia::detail::httpIsFormDataDisposition;
+    RUVIA_CHECK(httpIsFormDataDisposition("form-data; name=\"x\""));
+    RUVIA_CHECK(httpIsFormDataDisposition("FORM-DATA"));           // case-insensitive
+    RUVIA_CHECK(httpIsFormDataDisposition("  form-data  ; filename=\"y\""));  // OWS-trimmed type
+    RUVIA_CHECK(!httpIsFormDataDisposition("attachment; name=\"x\""));
+    RUVIA_CHECK(!httpIsFormDataDisposition("form-data-extra"));    // whole type compared
+    RUVIA_CHECK(!httpIsFormDataDisposition(""));
+}
