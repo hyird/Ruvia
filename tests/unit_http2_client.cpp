@@ -198,6 +198,7 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
 
         // "/trailer" ends the stream with a trailing HEADERS block instead of END_STREAM on DATA.
         const bool useTrailer = (ctx.path == "/trailer");
+        const bool useBadTrailer = (ctx.path == "/bad-trailer");
         if (noContentWithData || resetContentWithData) {
             body = "illegal-body";
         }
@@ -211,7 +212,7 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             char dataHeader[kHttp2FrameHeaderBytes];
             http2WriteFrameHeader(
                 dataHeader, static_cast<std::uint32_t>(chunk), Http2FrameType::kData,
-                static_cast<std::uint8_t>((last && !useTrailer) ? kHttp2FlagEndStream : 0),
+                static_cast<std::uint8_t>((last && !useTrailer && !useBadTrailer) ? kHttp2FlagEndStream : 0),
                 header.streamId);
             if (!co_await writeAll(std::string_view(dataHeader, sizeof(dataHeader)))) {
                 co_return;
@@ -222,12 +223,19 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             offset += chunk;
         } while (offset < body.size());
 
-        if (useTrailer) {
+        if (useTrailer || useBadTrailer) {
+            std::pmr::string trailerBlock(resource);
+            if (useBadTrailer) {
+                HpackEncoder::encodeStatus(trailerBlock, 200);
+            }
             char trailer[kHttp2FrameHeaderBytes];
             http2WriteFrameHeader(
-                trailer, 0, Http2FrameType::kHeaders,
+                trailer, static_cast<std::uint32_t>(trailerBlock.size()), Http2FrameType::kHeaders,
                 static_cast<std::uint8_t>(kHttp2FlagEndHeaders | kHttp2FlagEndStream), header.streamId);
             if (!co_await writeAll(std::string_view(trailer, sizeof(trailer)))) {
+                co_return;
+            }
+            if (!trailerBlock.empty() && !co_await writeAll(std::string_view(trailerBlock.data(), trailerBlock.size()))) {
                 co_return;
             }
         }
@@ -700,6 +708,13 @@ RUVIA_TEST(http2_response_trailers) {
     RUVIA_CHECK(results[1].error.empty());
     RUVIA_CHECK(results[1].ok);
     RUVIA_CHECK_EQ(results[1].body, std::string("/after"));
+}
+
+RUVIA_TEST(http2_trailer_pseudo_header_is_rejected) {
+    const auto results = runH2Fetches({"/bad-trailer"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
 }
 
 // --- A request with no response END_STREAM trips the deadline ------------
