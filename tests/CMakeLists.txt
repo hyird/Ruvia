@@ -21,6 +21,7 @@ add_executable(ruvia_unit_tests
     unit_header_classification.cpp
     unit_header_block_parser.cpp
     unit_response_header_classification.cpp
+    unit_http_basics.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
