@@ -30,6 +30,7 @@ add_executable(ruvia_unit_tests
     unit_http2_frame.cpp
     unit_http2_settings.cpp
     unit_http2_stream_flow.cpp
+    unit_http2_payload.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
