@@ -192,7 +192,18 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
 
         if (leftSegment == "*" || rightSegment == "*") {
             if (depth == 0 && leftSegment != rightSegment) {
-                return false;
+                // A wildcard at the root shadows a sibling param (both match a
+                // single segment at the same position), which the "wildcard must
+                // not shadow a dynamic path" rule forbids — report it as a shape
+                // conflict. It may still coexist with a distinguishing static
+                // segment on the other side.
+                const auto leftDynamic =
+                    leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
+                const auto rightDynamic =
+                    rightSegment == "*" || (!rightSegment.empty() && rightSegment.front() == ':');
+                if (!(leftDynamic && rightDynamic)) {
+                    return false;
+                }
             }
             return true;
         }

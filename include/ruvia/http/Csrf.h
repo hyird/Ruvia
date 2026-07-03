@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <span>
 #include <string_view>
 
@@ -18,6 +19,20 @@ namespace detail {
 // Fills `buffer` (which must hold at least 48 bytes) with a cryptographically
 // random hex token and returns a view of it, or an empty view on RNG failure.
 [[nodiscard]] std::string_view generateCsrfToken(std::span<char> buffer) noexcept;
+
+// Length-checked constant-time compare of the double-submit CSRF token, matching
+// the project convention of comparing attacker-reproducible tokens without an
+// early-out on the first differing byte.
+[[nodiscard]] inline bool csrfTokensEqual(std::string_view left, std::string_view right) noexcept {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    unsigned char diff = 0;
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        diff |= static_cast<unsigned char>(left[i] ^ right[i]);
+    }
+    return diff == 0;
+}
 
 }  // namespace detail
 
@@ -38,7 +53,8 @@ public:
         const auto cookie = c.req().cookie("XSRF-TOKEN");
         if (!safe) {
             const auto header = c.req().header("X-XSRF-TOKEN");
-            if (!cookie || cookie->empty() || !header || header->empty() || *cookie != *header) {
+            if (!cookie || cookie->empty() || !header || header->empty() ||
+                !detail::csrfTokensEqual(*cookie, *header)) {
                 c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
                 co_return;
             }

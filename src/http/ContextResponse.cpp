@@ -441,6 +441,7 @@ void writeSetCookie(
 
 [[nodiscard]] std::pmr::string composeSignedCookieValue(
     std::pmr::memory_resource* resource,
+    std::string_view name,
     std::string_view value,
     std::string_view secret) {
     std::pmr::string signedValue(resource);
@@ -450,7 +451,7 @@ void writeSetCookie(
     }
     signedValue.push_back('.');
     char signature[detail::kCookieSignatureSize];
-    detail::writeCookieSignature(signature, secret, value);
+    detail::writeCookieSignature(signature, secret, name, value);
     signedValue.append(signature, sizeof(signature));
     return signedValue;
 }
@@ -480,7 +481,7 @@ void Context::setSignedCookie(
     std::string_view value,
     std::string_view secret,
     const CookieOptions& options) {
-    setCookie(name, composeSignedCookieValue(resource(), value, secret), options);
+    setCookie(name, composeSignedCookieValue(resource(), name, value, secret), options);
 }
 
 std::pmr::string Context::generateCookie(
@@ -501,7 +502,7 @@ std::pmr::string Context::generateSignedCookie(
     std::string_view value,
     std::string_view secret,
     const CookieOptions& options) const {
-    return generateCookie(name, composeSignedCookieValue(resource(), value, secret), options);
+    return generateCookie(name, composeSignedCookieValue(resource(), name, value, secret), options);
 }
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {

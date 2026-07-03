@@ -3,6 +3,9 @@ add_executable(ruvia_unit_tests
     unit_encoding.cpp
     unit_json.cpp
     unit_cookie_signature.cpp
+    unit_http_parsing.cpp
+    unit_routing.cpp
+    unit_cors.cpp
 )
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
