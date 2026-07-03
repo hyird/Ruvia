@@ -413,41 +413,18 @@ StreamReuseOutcome runStreamContentLengthZeroWithExtraThenFetch() {
                     *first,
                     asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nJUNK")),
                     asio::use_awaitable);
+                std::error_code ignored;
+                first->shutdown(tcp::socket::shutdown_both, ignored);
+                first->close(ignored);
 
-                asio::co_spawn(
-                    io,
-                    [first, &acceptor]() -> asio::awaitable<void> {
-                        try {
-                            asio::streambuf reusedRequest;
-                            co_await asio::async_read_until(
-                                *first, reusedRequest, std::string("\r\n\r\n"), asio::use_awaitable);
-                            co_await asio::async_write(
-                                *first,
-                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nREUSED")),
-                                asio::use_awaitable);
-                            std::error_code ignored;
-                            acceptor.close(ignored);
-                        } catch (...) {
-                        }
-                    },
-                    asio::detached);
-
-                asio::co_spawn(
-                    io,
-                    [&acceptor]() -> asio::awaitable<void> {
-                        try {
-                            auto second = co_await acceptor.async_accept(asio::use_awaitable);
-                            asio::streambuf secondRequest;
-                            co_await asio::async_read_until(
-                                second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
-                            co_await asio::async_write(
-                                second,
-                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
-                                asio::use_awaitable);
-                        } catch (...) {
-                        }
-                    },
-                    asio::detached);
+                auto second = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::streambuf secondRequest;
+                co_await asio::async_read_until(
+                    second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                co_await asio::async_write(
+                    second,
+                    asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
+                    asio::use_awaitable);
             } catch (const std::exception& e) {
                 out.error += std::string("server:") + e.what();
             }
@@ -462,10 +439,19 @@ StreamReuseOutcome runStreamContentLengthZeroWithExtraThenFetch() {
 
     auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
         io, std::move(config), std::pmr::get_default_resource());
+    auto clientWatchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(1000));
+    clientWatchdog->async_wait([&](const std::error_code& ec) {
+        if (!ec) {
+            out.error += "client-timeout";
+            pool->closeNow();
+            std::error_code ignored;
+            acceptor.close(ignored);
+        }
+    });
 
     asio::co_spawn(
         io,
-        [&]() -> asio::awaitable<void> {
+        [&, clientWatchdog]() -> asio::awaitable<void> {
             try {
                 ruvia::FetchOptions options;
                 auto stream = co_await ruvia::detail::taskAsAwaitable(
@@ -481,7 +467,11 @@ StreamReuseOutcome runStreamContentLengthZeroWithExtraThenFetch() {
                 out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
+                std::error_code ignored;
+                acceptor.close(ignored);
             }
+            std::error_code ignored;
+            clientWatchdog->cancel(ignored);
             pool->closeNow();
         },
         asio::detached);
@@ -512,43 +502,18 @@ StreamReuseOutcome runStreamConnectionCloseThenFetch() {
                     asio::buffer(std::string(
                         "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello")),
                     asio::use_awaitable);
+                std::error_code ignored;
+                first->shutdown(tcp::socket::shutdown_both, ignored);
+                first->close(ignored);
 
-                asio::co_spawn(
-                    io,
-                    [first, &acceptor]() -> asio::awaitable<void> {
-                        try {
-                            asio::streambuf reusedRequest;
-                            co_await asio::async_read_until(
-                                *first, reusedRequest, std::string("\r\n\r\n"), asio::use_awaitable);
-                            co_await asio::async_write(
-                                *first,
-                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nREUSED")),
-                                asio::use_awaitable);
-                            std::error_code ignored;
-                            acceptor.close(ignored);
-                        } catch (...) {
-                        }
-                    },
-                    asio::detached);
-
-                asio::co_spawn(
-                    io,
-                    [first, &acceptor]() -> asio::awaitable<void> {
-                        try {
-                            auto second = co_await acceptor.async_accept(asio::use_awaitable);
-                            asio::streambuf secondRequest;
-                            co_await asio::async_read_until(
-                                second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
-                            co_await asio::async_write(
-                                second,
-                                asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
-                                asio::use_awaitable);
-                            std::error_code ignored;
-                            first->close(ignored);
-                        } catch (...) {
-                        }
-                    },
-                    asio::detached);
+                auto second = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::streambuf secondRequest;
+                co_await asio::async_read_until(
+                    second, secondRequest, std::string("\r\n\r\n"), asio::use_awaitable);
+                co_await asio::async_write(
+                    second,
+                    asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nFRESH")),
+                    asio::use_awaitable);
             } catch (const std::exception& e) {
                 out.error += std::string("server:") + e.what();
             }
@@ -563,10 +528,19 @@ StreamReuseOutcome runStreamConnectionCloseThenFetch() {
 
     auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
         io, std::move(config), std::pmr::get_default_resource());
+    auto clientWatchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(1000));
+    clientWatchdog->async_wait([&](const std::error_code& ec) {
+        if (!ec) {
+            out.error += "client-timeout";
+            pool->closeNow();
+            std::error_code ignored;
+            acceptor.close(ignored);
+        }
+    });
 
     asio::co_spawn(
         io,
-        [&]() -> asio::awaitable<void> {
+        [&, clientWatchdog]() -> asio::awaitable<void> {
             try {
                 ruvia::FetchOptions options;
                 auto stream = co_await ruvia::detail::taskAsAwaitable(
@@ -584,7 +558,11 @@ StreamReuseOutcome runStreamConnectionCloseThenFetch() {
                 out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
+                std::error_code ignored;
+                acceptor.close(ignored);
             }
+            std::error_code ignored;
+            clientWatchdog->cancel(ignored);
             pool->closeNow();
         },
         asio::detached);

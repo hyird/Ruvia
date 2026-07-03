@@ -298,14 +298,10 @@ Task<void> Http2ClientSession::readLoop() {
             break;
         }
     }
-    state_ = State::kClosed;
-    failAllStreams();
-    wakeFlusher();
-    std::pmr::vector<std::coroutine_handle<>> waiters(resource_);
-    waiters.swap(readyWaiters_);
-    for (auto handle : waiters) {
-        resume(handle);
-    }
+    // Tear down through closeNow() so the socket is actually closed — on a protocol-error exit
+    // state_ is not yet kClosed, and leaving the socket open would hang a peer still reading from
+    // us (and a later closeNow() would early-return without closing it).
+    closeNow();
     co_return;
 }
 
@@ -818,6 +814,26 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
     return true;
 }
 
+bool h2OnDecodedTrailerHeader(void* target, std::string_view name, std::string_view value) {
+    (void)value;
+    auto* ctx = static_cast<H2DecodeContext*>(target);
+    if (!name.empty() && name.front() == ':') {
+        ctx->malformed = true;
+        return false;
+    }
+    for (const auto ch : name) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ctx->malformed = true;
+            return false;
+        }
+    }
+    if (++ctx->headerCount > kMaxRequestHeaders) {
+        ctx->malformed = true;
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool endStream) {
@@ -837,6 +853,10 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
                     http2ResponseStatusMayHaveBody(stream->response.statusCode);
             }
         }
+    } else if (stream != nullptr && stream->headersComplete) {
+        H2DecodeContext ctx{};
+        const auto result = decoder_.decode(headerAssembly_, &ctx, &h2OnDecodedTrailerHeader);
+        ok = result.ok() && !ctx.malformed;
     } else {
         // Decode purely to advance the connection-global HPACK dynamic table; discard output.
         const auto result = decoder_.decode(
