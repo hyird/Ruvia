@@ -54,7 +54,17 @@ inline void httpAssignMultipartBoundaryMarkers(
         return true;
     }
     const char terminator = input[after];
-    return terminator == '\r' || terminator == '-';
+    if (terminator == '\r') {
+        return true;  // CRLF -> next part
+    }
+    if (terminator == '-') {
+        // The close-delimiter ends the boundary with "--"; a lone '-' followed by
+        // other content (e.g. "--abc-x") is NOT a delimiter. At end-of-buffer the
+        // second dash may be truncated, so (like the boundary-token EOF case above)
+        // treat it as a possible match and leave completion to the caller.
+        return after + 1 >= input.size() || input[after + 1] == '-';
+    }
+    return false;
 }
 
 [[nodiscard]] inline std::size_t httpFindMultipartBoundaryLine(
