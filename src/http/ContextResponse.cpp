@@ -304,6 +304,7 @@ struct SetCookieSerialization final {
     std::size_t expiresSize{0};
     std::string_view prefixText{};
     std::string_view priorityText{};
+    std::string_view sameSiteText{};
     std::uint64_t maxAgeValue{0};
     std::size_t maxAgeSize{0};
     bool hasMaxAge{false};
@@ -322,6 +323,7 @@ struct SetCookieSerialization final {
     SetCookieSerialization serialization;
     serialization.prefixText = detail::cookiePrefixText(options.prefix);
     serialization.priorityText = detail::cookiePriorityToken(options.priority);
+    serialization.sameSiteText = detail::cookieSameSiteToken(options.sameSite);
     if (options.expires.has_value()) {
         const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
         std::tm utc{};
@@ -365,8 +367,8 @@ struct SetCookieSerialization final {
     if (options.secure) {
         cookieSize += std::string_view("; Secure").size();
     }
-    if (!options.sameSite.empty()) {
-        cookieSize += std::string_view("; SameSite=").size() + options.sameSite.size();
+    if (!serialization.sameSiteText.empty()) {
+        cookieSize += std::string_view("; SameSite=").size() + serialization.sameSiteText.size();
     }
     if (!serialization.priorityText.empty()) {
         cookieSize += std::string_view("; Priority=").size() + serialization.priorityText.size();
@@ -426,9 +428,9 @@ void writeSetCookie(
     if (options.secure) {
         append("; Secure");
     }
-    if (!options.sameSite.empty()) {
+    if (!serialization.sameSiteText.empty()) {
         append("; SameSite=");
-        append(options.sameSite);
+        append(serialization.sameSiteText);
     }
     if (!serialization.priorityText.empty()) {
         append("; Priority=");

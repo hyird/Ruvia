@@ -41,6 +41,7 @@ public:
         std::pmr::vector<FetchResponseHeader> headers,
         Framing framing,
         std::size_t contentLength,
+        bool closeAfterResponse,
         std::pmr::string leftover,
         std::chrono::milliseconds idleTimeout,
         std::pmr::memory_resource* resource)
@@ -52,7 +53,8 @@ public:
           idleTimeout_(idleTimeout),
           clRemaining_(contentLength),
           framing_(framing),
-          status_(status) {}
+          status_(status),
+          closeAfterResponse_(closeAfterResponse) {}
 
     ~Http1StreamSource() override { finish(false); }
 
@@ -83,6 +85,7 @@ private:
             return;
         }
         finished_ = true;
+        reusable = reusable && !closeAfterResponse_;
         if (guard_) {
             if (!reusable) {
                 guard_->discard();
@@ -110,7 +113,7 @@ private:
             co_return empty();  // already ended or closed; the connection is released
         }
         if (clRemaining_ == 0) {
-            finish(/*reusable=*/true);
+            finish(/*reusable=*/buffer_.empty());
             co_return empty();
         }
         if (buffer_.empty()) {
@@ -267,6 +270,7 @@ private:
     Framing framing_;
     int status_;
     bool finished_{false};
+    bool closeAfterResponse_{false};
     bool chunkDone_{false};
     bool needChunkCrlf_{false};
 };
@@ -331,8 +335,8 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
 
     auto* source = constructPmrObject<Http1StreamSource>(
         requestResource, this, std::move(guard), response.statusCode,
-        std::move(response.headers), framing, contentLength, std::move(leftover), idleTimeout,
-        requestResource);
+        std::move(response.headers), framing, contentLength, head.closeAfterResponse,
+        std::move(leftover), idleTimeout, requestResource);
     co_return FetchResponseStream(
         std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
 }

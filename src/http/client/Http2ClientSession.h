@@ -83,6 +83,7 @@ private:
         std::chrono::steady_clock::time_point deadline{};
         std::uint32_t id{0};
         bool streaming{false};          // deliver DATA incrementally with flow-control backpressure
+        bool responseBodyAllowed{true};
         bool hasDeadline{false};
         bool headersComplete{false};
         bool localEndSent{false};       // we sent END_STREAM for the request

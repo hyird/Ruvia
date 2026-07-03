@@ -3,6 +3,7 @@ add_executable(ruvia_unit_tests
     unit_encoding.cpp
     unit_json.cpp
     unit_cookie_signature.cpp
+    unit_cookie_validation.cpp
     unit_http_parsing.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp

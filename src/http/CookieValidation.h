@@ -55,6 +55,29 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
+// Case-insensitive match to a canonical SameSite token; empty on no match.
+[[nodiscard]] inline std::string_view cookieSameSiteToken(std::string_view sameSite) noexcept {
+    constexpr std::string_view tokens[] = {"Strict", "Lax", "None"};
+    for (const auto token : tokens) {
+        if (sameSite.size() != token.size()) {
+            continue;
+        }
+        bool matches = true;
+        for (std::size_t i = 0; i < token.size(); ++i) {
+            const auto left = static_cast<unsigned char>(sameSite[i]);
+            const auto right = static_cast<unsigned char>(token[i]);
+            if ((left | 0x20) != (right | 0x20)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return token;
+        }
+    }
+    return {};
+}
+
 [[nodiscard]] inline std::string_view cookiePrefixText(CookiePrefix prefix) noexcept {
     switch (prefix) {
         case CookiePrefix::kNone: return {};
@@ -85,6 +108,17 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     }
     if (!options.priority.empty() && cookiePriorityToken(options.priority).empty()) {
         throw std::invalid_argument("invalid cookie Priority");
+    }
+    if (!options.sameSite.empty()) {
+        // Only Strict/Lax/None are valid; a typo would otherwise be emitted verbatim and silently
+        // treated as the browser default. RFC 6265bis §5.5: SameSite=None requires Secure.
+        const auto sameSite = cookieSameSiteToken(options.sameSite);
+        if (sameSite.empty()) {
+            throw std::invalid_argument("invalid cookie SameSite");
+        }
+        if (sameSite == "None" && !options.secure) {
+            throw std::invalid_argument("SameSite=None cookie requires Secure");
+        }
     }
     if (options.partitioned && !options.secure) {
         throw std::invalid_argument("partitioned cookie requires Secure");
