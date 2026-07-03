@@ -1450,6 +1450,239 @@ H2BadFrameOutcome runH2TruncatedGoawayOnActiveStream() {
     return out;
 }
 
+H2BadFrameOutcome runH2MalformedPriority() {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    H2BadFrameOutcome out;
+    std::shared_ptr<tcp::socket> serverSocket;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                serverSocket = std::make_shared<tcp::socket>(
+                    co_await acceptor.async_accept(asio::use_awaitable));
+                auto& sock = *serverSocket;
+                auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == size;
+                };
+                auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_write(
+                        sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == bytes.size();
+                };
+
+                char preface[24];
+                if (!co_await readExact(preface, sizeof(preface))) {
+                    co_return;
+                }
+                char settings[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+                if (!co_await writeAll(std::string_view(settings, sizeof(settings)))) {
+                    co_return;
+                }
+
+                char priority[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(priority, 0, Http2FrameType::kPriority, 0, 0);
+                if (!co_await writeAll(std::string_view(priority, sizeof(priority)))) {
+                    co_return;
+                }
+
+                char next[kHttp2FrameHeaderBytes];
+                for (;;) {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(next, sizeof(next)), asio::as_tuple(asio::use_awaitable));
+                    if (ec || n == 0) {
+                        out.serverSawClose = true;
+                        break;
+                    }
+                }
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+    auto watchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(300));
+    watchdog->async_wait([&](const std::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        out.timedOut = true;
+        if (serverSocket) {
+            std::error_code ignored;
+            serverSocket->close(ignored);
+        }
+        session->closeNow();
+        std::error_code ignored;
+        acceptor.close(ignored);
+    });
+
+    asio::co_spawn(
+        io,
+        [&, watchdog]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto response = co_await taskAsAwaitable(session->fetch("/malformed-priority", options, resource));
+                out.status = response.statusCode;
+                out.body.assign(response.body.data(), response.body.size());
+            } catch (...) {
+                out.clientFailed = true;
+            }
+            std::error_code ignored;
+            watchdog->cancel(ignored);
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
+H2BadFrameOutcome runH2SelfDependentPriority() {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    H2BadFrameOutcome out;
+    std::shared_ptr<tcp::socket> serverSocket;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                serverSocket = std::make_shared<tcp::socket>(
+                    co_await acceptor.async_accept(asio::use_awaitable));
+                auto& sock = *serverSocket;
+                auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == size;
+                };
+                auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_write(
+                        sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == bytes.size();
+                };
+
+                char preface[24];
+                if (!co_await readExact(preface, sizeof(preface))) {
+                    co_return;
+                }
+                char settings[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+                if (!co_await writeAll(std::string_view(settings, sizeof(settings)))) {
+                    co_return;
+                }
+
+                std::uint32_t streamId = 0;
+                for (;;) {
+                    char headerBytes[kHttp2FrameHeaderBytes];
+                    if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                        co_return;
+                    }
+                    const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                    std::string payload(header.length, '\0');
+                    if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                        co_return;
+                    }
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kSettings) {
+                        if ((header.flags & kHttp2FlagAck) == 0) {
+                            char ack[kHttp2FrameHeaderBytes];
+                            http2WriteFrameHeader(ack, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
+                            if (!co_await writeAll(std::string_view(ack, sizeof(ack)))) {
+                                co_return;
+                            }
+                        }
+                        continue;
+                    }
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kHeaders) {
+                        streamId = header.streamId;
+                        break;
+                    }
+                }
+
+                char payload[5]{};
+                http2Write32(payload, streamId);
+                payload[4] = 16;
+                char priority[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(priority, sizeof(payload), Http2FrameType::kPriority, 0, streamId);
+                if (!co_await writeAll(std::string_view(priority, sizeof(priority))) ||
+                    !co_await writeAll(std::string_view(payload, sizeof(payload)))) {
+                    co_return;
+                }
+
+                char next[kHttp2FrameHeaderBytes];
+                for (;;) {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(next, sizeof(next)), asio::as_tuple(asio::use_awaitable));
+                    if (ec || n == 0) {
+                        out.serverSawClose = true;
+                        break;
+                    }
+                }
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+    auto watchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(300));
+    watchdog->async_wait([&](const std::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        out.timedOut = true;
+        if (serverSocket) {
+            std::error_code ignored;
+            serverSocket->close(ignored);
+        }
+        session->closeNow();
+        std::error_code ignored;
+        acceptor.close(ignored);
+    });
+
+    asio::co_spawn(
+        io,
+        [&, watchdog]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto response = co_await taskAsAwaitable(session->fetch("/self-dependent-priority", options, resource));
+                out.status = response.statusCode;
+                out.body.assign(response.body.data(), response.body.size());
+            } catch (...) {
+                out.clientFailed = true;
+            }
+            std::error_code ignored;
+            watchdog->cancel(ignored);
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
 }  // namespace
 
 // --- Single request round-trip -------------------------------------------
@@ -1606,6 +1839,22 @@ RUVIA_TEST(http2_data_on_idle_stream_is_rejected) {
 
 RUVIA_TEST(http2_truncated_goaway_with_active_stream_is_rejected) {
     const auto out = runH2TruncatedGoawayOnActiveStream();
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(!out.timedOut);
+    RUVIA_CHECK(out.clientFailed);
+    RUVIA_CHECK(out.serverSawClose);
+}
+
+RUVIA_TEST(http2_malformed_priority_is_rejected) {
+    const auto out = runH2MalformedPriority();
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(!out.timedOut);
+    RUVIA_CHECK(out.clientFailed);
+    RUVIA_CHECK(out.serverSawClose);
+}
+
+RUVIA_TEST(http2_self_dependent_priority_is_rejected) {
+    const auto out = runH2SelfDependentPriority();
     RUVIA_CHECK(out.error.empty());
     RUVIA_CHECK(!out.timedOut);
     RUVIA_CHECK(out.clientFailed);

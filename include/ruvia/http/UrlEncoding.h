@@ -128,12 +128,16 @@ template <typename Visitor>
     while (!input.empty()) {
         const auto pairEnd = input.find('&');
         const auto pair = pairEnd == std::string_view::npos ? input : input.substr(0, pairEnd);
-        const auto equals = pair.find('=');
-        const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
-        const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
 
-        if (!dispatchUrlEncodedPairVisitor(visitorRef, name, value)) {
-            return true;
+        // Skip empty segments ("&&", leading/trailing "&") rather than emitting a phantom
+        // ("", "") pair — a segment with no bytes carries no field.
+        if (!pair.empty()) {
+            const auto equals = pair.find('=');
+            const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
+            const auto value = equals == std::string_view::npos ? std::string_view{} : pair.substr(equals + 1);
+            if (!dispatchUrlEncodedPairVisitor(visitorRef, name, value)) {
+                return true;
+            }
         }
 
         if (pairEnd == std::string_view::npos) {
