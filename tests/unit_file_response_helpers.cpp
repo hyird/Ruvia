@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 
 #include "http/FileResponseHelpers.h"
@@ -90,4 +92,66 @@ RUVIA_TEST(byte_range_set_multiple_detection) {
     RUVIA_CHECK(!httpByteRangeSetHasMultiple("bytes=-100"));
     RUVIA_CHECK(!httpByteRangeSetHasMultiple("bytes="));
     RUVIA_CHECK(!httpByteRangeSetHasMultiple("0-99,200-299"));  // missing "bytes=" unit
+}
+
+RUVIA_TEST(http_month_index_lookup) {
+    using ruvia::detail::httpMonthIndex;
+    RUVIA_CHECK_EQ(httpMonthIndex("Jan"), 1);
+    RUVIA_CHECK_EQ(httpMonthIndex("Feb"), 2);
+    RUVIA_CHECK_EQ(httpMonthIndex("Nov"), 11);
+    RUVIA_CHECK_EQ(httpMonthIndex("Dec"), 12);
+    // Unknown, empty, and wrong-case names are rejected (0).
+    RUVIA_CHECK_EQ(httpMonthIndex("Xyz"), 0);
+    RUVIA_CHECK_EQ(httpMonthIndex(""), 0);
+    RUVIA_CHECK_EQ(httpMonthIndex("jan"), 0);
+}
+
+RUVIA_TEST(http_parse_fixed_digits) {
+    using ruvia::detail::httpParseFixedDigits;
+    RUVIA_CHECK_EQ(httpParseFixedDigits("07").value_or(-1), 7);
+    RUVIA_CHECK_EQ(httpParseFixedDigits("2024").value_or(-1), 2024);
+    RUVIA_CHECK_EQ(httpParseFixedDigits("00").value_or(-1), 0);
+    // Empty and any non-digit byte are rejected.
+    RUVIA_CHECK(!httpParseFixedDigits("").has_value());
+    RUVIA_CHECK(!httpParseFixedDigits("1a").has_value());
+    RUVIA_CHECK(!httpParseFixedDigits(" 7").has_value());
+}
+
+RUVIA_TEST(http_days_from_civil_epoch) {
+    using ruvia::detail::httpDaysFromCivil;
+    // Days relative to the Unix epoch (Howard Hinnant's algorithm).
+    RUVIA_CHECK_EQ(httpDaysFromCivil(1970, 1, 1), std::int64_t{0});
+    RUVIA_CHECK_EQ(httpDaysFromCivil(1970, 1, 2), std::int64_t{1});
+    RUVIA_CHECK_EQ(httpDaysFromCivil(1969, 12, 31), std::int64_t{-1});
+    RUVIA_CHECK_EQ(httpDaysFromCivil(2000, 1, 1), std::int64_t{10957});
+    RUVIA_CHECK_EQ(httpDaysFromCivil(1994, 11, 6), std::int64_t{9075});
+}
+
+RUVIA_TEST(http_parse_imf_fixdate) {
+    using ruvia::detail::httpParseImfFixdate;
+    // The canonical RFC 7231 example resolves to its known epoch second.
+    const auto canonical = httpParseImfFixdate("Sun, 06 Nov 1994 08:49:37 GMT");
+    RUVIA_CHECK(canonical.has_value());
+    RUVIA_CHECK_EQ(*canonical, std::time_t{784111777});
+    // The Unix epoch itself.
+    const auto epoch = httpParseImfFixdate("Thu, 01 Jan 1970 00:00:00 GMT");
+    RUVIA_CHECK(epoch.has_value());
+    RUVIA_CHECK_EQ(*epoch, std::time_t{0});
+    // A leap second (60) is accepted.
+    RUVIA_CHECK(httpParseImfFixdate("Sun, 06 Nov 1994 08:49:60 GMT").has_value());
+
+    // Malformed inputs are rejected.
+    RUVIA_CHECK(!httpParseImfFixdate("bad").has_value());                          // wrong length
+    RUVIA_CHECK(!httpParseImfFixdate("Sun  06 Nov 1994 08:49:37 GMT").has_value());  // bad separators
+    RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Xxx 1994 08:49:37 GMT").has_value());  // bad month
+    RUVIA_CHECK(!httpParseImfFixdate("Sun, 32 Nov 1994 08:49:37 GMT").has_value());  // day out of range
+    RUVIA_CHECK(!httpParseImfFixdate("Sun, 06 Nov 1994 08:49:37 UTC").has_value());  // not GMT
+}
+
+RUVIA_TEST(http_trim_weak_etag_prefix) {
+    using ruvia::detail::httpTrimWeakEtagPrefix;
+    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/\"abc\""), std::string_view("\"abc\""));
+    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("\"abc\""), std::string_view("\"abc\""));  // strong etag unchanged
+    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/"), std::string_view(""));
+    RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W"), std::string_view("W"));  // needs both prefix chars
 }
