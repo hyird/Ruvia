@@ -44,6 +44,7 @@ add_executable(ruvia_unit_tests
     unit_response_head_buffer.cpp
     unit_pmr_string.cpp
     unit_http2_offset_vector.cpp
+    unit_http2_stream_lifecycle.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
