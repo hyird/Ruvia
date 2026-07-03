@@ -122,3 +122,44 @@ RUVIA_TEST(hpack_long_value_round_trips) {
     RUVIA_CHECK_EQ(out.headers[0].first, std::string("x-long"));
     RUVIA_CHECK_EQ(out.headers[0].second, longValue);
 }
+
+RUVIA_TEST(hpack_huffman_rejects_bad_padding_and_eos) {
+    // Literal (name :authority via 0x41) with a Huffman value.
+    // 0x00: after the 5-bit code for '0' the trailing 000 padding is not all-ones.
+    Collector out;
+    RUVIA_CHECK(!decodeBlock(bytes({0x41, 0x81, 0x00}), out));
+    // Four 0xFF bytes walk 30 one-bits into the EOS symbol, which must be rejected.
+    Collector out2;
+    RUVIA_CHECK(!decodeBlock(bytes({0x41, 0x84, 0xFF, 0xFF, 0xFF, 0xFF}), out2));
+}
+
+RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
+    // Literal with incremental indexing + literal name adds "custom-key:
+    // custom-value" to the dynamic table; a following index 62 (static size 61 + 1)
+    // references that newest dynamic entry.
+    std::string block;
+    block += static_cast<char>(0x40);                 // literal, incremental indexing, literal name
+    block += static_cast<char>(0x0A);                 // name length 10
+    block += "custom-key";
+    block += static_cast<char>(0x0C);                 // value length 12
+    block += "custom-value";
+    block += static_cast<char>(0xBE);                 // indexed field, index 62 (0x80 | 62)
+
+    Collector out;
+    RUVIA_CHECK(decodeBlock(block, out));
+    RUVIA_CHECK_EQ(out.headers.size(), std::size_t{2});
+    const auto expected = std::make_pair(std::string("custom-key"), std::string("custom-value"));
+    RUVIA_CHECK_EQ(out.headers[0], expected);
+    RUVIA_CHECK_EQ(out.headers[1], expected);  // resolved via the dynamic table
+}
+
+RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
+    // A dynamic-table size update must precede any header field (RFC 7541 4.2):
+    // 0x82 (:method GET) then 0x20 (size update) is a decoding error.
+    Collector out;
+    RUVIA_CHECK(!decodeBlock(bytes({0x82, 0x20}), out));
+    // A size update before the header is fine.
+    Collector out2;
+    RUVIA_CHECK(decodeBlock(bytes({0x20, 0x82}), out2));
+    RUVIA_CHECK_EQ(out2.headers.size(), std::size_t{1});
+}
