@@ -9,6 +9,7 @@
 
 #include <zstd.h>
 
+#include "http/HeaderAcceptUtils.h"
 #include "http/HeaderTokenUtils.h"
 #include "http/MultipartParsing.h"
 #include "http/RequestBodyDecoding.h"
@@ -125,4 +126,33 @@ RUVIA_TEST(zstd_decode_truncated_frame_rejected) {
     // Dropping the final bytes yields an incomplete frame that must be rejected,
     // matching the zlib/brotli decoders (regression guard for silent-truncation).
     RUVIA_CHECK(!zstdRoundTrip(plain, 4).has_value());
+}
+
+// --- Accept quality parsing shares the quote-aware parameter scanner ------
+RUVIA_TEST(accept_quality_quoted_semicolon_param) {
+    using ruvia::detail::httpAcceptsMediaType;
+    // A ';' inside a quoted media-range parameter must NOT be read as a parameter
+    // separator when locating q (RFC 7231 §5.3.2). Before unifying onto the quote-aware
+    // scanner this mis-read "q=0" from inside the quotes and rejected the type.
+    RUVIA_CHECK(httpAcceptsMediaType(
+        R"(application/json;version="a;q=0";q=0.9)", "application/json"));
+    // Regressions: a real q=0 still means "not accepted", and a normal q is honored.
+    RUVIA_CHECK(!httpAcceptsMediaType("application/json;q=0", "application/json"));
+    RUVIA_CHECK(httpAcceptsMediaType("text/html;q=0.8", "text/html"));
+}
+
+RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
+    using ruvia::detail::httpAcceptsEncoding;
+    RUVIA_CHECK(httpAcceptsEncoding("gzip;q=0.5, br", "br"));
+    RUVIA_CHECK(httpAcceptsEncoding("gzip;q=0.5, br", "gzip"));
+    RUVIA_CHECK(!httpAcceptsEncoding("gzip;q=0", "gzip"));
+}
+
+RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
+    using ruvia::detail::httpAcceptsEncoding;
+    using ruvia::detail::httpAcceptsMediaType;
+
+    RUVIA_CHECK(!httpAcceptsMediaType(
+        R"(application/json;version="a,b";q=0)", "application/json"));
+    RUVIA_CHECK(!httpAcceptsEncoding(R"(gzip;note="a,b";q=0)", "gzip"));
 }
