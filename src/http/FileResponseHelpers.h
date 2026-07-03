@@ -210,16 +210,47 @@ inline void httpAppendUnsigned(std::pmr::string& output, std::uint64_t value) {
 [[nodiscard]] inline std::pmr::string httpFormatDate(
     std::pmr::memory_resource* resource,
     std::time_t time) {
-    std::pmr::string output(resource);
     std::tm utc{};
 #if defined(_WIN32)
     gmtime_s(&utc, &time);
 #else
     gmtime_r(&time, &utc);
 #endif
-    output.resize_and_overwrite(30, [&](char* data, std::size_t count) {
-        return std::strftime(data, count, "%a, %d %b %Y %H:%M:%S GMT", &utc);
-    });
+    // RFC 7231 §7.1.1.1 IMF-fixdate mandates English day/month abbreviations
+    // regardless of the process locale. strftime's %a/%b honor the locale, so a
+    // non-C locale would emit invalid HTTP dates; format from fixed tables instead.
+    static constexpr std::array<std::string_view, 7> dayNames{
+        "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    static constexpr std::array<std::string_view, 12> monthNames{
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    const auto wday = (utc.tm_wday >= 0 && utc.tm_wday < 7) ? utc.tm_wday : 0;
+    const auto mon = (utc.tm_mon >= 0 && utc.tm_mon < 12) ? utc.tm_mon : 0;
+    const long year = static_cast<long>(utc.tm_year) + 1900;
+
+    std::pmr::string output(resource);
+    output.reserve(29);
+    const auto append2 = [&output](int value) {
+        output.push_back(static_cast<char>('0' + (value / 10) % 10));
+        output.push_back(static_cast<char>('0' + value % 10));
+    };
+    output.append(dayNames[static_cast<std::size_t>(wday)]);
+    output.append(", ");
+    append2(utc.tm_mday);
+    output.push_back(' ');
+    output.append(monthNames[static_cast<std::size_t>(mon)]);
+    output.push_back(' ');
+    output.push_back(static_cast<char>('0' + static_cast<int>((year / 1000) % 10)));
+    output.push_back(static_cast<char>('0' + static_cast<int>((year / 100) % 10)));
+    output.push_back(static_cast<char>('0' + static_cast<int>((year / 10) % 10)));
+    output.push_back(static_cast<char>('0' + static_cast<int>(year % 10)));
+    output.push_back(' ');
+    append2(utc.tm_hour);
+    output.push_back(':');
+    append2(utc.tm_min);
+    output.push_back(':');
+    append2(utc.tm_sec);
+    output.append(" GMT");
     return output;
 }
 
