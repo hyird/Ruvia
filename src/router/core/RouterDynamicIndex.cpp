@@ -10,7 +10,7 @@ const detail::RouteEntry* detail::RouteTable::findDynamicNode(
     RouteMatch& match) noexcept {
     std::string_view segment;
     std::string_view rest;
-    if (!splitSegment(path, segment, rest)) {
+    if (!splitSegmentStrict(path, segment, rest)) {
         if (node.route != nullptr) {
             return node.route;
         }
@@ -54,7 +54,7 @@ const detail::RouteEntry* detail::RouteTable::findDynamicNodeNoParams(
     std::string_view path) noexcept {
     std::string_view segment;
     std::string_view rest;
-    if (!splitSegment(path, segment, rest)) {
+    if (!splitSegmentStrict(path, segment, rest)) {
         return node.route != nullptr ? node.route : node.wildcardRoute;
     }
 
@@ -124,6 +124,31 @@ bool detail::RouteTable::splitSegment(
 
     segment = path.substr(0, slash);
     rest = path.substr(slash + 1);
+    return true;
+}
+
+bool detail::RouteTable::splitSegmentStrict(
+    std::string_view path,
+    std::string_view& segment,
+    std::string_view& rest) noexcept {
+    if (path.empty()) {
+        segment = {};
+        rest = {};
+        return false;
+    }
+    if (path.front() == '/') {
+        path.remove_prefix(1);
+    }
+
+    const auto slash = path.find('/');
+    if (slash == std::string_view::npos) {
+        segment = path;
+        rest = {};
+        return true;
+    }
+
+    segment = path.substr(0, slash);
+    rest = path.substr(slash);  // keep the leading '/' so empty segments survive
     return true;
 }
 

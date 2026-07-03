@@ -55,6 +55,16 @@ std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_res
             out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
         }
     }
+    // A length of 1 (mod 4) cannot encode any byte group; reject it rather than
+    // silently dropping the stray 6 bits.
+    if (bits >= 6) {
+        throw std::invalid_argument("JWT base64url has invalid length");
+    }
+    // Require canonical encoding: the trailing unused bits of the final char must
+    // be zero, so a given input maps to exactly one byte string.
+    if (bits > 0 && (buffer & ((std::uint32_t{1} << bits) - 1)) != 0) {
+        throw std::invalid_argument("JWT base64url is not canonical");
+    }
     return out;
 }
 

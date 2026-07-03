@@ -94,7 +94,11 @@ inline bool zstdInflateRequestBody(std::string_view input, std::pmr::string& out
     } guard{stream};
     ZSTD_inBuffer in{input.data(), input.size(), 0};
     char buffer[16384];
-    while (in.pos < in.size) {
+    // Mirror the zlib/brotli decoders: a truncated frame must be rejected, not
+    // reported as a complete body. ZSTD_decompressStream returns 0 only once a
+    // frame is fully decoded and flushed; any other (non-error) value means more
+    // decoding/flushing is still pending.
+    for (;;) {
         ZSTD_outBuffer outBuffer{buffer, sizeof(buffer), 0};
         const std::size_t result = ZSTD_decompressStream(stream, &outBuffer, &in);
         if (ZSTD_isError(result) != 0) {
@@ -104,8 +108,17 @@ inline bool zstdInflateRequestBody(std::string_view input, std::pmr::string& out
             return false;
         }
         out.append(buffer, outBuffer.pos);
-        if (outBuffer.pos == 0) {
+        if (result == 0) {
+            // Frame completely decoded and flushed.
             break;
+        }
+        if (outBuffer.pos == sizeof(buffer)) {
+            // Output buffer filled; flush the remainder before requiring input.
+            continue;
+        }
+        if (in.pos >= in.size) {
+            // Frame incomplete but no input remains: the stream was truncated.
+            return false;
         }
     }
     return true;

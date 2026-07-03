@@ -89,12 +89,79 @@ inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visit
     }
 }
 
+// Like httpVisitSemicolonParameters, but treats an RFC quoted-string value as
+// opaque so a ';' inside a "..." value does not split the parameter. Use for
+// Content-Type / Content-Disposition parameters (RFC 7231 §3.1.1.1, RFC 6266),
+// whose values may be quoted-strings. Do NOT use for Cookie headers: RFC 6265
+// gives '"' no special meaning there, so cookie parsing must stay literal.
+template <typename Visitor>
+inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&& visitor) {
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        std::size_t end = value.size();
+        bool inQuotes = false;
+        for (std::size_t i = start; i < value.size(); ++i) {
+            const char c = value[i];
+            if (inQuotes) {
+                if (c == '\\' && i + 1 < value.size()) {
+                    ++i;  // skip the escaped character (quoted-pair)
+                } else if (c == '"') {
+                    inQuotes = false;
+                }
+            } else if (c == '"') {
+                inQuotes = true;
+            } else if (c == ';') {
+                end = i;
+                break;
+            }
+        }
+        const auto part = httpTrimOws(value.substr(start, end - start));
+        if (const auto equals = part.find('='); equals != std::string_view::npos) {
+            if (!visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)))) {
+                return;
+            }
+        }
+        if (end >= value.size()) {
+            return;
+        }
+        start = end + 1;
+    }
+}
+
 [[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameter(
     std::string_view value,
     std::string_view name) {
     std::optional<std::string_view> result;
     httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
         if (key == name) {
+            result = parameterValue;
+            return false;
+        }
+        return true;
+    });
+    return result;
+}
+
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuoted(
+    std::string_view value,
+    std::string_view name) {
+    std::optional<std::string_view> result;
+    httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
+        if (key == name) {
+            result = parameterValue;
+            return false;
+        }
+        return true;
+    });
+    return result;
+}
+
+[[nodiscard]] inline std::optional<std::string_view> httpFindSemicolonParameterQuotedIgnoreCase(
+    std::string_view value,
+    std::string_view name) {
+    std::optional<std::string_view> result;
+    httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
+        if (httpAsciiEqualsIgnoreCase(key, name)) {
             result = parameterValue;
             return false;
         }

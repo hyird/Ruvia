@@ -7,8 +7,10 @@
 
 #include <array>
 #include <cstdint>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
+#include <string>
 
 namespace ruvia::detail {
 
@@ -19,18 +21,34 @@ static_assert(kCookieSignatureSize == base64EncodedSize(kHmacSha256Size));
 
 }  // namespace
 
-void writeCookieSignature(char* output, std::string_view secret, std::string_view value) {
+void writeCookieSignature(
+    char* output, std::string_view secret, std::string_view name, std::string_view value) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
     }
+    // Length-frame the name so the name/value boundary is unambiguous regardless
+    // of the bytes either contains (prevents name||value collisions).
+    const auto nameLen = static_cast<std::uint32_t>(name.size());
+    const std::array<char, 4> nameLenBytes{
+        static_cast<char>((nameLen >> 24) & 0xFF),
+        static_cast<char>((nameLen >> 16) & 0xFF),
+        static_cast<char>((nameLen >> 8) & 0xFF),
+        static_cast<char>(nameLen & 0xFF),
+    };
+    std::pmr::string message(std::pmr::get_default_resource());
+    message.reserve(nameLenBytes.size() + name.size() + value.size());
+    message.append(nameLenBytes.data(), nameLenBytes.size());
+    message.append(name.data(), name.size());
+    message.append(value.data(), value.size());
+
     std::array<unsigned char, EVP_MAX_MD_SIZE> digest{};
     unsigned int digestSize = 0;
     if (HMAC(
             EVP_sha256(),
             secret.data(),
             static_cast<int>(secret.size()),
-            reinterpret_cast<const unsigned char*>(value.data()),
-            value.size(),
+            reinterpret_cast<const unsigned char*>(message.data()),
+            message.size(),
             digest.data(),
             &digestSize) == nullptr ||
         digestSize != kHmacSha256Size) {

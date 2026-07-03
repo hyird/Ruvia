@@ -118,10 +118,17 @@ Task<void> MultipartReader::processBoundary() {
 }
 
 Task<void> MultipartReader::processHeaders() {
+    // Cap on a single part's header block, mirroring the 64KB request-header
+    // limit, so a part that opens headers but never terminates them (\r\n\r\n)
+    // cannot force the entire streamed body to buffer in memory.
+    constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
     for (;;) {
         const auto buffer = bufferView();
         const auto headersEnd = buffer.find("\r\n\r\n");
         if (headersEnd == std::string_view::npos) {
+            if (buffer.size() > kMaxMultipartHeaderBytes) {
+                throw std::invalid_argument("multipart part headers exceed limit");
+            }
             if (!(co_await appendMore())) {
                 throw std::invalid_argument("invalid multipart body");
             }

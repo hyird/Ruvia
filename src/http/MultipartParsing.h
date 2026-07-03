@@ -100,7 +100,7 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
-    const auto value = httpFindSemicolonParameter(disposition, name);
+    const auto value = httpFindSemicolonParameterQuoted(disposition, name);
     return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
 }
 
@@ -144,7 +144,7 @@ enum class HttpMultipartBoundaryStatus {
     }
 
     contentType.remove_prefix(mediaEnd + 1);
-    if (const auto value = httpFindSemicolonParameterIgnoreCase(contentType, "boundary")) {
+    if (const auto value = httpFindSemicolonParameterQuotedIgnoreCase(contentType, "boundary")) {
         boundary = httpTrimQuotes(*value);
     }
     return boundary.empty()

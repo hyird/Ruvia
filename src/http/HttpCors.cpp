@@ -35,28 +35,23 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         return;
     }
 
-    const auto configuredOrigin = std::string_view(cors.allowOrigin);
-    const bool reflectOrigin = configuredOrigin == "*" && cors.allowCredentials;
-    const auto allowOrigin = reflectOrigin ? origin : configuredOrigin;
+    // Never reflect the request Origin: credentialed CORS requires an explicit
+    // single origin (enforced at config validation), so a "*" configuration must
+    // stay a literal wildcard without credentials. This keeps the value a stable
+    // startup string and prevents reflecting arbitrary origins.
+    const auto allowOrigin = std::string_view(cors.allowOrigin);
+    const bool wildcardOrigin = allowOrigin == "*";
     std::array<std::string_view, 3> varyTokens{};
     std::size_t varyTokenCount = 0;
-    if (reflectOrigin) {
-        setResponseHeaderIfMissing(
-            response,
-            kResponseHeaderAccessControlAllowOrigin,
-            "Access-Control-Allow-Origin",
-            allowOrigin);
-    } else {
-        setStableResponseHeaderIfMissing(
-            response,
-            kResponseHeaderAccessControlAllowOrigin,
-            "Access-Control-Allow-Origin",
-            allowOrigin);
-    }
-    if (allowOrigin != "*") {
+    setStableResponseHeaderIfMissing(
+        response,
+        kResponseHeaderAccessControlAllowOrigin,
+        "Access-Control-Allow-Origin",
+        allowOrigin);
+    if (!wildcardOrigin) {
         varyTokens[varyTokenCount++] = "Origin";
     }
-    if (cors.allowCredentials &&
+    if (cors.allowCredentials && !wildcardOrigin &&
         !responseHasKnownHeader(response, kResponseHeaderAccessControlAllowCredentials)) {
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }

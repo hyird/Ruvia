@@ -329,7 +329,13 @@ private:
             const auto observedResetAtMs = stateResetAtMs(observed);
             const auto observedCount = stateCount(observed);
 
-            if (observedResetAtMs != resetAtMs) {
+            // Only roll the window forward. A request whose timestamp lands in a
+            // strictly newer window resets the slot to that window with count 1.
+            // A lagging request (observed window is newer than the caller's) must
+            // NOT rewind the slot — doing so would zero the newer window's count
+            // and let clients over-admit at window boundaries; fall through and
+            // count it against the already-advanced window instead.
+            if (observedResetAtMs < resetAtMs) {
                 const auto desired = packState(resetAtMs, 1);
                 if (slot.state.compare_exchange_weak(
                         observed,
@@ -348,7 +354,9 @@ private:
                 return ConsumeResult{.check = RateLimitCheck{.allowed = false, .resetAfterMs = resetAfter}};
             }
 
-            const auto desired = packState(resetAtMs, observedCount + 1);
+            // Pack with the observed window (== resetAtMs in the common case, or a
+            // newer window for a lagging request) so incrementing never rewinds it.
+            const auto desired = packState(observedResetAtMs, observedCount + 1);
             if (slot.state.compare_exchange_weak(
                     observed,
                     desired,

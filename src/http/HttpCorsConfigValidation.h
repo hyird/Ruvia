@@ -20,9 +20,18 @@ inline void validateCorsFields(
     std::string_view allowOrigin,
     std::string_view allowHeaders,
     std::string_view exposeHeaders,
-    std::chrono::seconds maxAge) {
+    std::chrono::seconds maxAge,
+    bool allowCredentials) {
     if (enabled && allowOrigin.empty()) {
         throw std::invalid_argument("CORS allowOrigin must not be empty when CORS is enabled");
+    }
+    // A wildcard origin combined with credentials would force reflecting the
+    // request's Origin back with Access-Control-Allow-Credentials: true, letting
+    // any site read credentialed responses. Require an explicit single origin for
+    // credentialed CORS instead of silently reflecting every origin.
+    if (allowCredentials && allowOrigin == "*") {
+        throw std::invalid_argument(
+            "CORS allowCredentials requires an explicit allowOrigin, not \"*\"");
     }
     validateCorsHeaderValue(allowOrigin, "CORS allowOrigin must be a valid header value");
     validateCorsHeaderValue(allowHeaders, "CORS allowHeaders must be a valid header value");
@@ -38,7 +47,8 @@ inline void validateCorsConfig(const CorsConfig& config) {
         config.allowOrigin,
         config.allowHeaders,
         config.exposeHeaders,
-        config.maxAge);
+        config.maxAge,
+        config.allowCredentials);
 }
 
 inline void validateCorsOptions(const HttpServerOptions::Cors& options) {
@@ -47,7 +57,8 @@ inline void validateCorsOptions(const HttpServerOptions::Cors& options) {
         options.allowOrigin,
         options.allowHeaders,
         options.exposeHeaders,
-        options.maxAge);
+        options.maxAge,
+        options.allowCredentials);
 }
 
 }  // namespace ruvia::detail
