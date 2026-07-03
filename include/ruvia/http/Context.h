@@ -1658,6 +1658,19 @@ public:
         std::string_view alias,
         std::string_view path,
         FetchOptions options = {});
+
+    // Streamed variant: the response body is pulled incrementally via FetchResponseStream rather
+    // than fully buffered — for large downloads or long-lived responses.
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        std::string_view path,
+        FetchOptions options = {}) {
+        return fetchStream(detail::kDefaultHttpClientAlias, path, std::move(options));
+    }
+
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        std::string_view alias,
+        std::string_view path,
+        FetchOptions options = {});
 #endif
 
     [[nodiscard]] WebSocket& webSocket() const;

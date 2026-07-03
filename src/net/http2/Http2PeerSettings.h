@@ -74,6 +74,10 @@ public:
         return initialWindowSize_;
     }
 
+    [[nodiscard]] std::uint32_t maxConcurrentStreams() const noexcept {
+        return maxConcurrentStreams_;
+    }
+
     [[nodiscard]] bool enableConnectProtocol() const noexcept {
         return enableConnectProtocol_;
     }

@@ -2,12 +2,32 @@
 
 #include "HttpClientInternal.h"
 #include "HttpClientPool.h"
+#include "Http2ClientSession.h"
 #include "ruvia/memory/PmrResource.h"
 
 #include <chrono>
 #include <utility>
 
 namespace ruvia::detail {
+
+namespace {
+
+// Build the transport for one origin: an HTTP/2 multiplexed session when the config opts in,
+// otherwise the HTTP/1.1 connection pool. Ownership is a base pointer whose deleter calls the
+// concrete type's destroy() so the right size returns to the PMR resource.
+HttpClientBackendPtr makeHttpClientBackend(
+    asio::io_context& ioContext,
+    const HttpClientConfig& config,
+    std::pmr::memory_resource* resource) {
+    if (config.http2) {
+        return HttpClientBackendPtr(
+            constructPmrObject<Http2ClientSession>(resource, ioContext, config, resource));
+    }
+    return HttpClientBackendPtr(
+        constructPmrObject<HttpClientPool>(resource, ioContext, config, resource));
+}
+
+}  // namespace
 
 HttpClientRegistry::HttpClientRegistry(
     asio::io_context& ioContext,
@@ -17,17 +37,17 @@ HttpClientRegistry::HttpClientRegistry(
       pools_(resource_) {
     pools_.reserve(clients.size());
     for (const auto& def : clients) {
-        auto pool = makePmrObject<HttpClientPool>(resource_, ioContext, def.config, resource_);
-        auto* poolRaw = pool.get();
+        auto backend = makeHttpClientBackend(ioContext, def.config, resource_);
+        auto* backendRaw = backend.get();
         pools_.push_back(Entry{
             std::pmr::string(def.alias, resource_),
-            std::move(pool)});
-        if (std::string_view(def.alias) == kDefaultHttpClientAlias && defaultPool_ == nullptr) {
-            defaultPool_ = poolRaw;
+            std::move(backend)});
+        if (std::string_view(def.alias) == kDefaultHttpClientAlias && defaultBackend_ == nullptr) {
+            defaultBackend_ = backendRaw;
         }
     }
-    if (defaultPool_ == nullptr && !pools_.empty()) {
-        defaultPool_ = pools_.front().pool.get();
+    if (defaultBackend_ == nullptr && !pools_.empty()) {
+        defaultBackend_ = pools_.front().backend.get();
     }
 }
 
@@ -35,13 +55,13 @@ HttpClientRegistry::~HttpClientRegistry() = default;
 
 Task<void> HttpClientRegistry::connect() {
     for (auto& entry : pools_) {
-        co_await entry.pool->connect();
+        co_await entry.backend->connect();
     }
 }
 
 void HttpClientRegistry::closeNow() noexcept {
     for (auto& entry : pools_) {
-        entry.pool->closeNow();
+        entry.backend->closeNow();
     }
 }
 
@@ -51,7 +71,7 @@ bool HttpClientRegistry::empty() const noexcept {
 
 bool HttpClientRegistry::hasAnyTimeout() const noexcept {
     for (const auto& entry : pools_) {
-        if (entry.pool->hasAnyTimeout()) return true;
+        if (entry.backend->hasAnyTimeout()) return true;
     }
     return false;
 }
@@ -59,17 +79,17 @@ bool HttpClientRegistry::hasAnyTimeout() const noexcept {
 void HttpClientRegistry::scanDeadlines() noexcept {
     const auto now = std::chrono::steady_clock::now();
     for (auto& entry : pools_) {
-        entry.pool->scanDeadlines(now);
+        entry.backend->scanDeadlines(now);
     }
 }
 
-HttpClientPool* HttpClientRegistry::get(std::string_view alias) const {
-    if (alias == kDefaultHttpClientAlias && defaultPool_ != nullptr) {
-        return defaultPool_;
+HttpClientBackend* HttpClientRegistry::get(std::string_view alias) const {
+    if (alias == kDefaultHttpClientAlias && defaultBackend_ != nullptr) {
+        return defaultBackend_;
     }
     for (const auto& entry : pools_) {
         if (std::string_view(entry.alias) == alias) {
-            return entry.pool.get();
+            return entry.backend.get();
         }
     }
     return nullptr;

@@ -2,10 +2,12 @@
 
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
+#include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
+#include <array>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -14,37 +16,47 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
+#include "HttpClientBackend.h"
+#include "HttpClientResponseParser.h"
 #include "../../core/PoolWaiterQueue.h"
 
 namespace ruvia::detail {
 
 struct PoolWaiterAwaiter;
 
-class HttpClientPool final {
+class HttpClientPool final : public HttpClientBackend {
 public:
     HttpClientPool(
         asio::io_context& ioContext,
         HttpClientConfig config,
         std::pmr::memory_resource* resource = nullptr);
-    ~HttpClientPool();
+    ~HttpClientPool() override;
 
     HttpClientPool(const HttpClientPool&) = delete;
     HttpClientPool& operator=(const HttpClientPool&) = delete;
 
-    Task<void> connect();
-    void closeNow() noexcept;
-    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept;
-    [[nodiscard]] bool hasAnyTimeout() const noexcept;
+    Task<void> connect() override;
+    void closeNow() noexcept override;
+    void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept override;
+    [[nodiscard]] bool hasAnyTimeout() const noexcept override;
 
     Task<FetchResponse> fetch(
         std::string_view path,
         const FetchOptions& options,
-        std::pmr::memory_resource* resource);
+        std::pmr::memory_resource* resource) override;
+    Task<FetchResponseStream> fetchStream(
+        std::string_view path,
+        const FetchOptions& options,
+        std::pmr::memory_resource* resource) override;
+
+    void destroy() noexcept override { destroyPmrObject(this, resource_); }
 
 private:
     friend struct PoolWaiterAwaiter;
@@ -83,8 +95,14 @@ private:
         ConnectionGuard(HttpClientPool& pool, std::size_t index) noexcept;
         ConnectionGuard(const ConnectionGuard&) = delete;
         ConnectionGuard& operator=(const ConnectionGuard&) = delete;
+        ConnectionGuard(ConnectionGuard&& other) noexcept
+            : pool_(other.pool_), index_(other.index_), discard_(other.discard_) {
+            other.pool_ = nullptr;
+        }
+        ConnectionGuard& operator=(ConnectionGuard&&) = delete;
         ~ConnectionGuard();
         void discard() noexcept { discard_ = true; }
+        [[nodiscard]] std::size_t index() const noexcept { return index_; }
         [[nodiscard]] Connection& connection() noexcept;
     private:
         HttpClientPool* pool_{nullptr};
@@ -92,14 +110,55 @@ private:
         bool discard_{false};
     };
 
+    friend class Http1StreamSource;
+
     Task<std::size_t> acquire();
     void release(std::size_t index) noexcept;
     void setDeadline(Connection& conn, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept;
+    // Arm an absolute deadline (or none). Unlike setDeadline's relative timeout, re-arming to
+    // the same time_point across a read loop bounds the total request duration, not each read.
+    void armDeadline(
+        Connection& conn,
+        std::optional<std::chrono::steady_clock::time_point> deadline,
+        Connection::DeadlineKind kind) noexcept;
     void clearDeadline(Connection& conn) noexcept;
     [[nodiscard]] bool finishDeadline(Connection& conn) noexcept;
     void closeConnection(Connection& conn) noexcept;
     void destroyConnection(Connection* conn) noexcept;
     Task<void> connectOne(Connection& conn);
+    Task<void> readChunkedResponseBody(
+        Connection& conn,
+        FetchResponse& response,
+        std::size_t bodyOffset,
+        std::optional<std::chrono::steady_clock::time_point> requestDeadline);
+    Task<void> readCloseDelimitedResponseBody(
+        Connection& conn,
+        FetchResponse& response,
+        std::size_t bodyOffset,
+        std::optional<std::chrono::steady_clock::time_point> requestDeadline);
+
+    // Connection I/O primitives (branch on TLS vs raw), shared by the buffered and streaming paths.
+    Task<std::error_code> connWrite(Connection& conn, std::array<asio::const_buffer, 2> buffers);
+    Task<std::pair<std::error_code, std::size_t>> connReadSome(Connection& conn, asio::mutable_buffer buffer);
+    Task<std::pair<std::error_code, std::size_t>> connRead(Connection& conn, asio::mutable_buffer buffer);
+
+    // Build + send the request and read/parse the response head, leaving any buffered body bytes
+    // past head.bodyOffset in conn.responseReadBuffer. Shared by executeRequest (buffered) and
+    // fetchStream (incremental). A streamed request body (options.bodyStream) is sent chunked
+    // and uses per-operation idle timeouts; a buffered request uses the absolute requestDeadline.
+    // Throws on write/read/parse failure.
+    Task<HttpClientResponseHead> writeRequestAndReadHead(
+        Connection& conn,
+        std::string_view path,
+        const FetchOptions& options,
+        std::chrono::milliseconds requestTimeout,
+        std::optional<std::chrono::steady_clock::time_point> requestDeadline,
+        FetchResponse& response,
+        std::pmr::memory_resource* requestResource);
+    Task<void> writeChunkedRequestBody(
+        Connection& conn,
+        const RequestBodyStream& bodyStream,
+        std::chrono::milliseconds requestTimeout);
     Task<FetchResponse> executeRequest(
         Connection& conn,
         std::string_view path,

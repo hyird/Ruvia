@@ -3,42 +3,30 @@
 #include "HttpClientPool.h"
 
 #include <asio/connect.hpp>
+#include <asio/ip/address.hpp>
 #include <asio/read.hpp>
+#include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
+#include <openssl/ssl.h>
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 
 #include "../../runtime/AsioAwait.h"
 #include "../HeaderTokenUtils.h"
+#include "HttpClientContentEncoding.h"
+#include "HttpClientRedirect.h"
 #include "HttpClientResponseParser.h"
+#include "HttpClientTlsVerification.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
-    if (target.empty()) {
-        return false;
-    }
-    if (target == "*") {
-        return true;
-    }
-    if (target.front() != '/') {
-        return false;
-    }
-    for (const auto ch : target) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F || byte == '#' || byte == '\\') {
-            return false;
-        }
-    }
-    return true;
-}
 
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
     return httpAsciiEqualsIgnoreCase(name, "Host") ||
@@ -139,10 +127,26 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
     }
 
     if (config_.tls) {
-        if (!conn.tlsStream) {
-            using TlsStream = Connection::TlsStream;
-            conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
+        // Always start from fresh SSL state: a stream that already completed a handshake
+        // cannot be re-handshaked, so a reused connection needs a new one. The stream binds
+        // to conn.rawSocket by reference (stable address), which now holds the fresh socket.
+        conn.tlsStream.reset();
+        using TlsStream = Connection::TlsStream;
+        conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
+        // RFC 6066 SNI: advertise the server name for virtual hosting, but never for IP
+        // literals (SNI must carry a host name, not an address).
+        const auto host = std::string_view(config_.host);
+        std::error_code addressEc;
+        asio::ip::make_address(host, addressEc);
+        const bool hostIsIpLiteral = !addressEc;
+        if (!hostIsIpLiteral) {
+            // OpenSSL needs a null-terminated string; config_.host (a std::pmr::string) is one.
+            if (SSL_set_tlsext_host_name(conn.tlsStream->native_handle(), config_.host.c_str()) != 1) {
+                throw std::runtime_error("http client: failed to set TLS SNI host name");
+            }
         }
+        // verify_peer only checks the chain; require the certificate to match the target host.
+        conn.tlsStream->set_verify_callback(HttpClientHostNameVerification(host, conn.resource));
         setDeadline(conn, config_.connectTimeout, Connection::DeadlineKind::kSocket);
         const auto handshakeEc = co_await asyncError([&](auto handler) {
             conn.tlsStream->async_handshake(
@@ -170,40 +174,61 @@ Task<FetchResponse> HttpClientPool::fetch(
     }
     auto* const requestResource = resource == nullptr ? resource_ : resource;
 
-    const auto index = co_await acquire();
-    ConnectionGuard guard(*this, index);
-    auto& conn = guard.connection();
+    std::string_view currentPath = path;
+    FetchOptions currentOptions = options;
+    // Stable storage for a resolved redirect target; currentPath points into it across hops.
+    std::pmr::string redirectTarget(requestResource);
+    std::uint32_t hopsRemaining = options.maxRedirects;
 
-    try {
-        if (!conn.connected) {
-            co_await connectOne(conn);
+    for (;;) {
+        const auto index = co_await acquire();
+        FetchResponse response(requestResource);
+        {
+            ConnectionGuard guard(*this, index);
+            auto& conn = guard.connection();
+            try {
+                if (!conn.connected) {
+                    co_await connectOne(conn);
+                }
+                response = co_await executeRequest(conn, currentPath, currentOptions, requestResource);
+            } catch (...) {
+                guard.discard();
+                throw;
+            }
+        }  // release the connection back to the pool before following a redirect
+
+        if (hopsRemaining == 0 || !isHttpClientRedirectStatus(response.statusCode)) {
+            co_return response;
         }
-        co_return co_await executeRequest(conn, path, options, requestResource);
-    } catch (...) {
-        guard.discard();
-        throw;
+        if (!canReplayHttpClientRedirectRequest(currentOptions, response.statusCode)) {
+            co_return response;
+        }
+        const auto location = findHttpClientResponseHeader(response, "Location");
+        if (location.empty() ||
+            !resolveHttpClientSameOriginRedirect(config_, location, redirectTarget)) {
+            // No Location, or a cross-origin/unparseable one: hand the 3xx back to the caller.
+            co_return response;
+        }
+        currentPath = redirectTarget;
+        applyHttpClientRedirectMethod(currentOptions, response.statusCode);
+        --hopsRemaining;
     }
 }
 
-Task<FetchResponse> HttpClientPool::executeRequest(
+Task<void> HttpClientPool::readChunkedResponseBody(
     Connection& conn,
-    std::string_view path,
-    const FetchOptions& options,
-    std::pmr::memory_resource* requestResource) {
-    if (options.timeout.count() < 0) {
-        throw std::invalid_argument("http client request timeout must not be negative");
-    }
-    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
-    auto asyncWriteConnection = [&conn](auto buffers) {
-        return asyncError([&conn, buffers](auto handler) mutable {
-            if (conn.tlsStream) {
-                asio::async_write(*conn.tlsStream, buffers, std::move(handler));
-            } else {
-                asio::async_write(conn.rawSocket, buffers, std::move(handler));
-            }
-        });
-    };
-    auto asyncReadSomeConnection = [&conn](asio::mutable_buffer buffer) {
+    FetchResponse& response,
+    std::size_t bodyOffset,
+    std::optional<std::chrono::steady_clock::time_point> requestDeadline) {
+    // Bound a single chunk-size / trailer line and the whole trailer section so a hostile
+    // peer cannot force unbounded buffering.
+    constexpr std::size_t kMaxChunkLineBytes = 1024;
+    constexpr std::size_t kMaxTrailerBytes = kMaxHttpHeaderBytes;
+
+    auto& buf = conn.responseReadBuffer;
+    std::size_t pos = bodyOffset;
+
+    auto readSome = [&conn](asio::mutable_buffer buffer) {
         return asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
             if (conn.tlsStream) {
                 conn.tlsStream->async_read_some(buffer, std::move(handler));
@@ -212,7 +237,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
             }
         });
     };
-    auto asyncReadConnection = [&conn](asio::mutable_buffer buffer) {
+    auto readExact = [&conn](asio::mutable_buffer buffer) {
         return asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
             if (conn.tlsStream) {
                 asio::async_read(*conn.tlsStream, buffer, std::move(handler));
@@ -222,10 +247,303 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         });
     };
 
+    // Append more bytes to buf, compacting the already-parsed prefix so the buffered window
+    // stays small. Throws on timeout, error, or premature EOF.
+    auto fill = [&]() -> Task<void> {
+        if (pos > 0) {
+            buf.erase(0, pos);
+            pos = 0;
+        }
+        constexpr std::size_t kReadChunk = 4096;
+        const auto oldSize = buf.size();
+        resizePmrStringForOverwrite(buf, oldSize + kReadChunk);
+        armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+        auto [ec, n] = co_await readSome(asio::buffer(buf.data() + oldSize, kReadChunk));
+        if (finishDeadline(conn)) {
+            closeConnection(conn);
+            throw std::system_error(asio::error::timed_out, "http client: read chunk timed out");
+        }
+        if (ec) {
+            conn.connected = false;
+            throw std::system_error(ec, "http client: read chunk failed");
+        }
+        if (n == 0) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: truncated chunked response");
+        }
+        buf.resize(oldSize + n);
+    };
+
+    // Return the next CRLF-terminated line (without the CRLF) and advance pos past it.
+    auto readLine = [&](std::size_t maxLen) -> Task<std::string_view> {
+        for (;;) {
+            const auto nl = buf.find("\r\n", pos);
+            if (nl != std::pmr::string::npos) {
+                const auto start = pos;
+                pos = nl + 2;
+                co_return std::string_view(buf.data() + start, nl - start);
+            }
+            if (buf.size() - pos > maxLen) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: chunked line too long");
+            }
+            co_await fill();
+        }
+    };
+
+    std::size_t totalBody = 0;
+    const auto maxBody = config_.maxResponseBodyBytes;
+
+    for (;;) {
+        const auto sizeLine = co_await readLine(kMaxChunkLineBytes);
+        auto sizeToken = sizeLine;
+        if (const auto semi = sizeToken.find(';'); semi != std::string_view::npos) {
+            sizeToken = sizeToken.substr(0, semi);  // drop chunk extensions
+        }
+        sizeToken = httpTrimOws(sizeToken);
+        std::size_t chunkSize = 0;
+        const auto [ptr, ec] = std::from_chars(
+            sizeToken.data(), sizeToken.data() + sizeToken.size(), chunkSize, 16);
+        if (sizeToken.empty() || ec != std::errc{} || ptr != sizeToken.data() + sizeToken.size()) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: malformed chunk size");
+        }
+
+        if (chunkSize == 0) {
+            // Final chunk: drain the optional trailer section (lines up to an empty line).
+            std::size_t trailerBytes = 0;
+            for (;;) {
+                const auto trailer = co_await readLine(kMaxChunkLineBytes);
+                if (trailer.empty()) {
+                    break;
+                }
+                trailerBytes += trailer.size() + 2;
+                if (trailerBytes > kMaxTrailerBytes) {
+                    closeConnection(conn);
+                    throw std::runtime_error("http client: chunked trailers too large");
+                }
+            }
+            // Any bytes past the terminating CRLF are an unexpected extra/pipelined
+            // response; the connection can no longer be safely reused.
+            if (pos != buf.size()) {
+                closeConnection(conn);
+            }
+            break;
+        }
+
+        if (maxBody != 0 && chunkSize > maxBody - totalBody) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: response body is too large");
+        }
+        totalBody += chunkSize;
+
+        const auto writeAt = response.body.size();
+        resizePmrStringForOverwrite(response.body, writeAt + chunkSize);
+        const auto buffered = buf.size() - pos;
+        const auto copied = std::min(buffered, chunkSize);
+        if (copied > 0) {
+            std::copy_n(buf.data() + pos, copied, response.body.data() + writeAt);
+            pos += copied;
+        }
+        if (copied < chunkSize) {
+            armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+            auto [dataEc, dataN] = co_await readExact(asio::buffer(
+                response.body.data() + writeAt + copied, chunkSize - copied));
+            (void)dataN;
+            if (finishDeadline(conn)) {
+                closeConnection(conn);
+                throw std::system_error(asio::error::timed_out, "http client: read chunk data timed out");
+            }
+            if (dataEc) {
+                conn.connected = false;
+                throw std::system_error(dataEc, "http client: read chunk data failed");
+            }
+        }
+
+        // Each chunk's data is followed by its own CRLF.
+        const auto terminator = co_await readLine(kMaxChunkLineBytes);
+        if (!terminator.empty()) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: malformed chunk terminator");
+        }
+    }
+}
+
+Task<void> HttpClientPool::readCloseDelimitedResponseBody(
+    Connection& conn,
+    FetchResponse& response,
+    std::size_t bodyOffset,
+    std::optional<std::chrono::steady_clock::time_point> requestDeadline) {
+    // RFC 7230 §3.3.3 rule 7: with neither Transfer-Encoding nor Content-Length, the body
+    // runs until the peer closes the connection. The caller marks the connection unreusable.
+    const auto maxBody = config_.maxResponseBodyBytes;
+    auto& buf = conn.responseReadBuffer;
+
+    auto readSome = [&conn](asio::mutable_buffer buffer) {
+        return asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
+            if (conn.tlsStream) {
+                conn.tlsStream->async_read_some(buffer, std::move(handler));
+            } else {
+                conn.rawSocket.async_read_some(buffer, std::move(handler));
+            }
+        });
+    };
+
+    // Seed the body with the bytes already buffered past the header block.
+    if (buf.size() > bodyOffset) {
+        const auto available = buf.size() - bodyOffset;
+        if (maxBody != 0 && available > maxBody) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: response body is too large");
+        }
+        response.body.assign(buf.data() + bodyOffset, available);
+    }
+
+    constexpr std::size_t kReadChunk = 8192;
+    for (;;) {
+        const auto oldSize = response.body.size();
+        resizePmrStringForOverwrite(response.body, oldSize + kReadChunk);
+        armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+        auto [ec, n] = co_await readSome(asio::buffer(response.body.data() + oldSize, kReadChunk));
+        if (finishDeadline(conn)) {
+            response.body.resize(oldSize);
+            closeConnection(conn);
+            throw std::system_error(asio::error::timed_out, "http client: read body timed out");
+        }
+        // A peer close (TCP EOF, or a TLS shutdown/truncation) is the normal end of a
+        // close-delimited body — keep any bytes delivered alongside it and stop.
+        if (ec == asio::error::eof || ec == asio::ssl::error::stream_truncated) {
+            response.body.resize(oldSize + n);
+            if (maxBody != 0 && response.body.size() > maxBody) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: response body is too large");
+            }
+            break;
+        }
+        if (ec) {
+            response.body.resize(oldSize);
+            conn.connected = false;
+            throw std::system_error(ec, "http client: read body failed");
+        }
+        response.body.resize(oldSize + n);
+        if (maxBody != 0 && response.body.size() > maxBody) {
+            closeConnection(conn);
+            throw std::runtime_error("http client: response body is too large");
+        }
+    }
+}
+
+Task<std::error_code> HttpClientPool::connWrite(
+    Connection& conn, std::array<asio::const_buffer, 2> buffers) {
+    co_return co_await asyncError([&conn, buffers](auto handler) mutable {
+        if (conn.tlsStream) {
+            asio::async_write(*conn.tlsStream, buffers, std::move(handler));
+        } else {
+            asio::async_write(conn.rawSocket, buffers, std::move(handler));
+        }
+    });
+}
+
+Task<std::pair<std::error_code, std::size_t>> HttpClientPool::connReadSome(
+    Connection& conn, asio::mutable_buffer buffer) {
+    co_return co_await asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
+        if (conn.tlsStream) {
+            conn.tlsStream->async_read_some(buffer, std::move(handler));
+        } else {
+            conn.rawSocket.async_read_some(buffer, std::move(handler));
+        }
+    });
+}
+
+Task<std::pair<std::error_code, std::size_t>> HttpClientPool::connRead(
+    Connection& conn, asio::mutable_buffer buffer) {
+    co_return co_await asyncResult<std::size_t>([&conn, buffer](auto handler) mutable {
+        if (conn.tlsStream) {
+            asio::async_read(*conn.tlsStream, buffer, std::move(handler));
+        } else {
+            asio::async_read(conn.rawSocket, buffer, std::move(handler));
+        }
+    });
+}
+
+Task<void> HttpClientPool::writeChunkedRequestBody(
+    Connection& conn, const RequestBodyStream& bodyStream, std::chrono::milliseconds requestTimeout) {
+    for (;;) {
+        const std::string_view chunk = co_await bodyStream.nextChunk();
+        if (chunk.empty()) {
+            break;  // end of body
+        }
+        std::array<char, 18> sizeLine;  // up to 16 hex digits + CRLF
+        auto [ptr, ec] = std::to_chars(sizeLine.data(), sizeLine.data() + 16, chunk.size(), 16);
+        if (ec != std::errc{}) {
+            closeConnection(conn);
+            throw std::logic_error("http client: failed to format request chunk size");
+        }
+        *ptr++ = '\r';
+        *ptr++ = '\n';
+        static constexpr char kCrlf[] = {'\r', '\n'};
+        const std::array<asio::const_buffer, 3> buffers{
+            asio::buffer(sizeLine.data(), static_cast<std::size_t>(ptr - sizeLine.data())),
+            asio::buffer(chunk.data(), chunk.size()),
+            asio::buffer(kCrlf, sizeof(kCrlf))};
+        setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
+        const auto writeEc = co_await asyncError([&conn, buffers](auto handler) mutable {
+            if (conn.tlsStream) {
+                asio::async_write(*conn.tlsStream, buffers, std::move(handler));
+            } else {
+                asio::async_write(conn.rawSocket, buffers, std::move(handler));
+            }
+        });
+        if (finishDeadline(conn)) {
+            closeConnection(conn);
+            throw std::system_error(asio::error::timed_out, "http client: request body write timed out");
+        }
+        if (writeEc) {
+            conn.connected = false;
+            throw std::system_error(writeEc, "http client: request body write failed");
+        }
+    }
+    static constexpr char kTerminator[] = {'0', '\r', '\n', '\r', '\n'};
+    const std::array<asio::const_buffer, 2> terminator{
+        asio::buffer(kTerminator, sizeof(kTerminator)), asio::buffer(kTerminator, 0)};
+    setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
+    const auto writeEc = co_await connWrite(conn, terminator);
+    if (finishDeadline(conn)) {
+        closeConnection(conn);
+        throw std::system_error(asio::error::timed_out, "http client: request terminator timed out");
+    }
+    if (writeEc) {
+        conn.connected = false;
+        throw std::system_error(writeEc, "http client: request terminator write failed");
+    }
+}
+
+Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
+    Connection& conn,
+    std::string_view path,
+    const FetchOptions& options,
+    std::chrono::milliseconds requestTimeout,
+    std::optional<std::chrono::steady_clock::time_point> requestDeadline,
+    FetchResponse& response,
+    std::pmr::memory_resource* requestResource) {
     // Build request
     const auto method = options.method.empty() ? std::string_view("GET") : options.method;
     const auto effectivePath = path.empty() ? std::string_view("/") : path;
     validateHttpClientRequestHead(method, effectivePath);
+
+    const bool streamingBody = options.bodyStream.valid();
+    if (streamingBody && !options.body.empty()) {
+        throw std::invalid_argument("http client: set either body or bodyStream, not both");
+    }
+    // Streamed request bodies use per-operation idle timeouts (the total time is unbounded by a
+    // possibly-slow producer); buffered requests keep the single absolute request deadline.
+    auto armRequest = [&]() {
+        if (streamingBody) {
+            setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
+        } else {
+            armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+        }
+    };
 
     std::array<char, 24> lenBuf;
     std::string_view contentLengthValue;
@@ -237,6 +555,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         }
         contentLengthValue = std::string_view(lenBuf.data(), static_cast<std::size_t>(ptr - lenBuf.data()));
     }
+    constexpr std::string_view kChunkedHeader = "Transfer-Encoding: chunked\r\n";
 
     std::size_t requestHeadBytes = 0;
     addHttpClientRequestHeadBytes(requestHeadBytes, method.size());
@@ -256,6 +575,9 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         addHttpClientRequestHeadBytes(requestHeadBytes, std::string_view("Content-Length: ").size());
         addHttpClientRequestHeadBytes(requestHeadBytes, contentLengthValue.size());
         addHttpClientRequestHeadBytes(requestHeadBytes, 2);
+    }
+    if (streamingBody) {
+        addHttpClientRequestHeadBytes(requestHeadBytes, kChunkedHeader.size());
     }
     addHttpClientRequestHeadBytes(requestHeadBytes, 2);
 
@@ -281,20 +603,28 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         requestBuf.append(contentLengthValue.data(), contentLengthValue.size());
         requestBuf.append("\r\n");
     }
+    if (streamingBody) {
+        requestBuf.append(kChunkedHeader.data(), kChunkedHeader.size());
+    }
     requestBuf.append("\r\n");
 
-    // Write request
+    // Write request head (+ the buffered body, if any)
     const std::array<asio::const_buffer, 2> requestBuffers{
         asio::buffer(requestBuf.data(), requestBuf.size()),
         asio::buffer(options.body.data(), options.body.size())};
-    setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
-    const auto writeEc = co_await asyncWriteConnection(requestBuffers);
+    armRequest();
+    const auto writeEc = co_await connWrite(conn, requestBuffers);
     if (finishDeadline(conn)) {
         throw std::system_error(asio::error::timed_out, "http client: write timed out");
     }
     if (writeEc) {
         conn.connected = false;
         throw std::system_error(writeEc, "http client: write failed");
+    }
+
+    // Stream the request body as HTTP chunks, if a producer was supplied.
+    if (streamingBody) {
+        co_await writeChunkedRequestBody(conn, options.bodyStream, requestTimeout);
     }
 
     // Read response headers
@@ -312,8 +642,8 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         const auto oldSize = readBuf.size();
         const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
         resizePmrStringForOverwrite(readBuf, oldSize + writable);
-        setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
-        auto [readEc, n] = co_await asyncReadSomeConnection(asio::buffer(readBuf.data() + oldSize, writable));
+        armRequest();
+        auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
         if (finishDeadline(conn)) {
             closeConnection(conn);
             throw std::system_error(asio::error::timed_out, "http client: read timed out");
@@ -331,61 +661,97 @@ Task<FetchResponse> HttpClientPool::executeRequest(
         headerEnd = readBuf.find("\r\n\r\n", searchOffset);
     }
 
-    FetchResponse response(requestResource);
-    auto responseHead = parseHttpClientResponseHead(
+    co_return parseHttpClientResponseHead(
         method,
         std::string_view(readBuf.data(), headerEnd),
         response,
         requestResource);
+}
 
-    // Collect body
-    if (responseHead.responseMayHaveBody && responseHead.hasTransferEncoding) {
-        closeConnection(conn);
-        throw std::runtime_error("http client: unsupported response Transfer-Encoding");
+Task<FetchResponse> HttpClientPool::executeRequest(
+    Connection& conn,
+    std::string_view path,
+    const FetchOptions& options,
+    std::pmr::memory_resource* requestResource) {
+    if (options.timeout.count() < 0) {
+        throw std::invalid_argument("http client request timeout must not be negative");
     }
-    if (responseHead.responseMayHaveBody && !responseHead.hasContentLength) {
-        closeConnection(conn);
-        throw std::runtime_error("http client: unsupported response body framing");
-    }
+    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
+    // One absolute deadline for the whole request phase (write + all reads), so a slow drip
+    // that re-enters a read loop cannot keep renewing a per-read timer and pin the connection.
+    std::optional<std::chrono::steady_clock::time_point> requestDeadline =
+        requestTimeout.count() > 0
+            ? std::optional(std::chrono::steady_clock::now() + requestTimeout)
+            : std::nullopt;
 
-    if (responseHead.responseMayHaveBody &&
-        responseHead.hasContentLength &&
-        config_.maxResponseBodyBytes != 0 &&
-        responseHead.contentLength > config_.maxResponseBodyBytes) {
-        closeConnection(conn);
-        throw std::runtime_error("http client: response body is too large");
+    FetchResponse response(requestResource);
+    auto responseHead = co_await writeRequestAndReadHead(
+        conn, path, options, requestTimeout, requestDeadline, response, requestResource);
+    // A streamed request body may have taken arbitrarily long; give the response body phase a
+    // fresh absolute budget rather than one anchored at request start.
+    if (options.bodyStream.valid() && requestTimeout.count() > 0) {
+        requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
     }
+    auto& readBuf = conn.responseReadBuffer;
 
-    if (responseHead.contentLength > 0 && responseHead.responseMayHaveBody) {
-        resizePmrStringForOverwrite(response.body, responseHead.contentLength);
-        const auto alreadyRead = readBuf.size() > responseHead.bodyOffset
-            ? readBuf.size() - responseHead.bodyOffset
-            : std::size_t{0};
-        const auto toCopy = std::min(alreadyRead, responseHead.contentLength);
-        if (alreadyRead > responseHead.contentLength) {
-            responseHead.closeAfterResponse = true;
-        }
-        if (toCopy > 0) {
-            std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, response.body.data());
-        }
-        if (toCopy < responseHead.contentLength) {
-            setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
-            auto [bodyEc, bodyN] = co_await asyncReadConnection(asio::buffer(
-                response.body.data() + toCopy,
-                responseHead.contentLength - toCopy));
-            (void)bodyN;
-            if (finishDeadline(conn)) {
+    // Collect body per RFC 7230 §3.3.3: chunked, then Content-Length, else close-delimited.
+    if (responseHead.responseMayHaveBody) {
+        if (responseHead.hasTransferEncoding) {
+            if (!responseHead.isChunked) {
                 closeConnection(conn);
-                throw std::system_error(asio::error::timed_out, "http client: read body timed out");
+                throw std::runtime_error("http client: unsupported response Transfer-Encoding");
             }
-            if (bodyEc) {
-                conn.connected = false;
-                throw std::system_error(bodyEc, "http client: read body failed");
+            co_await readChunkedResponseBody(conn, response, responseHead.bodyOffset, requestDeadline);
+        } else if (responseHead.hasContentLength) {
+            if (config_.maxResponseBodyBytes != 0 &&
+                responseHead.contentLength > config_.maxResponseBodyBytes) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: response body is too large");
             }
+            if (responseHead.contentLength > 0) {
+                resizePmrStringForOverwrite(response.body, responseHead.contentLength);
+                const auto alreadyRead = readBuf.size() > responseHead.bodyOffset
+                    ? readBuf.size() - responseHead.bodyOffset
+                    : std::size_t{0};
+                const auto toCopy = std::min(alreadyRead, responseHead.contentLength);
+                if (alreadyRead > responseHead.contentLength) {
+                    responseHead.closeAfterResponse = true;
+                }
+                if (toCopy > 0) {
+                    std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, response.body.data());
+                }
+                if (toCopy < responseHead.contentLength) {
+                    armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+                    auto [bodyEc, bodyN] = co_await connRead(conn, asio::buffer(
+                        response.body.data() + toCopy,
+                        responseHead.contentLength - toCopy));
+                    (void)bodyN;
+                    if (finishDeadline(conn)) {
+                        closeConnection(conn);
+                        throw std::system_error(asio::error::timed_out, "http client: read body timed out");
+                    }
+                    if (bodyEc) {
+                        conn.connected = false;
+                        throw std::system_error(bodyEc, "http client: read body failed");
+                    }
+                }
+            } else if (readBuf.size() > responseHead.bodyOffset) {
+                responseHead.closeAfterResponse = true;
+            }
+        } else {
+            co_await readCloseDelimitedResponseBody(
+                conn, response, responseHead.bodyOffset, requestDeadline);
+            // A close-delimited body consumes the connection; it cannot be reused.
+            responseHead.closeAfterResponse = true;
         }
     } else if (readBuf.size() > responseHead.bodyOffset) {
         responseHead.closeAfterResponse = true;
     }
+
+    // Transparently decode a supported Content-Encoding once the full body is in hand.
+    decodeHttpClientResponseContentEncoding(
+        response,
+        config_.maxResponseBodyBytes != 0 ? config_.maxResponseBodyBytes : kMaxDecodedRequestBodyBytes);
 
     if (responseHead.closeAfterResponse) {
         closeConnection(conn);
