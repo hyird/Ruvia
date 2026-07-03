@@ -35,7 +35,12 @@ void writeCookieSignature(
         static_cast<char>((nameLen >> 8) & 0xFF),
         static_cast<char>(nameLen & 0xFF),
     };
-    std::pmr::string message(std::pmr::get_default_resource());
+    // Assemble lenPrefix||name||value for the one-shot HMAC. A stack arena keeps
+    // signing a typical cookie allocation-free; an oversized name/value spills to
+    // the default upstream resource transparently.
+    std::array<std::byte, 512> messageBuffer;
+    std::pmr::monotonic_buffer_resource messageArena(messageBuffer.data(), messageBuffer.size());
+    std::pmr::string message(&messageArena);
     message.reserve(nameLenBytes.size() + name.size() + value.size());
     message.append(nameLenBytes.data(), nameLenBytes.size());
     message.append(name.data(), name.size());
