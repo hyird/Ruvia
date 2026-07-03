@@ -50,27 +50,20 @@ enum class HttpContentCoding : std::uint8_t {
 }
 
 [[nodiscard]] inline int httpQualityParameter(std::string_view value) noexcept {
+    // Reuse the shared quote-aware parameter scanner so a ';' inside a quoted media-range
+    // parameter (RFC 7231 §5.3.1: token "=" (token / quoted-string)) is not mistaken for a
+    // parameter separator — the same helper multipart Content-Type parsing uses. The leading
+    // media-type / coding token has no '=', so it is skipped exactly as before; first q wins.
     int quality = 1000;
-    while (!value.empty()) {
-        const auto semicolon = value.find(';');
-        if (semicolon == std::string_view::npos) {
-            break;
-        }
-        value.remove_prefix(semicolon + 1);
-        const auto next = value.find(';');
-        const auto param = httpTrimOws(next == std::string_view::npos ? value : value.substr(0, next));
-        const auto equals = param.find('=');
-        if (equals != std::string_view::npos) {
-            const auto name = httpTrimOws(param.substr(0, equals));
+    httpVisitSemicolonParametersQuoted(
+        value, [&quality](std::string_view name, std::string_view parameter) noexcept {
             if (httpAsciiEqualsIgnoreCase(name, "q")) {
-                const auto parsed = httpParseQualityValue(param.substr(equals + 1));
-                return parsed < 0 ? 0 : parsed;
+                const auto parsed = httpParseQualityValue(parameter);
+                quality = parsed < 0 ? 0 : parsed;
+                return false;  // first q wins; later parameters are accept-ext
             }
-        }
-        if (next == std::string_view::npos) {
-            break;
-        }
-    }
+            return true;
+        });
     return quality;
 }
 
@@ -84,22 +77,17 @@ inline void httpUpdateAcceptedEncodingQuality(
     std::string_view coding,
     int& explicitQuality,
     int& wildcardQuality) noexcept {
-    while (!acceptEncoding.empty()) {
-        const auto comma = acceptEncoding.find(',');
-        const auto item = httpTrimOws(
-            comma == std::string_view::npos ? acceptEncoding : acceptEncoding.substr(0, comma));
-        const auto token = httpHeaderTokenBeforeParameters(item);
-        if (httpAsciiEqualsIgnoreCase(token, coding)) {
-            explicitQuality = httpQualityParameter(item);
-        } else if (token == "*") {
-            wildcardQuality = httpQualityParameter(item);
-        }
-
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        acceptEncoding.remove_prefix(comma + 1);
-    }
+    httpVisitCommaSeparatedQuoted(
+        acceptEncoding,
+        [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
+            const auto token = httpHeaderTokenBeforeParameters(item);
+            if (httpAsciiEqualsIgnoreCase(token, coding)) {
+                explicitQuality = httpQualityParameter(item);
+            } else if (token == "*") {
+                wildcardQuality = httpQualityParameter(item);
+            }
+            return true;
+        });
 }
 
 [[nodiscard]] inline bool httpAcceptedEncodingAllows(int explicitQuality, int wildcardQuality) noexcept {
@@ -220,9 +208,7 @@ struct HttpAcceptedEncodingQuality {
 
     int bestSpecificity = -1;
     int bestQuality = 0;
-    while (!accept.empty()) {
-        const auto comma = accept.find(',');
-        const auto item = httpTrimOws(comma == std::string_view::npos ? accept : accept.substr(0, comma));
+    httpVisitCommaSeparatedQuoted(accept, [offered, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
         if (httpMediaRangeMatches(item, offered)) {
             const auto specificity = httpMediaRangeSpecificity(item);
             const auto quality = httpQualityParameter(item);
@@ -231,11 +217,8 @@ struct HttpAcceptedEncodingQuality {
                 bestQuality = quality;
             }
         }
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        accept.remove_prefix(comma + 1);
-    }
+        return true;
+    });
 
     return bestSpecificity >= 0 && bestQuality > 0;
 }
