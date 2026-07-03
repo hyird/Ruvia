@@ -39,6 +39,15 @@ inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     X509_free(certificate);
 }
 
+struct TlsServerHandshakeInitiator final {
+    asio::ssl::stream<TcpSocket&>* stream;
+
+    template <typename Handler>
+    void operator()(Handler handler) const {
+        stream->async_handshake(asio::ssl::stream_base::server, std::move(handler));
+    }
+};
+
 #include "HttpServerSessionEntry.inl"
 #include "HttpServerStreamSession.inl"
 

@@ -1,6 +1,9 @@
 #include "AppInternal.h"
 
+#include <asio/signal_set.hpp>
+
 #include <algorithm>
+#include <csignal>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>

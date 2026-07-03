@@ -7,9 +7,7 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
                 ConnectionScanner::Guard handshakeGuard(&connectionScanner_, handshakeEntry, socket);
                 handshakeEntry.setPhase(ConnectionScanner::Phase::kReadingHeader);
                 asio::ssl::stream<TcpSocket&> tlsStream(socket, *tlsContext_);
-                const auto ec = co_await asyncError([&tlsStream](auto handler) mutable {
-                    tlsStream.async_handshake(asio::ssl::stream_base::server, std::move(handler));
-                });
+                const auto ec = co_await asyncError(TlsServerHandshakeInitiator{&tlsStream});
                 if (ec) {
                     closeSocket(socket);
                     co_return;

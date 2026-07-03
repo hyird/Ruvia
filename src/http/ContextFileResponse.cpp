@@ -245,7 +245,8 @@ template <typename ApplyResponseState>
         return response;
     };
 
-    const auto& request = context.req().raw();
+    const auto contextRequest = context.req();
+    const auto& request = contextRequest.raw();
     if (request.method() == HttpMethod::kGet || request.method() == HttpMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
         if (enableValidators && !ifMatchAllows(conditional.ifMatch, etag)) {
