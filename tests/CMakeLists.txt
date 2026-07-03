@@ -27,6 +27,7 @@ add_executable(ruvia_unit_tests
     unit_file_response_helpers.cpp
     unit_json_writer.cpp
     unit_hpack.cpp
+    unit_http2_frame.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
