@@ -32,6 +32,7 @@
 #include "../../net/http2/Http2FrameCodec.h"
 #include "../../net/http2/Http2FramePayload.h"
 #include "../../net/http2/Http2FlowControl.h"
+#include "../../net/http2/Http2HeaderRules.h"
 #include "../../net/http2/Http2InputBuffer.h"
 #include "../../net/http2/Http2LocalSettings.h"
 #include "../../net/http2/Http2WindowUpdate.h"
@@ -652,6 +653,14 @@ bool Http2ClientSession::onFrame(const Http2FrameHeader& header, std::string_vie
             if (header.streamId == 0 || payload.size() != 5) {
                 return false;
             }
+            if (http2Read31(reinterpret_cast<const unsigned char*>(payload.data())) == header.streamId) {
+                if (Stream* stream = findStream(header.streamId); stream != nullptr) {
+                    sendRstStream(stream->id, Http2ErrorCode::kProtocolError);
+                    failStream(*stream, Http2ErrorCode::kProtocolError);
+                    return true;
+                }
+                return false;
+            }
             return true;  // accepted and ignored
         case Http2FrameType::kPushPromise:
             return false;  // we advertise ENABLE_PUSH=0; server push is a protocol error
@@ -714,8 +723,14 @@ bool Http2ClientSession::onHeaders(const Http2FrameHeader& header, std::string_v
         return false;  // responses arrive on the client's odd stream ids only
     }
     std::string_view fragment;
-    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
+    std::uint32_t dependency = 0;
+    if (!http2StripPadAndPriority(header, payload, true, fragment, &dependency)) {
         return false;
+    }
+    if ((header.flags & kHttp2FlagPriority) != 0) {
+        if (dependency == header.streamId) {
+            return false;
+        }
     }
     Stream* stream = findStream(header.streamId);
     bool discard;
@@ -778,9 +793,11 @@ struct H2DecodeContext final {
     FetchResponse* response{nullptr};
     std::pmr::memory_resource* resource{nullptr};
     std::size_t headerCount{0};
+    std::size_t contentLength{0};
     int status{0};
     bool sawStatus{false};
     bool sawRegular{false};
+    bool hasContentLength{false};
     bool malformed{false};
 };
 
@@ -801,16 +818,27 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
         ctx->sawStatus = true;
         return true;
     }
-    // Header names must already be lowercase in HTTP/2; uppercase is malformed.
-    for (const auto ch : name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ctx->malformed = true;
-            return false;
-        }
+    if (!http2IsValidRegularHeader(name, value)) {
+        ctx->malformed = true;
+        return false;
     }
     if (++ctx->headerCount > kMaxRequestHeaders) {
         ctx->malformed = true;
         return false;
+    }
+    if (name == "content-length") {
+        std::size_t parsed = 0;
+        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+            ctx->malformed = true;
+            return false;
+        }
+        if (ctx->hasContentLength && ctx->contentLength != parsed) {
+            ctx->malformed = true;
+            return false;
+        }
+        ctx->contentLength = parsed;
+        ctx->hasContentLength = true;
     }
     ctx->sawRegular = true;
     if (ctx->status < 200) {
@@ -824,17 +852,14 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
 }
 
 bool h2OnDecodedTrailerHeader(void* target, std::string_view name, std::string_view value) {
-    (void)value;
     auto* ctx = static_cast<H2DecodeContext*>(target);
     if (!name.empty() && name.front() == ':') {
         ctx->malformed = true;
         return false;
     }
-    for (const auto ch : name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            ctx->malformed = true;
-            return false;
-        }
+    if (!http2IsValidRegularHeader(name, value)) {
+        ctx->malformed = true;
+        return false;
     }
     if (++ctx->headerCount > kMaxRequestHeaders) {
         ctx->malformed = true;
@@ -860,6 +885,8 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
                 stream->responseBodyAllowed =
                     stream->responseBodyAllowed &&
                     http2ResponseStatusMayHaveBody(stream->response.statusCode);
+                stream->responseHasContentLength = ctx.hasContentLength;
+                stream->responseContentLength = ctx.contentLength;
             }
         }
     } else if (stream != nullptr && stream->headersComplete) {
@@ -880,6 +907,14 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
     // For a streaming request, deliver the response headers to fetchStream as soon as they arrive.
     if (apply && stream != nullptr && stream->headersComplete && stream->streaming) {
         signalWaiter(*stream);
+    }
+    if (stream != nullptr &&
+        stream->headersComplete &&
+        endStream &&
+        stream->responseBodyAllowed &&
+        stream->responseHasContentLength &&
+        stream->responseBodyBytes != stream->responseContentLength) {
+        return false;
     }
     if (stream != nullptr && stream->headersComplete && endStream) {
         markRemoteEnd(*stream);
@@ -940,6 +975,17 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
         wakeFlusher();
         return true;
     }
+    if (stream->responseBodyAllowed && stream->responseHasContentLength) {
+        if (data.size() > stream->responseContentLength ||
+            stream->responseBodyBytes > stream->responseContentLength - data.size()) {
+            sendRstStream(stream->id, Http2ErrorCode::kProtocolError);
+            failStream(*stream, Http2ErrorCode::kProtocolError);
+            queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
+            wakeFlusher();
+            return true;
+        }
+        stream->responseBodyBytes += data.size();
+    }
     if (stream->streaming) {
         // Backpressure: buffer the data and defer the WINDOW_UPDATE until readChunk consumes it,
         // so a slow reader stalls the peer instead of growing memory without bound.
@@ -960,6 +1006,14 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
         wakeFlusher();
     }
     if ((header.flags & kHttp2FlagEndStream) != 0) {
+        if (stream->responseBodyAllowed &&
+            stream->responseHasContentLength &&
+            stream->responseBodyBytes != stream->responseContentLength) {
+            sendRstStream(stream->id, Http2ErrorCode::kProtocolError);
+            failStream(*stream, Http2ErrorCode::kProtocolError);
+            wakeFlusher();
+            return true;
+        }
         markRemoteEnd(*stream);
     }
     return true;

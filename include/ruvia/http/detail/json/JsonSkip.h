@@ -91,9 +91,11 @@ namespace ruvia::detail {
         case '"':
             return skipJsonString(input);
         case '{':
-            return skipJsonObject(input, depth + 1);
+            // skipJsonObject/skipJsonArray already add depth+1 for their child values; passing
+            // depth+1 here too would double-count and enforce half the documented kMaxJsonDepth.
+            return skipJsonObject(input, depth);
         case '[':
-            return skipJsonArray(input, depth + 1);
+            return skipJsonArray(input, depth);
         case 't':
             return consumeJsonLiteral(input, "true");
         case 'f':
