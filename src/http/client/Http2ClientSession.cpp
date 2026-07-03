@@ -78,6 +78,15 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     return false;
 }
 
+[[nodiscard]] bool isAllowedH2RequestHeader(
+    std::string_view name,
+    std::string_view value) noexcept {
+    if (isForbiddenH2RequestHeader(name)) {
+        return false;
+    }
+    return !httpAsciiEqualsIgnoreCase(name, "te") || value == "trailers";
+}
+
 [[nodiscard]] char asciiLower(char ch) noexcept {
     return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
 }
@@ -810,7 +819,12 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
         }
         int status = 0;
         const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), status);
-        if (ec != std::errc{} || ptr != value.data() + value.size() || status < 100 || status > 999) {
+        if (value.size() != 3 ||
+            ec != std::errc{} ||
+            ptr != value.data() + value.size() ||
+            status < 100 ||
+            status > 999 ||
+            status == 101) {
             ctx->malformed = true;
             return false;
         }
@@ -1190,7 +1204,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         if (!isValidHttpHeaderName(userHeader.name) || !isValidHttpHeaderValue(userHeader.value)) {
             throw std::invalid_argument("http/2: invalid request header");
         }
-        if (isForbiddenH2RequestHeader(userHeader.name)) {
+        if (!isAllowedH2RequestHeader(userHeader.name, userHeader.value)) {
             throw std::invalid_argument("http/2: request header is not allowed over HTTP/2");
         }
         lowerName.clear();

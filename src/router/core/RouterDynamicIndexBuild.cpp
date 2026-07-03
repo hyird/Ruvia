@@ -1,6 +1,7 @@
 #include "../RouteTable.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
 #include <utility>
 
@@ -178,7 +179,15 @@ void detail::RouteTable::sortDynamicNode(DynamicNode& node) {
 }
 
 bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_view right) noexcept {
-    std::size_t depth = 0;
+    enum class ForkPriority : std::uint8_t {
+        kShared,
+        kLeftStatic,
+        kRightStatic
+    };
+
+    // Tracks the first static-vs-param fork. After that fork, the static side has runtime priority
+    // for overlapping paths because findDynamicNode tries static children before param children.
+    auto priority = ForkPriority::kShared;
     for (;;) {
         std::string_view leftSegment;
         std::string_view leftRest;
@@ -191,12 +200,16 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
         }
 
         if (leftSegment == "*" || rightSegment == "*") {
-            if (depth == 0 && leftSegment != rightSegment) {
-                // A wildcard at the root shadows a sibling param (both match a
-                // single segment at the same position), which the "wildcard must
-                // not shadow a dynamic path" rule forbids — report it as a shape
-                // conflict. It may still coexist with a distinguishing static
-                // segment on the other side.
+            if (leftSegment == rightSegment) {
+                return priority == ForkPriority::kShared;
+            }
+
+            if (priority == ForkPriority::kShared) {
+                // At a shared node a wildcard is distinguished by a STATIC sibling (findDynamicNode
+                // tries the static child before the wildcard), so it is not a conflict — unless both
+                // sides are dynamic, in which case the wildcard shadows the sibling param. This holds
+                // at any depth, not just the root: e.g. "/files/*" + "/files/public/:id" is fine, but
+                // "/a/*" + "/a/:x" conflicts.
                 const auto leftDynamic =
                     leftSegment == "*" || (!leftSegment.empty() && leftSegment.front() == ':');
                 const auto rightDynamic =
@@ -204,6 +217,14 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
                 if (!(leftDynamic && rightDynamic)) {
                     return false;
                 }
+            }
+
+            const auto leftWildcard = leftSegment == "*";
+            if (priority == ForkPriority::kLeftStatic) {
+                return leftWildcard;
+            }
+            if (priority == ForkPriority::kRightStatic) {
+                return !leftWildcard;
             }
             return true;
         }
@@ -213,10 +234,12 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
         if (!leftParam && !rightParam && leftSegment != rightSegment) {
             return false;
         }
+        if (priority == ForkPriority::kShared && leftParam != rightParam) {
+            priority = leftParam ? ForkPriority::kRightStatic : ForkPriority::kLeftStatic;
+        }
 
         left = leftRest;
         right = rightRest;
-        ++depth;
     }
 }
 
