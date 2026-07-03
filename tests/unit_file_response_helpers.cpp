@@ -79,3 +79,15 @@ RUVIA_TEST(byte_range_rejects_invalid) {
     RUVIA_CHECK(!httpParseByteRange("bytes=", 1000).has_value());             // empty spec
     RUVIA_CHECK(!httpParseByteRange("bytes=0-99", 0).has_value());            // empty resource
 }
+
+RUVIA_TEST(byte_range_set_multiple_detection) {
+    using ruvia::detail::httpByteRangeSetHasMultiple;
+    // A comma after "bytes=" means more than one range was requested.
+    RUVIA_CHECK(httpByteRangeSetHasMultiple("bytes=0-99,200-299"));
+    RUVIA_CHECK(httpByteRangeSetHasMultiple("bytes=0-0,-1"));
+    // A single range, a suffix, and non-range / prefixless inputs are not "multiple".
+    RUVIA_CHECK(!httpByteRangeSetHasMultiple("bytes=0-99"));
+    RUVIA_CHECK(!httpByteRangeSetHasMultiple("bytes=-100"));
+    RUVIA_CHECK(!httpByteRangeSetHasMultiple("bytes="));
+    RUVIA_CHECK(!httpByteRangeSetHasMultiple("0-99,200-299"));  // missing "bytes=" unit
+}
