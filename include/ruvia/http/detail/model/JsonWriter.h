@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/model/Traits.h"
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -69,6 +70,15 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
     } else if constexpr (std::is_same_v<T, bool>) {
         output.append(value ? "true" : "false");
     } else if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {
+        if constexpr (std::is_floating_point_v<T>) {
+            // JSON (RFC 8259) has no representation for infinity or NaN, and
+            // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
+            // Serialize non-finite values as null, matching JSON.stringify.
+            if (!std::isfinite(value)) {
+                output.append("null");
+                return;
+            }
+        }
         char buffer[64];
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
         if (ec == std::errc{}) {
