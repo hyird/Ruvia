@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "http/FileResponseHelpers.h"
+#include "http/HttpImfFixdate.h"
 
 namespace {
 
@@ -121,4 +122,36 @@ RUVIA_TEST(file_etag_deterministic_and_sensitive) {
     RUVIA_CHECK(base != fileEtag(101, Ticks{123456}));        // size-sensitive
     RUVIA_CHECK(base != fileEtag(100, Ticks{123457}));        // mtime-sensitive
     RUVIA_CHECK(base.size() >= 2 && base.front() == '"' && base.back() == '"');  // quoted-string
+}
+
+// httpWriteImfFixdate is the single owner of HTTP date formatting (used by both
+// httpFormatDate/Last-Modified and the response Date header cache). Test it in
+// isolation with a hand-built tm so no gmtime dependency is involved.
+RUVIA_TEST(imf_fixdate_writer_known_vector) {
+    std::tm utc{};
+    utc.tm_wday = 0;   // Sunday
+    utc.tm_mday = 6;
+    utc.tm_mon = 10;   // November
+    utc.tm_year = 94;  // 1994
+    utc.tm_hour = 8;
+    utc.tm_min = 49;
+    utc.tm_sec = 37;
+    char buffer[ruvia::detail::kImfFixdateSize];
+    const auto written = ruvia::detail::httpWriteImfFixdate(buffer, utc);
+    RUVIA_CHECK_EQ(written, ruvia::detail::kImfFixdateSize);
+    RUVIA_CHECK_EQ(std::string(buffer, written), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
+}
+
+RUVIA_TEST(imf_fixdate_writer_clamps_out_of_range_indices) {
+    // A corrupt tm must not index the day/month tables out of bounds.
+    std::tm utc{};
+    utc.tm_wday = 99;
+    utc.tm_mon = 99;
+    utc.tm_mday = 1;
+    utc.tm_year = 70;
+    char buffer[ruvia::detail::kImfFixdateSize];
+    const auto written = ruvia::detail::httpWriteImfFixdate(buffer, utc);
+    RUVIA_CHECK_EQ(written, ruvia::detail::kImfFixdateSize);
+    RUVIA_CHECK_EQ(std::string(buffer, 3), std::string("Sun"));       // wday 99 -> 0
+    RUVIA_CHECK_EQ(std::string(buffer + 8, 3), std::string("Jan"));   // mon 99 -> 0
 }

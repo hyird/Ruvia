@@ -1,5 +1,7 @@
 #include "HttpDateCache.h"
 
+#include "../../http/HttpImfFixdate.h"
+
 #include <array>
 #include <ctime>
 #include <cstring>
@@ -41,18 +43,11 @@ void refreshCachedDateHeader(std::time_t now) noexcept {
     gmtime_r(&now, &utc);
 #endif
     std::memcpy(cache.line.data(), kDateHeaderPrefix.data(), kDateHeaderPrefix.size());
-    const auto written = std::strftime(
-        cache.line.data() + kDateHeaderPrefix.size(),
-        cache.line.size() - kDateHeaderPrefix.size(),
-        "%a, %d %b %Y %H:%M:%S GMT",
-        &utc);
-    if (written == 0) {
-        cache.size = 0;
-    } else {
-        cache.size = kDateHeaderPrefix.size() + written;
-        cache.line[cache.size++] = kDateHeaderSuffix[0];
-        cache.line[cache.size++] = kDateHeaderSuffix[1];
-    }
+    // "Date: " (6) + IMF-fixdate (29) + CRLF (2) = 37 bytes, well within line[64].
+    const auto written = httpWriteImfFixdate(cache.line.data() + kDateHeaderPrefix.size(), utc);
+    cache.size = kDateHeaderPrefix.size() + written;
+    cache.line[cache.size++] = kDateHeaderSuffix[0];
+    cache.line[cache.size++] = kDateHeaderSuffix[1];
     cache.second = now;
 }
 
