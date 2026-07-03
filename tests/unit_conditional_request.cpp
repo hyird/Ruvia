@@ -9,6 +9,7 @@
 
 #include "http/FileResponseHelpers.h"
 #include "http/HttpImfFixdate.h"
+#include "net/server/HttpDateCache.h"
 
 namespace {
 
@@ -154,4 +155,33 @@ RUVIA_TEST(imf_fixdate_writer_clamps_out_of_range_indices) {
     RUVIA_CHECK_EQ(written, ruvia::detail::kImfFixdateSize);
     RUVIA_CHECK_EQ(std::string(buffer, 3), std::string("Sun"));       // wday 99 -> 0
     RUVIA_CHECK_EQ(std::string(buffer + 8, 3), std::string("Jan"));   // mon 99 -> 0
+}
+
+// The response Date header cache must emit "Date: <IMF-fixdate>\r\n" with a valid
+// English date reflecting the current second (guards the shared formatter on the
+// hot per-response path).
+RUVIA_TEST(cached_date_header_framing_and_validity) {
+    using ruvia::detail::cachedDateHeader;
+    using ruvia::detail::cachedDateValue;
+    using ruvia::detail::httpParseImfFixdate;
+
+    const std::string header(cachedDateHeader());
+    RUVIA_CHECK_EQ(header.size(), std::size_t{37});  // "Date: " (6) + date (29) + CRLF (2)
+    RUVIA_CHECK(header.starts_with("Date: "));
+    RUVIA_CHECK(std::string_view(header).substr(header.size() - 2) == "\r\n");
+
+    // The 29-char value must parse as a valid IMF-fixdate; a localized or
+    // malformed date (the pre-fix strftime %a/%b risk) would fail to parse.
+    const std::string_view valuePart = std::string_view(header).substr(6, 29);
+    const auto parsedFromHeader = httpParseImfFixdate(valuePart);
+    RUVIA_CHECK(parsedFromHeader.has_value());
+    if (parsedFromHeader) {
+        const auto now = std::time(nullptr);
+        RUVIA_CHECK(*parsedFromHeader <= now && now - *parsedFromHeader < 3);
+    }
+
+    // The bare value accessor (HPACK :date) is likewise a valid 29-char date.
+    const std::string value(cachedDateValue());
+    RUVIA_CHECK_EQ(value.size(), std::size_t{29});
+    RUVIA_CHECK(httpParseImfFixdate(value).has_value());
 }
