@@ -59,6 +59,7 @@ add_executable(ruvia_unit_tests
     unit_request_access.cpp
     unit_http2_body_state.cpp
     unit_http2_frame_codec.cpp
+    unit_http2_peer_settings.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
