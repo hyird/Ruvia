@@ -356,9 +356,7 @@ HttpResponse Context::file(
     detail::HttpAcceptedEncodingQuality brotli;
     detail::HttpAcceptedEncodingQuality zstd;
     detail::HttpAcceptedEncodingQuality gzip;
-    brotli.update(acceptEncoding, "br");
-    zstd.update(acceptEncoding, "zstd");
-    gzip.update(acceptEncoding, "gzip");
+    detail::httpUpdateResponseCodingQualities(acceptEncoding, gzip, brotli, zstd);
 
     struct Candidate final {
         std::string_view suffix;
