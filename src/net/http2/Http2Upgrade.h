@@ -26,6 +26,16 @@ struct Http2UpgradeRequest final {
         httpAsciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
 }
 
+[[nodiscard]] inline bool http2UpgradeConnectionHasSettingsToken(const HttpRequest& request) noexcept {
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Connection") &&
+            httpHasToken(header.value(), "HTTP2-Settings")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] inline bool http2ShouldDropInvalidCleartextPreface(
     std::string_view buffer,
     HttpParseError error) noexcept {
@@ -123,7 +133,7 @@ struct Http2UpgradeRequest final {
     if (!isHttp2UpgradeAttempt(parsed)) {
         return result;
     }
-    if (!httpHasToken(requestKnownHeader(parsed.request, RequestKnownHeader::kConnection), "HTTP2-Settings")) {
+    if (!http2UpgradeConnectionHasSettingsToken(parsed.request)) {
         return result;
     }
 

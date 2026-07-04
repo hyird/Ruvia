@@ -119,6 +119,13 @@ RUVIA_TEST(parse_http2_upgrade_request) {
     RUVIA_CHECK(validResult.valid);
     RUVIA_CHECK_EQ(validResult.settingsPayload.size(), std::size_t{6});
 
+    // RFC field-line combination means split Connection fields still carry the
+    // same token set; the upgrade path must not depend on the cached last value.
+    const auto splitConnection = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: HTTP2-Settings\r\n"
+        "Connection: Upgrade\r\nUpgrade: h2c\r\nHTTP2-Settings: AAQAAQAA\r\n\r\n");
+    RUVIA_CHECK(parseHttp2UpgradeRequest(splitConnection, resource).valid);
+
     // Not an h2c upgrade -> invalid.
     const auto websocket = parser.parse(
         "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
