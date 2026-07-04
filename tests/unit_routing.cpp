@@ -427,3 +427,73 @@ RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/x").status(),
                    std::uint16_t{200});
 }
+
+namespace {
+
+using ruvia::HttpErrorHandler;
+using ruvia::HttpErrorInfo;
+using ruvia::HttpNotFoundHandler;
+
+ruvia::Task<ruvia::HttpResponse> customNotFound(ruvia::Context& context) {
+    co_return context.body("custom-not-found", ruvia::Context::ResponseInit{.status = 404});
+}
+
+ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorInfo info) {
+    co_return context.body("custom-error", ruvia::Context::ResponseInit{.status = info.status()});
+}
+
+ruvia::HttpResponse dispatchWithHandlers(
+    RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
+    HttpMethod method, std::string_view p) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    if (errorH != nullptr) {
+        impl.setErrorHandler(errorH);
+    }
+    if (notFoundH != nullptr) {
+        impl.setNotFoundHandler(notFoundH);
+    }
+    impl.registerRoute(HttpMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
+                       std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, method);
+    ruvia::detail::HttpRequestAccess::setPath(request, p);
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    return future.get();
+}
+
+std::string bodyOf(const ruvia::HttpResponse& response) {
+    const auto body = ruvia::detail::responseBodyBytes(response);
+    return std::string(body.data(), body.size());
+}
+
+}  // namespace
+
+RUVIA_TEST(dispatch_uses_custom_not_found_handler) {
+    // A registered not-found handler replaces the default 404 response body.
+    const auto response = dispatchWithHandlers(
+        RouteHandler(nullptr, &okHandler), nullptr, &customNotFound, HttpMethod::kGet, "/nope");
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
+    RUVIA_CHECK_EQ(bodyOf(response), std::string("custom-not-found"));
+}
+
+RUVIA_TEST(dispatch_uses_custom_error_handler_with_thrown_status) {
+    // A registered error handler renders a thrown HttpError, preserving its status.
+    const auto response = dispatchWithHandlers(
+        RouteHandler(nullptr, &throwsHttpErrorHandler), &customError, nullptr, HttpMethod::kGet, "/x");
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{403});
+    RUVIA_CHECK_EQ(bodyOf(response), std::string("custom-error"));
+}
