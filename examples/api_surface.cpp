@@ -1584,7 +1584,7 @@ static_assert(!std::is_constructible_v<
 static_assert(!HasAccessLogRecordPublicFields<ruvia::AccessLogRecord>);
 static_assert(HasAccessLogRecordCanonicalReadAccessors<ruvia::AccessLogRecord>);
 static_assert(!std::is_default_constructible_v<ruvia::ValidationIssue>);
-static_assert(std::is_constructible_v<
+static_assert(!std::is_constructible_v<
     ruvia::ValidationIssue,
     std::string_view,
     std::string_view,
