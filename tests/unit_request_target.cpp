@@ -39,6 +39,9 @@ RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader("[::1]x"));              // junk after the bracket
     RUVIA_CHECK(!isValidHostHeader("[GG::1]"));             // non-hex byte in the IPv6 literal
     RUVIA_CHECK(!isValidHostHeader("[::::]"));              // not a valid IPv6 literal
+    // A zone/scope id is valid to getaddrinfo but not a legal URI host: it must
+    // be rejected so a scoped address can never slip into host matching.
+    RUVIA_CHECK(!isValidHostHeader("[fe80::1%eth0]"));
     // A CRLF-injection attempt must not validate.
     RUVIA_CHECK(!isValidHostHeader(std::string_view("example.com\r\nX", 14)));
 }
