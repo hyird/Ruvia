@@ -3,8 +3,8 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/SessionInternal.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/Session.h"
 
 namespace {
 

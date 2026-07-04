@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ruvia/http/Context.h"
+#include "ruvia/http/HttpResponse.h"
 
+#include <memory_resource>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -29,5 +31,33 @@ struct SessionAccess final {
         return context.session();
     }
 };
+
+[[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
+    if (id.empty() || id.size() > 128) {
+        return false;
+    }
+    for (const char ch : id) {
+        const bool hex = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+        if (!hex) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline void appendSessionCookieHeader(
+    HttpResponse& response,
+    std::pmr::memory_resource* resource,
+    std::string_view id,
+    bool secure) {
+    std::pmr::string setCookie(resource);
+    setCookie.append("sid=");
+    setCookie.append(id.data(), id.size());
+    setCookie.append("; Path=/; HttpOnly; SameSite=Lax");
+    if (secure) {
+        setCookie.append("; Secure");
+    }
+    response.header("Set-Cookie", setCookie, {.append = true});
+}
 
 }  // namespace ruvia::detail
