@@ -14,10 +14,18 @@ namespace {
     if (target.empty()) {
         return false;
     }
-    for (const auto ch : target) {
-        const auto c = static_cast<unsigned char>(ch);
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        const auto c = static_cast<unsigned char>(target[i]);
         if (c <= 0x20 || c == 0x7F || c == '#') {
             return false;
+        }
+        if (c == '%') {
+            if (i + 2 >= target.size() ||
+                !isHttpHexDigit(static_cast<unsigned char>(target[i + 1])) ||
+                !isHttpHexDigit(static_cast<unsigned char>(target[i + 2]))) {
+                return false;
+            }
+            i += 2;
         }
     }
     return true;
