@@ -38,6 +38,27 @@ RUVIA_TEST(ready_queue_capacity_and_reuse) {
     RUVIA_CHECK(queue.push(9999));
 }
 
+RUVIA_TEST(ready_queue_push_reclaims_prefix_when_physically_full) {
+    Http2ReadyQueue queue;
+    const std::uint32_t capacity = kHttp2LocalMaxConcurrentStreams;
+    for (std::uint32_t id = 1; id <= capacity; ++id) {
+        RUVIA_CHECK(queue.push(id));
+    }
+    RUVIA_CHECK(!queue.push(9999));  // genuinely full: nothing consumed yet
+    // A single pop leaves the buffer physically full (lazy compaction skips a
+    // consumed prefix below the threshold), but the queue now holds one fewer
+    // live stream. A push must reclaim that slot rather than spuriously fail --
+    // otherwise a ready stream would stall under maximum concurrency.
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{1});
+    RUVIA_CHECK(queue.push(9999));
+    // FIFO order survives the in-push compaction: 2..capacity, then the new id.
+    for (std::uint32_t id = 2; id <= capacity; ++id) {
+        RUVIA_CHECK_EQ(queue.pop(), id);
+    }
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{9999});
+    RUVIA_CHECK(!queue.hasReady());
+}
+
 RUVIA_TEST(ready_queue_remove) {
     Http2ReadyQueue queue;
     RUVIA_CHECK(queue.push(1));

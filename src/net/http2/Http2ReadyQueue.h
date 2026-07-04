@@ -12,6 +12,21 @@ namespace ruvia::detail {
 class Http2ReadyQueue final {
 public:
     [[nodiscard]] bool push(std::uint32_t streamId) noexcept {
+        if (size_ >= streamIds_.size() && offset_ > 0) {
+            // The array is physically full but the consumed prefix is reclaimable.
+            // pop() compacts only lazily, so after filling to capacity and popping
+            // a few entries the buffer can stay full while holding fewer than
+            // capacity live streams. Reclaim the prefix here so a ready stream is
+            // never spuriously rejected (which would stall it) while the queue is
+            // not logically full.
+            const auto remaining = size_ - offset_;
+            std::memmove(
+                streamIds_.data(),
+                streamIds_.data() + offset_,
+                remaining * sizeof(std::uint32_t));
+            offset_ = 0;
+            size_ = remaining;
+        }
         if (size_ >= streamIds_.size()) {
             return false;
         }
