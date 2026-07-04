@@ -641,40 +641,51 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     readBuf.clear();
     readBuf.reserve(4096);
 
-    auto headerEnd = std::pmr::string::npos;
-    while (headerEnd == std::pmr::string::npos) {
-        if (readBuf.size() >= kMaxHttpHeaderBytes) {
-            closeConnection(conn);
-            throw std::runtime_error("http client: response headers too large");
+    for (;;) {
+        auto headerEnd = readBuf.find("\r\n\r\n");
+        while (headerEnd == std::pmr::string::npos) {
+            if (readBuf.size() >= kMaxHttpHeaderBytes) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: response headers too large");
+            }
+
+            const auto oldSize = readBuf.size();
+            const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
+            resizePmrStringForOverwrite(readBuf, oldSize + writable);
+            armRequest();
+            auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
+            if (finishDeadline(conn)) {
+                closeConnection(conn);
+                throw std::system_error(asio::error::timed_out, "http client: read timed out");
+            }
+            if (readEc) {
+                conn.connected = false;
+                throw std::system_error(readEc, "http client: read failed");
+            }
+            if (n == 0) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: empty response read");
+            }
+            readBuf.resize(oldSize + n);
+            const auto searchOffset = oldSize > 3 ? oldSize - 3 : 0;
+            headerEnd = readBuf.find("\r\n\r\n", searchOffset);
         }
 
-        const auto oldSize = readBuf.size();
-        const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
-        resizePmrStringForOverwrite(readBuf, oldSize + writable);
-        armRequest();
-        auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
-        if (finishDeadline(conn)) {
-            closeConnection(conn);
-            throw std::system_error(asio::error::timed_out, "http client: read timed out");
+        auto head = parseHttpClientResponseHead(
+            method,
+            std::string_view(readBuf.data(), headerEnd),
+            response,
+            requestResource);
+        const auto status = response.status();
+        if (status >= 100 && status < 200 && status != 101) {
+            readBuf.erase(0, headerEnd + 4);
+            FetchResponseAccess::setStatus(response, 0);
+            FetchResponseAccess::headers(response).clear();
+            FetchResponseAccess::body(response).clear();
+            continue;
         }
-        if (readEc) {
-            conn.connected = false;
-            throw std::system_error(readEc, "http client: read failed");
-        }
-        if (n == 0) {
-            closeConnection(conn);
-            throw std::runtime_error("http client: empty response read");
-        }
-        readBuf.resize(oldSize + n);
-        const auto searchOffset = oldSize > 3 ? oldSize - 3 : 0;
-        headerEnd = readBuf.find("\r\n\r\n", searchOffset);
+        co_return head;
     }
-
-    co_return parseHttpClientResponseHead(
-        method,
-        std::string_view(readBuf.data(), headerEnd),
-        response,
-        requestResource);
 }
 
 Task<FetchResponse> HttpClientPool::executeRequest(

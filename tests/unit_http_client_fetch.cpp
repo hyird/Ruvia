@@ -922,6 +922,17 @@ RUVIA_TEST(http_client_fetch_content_length) {
     RUVIA_CHECK_EQ(out.body, std::string("Hello, world"));
 }
 
+RUVIA_TEST(http_client_fetch_skips_100_continue) {
+    const auto out = runOneFetch(
+        "HTTP/1.1 100 Continue\r\n\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfinal",
+        WriteMode::kWhole);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.status, 200);
+    RUVIA_CHECK_EQ(out.body, std::string("final"));
+}
+
 RUVIA_TEST(http_client_rejects_hop_by_hop_request_headers) {
     for (const auto header : {
              ruvia::HttpHeaderView{"Keep-Alive", "timeout=5"},
