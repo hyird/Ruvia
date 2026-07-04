@@ -65,3 +65,17 @@ RUVIA_TEST(clear_pmr_string_releases_large_capacity) {
     clearPmrStringRetainingSmall(small, 4096);
     RUVIA_CHECK(small.empty());
 }
+
+RUVIA_TEST(clear_pmr_string_retains_heap_buffer_below_threshold) {
+    // The helper's purpose (vs a swap that always frees) is that a HEAP buffer below
+    // the retained threshold is KEPT for reuse -- avoiding reallocation churn on the
+    // hot connection-reuse path. The "short" case above is small-string-optimized, so
+    // it cannot demonstrate a heap buffer surviving. Use a string large enough to be
+    // heap allocated but well under the threshold: its capacity must be unchanged.
+    auto buffer = make(std::string(200, 'y'));  // heap (> SSO), well under 4096
+    const auto capacityBefore = buffer.capacity();
+    RUVIA_CHECK(capacityBefore >= 200);
+    clearPmrStringRetainingSmall(buffer, 4096);
+    RUVIA_CHECK(buffer.empty());
+    RUVIA_CHECK_EQ(buffer.capacity(), capacityBefore);  // retained for reuse, not released
+}
