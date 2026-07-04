@@ -12,6 +12,7 @@
 #include "http/HttpRequestInternal.h"
 #include "http/HttpResponseHeaderState.h"
 #include "ruvia/http/Context.h"
+#include "ruvia/http/Error.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/StaticFiles.h"
@@ -125,6 +126,65 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     const auto bad = serve("bytes=1000-2000");
     RUVIA_CHECK_EQ(bad.first, std::uint16_t{416});
     RUVIA_CHECK_EQ(bad.second, std::string("bytes */100"));
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_conditional_request_serving) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_conditional_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(100, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](
+        ruvia::detail::RequestKnownHeader slot, std::string_view headerName, std::string_view headerValue) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        if (!headerName.empty()) {
+            HttpRequestAccess::addHeader(
+                request, HttpHeaderView{headerName, headerValue}, HttpRequestAccess::knownHeaderSlot(slot));
+        }
+        auto context = ContextAccess::make(memory, request);
+        const auto response = context.staticFile(root, "data.txt", "text/plain");
+        return std::pair<std::uint16_t, std::string>(
+            response.status(), std::string(response.header("ETag")));
+    };
+
+    // An unconditional GET yields 200 and a strong ETag validator.
+    const auto plain = serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "", "");
+    RUVIA_CHECK_EQ(plain.first, std::uint16_t{200});
+    RUVIA_CHECK(!plain.second.empty());
+    const std::string etag = plain.second;
+
+    // If-None-Match with the current ETag -> 304; a stale one falls through to 200.
+    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", etag).first, std::uint16_t{304});
+    RUVIA_CHECK_EQ(serve(ruvia::detail::RequestKnownHeader::kIfNoneMatch, "If-None-Match", "\"stale\"").first, std::uint16_t{200});
+
+    // If-Match against a non-matching ETag is a 412 precondition failure (thrown).
+    bool precondition = false;
+    try {
+        (void)serve(ruvia::detail::RequestKnownHeader::kIfMatch, "If-Match", "\"stale\"");
+    } catch (const ruvia::HttpError& error) {
+        precondition = error.info().status() == 412;
+    }
+    RUVIA_CHECK(precondition);
 
     fs::remove_all(dir);
 }
