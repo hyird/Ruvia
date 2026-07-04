@@ -90,3 +90,19 @@ RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
     RUVIA_CHECK(responseBodyBytes(response).empty());
 }
+
+RUVIA_TEST(context_text_sets_plain_content_type) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.text("hello", 200, "OK");
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
+    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello"));
+}
+
+RUVIA_TEST(context_html_sets_html_content_type) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.html("<h1>hi</h1>", 200, "OK");
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
+    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("<h1>hi</h1>"));
+}
