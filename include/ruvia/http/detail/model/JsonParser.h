@@ -6,7 +6,6 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 #include "ruvia/http/detail/model/Traits.h"
 #include "ruvia/http/detail/json/JsonNumber.h"
@@ -151,20 +150,6 @@ template <typename T>
             value.value = parsed;
             return true;
         }
-    } else if constexpr (std::is_same_v<FieldT, bool>) {
-        if (consumeJsonLiteral(input, "true")) {
-            value = true;
-            return true;
-        }
-        if (consumeJsonLiteral(input, "false")) {
-            value = false;
-            return true;
-        }
-        return false;
-    } else if constexpr (std::is_integral_v<FieldT>) {
-        return parseJsonNumberValue(input, value);
-    } else if constexpr (std::is_floating_point_v<FieldT>) {
-        return parseJsonNumberValue(input, value);
     } else if constexpr (JsonBody<FieldT>::value) {
         std::string_view object = input;
         if (!skipJsonObject(input, depth + 1)) {
