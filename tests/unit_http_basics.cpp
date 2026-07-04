@@ -3,12 +3,16 @@
 #include <string_view>
 
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpParseTypes.h"
 
 namespace {
 
 using ruvia::HttpMethod;
+using ruvia::HttpParseError;
+using ruvia::httpParseErrorMessage;
 using ruvia::isValidHttpHeaderName;
 using ruvia::isValidHttpHeaderValue;
+using ruvia::isValidHttpStatusText;
 using ruvia::methodName;
 using ruvia::parseMethod;
 
@@ -61,4 +65,31 @@ RUVIA_TEST(http_method_name_round_trips) {
         RUVIA_CHECK(parseMethod(methodName(method)) == method);
     }
     RUVIA_CHECK_EQ(methodName(HttpMethod::kUnknown), std::string_view("UNKNOWN"));
+}
+
+RUVIA_TEST(http_status_text_validation) {
+    // The status reason phrase is validated by the header-value rules, so
+    // response-splitting bytes on the status line are rejected.
+    RUVIA_CHECK(isValidHttpStatusText("OK"));
+    RUVIA_CHECK(isValidHttpStatusText("Not Found"));  // space is allowed
+    RUVIA_CHECK(isValidHttpStatusText(""));            // an empty reason phrase is valid
+    RUVIA_CHECK(!isValidHttpStatusText(std::string_view("a\r\nb", 4)));
+    RUVIA_CHECK(!isValidHttpStatusText(std::string_view("a\nb", 3)));
+    RUVIA_CHECK(!isValidHttpStatusText(std::string_view("a\0b", 3)));
+}
+
+RUVIA_TEST(http_parse_error_messages) {
+    RUVIA_CHECK_EQ(httpParseErrorMessage(HttpParseError::kMissingHost),
+                   std::string_view("missing Host header"));
+    RUVIA_CHECK_EQ(httpParseErrorMessage(HttpParseError::kHeaderTooLarge),
+                   std::string_view("request header is too large"));
+    RUVIA_CHECK_EQ(httpParseErrorMessage(HttpParseError::kUnsupportedHttpVersion),
+                   std::string_view("unsupported HTTP version"));
+    // The two Content-Length faults intentionally share one message.
+    RUVIA_CHECK_EQ(httpParseErrorMessage(HttpParseError::kInvalidContentLength),
+                   httpParseErrorMessage(HttpParseError::kConflictingContentLength));
+    // Reachable errors all map to a non-empty message.
+    RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kNone).empty());
+    RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kChunkSizeOverflow).empty());
+    RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kInvalidTransferEncoding).empty());
 }
