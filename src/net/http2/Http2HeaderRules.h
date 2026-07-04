@@ -31,6 +31,8 @@ namespace ruvia::detail {
         httpAsciiEqualsIgnoreCase(name, "http2-settings") ||
         httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
         httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+        httpAsciiEqualsIgnoreCase(name, "te") ||
+        httpAsciiEqualsIgnoreCase(name, "trailer") ||
         httpAsciiEqualsIgnoreCase(name, "transfer-encoding");
 }
 

@@ -40,6 +40,8 @@ RUVIA_TEST(http2_forbidden_upgraded_request_headers) {
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("HTTP2-Settings"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Keep-Alive"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TRANSFER-ENCODING"));
+    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TE"));
+    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Trailer"));
     RUVIA_CHECK(!http2IsForbiddenUpgradedRequestHeader("content-type"));
 }
 
