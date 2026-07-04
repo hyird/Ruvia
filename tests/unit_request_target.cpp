@@ -22,6 +22,7 @@ RUVIA_TEST(host_header_accepts_valid) {
     RUVIA_CHECK(isValidHostHeader("sub.domain.example.com"));
     RUVIA_CHECK(isValidHostHeader("192.0.2.1"));
     RUVIA_CHECK(isValidHostHeader("192.0.2.1:443"));
+    RUVIA_CHECK(isValidHostHeader("example.com:65535"));   // the maximum valid port is inclusive
     RUVIA_CHECK(isValidHostHeader("[::1]"));
     RUVIA_CHECK(isValidHostHeader("[::1]:8080"));
     RUVIA_CHECK(isValidHostHeader("[2001:db8::1]"));
@@ -30,6 +31,7 @@ RUVIA_TEST(host_header_accepts_valid) {
 RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader(""));
     RUVIA_CHECK(!isValidHostHeader("example.com:"));        // empty port
+    RUVIA_CHECK(!isValidHostHeader("example.com:65536"));   // one past the maximum port
     RUVIA_CHECK(!isValidHostHeader("example.com:70000"));   // port > 65535
     RUVIA_CHECK(!isValidHostHeader("example.com:8o80"));    // non-digit in port
     RUVIA_CHECK(!isValidHostHeader("example.com:80:80"));   // trailing junk after port
