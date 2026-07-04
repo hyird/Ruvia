@@ -58,6 +58,27 @@ asio::awaitable<void> cloneParseArrayForm(
     }
 }
 
+asio::awaitable<void> cloneParseMultipart(
+    ruvia::Context& context,
+    std::string& nameValue,
+    std::string& fileName,
+    std::string& fileType,
+    std::string& fileData) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    const auto form = clone.parseBody({});
+    if (const auto nv = form.get("name").value(); nv.has_value()) {
+        nameValue.assign(nv->data(), nv->size());
+    }
+    const auto file = form.get("file");
+    if (const auto* f = file.field(); f != nullptr) {
+        fileName.assign(f->filename().data(), f->filename().size());
+    }
+    if (const auto b = file.blob(); b.has_value()) {
+        fileType.assign(b->type().data(), b->type().size());
+        fileData.assign(b->text().data(), b->text().size());
+    }
+}
+
 }  // namespace
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
@@ -238,6 +259,44 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     RUVIA_CHECK(tagsArray);                      // flagged as an array
     RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
+}
+
+RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(
+        request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"name\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"f.txt\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "hello\r\n"
+        "--BOUNDARY--\r\n");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // A multipart body parses into a text field plus a file part whose filename,
+    // content type, and bytes are all preserved through the RequestBlob.
+    asio::io_context io;
+    std::string nameValue, fileName, fileType, fileData;
+    asio::co_spawn(io, cloneParseMultipart(context, nameValue, fileName, fileType, fileData), asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(nameValue, std::string("value"));
+    RUVIA_CHECK_EQ(fileName, std::string("f.txt"));
+    RUVIA_CHECK_EQ(fileType, std::string("text/plain"));
+    RUVIA_CHECK_EQ(fileData, std::string("hello"));
 }
 
 RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
