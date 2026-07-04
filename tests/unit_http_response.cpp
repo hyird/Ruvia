@@ -101,6 +101,9 @@ RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
     RUVIA_CHECK(throwsInvalid([&] {
         response.header("Transfer-Encoding", "chunked", HttpResponse::HeaderOptions{true});
     }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Location", "/next", HttpResponse::HeaderOptions{true});
+    }));
 
     RUVIA_CHECK(!throwsInvalid([&] {
         response.header("Content-Length", "5");
