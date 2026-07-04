@@ -83,6 +83,37 @@ RUVIA_TEST(ws_assembler_fragmented_message) {
     RUVIA_CHECK_EQ(out.payload(), std::string_view("hello world"));
 }
 
+RUVIA_TEST(ws_assembler_control_frame_interleaved_in_fragments) {
+    // RFC 6455 §5.4: a control frame may be injected between the fragments of a
+    // data message and MUST NOT disrupt the reassembly already in progress.
+    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
+    RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "hel", false), 1000, out) ==
+                WebSocketInboundAction::kContinue);
+    // A ping arrives mid-message: it is answered but the fragment state is untouched.
+    RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kPing, "p", true), 1000, out) ==
+                WebSocketInboundAction::kSendPong);
+    // The continuation still completes the ORIGINAL message intact.
+    RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "lo", true, true), 1000, out) ==
+                WebSocketInboundAction::kDeliver);
+    RUVIA_CHECK_EQ(out.payload(), std::string_view("hello"));
+}
+
+RUVIA_TEST(ws_assembler_fragmented_compressed_defers_validation) {
+    // A compressed message carries RSV1 on its FIRST frame only; the assembler must
+    // remember that across continuation frames and, on completion, defer to the
+    // connection for inflation (UTF-8 cannot be judged until the bytes are inflated).
+    WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
+    RUVIA_CHECK(assembler.accept(
+                    frame(WebSocketOpcode::kText, std::string_view("\x01\x02", 2), false, false, true),
+                    1000, out) == WebSocketInboundAction::kContinue);
+    RUVIA_CHECK(assembler.accept(
+                    frame(WebSocketOpcode::kText, std::string_view("\x03", 1), true, true),
+                    1000, out) == WebSocketInboundAction::kDeliverCompressed);
+    RUVIA_CHECK_EQ(out.payload().size(), std::size_t{3});
+}
+
 RUVIA_TEST(ws_assembler_protocol_errors) {
     // A continuation frame with no message in progress is a protocol violation.
     WebSocketInboundAssembler noStart(std::pmr::get_default_resource());
