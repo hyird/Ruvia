@@ -71,6 +71,22 @@ RUVIA_TEST(security_headers_emit_configured_policies) {
     RUVIA_CHECK_EQ(response.header("Referrer-Policy"), std::string_view("no-referrer"));
 }
 
+RUVIA_TEST(security_headers_apply_custom_headers) {
+    auto response = makeResponse();
+    const ruvia::SecurityHeader custom[] = {
+        {"X-Custom-Security", "value-1"},
+        {"X-Report-To", "endpoint"},
+    };
+    SecurityHeadersOptions options;
+    options.customHeaders = custom;
+    applySecurityHeaders(response, options);
+
+    RUVIA_CHECK_EQ(response.header("X-Custom-Security"), std::string_view("value-1"));
+    RUVIA_CHECK_EQ(response.header("X-Report-To"), std::string_view("endpoint"));
+    // Built-in defaults are still applied alongside custom headers.
+    RUVIA_CHECK_EQ(response.header("X-Frame-Options"), std::string_view("DENY"));
+}
+
 RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {
     // The default (overwriteExisting = false) must not clobber a header a handler
     // already set -- the middleware only supplies defaults.
