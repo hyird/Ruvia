@@ -11,21 +11,12 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::size_t decimalDigits(std::uint64_t value) noexcept {
-    std::size_t digits = 1;
-    while (value >= 10) {
-        value /= 10;
-        ++digits;
-    }
-    return digits;
-}
-
 template <typename Args>
 [[nodiscard]] std::size_t respSerializedSize(const Args& args) noexcept {
-    std::size_t size = 1 + decimalDigits(static_cast<std::uint64_t>(args.size())) + 2;
+    std::size_t size = 1 + unsignedDecimalSize(static_cast<std::uint64_t>(args.size())) + 2;
     for (const auto& arg : args) {
         const auto bytes = static_cast<std::size_t>(arg.size());
-        size += 1 + decimalDigits(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
+        size += 1 + unsignedDecimalSize(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
     }
     return size;
 }
