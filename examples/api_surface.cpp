@@ -1533,6 +1533,8 @@ static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
+static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
+static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);
 static_assert(HasDbRowCanonicalReadAccessors<ruvia::DbRow>);
 static_assert(!std::is_default_constructible_v<ruvia::DbField>);
 static_assert(!std::is_constructible_v<ruvia::DbField, std::nullptr_t, std::pmr::memory_resource*>);
