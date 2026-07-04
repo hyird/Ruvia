@@ -152,6 +152,26 @@ RUVIA_TEST(jwt_verify_enforces_registered_claims) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, badAudience); }));
 }
 
+RUVIA_TEST(jwt_verify_rejects_expired_token) {
+    // exp is a Unix timestamp; 1 (1970) is far in the past, so this token is
+    // expired regardless of the current clock and must be rejected -- the core
+    // reason exp exists. jwtSign can only mint future exp, so craft it directly.
+    const auto expired = signedTokenWithPayload("secret", R"({"sub":"user-1","exp":1})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(expired, verifyOptions("secret")); }));
+
+    // leeway applies to exp as well as nbf: a token that expired a few seconds
+    // ago is rejected by default but accepted when leeway covers the gap.
+    const auto nowSeconds = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const std::string recentPayload =
+        R"({"sub":"user-1","exp":)" + std::to_string(nowSeconds - 10) + "}";
+    const auto recentlyExpired = signedTokenWithPayload("secret", recentPayload);
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(recentlyExpired, verifyOptions("secret")); }));
+    auto lenient = verifyOptions("secret");
+    lenient.leeway = std::chrono::seconds{3600};
+    RUVIA_CHECK_EQ(jwtVerify(recentlyExpired, lenient).subject(), std::string_view("user-1"));
+}
+
 RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     const auto verify = verifyOptions("secret");
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("not-a-jwt", verify); }));
