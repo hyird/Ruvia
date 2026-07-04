@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DbValueAccess.h"
 #include "ruvia/db/Db.h"
 
 #include <cstdint>
@@ -41,7 +42,7 @@ inline void appendDbNumber(std::pmr::string& output, double value) {
         case DbValueType::kNull:
             return DbValue(nullptr);
         case DbValueType::kString:
-            return DbValue(std::pmr::string(value.text(), resolvedResource));
+            return DbValueAccess::ownedString(std::pmr::string(value.text(), resolvedResource));
         case DbValueType::kSigned:
             return DbValue(value.signedValue());
         case DbValueType::kUnsigned:

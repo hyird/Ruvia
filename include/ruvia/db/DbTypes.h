@@ -13,6 +13,7 @@
 namespace ruvia {
 
 class RequestMemory;
+class DbValue;
 
 struct DbConfig {
     // Host name or unbracketed address only; keep the port in port.
@@ -42,6 +43,7 @@ struct DbDefinition final {
 class MariaDbPool;
 class DbRegistry;
 class DbMigrationRunner;
+struct DbValueAccess;
 
 }  // namespace detail
 
@@ -59,7 +61,6 @@ public:
     DbValue(std::nullptr_t);
     DbValue(const char* value);
     DbValue(std::string_view value);
-    DbValue(std::pmr::string value);
     DbValue(bool value);
 
     template <typename T>
@@ -87,6 +88,10 @@ public:
     [[nodiscard]] bool boolValue() const noexcept;
 
 private:
+    friend struct detail::DbValueAccess;
+
+    explicit DbValue(std::pmr::string value);
+
     DbValueType type_{DbValueType::kNull};
     std::pmr::string ownedText_;
     std::string_view text_;
