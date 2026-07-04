@@ -230,7 +230,6 @@ public:
     App& setCompression(CompressionConfig config);
     App& setCors(CorsConfig config);
     App& setDocumentRoot(DocumentRootConfig config);
-    App& setDocumentRoot(const std::filesystem::path& root);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);

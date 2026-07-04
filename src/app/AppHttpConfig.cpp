@@ -119,12 +119,6 @@ App& App::setDocumentRoot(DocumentRootConfig config) {
         });
 }
 
-App& App::setDocumentRoot(const std::filesystem::path& root) {
-    DocumentRootConfig config;
-    config.root = root;
-    return setDocumentRoot(std::move(config));
-}
-
 App& App::onError(HttpErrorHandler handler) {
     return detail::mutateStoppedApp(
         *this,
