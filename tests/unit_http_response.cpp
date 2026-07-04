@@ -92,6 +92,31 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     RUVIA_CHECK(response.header("X-Test").empty());
 }
 
+RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
+    auto response = makeResponse();
+    // Content-Type is a KNOWN header tracked by a bit in the response's header index
+    // (unlike the custom X-Test above, which is unindexed). Removing it must rebuild
+    // that index, or the indexed lookup fast path could still resolve to the removed
+    // slot -- returning a stale value.
+    response.header("Content-Type", "text/plain");
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
+
+    response.header("Content-Type", std::nullopt);
+    RUVIA_CHECK(response.header("Content-Type").empty());   // gone, not a stale index hit
+
+    // Re-adding after removal replaces cleanly and leaves exactly one header line --
+    // no duplicate resurrected from a stale index entry.
+    response.header("Content-Type", "application/json");
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
+    std::size_t count = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == std::string_view("Content-Type")) {
+            ++count;
+        }
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{1});
+}
+
 RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
     auto response = makeResponse();
 
