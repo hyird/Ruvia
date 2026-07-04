@@ -1431,6 +1431,15 @@ static_assert(!HasFormObjectHasAlias<ruvia::ContextRequest::RequestFormData::Obj
 static_assert(!HasFormObjectNamedValuesAllocator<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(HasFormObjectCanonicalAccessors<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(noexcept(std::declval<const ruvia::ContextRequest::RequestFormData::Object&>().at(std::string_view{})));
+static_assert(!std::is_default_constructible_v<ruvia::JsonValue>);
+static_assert(!std::is_constructible_v<ruvia::JsonValue, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::JsonValue, std::string_view, std::pmr::memory_resource*>);
+static_assert(!std::is_default_constructible_v<ruvia::JsonObject>);
+static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view, std::pmr::memory_resource*>);
+static_assert(!std::is_default_constructible_v<ruvia::FormObject>);
+static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view, std::pmr::memory_resource*>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(!HasStdStringNewResponseBody<ruvia::Context>);

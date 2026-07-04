@@ -25,13 +25,6 @@ public:
         kNull
     };
 
-    JsonValue() noexcept = default;
-
-    explicit JsonValue(
-        std::string_view body,
-        std::pmr::memory_resource* resource = nullptr) noexcept
-        : JsonValue(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
-
     [[nodiscard]] static std::optional<JsonValue> parse(
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept {
@@ -101,6 +94,8 @@ public:
     [[nodiscard]] std::optional<T> get(std::string_view field) const;
 
 private:
+    JsonValue() noexcept = default;
+
     JsonValue(
         detail::ResolvedPmrResourceTag,
         std::string_view body,
@@ -113,13 +108,6 @@ private:
 
 class JsonObject final {
 public:
-    JsonObject() noexcept = default;
-
-    explicit JsonObject(
-        std::string_view body,
-        std::pmr::memory_resource* resource = nullptr) noexcept
-        : JsonObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
-
     [[nodiscard]] static std::optional<JsonObject> parse(
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept {
@@ -170,7 +158,10 @@ public:
     }
 
 private:
+    friend class JsonValue;
     friend class RequestObject;
+
+    JsonObject() noexcept = default;
 
     JsonObject(
         detail::ResolvedPmrResourceTag,
@@ -187,18 +178,11 @@ template <typename T>
     if (!isObject()) {
         return std::nullopt;
     }
-    return JsonObject(body_, resource_).get<T>(field);
+    return JsonObject(detail::ResolvedPmrResourceTag{}, body_, resource_).get<T>(field);
 }
 
 class FormObject final {
 public:
-    FormObject() noexcept = default;
-
-    explicit FormObject(
-        std::string_view body,
-        std::pmr::memory_resource* resource = nullptr) noexcept
-        : FormObject(detail::ResolvedPmrResourceTag{}, body, detail::pmrResourceOrDefault(resource)) {}
-
     [[nodiscard]] static std::optional<FormObject> parse(
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept {
@@ -243,6 +227,8 @@ public:
 
 private:
     friend class RequestObject;
+
+    FormObject() noexcept = default;
 
     FormObject(
         detail::ResolvedPmrResourceTag,
