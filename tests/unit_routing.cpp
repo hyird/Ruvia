@@ -301,6 +301,17 @@ public:
     }
 };
 
+// Misuse: calls next() twice. The second invocation must be rejected rather than
+// re-entering the downstream chain (which would run the handler -- and its side
+// effects -- a second time).
+class ChainMwDoubleNext final : public ruvia::Middleware<ChainMwDoubleNext> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        co_await next();
+        co_await next();
+    }
+};
+
 ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
     g_chainOrder.push_back(0);
     co_return context.body("ok");
@@ -361,6 +372,26 @@ RUVIA_TEST(middleware_chain_short_circuits_without_next) {
     RUVIA_CHECK_EQ(body, std::string("stopped"));
     const std::vector<int> expected{9};
     RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
+    g_chainOrder.clear();
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwDoubleNext>(),
+    };
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    // The handler (which records 0) must run EXACTLY once: the first next() runs
+    // it, the second is detected and converted to an error instead of re-entering
+    // the chain. A regression to the double-invoke guard would run it twice.
+    std::size_t handlerRuns = 0;
+    for (const int step : g_chainOrder) {
+        if (step == 0) {
+            ++handlerRuns;
+        }
+    }
+    RUVIA_CHECK_EQ(handlerRuns, std::size_t{1});
+    // The response is the "next called multiple times" error, not the handler body.
+    RUVIA_CHECK(body != std::string("ok"));
 }
 
 namespace {
