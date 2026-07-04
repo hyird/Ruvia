@@ -37,6 +37,9 @@ namespace {
     if (ec != std::errc{} || ptr != codeStr.data() + codeStr.size() || statusCode < 100 || statusCode > 999) {
         throw std::runtime_error("http client: invalid response status code");
     }
+    if (statusCode == 101) {
+        throw std::runtime_error("http client: unsupported Switching Protocols response");
+    }
 
     return static_cast<std::uint16_t>(statusCode);
 }
