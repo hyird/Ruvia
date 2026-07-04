@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/HttpParseTypes.h"
 #include "ruvia/http/HttpRequest.h"
@@ -51,24 +50,6 @@ private:
     HttpRequest request_;
     std::size_t consumedBytes_{0};
 };
-
-namespace detail {
-
-struct HttpParseResultAccess final {
-    [[nodiscard]] static HttpParseResult make(
-        HttpParseStatus status,
-        HttpParseError error,
-        HttpRequest request,
-        std::size_t consumedBytes) noexcept {
-        return HttpParseResult(status, error, std::move(request), consumedBytes);
-    }
-
-    [[nodiscard]] static HttpRequest& request(HttpParseResult& result) noexcept {
-        return result.request_;
-    }
-};
-
-}  // namespace detail
 
 class HttpParser final {
 public:
