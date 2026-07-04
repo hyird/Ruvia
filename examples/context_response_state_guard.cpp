@@ -81,7 +81,7 @@ void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const r
 int main() {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request;
+    auto request = ruvia::detail::HttpRequestAccess::make();
 
     exerciseAppendHeaderNotDuplicated(memory, request);
     exerciseSetCookieNotDuplicated(memory, request);

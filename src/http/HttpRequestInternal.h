@@ -40,6 +40,10 @@ enum class RequestKnownHeader : std::uint8_t {
 struct HttpRequestAccess final {
     static constexpr std::size_t kCachedHeaderSlots = HttpRequest::kCachedHeaderSlots;
 
+    [[nodiscard]] static HttpRequest make() noexcept {
+        return HttpRequest();
+    }
+
     [[nodiscard]] static constexpr std::size_t knownHeaderSlot(RequestKnownHeader name) noexcept {
         const auto slot = static_cast<std::size_t>(name);
         return slot < kCachedHeaderSlots
