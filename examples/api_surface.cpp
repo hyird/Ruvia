@@ -772,6 +772,15 @@ concept HasWebSocketMessageCanonicalReadAccessors = requires(const T& message) {
 };
 
 template <typename T>
+concept HasWebSocketPublicCallbackConstructor = requires(
+    void* target,
+    typename T::Read read,
+    typename T::Write write,
+    typename T::Close close) {
+    T(target, read, write, close);
+};
+
+template <typename T>
 concept HasContextGetIfAlias = requires(T& context) {
     context.template getIf<std::string_view>(std::string_view{});
 };
@@ -1576,6 +1585,7 @@ static_assert(!HasWebSocketMessagePublicFields<ruvia::WebSocketMessage>);
 static_assert(HasWebSocketMessageCanonicalReadAccessors<ruvia::WebSocketMessage>);
 static_assert(!std::is_default_constructible_v<ruvia::WebSocketMessage>);
 static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocketOpcode, std::string_view>);
+static_assert(!HasWebSocketPublicCallbackConstructor<ruvia::WebSocket>);
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
 static_assert(!HasContextVarIfAlias<ruvia::Context>);
 static_assert(!HasContextVarHasAlias<ruvia::Context>);
