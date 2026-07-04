@@ -69,6 +69,12 @@ Task<void> Http2ServerSession<Stream>::writeData(
             co_return;
         }
         const auto availableWindow = http2AvailableSendWindow(connectionSendWindow_, stream);
+        if (availableWindow == 0) {
+            // Woken while the window is still exhausted (e.g. a WINDOW_UPDATE that
+            // did not lift a negative stream window): re-check and wait again
+            // rather than emitting an empty DATA frame.
+            continue;
+        }
         const auto chunk = std::min<std::size_t>(
             {bodySize - offset, availableWindow, peerSettings_.maxFrameSize()});
         const auto last = offset + chunk == bodySize;
