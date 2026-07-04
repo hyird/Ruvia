@@ -2,6 +2,7 @@
 
 #include "CookieSignature.h"
 #include "CookieValidation.h"
+#include "HttpImfFixdate.h"
 #include "HttpRequestInternal.h"
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
@@ -332,15 +333,12 @@ struct SetCookieSerialization final {
 #else
         gmtime_r(&expiresTime, &utc);
 #endif
-        const auto written = std::strftime(
-            serialization.expiresBuffer.data(),
-            serialization.expiresBuffer.size(),
-            "%a, %d %b %Y %H:%M:%S GMT",
-            &utc);
-        if (written == 0) {
-            throw std::invalid_argument("invalid cookie Expires");
-        }
-        serialization.expiresSize = written;
+        // Locale-independent IMF-fixdate (RFC 7231 7.1.1.1). std::strftime's
+        // %a/%b are locale-dependent and could emit a malformed HTTP date under
+        // a non-C locale; the shared formatter uses fixed English day/month
+        // tables, matching the Date-header and file-response paths.
+        serialization.expiresSize =
+            detail::httpWriteImfFixdate(serialization.expiresBuffer.data(), utc);
     }
     serialization.hasMaxAge = options.maxAge >= 0;
     serialization.maxAgeValue =
