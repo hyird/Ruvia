@@ -20,6 +20,23 @@ RUVIA_TEST(multipart_boundary_lone_dash_is_not_a_delimiter) {
     RUVIA_CHECK(httpFindMultipartBoundaryPrefix(body, "abc") != std::size_t{0});
 }
 
+RUVIA_TEST(multipart_boundary_prefix_of_longer_token_is_not_a_delimiter) {
+    using ruvia::detail::httpFindMultipartBoundaryLine;
+    using ruvia::detail::httpFindMultipartBoundaryPrefix;
+    // The boundary "abc" appearing as a strict PREFIX of a longer token ("abcXYZ")
+    // must not be mistaken for a delimiter: the byte after the boundary is a letter,
+    // which is neither the CRLF of a next-part delimiter nor the "--" of a close
+    // delimiter. This is the default-reject branch of httpMultipartBoundaryAt,
+    // distinct from the '-'-not-followed-by-'-' case above -- and the core defense
+    // against a field value that merely starts with the boundary string splitting
+    // the stream at the wrong place. The real delimiter is the later "\r\n--abc\r\n".
+    const std::string_view body = "\r\n--abcXYZ\r\n--abc\r\n";
+    RUVIA_CHECK_EQ(httpFindMultipartBoundaryPrefix(body, "abc"), body.find("\r\n--abc\r\n"));
+    // Same for the line form ("--" prefix, no leading CRLF): "--abcXYZ" is skipped.
+    const std::string_view line = "--abcXYZ\r\n--abc\r\n";
+    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine(line, "abc"), line.find("--abc\r\n", 1));
+}
+
 RUVIA_TEST(multipart_boundary_close_delimiter_still_matches) {
     using ruvia::detail::httpFindMultipartBoundaryLine;
     using ruvia::detail::httpFindMultipartBoundaryPrefix;
