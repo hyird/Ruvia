@@ -1053,6 +1053,17 @@ concept HasControllerMiddlewareDescriptorPublicCallbackConstructor = requires(
 };
 
 template <typename T>
+concept HasControllerStorePublicMutators = requires(T& store) {
+    store.reserve(std::size_t{1});
+    store.template emplace<int>();
+};
+
+template <typename T>
+concept HasControllerStorePublicSize = requires(const T& store) {
+    { store.size() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
 concept HasDbRowPublicMutators = requires(T& row, ruvia::DbField field) {
     row.reserve(std::size_t{1});
     row.push_back(std::move(field));
@@ -1636,6 +1647,8 @@ static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::Contr
 static_assert(!HasControllerRouteBuilderPublicRegisterStreamRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicCreateScope<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerMiddlewareDescriptorPublicCallbackConstructor<ruvia::detail::ControllerMiddlewareDescriptor>);
+static_assert(!HasControllerStorePublicMutators<ruvia::detail::ControllerStore>);
+static_assert(!HasControllerStorePublicSize<ruvia::detail::ControllerStore>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);

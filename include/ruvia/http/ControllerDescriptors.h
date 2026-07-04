@@ -42,6 +42,11 @@ public:
     ControllerStore(ControllerStore&&) noexcept;
     ControllerStore& operator=(ControllerStore&&) noexcept;
 
+private:
+    template <typename ControllerT>
+    friend void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes);
+    friend void runControllerRegistrars(Router& router, ControllerStore& controllerLifetimes);
+
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         auto* resource = registrationResource();
@@ -59,7 +64,6 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept;
 
-private:
     using Destroy = void (*)(void*, std::pmr::memory_resource*) noexcept;
 
     void addLifetime(void* target, Destroy destroy, std::pmr::memory_resource* resource);
