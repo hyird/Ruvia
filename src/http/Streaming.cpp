@@ -10,6 +10,7 @@ namespace ruvia {
 
 Task<void> SseWriter::writeSSE(const SseMessage& message) {
     auto& frame = detail::StreamingAccess::scratch(writer_);
+    frame.clear();
     if (!message.event.empty()) {
         frame.append("event: ");
         frame.append(message.event.data(), message.event.size());
