@@ -86,6 +86,24 @@ RUVIA_TEST(body_queue_hot_slot_reused_after_drain) {
     RUVIA_CHECK_EQ(queue.pop(), std::string_view("b"));
 }
 
+RUVIA_TEST(body_queue_enqueue_after_partial_drain_stays_fifo) {
+    // The hot slot is a fast path only for a queue that is otherwise empty. Once
+    // the overflow vector holds data, a new chunk must go there too -- even after
+    // the hot slot is drained and free -- or it would jump ahead of already-queued
+    // bytes and REORDER the request body. (hot_slot_reused covers the fully-drained
+    // case; this covers a hot-slot-free-but-overflow-non-empty state.)
+    Http2StreamBodyQueue queue(std::pmr::get_default_resource());
+    queue.enqueue("1");  // -> hot slot
+    queue.enqueue("2");  // -> overflow (hot slot occupied)
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("1"));  // drains the hot slot
+    RUVIA_CHECK(queue.hasOverflowQueuedChunk());          // "2" still queued in overflow
+
+    queue.enqueue("3");  // hot slot is free, but overflow is non-empty -> must overflow
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("2"));   // not "3"
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("3"));
+    RUVIA_CHECK(queue.pop().empty());
+}
+
 RUVIA_TEST(body_queue_waiter_set_and_take_is_one_shot) {
     Http2StreamBodyQueue queue(std::pmr::get_default_resource());
     RUVIA_CHECK(!queue.takeWaiter());  // no waiter registered initially
