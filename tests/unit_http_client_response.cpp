@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/client/HttpClientContentEncoding.h"
 #include "http/client/HttpClientRedirect.h"
 #include "http/client/HttpClientAccess.h"
 #include "http/client/HttpClientResponseParser.h"
@@ -233,3 +234,47 @@ RUVIA_TEST(http_client_duplicate_content_length_same_value_ok) {
 }
 
 #endif  // RUVIA_ENABLE_HTTP_CLIENT
+
+// --- Response Content-Encoding: parser vs. decode-path must not drift --------
+// The response content-coding decision is computed in TWO places: the parser
+// fills HttpClientResponseHead::contentCoding, and httpClientResponseContentCoding
+// re-derives the same decision from the stored headers for the actual decode.
+// They apply identical rules (a single known token decodes; identity, an unknown
+// coding, a comma list, or a repeated Content-Encoding header all yield kNone so
+// the body is delivered as received). Pin the two paths to agree so a fix to one
+// can never silently diverge from the other -- e.g. wrongly decoding a layered
+// or attacker-supplied multi-coding response.
+RUVIA_TEST(http_client_response_content_coding_paths_agree) {
+    using ruvia::detail::HttpContentCoding;
+    using ruvia::detail::httpClientResponseContentCoding;
+
+    struct Case final {
+        std::string_view headers;
+        HttpContentCoding expected;
+    };
+    const Case cases[] = {
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip", HttpContentCoding::kGzip},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: x-gzip", HttpContentCoding::kGzip},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: GZIP", HttpContentCoding::kGzip},   // case-insensitive
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: br", HttpContentCoding::kBrotli},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: zstd", HttpContentCoding::kZstd},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: identity", HttpContentCoding::kNone},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: deflate", HttpContentCoding::kNone},  // unsupported
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip, br", HttpContentCoding::kNone}, // a list is not decoded
+        // A repeated Content-Encoding header is a coding list split across lines:
+        // both paths must refuse it (kNone), never decode only the first layer.
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: br", HttpContentCoding::kNone},
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0", HttpContentCoding::kNone},         // header absent
+    };
+
+    for (const auto& c : cases) {
+        FetchResponse response =
+            ruvia::detail::FetchResponseAccess::make(std::pmr::get_default_resource());
+        const auto head = ruvia::detail::parseHttpClientResponseHead(
+            "GET", c.headers, response, std::pmr::get_default_resource());
+        const auto rederived = httpClientResponseContentCoding(response);
+        RUVIA_CHECK(head.contentCoding == c.expected);
+        RUVIA_CHECK(rederived == c.expected);
+        RUVIA_CHECK(head.contentCoding == rederived);  // the two paths agree
+    }
+}
