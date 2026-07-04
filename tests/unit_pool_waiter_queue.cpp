@@ -162,3 +162,39 @@ RUVIA_TEST(pool_waiter_queue_expire_deadlines_is_selective) {
     RUVIA_CHECK_EQ(index[1], std::size_t{3});
     RUVIA_CHECK(queue.empty());
 }
+
+RUVIA_TEST(pool_waiter_queue_expire_deadlines_interleaved_preserves_survivors) {
+    // Interleaved expired/surviving waiters: every expired one is failed and removed
+    // while the survivors keep their FIFO order and remain servable. Exercises detach-
+    // while-traversing across MULTIPLE removals, not just a single head expiry.
+    PoolWaiterQueue queue;
+    const auto now = Clock::now();
+    const auto past = now - std::chrono::seconds(1);
+    const auto future = now + std::chrono::hours(1);
+
+    bool ready[4] = {false, false, false, false};
+    bool timedOut[4] = {false, false, false, false};
+    std::size_t index[4] = {0, 0, 0, 0};
+    PoolWaiter waiters[4];
+    waiters[0].bind(ready[0], timedOut[0], index[0], past, {});    // expired
+    waiters[1].bind(ready[1], timedOut[1], index[1], future, {});  // survives
+    waiters[2].bind(ready[2], timedOut[2], index[2], past, {});    // expired
+    waiters[3].bind(ready[3], timedOut[3], index[3], future, {});  // survives
+    for (auto& w : waiters) {
+        queue.enqueue(w);
+    }
+
+    queue.expireDeadlines(now);
+
+    RUVIA_CHECK(timedOut[0]);   // both expired waiters are failed
+    RUVIA_CHECK(timedOut[2]);
+    RUVIA_CHECK(!timedOut[1]);  // survivors are untouched
+    RUVIA_CHECK(!timedOut[3]);
+
+    // The survivors keep FIFO order: 1 is served before 3.
+    RUVIA_CHECK(queue.resumeNext(10));
+    RUVIA_CHECK_EQ(index[1], std::size_t{10});
+    RUVIA_CHECK(queue.resumeNext(11));
+    RUVIA_CHECK_EQ(index[3], std::size_t{11});
+    RUVIA_CHECK(queue.empty());
+}
