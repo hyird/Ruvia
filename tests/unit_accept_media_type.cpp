@@ -54,6 +54,16 @@ RUVIA_TEST(media_range_specificity_ordering) {
     RUVIA_CHECK_EQ(httpMediaRangeSpecificity("bogus"), -1);  // not a media range
 }
 
+RUVIA_TEST(media_range_rejects_invalid_tokens) {
+    RUVIA_CHECK_EQ(httpMediaRangeSpecificity("text/"), -1);
+    RUVIA_CHECK_EQ(httpMediaRangeSpecificity("/json"), -1);
+    RUVIA_CHECK_EQ(httpMediaRangeSpecificity("*/json"), -1);
+    RUVIA_CHECK_EQ(httpMediaRangeSpecificity("text /html"), -1);
+
+    RUVIA_CHECK(!httpMediaRangeMatches("text/*", "text/"));
+    RUVIA_CHECK(!httpAcceptsMediaType("*/json, */*;q=0", "application/json"));
+}
+
 RUVIA_TEST(accepts_media_type_basic) {
     RUVIA_CHECK(httpAcceptsMediaType("", "text/html"));                // absent Accept -> accept anything
     RUVIA_CHECK(httpAcceptsMediaType("text/html", "text/html"));
