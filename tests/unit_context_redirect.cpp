@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <iterator>
 #include <string_view>
 
 #include "http/ContextInternal.h"
@@ -106,6 +107,34 @@ RUVIA_TEST(context_html_sets_html_content_type) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("<h1>hi</h1>"));
+}
+
+RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
+    // A route-parameter lookup returns an unencoded value verbatim via the
+    // zero-alloc fast path, and yields nullopt (not a false match or a crash)
+    // for a name that was never captured. The encoded-decode path is covered
+    // separately; this pins the two other branches of routeParam().
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const std::string_view names[] = {"slug", "id"};
+    const std::string_view values[] = {"hello", "42"};
+    RequestMemory memory(worker);
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(
+        memory, request, "/p/:slug/:id", names, values, std::size(names),
+        ruvia::HttpMethod::kGet, 0, 0);
+
+    const auto slug = context.req().param("slug");
+    RUVIA_CHECK(slug.has_value());
+    RUVIA_CHECK_EQ(*slug, std::string_view("hello"));
+    const auto id = context.req().param("id");
+    RUVIA_CHECK(id.has_value());
+    RUVIA_CHECK_EQ(*id, std::string_view("42"));
+    // An unknown parameter name is a clean miss.
+    RUVIA_CHECK(!context.req().param("missing").has_value());
+    // Neither single lookup materializes the full parameter table.
+    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
 }
 
 RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {
