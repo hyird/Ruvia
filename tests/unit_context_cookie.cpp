@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <asio/co_spawn.hpp>
+#include <asio/use_future.hpp>
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
@@ -77,6 +78,11 @@ asio::awaitable<void> cloneParseMultipart(
         fileType.assign(b->type().data(), b->type().size());
         fileData.assign(b->text().data(), b->text().size());
     }
+}
+
+asio::awaitable<void> cloneParseBodyDiscard(ruvia::Context& context) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    (void)clone.parseBody({});
 }
 
 }  // namespace
@@ -297,6 +303,34 @@ RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {
     RUVIA_CHECK_EQ(fileName, std::string("f.txt"));
     RUVIA_CHECK_EQ(fileType, std::string("text/plain"));
     RUVIA_CHECK_EQ(fileData, std::string("hello"));
+}
+
+RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "a=%zz");  // invalid percent-encoding
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // A malformed body must surface as an exception (the handler maps it to a 400)
+    // rather than a silently-empty form or a crash.
+    asio::io_context io;
+    auto future = asio::co_spawn(io, cloneParseBodyDiscard(context), asio::use_future);
+    io.run();
+    bool threw = false;
+    try {
+        future.get();
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
