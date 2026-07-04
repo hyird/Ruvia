@@ -48,6 +48,17 @@ RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case) {
     RUVIA_CHECK(quoted.has_value());
     RUVIA_CHECK_EQ(*quoted, std::string_view("\"a;b\""));
 
+    // A quoted-pair (\") does not close the quote, so a ';' after it stays
+    // inside the value (e.g. a multipart filename containing an escaped quote),
+    // and a real parameter following the quoted value is still parsed.
+    const std::string_view withPair = "form-data; name=\"a\\\"b;c\"; charset=utf-8";
+    const auto pairValue = httpFindSemicolonParameterQuotedIgnoreCase(withPair, "name");
+    RUVIA_CHECK(pairValue.has_value());
+    RUVIA_CHECK_EQ(*pairValue, std::string_view("\"a\\\"b;c\""));
+    const auto trailing = httpFindSemicolonParameterQuotedIgnoreCase(withPair, "charset");
+    RUVIA_CHECK(trailing.has_value());
+    RUVIA_CHECK_EQ(*trailing, std::string_view("utf-8"));
+
     // Absent parameter -> nullopt.
     RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase("text/html", "charset").has_value());
 }
