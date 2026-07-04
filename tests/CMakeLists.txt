@@ -126,7 +126,10 @@ endif()
 
 # The Redis RESP-protocol suite links appendRespCommand, gated the same way.
 if(RUVIA_ENABLE_REDIS)
-    target_sources(ruvia_unit_tests PRIVATE unit_redis_protocol.cpp)
+    target_sources(ruvia_unit_tests PRIVATE
+        unit_redis_api_surface.cpp
+        unit_redis_protocol.cpp
+    )
 endif()
 
 # The DB SQL-interpolation suite links interpolateSql (and libmariadb's escaper).

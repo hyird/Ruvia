@@ -5,7 +5,6 @@
 #include "RedisUtils.h"
 
 #include <chrono>
-#include <initializer_list>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -136,10 +135,6 @@ Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::span<const std::stri
         detail::emplaceRedisString(args, sha1);
     }
     return detail::redisBoolArrayCommand(pool_, std::move(args), resource_);
-}
-
-Task<std::pmr::vector<bool>> RedisHandle::scriptExists(std::initializer_list<std::string_view> sha1s) const {
-    return scriptExists(std::span<const std::string_view>(sha1s.begin(), sha1s.size()));
 }
 
 Task<std::optional<RedisKeyValue>> RedisHandle::blpop(

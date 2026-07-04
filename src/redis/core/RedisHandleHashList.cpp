@@ -21,16 +21,8 @@ Task<std::int64_t> RedisHandle::hset(std::string_view key, std::span<const std::
     return detail::redisIntegerCommand(pool_, detail::redisHsetFieldsArgs(key, fields, resource_), resource_);
 }
 
-Task<std::int64_t> RedisHandle::hset(std::string_view key, std::initializer_list<std::pair<std::string_view, std::string_view>> fields) const {
-    return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields.begin(), fields.size()));
-}
-
 Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::hmget(std::string_view key, std::span<const std::string_view> fields) const {
     return detail::redisOptionalStringArrayCommand(pool_, detail::redisCommandWithKeyFields("HMGET", key, fields, resource_), resource_);
-}
-
-Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::hmget(std::string_view key, std::initializer_list<std::string_view> fields) const {
-    return hmget(key, std::span<const std::string_view>(fields.begin(), fields.size()));
 }
 
 Task<std::pmr::vector<RedisKeyValue>> RedisHandle::hgetAll(std::string_view key) const {

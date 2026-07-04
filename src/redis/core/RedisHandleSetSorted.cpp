@@ -40,24 +40,12 @@ Task<std::pmr::vector<std::pmr::string>> RedisHandle::sinter(std::span<const std
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SINTER", keys, resource_), resource_);
 }
 
-Task<std::pmr::vector<std::pmr::string>> RedisHandle::sinter(std::initializer_list<std::string_view> keys) const {
-    return sinter(std::span<const std::string_view>(keys.begin(), keys.size()));
-}
-
 Task<std::pmr::vector<std::pmr::string>> RedisHandle::sunion(std::span<const std::string_view> keys) const {
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SUNION", keys, resource_), resource_);
 }
 
-Task<std::pmr::vector<std::pmr::string>> RedisHandle::sunion(std::initializer_list<std::string_view> keys) const {
-    return sunion(std::span<const std::string_view>(keys.begin(), keys.size()));
-}
-
 Task<std::pmr::vector<std::pmr::string>> RedisHandle::sdiff(std::span<const std::string_view> keys) const {
     return detail::redisStringArrayCommand(pool_, detail::redisCommandWithKeys("SDIFF", keys, resource_), resource_);
-}
-
-Task<std::pmr::vector<std::pmr::string>> RedisHandle::sdiff(std::initializer_list<std::string_view> keys) const {
-    return sdiff(std::span<const std::string_view>(keys.begin(), keys.size()));
 }
 
 Task<std::int64_t> RedisHandle::zadd(std::string_view key, double score, std::string_view member) const {
