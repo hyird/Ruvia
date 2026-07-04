@@ -50,6 +50,10 @@ RUVIA_TEST(multipart_boundary_from_content_type) {
                 HttpMultipartBoundaryStatus::kInvalidBoundary);
     RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data; charset=utf-8", boundary) ==
                 HttpMultipartBoundaryStatus::kInvalidBoundary);
+    // A present-but-empty boundary value is rejected too (a distinct branch from a
+    // missing parameter): an empty delimiter would match at every "--" in the body.
+    RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data; boundary=", boundary) ==
+                HttpMultipartBoundaryStatus::kInvalidBoundary);
 }
 
 // Part header (Content-Disposition / Content-Type) parsing and its error states.
