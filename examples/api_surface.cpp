@@ -523,6 +523,11 @@ concept HasFormObjectCanonicalAccessors = requires(const T& object) {
 };
 
 template <typename T>
+concept HasModelBodyAccessor = requires(const T& model) {
+    { model.body() } -> std::same_as<const ruvia::RequestObject&>;
+};
+
+template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
     { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
     { context.newResponse(body) } -> std::same_as<ruvia::HttpResponse>;
@@ -1440,6 +1445,19 @@ static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view, std:
 static_assert(!std::is_default_constructible_v<ruvia::FormObject>);
 static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view>);
 static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view, std::pmr::memory_resource*>);
+static_assert(!std::is_default_constructible_v<ruvia::RequestObject>);
+static_assert(!std::is_constructible_v<ruvia::RequestObject, ruvia::RequestObjectKind, std::string_view>);
+static_assert(!std::is_constructible_v<
+    ruvia::RequestObject,
+    ruvia::RequestObjectKind,
+    std::string_view,
+    std::pmr::memory_resource*>);
+static_assert(!std::is_constructible_v<
+    ruvia::RequestObject,
+    const ruvia::RequestNameValueList&,
+    std::pmr::memory_resource*>);
+static_assert(!HasModelBodyAccessor<ClonePayload>);
+static_assert(!std::is_constructible_v<ClonePayload, ruvia::RequestObject>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(!HasStdStringNewResponseBody<ruvia::Context>);

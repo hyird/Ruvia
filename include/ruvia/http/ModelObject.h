@@ -242,6 +242,8 @@ private:
 
 namespace detail {
 
+struct RequestObjectAccess;
+
 template <typename T>
 [[nodiscard]] std::optional<T> getDecodedFormField(
     const RequestNameValueList& fields,
@@ -283,25 +285,6 @@ enum class RequestObjectKind {
 
 class RequestObject final {
 public:
-    RequestObject() noexcept = default;
-
-    RequestObject(
-        RequestObjectKind kind,
-        std::string_view body,
-        std::pmr::memory_resource* resource = nullptr) noexcept
-        : RequestObject(
-              detail::ResolvedPmrResourceTag{},
-              kind,
-              body,
-              detail::pmrResourceOrDefault(resource)) {}
-
-    RequestObject(
-        const RequestNameValueList& fields,
-        std::pmr::memory_resource* resource = nullptr) noexcept
-        : kind_(RequestObjectKind::kFormFields),
-          fields_(&fields),
-          resource_(detail::pmrResourceOrDefault(resource)) {}
-
     RequestObject(const RequestObject& other)
         : kind_(other.kind_),
           body_(other.body_),
@@ -359,6 +342,27 @@ public:
     }
 
 private:
+    friend struct detail::RequestObjectAccess;
+
+    RequestObject() noexcept = default;
+
+    RequestObject(
+        RequestObjectKind kind,
+        std::string_view body,
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : RequestObject(
+              detail::ResolvedPmrResourceTag{},
+              kind,
+              body,
+              detail::pmrResourceOrDefault(resource)) {}
+
+    RequestObject(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource = nullptr) noexcept
+        : kind_(RequestObjectKind::kFormFields),
+          fields_(&fields),
+          resource_(detail::pmrResourceOrDefault(resource)) {}
+
     RequestObject(
         detail::ResolvedPmrResourceTag,
         RequestObjectKind kind,
@@ -373,5 +377,29 @@ private:
     const RequestNameValueList* fields_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
 };
+
+namespace detail {
+
+struct RequestObjectAccess final {
+    [[nodiscard]] static RequestObject makeJson(
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept {
+        return RequestObject(RequestObjectKind::kJson, body, resource);
+    }
+
+    [[nodiscard]] static RequestObject makeForm(
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept {
+        return RequestObject(RequestObjectKind::kForm, body, resource);
+    }
+
+    [[nodiscard]] static RequestObject makeFormFields(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource) noexcept {
+        return RequestObject(fields, resource);
+    }
+};
+
+}  // namespace detail
 
 }  // namespace ruvia
