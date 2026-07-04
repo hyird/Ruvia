@@ -37,17 +37,16 @@ constexpr void matchPatternClassEscape(char escape, char value, bool& matched) n
     }
 }
 
+// Matches `value` against the class body in [begin, end). Negation is NOT handled
+// here: a leading '[^' is stripped by the compiler, which records it on the atom's
+// negateClass flag (applied once in matchPatternAtom). Treating a leading '^' as
+// negation here as well would double-negate a class whose first literal member is
+// itself a caret (e.g. "[^^]"), so any '^' in the body is an ordinary member.
 [[nodiscard]] constexpr bool matchPatternClass(
     std::string_view pattern,
     std::size_t begin,
     std::size_t end,
     char value) noexcept {
-    bool negate = false;
-    if (begin < end && pattern[begin] == '^') {
-        negate = true;
-        ++begin;
-    }
-
     bool matched = false;
     for (std::size_t i = begin; i < end;) {
         char first = pattern[i++];
@@ -74,7 +73,7 @@ constexpr void matchPatternClassEscape(char escape, char value, bool& matched) n
         matched = matched || value == first;
     }
 
-    return negate ? !matched : matched;
+    return matched;
 }
 
 [[nodiscard]] constexpr bool matchPatternAtom(
