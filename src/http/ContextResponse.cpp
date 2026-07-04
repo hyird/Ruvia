@@ -681,7 +681,7 @@ HttpResponse Context::body(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    response.setBodyView(byteBodyView(body));
+    response.setBodyCopy(byteBodyView(body));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -691,7 +691,7 @@ HttpResponse Context::body(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    response.setBodyView(byteBodyView(body));
+    response.setBodyCopy(byteBodyView(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
 }
@@ -708,7 +708,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(std::span<const std::byte> body, ResponseInit init) const {
     HttpResponse response(resource());
-    response.setBodyView(byteBodyView(body));
+    response.setBodyCopy(byteBodyView(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
