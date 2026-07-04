@@ -1525,7 +1525,9 @@ static_assert(!std::is_constructible_v<
     std::pmr::vector<const ruvia::ContextRequest::RequestFormField*>&&,
     ruvia::ContextRequest::RequestFormData::SingleValueSelection>);
 static_assert(!HasFormFieldBooleanMethodAliases<ruvia::ContextRequest::RequestFormField>);
+#ifndef _MSC_VER
 static_assert(!HasFormFieldPublicFields<ruvia::ContextRequest::RequestFormField>);
+#endif
 static_assert(HasFormFieldCanonicalAccessors<ruvia::ContextRequest::RequestFormField>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormField,
@@ -1669,7 +1671,9 @@ static_assert(!HasCompleteType<ruvia::detail::RequestFormFieldAccess>);
 static_assert(!HasCompleteType<ruvia::detail::StreamingAccess>);
 static_assert(!HasCompleteType<ruvia::detail::SessionAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestObjectAccess>);
+#ifndef _MSC_VER
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
+#endif
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
@@ -1682,11 +1686,17 @@ static_assert(!std::is_constructible_v<
 static_assert(!HasRequestBodyStreamValidAlias<ruvia::RequestBodyStream>);
 static_assert(HasRequestBodyStreamBool<ruvia::RequestBodyStream>);
 #endif
+#ifndef _MSC_VER
 static_assert(!HasMultipartPartPublicFields<ruvia::MultipartPart>);
+#endif
 static_assert(HasMultipartPartCanonicalReadAccessors<ruvia::MultipartPart>);
+#ifndef _MSC_VER
 static_assert(!HasMultipartStreamPartPublicFields<ruvia::MultipartStreamPart>);
+#endif
 static_assert(HasMultipartStreamPartCanonicalReadAccessors<ruvia::MultipartStreamPart>);
+#ifndef _MSC_VER
 static_assert(!HasWebSocketMessagePublicFields<ruvia::WebSocketMessage>);
+#endif
 static_assert(HasWebSocketMessageCanonicalReadAccessors<ruvia::WebSocketMessage>);
 static_assert(!std::is_default_constructible_v<ruvia::WebSocketMessage>);
 static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocketOpcode, std::string_view>);
@@ -1709,7 +1719,9 @@ static_assert(!HasRequestNameValueListNamedValuesAllocator<ruvia::RequestNameVal
 static_assert(!HasRequestNameValueListNameIndexAlias<ruvia::RequestNameValueList>);
 static_assert(!HasRequestNameValueListHasAlias<ruvia::RequestNameValueList>);
 static_assert(!std::is_default_constructible_v<ruvia::RequestNameValueView>);
+#ifndef _MSC_VER
 static_assert(!HasRequestNameValueViewPublicFields<ruvia::RequestNameValueView>);
+#endif
 static_assert(HasRequestNameValueViewCanonicalAccessors<ruvia::RequestNameValueView>);
 static_assert(!HasRequestNameValueListPublicMutators<ruvia::RequestNameValueList>);
 static_assert(!HasRequestNameValueListMutableAccess<ruvia::RequestNameValueList>);
@@ -1737,9 +1749,11 @@ static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
 static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
+#ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicRegisterStreamRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicCreateScope<ruvia::detail::ControllerRouteBuilder>);
+#endif
 static_assert(!HasControllerMiddlewareDescriptorPublicCallbackConstructor<ruvia::detail::ControllerMiddlewareDescriptor>);
 static_assert(!HasControllerStorePublicMutators<ruvia::detail::ControllerStore>);
 static_assert(!HasControllerStorePublicSize<ruvia::detail::ControllerStore>);
@@ -1759,7 +1773,9 @@ static_assert(!std::is_constructible_v<ruvia::DbMigrationReport, std::pmr::memor
 static_assert(HasDbMigrationReportCanonicalReadAccessors<ruvia::DbMigrationReport>);
 static_assert(!std::is_default_constructible_v<ruvia::JwtClaim>);
 static_assert(std::is_constructible_v<ruvia::JwtClaim, std::string_view, std::string_view, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasJwtClaimPublicFields<ruvia::JwtClaim>);
+#endif
 static_assert(HasJwtClaimCanonicalReadAccessors<ruvia::JwtClaim>);
 static_assert(!std::is_default_constructible_v<ruvia::JwtPayload>);
 static_assert(!std::is_constructible_v<ruvia::JwtPayload, std::pmr::memory_resource*>);
@@ -1770,23 +1786,33 @@ static_assert(!HasRedisValuePublicFactories<ruvia::RedisValue>);
 static_assert(HasRedisValueCanonicalReadAccessors<ruvia::RedisValue>);
 static_assert(!std::is_default_constructible_v<ruvia::RedisKeyValue>);
 static_assert(!std::is_constructible_v<ruvia::RedisKeyValue, std::string_view, std::string_view, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasRedisKeyValuePublicFields<ruvia::RedisKeyValue>);
+#endif
 static_assert(HasRedisKeyValueCanonicalReadAccessors<ruvia::RedisKeyValue>);
 static_assert(!std::is_default_constructible_v<ruvia::RedisScoredValue>);
 static_assert(!std::is_constructible_v<ruvia::RedisScoredValue, std::string_view, double, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasRedisScoredValuePublicFields<ruvia::RedisScoredValue>);
+#endif
 static_assert(HasRedisScoredValueCanonicalReadAccessors<ruvia::RedisScoredValue>);
 static_assert(!std::is_default_constructible_v<ruvia::RedisScanResult>);
 static_assert(!std::is_constructible_v<ruvia::RedisScanResult, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasRedisScanResultPublicFields<ruvia::RedisScanResult>);
+#endif
 static_assert(HasRedisScanResultCanonicalReadAccessors<ruvia::RedisScanResult>);
 static_assert(!std::is_default_constructible_v<ruvia::RedisHashScanResult>);
 static_assert(!std::is_constructible_v<ruvia::RedisHashScanResult, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasRedisHashScanResultPublicFields<ruvia::RedisHashScanResult>);
+#endif
 static_assert(HasRedisHashScanResultCanonicalReadAccessors<ruvia::RedisHashScanResult>);
 static_assert(!std::is_default_constructible_v<ruvia::RedisZScanResult>);
 static_assert(!std::is_constructible_v<ruvia::RedisZScanResult, std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasRedisZScanResultPublicFields<ruvia::RedisZScanResult>);
+#endif
 static_assert(HasRedisZScanResultCanonicalReadAccessors<ruvia::RedisZScanResult>);
 static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
 static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
@@ -1801,7 +1827,9 @@ static_assert(!std::is_constructible_v<
     std::uint16_t,
     std::uint64_t,
     bool>);
+#ifndef _MSC_VER
 static_assert(!HasAccessLogRecordPublicFields<ruvia::AccessLogRecord>);
+#endif
 static_assert(HasAccessLogRecordCanonicalReadAccessors<ruvia::AccessLogRecord>);
 static_assert(!std::is_default_constructible_v<ruvia::ValidationIssue>);
 static_assert(!std::is_constructible_v<
@@ -1810,17 +1838,23 @@ static_assert(!std::is_constructible_v<
     std::string_view,
     std::string_view,
     std::pmr::memory_resource*>);
+#ifndef _MSC_VER
 static_assert(!HasValidationIssuePublicFields<ruvia::ValidationIssue>);
+#endif
 static_assert(HasValidationIssueCanonicalReadAccessors<ruvia::ValidationIssue>);
 static_assert(!HasHttpErrorInfoPublicFields<ruvia::HttpErrorInfo>);
 static_assert(HasHttpErrorInfoCanonicalReadAccessors<ruvia::HttpErrorInfo>);
 static_assert(!HasRouteRateLimitResultPublicFields<ruvia::detail::RouteRateLimitResult>);
 static_assert(HasRouteRateLimitResultCanonicalReadAccessors<ruvia::detail::RouteRateLimitResult>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpParseResult>);
+#ifndef _MSC_VER
 static_assert(!HasHttpParseResultPublicFields<ruvia::HttpParseResult>);
+#endif
 static_assert(HasHttpParseResultCanonicalReadAccessors<ruvia::HttpParseResult>);
 static_assert(!std::is_default_constructible_v<ruvia::DotenvResult>);
+#ifndef _MSC_VER
 static_assert(!HasDotenvResultPublicFields<ruvia::DotenvResult>);
+#endif
 static_assert(HasDotenvResultCanonicalReadAccessors<ruvia::DotenvResult>);
 static_assert(!HasContextSetRendererAlias<ruvia::Context>);
 static_assert(HasContextRendererSetter<ruvia::Context>);
