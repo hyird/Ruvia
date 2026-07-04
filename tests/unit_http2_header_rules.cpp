@@ -39,6 +39,7 @@ RUVIA_TEST(http2_forbidden_upgraded_request_headers) {
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("upgrade"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("HTTP2-Settings"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Keep-Alive"));
+    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Proxy-Connection"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TRANSFER-ENCODING"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TE"));
     RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Trailer"));
@@ -53,8 +54,11 @@ RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(!http2IsValidRegularHeader("", "value"));
     // An uppercase name is malformed.
     RUVIA_CHECK(!http2IsValidRegularHeader("Content-Type", "text/html"));
-    // Connection-specific headers are forbidden.
+    // Every connection-specific header is forbidden (RFC 7540 8.1.2.2).
     RUVIA_CHECK(!http2IsValidRegularHeader("connection", "close"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("keep-alive", "timeout=5"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("proxy-connection", "keep-alive"));
+    RUVIA_CHECK(!http2IsValidRegularHeader("upgrade", "websocket"));
     RUVIA_CHECK(!http2IsValidRegularHeader("transfer-encoding", "chunked"));
     // TE may carry only "trailers".
     RUVIA_CHECK(http2IsValidRegularHeader("te", "trailers"));
