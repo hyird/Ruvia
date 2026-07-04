@@ -28,9 +28,31 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
 }
 
 RUVIA_TEST(validate_server_options_rejects_negative_timeout) {
-    HttpServerOptions options;
-    options.idleTimeout = std::chrono::milliseconds(-1);
-    RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    // Every connection timeout feeds the same non-negative fold. Each one bounds
+    // how long a slow client can hold a connection (a slowloris defense), so a
+    // negative value in ANY of them must be rejected -- checking only idleTimeout
+    // would miss a field dropped from the fold call.
+    using std::chrono::milliseconds;
+    {
+        HttpServerOptions options;
+        options.idleTimeout = milliseconds(-1);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.headerTimeout = milliseconds(-1);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.bodyTimeout = milliseconds(-1);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.writeTimeout = milliseconds(-1);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
 }
 
 RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
