@@ -1,5 +1,6 @@
 #include "RedisProtocol.h"
 
+#include "RedisTypesAccess.h"
 #include "RedisUtils.h"
 
 #include <hiredis/hiredis.h>
@@ -85,20 +86,20 @@ RedisValue hiredisReplyToValue(
 #ifdef REDIS_REPLY_VERB
         case REDIS_REPLY_VERB:
 #endif
-            return RedisValue::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
         case REDIS_REPLY_ERROR:
-            return RedisValue::errorValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::errorValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
         case REDIS_REPLY_INTEGER:
-            return RedisValue::integerValue(static_cast<std::int64_t>(reply.integer), resource);
+            return RedisTypesAccess::integerValue(static_cast<std::int64_t>(reply.integer), resource);
         case REDIS_REPLY_NIL:
-            return RedisValue::nullValue(resource);
+            return RedisTypesAccess::nullValue(resource);
 #ifdef REDIS_REPLY_DOUBLE
         case REDIS_REPLY_DOUBLE:
-            return RedisValue::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
+            return RedisTypesAccess::stringValue(std::string_view(reply.str == nullptr ? "" : reply.str, reply.len), resource);
 #endif
 #ifdef REDIS_REPLY_BOOL
         case REDIS_REPLY_BOOL:
-            return RedisValue::integerValue(reply.integer == 0 ? 0 : 1, resource);
+            return RedisTypesAccess::integerValue(reply.integer == 0 ? 0 : 1, resource);
 #endif
         case REDIS_REPLY_ARRAY:
 #ifdef REDIS_REPLY_MAP
@@ -125,7 +126,7 @@ RedisValue hiredisReplyToValue(
                 }
                 values.emplace_back(hiredisReplyToValue(*reply.element[i], depth + 1, maxDepth, resource));
             }
-            return RedisValue::arrayValue(std::move(values), resource);
+            return RedisTypesAccess::arrayValue(std::move(values), resource);
         }
         default:
             throw RedisError(RedisError::Code::kProtocolError, "unsupported redis reply type");

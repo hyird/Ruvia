@@ -5,15 +5,12 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/memory/PmrResource.h"
-
-struct redisReply;
 
 namespace ruvia {
 
@@ -62,25 +59,7 @@ struct RedisScanOptions {
 
 namespace detail {
 
-[[nodiscard]] std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource,
-    std::string_view context);
-[[nodiscard]] std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource);
-[[nodiscard]] std::optional<RedisKeyValue> parseRedisBlockingPopReply(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource);
-[[nodiscard]] RedisScanResult parseRedisScanResult(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource);
-[[nodiscard]] RedisHashScanResult parseRedisHashScanResult(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource);
-[[nodiscard]] RedisZScanResult parseRedisZScanResult(
-    const RedisValue& value,
-    std::pmr::memory_resource* resource);
+struct RedisTypesAccess;
 
 }  // namespace detail
 
@@ -100,16 +79,7 @@ public:
     }
 
 private:
-    friend std::pmr::vector<RedisKeyValue> detail::parseRedisKeyValueArray(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource,
-        std::string_view context);
-    friend std::optional<RedisKeyValue> detail::parseRedisBlockingPopReply(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
-    friend RedisHashScanResult detail::parseRedisHashScanResult(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     RedisKeyValue(std::string_view key, std::string_view value, std::pmr::memory_resource* resource)
         : RedisKeyValue(key, value, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
@@ -142,12 +112,7 @@ public:
     }
 
 private:
-    friend std::pmr::vector<RedisScoredValue> detail::parseRedisScoredArray(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
-    friend RedisZScanResult detail::parseRedisZScanResult(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     RedisScoredValue(std::string_view value, double score, std::pmr::memory_resource* resource)
         : RedisScoredValue(value, score, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
@@ -175,9 +140,7 @@ public:
     }
 
 private:
-    friend RedisScanResult detail::parseRedisScanResult(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     explicit RedisScanResult(std::pmr::memory_resource* resource)
         : values_(detail::pmrResourceOrDefault(resource)) {}
@@ -197,9 +160,7 @@ public:
     }
 
 private:
-    friend RedisHashScanResult detail::parseRedisHashScanResult(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     explicit RedisHashScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
@@ -219,9 +180,7 @@ public:
     }
 
 private:
-    friend RedisZScanResult detail::parseRedisZScanResult(
-        const RedisValue& value,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     explicit RedisZScanResult(std::pmr::memory_resource* resource)
         : entries_(detail::pmrResourceOrDefault(resource)) {}
@@ -241,11 +200,6 @@ struct RedisDefinition final {
 
 class RedisPool;
 class RedisRegistry;
-[[nodiscard]] RedisValue hiredisReplyToValue(
-    const ::redisReply& reply,
-    std::size_t depth,
-    std::size_t maxDepth,
-    std::pmr::memory_resource* resource);
 
 }  // namespace detail
 
@@ -297,11 +251,7 @@ public:
 
 private:
     friend class detail::RedisPool;
-    friend RedisValue detail::hiredisReplyToValue(
-        const ::redisReply& reply,
-        std::size_t depth,
-        std::size_t maxDepth,
-        std::pmr::memory_resource* resource);
+    friend struct detail::RedisTypesAccess;
 
     explicit RedisValue(std::pmr::memory_resource* resource = nullptr);
     [[nodiscard]] static RedisValue nullValue(std::pmr::memory_resource* resource);

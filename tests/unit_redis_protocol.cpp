@@ -12,7 +12,9 @@
 #include <hiredis/hiredis.h>
 
 #include "redis/core/RedisConfigValidation.h"
+#include "redis/core/RedisHandleHelpers.h"
 #include "redis/core/RedisProtocol.h"
+#include "redis/core/RedisTypesAccess.h"
 #include "ruvia/redis/RedisTypes.h"
 
 namespace {
@@ -20,6 +22,7 @@ namespace {
 using ruvia::RedisValue;
 using ruvia::detail::appendRespCommand;
 using ruvia::detail::hiredisReplyToValue;
+using ruvia::detail::RedisTypesAccess;
 using ruvia::detail::parseRedisBlockingPopReply;
 using ruvia::detail::parseRedisHashScanResult;
 using ruvia::detail::parseRedisKeyValueArray;
@@ -35,8 +38,7 @@ redisReply nilReply() {
 }
 
 RedisValue toNilValue() {
-    const auto reply = nilReply();
-    return hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource());
+    return RedisTypesAccess::nullValue(std::pmr::get_default_resource());
 }
 
 // Build a bulk-string hiredis reply pointing at `text` (borrowed, must outlive use).

@@ -1709,6 +1709,7 @@ static_assert(!HasCompleteType<ruvia::detail::StreamingAccess>);
 static_assert(!HasCompleteType<ruvia::detail::SessionAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestObjectAccess>);
 static_assert(!HasCompleteType<ruvia::detail::DbValueAccess>);
+static_assert(!HasCompleteType<ruvia::detail::RedisTypesAccess>);
 #ifndef _MSC_VER
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 #endif
