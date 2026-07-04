@@ -1272,6 +1272,16 @@ concept HasAppGlobalRateLimitTupleSetter = requires(T& app) {
 };
 
 template <typename T>
+concept HasAppDocumentRootConfigSetter = requires(T& app) {
+    { app.setDocumentRoot(ruvia::DocumentRootConfig{}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppDocumentRootPathSetter = requires(T& app, const std::filesystem::path& root) {
+    { app.setDocumentRoot(root) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
 concept HasAccessLogRecordPublicFields = requires(T& record) {
     record.method;
     record.path;
@@ -1768,6 +1778,8 @@ static_assert(!HasRedisZScanResultPublicFields<ruvia::RedisZScanResult>);
 static_assert(HasRedisZScanResultCanonicalReadAccessors<ruvia::RedisZScanResult>);
 static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
 static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
+static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
+static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<
     ruvia::AccessLogRecord,
