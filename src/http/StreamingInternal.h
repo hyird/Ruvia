@@ -40,6 +40,10 @@ struct StreamingAccess final {
             target, write, end, sleep, bindContext, scratch, addTrailer, committed, aborted);
     }
 
+    [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {
+        return SseWriter(writer);
+    }
+
     static void bindContext(ResponseStreamWriter& writer, Context& context) noexcept {
         writer.bindContext(context);
     }

@@ -87,3 +87,61 @@ RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk
     RUVIA_CHECK_EQ(sink.writes[0], std::string("first\n"));
     RUVIA_CHECK_EQ(sink.writes[1], std::string("second\n"));
 }
+
+namespace {
+
+ruvia::Task<void> writeOneSse(ruvia::SseWriter& sse, ruvia::SseMessage message) {
+    co_await sse.writeSSE(message);
+}
+
+}  // namespace
+
+RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+    auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(writeOneSse(
+            sse, ruvia::SseMessage{.data = "line1\nline2", .event = "update", .id = "7",
+                                   .retry = 3000})),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{1});
+    // Header fields, one "data:" line per input line, then the blank line that ends
+    // the event. An embedded newline in data is split, never emitted raw.
+    RUVIA_CHECK_EQ(
+        sink.writes[0],
+        std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
+}
+
+RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+    auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
+
+    const auto throwsFor = [&](ruvia::SseMessage message) {
+        asio::io_context ctx(1);
+        auto future = asio::co_spawn(
+            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+        ctx.run();
+        try {
+            future.get();
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    // A CR or LF in event/id would inject additional SSE fields or a new event, so
+    // it is rejected -- matching how the data field is line-split rather than raw.
+    RUVIA_CHECK(throwsFor(ruvia::SseMessage{.data = "x", .event = "a\nb"}));
+    RUVIA_CHECK(throwsFor(ruvia::SseMessage{.data = "x", .event = "a\rb"}));
+    RUVIA_CHECK(throwsFor(ruvia::SseMessage{.id = "1\n2"}));
+    // A rejected message emits nothing.
+    RUVIA_CHECK(sink.writes.empty());
+}
