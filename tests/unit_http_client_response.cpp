@@ -200,6 +200,10 @@ RUVIA_TEST(http_client_rejects_bad_status_code) {
     RUVIA_CHECK(parseThrows("GET", "HTTP/1.1 abc Bad"));
 }
 
+RUVIA_TEST(http_client_rejects_switching_protocols_status) {
+    RUVIA_CHECK(parseThrows("GET", "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket"));
+}
+
 RUVIA_TEST(http_client_rejects_bad_content_length) {
     RUVIA_CHECK(parseThrows("GET", "HTTP/1.1 200 OK\r\nContent-Length: notanumber"));
 }
