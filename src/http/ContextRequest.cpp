@@ -5,6 +5,7 @@
 #include "HeaderAcceptUtils.h"
 #include "HttpCommonInternal.h"
 #include "HttpRequestInternal.h"
+#include "ContextRequestInternal.h"
 #include "MultipartParsing.h"
 #include "RequestBodyDecoding.h"
 #include "RequestBodyLoader.h"
