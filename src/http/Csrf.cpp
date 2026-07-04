@@ -7,10 +7,11 @@
 
 #include <openssl/rand.h>
 
+#include "ruvia/http/detail/Hex.h"
+
 namespace ruvia::detail {
 
 std::string_view generateCsrfToken(std::span<char> buffer) noexcept {
-    static constexpr char kHex[] = "0123456789abcdef";
     constexpr std::size_t kRandomBytes = 24;  // 24 bytes -> 48 hex characters
     if (buffer.size() < kRandomBytes * 2) {
         return {};
@@ -20,8 +21,8 @@ std::string_view generateCsrfToken(std::span<char> buffer) noexcept {
         return {};
     }
     for (std::size_t i = 0; i < kRandomBytes; ++i) {
-        buffer[i * 2] = kHex[(raw[i] >> 4) & 0x0F];
-        buffer[i * 2 + 1] = kHex[raw[i] & 0x0F];
+        buffer[i * 2] = lowerHexDigit(raw[i] >> 4);
+        buffer[i * 2 + 1] = lowerHexDigit(raw[i]);
     }
     return std::string_view(buffer.data(), kRandomBytes * 2);
 }
