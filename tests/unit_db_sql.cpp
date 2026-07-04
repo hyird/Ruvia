@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "db/core/DbMigrationValidation.h"
 #include "db/core/DbSql.h"
 #include "ruvia/db/DbTypes.h"
 
@@ -76,4 +77,45 @@ RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     RUVIA_CHECK_EQ(interp(mysql, "SELECT 1", {}), std::string("SELECT 1"));
 
     mysql_close(&mysql);
+}
+
+RUVIA_TEST(db_migration_table_name_rejects_injection) {
+    using ruvia::detail::isValidMigrationTableName;
+    // Valid SQL identifiers: letters, digits, underscores.
+    RUVIA_CHECK(isValidMigrationTableName("ruvia_schema_migrations"));
+    RUVIA_CHECK(isValidMigrationTableName("t1"));
+    RUVIA_CHECK(isValidMigrationTableName("_private"));
+    RUVIA_CHECK(isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    // The name is a non-parameterizable identifier, so anything that could break
+    // out of the backtick quoting or restructure the SQL is rejected.
+    RUVIA_CHECK(!isValidMigrationTableName(""));
+    RUVIA_CHECK(!isValidMigrationTableName("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+    RUVIA_CHECK(!isValidMigrationTableName("has space"));
+    RUVIA_CHECK(!isValidMigrationTableName("has-hyphen"));
+    RUVIA_CHECK(!isValidMigrationTableName("a.b"));
+    RUVIA_CHECK(!isValidMigrationTableName("quote'"));
+    RUVIA_CHECK(!isValidMigrationTableName("tbl`; DROP TABLE users;--"));
+}
+
+RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
+    using ruvia::DbMigration;
+    using ruvia::detail::validateMigrationList;
+    const DbMigration ok[] = {
+        {"001_init", "CREATE TABLE a(id INT)"},
+        {"002_more", "ALTER TABLE a ADD b INT"}};
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>(ok, 2)); }));
+    // An empty list is valid: nothing to apply.
+    RUVIA_CHECK(!throwsOn([&] { validateMigrationList(std::span<const DbMigration>()); }));
+    // Duplicate ids would apply the wrong migration -> rejected.
+    const DbMigration dup[] = {{"001", "SQL1"}, {"001", "SQL2"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(dup, 2)); }));
+    // Empty id and empty SQL are rejected.
+    const DbMigration emptyId[] = {{"", "SQL"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptyId, 1)); }));
+    const DbMigration emptySql[] = {{"001", ""}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(emptySql, 1)); }));
+    // An id longer than the 190-byte schema column is rejected.
+    const std::string longId(191, 'x');
+    const DbMigration tooLong[] = {{longId, "SQL"}};
+    RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tooLong, 1)); }));
 }
