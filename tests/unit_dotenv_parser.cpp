@@ -126,8 +126,10 @@ RUVIA_TEST(dotenv_double_quote_unknown_escape_drops_backslash) {
 }
 
 RUVIA_TEST(dotenv_rejects_invalid_key) {
-    // A key starting with a digit, or containing a non-[A-Za-z0-9_] byte, is invalid.
-    for (const std::string_view content : {"1KEY=x\n", "KE-Y=x\n", "K Y=x\n"}) {
+    // A key starting with a digit, or containing a non-[A-Za-z0-9_] byte -- including
+    // a high, non-ASCII byte, since key validation is ASCII-only and locale-independent
+    // -- is invalid.
+    for (const std::string_view content : {"1KEY=x\n", "KE-Y=x\n", "K Y=x\n", "K\xC3\x89Y=x\n"}) {
         const auto path = writeTempEnv("ruvia_dotenv_badkey.env", content);
         bool threw = false;
         try {
