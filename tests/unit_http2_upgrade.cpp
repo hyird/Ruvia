@@ -31,6 +31,24 @@ RUVIA_TEST(http2_base64url_decode_valid_settings) {
     RUVIA_CHECK_EQ(static_cast<unsigned char>(decoded[3]), 0x01U);
 }
 
+RUVIA_TEST(http2_base64url_decode_multi_entry_settings) {
+    bool ok = false;
+    // Two 6-byte SETTINGS entries (12 bytes, output length a multiple of six):
+    //   {00 04 00 01 00 00}  INITIAL_WINDOW_SIZE = 0x00010000
+    //   {00 03 00 00 00 64}  MAX_CONCURRENT_STREAMS = 100
+    // The single-entry vector only covers one 4-char group's worth of the decode
+    // loop; a real HTTP2-Settings header carries several entries, so exercise the
+    // loop across multiple groups and confirm the %6 length gate still passes.
+    const auto decoded = decode("AAQAAQAAAAMAAABk", ok);
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(decoded.size(), std::size_t{12});
+    const unsigned char expected[] = {0x00, 0x04, 0x00, 0x01, 0x00, 0x00,
+                                      0x00, 0x03, 0x00, 0x00, 0x00, 0x64};
+    for (std::size_t i = 0; i < decoded.size(); ++i) {
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(decoded[i]), expected[i]);
+    }
+}
+
 RUVIA_TEST(http2_base64url_decode_rejects_bad_input) {
     bool ok = true;
     // Standard-base64 characters '+' and '/' are not valid base64url.
