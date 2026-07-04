@@ -95,7 +95,7 @@ public:
                 if (c.req().raw().isSecure()) {
                     setCookie.append("; Secure");
                 }
-                response.setHeader("Set-Cookie", setCookie);
+                response.header("Set-Cookie", setCookie);
             }
             std::pmr::string key(c.resource());
             key.append("sess:");

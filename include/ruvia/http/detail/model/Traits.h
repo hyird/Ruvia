@@ -5,11 +5,11 @@
 #include <type_traits>
 #include <vector>
 
+#include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/json/JsonLimits.h"
 #include "ruvia/memory/PmrResource.h"
 
-// Internal layer: included by ruvia/http/Model.h after model field types are
-// declared. Users should include ruvia/http/Model.h instead of this file.
+// Internal layer. Users should include ruvia/http/Model.h instead of this file.
 
 namespace ruvia::detail {
 

@@ -23,9 +23,29 @@ struct RouteRateLimitOptions final {
     RateLimitRule rule;
 };
 
-struct RouteRateLimitResult final {
-    bool allowed{true};
-    std::int64_t resetAfterMs{1};
+class RouteRateLimitResult final {
+public:
+    [[nodiscard]] bool allowed() const noexcept {
+        return allowed_;
+    }
+
+    [[nodiscard]] std::chrono::milliseconds resetAfter() const noexcept {
+        return std::chrono::milliseconds(resetAfterMs_);
+    }
+
+private:
+    friend RouteRateLimitResult checkRouteRateLimit(
+        Context& context,
+        const RouteRateLimitOptions& options) noexcept;
+
+    constexpr RouteRateLimitResult() noexcept = default;
+
+    constexpr RouteRateLimitResult(bool allowed, std::int64_t resetAfterMs) noexcept
+        : allowed_(allowed),
+          resetAfterMs_(resetAfterMs) {}
+
+    bool allowed_{true};
+    std::int64_t resetAfterMs_{1};
 };
 
 [[nodiscard]] RouteRateLimitResult checkRouteRateLimit(
@@ -45,7 +65,7 @@ inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std
     char buffer[24];
     const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
     if (ec == std::errc{}) {
-        response.setHeader(name, std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
+        response.header(name, std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
     }
 }
 
@@ -67,12 +87,12 @@ public:
             "route rate limit window must be greater than 0ms");
 
         const auto check = detail::checkRouteRateLimit(context, routeRateLimitOptions());
-        if (!check.allowed) {
+        if (!check.allowed()) {
             auto response = context.error(429, "too_many_requests", "rate limit exceeded");
-            detail::setUnsignedHeader(response, "Retry-After", detail::retryAfterSeconds(check.resetAfterMs));
+            detail::setUnsignedHeader(response, "Retry-After", detail::retryAfterSeconds(check.resetAfter().count()));
             detail::setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
             detail::setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
-            detail::setUnsignedHeader(response, "X-RateLimit-Reset", detail::retryAfterSeconds(check.resetAfterMs));
+            detail::setUnsignedHeader(response, "X-RateLimit-Reset", detail::retryAfterSeconds(check.resetAfter().count()));
             context.res(std::move(response));
             co_return;
         }

@@ -19,10 +19,8 @@
 
 namespace ruvia {
 
-struct ValidationIssue final {
-    explicit ValidationIssue(std::pmr::memory_resource* resource = nullptr)
-        : ValidationIssue(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
-
+class ValidationIssue final {
+public:
     ValidationIssue(
         std::string_view fieldName,
         std::string_view codeValue,
@@ -35,15 +33,23 @@ struct ValidationIssue final {
               messageValue,
               detail::pmrResourceOrDefault(resource)) {}
 
-    std::pmr::string field;
-    std::pmr::string code;
-    std::pmr::string message;
+    [[nodiscard]] std::string_view field() const noexcept {
+        return field_;
+    }
+
+    [[nodiscard]] std::string_view code() const noexcept {
+        return code_;
+    }
+
+    [[nodiscard]] std::string_view message() const noexcept {
+        return message_;
+    }
 
 private:
     ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-        : field(resource),
-          code(resource),
-          message(resource) {}
+        : field_(resource),
+          code_(resource),
+          message_(resource) {}
 
     ValidationIssue(
         detail::ResolvedPmrResourceTag,
@@ -51,9 +57,13 @@ private:
         std::string_view codeValue,
         std::string_view messageValue,
         std::pmr::memory_resource* resource)
-        : field(fieldName, resource),
-          code(codeValue, resource),
-          message(messageValue, resource) {}
+        : field_(fieldName, resource),
+          code_(codeValue, resource),
+          message_(messageValue, resource) {}
+
+    std::pmr::string field_;
+    std::pmr::string code_;
+    std::pmr::string message_;
 };
 
 namespace detail {
@@ -87,7 +97,7 @@ public:
           detailsJson_(resource_) {
         issues_.reserve(issues.size());
         for (const auto& issue : issues) {
-            issues_.emplace_back(issue.field, issue.code, issue.message, resource_);
+            issues_.emplace_back(issue.field(), issue.code(), issue.message(), resource_);
         }
         buildDetailsJson();
     }
@@ -116,11 +126,7 @@ public:
     }
 
     [[nodiscard]] HttpErrorInfo info() const noexcept {
-        return HttpErrorInfo{
-            .statusCode = statusCode_,
-            .code = code_,
-            .message = message_,
-            .detailsJson = detailsJson_};
+        return HttpErrorInfo(statusCode_, code_, message_, {}, detailsJson_);
     }
 
 private:
@@ -133,9 +139,9 @@ private:
                 ++size;
             }
             sizeFirst = false;
-            size += std::string_view("{\"field\":").size() + detail::jsonStringSizeHint(issue.field);
-            size += std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(issue.code);
-            size += std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(issue.message);
+            size += std::string_view("{\"field\":").size() + detail::jsonStringSizeHint(issue.field());
+            size += std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(issue.code());
+            size += std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(issue.message());
             size += 1;
         }
         detailsJson_.reserve(size);
@@ -147,11 +153,11 @@ private:
             }
             first = false;
             detailsJson_.append("{\"field\":");
-            detail::appendJsonString(detailsJson_, issue.field);
+            detail::appendJsonString(detailsJson_, issue.field());
             detailsJson_.append(",\"code\":");
-            detail::appendJsonString(detailsJson_, issue.code);
+            detail::appendJsonString(detailsJson_, issue.code());
             detailsJson_.append(",\"message\":");
-            detail::appendJsonString(detailsJson_, issue.message);
+            detail::appendJsonString(detailsJson_, issue.message());
             detailsJson_.push_back('}');
         }
         detailsJson_.push_back(']');
@@ -314,7 +320,7 @@ private:
         const auto ruviaValue = body.field(); \
         rules.validate( \
             body.template ruviaFieldState<#field>(), \
-            ruviaValue.optional(), \
+            ruviaValue, \
             ruviaPath, \
             validator); \
     }

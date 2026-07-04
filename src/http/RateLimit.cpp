@@ -17,9 +17,7 @@ RouteRateLimitResult checkRouteRateLimit(
         ContextAccess::routeRateLimitScope(context),
         context.req().raw().remoteAddress(),
         options.rule);
-    return RouteRateLimitResult{
-        .allowed = check.allowed,
-        .resetAfterMs = check.resetAfterMs};
+    return RouteRateLimitResult(check.allowed, check.resetAfterMs);
 }
 
 }  // namespace ruvia::detail

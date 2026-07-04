@@ -19,7 +19,7 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask) {
     HttpResponse response(memory.resource());
-    response.setStatus(204, {});
+    response.status(204, {});
     setAllowHeader(response, methodMask);
     return response;
 }
@@ -86,23 +86,18 @@ struct OwnedHttpErrorInfo final {
 
     OwnedHttpErrorInfo(std::pmr::memory_resource* resource, std::exception_ptr exception)
         : OwnedHttpErrorInfo(
-              HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"},
+              HttpErrorInfo(500, {}, "unhandled exception"),
               resource) {
         assignExceptionError(*this, exception);
     }
 
     void assign(HttpErrorInfo source) {
-        statusText.assign(source.statusText.data(), source.statusText.size());
-        code.assign(source.code.data(), source.code.size());
-        message.assign(source.message.data(), source.message.size());
-        detailsJson.assign(source.detailsJson.data(), source.detailsJson.size());
+        statusText.assign(source.statusText().data(), source.statusText().size());
+        code.assign(source.code().data(), source.code().size());
+        message.assign(source.message().data(), source.message().size());
+        detailsJson.assign(source.detailsJson().data(), source.detailsJson().size());
 
-        info = HttpErrorInfo{
-            .statusCode = source.statusCode,
-            .statusText = statusText,
-            .code = code,
-            .message = message,
-            .detailsJson = detailsJson};
+        info = HttpErrorInfo(source.status(), code, message, statusText, detailsJson);
     }
 };
 
@@ -116,11 +111,11 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const std::invalid_argument& error) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 400, .message = error.what()});
+        errorInfo.assign(HttpErrorInfo(400, {}, error.what()));
     } catch (const std::exception& error) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = error.what()});
+        errorInfo.assign(HttpErrorInfo(500, {}, error.what()));
     } catch (...) {
-        errorInfo.assign(HttpErrorInfo{.statusCode = 500, .message = "unhandled exception"});
+        errorInfo.assign(HttpErrorInfo(500, {}, "unhandled exception"));
     }
 }
 
@@ -249,7 +244,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
                 co_return makeAllowNoContentResponse(memory, resolution.allowedMethods());
             }
 
-            const auto error = HttpErrorInfo{.statusCode = 405, .message = "method not allowed"};
+            const auto error = HttpErrorInfo(405, {}, "method not allowed");
             auto response = co_await handleError(request, memory, error, false, services);
             setAllowHeader(response, resolution.allowedMethods());
             co_return response;
@@ -338,7 +333,7 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
     if (notFoundHandler_ == nullptr) {
         co_return makeErrorResponse(
             memory.resource(),
-            HttpErrorInfo{.statusCode = 404, .message = "route not found"},
+            HttpErrorInfo(404, {}, "route not found"),
             closeConnection);
     }
 

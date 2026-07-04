@@ -18,18 +18,55 @@ enum class WebSocketOpcode : std::uint8_t {
     kPong = 0xA
 };
 
-struct WebSocketMessage final {
-    WebSocketOpcode opcode{WebSocketOpcode::kText};
-    std::string_view payload;
+namespace detail {
+struct WebSocketMessageAccess;
+}  // namespace detail
+
+class WebSocketMessage final {
+public:
+    constexpr WebSocketMessage() noexcept = default;
+    WebSocketMessage(const WebSocketMessage&) noexcept = default;
+    WebSocketMessage& operator=(const WebSocketMessage&) noexcept = default;
+    WebSocketMessage(WebSocketMessage&&) noexcept = default;
+    WebSocketMessage& operator=(WebSocketMessage&&) noexcept = default;
+
+    [[nodiscard]] constexpr WebSocketOpcode opcode() const noexcept {
+        return opcode_;
+    }
+
+    [[nodiscard]] constexpr std::string_view payload() const noexcept {
+        return payload_;
+    }
 
     [[nodiscard]] bool text() const noexcept {
-        return opcode == WebSocketOpcode::kText;
+        return opcode_ == WebSocketOpcode::kText;
     }
 
     [[nodiscard]] bool binary() const noexcept {
-        return opcode == WebSocketOpcode::kBinary;
+        return opcode_ == WebSocketOpcode::kBinary;
+    }
+
+private:
+    friend struct detail::WebSocketMessageAccess;
+
+    constexpr WebSocketMessage(WebSocketOpcode opcode, std::string_view payload) noexcept
+        : opcode_(opcode), payload_(payload) {}
+
+    WebSocketOpcode opcode_{WebSocketOpcode::kText};
+    std::string_view payload_;
+};
+
+namespace detail {
+
+struct WebSocketMessageAccess final {
+    [[nodiscard]] static constexpr WebSocketMessage make(
+        WebSocketOpcode opcode,
+        std::string_view payload) noexcept {
+        return WebSocketMessage(opcode, payload);
     }
 };
+
+}  // namespace detail
 
 struct WebSocketHeartbeatOptions final {
     std::chrono::milliseconds pingInterval{0};

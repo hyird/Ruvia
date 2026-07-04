@@ -11,14 +11,47 @@
 
 #include "http/HeaderAcceptUtils.h"
 #include "http/HeaderTokenUtils.h"
+#include "http/parser/HttpChunkParser.h"
 #include "http/MultipartParsing.h"
 #include "http/RequestBodyDecoding.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/Model.h"
 
 namespace {
 
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpMultipartPartHeaderStatus;
 using ruvia::detail::HttpMultipartPartHeaders;
+
+template <typename T>
+concept HasCookiesAccessor = requires(const T& request) {
+    request.cookies();
+};
+
+template <typename T>
+concept HasQueryListAccessor = requires(const T& request) {
+    request.query();
+};
+
+template <typename T>
+concept HasQueriesVectorAccessor = requires(const T& request) {
+    request.queries(std::string_view{});
+};
+
+static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
+static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);
+static_assert(!HasQueriesVectorAccessor<ruvia::HttpRequest>);
+
+RUVIA_MODEL(AccessorSurfaceModel,
+    RUVIA_FIELD(message, ruvia::String)
+);
+
+static_assert(std::same_as<
+    std::remove_cvref_t<decltype(std::declval<AccessorSurfaceModel&>().message())>,
+    std::optional<ruvia::String>>);
+static_assert(std::same_as<
+    std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceModel&>().message())>,
+    std::optional<ruvia::String>>);
 
 std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
     const std::size_t bound = ZSTD_compressBound(plain.size());
@@ -155,4 +188,15 @@ RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
     RUVIA_CHECK(!httpAcceptsMediaType(
         R"(application/json;version="a,b";q=0)", "application/json"));
     RUVIA_CHECK(!httpAcceptsEncoding(R"(gzip;note="a,b";q=0)", "gzip"));
+}
+
+// --- Chunk extension quoted-pair follows RFC quoted-string grammar -------
+RUVIA_TEST(chunk_extension_quoted_pair_allows_escaped_htab) {
+    using ruvia::detail::HttpChunkScanStatus;
+    using ruvia::detail::scanHttpChunkedBody;
+
+    const std::string_view body = "1;note=\"a\\\tb\"\r\nx\r\n0\r\n\r\n";
+    const auto result = scanHttpChunkedBody(body);
+    RUVIA_CHECK(result.status == HttpChunkScanStatus::kComplete);
+    RUVIA_CHECK_EQ(result.consumedBytes, body.size());
 }

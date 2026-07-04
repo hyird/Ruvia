@@ -20,8 +20,6 @@ class DbTransaction;
 
 class QueryResult final {
 public:
-    explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
-
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
     QueryResult(QueryResult&& other) noexcept;
@@ -37,6 +35,7 @@ private:
     friend class DbHandle;
     friend class DbTransaction;
 
+    explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
     QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<DbRow> rows_;

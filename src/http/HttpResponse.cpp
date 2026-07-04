@@ -24,7 +24,7 @@ std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return body_.get_allocator().resource();
 }
 
-std::uint16_t HttpResponse::statusCode() const noexcept {
+std::uint16_t HttpResponse::status() const noexcept {
     return statusCode_;
 }
 
@@ -68,7 +68,7 @@ const HttpResponse::FileBody& HttpResponse::fileBody() const {
     return *fileBody_;
 }
 
-void HttpResponse::setStatus(std::uint16_t statusCode, std::string_view statusText) {
+void HttpResponse::status(std::uint16_t statusCode, std::string_view statusText) {
     if (statusCode < 100 || statusCode > 999) {
         throw std::invalid_argument("invalid HTTP status code");
     }

@@ -47,7 +47,7 @@ private:
     ResponseBodyMode mode,
     ResponseStreamFraming framing) {
     auto response = ContextAccess::streamingHead(context);
-    const auto policy = responseWritePolicy(response.statusCode());
+    const auto policy = responseWritePolicy(response.status());
     const bool needsSseContentType =
         mode == ResponseBodyMode::kSse &&
         !responseHasKnownHeader(response, kResponseHeaderContentType);

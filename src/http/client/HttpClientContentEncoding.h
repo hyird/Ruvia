@@ -18,15 +18,15 @@ namespace ruvia::detail {
     const FetchResponse& response) noexcept {
     bool seen = false;
     HttpContentCoding coding = HttpContentCoding::kNone;
-    for (const auto& header : response.headers) {
-        if (!httpAsciiEqualsIgnoreCase(header.name, "content-encoding")) {
+    for (const auto& header : response.headers()) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "content-encoding")) {
             continue;
         }
         if (seen) {
             return HttpContentCoding::kNone;
         }
         seen = true;
-        coding = requestContentCoding(std::string_view(header.value));
+        coding = requestContentCoding(header.value());
     }
     return coding;
 }
@@ -35,14 +35,15 @@ inline void decodeHttpClientResponseContentEncoding(
     FetchResponse& response,
     std::size_t maxDecodedBytes) {
     const auto coding = httpClientResponseContentCoding(response);
-    if (coding == HttpContentCoding::kNone || response.body.empty()) {
+    if (coding == HttpContentCoding::kNone || response.body().empty()) {
         return;
     }
-    std::pmr::string decoded(response.body.get_allocator().resource());
-    if (!decodeRequestContentEncoding(coding, response.body, decoded, maxDecodedBytes)) {
+    auto& body = FetchResponseAccess::body(response);
+    std::pmr::string decoded(body.get_allocator().resource());
+    if (!decodeRequestContentEncoding(coding, body, decoded, maxDecodedBytes)) {
         throw std::runtime_error("http client: failed to decode response Content-Encoding");
     }
-    response.body = std::move(decoded);
+    body = std::move(decoded);
 }
 
 }  // namespace ruvia::detail

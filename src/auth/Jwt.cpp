@@ -24,8 +24,8 @@ std::span<const JwtClaim> JwtPayload::claims() const noexcept { return {claims_.
 
 std::optional<std::string_view> JwtPayload::claim(std::string_view name) const noexcept {
     for (const auto& item : claims_) {
-        if (item.name == name) {
-            return std::string_view(item.value);
+        if (item.name() == name) {
+            return item.value();
         }
     }
     return std::nullopt;
@@ -54,10 +54,10 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
         detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(now + options.notBeforeDelay));
     }
     for (const auto& claim : options.claims) {
-        if (claim.name.empty() || detail::jwtIsReservedClaim(claim.name)) {
+        if (claim.name().empty() || detail::jwtIsReservedClaim(claim.name())) {
             throw std::invalid_argument("JWT custom claim name is empty or reserved");
         }
-        detail::jwtAppendJsonMember(payload, first, claim.name, claim.value);
+        detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());
     }
     payload.push_back('}');
 

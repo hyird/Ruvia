@@ -18,9 +18,32 @@ enum class JwtAlgorithm {
     kHs512
 };
 
-struct JwtClaim final {
-    std::pmr::string name;
-    std::pmr::string value;
+class JwtClaim final {
+public:
+    JwtClaim(
+        std::string_view name,
+        std::string_view value,
+        std::pmr::memory_resource* resource = nullptr)
+        : name_(name, detail::pmrResourceOrDefault(resource)),
+          value_(value, name_.get_allocator().resource()) {}
+
+    JwtClaim(
+        std::pmr::string name,
+        std::pmr::string value) noexcept
+        : name_(std::move(name)),
+          value_(std::move(value)) {}
+
+    [[nodiscard]] std::string_view name() const noexcept {
+        return name_;
+    }
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_;
+    }
+
+private:
+    std::pmr::string name_;
+    std::pmr::string value_;
 };
 
 struct JwtSignOptions final {
@@ -47,8 +70,6 @@ struct JwtVerifyOptions final {
 
 class JwtPayload final {
 public:
-    explicit JwtPayload(std::pmr::memory_resource* resource = nullptr);
-
     [[nodiscard]] std::string_view issuer() const noexcept;
     [[nodiscard]] std::string_view subject() const noexcept;
     [[nodiscard]] std::string_view audience() const noexcept;
@@ -63,6 +84,8 @@ private:
     friend struct JwtPayloadAccess;
     friend JwtPayload jwtDecodeUnverified(std::string_view, std::pmr::memory_resource*);
     friend JwtPayload jwtVerify(std::string_view, const JwtVerifyOptions&, std::pmr::memory_resource*);
+
+    explicit JwtPayload(std::pmr::memory_resource* resource = nullptr);
 
     std::pmr::string issuer_;
     std::pmr::string subject_;

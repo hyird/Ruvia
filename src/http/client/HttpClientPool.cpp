@@ -182,7 +182,7 @@ Task<FetchResponse> HttpClientPool::fetch(
 
     for (;;) {
         const auto index = co_await acquire();
-        FetchResponse response(requestResource);
+        FetchResponse response = FetchResponseAccess::make(requestResource);
         {
             ConnectionGuard guard(*this, index);
             auto& conn = guard.connection();
@@ -197,10 +197,10 @@ Task<FetchResponse> HttpClientPool::fetch(
             }
         }  // release the connection back to the pool before following a redirect
 
-        if (hopsRemaining == 0 || !isHttpClientRedirectStatus(response.statusCode)) {
+        if (hopsRemaining == 0 || !isHttpClientRedirectStatus(response.status())) {
             co_return response;
         }
-        if (!canReplayHttpClientRedirectRequest(currentOptions, response.statusCode)) {
+        if (!canReplayHttpClientRedirectRequest(currentOptions, response.status())) {
             co_return response;
         }
         const auto location = findHttpClientResponseHeader(response, "Location");
@@ -210,7 +210,7 @@ Task<FetchResponse> HttpClientPool::fetch(
             co_return response;
         }
         currentPath = redirectTarget;
-        applyHttpClientRedirectMethod(currentOptions, response.statusCode);
+        applyHttpClientRedirectMethod(currentOptions, response.status());
         --hopsRemaining;
     }
 }
@@ -337,18 +337,19 @@ Task<void> HttpClientPool::readChunkedResponseBody(
         }
         totalBody += chunkSize;
 
-        const auto writeAt = response.body.size();
-        resizePmrStringForOverwrite(response.body, writeAt + chunkSize);
+        auto& body = FetchResponseAccess::body(response);
+        const auto writeAt = body.size();
+        resizePmrStringForOverwrite(body, writeAt + chunkSize);
         const auto buffered = buf.size() - pos;
         const auto copied = std::min(buffered, chunkSize);
         if (copied > 0) {
-            std::copy_n(buf.data() + pos, copied, response.body.data() + writeAt);
+            std::copy_n(buf.data() + pos, copied, body.data() + writeAt);
             pos += copied;
         }
         if (copied < chunkSize) {
             armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
             auto [dataEc, dataN] = co_await readExact(asio::buffer(
-                response.body.data() + writeAt + copied, chunkSize - copied));
+                body.data() + writeAt + copied, chunkSize - copied));
             (void)dataN;
             if (finishDeadline(conn)) {
                 closeConnection(conn);
@@ -390,43 +391,44 @@ Task<void> HttpClientPool::readCloseDelimitedResponseBody(
     };
 
     // Seed the body with the bytes already buffered past the header block.
+    auto& body = FetchResponseAccess::body(response);
     if (buf.size() > bodyOffset) {
         const auto available = buf.size() - bodyOffset;
         if (maxBody != 0 && available > maxBody) {
             closeConnection(conn);
             throw std::runtime_error("http client: response body is too large");
         }
-        response.body.assign(buf.data() + bodyOffset, available);
+        body.assign(buf.data() + bodyOffset, available);
     }
 
     constexpr std::size_t kReadChunk = 8192;
     for (;;) {
-        const auto oldSize = response.body.size();
-        resizePmrStringForOverwrite(response.body, oldSize + kReadChunk);
+        const auto oldSize = body.size();
+        resizePmrStringForOverwrite(body, oldSize + kReadChunk);
         armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
-        auto [ec, n] = co_await readSome(asio::buffer(response.body.data() + oldSize, kReadChunk));
+        auto [ec, n] = co_await readSome(asio::buffer(body.data() + oldSize, kReadChunk));
         if (finishDeadline(conn)) {
-            response.body.resize(oldSize);
+            body.resize(oldSize);
             closeConnection(conn);
             throw std::system_error(asio::error::timed_out, "http client: read body timed out");
         }
         // A peer close (TCP EOF, or a TLS shutdown/truncation) is the normal end of a
         // close-delimited body — keep any bytes delivered alongside it and stop.
         if (ec == asio::error::eof || ec == asio::ssl::error::stream_truncated) {
-            response.body.resize(oldSize + n);
-            if (maxBody != 0 && response.body.size() > maxBody) {
+            body.resize(oldSize + n);
+            if (maxBody != 0 && body.size() > maxBody) {
                 closeConnection(conn);
                 throw std::runtime_error("http client: response body is too large");
             }
             break;
         }
         if (ec) {
-            response.body.resize(oldSize);
+            body.resize(oldSize);
             conn.connected = false;
             throw std::system_error(ec, "http client: read body failed");
         }
-        response.body.resize(oldSize + n);
-        if (maxBody != 0 && response.body.size() > maxBody) {
+        body.resize(oldSize + n);
+        if (maxBody != 0 && body.size() > maxBody) {
             closeConnection(conn);
             throw std::runtime_error("http client: response body is too large");
         }
@@ -531,7 +533,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     const auto effectivePath = path.empty() ? std::string_view("/") : path;
     validateHttpClientRequestHead(method, effectivePath);
 
-    const bool streamingBody = options.bodyStream.valid();
+    const bool streamingBody = static_cast<bool>(options.bodyStream);
     if (streamingBody && !options.body.empty()) {
         throw std::invalid_argument("http client: set either body or bodyStream, not both");
     }
@@ -684,12 +686,12 @@ Task<FetchResponse> HttpClientPool::executeRequest(
             ? std::optional(std::chrono::steady_clock::now() + requestTimeout)
             : std::nullopt;
 
-    FetchResponse response(requestResource);
+    FetchResponse response = FetchResponseAccess::make(requestResource);
     auto responseHead = co_await writeRequestAndReadHead(
         conn, path, options, requestTimeout, requestDeadline, response, requestResource);
     // A streamed request body may have taken arbitrarily long; give the response body phase a
     // fresh absolute budget rather than one anchored at request start.
-    if (options.bodyStream.valid() && requestTimeout.count() > 0) {
+    if (options.bodyStream && requestTimeout.count() > 0) {
         requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
     }
     auto& readBuf = conn.responseReadBuffer;
@@ -709,7 +711,8 @@ Task<FetchResponse> HttpClientPool::executeRequest(
                 throw std::runtime_error("http client: response body is too large");
             }
             if (responseHead.contentLength > 0) {
-                resizePmrStringForOverwrite(response.body, responseHead.contentLength);
+                auto& body = FetchResponseAccess::body(response);
+                resizePmrStringForOverwrite(body, responseHead.contentLength);
                 const auto alreadyRead = readBuf.size() > responseHead.bodyOffset
                     ? readBuf.size() - responseHead.bodyOffset
                     : std::size_t{0};
@@ -718,12 +721,12 @@ Task<FetchResponse> HttpClientPool::executeRequest(
                     responseHead.closeAfterResponse = true;
                 }
                 if (toCopy > 0) {
-                    std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, response.body.data());
+                    std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, body.data());
                 }
                 if (toCopy < responseHead.contentLength) {
                     armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
                     auto [bodyEc, bodyN] = co_await connRead(conn, asio::buffer(
-                        response.body.data() + toCopy,
+                        body.data() + toCopy,
                         responseHead.contentLength - toCopy));
                     (void)bodyN;
                     if (finishDeadline(conn)) {

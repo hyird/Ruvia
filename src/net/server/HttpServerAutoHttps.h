@@ -54,7 +54,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     RequestMemory& memory,
     std::uint16_t httpsPort) {
     HttpResponse response(memory.resource());
-    response.setStatus(308, {});
+    response.status(308, {});
 
     const auto host = hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
     auto path = request.path();
@@ -78,7 +78,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
         location.append(request.queryString().data(), request.queryString().size());
     }
 
-    response.setHeader("Location", location);
+    response.header("Location", location);
     markConnectionClose(response);
     return response;
 }

@@ -264,14 +264,14 @@ template <typename T>
     std::optional<T> result;
     bool parseFailed = false;
     for (const auto& item : fields) {
-        if (item.name != field) {
+        if (item.name() != field) {
             continue;
         }
 
         T value = makeRequestValue<T>(ResolvedPmrResourceTag{}, resource);
         if (!parseDecodedFormValue(
                 ResolvedPmrResourceTag{},
-                item.value,
+                item.value(),
                 value,
                 resource)) {
             parseFailed = true;

@@ -47,6 +47,7 @@ RUVIA_TEST(response_coding_single_pass_matches_three_pass) {
         "gzip;q=0, gzip;q=0.9",  // later matching item overwrites
         ", gzip, , br,",         // empty items are skipped
         "gzip;q=1.0, br;q=0.500",
+        R"(gzip;note="a,b";q=0, br;q=0.5)",
     };
     for (const auto header : cases) {
         HttpAcceptedEncodingQuality gzip;

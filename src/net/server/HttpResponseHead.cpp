@@ -50,7 +50,7 @@ void emitResponseHead(
         sink.append(statusLine);
     } else {
         sink.append(std::string_view("HTTP/1.1 "));
-        sink.appendUnsigned(response.statusCode());
+        sink.appendUnsigned(response.status());
         sink.append(' ');
         sink.append(response.statusText());
         sink.append(std::string_view("\r\n"));
@@ -114,7 +114,7 @@ void appendResponseHead(
             explicitContentLengthAllowed,
             transferEncodingAllowed)};
 
-    const auto statusLine = httpCachedStatusLine(response.statusCode(), response.statusText());
+    const auto statusLine = httpCachedStatusLine(response.status(), response.statusText());
     const auto dateHeader = cachedDateHeader();
 
     // Upper bound on emitted bytes (filtered headers are counted anyway; the

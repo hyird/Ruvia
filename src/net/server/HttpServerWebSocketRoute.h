@@ -41,7 +41,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 400, .message = "invalid websocket upgrade"},
+            HttpErrorInfo(400, {}, "invalid websocket upgrade"),
             true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);

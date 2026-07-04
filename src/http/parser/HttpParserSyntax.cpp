@@ -236,7 +236,7 @@ bool isValidHttpChunkExtension(std::string_view value) noexcept {
                         return false;
                     }
                     const auto escaped = static_cast<unsigned char>(value[cursor]);
-                    if (escaped == 0x7F || escaped < 0x20) {
+                    if (escaped == 0x7F || (escaped < 0x20 && escaped != '\t')) {
                         return false;
                     }
                     ++cursor;

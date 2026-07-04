@@ -49,8 +49,8 @@ RUVIA_TEST(throw_request_body_too_large_is_413) {
     } catch (const HttpError& error) {
         caught = true;
         const auto info = error.info();
-        RUVIA_CHECK_EQ(info.statusCode, std::uint16_t{413});
-        RUVIA_CHECK_EQ(info.code, std::string_view("payload_too_large"));
+        RUVIA_CHECK_EQ(info.status(), std::uint16_t{413});
+        RUVIA_CHECK_EQ(info.code(), std::string_view("payload_too_large"));
     }
     RUVIA_CHECK(caught);
 }
@@ -58,7 +58,7 @@ RUVIA_TEST(throw_request_body_too_large_is_413) {
 RUVIA_TEST(http_error_info_round_trips) {
     const HttpError error(422, "unprocessable", "bad fields");
     const auto info = error.info();
-    RUVIA_CHECK_EQ(info.statusCode, std::uint16_t{422});
-    RUVIA_CHECK_EQ(info.code, std::string_view("unprocessable"));
-    RUVIA_CHECK_EQ(info.message, std::string_view("bad fields"));
+    RUVIA_CHECK_EQ(info.status(), std::uint16_t{422});
+    RUVIA_CHECK_EQ(info.code(), std::string_view("unprocessable"));
+    RUVIA_CHECK_EQ(info.message(), std::string_view("bad fields"));
 }

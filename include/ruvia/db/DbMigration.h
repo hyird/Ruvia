@@ -24,8 +24,6 @@ struct DbMigrationOptions final {
 
 class DbMigrationReport final {
 public:
-    explicit DbMigrationReport(std::pmr::memory_resource* resource = nullptr);
-
     DbMigrationReport(const DbMigrationReport&) = delete;
     DbMigrationReport& operator=(const DbMigrationReport&) = delete;
     DbMigrationReport(DbMigrationReport&&) noexcept = default;
@@ -39,6 +37,7 @@ private:
     friend class DbMigrator;
     friend class detail::DbMigrationRunner;
 
+    explicit DbMigrationReport(std::pmr::memory_resource* resource);
     DbMigrationReport(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 
     std::pmr::vector<std::pmr::string> applied_;

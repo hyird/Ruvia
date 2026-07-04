@@ -133,7 +133,7 @@ Task<void> Http2ServerSession<Stream>::writeResponse(
     Http2StreamState& stream,
     const HttpResponse& response,
     bool skipBody) {
-    const auto policy = responseWritePolicy(response.statusCode());
+    const auto policy = responseWritePolicy(response.status());
     if (stream.isReset()) {
         co_return;
     }

@@ -118,7 +118,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,
-                            HttpErrorInfo{.statusCode = 400, .message = "missing Host header"},
+                            HttpErrorInfo(400, {}, "missing Host header"),
                             true,
                             baseRouteServices);
                         markConnectionClose(response);
@@ -169,7 +169,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     response = co_await routes.handleError(
                         parsed.request,
                         requestMemory,
-                        HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+                        HttpErrorInfo(429, {}, "rate limit exceeded"),
                         true,
                         baseRouteServices);
                     setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
@@ -182,7 +182,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,
-                            HttpErrorInfo{.statusCode = 413, .message = "request body is too large"},
+                            HttpErrorInfo(413, {}, "request body is too large"),
                             true,
                             baseRouteServices);
                         markConnectionCloseAfterWrite(response, closeAfterWrite);
@@ -218,7 +218,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     response = co_await routes.handleError(
                         parsed.request,
                         requestMemory,
-                        HttpErrorInfo{.statusCode = 413, .message = "request body is too large"},
+                        HttpErrorInfo(413, {}, "request body is too large"),
                         true,
                         baseRouteServices);
                     markConnectionCloseAfterWrite(response, closeAfterWrite);
@@ -357,7 +357,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
-                    HttpErrorInfo{.statusCode = httpParseErrorStatus(error), .message = httpParseErrorMessage(error)},
+                    HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     true,
                     baseRouteServices);
                 closeAfterWrite = true;
@@ -373,7 +373,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 response = co_await routes.handleError(
                     parsed.request,
                     requestMemory,
-                    HttpErrorInfo{.statusCode = httpParseErrorStatus(error), .message = httpParseErrorMessage(error)},
+                    HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     true,
                     baseRouteServices);
                 closeAfterWrite = true;
@@ -417,7 +417,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
-                response.statusCode(), requestStart, false);
+                response.status(), requestStart, false);
             if (ec || closeAfterWrite || !keepAlive || !started_.load(std::memory_order_relaxed)) {
                 co_return;
             }
@@ -425,7 +425,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
-                response.statusCode(), requestStart, false);
+                response.status(), requestStart, false);
             if (!started_.load(std::memory_order_relaxed)) {
                 co_return;
             }

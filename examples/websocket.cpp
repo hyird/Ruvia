@@ -24,9 +24,9 @@ private:
         auto& ws = c.webSocket();
         while (auto message = co_await ws.read()) {
             if (message->text()) {
-                co_await ws.text(message->payload);
+                co_await ws.text(message->payload());
             } else if (message->binary()) {
-                co_await ws.binary(message->payload);
+                co_await ws.binary(message->payload());
             }
         }
     }
@@ -36,7 +36,7 @@ private:
         co_await ws.text("welcome");
         while (auto message = co_await ws.read()) {
             if (message->text()) {
-                co_await ws.text(message->payload);
+                co_await ws.text(message->payload());
             }
         }
         co_await ws.close(1000, "bye");

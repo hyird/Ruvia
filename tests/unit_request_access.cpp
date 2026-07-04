@@ -62,8 +62,8 @@ RUVIA_TEST(request_access_add_header_appends_and_caches) {
         request, HttpHeaderView{"host", "example.com"},
         HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost)));
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(request.headers()[0].name, std::string_view("host"));
-    RUVIA_CHECK_EQ(request.headers()[0].value, std::string_view("example.com"));
+    RUVIA_CHECK_EQ(request.headers()[0].name(), std::string_view("host"));
+    RUVIA_CHECK_EQ(request.headers()[0].value(), std::string_view("example.com"));
     // The two-argument overload also caches the value for fast known-header access.
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kHost),
                    std::string_view("example.com"));

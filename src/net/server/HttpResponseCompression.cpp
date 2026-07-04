@@ -186,7 +186,7 @@ bool compressResponseBodyIfAccepted(
     }
     const auto compressor = codingCompressor(coding);
 
-    const auto statusCode = response.statusCode();
+    const auto statusCode = response.status();
     if (statusCode < 200 ||
         statusCode == 206 ||
         statusCode == 204 ||

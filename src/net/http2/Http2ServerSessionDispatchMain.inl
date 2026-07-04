@@ -15,7 +15,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         HttpResponse response = co_await routes_.handleError(
             request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 400, .message = "invalid http2 request headers"},
+            HttpErrorInfo(400, {}, "invalid http2 request headers"),
             false,
             baseServices);
         co_await writeResponse(stream, response);
@@ -32,14 +32,14 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         auto response = co_await routes_.handleError(
             request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 429, .message = "rate limit exceeded"},
+            HttpErrorInfo(429, {}, "rate limit exceeded"),
             false,
             baseServices);
         setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
         co_await writeResponse(stream, response);
         recordHttpAccess(
             options_.accessLog, request, remoteAddress_,
-            response.statusCode(), requestStart, true);
+            response.status(), requestStart, true);
         co_return;
     }
     const auto maxBody = requestBodyByteLimit(
@@ -50,7 +50,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         auto response = co_await routes_.handleError(
             request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 413, .message = "request body is too large"},
+            HttpErrorInfo(413, {}, "request body is too large"),
             false,
             baseServices);
         co_await writeResponse(stream, response);
@@ -96,7 +96,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
                 // so log the completed streamed response here (status 200).
                 recordHttpAccess(
                     options_.accessLog, request, remoteAddress_,
-                    response.statusCode(), requestStart, true);
+                    response.status(), requestStart, true);
                 co_return;
             }
             if (dispatchResult.bufferedResponse()) {
@@ -133,5 +133,5 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
     }
     recordHttpAccess(
         options_.accessLog, request, remoteAddress_,
-        response.statusCode(), requestStart, true);
+        response.status(), requestStart, true);
 }

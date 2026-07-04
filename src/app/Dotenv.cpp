@@ -102,12 +102,12 @@ DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path
         if (options.required) {
             throw std::runtime_error("dotenv file not found: " + path.string());
         }
-        return {};
+        return detail::DotenvResultAccess::make(false);
     }
     probe.close();
 
     const auto entries = detail::readDotenvEntries(path);
-    DotenvResult result{.loaded = true};
+    auto result = detail::DotenvResultAccess::make(true);
     auto& state = detail::EnvAccess::state(env);
 
     for (const auto& entry : entries) {
@@ -115,12 +115,12 @@ DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path
         auto it = findVariableSlot(variables, entry.name);
         if (it != variables.end() && std::string_view(it->name) == std::string_view(entry.name)) {
             if (!options.overrideExisting) {
-                ++result.variablesSkipped;
+                detail::DotenvResultAccess::incrementVariablesSkipped(result);
                 continue;
             }
 
             it->value = entry.value;
-            ++result.variablesSet;
+            detail::DotenvResultAccess::incrementVariablesSet(result);
             continue;
         }
 
@@ -128,7 +128,7 @@ DotenvResult detail::loadEnvFromFile(Env& env, const std::filesystem::path& path
         variable.name.assign(entry.name.data(), entry.name.size());
         variable.value.assign(entry.value.data(), entry.value.size());
         variables.insert(it, std::move(variable));
-        ++result.variablesSet;
+        detail::DotenvResultAccess::incrementVariablesSet(result);
     }
 
     state.loaded = true;

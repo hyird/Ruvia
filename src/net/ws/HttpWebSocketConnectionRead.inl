@@ -30,7 +30,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
             case WebSocketInboundAction::kDeliverCompressed: {
                 inboundInflated_.clear();
                 const auto result = deflate_.has_value()
-                    ? deflate_->decompress(message.payload, inboundInflated_, maxMessageBytes_)
+                    ? deflate_->decompress(message.payload(), inboundInflated_, maxMessageBytes_)
                     : WebSocketInflateResult::kError;
                 if (result == WebSocketInflateResult::kTooLarge) {
                     co_await close(1009, "message too large");
@@ -40,13 +40,13 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
                     co_await close(1002, "decompression failed");
                     co_return std::nullopt;
                 }
-                if (message.opcode == WebSocketOpcode::kText && !isValidUtf8(inboundInflated_)) {
+                if (message.opcode() == WebSocketOpcode::kText && !isValidUtf8(inboundInflated_)) {
                     co_await close(1007, "invalid utf-8");
                     co_return std::nullopt;
                 }
-                co_return WebSocketMessage{
-                    .opcode = message.opcode,
-                    .payload = std::string_view(inboundInflated_.data(), inboundInflated_.size())};
+                co_return WebSocketMessageAccess::make(
+                    message.opcode(),
+                    std::string_view(inboundInflated_.data(), inboundInflated_.size()));
             }
             case WebSocketInboundAction::kInvalidUtf8:
                 co_await close(1007, "invalid utf-8");

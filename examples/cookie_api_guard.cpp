@@ -115,8 +115,8 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     raw.append(cookiePair);
     raw.append("\r\n\r\n");
     const auto parsed = ruvia::HttpParser().parse(raw);
-    check(parsed.status == ruvia::HttpParseStatus::kComplete);
-    auto reader = ruvia::detail::ContextAccess::make(memory, parsed.request);
+    check(parsed.status() == ruvia::HttpParseStatus::kComplete);
+    auto reader = ruvia::detail::ContextAccess::make(memory, parsed.request());
     const auto verified = reader.req().signedCookie("sid", kSecret);
     check(verified.has_value() && *verified == "hello");
     check(!reader.req().signedCookie("sid", "other-secret").has_value());
@@ -130,23 +130,23 @@ void exerciseSignedCookieRoundtrip(ruvia::RequestMemory& memory, const ruvia::Ht
     tampered.append(tamperedPair);
     tampered.append("\r\n\r\n");
     const auto tamperedParsed = ruvia::HttpParser().parse(tampered);
-    check(tamperedParsed.status == ruvia::HttpParseStatus::kComplete);
-    auto tamperedReader = ruvia::detail::ContextAccess::make(memory, tamperedParsed.request);
+    check(tamperedParsed.status() == ruvia::HttpParseStatus::kComplete);
+    auto tamperedReader = ruvia::detail::ContextAccess::make(memory, tamperedParsed.request());
     check(!tamperedReader.req().signedCookie("sid", kSecret).has_value());
 
     // A cookie without the fixed-width signature suffix is rejected, not parsed.
     std::string malformed("GET / HTTP/1.1\r\nHost: guard\r\nCookie: sid=no-signature\r\n\r\n");
     const auto malformedParsed = ruvia::HttpParser().parse(malformed);
-    check(malformedParsed.status == ruvia::HttpParseStatus::kComplete);
-    auto malformedReader = ruvia::detail::ContextAccess::make(memory, malformedParsed.request);
+    check(malformedParsed.status() == ruvia::HttpParseStatus::kComplete);
+    auto malformedReader = ruvia::detail::ContextAccess::make(memory, malformedParsed.request());
     check(!malformedReader.req().signedCookie("sid", kSecret).has_value());
 }
 
 void exerciseDeleteCookieReturnsRequestValue(ruvia::RequestMemory& memory) {
     std::string raw("GET / HTTP/1.1\r\nHost: guard\r\nCookie: legacy=old\r\n\r\n");
     const auto parsed = ruvia::HttpParser().parse(raw);
-    check(parsed.status == ruvia::HttpParseStatus::kComplete);
-    auto context = ruvia::detail::ContextAccess::make(memory, parsed.request);
+    check(parsed.status() == ruvia::HttpParseStatus::kComplete);
+    auto context = ruvia::detail::ContextAccess::make(memory, parsed.request());
     const auto deleted = context.deleteCookie("legacy");
     check(deleted.has_value() && *deleted == "old");
     auto response = context.text("x");
@@ -165,7 +165,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
         std::span<const std::byte>(bytes),
         206,
         {{"X-Bin", "1"}});
-    check(response.statusCode() == 206);
+    check(response.status() == 206);
     check(response.header("X-Bin") == "1");
     check(response.header("Content-Type").empty());
     const auto body = ruvia::detail::responseBodyBytes(response);

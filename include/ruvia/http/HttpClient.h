@@ -18,6 +18,8 @@
 
 namespace ruvia::detail {
 inline constexpr std::string_view kDefaultHttpClientAlias = "default";
+struct FetchResponseHeaderAccess;
+struct FetchResponseAccess;
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -47,26 +49,32 @@ struct FetchRequestHeader {
     std::string_view value;  // borrowed; must remain valid through co_await
 };
 
-struct FetchResponseHeader {
-    std::pmr::string name;
-    std::pmr::string value;
+class FetchResponseHeader final {
+public:
+    [[nodiscard]] std::string_view name() const noexcept {
+        return std::string_view(name_.data(), name_.size());
+    }
 
-    FetchResponseHeader() = default;
-
-    FetchResponseHeader(std::pmr::string n, std::pmr::string v)
-        : name(std::move(n)), value(std::move(v)) {}
-
-    FetchResponseHeader(std::string_view n, std::string_view v, std::pmr::memory_resource* resource)
-        : FetchResponseHeader(detail::ResolvedPmrResourceTag{}, n, v, detail::pmrResourceOrDefault(resource)) {}
+    [[nodiscard]] std::string_view value() const noexcept {
+        return std::string_view(value_.data(), value_.size());
+    }
 
 private:
+    friend struct detail::FetchResponseHeaderAccess;
+
+    FetchResponseHeader(std::pmr::string n, std::pmr::string v)
+        : name_(std::move(n)), value_(std::move(v)) {}
+
     FetchResponseHeader(
         detail::ResolvedPmrResourceTag,
         std::string_view n,
         std::string_view v,
         std::pmr::memory_resource* resource)
-        : name(n.data(), n.size(), resource),
-          value(v.data(), v.size(), resource) {}
+        : name_(n.data(), n.size(), resource),
+          value_(v.data(), v.size(), resource) {}
+
+    std::pmr::string name_;
+    std::pmr::string value_;
 };
 
 // Borrowed streaming request body producer. The client calls nextChunk(target) repeatedly and
@@ -82,7 +90,7 @@ public:
         : target_(target),
           nextChunk_(nextChunk) {}
 
-    [[nodiscard]] constexpr bool valid() const noexcept { return nextChunk_ != nullptr; }
+    [[nodiscard]] constexpr explicit operator bool() const noexcept { return nextChunk_ != nullptr; }
     [[nodiscard]] Task<std::string_view> nextChunk() const { return nextChunk_(target_); }
 
 private:
@@ -107,25 +115,74 @@ struct FetchOptions {
 
 class FetchResponse final {
 public:
-    explicit FetchResponse(std::pmr::memory_resource* resource = nullptr)
-        : FetchResponse(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
-
     FetchResponse(const FetchResponse&) = delete;
     FetchResponse& operator=(const FetchResponse&) = delete;
     FetchResponse(FetchResponse&&) noexcept = default;
     FetchResponse& operator=(FetchResponse&&) noexcept = default;
 
-    int statusCode{0};
-    std::pmr::vector<FetchResponseHeader> headers;
-    std::pmr::string body;
+    [[nodiscard]] std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] std::span<const FetchResponseHeader> headers() const noexcept {
+        return std::span<const FetchResponseHeader>(headers_.data(), headers_.size());
+    }
+
+    [[nodiscard]] std::string_view body() const noexcept {
+        return std::string_view(body_.data(), body_.size());
+    }
 
 private:
+    friend struct detail::FetchResponseAccess;
+
+    explicit FetchResponse(std::pmr::memory_resource* resource)
+        : FetchResponse(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
     FetchResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
-        : headers(resource),
-          body(resource) {}
+        : headers_(resource),
+          body_(resource) {}
+
+    std::uint16_t status_{0};
+    std::pmr::vector<FetchResponseHeader> headers_;
+    std::pmr::string body_;
 };
 
 namespace detail {
+
+struct FetchResponseHeaderAccess final {
+    [[nodiscard]] static FetchResponseHeader make(std::pmr::string name, std::pmr::string value) {
+        return FetchResponseHeader(std::move(name), std::move(value));
+    }
+
+    [[nodiscard]] static FetchResponseHeader make(
+        std::string_view name,
+        std::string_view value,
+        std::pmr::memory_resource* resource) {
+        return FetchResponseHeader(
+            ResolvedPmrResourceTag{},
+            name,
+            value,
+            pmrResourceOrDefault(resource));
+    }
+};
+
+struct FetchResponseAccess final {
+    [[nodiscard]] static FetchResponse make(std::pmr::memory_resource* resource) {
+        return FetchResponse(resource);
+    }
+
+    static void setStatus(FetchResponse& response, std::uint16_t status) noexcept {
+        response.status_ = status;
+    }
+
+    [[nodiscard]] static std::pmr::vector<FetchResponseHeader>& headers(FetchResponse& response) noexcept {
+        return response.headers_;
+    }
+
+    [[nodiscard]] static std::pmr::string& body(FetchResponse& response) noexcept {
+        return response.body_;
+    }
+};
 
 struct HttpClientDefinition final {
     std::pmr::string alias;
@@ -166,7 +223,7 @@ public:
     FetchResponseStream& operator=(FetchResponseStream&&) noexcept;
     ~FetchResponseStream();
 
-    [[nodiscard]] int statusCode() const noexcept;
+    [[nodiscard]] std::uint16_t status() const noexcept;
     [[nodiscard]] std::span<const FetchResponseHeader> headers() const noexcept;
     // Next slice of the body; an empty string signals end of stream. Throws on transport error.
     [[nodiscard]] Task<std::pmr::string> readChunk();

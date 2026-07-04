@@ -29,7 +29,7 @@ Task<void> writeResponseWithScratch(
     bool skipBody,
     std::error_code& ec) {
     head.reset();
-    const auto policy = responseWritePolicy(response.statusCode());
+    const auto policy = responseWritePolicy(response.status());
     appendResponseHead(response, head, policy);
     if (responseHasFileBody(response)) {
         const auto fileBody = responseFileBody(response);

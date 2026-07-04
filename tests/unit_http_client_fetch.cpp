@@ -166,8 +166,8 @@ FetchOutcome runOneFetch(
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/", options, std::pmr::get_default_resource()));
                 out.ok = true;
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
             }
@@ -229,7 +229,7 @@ FetchOutcome runStreamFetch(std::string cannedResponse, WriteMode writeMode) {
                 ruvia::FetchOptions options;
                 auto stream = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetchStream("/", options, std::pmr::get_default_resource()));
-                out.status = stream.statusCode();
+                out.status = stream.status();
                 for (;;) {
                     auto chunk = co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
                     if (chunk.empty()) {
@@ -320,10 +320,10 @@ ReuseOutcome runReuseFetch(std::string response1, std::string response2) {
                 ruvia::FetchOptions options;
                 auto r1 = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/one", options, std::pmr::get_default_resource()));
-                out.body1.assign(r1.body.data(), r1.body.size());
+                out.body1.assign(r1.body().data(), r1.body().size());
                 auto r2 = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/two", options, std::pmr::get_default_resource()));
-                out.body2.assign(r2.body.data(), r2.body.size());
+                out.body2.assign(r2.body().data(), r2.body().size());
                 out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
@@ -463,7 +463,7 @@ StreamReuseOutcome runStreamContentLengthZeroWithExtraThenFetch() {
 
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/two", options, std::pmr::get_default_resource()));
-                out.body.assign(response.body.data(), response.body.size());
+                out.body.assign(response.body().data(), response.body().size());
                 out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
@@ -554,7 +554,7 @@ StreamReuseOutcome runStreamConnectionCloseThenFetch() {
 
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/two", options, std::pmr::get_default_resource()));
-                out.body.assign(response.body.data(), response.body.size());
+                out.body.assign(response.body().data(), response.body().size());
                 out.ok = true;
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
@@ -703,8 +703,8 @@ RedirectOutcome runRedirectFetch(std::vector<std::string> responses, ruvia::Fetc
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/start", options, std::pmr::get_default_resource()));
                 out.ok = true;
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
             }
@@ -820,7 +820,7 @@ UploadOutcome runChunkedUploadFetch() {
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/upload", options, std::pmr::get_default_resource()));
                 out.ok = true;
-                out.status = response.statusCode;
+                out.status = response.status();
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
             }

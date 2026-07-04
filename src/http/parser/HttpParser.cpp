@@ -221,11 +221,11 @@ namespace ruvia {
 HttpParseResult HttpParser::parse(std::string_view buffer) const noexcept {
     detail::HttpServerParser parser;
     auto parsed = parser.parse(buffer);
-    return HttpParseResult{
-        .status = parsed.status,
-        .error = parsed.error,
-        .request = parsed.request,
-        .consumedBytes = parsed.consumedBytes};
+    return detail::HttpParseResultAccess::make(
+        parsed.status,
+        parsed.error,
+        parsed.request,
+        parsed.consumedBytes);
 }
 
 }  // namespace ruvia

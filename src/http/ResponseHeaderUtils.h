@@ -39,7 +39,7 @@ inline void setResponseHeaderIfMissing(
     std::string_view name,
     std::string_view value) {
     if (!responseHasKnownHeader(response, bit)) {
-        response.setHeader(name, value);
+        response.header(name, value);
     }
 }
 
@@ -116,7 +116,7 @@ inline void addVaryTokens(
         }
         updated.append(token.data(), token.size());
     }
-    response.setHeader("Vary", updated);
+    response.header("Vary", updated);
 }
 
 inline void addVaryToken(HttpResponse& response, std::string_view token) {
@@ -139,7 +139,7 @@ inline void addVaryToken(HttpResponse& response, std::string_view token) {
         updated.append(", ");
     }
     updated.append(token.data(), token.size());
-    response.setHeader("Vary", updated);
+    response.header("Vary", updated);
 }
 
 }  // namespace ruvia::detail

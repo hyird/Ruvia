@@ -64,7 +64,7 @@ template <typename Visitor>
     Visitor&& visitor) {
     auto& visitorRef = visitor;
     for (const auto& field : fields) {
-        if (!dispatchJsonObjectFieldVisitor(visitorRef, field.name, field.value)) {
+        if (!dispatchJsonObjectFieldVisitor(visitorRef, field.name(), field.value())) {
             break;
         }
     }

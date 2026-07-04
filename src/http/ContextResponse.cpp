@@ -88,7 +88,7 @@ void assignResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot)
         const auto value = header.value();
         if (knownBit == detail::kResponseHeaderSetCookie) {
             if (!removedAssignedSetCookie) {
-                (void)response.removeHeader("Set-Cookie");
+                response.header("Set-Cookie", std::nullopt);
                 removedAssignedSetCookie = true;
             }
             detail::appendResponseHeaderValidated(response, name, value, knownBit);
@@ -211,7 +211,7 @@ void Context::status(std::uint16_t statusCode) {
     }
     responseStatusCode_ = statusCode;
     if (response_ != nullptr) {
-        response_->setStatus(statusCode, {});
+        response_->status(statusCode, {});
     }
 }
 
@@ -253,7 +253,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
         rebuildResponseHeaderIndexes();
     }
     if (response_ != nullptr) {
-        responseStorage().removeHeader(name);
+        responseStorage().header(name, std::nullopt);
     }
     return *this;
 }
@@ -522,8 +522,8 @@ void Context::storeResponse(HttpResponse&& response) {
 
     // The context status is a default: a status already carried by the
     // response (an explicit helper argument or setStatus call) wins.
-    if (responseStatusCode_ != 200 && response.statusCode() == 200) {
-        response.setStatus(responseStatusCode_, {});
+    if (responseStatusCode_ != 200 && response.status() == 200) {
+        response.status(responseStatusCode_, {});
     }
 
     if (!hadResponseSlot) {
@@ -555,8 +555,8 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         assignResponseSlotHeaders(response, *response_);
     }
 
-    if (responseStatusCode_ != 200 && response.statusCode() == 200) {
-        response.setStatus(responseStatusCode_, {});
+    if (responseStatusCode_ != 200 && response.status() == 200) {
+        response.status(responseStatusCode_, {});
     }
 
     if (response_ == nullptr) {
@@ -643,7 +643,7 @@ HttpResponse Context::body(
     std::uint16_t statusCode,
     std::string_view statusText) const {
     HttpResponse response(resource());
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -653,7 +653,7 @@ HttpResponse Context::body(
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
 }
@@ -670,7 +670,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
     HttpResponse response(resource());
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
@@ -858,7 +858,7 @@ HttpResponse Context::text(
     std::string_view statusText) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -869,7 +869,7 @@ HttpResponse Context::text(
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
 }
@@ -887,7 +887,7 @@ HttpResponse Context::text(
 HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
@@ -909,7 +909,7 @@ HttpResponse Context::jsonSerialized(
     std::string_view statusText) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -960,7 +960,7 @@ HttpResponse Context::html(
     std::string_view statusText) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -971,7 +971,7 @@ HttpResponse Context::html(
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
 }
@@ -989,21 +989,21 @@ HttpResponse Context::html(
 HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, init.status, init.statusText, init.headers);
     return response;
 }
 
-void Context::setRenderer(Renderer renderer) noexcept {
+void Context::renderer(Renderer renderer) noexcept {
     renderer_ = renderer;
 }
 
-Context::Layout Context::setLayout(Layout layout) noexcept {
+Context::Layout Context::layout(Layout layout) noexcept {
     layout_ = layout;
     return layout_;
 }
 
-Context::Layout Context::getLayout() const noexcept {
+Context::Layout Context::layout() const noexcept {
     return layout_;
 }
 
@@ -1030,9 +1030,9 @@ HttpResponse Context::redirect(
     applyResponseState(response, statusCode, statusText);
     if (redirectLocationNeedsEncoding(location)) {
         auto encodedLocation = encodeRedirectLocation(location, resource());
-        response.setHeader("Location", encodedLocation);
+        response.header("Location", encodedLocation);
     } else {
-        response.setHeader("Location", location);
+        response.header("Location", location);
     }
     return response;
 }
@@ -1044,11 +1044,7 @@ HttpResponse Context::error(
     std::string_view statusText) const {
     auto response = makeErrorResponse(
         resource(),
-        HttpErrorInfo{
-            .statusCode = statusCode,
-            .statusText = statusText,
-            .code = code,
-            .message = message});
+        HttpErrorInfo(statusCode, code, message, statusText));
     applyResponseState(response, statusCode, statusText);
     return response;
 }
@@ -1060,7 +1056,7 @@ Task<HttpResponse> Context::notFound() {
 
     auto response = co_await makeErrorResponse(
         *this,
-        HttpErrorInfo{.statusCode = 404, .message = "route not found"},
+        HttpErrorInfo(404, {}, "route not found"),
         false,
         nullptr);
     applyResponseState(response, 404, {});
@@ -1070,7 +1066,7 @@ Task<HttpResponse> Context::notFound() {
 HttpResponse Context::streamingHead(std::string_view contentType) const {
     HttpResponse response(resource());
     if (!contentType.empty()) {
-        response.setHeader("Content-Type", contentType);
+        response.header("Content-Type", contentType);
     }
     applyResponseState(response, 0, {});
     return response;
@@ -1097,10 +1093,10 @@ void Context::applyResponseState(
     const auto finalStatusCode = statusCode == 0 ? responseStatusCode_ : statusCode;
     if (!statusText.empty()) {
         if (finalStatusCode != 200 || statusText != "OK") {
-            response.setStatus(finalStatusCode, statusText);
+            response.status(finalStatusCode, statusText);
         }
     } else if (finalStatusCode != 200) {
-        response.setStatus(finalStatusCode, {});
+        response.status(finalStatusCode, {});
     }
     if (response_ != nullptr && response_ != &response) {
         mergeResponseSlotHeaders(response, *response_);
@@ -1134,7 +1130,7 @@ void Context::applyExplicitResponseHeaders(
     }
     detail::reserveResponseHeaders(response, response.headers().size() + headers.size());
     for (const auto& header : headers) {
-        response.setHeader(header.name, header.value);
+        response.header(header.name(), header.value());
     }
 }
 

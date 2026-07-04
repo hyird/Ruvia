@@ -7,7 +7,6 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 
 namespace ruvia {
@@ -34,8 +33,6 @@ public:
         return path_;
     }
 
-    [[nodiscard]] RequestValue decodedPath() const noexcept;
-
     [[nodiscard]] std::string_view queryString() const noexcept {
         return queryString_;
     }
@@ -49,11 +46,8 @@ public:
     }
 
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
-    [[nodiscard]] QueryValue query(std::string_view name) const noexcept;
-    [[nodiscard]] RequestNameValueList query() const;
-    [[nodiscard]] std::pmr::vector<QueryValue> queries(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
-    [[nodiscard]] RequestNameValueList cookies() const;
 
     [[nodiscard]] std::string_view remoteAddress() const noexcept {
         return remoteAddress_;

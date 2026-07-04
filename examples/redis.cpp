@@ -340,13 +340,13 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("keys=");
-        appendSigned(body, static_cast<std::int64_t>(keys.values.size()));
+        appendSigned(body, static_cast<std::int64_t>(keys.values().size()));
         body.append("\nhash=");
-        appendSigned(body, static_cast<std::int64_t>(hash.entries.size()));
+        appendSigned(body, static_cast<std::int64_t>(hash.entries().size()));
         body.append("\nset=");
-        appendSigned(body, static_cast<std::int64_t>(set.values.size()));
+        appendSigned(body, static_cast<std::int64_t>(set.values().size()));
         body.append("\nzset=");
-        appendSigned(body, static_cast<std::int64_t>(zset.entries.size()));
+        appendSigned(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
         co_return c.text(body);
     }

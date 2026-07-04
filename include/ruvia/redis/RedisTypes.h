@@ -13,7 +13,16 @@
 
 #include "ruvia/memory/PmrResource.h"
 
+struct redisReply;
+
 namespace ruvia {
+
+class RedisValue;
+class RedisKeyValue;
+class RedisScoredValue;
+class RedisScanResult;
+class RedisHashScanResult;
+class RedisZScanResult;
 
 struct RedisConfig {
     // Host name or unbracketed address only; keep the port in port.
@@ -51,29 +60,174 @@ struct RedisScanOptions {
     std::uint64_t count{0};
 };
 
-struct RedisKeyValue {
-    std::pmr::string key;
-    std::pmr::string value;
+namespace detail {
+
+[[nodiscard]] std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource,
+    std::string_view context);
+[[nodiscard]] std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource);
+[[nodiscard]] std::optional<RedisKeyValue> parseRedisBlockingPopReply(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource);
+[[nodiscard]] RedisScanResult parseRedisScanResult(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource);
+[[nodiscard]] RedisHashScanResult parseRedisHashScanResult(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource);
+[[nodiscard]] RedisZScanResult parseRedisZScanResult(
+    const RedisValue& value,
+    std::pmr::memory_resource* resource);
+
+}  // namespace detail
+
+class RedisKeyValue final {
+public:
+    RedisKeyValue(const RedisKeyValue&) = default;
+    RedisKeyValue& operator=(const RedisKeyValue&) = default;
+    RedisKeyValue(RedisKeyValue&&) noexcept = default;
+    RedisKeyValue& operator=(RedisKeyValue&&) noexcept = default;
+
+    [[nodiscard]] std::string_view key() const noexcept {
+        return std::string_view(key_.data(), key_.size());
+    }
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return std::string_view(value_.data(), value_.size());
+    }
+
+private:
+    friend std::pmr::vector<RedisKeyValue> detail::parseRedisKeyValueArray(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource,
+        std::string_view context);
+    friend std::optional<RedisKeyValue> detail::parseRedisBlockingPopReply(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+    friend RedisHashScanResult detail::parseRedisHashScanResult(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+
+    RedisKeyValue(std::string_view key, std::string_view value, std::pmr::memory_resource* resource)
+        : RedisKeyValue(key, value, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+    RedisKeyValue(
+        std::string_view key,
+        std::string_view value,
+        detail::ResolvedPmrResourceTag,
+        std::pmr::memory_resource* resource)
+        : key_(key.data(), key.size(), resource),
+          value_(value.data(), value.size(), resource) {}
+
+    std::pmr::string key_;
+    std::pmr::string value_;
 };
 
-struct RedisScoredValue {
-    std::pmr::string value;
-    double score{0};
+class RedisScoredValue final {
+public:
+    RedisScoredValue(const RedisScoredValue&) = default;
+    RedisScoredValue& operator=(const RedisScoredValue&) = default;
+    RedisScoredValue(RedisScoredValue&&) noexcept = default;
+    RedisScoredValue& operator=(RedisScoredValue&&) noexcept = default;
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return std::string_view(value_.data(), value_.size());
+    }
+
+    [[nodiscard]] double score() const noexcept {
+        return score_;
+    }
+
+private:
+    friend std::pmr::vector<RedisScoredValue> detail::parseRedisScoredArray(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+    friend RedisZScanResult detail::parseRedisZScanResult(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+
+    RedisScoredValue(std::string_view value, double score, std::pmr::memory_resource* resource)
+        : RedisScoredValue(value, score, detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+
+    RedisScoredValue(
+        std::string_view value,
+        double score,
+        detail::ResolvedPmrResourceTag,
+        std::pmr::memory_resource* resource)
+        : value_(value.data(), value.size(), resource),
+          score_(score) {}
+
+    std::pmr::string value_;
+    double score_{0};
 };
 
-struct RedisScanResult {
-    std::uint64_t cursor{0};
-    std::pmr::vector<std::pmr::string> values;
+class RedisScanResult final {
+public:
+    [[nodiscard]] std::uint64_t cursor() const noexcept {
+        return cursor_;
+    }
+
+    [[nodiscard]] std::span<const std::pmr::string> values() const noexcept {
+        return std::span<const std::pmr::string>(values_.data(), values_.size());
+    }
+
+private:
+    friend RedisScanResult detail::parseRedisScanResult(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+
+    explicit RedisScanResult(std::pmr::memory_resource* resource)
+        : values_(detail::pmrResourceOrDefault(resource)) {}
+
+    std::uint64_t cursor_{0};
+    std::pmr::vector<std::pmr::string> values_;
 };
 
-struct RedisHashScanResult {
-    std::uint64_t cursor{0};
-    std::pmr::vector<RedisKeyValue> entries;
+class RedisHashScanResult final {
+public:
+    [[nodiscard]] std::uint64_t cursor() const noexcept {
+        return cursor_;
+    }
+
+    [[nodiscard]] std::span<const RedisKeyValue> entries() const noexcept {
+        return std::span<const RedisKeyValue>(entries_.data(), entries_.size());
+    }
+
+private:
+    friend RedisHashScanResult detail::parseRedisHashScanResult(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+
+    explicit RedisHashScanResult(std::pmr::memory_resource* resource)
+        : entries_(detail::pmrResourceOrDefault(resource)) {}
+
+    std::uint64_t cursor_{0};
+    std::pmr::vector<RedisKeyValue> entries_;
 };
 
-struct RedisZScanResult {
-    std::uint64_t cursor{0};
-    std::pmr::vector<RedisScoredValue> entries;
+class RedisZScanResult final {
+public:
+    [[nodiscard]] std::uint64_t cursor() const noexcept {
+        return cursor_;
+    }
+
+    [[nodiscard]] std::span<const RedisScoredValue> entries() const noexcept {
+        return std::span<const RedisScoredValue>(entries_.data(), entries_.size());
+    }
+
+private:
+    friend RedisZScanResult detail::parseRedisZScanResult(
+        const RedisValue& value,
+        std::pmr::memory_resource* resource);
+
+    explicit RedisZScanResult(std::pmr::memory_resource* resource)
+        : entries_(detail::pmrResourceOrDefault(resource)) {}
+
+    std::uint64_t cursor_{0};
+    std::pmr::vector<RedisScoredValue> entries_;
 };
 
 namespace detail {
@@ -87,6 +241,11 @@ struct RedisDefinition final {
 
 class RedisPool;
 class RedisRegistry;
+[[nodiscard]] RedisValue hiredisReplyToValue(
+    const ::redisReply& reply,
+    std::size_t depth,
+    std::size_t maxDepth,
+    std::pmr::memory_resource* resource);
 
 }  // namespace detail
 
@@ -125,8 +284,6 @@ public:
         kError
     };
 
-    explicit RedisValue(std::pmr::memory_resource* resource = nullptr);
-
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;
     RedisValue(RedisValue&&) noexcept = default;
@@ -138,14 +295,20 @@ public:
     [[nodiscard]] std::int64_t integer() const;
     [[nodiscard]] std::span<const RedisValue> array() const;
 
+private:
+    friend class detail::RedisPool;
+    friend RedisValue detail::hiredisReplyToValue(
+        const ::redisReply& reply,
+        std::size_t depth,
+        std::size_t maxDepth,
+        std::pmr::memory_resource* resource);
+
+    explicit RedisValue(std::pmr::memory_resource* resource = nullptr);
     [[nodiscard]] static RedisValue nullValue(std::pmr::memory_resource* resource);
     [[nodiscard]] static RedisValue stringValue(std::string_view value, std::pmr::memory_resource* resource);
     [[nodiscard]] static RedisValue errorValue(std::string_view value, std::pmr::memory_resource* resource);
     [[nodiscard]] static RedisValue integerValue(std::int64_t value, std::pmr::memory_resource* resource);
     [[nodiscard]] static RedisValue arrayValue(std::pmr::vector<RedisValue> values, std::pmr::memory_resource* resource);
-
-private:
-    friend class detail::RedisPool;
 
     RedisValue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
 

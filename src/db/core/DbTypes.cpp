@@ -158,26 +158,6 @@ const DbField* DbRow::end() const noexcept {
     return fields_ + size_;
 }
 
-void DbRow::reserve(std::size_t size) {
-    ownedFields_.reserve(size);
-    refreshView();
-}
-
-void DbRow::push_back(DbField field) {
-    ownedFields_.push_back(std::move(field));
-    refreshView();
-}
-
-void DbRow::emplace_back(std::nullptr_t, std::pmr::memory_resource* resource) {
-    ownedFields_.emplace_back(nullptr, resource);
-    refreshView();
-}
-
-void DbRow::emplace_back(std::string_view value, std::pmr::memory_resource* resource) {
-    ownedFields_.emplace_back(value, resource);
-    refreshView();
-}
-
 void DbRow::refreshView() noexcept {
     if (ownsFields_) {
         fields_ = ownedFields_.data();

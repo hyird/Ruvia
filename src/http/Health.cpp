@@ -1,5 +1,6 @@
 #include "ruvia/http/Health.h"
 
+#include "HttpResponseBodyAccess.h"
 #include "ruvia/http/JsonUtils.h"
 
 #include <memory_resource>
@@ -12,9 +13,9 @@ namespace {
     std::pmr::string body,
     std::uint16_t statusCode = 200) {
     HttpResponse response(context.resource());
-    response.setStatus(statusCode, {});
-    response.setHeader("Content-Type", "application/json");
-    response.setBodyOwned(std::move(body));
+    response.status(statusCode, {});
+    response.header("Content-Type", "application/json");
+    detail::setResponseBodyOwned(response, std::move(body));
     return response;
 }
 

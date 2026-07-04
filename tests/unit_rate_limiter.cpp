@@ -82,6 +82,22 @@ RUVIA_TEST(rate_limiter_oversized_key_follows_fail_closed) {
     RUVIA_CHECK(open.allowGlobal(oversized).allowed);  // fail open -> allow
 }
 
+RUVIA_TEST(rate_limiter_route_rule_owns_fail_policy) {
+    const std::string oversized(100, 'a');  // exceeds the 64-byte key cap
+    RateLimiter limiter(ruleWith(1, /*failClosed=*/true));
+    const RateLimitRule routeOpen = ruleWith(1, /*failClosed=*/false);
+    RUVIA_CHECK(limiter.allowRoute(0xCAFE, oversized, routeOpen).allowed);
+}
+
+RUVIA_TEST(rate_limiter_route_rule_is_normalized) {
+    RateLimiter limiter(ruleWith(10));
+    RateLimitRule routeRule;
+    routeRule.maxRequests = 1;
+    routeRule.window = std::chrono::milliseconds(0);
+    RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
+    RUVIA_CHECK(!limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
+}
+
 // The core lock-free guarantee: under heavy contention on ONE key within a single
 // window, the limiter admits EXACTLY maxRequests — never over-admits (a lost CAS
 // race would let clients exceed the limit) and never under-admits.

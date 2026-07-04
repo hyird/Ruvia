@@ -13,12 +13,46 @@ namespace ruvia {
 
 class Context;
 
-struct HttpErrorInfo {
-    std::uint16_t statusCode{500};
-    std::string_view statusText{};
-    std::string_view code{};
-    std::string_view message{};
-    std::string_view detailsJson{};
+class HttpErrorInfo final {
+public:
+    constexpr HttpErrorInfo(
+        std::uint16_t status = 500,
+        std::string_view code = {},
+        std::string_view message = {},
+        std::string_view statusText = {},
+        std::string_view detailsJson = {}) noexcept
+        : status_(status),
+          statusText_(statusText),
+          code_(code),
+          message_(message),
+          detailsJson_(detailsJson) {}
+
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] constexpr std::string_view statusText() const noexcept {
+        return statusText_;
+    }
+
+    [[nodiscard]] constexpr std::string_view code() const noexcept {
+        return code_;
+    }
+
+    [[nodiscard]] constexpr std::string_view message() const noexcept {
+        return message_;
+    }
+
+    [[nodiscard]] constexpr std::string_view detailsJson() const noexcept {
+        return detailsJson_;
+    }
+
+private:
+    std::uint16_t status_{500};
+    std::string_view statusText_{};
+    std::string_view code_{};
+    std::string_view message_{};
+    std::string_view detailsJson_{};
 };
 
 using HttpErrorHandler = Task<HttpResponse> (*)(Context&, HttpErrorInfo);

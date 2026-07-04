@@ -126,11 +126,11 @@ inline void appendHttp2ResponseHeaders(
     bool emitAutoContentLength = true) {
     auto& headerBlock = stream.responseHeaderBlock();
     headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, response.statusCode());
+    HpackEncoder::encodeStatus(headerBlock, response.status());
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
 
-    const auto policy = responseWritePolicy(response.statusCode());
+    const auto policy = responseWritePolicy(response.status());
     const auto knownBits = responseKnownHeaderBits(response);
     const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed();
     bool contentLengthWritten = false;

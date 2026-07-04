@@ -37,7 +37,7 @@ public:
     Http1StreamSource(
         HttpClientPool* pool,
         HttpClientPool::ConnectionGuard guard,
-        int status,
+        std::uint16_t status,
         std::pmr::vector<FetchResponseHeader> headers,
         Framing framing,
         std::size_t contentLength,
@@ -58,7 +58,7 @@ public:
 
     ~Http1StreamSource() override { finish(false); }
 
-    [[nodiscard]] int statusCode() const noexcept override { return status_; }
+    [[nodiscard]] std::uint16_t status() const noexcept override { return status_; }
     [[nodiscard]] const std::pmr::vector<FetchResponseHeader>& headers() const noexcept override {
         return headers_;
     }
@@ -268,7 +268,7 @@ private:
     std::size_t clRemaining_{0};
     std::size_t chunkRemaining_{0};
     Framing framing_;
-    int status_;
+    std::uint16_t status_;
     bool finished_{false};
     bool closeAfterResponse_{false};
     bool chunkDone_{false};
@@ -290,7 +290,7 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
 
     const auto index = co_await acquire();
     ConnectionGuard guard(*this, index);
-    FetchResponse response(requestResource);
+    FetchResponse response = FetchResponseAccess::make(requestResource);
     HttpClientResponseHead head;
     try {
         auto& conn = guard.connection();
@@ -334,8 +334,8 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
     }
 
     auto* source = constructPmrObject<Http1StreamSource>(
-        requestResource, this, std::move(guard), response.statusCode,
-        std::move(response.headers), framing, contentLength, head.closeAfterResponse,
+        requestResource, this, std::move(guard), response.status(),
+        std::move(FetchResponseAccess::headers(response)), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), idleTimeout, requestResource);
     co_return FetchResponseStream(
         std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));

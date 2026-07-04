@@ -52,7 +52,7 @@ RUVIA_TEST(ws_assembler_single_frame_messages) {
     WebSocketMessage out;
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "hello", true), 1000, out) ==
                 WebSocketInboundAction::kDeliver);
-    RUVIA_CHECK_EQ(out.payload, std::string_view("hello"));
+    RUVIA_CHECK_EQ(out.payload(), std::string_view("hello"));
     // Binary is delivered without UTF-8 checking.
     const std::string binary("\xff\xfe\x00\x01", 4);
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kBinary, binary, true), 1000, out) ==
@@ -79,7 +79,7 @@ RUVIA_TEST(ws_assembler_fragmented_message) {
                 WebSocketInboundAction::kContinue);
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "world", true, true), 1000, out) ==
                 WebSocketInboundAction::kDeliver);
-    RUVIA_CHECK_EQ(out.payload, std::string_view("hello world"));
+    RUVIA_CHECK_EQ(out.payload(), std::string_view("hello world"));
 }
 
 RUVIA_TEST(ws_assembler_protocol_errors) {

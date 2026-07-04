@@ -159,29 +159,24 @@ inline void httpUpdateResponseCodingQualities(
     HttpAcceptedEncodingQuality& gzip,
     HttpAcceptedEncodingQuality& brotli,
     HttpAcceptedEncodingQuality& zstd) noexcept {
-    while (!acceptEncoding.empty()) {
-        const auto comma = acceptEncoding.find(',');
-        const auto item = httpTrimOws(
-            comma == std::string_view::npos ? acceptEncoding : acceptEncoding.substr(0, comma));
-        const auto token = httpHeaderTokenBeforeParameters(item);
-        if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
-            gzip.explicitQuality = httpQualityParameter(item);
-        } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
-            brotli.explicitQuality = httpQualityParameter(item);
-        } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-            zstd.explicitQuality = httpQualityParameter(item);
-        } else if (token == "*") {
-            const auto wildcard = httpQualityParameter(item);
-            gzip.wildcardQuality = wildcard;
-            brotli.wildcardQuality = wildcard;
-            zstd.wildcardQuality = wildcard;
-        }
-
-        if (comma == std::string_view::npos) {
-            break;
-        }
-        acceptEncoding.remove_prefix(comma + 1);
-    }
+    httpVisitCommaSeparatedQuoted(
+        acceptEncoding,
+        [&gzip, &brotli, &zstd](std::string_view item) noexcept {
+            const auto token = httpHeaderTokenBeforeParameters(item);
+            if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
+                gzip.explicitQuality = httpQualityParameter(item);
+            } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
+                brotli.explicitQuality = httpQualityParameter(item);
+            } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
+                zstd.explicitQuality = httpQualityParameter(item);
+            } else if (token == "*") {
+                const auto wildcard = httpQualityParameter(item);
+                gzip.wildcardQuality = wildcard;
+                brotli.wildcardQuality = wildcard;
+                zstd.wildcardQuality = wildcard;
+            }
+            return true;
+        });
 }
 
 [[nodiscard]] inline HttpContentCoding httpSelectResponseCoding(std::string_view acceptEncoding) noexcept {
