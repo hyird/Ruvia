@@ -44,6 +44,40 @@ inline constexpr std::size_t kRequestHeaderKindCount =
     return index == 0 ? kRequestHeaderKindCount : index - 1;
 }
 
+[[nodiscard]] inline constexpr std::uint32_t singletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
+    switch (kind) {
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kRange:
+            return 1U << static_cast<std::uint32_t>(kind);
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentEncoding:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kUserAgent:
+            return 0;
+    }
+    return 0;
+}
+
 enum class ChunkSizeLineStatus {
     kOk,
     kInvalidSize,

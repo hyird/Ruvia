@@ -7,6 +7,7 @@
 namespace {
 
 using ruvia::detail::classifyRequestHeader;
+using ruvia::detail::singletonRequestHeaderBit;
 using ruvia::detail::RequestHeaderKind;
 
 struct Case final {
@@ -72,4 +73,44 @@ RUVIA_TEST(request_header_classification_unknown_is_other) {
     // Same length and first byte as a known header but a different name.
     RUVIA_CHECK(classifyRequestHeader("Hosx") == RequestHeaderKind::kOther);   // 4 bytes, not "Host"
     RUVIA_CHECK(classifyRequestHeader("Hosts") == RequestHeaderKind::kOther);  // 5 bytes, not "Range"
+}
+
+RUVIA_TEST(request_header_singleton_policy_table) {
+    const RequestHeaderKind singleton[] = {
+        RequestHeaderKind::kAccessControlRequestMethod,
+        RequestHeaderKind::kAuthorization,
+        RequestHeaderKind::kContentType,
+        RequestHeaderKind::kIfMatch,
+        RequestHeaderKind::kIfModifiedSince,
+        RequestHeaderKind::kIfNoneMatch,
+        RequestHeaderKind::kIfRange,
+        RequestHeaderKind::kIfUnmodifiedSince,
+        RequestHeaderKind::kOrigin,
+        RequestHeaderKind::kRange,
+    };
+    for (const auto kind : singleton) {
+        RUVIA_CHECK(singletonRequestHeaderBit(kind) == (1U << static_cast<unsigned>(kind)));
+    }
+
+    const RequestHeaderKind repeatableOrSpecial[] = {
+        RequestHeaderKind::kOther,
+        RequestHeaderKind::kAccept,
+        RequestHeaderKind::kAcceptEncoding,
+        RequestHeaderKind::kAccessControlRequestHeaders,
+        RequestHeaderKind::kConnection,
+        RequestHeaderKind::kContentEncoding,
+        RequestHeaderKind::kContentLength,
+        RequestHeaderKind::kCookie,
+        RequestHeaderKind::kExpect,
+        RequestHeaderKind::kHost,
+        RequestHeaderKind::kSecWebSocketKey,
+        RequestHeaderKind::kSecWebSocketProtocol,
+        RequestHeaderKind::kSecWebSocketVersion,
+        RequestHeaderKind::kTransferEncoding,
+        RequestHeaderKind::kUpgrade,
+        RequestHeaderKind::kUserAgent,
+    };
+    for (const auto kind : repeatableOrSpecial) {
+        RUVIA_CHECK(singletonRequestHeaderBit(kind) == 0U);
+    }
 }
