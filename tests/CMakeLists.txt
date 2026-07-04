@@ -96,6 +96,7 @@ add_executable(ruvia_unit_tests
     unit_dotenv_parser.cpp
     unit_http2_header_block.cpp
     unit_http2_payload_slice.cpp
+    unit_http2_response_headers.cpp
     unit_http2_websocket_handshake.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
