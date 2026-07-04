@@ -3,7 +3,6 @@
 #include "DotenvInternal.h"
 
 #include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -54,15 +53,20 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
         return false;
     }
 
-    const auto equalsIgnoreCase = [](std::string_view left, std::string_view right) noexcept {
+    // ASCII-only case fold: the boolean tokens are ASCII, and std::tolower is
+    // locale-dependent (a non-"C" LC_CTYPE set by the host app could fold bytes
+    // unexpectedly). Matches how the rest of the codebase folds ASCII.
+    const auto asciiLower = [](unsigned char c) noexcept -> unsigned char {
+        return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+    };
+    const auto equalsIgnoreCase = [&asciiLower](std::string_view left, std::string_view right) noexcept {
         if (left.size() != right.size()) {
             return false;
         }
 
         for (std::size_t index = 0; index < left.size(); ++index) {
-            const auto l = static_cast<unsigned char>(left[index]);
-            const auto r = static_cast<unsigned char>(right[index]);
-            if (std::tolower(l) != std::tolower(r)) {
+            if (asciiLower(static_cast<unsigned char>(left[index])) !=
+                asciiLower(static_cast<unsigned char>(right[index]))) {
                 return false;
             }
         }
