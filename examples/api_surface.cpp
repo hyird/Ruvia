@@ -19,6 +19,7 @@
 #include "ruvia/db/DbQueryResult.h"
 #include "ruvia/db/DbTypes.h"
 #include "ruvia/http/Controller.h"
+#include "ruvia/http/Csrf.h"
 #include "ruvia/http/HttpParser.h"
 #include "ruvia/http/RateLimit.h"
 #include "ruvia/http/Session.h"

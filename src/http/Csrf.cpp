@@ -1,5 +1,8 @@
 #include "ruvia/http/Csrf.h"
 
+#include "CsrfInternal.h"
+
+#include <array>
 #include <cstddef>
 
 #include <openssl/rand.h>
@@ -24,3 +27,32 @@ std::string_view generateCsrfToken(std::span<char> buffer) noexcept {
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+Task<void> CsrfProtection::handle(Context& c, Next& next) {
+    const auto method = c.req().method();
+    const bool safe = method == "GET" ||
+        method == "HEAD" ||
+        method == "OPTIONS";
+    const auto cookie = c.req().cookie("XSRF-TOKEN");
+    if (!safe) {
+        const auto header = c.req().header("X-XSRF-TOKEN");
+        if (!cookie || cookie->empty() || !header || header->empty() ||
+            !detail::csrfTokensEqual(*cookie, *header)) {
+            c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
+            co_return;
+        }
+    } else if (!cookie) {
+        std::array<char, 64> buffer;
+        const auto token = detail::generateCsrfToken(buffer);
+        CookieOptions options;
+        options.path = "/";
+        options.sameSite = "Lax";
+        options.secure = c.req().raw().isSecure();
+        c.setCookie("XSRF-TOKEN", token, options);
+    }
+    co_await next();
+}
+
+}  // namespace ruvia
