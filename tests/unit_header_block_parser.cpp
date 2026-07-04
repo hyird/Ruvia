@@ -98,6 +98,24 @@ RUVIA_TEST(header_block_rejects_duplicate_conditional_header) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
 }
 
+RUVIA_TEST(header_block_rejects_duplicate_auth_and_cors_singletons) {
+    RUVIA_CHECK(parse(
+                    "GET / HTTP/1.1\r\nHost: x\r\n"
+                    "Authorization: Bearer first\r\n"
+                    "Authorization: Bearer second\r\n\r\n")
+                    .error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(parse(
+                    "GET / HTTP/1.1\r\nHost: x\r\n"
+                    "Origin: https://a.example\r\n"
+                    "Origin: https://b.example\r\n\r\n")
+                    .error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(parse(
+                    "OPTIONS / HTTP/1.1\r\nHost: x\r\n"
+                    "Access-Control-Request-Method: GET\r\n"
+                    "Access-Control-Request-Method: POST\r\n\r\n")
+                    .error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);
