@@ -181,16 +181,6 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
 
     std::exception_ptr exception;
     try {
-        // A kDynamic route runs the ordinary buffered handler chain with the
-        // stream writer bound: if the handler streams, the sink commits and that
-        // is the response; otherwise the returned HttpResponse is sent buffered.
-        // outcome stays kBufferedResponse so the caller lets committed() decide.
-        if (route.isDynamicResponse()) {
-            auto response = co_await invokeRoute(route, context);
-            co_return StreamDispatchResult(
-                std::move(response),
-                RouteStreamDispatchOutcome::kBufferedResponse);
-        }
         if (!route.hasMiddleware()) {
             co_await route.streamHandler()(context);
             co_return StreamDispatchResult(
