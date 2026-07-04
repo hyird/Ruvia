@@ -1160,8 +1160,7 @@ public:
         constexpr ResponseHeaderInit(const HttpHeaderView (&headers)[N]) noexcept
             : headers_(headers, N) {}
 
-        constexpr ResponseHeaderInit(std::initializer_list<HttpHeaderView> headers) noexcept
-            : headers_(headers.begin(), headers.size()) {}
+        constexpr ResponseHeaderInit(std::initializer_list<HttpHeaderView>) = delete;
 
         [[nodiscard]] constexpr operator std::span<const HttpHeaderView>() const noexcept {
             return headers_;
