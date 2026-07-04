@@ -116,16 +116,28 @@ inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visi
 // of OWS; segments without '=' are skipped. The visitor returns false to stop
 // (e.g. once it has found the parameter it wants). Quote-stripping and key
 // matching are left to the caller, which differs per RFC.
+// Split one already-OWS-trimmed "name=value" segment on its first '=', trim OWS
+// from each side, and hand the pair to the visitor. Sole owner of the parameter
+// key/value emit shared by both semicolon scanners below. Returns the visitor's
+// keep-going result; a segment with no '=' is not a parameter, so it is skipped
+// (returns true to continue the scan).
+template <typename Visitor>
+[[nodiscard]] inline bool httpEmitSemicolonParameter(std::string_view part, Visitor&& visitor) {
+    const auto equals = part.find('=');
+    if (equals == std::string_view::npos) {
+        return true;
+    }
+    return visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)));
+}
+
 template <typename Visitor>
 inline void httpVisitSemicolonParameters(std::string_view value, Visitor&& visitor) {
     while (!value.empty()) {
         const auto semicolon = value.find(';');
         const auto part = httpTrimOws(
             semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-        if (const auto equals = part.find('='); equals != std::string_view::npos) {
-            if (!visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)))) {
-                return;
-            }
+        if (!httpEmitSemicolonParameter(part, visitor)) {
+            return;
         }
         if (semicolon == std::string_view::npos) {
             return;
@@ -161,10 +173,8 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
             }
         }
         const auto part = httpTrimOws(value.substr(start, end - start));
-        if (const auto equals = part.find('='); equals != std::string_view::npos) {
-            if (!visitor(httpTrimOws(part.substr(0, equals)), httpTrimOws(part.substr(equals + 1)))) {
-                return;
-            }
+        if (!httpEmitSemicolonParameter(part, visitor)) {
+            return;
         }
         if (end >= value.size()) {
             return;
