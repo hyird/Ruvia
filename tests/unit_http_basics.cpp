@@ -32,7 +32,12 @@ RUVIA_TEST(http_header_name_validation) {
 
 RUVIA_TEST(http_header_value_rejects_injection) {
     RUVIA_CHECK(isValidHttpHeaderValue("text/html; charset=utf-8"));  // spaces allowed
+    RUVIA_CHECK(isValidHttpHeaderValue("a b"));                       // inner spaces allowed
     RUVIA_CHECK(isValidHttpHeaderValue(""));                          // empty value is valid
+    RUVIA_CHECK(!isValidHttpHeaderValue(" leading"));
+    RUVIA_CHECK(!isValidHttpHeaderValue("trailing "));
+    RUVIA_CHECK(!isValidHttpHeaderValue("\ttab"));
+    RUVIA_CHECK(!isValidHttpHeaderValue("tab\t"));
     // CR, LF and NUL must be rejected -- these are response/header-injection bytes.
     RUVIA_CHECK(!isValidHttpHeaderValue(std::string_view("a\rb", 3)));
     RUVIA_CHECK(!isValidHttpHeaderValue(std::string_view("a\nb", 3)));
