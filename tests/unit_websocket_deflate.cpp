@@ -4,12 +4,31 @@
 #include <string>
 #include <string_view>
 
+#include "http/HttpParserInternal.h"
 #include "net/ws/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 
+using ruvia::detail::HttpServerParser;
 using ruvia::detail::WebSocketDeflate;
 using ruvia::detail::WebSocketInflateResult;
+using ruvia::detail::webSocketOffersPermessageDeflate;
+
+// Parses a WebSocket upgrade carrying `extensions` as its Sec-WebSocket-Extensions
+// value and reports whether the server would enable permessage-deflate for it.
+// (parser/raw stay alive across the call: request headers view into raw.)
+bool offersDeflate(std::string_view extensions) {
+    std::string raw = "GET /ws HTTP/1.1\r\nHost: x\r\n";
+    if (!extensions.empty()) {
+        raw += "Sec-WebSocket-Extensions: ";
+        raw.append(extensions.data(), extensions.size());
+        raw += "\r\n";
+    }
+    raw += "\r\n";
+    HttpServerParser parser;
+    const auto result = parser.parse(raw);
+    return webSocketOffersPermessageDeflate(result.request);
+}
 
 // Compress then decompress on the same codec (separate deflate/inflate streams,
 // each reset per message for no-context-takeover) must reproduce the input.
@@ -63,6 +82,41 @@ RUVIA_TEST(websocket_deflate_inflate_respects_max_bytes) {
     std::pmr::string ok(std::pmr::get_default_resource());
     RUVIA_CHECK(codec.decompress(compressed, ok, 10000) == WebSocketInflateResult::kOk);
     RUVIA_CHECK_EQ(ok.size(), std::size_t{10000});
+}
+
+RUVIA_TEST(websocket_deflate_offer_accepted_forms) {
+    // A bare offer, and the common browser offer that only constrains the
+    // client's window, are honored (we run a fixed 32 KiB server window).
+    RUVIA_CHECK(offersDeflate("permessage-deflate"));
+    RUVIA_CHECK(offersDeflate("permessage-deflate; client_max_window_bits"));
+    RUVIA_CHECK(offersDeflate("permessage-deflate; client_max_window_bits=15"));
+    // The extension name matches case-insensitively.
+    RUVIA_CHECK(offersDeflate("PERMESSAGE-DEFLATE"));
+    // Surrounding optional whitespace is trimmed before the name compare.
+    RUVIA_CHECK(offersDeflate("  permessage-deflate  "));
+}
+
+RUVIA_TEST(websocket_deflate_offer_declined_forms) {
+    // Nothing offered at all.
+    RUVIA_CHECK(!offersDeflate(""));
+    // A different extension is not permessage-deflate.
+    RUVIA_CHECK(!offersDeflate("permessage-foo"));
+    // A superstring name must not match as a whole token.
+    RUVIA_CHECK(!offersDeflate("xpermessage-deflate"));
+    // An offer pinning a server window is declined: we never shrink our window,
+    // so honoring a smaller server_max_window_bits would break the negotiated bound.
+    RUVIA_CHECK(!offersDeflate("permessage-deflate; server_max_window_bits=10"));
+}
+
+RUVIA_TEST(websocket_deflate_offer_picks_first_honorable_offer) {
+    // RFC 7692 permits multiple offers; the server takes the first it can honor.
+    // First offer pins a server window (declined), the second is acceptable.
+    RUVIA_CHECK(offersDeflate("permessage-deflate; server_max_window_bits=10, permessage-deflate"));
+    // An acceptable offer ahead of an unacceptable one still wins.
+    RUVIA_CHECK(offersDeflate("permessage-deflate, permessage-deflate; server_max_window_bits=10"));
+    // Every offer pins a server window -> declined outright.
+    RUVIA_CHECK(!offersDeflate(
+        "permessage-deflate; server_max_window_bits=8, permessage-deflate; server_max_window_bits=10"));
 }
 
 RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
