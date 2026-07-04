@@ -16,12 +16,12 @@ public:
     DbHandle(const DbHandle&) = default;
     DbHandle& operator=(const DbHandle&) = delete;
 
-    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params = {}) const;
-    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params) const;
-    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params = {}) const;
-    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params) const;
-    Task<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params = {}) const;
-    Task<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params) const;
+    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {}) const;
+    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {}) const;
+    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
+    Task<DbStreamResult> queryStream(std::string_view sql, std::span<const DbValue> params = {}) const;
+    Task<DbStreamResult> queryStream(std::string_view sql, std::initializer_list<DbValue> params) const = delete;
     Task<DbTransaction> beginTransaction() const;
 
 private:

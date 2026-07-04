@@ -21,10 +21,10 @@ public:
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
-    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params = {});
-    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params);
-    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params = {});
-    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params);
+    Task<QueryResult> query(std::string_view sql, std::span<const DbValue> params = {});
+    Task<QueryResult> query(std::string_view sql, std::initializer_list<DbValue> params) = delete;
+    Task<QueryResult> execute(std::string_view sql, std::span<const DbValue> params = {});
+    Task<QueryResult> execute(std::string_view sql, std::initializer_list<DbValue> params) = delete;
     Task<void> commit();
     Task<void> rollback();
 

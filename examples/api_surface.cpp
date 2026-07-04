@@ -658,6 +658,38 @@ concept HasFetchOptionsHeaderViews = requires(T& options, std::span<const ruvia:
     { options.headers } -> std::same_as<std::span<const ruvia::HttpHeaderView>&>;
 };
 
+#ifdef RUVIA_ENABLE_MARIADB
+template <typename T>
+concept HasDbHandleDefaultParams = requires(const T& handle) {
+    handle.query(std::string_view{});
+    handle.execute(std::string_view{});
+    handle.queryStream(std::string_view{});
+};
+
+template <typename T>
+concept HasDbHandleInitializerListParams = requires(
+    const T& handle,
+    std::initializer_list<ruvia::DbValue> params) {
+    handle.query(std::string_view{}, params);
+    handle.execute(std::string_view{}, params);
+    handle.queryStream(std::string_view{}, params);
+};
+
+template <typename T>
+concept HasDbTransactionDefaultParams = requires(T& transaction) {
+    transaction.query(std::string_view{});
+    transaction.execute(std::string_view{});
+};
+
+template <typename T>
+concept HasDbTransactionInitializerListParams = requires(
+    T& transaction,
+    std::initializer_list<ruvia::DbValue> params) {
+    transaction.query(std::string_view{}, params);
+    transaction.execute(std::string_view{}, params);
+};
+#endif
+
 template <typename T>
 concept HasFetchResponseHeadersField = requires(const T& response) {
     response.headers;
@@ -1567,6 +1599,12 @@ static_assert(!HasFetchResponseHeadersField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseHeadersGetter<ruvia::FetchResponse>);
 static_assert(!HasFetchResponseBodyField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseBodyGetter<ruvia::FetchResponse>);
+#ifdef RUVIA_ENABLE_MARIADB
+static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
+static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
+static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
+static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
+#endif
 static_assert(!std::is_default_constructible_v<ruvia::FetchResponse>);
 static_assert(!std::is_constructible_v<ruvia::FetchResponse, std::pmr::memory_resource*>);
 static_assert(!std::is_default_constructible_v<ruvia::FetchResponseHeader>);
