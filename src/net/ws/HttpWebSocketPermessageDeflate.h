@@ -133,7 +133,7 @@ private:
         const auto name = httpTrimOws(semicolon == std::string_view::npos ? offer : offer.substr(0, semicolon));
         if (httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
             const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
-            if (params.find("server_max_window_bits") == std::string_view::npos) {
+            if (!httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits").has_value()) {
                 return true;
             }
         }
