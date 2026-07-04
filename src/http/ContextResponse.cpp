@@ -1131,7 +1131,12 @@ void Context::applyExplicitResponseHeaders(
     }
     detail::reserveResponseHeaders(response, response.headers().size() + headers.size());
     for (const auto& header : headers) {
-        response.header(header.name(), header.value());
+        const auto knownBit = detail::classifyResponseKnownHeader(header.name());
+        if (knownBit == detail::kResponseHeaderSetCookie) {
+            response.header(header.name(), header.value(), HttpResponse::HeaderOptions{.append = true});
+        } else {
+            response.header(header.name(), header.value());
+        }
     }
 }
 

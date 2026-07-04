@@ -86,6 +86,20 @@ RUVIA_TEST(context_body_applies_init_headers) {
     RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
 }
 
+RUVIA_TEST(context_response_init_preserves_repeated_set_cookie_headers) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const HttpHeaderView headers[] = {{"Set-Cookie", "a=1"}, {"Set-Cookie", "b=2"}};
+    const auto response = context.body("data", Context::ResponseInit{.headers = headers});
+
+    std::size_t setCookieCount = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == std::string_view("Set-Cookie")) {
+            ++setCookieCount;
+        }
+    }
+    RUVIA_CHECK_EQ(setCookieCount, std::size_t{2});
+}
+
 RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     const auto response = context.body(nullptr, std::uint16_t{204}, "No Content");
