@@ -93,7 +93,7 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":authority") {
-            if (stream.hasAuthority()) {
+            if (stream.hasAuthority() || !isValidHostHeader(value)) {
                 return false;
             }
             stream.assignRequestAuthority(value);
@@ -117,7 +117,10 @@ struct Http2HeaderDecodeContext final {
     stream.markRegularHeaderSeen();
     const auto kind = classifyRequestHeader(name);
     if (kind == RequestHeaderKind::kHost) {
-        if (stream.hasHost()) {
+        if (stream.hasHost() || !isValidHostHeader(value)) {
+            return false;
+        }
+        if (stream.hasAuthority() && !authorityMatchesHost(stream.requestAuthority(), value, 0)) {
             return false;
         }
         stream.markHost();

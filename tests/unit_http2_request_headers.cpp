@@ -47,9 +47,40 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", ""));      // empty path
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "")); // empty authority
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":protocol", ""));  // empty protocol
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":unknown", "x"));  // unknown pseudo-header
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "", "x"));          // empty name
+}
+
+RUVIA_TEST(h2_headers_authority_and_host_are_validated) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "bad host"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "example.com:"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "bad host"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "EXAMPLE.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "other.example"));
+    }
 }
 
 RUVIA_TEST(h2_headers_path_rejects_malformed_origin_target) {
