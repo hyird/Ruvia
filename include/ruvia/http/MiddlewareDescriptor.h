@@ -9,17 +9,16 @@ class Context;
 
 namespace detail {
 
+class ControllerMiddlewareDescriptor;
+
+template <typename MiddlewareT>
+[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
+
 class ControllerMiddlewareDescriptor final {
 public:
     using Invoke = Task<void> (*)(void*, Context&, Next&);
     using Create = void* (*)();
     using Destroy = void (*)(void*) noexcept;
-
-    constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy) noexcept
-        : invoke_(invoke),
-          create_(create),
-          destroy_(destroy) {}
 
     [[nodiscard]] bool valid() const noexcept {
         return invoke_ != nullptr;
@@ -38,6 +37,15 @@ public:
     }
 
 private:
+    template <typename MiddlewareT>
+    friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
+
+    constexpr ControllerMiddlewareDescriptor() noexcept = default;
+    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy) noexcept
+        : invoke_(invoke),
+          create_(create),
+          destroy_(destroy) {}
+
     Invoke invoke_{nullptr};
     Create create_{nullptr};
     Destroy destroy_{nullptr};
