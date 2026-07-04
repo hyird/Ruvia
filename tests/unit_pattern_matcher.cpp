@@ -134,3 +134,17 @@ RUVIA_TEST(pattern_match_negated_class_with_caret_member) {
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^0-9]$"}>("a"));
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^0-9]$"}>("5"));
 }
+
+RUVIA_TEST(pattern_match_escaped_literals_are_not_meta) {
+    // A backslash-escaped metacharacter matches that byte literally, not its
+    // special meaning -- '\.' is a literal dot, NOT "any char".
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\.$"}>("."));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\.$"}>("a"));
+    // '\*' is a literal asterisk, not a quantifier.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\*$"}>("*"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\*$"}>("x"));
+    // An escaped ']' inside a class is a literal member (the only way to put a ']'
+    // in a class, since an unescaped ']' closes it): [\]] matches ']' and nothing else.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[\\]]$"}>("]"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[\\]]$"}>("a"));
+}
