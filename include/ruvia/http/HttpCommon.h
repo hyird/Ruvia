@@ -394,59 +394,6 @@ private:
     std::pmr::vector<RequestValueGroup> groups_;
 };
 
-class RequestValue final {
-public:
-    enum class DecodeMode : std::uint8_t {
-        kNone,
-        kPercent,
-        kForm
-    };
-
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return value_.has_value();
-    }
-
-    [[nodiscard]] std::optional<std::string_view> value() const noexcept {
-        return value_;
-    }
-
-    [[nodiscard]] std::optional<std::pmr::string> toString() const;
-    [[nodiscard]] std::optional<bool> toBool() const noexcept;
-    [[nodiscard]] std::optional<std::int32_t> toInt32() const noexcept;
-    [[nodiscard]] std::optional<std::uint32_t> toUInt32() const noexcept;
-    [[nodiscard]] std::optional<std::int64_t> toInt64() const noexcept;
-    [[nodiscard]] std::optional<std::uint64_t> toUInt64() const noexcept;
-
-private:
-    RequestValue() = default;
-    RequestValue(
-        std::optional<std::string_view> value,
-        std::pmr::memory_resource* resource = nullptr,
-        DecodeMode decodeMode = DecodeMode::kNone) noexcept
-        : RequestValue(
-              detail::ResolvedPmrResourceTag{},
-              value,
-              detail::pmrResourceOrDefault(resource),
-              decodeMode) {}
-
-    RequestValue(
-        detail::ResolvedPmrResourceTag,
-        std::optional<std::string_view> value,
-        std::pmr::memory_resource* resource,
-        DecodeMode decodeMode) noexcept
-        : value_(value),
-          resource_(resource),
-          decodeMode_(decodeMode) {}
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
-    std::optional<std::string_view> value_;
-    std::pmr::memory_resource* resource_{nullptr};
-    DecodeMode decodeMode_{DecodeMode::kNone};
-};
-
 HttpMethod parseMethod(std::string_view method);
 std::string_view methodName(HttpMethod method);
 [[nodiscard]] bool isValidHttpHeaderName(std::string_view name) noexcept;

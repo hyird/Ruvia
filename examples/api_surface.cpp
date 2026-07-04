@@ -356,41 +356,6 @@ concept HasFormValueZeroAllocationAccessors = requires(const T& value) {
 };
 
 template <typename T>
-concept HasRequestValueToStringViewAlias = requires(const T& value) {
-    value.toStringView();
-};
-
-template <typename T>
-concept HasRequestValueExistsAlias = requires(const T& value) {
-    value.exists();
-};
-
-template <typename T>
-concept HasRequestValueHasValueAlias = requires(const T& value) {
-    value.has_value();
-};
-
-template <typename T>
-concept HasRequestValueValueOrAlias = requires(const T& value) {
-    value.value_or(std::string_view{});
-};
-
-template <typename T>
-concept HasRequestValuePlatformIntAliases = requires(const T& value) {
-    value.toInt();
-    value.toUInt();
-};
-
-template <typename T>
-concept HasRequestValueGetter = requires(const T& value) {
-    { value.value() } -> std::same_as<std::optional<std::string_view>>;
-    { value.toInt32() } -> std::same_as<std::optional<std::int32_t>>;
-    { value.toUInt32() } -> std::same_as<std::optional<std::uint32_t>>;
-    { value.toInt64() } -> std::same_as<std::optional<std::int64_t>>;
-    { value.toUInt64() } -> std::same_as<std::optional<std::uint64_t>>;
-};
-
-template <typename T>
 concept HasHttpRequestQueryGetter = requires(const T& request) {
     { request.query(std::string_view{}) } -> std::same_as<std::optional<std::string_view>>;
 };
@@ -1404,17 +1369,6 @@ static_assert(!HasFormValueMediaTypeAlias<ruvia::ContextRequest::RequestFormData
 static_assert(std::is_trivially_copyable_v<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(HasFormValueZeroAllocationAccessors<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(HasFormValueZeroAllocationAccessors<ruvia::ContextRequest::RequestFormData::PathValue>);
-static_assert(!HasRequestValueToStringViewAlias<ruvia::RequestValue>);
-static_assert(!HasRequestValueExistsAlias<ruvia::RequestValue>);
-static_assert(!HasRequestValueHasValueAlias<ruvia::RequestValue>);
-static_assert(!HasRequestValueValueOrAlias<ruvia::RequestValue>);
-static_assert(!HasRequestValuePlatformIntAliases<ruvia::RequestValue>);
-static_assert(HasRequestValueGetter<ruvia::RequestValue>);
-static_assert(!std::is_default_constructible_v<ruvia::RequestValue>);
-static_assert(!std::is_constructible_v<
-    ruvia::RequestValue,
-    std::optional<std::string_view>,
-    std::pmr::memory_resource*>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpRequest>);
 static_assert(HasHttpRequestQueryGetter<ruvia::HttpRequest>);
 static_assert(!HasHttpRequestDecodedPathAlias<ruvia::HttpRequest>);
