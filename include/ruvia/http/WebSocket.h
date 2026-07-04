@@ -57,18 +57,6 @@ private:
     std::string_view payload_;
 };
 
-namespace detail {
-
-struct WebSocketMessageAccess final {
-    [[nodiscard]] static constexpr WebSocketMessage make(
-        WebSocketOpcode opcode,
-        std::string_view payload) noexcept {
-        return WebSocketMessage(opcode, payload);
-    }
-};
-
-}  // namespace detail
-
 struct WebSocketHeartbeatOptions final {
     std::chrono::milliseconds pingInterval{0};
     std::chrono::milliseconds pongTimeout{0};
