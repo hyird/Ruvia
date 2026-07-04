@@ -55,6 +55,7 @@ add_executable(ruvia_unit_tests
     unit_http2_frame_payload.cpp
     unit_static_response_headers.cpp
     unit_vary_headers.cpp
+    unit_content_range.cpp
     unit_websocket_utils.cpp
     unit_hpack_static_table.cpp
     unit_pool_waiter_queue.cpp
