@@ -267,6 +267,39 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     RUVIA_CHECK(!missing.methodNotAllowed());
 }
 
+RUVIA_TEST(routing_rejects_duplicate_route_registration) {
+    Router r;
+    addRoute(r.impl, HttpMethod::kGet, "/x");
+    // The same method+path registered twice is a duplicate: ambiguous routing is
+    // rejected at registration rather than one route silently shadowing the other.
+    bool threw = false;
+    try {
+        addRoute(r.impl, HttpMethod::kGet, "/x");
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    // The SAME path under a DIFFERENT method is not a duplicate.
+    addRoute(r.impl, HttpMethod::kPost, "/x");
+    r.finalize();
+    RUVIA_CHECK(r.matches("/x"));
+}
+
+RUVIA_TEST(routing_rejects_registration_after_finalize) {
+    Router r;
+    addRoute(r.impl, HttpMethod::kGet, "/x");
+    r.finalize();
+    // The route table is immutable once finalized; a late registration must throw
+    // rather than mutate the already-built table.
+    bool threw = false;
+    try {
+        addRoute(r.impl, HttpMethod::kGet, "/y");
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+}
+
 namespace {
 
 // Records the order middlewares and the handler run: positive on entry (before
