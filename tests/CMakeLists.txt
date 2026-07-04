@@ -118,6 +118,11 @@ if(RUVIA_ENABLE_REDIS)
     target_sources(ruvia_unit_tests PRIVATE unit_redis_protocol.cpp)
 endif()
 
+# The DB SQL-interpolation suite links interpolateSql (and libmariadb's escaper).
+if(RUVIA_ENABLE_MARIADB)
+    target_sources(ruvia_unit_tests PRIVATE unit_db_sql.cpp)
+endif()
+
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
 
 # Unit tests reach into internal detail headers under src/ (e.g. core/Base64.h,
