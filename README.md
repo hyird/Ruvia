@@ -110,7 +110,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8080)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8080)
         .setThreadNum(2)
         .run();
 }
@@ -764,7 +765,8 @@ Load `.env` during startup with the chainable `App` helper. Without an explicit 
 ```cpp
 ruvia::app()
     .loadDotenv()
-    .setListenAddress("0.0.0.0", 8080)
+    .setListenAddress("0.0.0.0")
+    .setHttpListenPort(8080)
     .setThreadNum(2)
     .setIdleTimeout(std::chrono::seconds(60))
     .setHeaderTimeout(std::chrono::seconds(15))
@@ -775,7 +777,7 @@ ruvia::app()
     .run();
 ```
 
-`setListenAddress(address, port)` configures the HTTP listener; app-managed listener ports must be non-zero. HTTPS has its own startup-only port:
+`setListenAddress(address)` configures the bind address and `setHttpListenPort(port)` declares the HTTP listener; app-managed listener ports must be non-zero. HTTPS has its own startup-only port:
 calling `setHttpsListenPort(port)` declares the HTTPS listener, and `useTls(...)` supplies its certificate and key.
 
 Each timeout governs exactly one phase: `headerTimeout` is the request-header read window (TLS handshake included), `bodyTimeout` is the request-body read window, `writeTimeout` is the response write window. `idleTimeout` covers both keep-alive idle time **and the dispatch (handler) phase** �?once the body has been read, the connection scanner classifies the connection as idle until writing starts, so `idleTimeout` serves as the deadman switch for hung handlers. To bound business-logic runtime, use `idleTimeout` or in-handler cancellation �?`headerTimeout` / `bodyTimeout` no longer leak into dispatch. Any timeout set to `0ms` is disabled; `setConnectionScanInterval(...)` is a scanner cadence and must be greater than zero.

@@ -31,22 +31,6 @@ App& App::setListenAddress(std::string_view address) {
         });
 }
 
-App& App::setListenAddress(std::string_view address, std::uint16_t port) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot change listen address while app is running",
-        [&](detail::AppState& state) {
-            if (address.empty()) {
-                throw std::invalid_argument("listen address must not be empty");
-            }
-            detail::ensureNonZeroPort(port, "HTTP listen port must not be zero");
-
-            state.listenAddress.assign(address.data(), address.size());
-            state.httpListenPort = port;
-        });
-}
-
 App& App::setHttpListenPort(std::uint16_t port) {
     return detail::mutateStoppedApp(
         *this,

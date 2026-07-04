@@ -1288,6 +1288,21 @@ concept HasAppDocumentRootPathSetter = requires(T& app, const std::filesystem::p
 };
 
 template <typename T>
+concept HasAppListenAddressSetter = requires(T& app) {
+    { app.setListenAddress(std::string_view{}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppListenAddressPortSetter = requires(T& app) {
+    { app.setListenAddress(std::string_view{}, std::uint16_t{8080}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppHttpListenPortSetter = requires(T& app) {
+    { app.setHttpListenPort(std::uint16_t{8080}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
 concept HasAccessLogRecordPublicFields = requires(T& record) {
     record.method;
     record.path;
@@ -1818,6 +1833,9 @@ static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
 static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
 static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
+static_assert(HasAppListenAddressSetter<ruvia::App>);
+static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
+static_assert(HasAppHttpListenPortSetter<ruvia::App>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<
     ruvia::AccessLogRecord,
@@ -2817,7 +2835,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8088)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8088)
         .setThreadNum(2)
         .notFound(&surfaceNotFound)
         .run();

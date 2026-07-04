@@ -151,7 +151,8 @@ int main() {
     memory.requestInitialBufferBytes = 4096;
 
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8080)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8080)
         .setThreadNum(2)
         .setIdleTimeout(std::chrono::seconds(60))
         .setHeaderTimeout(std::chrono::seconds(15))

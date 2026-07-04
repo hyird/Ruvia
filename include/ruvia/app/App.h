@@ -209,7 +209,6 @@ public:
     App& loadDotenv(DotenvOptions options = {});
     App& loadDotenv(const std::filesystem::path& path, DotenvOptions options = {});
     App& setListenAddress(std::string_view address);
-    App& setListenAddress(std::string_view address, std::uint16_t port);
     App& setHttpListenPort(std::uint16_t port);
     App& setHttpsListenPort(std::uint16_t port);
     App& setAutoHttps(bool enabled = true);
