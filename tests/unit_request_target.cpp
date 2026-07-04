@@ -11,6 +11,8 @@ using ruvia::HttpMethod;
 using ruvia::detail::RequestTargetView;
 using ruvia::detail::authorityMatchesHost;
 using ruvia::detail::isValidHostHeader;
+using ruvia::detail::isValidOriginFormTarget;
+using ruvia::detail::isValidRequestTargetBytes;
 using ruvia::detail::parseRequestTarget;
 
 }  // namespace
@@ -144,4 +146,51 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "/ok%2F?q=%7B%7D", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/ok%2F"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=%7B%7D"));
+}
+
+RUVIA_TEST(request_target_bytes_reject_smuggling_and_control_chars) {
+    // The low-level byte validator underpins both the HTTP/1 request target and the
+    // HTTP/2 :path. It is a request-smuggling / path-injection defense, so anything
+    // that could confuse downstream parsing or split the target must be rejected.
+    RUVIA_CHECK(isValidRequestTargetBytes("/index.html"));
+    RUVIA_CHECK(isValidRequestTargetBytes("/search?q=a+b&x=1"));
+    RUVIA_CHECK(isValidRequestTargetBytes("/a/b/c"));
+
+    RUVIA_CHECK(!isValidRequestTargetBytes(""));              // empty is never a valid target
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a b"));          // raw space (0x20) splits the request line
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\tb"));         // HTAB is a control char
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\rb"));         // CR -- header/line injection
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\nb"));         // LF -- request smuggling
+    RUVIA_CHECK(!isValidRequestTargetBytes(std::string_view("/a\0b", 4)));  // NUL
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\x7f" "b"));    // DEL (0x7F); split literal so 'b' is not eaten by the hex escape
+    RUVIA_CHECK(!isValidRequestTargetBytes("/page#frag"));    // '#' -- fragment must not reach the origin
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a\\b"));         // backslash -- path-normalization confusion
+}
+
+RUVIA_TEST(request_target_bytes_validate_percent_encoding) {
+    // A '%' must be followed by exactly two hex digits, else it is malformed.
+    RUVIA_CHECK(isValidRequestTargetBytes("/%2Fpath"));       // %2F is well-formed
+    RUVIA_CHECK(isValidRequestTargetBytes("/a%20b"));         // encoded space is fine (raw is not)
+    RUVIA_CHECK(isValidRequestTargetBytes("/%ff"));           // lowercase hex accepted
+
+    RUVIA_CHECK(!isValidRequestTargetBytes("/%"));            // truncated at string end
+    RUVIA_CHECK(!isValidRequestTargetBytes("/%2"));           // only one hex digit
+    RUVIA_CHECK(!isValidRequestTargetBytes("/%2G"));          // second digit not hex
+    RUVIA_CHECK(!isValidRequestTargetBytes("/%g0"));          // first digit not hex
+    RUVIA_CHECK(!isValidRequestTargetBytes("/a%"));           // trailing bare '%'
+}
+
+RUVIA_TEST(origin_form_target_shape) {
+    // Origin-form must start with '/'; the sole exception is the asterisk-form ("*",
+    // used by OPTIONS) which is valid on its own but not as a prefix.
+    RUVIA_CHECK(isValidOriginFormTarget("/"));
+    RUVIA_CHECK(isValidOriginFormTarget("/path?q=1"));
+    RUVIA_CHECK(isValidOriginFormTarget("*"));
+
+    RUVIA_CHECK(!isValidOriginFormTarget(""));                // empty
+    RUVIA_CHECK(!isValidOriginFormTarget("path"));            // missing leading '/'
+    RUVIA_CHECK(!isValidOriginFormTarget("http://x/y"));      // absolute-form is not origin-form
+    RUVIA_CHECK(!isValidOriginFormTarget("*/"));              // '*' is valid only as the whole target
+    RUVIA_CHECK(!isValidOriginFormTarget("/bad path"));       // inherits byte validation (raw space)
+    RUVIA_CHECK(!isValidOriginFormTarget("/x#y"));            // inherits fragment rejection
 }
