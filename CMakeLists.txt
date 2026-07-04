@@ -105,6 +105,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/MultipartReader.cpp
     src/http/RateLimit.cpp
     src/http/SecurityHeaders.cpp
+    src/http/Session.cpp
     src/http/StaticFiles.cpp
     src/http/Streaming.cpp
     src/http/parser/HttpChunkParser.cpp

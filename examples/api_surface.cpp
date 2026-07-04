@@ -21,6 +21,7 @@
 #include "ruvia/http/Controller.h"
 #include "ruvia/http/HttpParser.h"
 #include "ruvia/http/RateLimit.h"
+#include "ruvia/http/Session.h"
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/redis/RedisTypes.h"
 
@@ -1517,6 +1518,7 @@ static_assert(!HasCompleteType<ruvia::detail::AccessLogRecordAccess>);
 static_assert(!HasCompleteType<ruvia::detail::DotenvResultAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestFormFieldAccess>);
 static_assert(!HasCompleteType<ruvia::detail::StreamingAccess>);
+static_assert(!HasCompleteType<ruvia::detail::SessionAccess>);
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
