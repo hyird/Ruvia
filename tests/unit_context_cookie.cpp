@@ -1,9 +1,15 @@
 #include "test_harness.h"
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
+
+#include <string>
 #include <string_view>
 
 #include "http/ContextInternal.h"
 #include "http/HttpRequestInternal.h"
+#include "runtime/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -18,6 +24,12 @@ using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::RequestKnownHeader;
+
+asio::awaitable<void> cloneHeaderValue(ruvia::Context& context, std::string& output) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    const auto value = clone.header("X-Trace");
+    output.assign(value.data(), value.size());
+}
 
 }  // namespace
 
@@ -80,4 +92,23 @@ RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_par
     RUVIA_CHECK(param.has_value());
     RUVIA_CHECK_EQ(*param, std::string_view("one two"));
     RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+}
+
+RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Trace", "first"}));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x-trace", "second"}));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context io;
+    std::string header;
+    asio::co_spawn(io, cloneHeaderValue(context, header), asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(header, std::string("second"));
 }
