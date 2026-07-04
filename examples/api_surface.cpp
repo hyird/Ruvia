@@ -1354,6 +1354,22 @@ static_assert(!HasFormValueIsArrayAlias<ruvia::ContextRequest::RequestFormData::
 static_assert(!HasFormValueIsArrayAlias<ruvia::ContextRequest::RequestFormData::PathValue>);
 static_assert(!HasFormValueIsFileAlias<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(!HasFormValueIsFileAlias<ruvia::ContextRequest::RequestFormData::PathValue>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Entry,
+    std::pmr::memory_resource*,
+    std::string_view,
+    bool,
+    ruvia::ContextRequest::RequestFormData::SingleValueSelection>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Value,
+    const ruvia::ContextRequest::RequestFormData::Entry*>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData::PathValue,
+    const ruvia::ContextRequest::RequestFormData::Entry*>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData::PathValue,
+    std::pmr::vector<const ruvia::ContextRequest::RequestFormField*>&&,
+    ruvia::ContextRequest::RequestFormData::SingleValueSelection>);
 static_assert(!HasFormFieldBooleanMethodAliases<ruvia::ContextRequest::RequestFormField>);
 static_assert(!HasFormFieldPublicFields<ruvia::ContextRequest::RequestFormField>);
 static_assert(HasFormFieldCanonicalAccessors<ruvia::ContextRequest::RequestFormField>);
