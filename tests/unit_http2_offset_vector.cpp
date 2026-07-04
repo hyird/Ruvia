@@ -76,3 +76,26 @@ RUVIA_TEST(offset_vector_compact_movable) {
     RUVIA_CHECK(drained.empty());
     RUVIA_CHECK_EQ(drainedOffset, std::size_t{0});
 }
+
+RUVIA_TEST(offset_vector_compact_overlapping_left_shift) {
+    // Threshold-triggered compaction where the consumed prefix is SMALLER than
+    // the surviving suffix: the move region overlaps its destination. The trivial
+    // path must use memmove (not memcpy) and the movable path must read each
+    // element before it is overwritten (forward iteration), or the result corrupts.
+    std::vector<int> trivial = {10, 20, 30, 40, 50, 60};
+    std::size_t off = 2;  // remaining (4) > offset (2) -> overlap; threshold 2 triggers it
+    http2CompactOffsetVector(trivial, off, 2);
+    RUVIA_CHECK_EQ(trivial.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(trivial[0], 30);
+    RUVIA_CHECK_EQ(trivial[3], 60);
+    RUVIA_CHECK_EQ(off, std::size_t{0});
+
+    std::vector<std::string> movable = {"a", "b", "c", "d", "e"};
+    std::size_t moff = 2;  // remaining (3) > offset (2) -> overlap
+    http2CompactMovableOffsetVector(movable, moff, 2);
+    RUVIA_CHECK_EQ(movable.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(movable[0], std::string("c"));
+    RUVIA_CHECK_EQ(movable[1], std::string("d"));
+    RUVIA_CHECK_EQ(movable[2], std::string("e"));
+    RUVIA_CHECK_EQ(moff, std::size_t{0});
+}
