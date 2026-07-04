@@ -37,4 +37,15 @@ RUVIA_TEST(pattern_compile_rejects_malformed_atoms) {
     RUVIA_CHECK(!compiles("^[a-z$"));   // unterminated char class
     RUVIA_CHECK(!compiles("^a**$"));    // stacked quantifiers
     RUVIA_CHECK(!compiles("^+$"));      // quantifier with no preceding atom
+    RUVIA_CHECK(!compiles("^a\\$"));    // dangling backslash: '\' escapes the '$' anchor, none left to close
+}
+
+RUVIA_TEST(pattern_compile_escape_handling) {
+    // Escaped metacharacters are well-formed literal atoms.
+    RUVIA_CHECK(compiles("^\\.$"));      // literal dot
+    RUVIA_CHECK(compiles("^\\*$"));      // literal asterisk
+    RUVIA_CHECK(compiles("^\\[$"));      // literal '['
+    // A class may carry an escaped ']' as a member, alone or amid other members.
+    RUVIA_CHECK(compiles("^[\\]]$"));
+    RUVIA_CHECK(compiles("^[a\\]b]$"));
 }
