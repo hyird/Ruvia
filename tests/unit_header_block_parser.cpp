@@ -68,6 +68,11 @@ RUVIA_TEST(header_block_rejects_duplicate_host) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
 }
 
+RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
+    RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
+    RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);
+}
+
 RUVIA_TEST(header_block_accepts_transfer_encoding_chunked) {
     const auto result = parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
     RUVIA_CHECK(result.error == HttpParseError::kNone);
