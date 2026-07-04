@@ -14,23 +14,23 @@ Task<Http2SessionFlow> Http2ServerSession<Stream>::processData(
     if (stream == nullptr) {
         if (header.streamId <= lastStreamId_) {
             co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-            co_return Http2SessionFlow::keepRunning();
+            co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/false);
         }
         co_await sendGoaway(lastStreamId_, Http2ErrorCode::kProtocolError, "DATA before HEADERS");
         co_return Http2SessionFlow::stopRunning();
     }
     if (stream->isReset()) {
-        co_return Http2SessionFlow::keepRunning();
+        co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/false);
     }
     if (!stream->headersDecoded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
         stream->markReset();
-        co_return Http2SessionFlow::keepRunning();
+        co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/false);
     }
     if (stream->bodyEnded()) {
         co_await sendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
         stream->markReset();
-        co_return Http2SessionFlow::keepRunning();
+        co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/false);
     }
 
     const auto flowBytes = static_cast<std::int32_t>(payload.size());
@@ -41,9 +41,11 @@ Task<Http2SessionFlow> Http2ServerSession<Stream>::processData(
             co_await sendGoaway(lastStreamId_, Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
             co_return Http2SessionFlow::stopRunning();
         case Http2ReceiveWindowResult::kStreamExceeded:
+            // consumeReceiveWindow rejected the stream debit, so the connection window
+            // was not touched: credit the peer back without restoring it locally.
             co_await sendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
             stream->markReset();
-            co_return Http2SessionFlow::keepRunning();
+            co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/false);
     }
 
     std::string_view data;
@@ -56,13 +58,15 @@ Task<Http2SessionFlow> Http2ServerSession<Stream>::processData(
         case Http2BodyAccountingResult::kOk:
             break;
         case Http2BodyAccountingResult::kTooLarge:
+            // The connection window was already debited above; restore and re-advertise
+            // it so resetting this stream does not permanently shrink the shared window.
             co_await sendRstStream(header.streamId, Http2ErrorCode::kCancel);
             stream->markReset();
-            co_return Http2SessionFlow::keepRunning();
+            co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/true);
         case Http2BodyAccountingResult::kContentLengthExceeded:
             co_await sendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
             stream->markReset();
-            co_return Http2SessionFlow::keepRunning();
+            co_return co_await dropDataFrameKeepConnection(payload.size(), /*windowConsumed=*/true);
     }
     if (flowBytes > 0) {
         const auto increment = static_cast<std::uint32_t>(flowBytes);
