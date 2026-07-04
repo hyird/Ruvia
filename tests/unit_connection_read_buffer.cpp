@@ -6,12 +6,14 @@
 #include <string_view>
 
 #include "net/server/HttpConnectionState.h"
+#include "net/server/HttpServerConnectionGuards.h"
 #include "http/HttpParserInternal.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace {
 
 using ruvia::detail::compactConnectionReadBuffer;
+using ruvia::detail::ConnectionCountGuard;
 using ruvia::detail::growReadBuffer;
 using ruvia::detail::trimReadBufferStorage;
 using ruvia::detail::HttpServerParseResult;
@@ -127,4 +129,22 @@ RUVIA_TEST(trim_read_buffer_keeps_buffer_when_still_heavily_used) {
     auto readBuffer = sizedBuffer(70 * 1024);
     trimReadBufferStorage(readBuffer, /*usedBytes=*/9000);  // > initial -> keep as-is
     RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{70 * 1024});
+}
+
+RUVIA_TEST(connection_count_guard_decrements_with_underflow_protection) {
+    // The guard decrements the live-connection count on scope exit (the accept path
+    // increments). It must never decrement below zero: a stray release at zero would
+    // wrap the count to SIZE_MAX and effectively remove the concurrent-connection cap.
+    std::size_t count = 3;
+    {
+        ConnectionCountGuard guard(count);
+        RUVIA_CHECK_EQ(count, std::size_t{3});  // construction does not change the count
+    }
+    RUVIA_CHECK_EQ(count, std::size_t{2});       // decremented on scope exit
+
+    std::size_t zero = 0;
+    {
+        ConnectionCountGuard guard(zero);
+    }
+    RUVIA_CHECK_EQ(zero, std::size_t{0});         // never underflows past zero
 }
