@@ -7,6 +7,16 @@
 
 namespace ruvia {
 
+namespace {
+
+template <typename... Args>
+RedisPipeline& appendCommandArgs(RedisPipeline& pipeline, Args&&... args) {
+    const std::string_view views[]{std::string_view(args)...};
+    return pipeline.command(std::span<const std::string_view>(views, sizeof...(Args)));
+}
+
+}  // namespace
+
 RedisPipeline::RedisPipeline(
     detail::RedisPool& pool,
     std::pmr::memory_resource* resource) noexcept
@@ -53,9 +63,6 @@ void RedisPipeline::appendCommand(
     target.emplace_back(makeCommand(resource, first, rest));
 }
 
-RedisPipeline& RedisPipeline::command(std::initializer_list<std::string_view> args) {
-    return command(std::span<const std::string_view>(args.begin(), args.size()));
-}
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
     appendCommand(commands_, resource_, args);
@@ -63,162 +70,162 @@ RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
 }
 
 RedisPipeline& RedisPipeline::get(std::string_view key) {
-    return command({"GET", key});
+    return appendCommandArgs(*this, "GET", key);
 }
 
 RedisPipeline& RedisPipeline::set(std::string_view key, std::string_view value) {
-    return command({"SET", key, value});
+    return appendCommandArgs(*this, "SET", key, value);
 }
 
 RedisPipeline& RedisPipeline::getDel(std::string_view key) {
-    return command({"GETDEL", key});
+    return appendCommandArgs(*this, "GETDEL", key);
 }
 
 RedisPipeline& RedisPipeline::getSet(std::string_view key, std::string_view value) {
-    return command({"GETSET", key, value});
+    return appendCommandArgs(*this, "GETSET", key, value);
 }
 
 RedisPipeline& RedisPipeline::append(std::string_view key, std::string_view value) {
-    return command({"APPEND", key, value});
+    return appendCommandArgs(*this, "APPEND", key, value);
 }
 
 RedisPipeline& RedisPipeline::strlen(std::string_view key) {
-    return command({"STRLEN", key});
+    return appendCommandArgs(*this, "STRLEN", key);
 }
 
 RedisPipeline& RedisPipeline::del(std::string_view key) {
-    return command({"DEL", key});
+    return appendCommandArgs(*this, "DEL", key);
 }
 
 RedisPipeline& RedisPipeline::unlink(std::string_view key) {
-    return command({"UNLINK", key});
+    return appendCommandArgs(*this, "UNLINK", key);
 }
 
 RedisPipeline& RedisPipeline::exists(std::string_view key) {
-    return command({"EXISTS", key});
+    return appendCommandArgs(*this, "EXISTS", key);
 }
 
 RedisPipeline& RedisPipeline::touch(std::string_view key) {
-    return command({"TOUCH", key});
+    return appendCommandArgs(*this, "TOUCH", key);
 }
 
 RedisPipeline& RedisPipeline::type(std::string_view key) {
-    return command({"TYPE", key});
+    return appendCommandArgs(*this, "TYPE", key);
 }
 
 RedisPipeline& RedisPipeline::rename(std::string_view key, std::string_view newKey) {
-    return command({"RENAME", key, newKey});
+    return appendCommandArgs(*this, "RENAME", key, newKey);
 }
 
 RedisPipeline& RedisPipeline::renameNx(std::string_view key, std::string_view newKey) {
-    return command({"RENAMENX", key, newKey});
+    return appendCommandArgs(*this, "RENAMENX", key, newKey);
 }
 
 RedisPipeline& RedisPipeline::incr(std::string_view key) {
-    return command({"INCR", key});
+    return appendCommandArgs(*this, "INCR", key);
 }
 
 RedisPipeline& RedisPipeline::incrBy(std::string_view key, std::int64_t value) {
     auto amount = detail::redisIntString(value, resource_);
-    return command({"INCRBY", key, std::string_view(amount)});
+    return appendCommandArgs(*this, "INCRBY", key, std::string_view(amount));
 }
 
 RedisPipeline& RedisPipeline::decr(std::string_view key) {
-    return command({"DECR", key});
+    return appendCommandArgs(*this, "DECR", key);
 }
 
 RedisPipeline& RedisPipeline::decrBy(std::string_view key, std::int64_t value) {
     auto amount = detail::redisIntString(value, resource_);
-    return command({"DECRBY", key, std::string_view(amount)});
+    return appendCommandArgs(*this, "DECRBY", key, std::string_view(amount));
 }
 
 RedisPipeline& RedisPipeline::hget(std::string_view key, std::string_view field) {
-    return command({"HGET", key, field});
+    return appendCommandArgs(*this, "HGET", key, field);
 }
 
 RedisPipeline& RedisPipeline::hset(std::string_view key, std::string_view field, std::string_view value) {
-    return command({"HSET", key, field, value});
+    return appendCommandArgs(*this, "HSET", key, field, value);
 }
 
 RedisPipeline& RedisPipeline::hdel(std::string_view key, std::string_view field) {
-    return command({"HDEL", key, field});
+    return appendCommandArgs(*this, "HDEL", key, field);
 }
 
 RedisPipeline& RedisPipeline::hexists(std::string_view key, std::string_view field) {
-    return command({"HEXISTS", key, field});
+    return appendCommandArgs(*this, "HEXISTS", key, field);
 }
 
 RedisPipeline& RedisPipeline::hlen(std::string_view key) {
-    return command({"HLEN", key});
+    return appendCommandArgs(*this, "HLEN", key);
 }
 
 RedisPipeline& RedisPipeline::hgetAll(std::string_view key) {
-    return command({"HGETALL", key});
+    return appendCommandArgs(*this, "HGETALL", key);
 }
 
 RedisPipeline& RedisPipeline::lpush(std::string_view key, std::string_view value) {
-    return command({"LPUSH", key, value});
+    return appendCommandArgs(*this, "LPUSH", key, value);
 }
 
 RedisPipeline& RedisPipeline::rpush(std::string_view key, std::string_view value) {
-    return command({"RPUSH", key, value});
+    return appendCommandArgs(*this, "RPUSH", key, value);
 }
 
 RedisPipeline& RedisPipeline::lpop(std::string_view key) {
-    return command({"LPOP", key});
+    return appendCommandArgs(*this, "LPOP", key);
 }
 
 RedisPipeline& RedisPipeline::rpop(std::string_view key) {
-    return command({"RPOP", key});
+    return appendCommandArgs(*this, "RPOP", key);
 }
 
 RedisPipeline& RedisPipeline::llen(std::string_view key) {
-    return command({"LLEN", key});
+    return appendCommandArgs(*this, "LLEN", key);
 }
 
 RedisPipeline& RedisPipeline::lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
-    return command({"LRANGE", key, std::string_view(startValue), std::string_view(stopValue)});
+    return appendCommandArgs(*this, "LRANGE", key, std::string_view(startValue), std::string_view(stopValue));
 }
 
 RedisPipeline& RedisPipeline::sadd(std::string_view key, std::string_view member) {
-    return command({"SADD", key, member});
+    return appendCommandArgs(*this, "SADD", key, member);
 }
 
 RedisPipeline& RedisPipeline::srem(std::string_view key, std::string_view member) {
-    return command({"SREM", key, member});
+    return appendCommandArgs(*this, "SREM", key, member);
 }
 
 RedisPipeline& RedisPipeline::smembers(std::string_view key) {
-    return command({"SMEMBERS", key});
+    return appendCommandArgs(*this, "SMEMBERS", key);
 }
 
 RedisPipeline& RedisPipeline::scard(std::string_view key) {
-    return command({"SCARD", key});
+    return appendCommandArgs(*this, "SCARD", key);
 }
 
 RedisPipeline& RedisPipeline::zadd(std::string_view key, double score, std::string_view member) {
     auto scoreValue = detail::redisScoreString(score, resource_);
-    return command({"ZADD", key, std::string_view(scoreValue), member});
+    return appendCommandArgs(*this, "ZADD", key, std::string_view(scoreValue), member);
 }
 
 RedisPipeline& RedisPipeline::zrem(std::string_view key, std::string_view member) {
-    return command({"ZREM", key, member});
+    return appendCommandArgs(*this, "ZREM", key, member);
 }
 
 RedisPipeline& RedisPipeline::zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
-    return command({"ZRANGE", key, std::string_view(startValue), std::string_view(stopValue)});
+    return appendCommandArgs(*this, "ZRANGE", key, std::string_view(startValue), std::string_view(stopValue));
 }
 
 RedisPipeline& RedisPipeline::zscore(std::string_view key, std::string_view member) {
-    return command({"ZSCORE", key, member});
+    return appendCommandArgs(*this, "ZSCORE", key, member);
 }
 
 RedisPipeline& RedisPipeline::zcard(std::string_view key) {
-    return command({"ZCARD", key});
+    return appendCommandArgs(*this, "ZCARD", key);
 }
 
 Task<std::pmr::vector<RedisValue>> RedisPipeline::exec() {

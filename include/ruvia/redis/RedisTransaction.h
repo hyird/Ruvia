@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <initializer_list>
 #include <memory_resource>
 #include <span>
 #include <string_view>
@@ -18,8 +19,8 @@ public:
     RedisTransaction(RedisTransaction&&) noexcept = default;
     RedisTransaction& operator=(RedisTransaction&&) noexcept = default;
 
-    RedisTransaction& command(std::initializer_list<std::string_view> args);
     RedisTransaction& command(std::span<const std::string_view> args);
+    RedisTransaction& command(std::initializer_list<std::string_view> args) = delete;
     RedisTransaction& watch(std::string_view key);
     RedisTransaction& watch(std::span<const std::string_view> keys);
     RedisTransaction& unwatch();

@@ -17,10 +17,6 @@ RedisTransaction& RedisTransaction::markActive() noexcept {
     return *this;
 }
 
-RedisTransaction& RedisTransaction::command(std::initializer_list<std::string_view> args) {
-    pipeline_.command(args);
-    return markActive();
-}
 
 RedisTransaction& RedisTransaction::command(std::span<const std::string_view> args) {
     pipeline_.command(args);

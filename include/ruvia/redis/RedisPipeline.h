@@ -22,8 +22,8 @@ public:
     RedisPipeline(RedisPipeline&&) noexcept = default;
     RedisPipeline& operator=(RedisPipeline&&) noexcept = default;
 
-    RedisPipeline& command(std::initializer_list<std::string_view> args);
     RedisPipeline& command(std::span<const std::string_view> args);
+    RedisPipeline& command(std::initializer_list<std::string_view> args) = delete;
     RedisPipeline& get(std::string_view key);
     RedisPipeline& set(std::string_view key, std::string_view value);
     RedisPipeline& getDel(std::string_view key);

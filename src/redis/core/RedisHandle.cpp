@@ -19,9 +19,6 @@ RedisHandle::RedisHandle(
     : pool_(pool),
       resource_(detail::pmrResourceOrDefault(resource)) {}
 
-Task<RedisValue> RedisHandle::command(std::initializer_list<std::string_view> args) const {
-    return detail::executeOwnedRedisCommand(pool_, detail::ownRedisArgs(args, resource_), resource_);
-}
 
 Task<RedisValue> RedisHandle::command(std::span<const std::string_view> args) const {
     return detail::executeOwnedRedisCommand(pool_, detail::ownRedisArgs(args, resource_), resource_);
@@ -43,9 +40,6 @@ Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::mget(std::s
     return detail::redisOptionalStringArrayCommand(pool_, detail::redisCommandWithKeys("MGET", keys, resource_), resource_);
 }
 
-Task<std::pmr::vector<std::optional<std::pmr::string>>> RedisHandle::mget(std::initializer_list<std::string_view> keys) const {
-    return mget(std::span<const std::string_view>(keys.begin(), keys.size()));
-}
 
 Task<void> RedisHandle::set(std::string_view key, std::string_view value) const {
     return detail::redisOkCommand(pool_, detail::ownRedisArgs({"SET", key, value}, resource_), resource_);
@@ -88,9 +82,6 @@ Task<void> RedisHandle::mset(std::span<const std::pair<std::string_view, std::st
     return detail::redisOkCommand(pool_, detail::redisMsetArgs(items, resource_), resource_);
 }
 
-Task<void> RedisHandle::mset(std::initializer_list<std::pair<std::string_view, std::string_view>> items) const {
-    return mset(std::span<const std::pair<std::string_view, std::string_view>>(items.begin(), items.size()));
-}
 
 Task<void> RedisHandle::setEx(std::string_view key, std::chrono::seconds ttl, std::string_view value) const {
     auto ttlValue = detail::redisSecondsString(ttl, resource_);

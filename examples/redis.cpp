@@ -352,6 +352,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
+        const std::array<std::string_view, 2> typeCommand{"TYPE", "ruvia:example:pipeline"};
         auto pipeline = c.redis().pipeline();
         auto results = co_await pipeline
             .set("ruvia:example:pipeline", "1")
@@ -362,7 +363,7 @@ public:
             .lpush("ruvia:example:pipeline:list", "item")
             .sadd("ruvia:example:pipeline:set", "member")
             .zadd("ruvia:example:pipeline:zset", 1.0, "member")
-            .command({"TYPE", "ruvia:example:pipeline"})
+            .command(typeCommand)
             .exec();
 
         std::pmr::string body(c.allocator<char>());
