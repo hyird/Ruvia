@@ -39,6 +39,8 @@ struct CurrentUser final {
     std::string_view name;
 };
 
+struct AppUseProbeMiddleware;
+
 RUVIA_MODEL(ClonePayload,
     RUVIA_FIELD(message, ruvia::String)
 );
@@ -994,6 +996,11 @@ concept HasAppSetRateLimitAlias = requires(T& app) {
 };
 
 template <typename T>
+concept HasAppUseMiddlewareTemplate = requires {
+    &T::template use<AppUseProbeMiddleware>;
+};
+
+template <typename T>
 concept HasDbRowPublicMutators = requires(T& row, ruvia::DbField field) {
     row.reserve(std::size_t{1});
     row.push_back(std::move(field));
@@ -1556,6 +1563,7 @@ static_assert(HasRequestValueGroupListCanonicalAccessors<ruvia::RequestValueGrou
 static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
+static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);

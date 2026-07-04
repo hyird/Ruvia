@@ -166,24 +166,6 @@ void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
     pendingRoutes_.push_back(std::move(route));
 }
 
-void detail::RouterImpl::prependMiddlewares(std::span<const ControllerMiddlewareDescriptor> middlewares) {
-    if (finalized_) {
-        throw std::logic_error("cannot register middleware after router finalize");
-    }
-    if (middlewares.empty() || pendingRoutes_.empty()) {
-        return;
-    }
-
-    for (auto& route : pendingRoutes_) {
-        std::pmr::vector<RouteMiddleware> merged(resource_);
-        const auto routeMiddlewares = route.middlewares();
-        merged.reserve(middlewares.size() + routeMiddlewares.size());
-        appendMaterializedMiddlewares(merged, middlewares);
-        merged.insert(merged.end(), routeMiddlewares.begin(), routeMiddlewares.end());
-        route.setMiddlewares(std::move(merged));
-    }
-}
-
 detail::ControllerRouteBuilder::ControllerRouteBuilder(
     Router& router,
     std::string_view prefix,

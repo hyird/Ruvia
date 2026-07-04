@@ -33,8 +33,9 @@ public:
 
 class RuntimeController final : public ruvia::Controller<RuntimeController> {
 public:
+    RUVIA_CONTROLLER_GROUP("/runtime", GlobalHeaderMiddleware)
     RUVIA_ROUTES_BEGIN
-    RUVIA_GET("/runtime", runtime);
+    RUVIA_GET("/", runtime);
     RUVIA_ROUTES_END
 
 private:
@@ -76,8 +77,7 @@ int main() {
             .allowOrigin = "*",
             .allowHeaders = "content-type, authorization",
             .maxAge = std::chrono::seconds(600),
-        })
-        .use<GlobalHeaderMiddleware>();
+        });
 
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));
