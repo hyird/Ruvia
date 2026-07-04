@@ -19,6 +19,7 @@ using ruvia::RedisValue;
 using ruvia::detail::appendRespCommand;
 using ruvia::detail::hiredisReplyToValue;
 using ruvia::detail::parseRedisBlockingPopReply;
+using ruvia::detail::parseRedisHashScanResult;
 using ruvia::detail::parseRedisKeyValueArray;
 using ruvia::detail::parseRedisScanResult;
 using ruvia::detail::parseRedisScoredArray;
@@ -186,6 +187,37 @@ RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
     // A root array that is not exactly two elements is rejected.
     redisReply* shortRoot[] = {&cursor};
     RUVIA_CHECK(throwsOn([&] { (void)parseRedisScanResult(toValue(shortRoot, 1), resource); }));
+}
+
+RUVIA_TEST(redis_parse_hash_scan_result_reads_field_value_pairs) {
+    auto* resource = std::pmr::get_default_resource();
+    redisReply f1 = stringReply("field1");
+    redisReply v1 = stringReply("value1");
+    redisReply f2 = stringReply("field2");
+    redisReply v2 = stringReply("value2");
+    redisReply* innerElems[] = {&f1, &v1, &f2, &v2};
+    redisReply inner = arrayReply(innerElems, 4);
+
+    // HSCAN reply: [cursor, [field, value, field, value, ...]].
+    redisReply cursor = stringReply("7");
+    redisReply* root[] = {&cursor, &inner};
+    const auto reply = arrayReply(root, 2);
+    const auto hscan = parseRedisHashScanResult(
+        hiredisReplyToValue(reply, 0, 32, resource), resource);
+    RUVIA_CHECK_EQ(hscan.cursor(), std::uint64_t{7});
+    RUVIA_CHECK_EQ(hscan.entries().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(hscan.entries()[0].key(), std::string_view("field1"));
+    RUVIA_CHECK_EQ(hscan.entries()[0].value(), std::string_view("value1"));
+    RUVIA_CHECK_EQ(hscan.entries()[1].key(), std::string_view("field2"));
+
+    // An odd-length inner array (a field with no value) is malformed.
+    redisReply* oddInner[] = {&f1, &v1, &f2};
+    redisReply oddArr = arrayReply(oddInner, 3);
+    redisReply* oddRoot[] = {&cursor, &oddArr};
+    const auto oddReply = arrayReply(oddRoot, 2);
+    RUVIA_CHECK(throwsOn([&] {
+        (void)parseRedisHashScanResult(hiredisReplyToValue(oddReply, 0, 32, resource), resource);
+    }));
 }
 
 RUVIA_TEST(redis_parse_blocking_pop_reply_handles_timeout_and_pair) {
