@@ -1036,6 +1036,14 @@ concept HasControllerRouteBuilderPublicCreateScope = requires(const T& builder) 
 };
 
 template <typename T>
+concept HasControllerMiddlewareDescriptorPublicCallbackConstructor = requires(
+    typename T::Invoke invoke,
+    typename T::Create create,
+    typename T::Destroy destroy) {
+    T(invoke, create, destroy);
+};
+
+template <typename T>
 concept HasDbRowPublicMutators = requires(T& row, ruvia::DbField field) {
     row.reserve(std::size_t{1});
     row.push_back(std::move(field));
@@ -1617,6 +1625,7 @@ static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ru
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicRegisterStreamRoute<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicCreateScope<ruvia::detail::ControllerRouteBuilder>);
+static_assert(!HasControllerMiddlewareDescriptorPublicCallbackConstructor<ruvia::detail::ControllerMiddlewareDescriptor>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);
