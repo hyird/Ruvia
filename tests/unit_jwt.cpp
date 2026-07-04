@@ -192,6 +192,35 @@ RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("a.b.c.d", verify); }));        // four sections
 }
 
+RUVIA_TEST(jwt_verify_rejects_none_algorithm_downgrade) {
+    // The canonical JWT forgery (the "alg:none" attack): an attacker crafts a
+    // header claiming no signature algorithm and strips the signature, hoping the
+    // verifier trusts the token's own alg field and skips authentication. Ruvia
+    // recomputes the MAC with the server-configured algorithm and compares it to
+    // the token's signature, so the forgery fails the signature gate before the
+    // alg field is even inspected. requireExpiration is disabled here so the
+    // rejection can only come from the signature/alg gates, never a missing exp.
+    auto* const resource = std::pmr::get_default_resource();
+    const auto header = ruvia::detail::jwtBase64UrlEncode(R"({"alg":"none","typ":"JWT"})", resource);
+    const auto payload = ruvia::detail::jwtBase64UrlEncode(R"({"sub":"admin"})", resource);
+
+    // "<header>.<payload>." -- an empty third section, as an alg:none token has.
+    std::string forged;
+    forged.append(header.data(), header.size());
+    forged.push_back('.');
+    forged.append(payload.data(), payload.size());
+    forged.push_back('.');
+
+    auto verify = verifyOptions("secret");
+    verify.requireExpiration = false;
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(forged, verify); }));
+
+    // The same forgery with attacker-supplied junk in the signature slot is also
+    // rejected: no chosen string equals HMAC(secret, signingInput).
+    const std::string forgedJunk = forged + "AAAA";
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(forgedJunk, verify); }));
+}
+
 RUVIA_TEST(jwt_verify_rejects_signed_non_object_payload) {
     auto verify = verifyOptions("secret");
     verify.requireExpiration = false;
