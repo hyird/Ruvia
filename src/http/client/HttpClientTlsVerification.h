@@ -4,11 +4,13 @@
 
 #include <asio/error_code.hpp>
 #include <asio/ip/address.hpp>
+#include <asio/ssl/context.hpp>
 #include <asio/ssl/verify_context.hpp>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +19,16 @@
 #include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
+
+// Build the shared client TLS context: a tls_client context trusting the system
+// store and verifying the peer chain (verify_peer). The per-connection host-name
+// match is layered on separately via applyClientTlsIdentity. Sole owner shared by
+// the HTTP/1.1 pool and the HTTP/2 session.
+inline void configureClientTlsContext(std::optional<asio::ssl::context>& context) {
+    context.emplace(asio::ssl::context::tls_client);
+    context->set_default_verify_paths();
+    context->set_verify_mode(asio::ssl::verify_peer);
+}
 
 // Asio's host_name_verification owns a std::string. Keep the same OpenSSL/RFC 6125
 // behavior while binding the hostname storage to the connection/session PMR resource.

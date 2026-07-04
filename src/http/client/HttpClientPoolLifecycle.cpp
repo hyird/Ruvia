@@ -2,6 +2,7 @@
 
 #include "HttpClientPool.h"
 #include "HttpClientConfigValidation.h"
+#include "HttpClientTlsVerification.h"
 #include "ruvia/memory/PmrResource.h"
 
 #include <asio/ssl/context.hpp>
@@ -35,9 +36,7 @@ HttpClientPool::HttpClientPool(
       connections_(resource_),
       free_(resource_) {
     if (config_.tls) {
-        sslContext_.emplace(asio::ssl::context::tls_client);
-        sslContext_->set_default_verify_paths();
-        sslContext_->set_verify_mode(asio::ssl::verify_peer);
+        configureClientTlsContext(sslContext_);
     }
     const auto n = config_.poolSizePerWorker;
     connections_.reserve(n);
