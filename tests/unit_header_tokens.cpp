@@ -24,6 +24,18 @@ RUVIA_TEST(header_has_token_case_insensitive) {
     RUVIA_CHECK(!httpHasToken("", "gzip"));                        // empty value
 }
 
+RUVIA_TEST(header_has_token_skips_empty_list_items) {
+    // Doubled, leading, and trailing commas (which real proxies emit) produce
+    // empty list items that must be skipped -- not matched, and not stopping the
+    // scan from reaching the real tokens.
+    RUVIA_CHECK(httpHasToken("gzip,,deflate", "deflate"));
+    RUVIA_CHECK(httpHasToken(",gzip", "gzip"));
+    RUVIA_CHECK(httpHasToken("gzip,", "gzip"));
+    RUVIA_CHECK(httpHasToken(" , gzip , ", "gzip"));
+    // A list of only empty items never matches anything.
+    RUVIA_CHECK(!httpHasToken(",,", "gzip"));
+}
+
 RUVIA_TEST(header_has_exact_token_case_sensitive) {
     RUVIA_CHECK(httpHasExactToken("gzip, deflate", "deflate"));
     RUVIA_CHECK(!httpHasExactToken("gzip, DEFLATE", "deflate"));   // case-sensitive
