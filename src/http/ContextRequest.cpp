@@ -77,32 +77,8 @@ namespace {
 
 void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     for (const char ch : input) {
-        auto c = static_cast<unsigned char>(ch);
-        if (c >= 'A' && c <= 'Z') {
-            c = static_cast<unsigned char>(c - 'A' + 'a');
-        }
-        output.push_back(static_cast<char>(c));
+        output.push_back(static_cast<char>(detail::httpLowerAscii(static_cast<unsigned char>(ch))));
     }
-}
-
-[[nodiscard]] bool equalsIgnoreAsciiCase(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        auto a = static_cast<unsigned char>(left[i]);
-        auto b = static_cast<unsigned char>(right[i]);
-        if (a >= 'A' && a <= 'Z') {
-            a = static_cast<unsigned char>(a - 'A' + 'a');
-        }
-        if (b >= 'A' && b <= 'Z') {
-            b = static_cast<unsigned char>(b - 'A' + 'a');
-        }
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
 }
 
 void assignUrlDecodedOrCopy(
@@ -411,7 +387,7 @@ void compactParsedBodyFields(
 
 std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
     for (auto it = headers_.rbegin(); it != headers_.rend(); ++it) {
-        if (equalsIgnoreAsciiCase(it->name(), name)) {
+        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
             return it->value();
         }
     }
