@@ -128,6 +128,10 @@ struct ContextAccess final {
         return context.requestQuery_ != nullptr || context.requestQueries_ != nullptr;
     }
 
+    [[nodiscard]] static bool routeParamsMaterialized(const Context& context) noexcept {
+        return context.routeParams_ != nullptr;
+    }
+
     static void setResponse(Context& context, HttpResponse&& response) {
         context.storeResponse(std::move(response));
     }
