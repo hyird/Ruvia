@@ -129,9 +129,6 @@ struct HttpRequestAccess final {
         if (slot >= kCachedHeaderSlots) {
             return;
         }
-        if ((request.cachedHeaderBits_ & cachedHeaderBit(slot)) != 0) {
-            return;
-        }
         request.cachedHeaders_[slot] = value;
         request.cachedHeaderBits_ |= cachedHeaderBit(slot);
     }
