@@ -275,3 +275,15 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(-1); validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(-1); validateRedisConfig(c); }));
 }
+
+RUVIA_TEST(resp_command_bulk_strings_are_binary_safe) {
+    // RESP multi-bulk length-prefixes every argument ($<len>\r\n<bytes>\r\n), so an
+    // argument containing CRLF is carried verbatim inside its byte count -- it cannot
+    // terminate the bulk early or inject a second command. This is the RESP
+    // command-injection defense for attacker-influenced keys and values.
+    RUVIA_CHECK_EQ(encode({"SET", "k", "a\r\nb"}),
+                   std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$4\r\na\r\nb\r\n"));
+    // An embedded NUL is likewise just another length-counted byte.
+    RUVIA_CHECK_EQ(encode({"SET", "k", std::string_view("a\0b", 3)}),
+                   std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\na\0b\r\n", 29));
+}
