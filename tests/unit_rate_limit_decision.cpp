@@ -1,18 +1,69 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
+#include "http/ContextInternal.h"
+#include "http/ContextServices.h"
+#include "http/HttpRequestInternal.h"
 #include "net/server/RateLimitDecision.h"
 #include "ruvia/app/RateLimitRule.h"
+#include "ruvia/http/Context.h"
+#include "ruvia/http/RateLimit.h"
+#include "ruvia/memory/MemoryPool.h"
 
 namespace {
 
+using ruvia::HttpRequest;
 using ruvia::RateLimitRule;
+using ruvia::RequestMemory;
+using ruvia::WorkerMemory;
+using ruvia::detail::applyRouteRateLimit;
+using ruvia::detail::RouteRateLimitOptions;
+using ruvia::detail::ContextAccess;
+using ruvia::detail::ContextServices;
+using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::RateLimiter;
 using ruvia::detail::rateLimiterNowMs;
 using ruvia::detail::rateLimitRequestAllowed;
+
+struct RouteLimitResult final {
+    bool allowed{false};
+    bool hasResponse{false};
+    std::uint16_t status{0};
+    std::string retryAfter;
+    std::string limit;
+    std::string remaining;
+    std::string reset;
+};
+
+// Runs the per-route limiter over one fresh request that shares the given limiter
+// and scope (and the same empty remote address, so they collide on one counter).
+RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
+                               const RouteRateLimitOptions& options) {
+    WorkerMemory worker;
+    RequestMemory memory(worker);
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setResource(request, memory.resource());
+    ContextServices services(nullptr, nullptr, nullptr, &limiter);
+    auto context = ContextAccess::make(memory, request, scope, services);
+
+    RouteLimitResult r;
+    r.allowed = applyRouteRateLimit(context, options, options.rule.maxRequests);
+    r.hasResponse = ContextAccess::hasResponse(context);
+    if (r.hasResponse) {
+        auto response = ContextAccess::takeResponse(context);
+        r.status = response.status();
+        r.retryAfter = std::string(response.header("Retry-After"));
+        r.limit = std::string(response.header("X-RateLimit-Limit"));
+        r.remaining = std::string(response.header("X-RateLimit-Remaining"));
+        r.reset = std::string(response.header("X-RateLimit-Reset"));
+    }
+    return r;
+}
 
 }  // namespace
 
@@ -118,4 +169,35 @@ RUVIA_TEST(rate_limit_rule_normalization_clamps_unsafe_fields) {
         RUVIA_CHECK(normalized.window == std::chrono::milliseconds(60000));
         RUVIA_CHECK_EQ(normalized.slotCount, std::size_t{1024});
     }
+}
+
+RUVIA_TEST(route_rate_limit_429_carries_retry_after_and_ratelimit_headers) {
+    // The per-route limiter's rejection path (applyRouteRateLimit) had no coverage:
+    // the RateLimiter core is tested, but not the 429 response it produces with the
+    // Retry-After and X-RateLimit-* advisory headers a client relies on.
+    RateLimiter limiter(RateLimitRule{}, std::pmr::get_default_resource());
+    RouteRateLimitOptions options;
+    options.rule.maxRequests = 1;
+    options.rule.window = std::chrono::seconds(60);
+    const std::uintptr_t scope = 0xABCD;
+
+    // The first request under this (scope, empty-IP) key is admitted with no response.
+    const auto first = runRouteLimit(limiter, scope, options);
+    RUVIA_CHECK(first.allowed);
+    RUVIA_CHECK(!first.hasResponse);
+
+    // The second exceeds maxRequests=1 -> short-circuited with a 429 and the full
+    // advisory header set.
+    const auto second = runRouteLimit(limiter, scope, options);
+    RUVIA_CHECK(!second.allowed);
+    RUVIA_CHECK(second.hasResponse);
+    RUVIA_CHECK_EQ(second.status, std::uint16_t{429});
+    RUVIA_CHECK_EQ(second.limit, std::string("1"));       // X-RateLimit-Limit = maxRequests
+    RUVIA_CHECK_EQ(second.remaining, std::string("0"));   // X-RateLimit-Remaining = 0 when blocked
+    // Retry-After is a positive whole number of seconds (ceil of the ms remaining in
+    // the 60s window), and X-RateLimit-Reset mirrors it.
+    RUVIA_CHECK(!second.retryAfter.empty());
+    const int retry = std::stoi(second.retryAfter);
+    RUVIA_CHECK(retry >= 1 && retry <= 60);
+    RUVIA_CHECK_EQ(second.reset, second.retryAfter);
 }
