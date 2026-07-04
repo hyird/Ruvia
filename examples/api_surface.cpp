@@ -878,6 +878,11 @@ concept HasRequestNameValueListMutableAccess = requires(T& list) {
 };
 
 template <typename T>
+concept HasRequestNameValueListMutableIteratorAlias = requires {
+    typename T::iterator;
+};
+
+template <typename T>
 concept HasRequestNameValueListCanonicalAccessors = requires(const T& list) {
     { list.get(std::string_view{}) } -> std::same_as<std::optional<std::string_view>>;
     { list.count(std::string_view{}) } -> std::same_as<std::size_t>;
@@ -960,6 +965,11 @@ concept HasRequestValueGroupListMutableAccess = requires(T& list) {
     { list.end() } -> std::same_as<typename T::iterator>;
     { list.data() } -> std::same_as<ruvia::RequestValueGroup*>;
     { list[std::size_t{}] } -> std::same_as<ruvia::RequestValueGroup&>;
+};
+
+template <typename T>
+concept HasRequestValueGroupListMutableIteratorAlias = requires {
+    typename T::iterator;
 };
 
 template <typename T>
@@ -1524,6 +1534,8 @@ static_assert(!HasRequestNameValueViewPublicFields<ruvia::RequestNameValueView>)
 static_assert(HasRequestNameValueViewCanonicalAccessors<ruvia::RequestNameValueView>);
 static_assert(!HasRequestNameValueListPublicMutators<ruvia::RequestNameValueList>);
 static_assert(!HasRequestNameValueListMutableAccess<ruvia::RequestNameValueList>);
+static_assert(!HasRequestNameValueListMutableIteratorAlias<ruvia::RequestNameValueList>);
+static_assert(std::is_pointer_v<ruvia::RequestNameValueList::const_iterator>);
 static_assert(HasRequestNameValueListCanonicalAccessors<ruvia::RequestNameValueList>);
 static_assert(!HasRequestValueGroupFirstAlias<ruvia::RequestValueGroup>);
 static_assert(HasRequestValueGroupCanonicalAccessors<ruvia::RequestValueGroup>);
@@ -1538,6 +1550,8 @@ static_assert(!HasRequestValueGroupListFirstAlias<ruvia::RequestValueGroupList>)
 static_assert(!HasRequestValueGroupListGroupInternal<ruvia::RequestValueGroupList>);
 static_assert(!HasRequestValueGroupListPublicMutators<ruvia::RequestValueGroupList>);
 static_assert(!HasRequestValueGroupListMutableAccess<ruvia::RequestValueGroupList>);
+static_assert(!HasRequestValueGroupListMutableIteratorAlias<ruvia::RequestValueGroupList>);
+static_assert(std::is_pointer_v<ruvia::RequestValueGroupList::const_iterator>);
 static_assert(HasRequestValueGroupListCanonicalAccessors<ruvia::RequestValueGroupList>);
 static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
