@@ -112,3 +112,30 @@ RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
         response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
     }));
 }
+
+RUVIA_TEST(response_header_append_rejects_single_value_headers) {
+    auto response = makeResponse();
+
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Content-Type", "text/plain", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("ETag", "\"abc\"", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Access-Control-Allow-Origin", "https://example.com", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Server", "ruvia", HttpResponse::HeaderOptions{true});
+    }));
+
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Vary", "Origin", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Cache-Control", "no-store", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
+    }));
+}
