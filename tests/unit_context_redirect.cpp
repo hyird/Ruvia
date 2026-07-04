@@ -6,18 +6,22 @@
 
 #include "http/ContextInternal.h"
 #include "http/HttpRequestInternal.h"
+#include "http/HttpResponseBodyAccess.h"
 #include "ruvia/http/Context.h"
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
 
 namespace {
 
 using ruvia::Context;
+using ruvia::HttpHeaderView;
 using ruvia::HttpRequest;
 using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::responseBodyBytes;
 
 // The Context holds the request by reference, so keep it in the test's scope
 // (this macro-free setup avoids a returning helper that would dangle).
@@ -61,4 +65,28 @@ RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(context_body_sets_body_and_status) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.body("hello world", Context::ResponseInit{.status = 201});
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{201});
+    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello world"));
+}
+
+RUVIA_TEST(context_body_applies_init_headers) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const HttpHeaderView headers[] = {{"Content-Type", "text/plain"}, {"X-Custom", "v"}};
+    const auto response = context.body("data", Context::ResponseInit{.status = 200, .headers = headers});
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("data"));
+    RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
+    RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
+}
+
+RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const auto response = context.body(nullptr, std::uint16_t{204}, "No Content");
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
+    RUVIA_CHECK(responseBodyBytes(response).empty());
 }
