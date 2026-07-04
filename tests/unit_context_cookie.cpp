@@ -55,3 +55,29 @@ RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_que
     RUVIA_CHECK_EQ(*query, std::string_view("one two"));
     RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
 }
+
+RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_param_table) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+
+    const std::string_view names[] = {"unused", "id"};
+    const std::string_view values[] = {"skip", "one%20two"};
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(
+        requestMemory,
+        request,
+        "/items/:id",
+        names,
+        values,
+        std::size(names),
+        ruvia::HttpMethod::kGet,
+        0,
+        0);
+
+    const auto param = context.req().param("id");
+    RUVIA_CHECK(param.has_value());
+    RUVIA_CHECK_EQ(*param, std::string_view("one two"));
+    RUVIA_CHECK(!ContextAccess::routeParamsMaterialized(context));
+}

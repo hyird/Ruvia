@@ -639,7 +639,20 @@ const RequestNameValueList& Context::routeParams() const {
 }
 
 std::optional<std::string_view> Context::routeParam(std::string_view name) const {
-    return routeParams().get(name);
+    for (std::size_t i = paramCount_; i > 0; --i) {
+        const auto index = i - 1;
+        if (paramNames_[index] != name) {
+            continue;
+        }
+        const auto value = paramValues_[index];
+        if (!detail::hasUrlEncoding(value, detail::UrlDecodeMode::kPercent)) {
+            return value;
+        }
+        auto& decoded = memory_.emplace<std::pmr::string>(resource());
+        assignUrlDecodedOrCopy(decoded, value, detail::UrlDecodeMode::kPercent);
+        return storedStringView(decoded);
+    }
+    return std::nullopt;
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {
