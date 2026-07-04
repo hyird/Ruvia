@@ -202,7 +202,7 @@ public:
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
         auto* const resource = resource_;
         std::optional<T> result;
-        bool parseFailed = false;
+        bool lastMatchFailed = false;
         const bool valid = detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
             if (!detail::formFieldNameEquals(name, field)) {
                 return true;
@@ -214,14 +214,16 @@ public:
                     valueView,
                     value,
                     resource)) {
-                parseFailed = true;
-                return false;
+                result.reset();
+                lastMatchFailed = true;
+                return true;
             }
             result.emplace(std::move(value));
+            lastMatchFailed = false;
             return true;
         });
 
-        if (!valid || parseFailed) {
+        if (!valid || lastMatchFailed) {
             return std::nullopt;
         }
         return result;
@@ -251,9 +253,8 @@ template <typename T>
     const RequestNameValueList& fields,
     std::string_view field,
     std::pmr::memory_resource* resource) {
-    std::optional<T> result;
-    bool parseFailed = false;
-    for (const auto& item : fields) {
+    for (std::size_t index = fields.size(); index > 0; --index) {
+        const auto& item = fields[index - 1];
         if (item.name() != field) {
             continue;
         }
@@ -264,17 +265,12 @@ template <typename T>
                 item.value(),
                 value,
                 resource)) {
-            parseFailed = true;
-            break;
+            return std::nullopt;
         }
-        result.emplace(std::move(value));
-        break;
+        return value;
     }
 
-    if (parseFailed) {
-        return std::nullopt;
-    }
-    return result;
+    return std::nullopt;
 }
 
 }  // namespace detail
