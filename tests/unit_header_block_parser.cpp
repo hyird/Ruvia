@@ -68,6 +68,16 @@ RUVIA_TEST(header_block_rejects_duplicate_host) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
 }
 
+RUVIA_TEST(header_block_rejects_duplicate_content_type) {
+    // Content-Type is a singleton representation header; accepting duplicates
+    // lets body helpers observe only the cached last value.
+    const auto result = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Type: application/json\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);

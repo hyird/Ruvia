@@ -96,6 +96,17 @@ RUVIA_TEST(http1_parse_content_length_with_transfer_encoding_rejected) {
     RUVIA_CHECK(result.status == HttpParseStatus::kError);
 }
 
+RUVIA_TEST(http1_parse_duplicate_content_type_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Content-Type: text/plain\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: 2\r\n\r\n{}");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(http1_parse_chunked_body) {
     HttpServerParser parser;
     const auto result = parser.parse(
