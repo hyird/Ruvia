@@ -69,6 +69,46 @@ RUVIA_TEST(json_number_parse_values) {
     }
 }
 
+RUVIA_TEST(json_number_parse_type_boundaries) {
+    using ruvia::detail::parseJsonNumberValue;
+
+    // An integer target must REJECT a well-formed but non-integer JSON number
+    // rather than silently truncate it, and must leave the cursor unmoved so the
+    // caller sees the parse failure at the value's start.
+    {
+        std::string_view in = "1.5";
+        int v = -1;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+        RUVIA_CHECK_EQ(in, std::string_view("1.5"));  // not consumed
+    }
+    {
+        std::string_view in = "1e2";  // exponent form is not an integer literal
+        int v = -1;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+    }
+    // A negative value cannot fit an unsigned target.
+    {
+        std::string_view in = "-5";
+        unsigned v = 7;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+    }
+    // Out-of-range magnitudes are rejected, not wrapped/clamped.
+    {
+        std::string_view in = "99999999999999999999";  // > INT64/INT32 max
+        int v = -1;
+        RUVIA_CHECK(!parseJsonNumberValue(in, v));
+        RUVIA_CHECK_EQ(in, std::string_view("99999999999999999999"));  // not consumed
+    }
+    // The same exponent form parses fine into a floating target.
+    {
+        std::string_view in = "1e2";
+        double v = 0;
+        RUVIA_CHECK(parseJsonNumberValue(in, v));
+        RUVIA_CHECK(v == 100.0);
+        RUVIA_CHECK(in.empty());
+    }
+}
+
 // --- String view parsing -------------------------------------------------
 RUVIA_TEST(json_string_view_unescaped) {
     std::string_view in = "\"hello\" rest";
