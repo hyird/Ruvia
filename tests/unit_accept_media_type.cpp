@@ -10,6 +10,7 @@ using ruvia::detail::httpAcceptsMediaType;
 using ruvia::detail::httpMediaRangeMatches;
 using ruvia::detail::httpMediaRangeSpecificity;
 using ruvia::detail::httpParseQualityValue;
+using ruvia::detail::httpQualityParameter;
 
 }  // namespace
 
@@ -33,6 +34,29 @@ RUVIA_TEST(parse_quality_value_rfc7231_grammar) {
     RUVIA_CHECK_EQ(httpParseQualityValue("2"), -1);
     RUVIA_CHECK_EQ(httpParseQualityValue("abc"), -1);
     RUVIA_CHECK_EQ(httpParseQualityValue(""), -1);
+}
+
+RUVIA_TEST(quality_parameter_extracts_q_from_header_item) {
+    // A header item without a q parameter defaults to full quality (1000): the
+    // media range / coding is present and acceptable.
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip"), 1000);
+    RUVIA_CHECK_EQ(httpQualityParameter("text/html"), 1000);
+
+    // The q parameter is extracted and its name matched case-insensitively.
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.5"), 500);
+    RUVIA_CHECK_EQ(httpQualityParameter("text/plain;Q=0.8"), 800);
+
+    // A syntactically INVALID q collapses to 0 (not acceptable) rather than the
+    // present-default of 1000 -- a malformed q must never be read as "accept".
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=2"), 0);
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=bogus"), 0);
+
+    // The first q wins; parameters after it are accept-ext and do not override it.
+    RUVIA_CHECK_EQ(httpQualityParameter("gzip;q=0.3;q=0.9"), 300);
+
+    // A ';' inside a quoted parameter value is not a parameter separator, so a
+    // fake q smuggled inside quotes is ignored and the real trailing q is used.
+    RUVIA_CHECK_EQ(httpQualityParameter(R"(a;note="x;q=1";q=0.4)"), 400);
 }
 
 RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
