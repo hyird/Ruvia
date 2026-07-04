@@ -74,7 +74,11 @@ struct Http2HeaderDecodeContext final {
             if (stream.hasMethod()) {
                 return false;
             }
-            stream.setRequestMethod(parseMethod(value));
+            const auto method = parseMethod(value);
+            if (method == HttpMethod::kUnknown) {
+                return false;
+            }
+            stream.setRequestMethod(method);
             stream.markMethod();
             return true;
         }
@@ -86,7 +90,7 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":scheme") {
-            if (stream.hasScheme()) {
+            if (stream.hasScheme() || (value != "http" && value != "https")) {
                 return false;
             }
             stream.markScheme();

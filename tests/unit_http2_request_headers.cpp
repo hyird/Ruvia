@@ -44,6 +44,26 @@ RUVIA_TEST(h2_headers_duplicate_pseudo_header_rejected) {
 }
 
 RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":method", ""));  // empty method
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":method", "FOO"));  // unsupported method
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", ""));  // empty scheme
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":scheme", "ftp"));  // unsupported scheme
+    }
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", ""));      // empty path
