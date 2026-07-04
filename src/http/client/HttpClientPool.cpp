@@ -140,20 +140,9 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         conn.tlsStream.reset();
         using TlsStream = Connection::TlsStream;
         conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
-        // RFC 6066 SNI: advertise the server name for virtual hosting, but never for IP
-        // literals (SNI must carry a host name, not an address).
-        const auto host = std::string_view(config_.host);
-        std::error_code addressEc;
-        asio::ip::make_address(host, addressEc);
-        const bool hostIsIpLiteral = !addressEc;
-        if (!hostIsIpLiteral) {
-            // OpenSSL needs a null-terminated string; config_.host (a std::pmr::string) is one.
-            if (SSL_set_tlsext_host_name(conn.tlsStream->native_handle(), config_.host.c_str()) != 1) {
-                throw std::runtime_error("http client: failed to set TLS SNI host name");
-            }
-        }
-        // verify_peer only checks the chain; require the certificate to match the target host.
-        conn.tlsStream->set_verify_callback(HttpClientHostNameVerification(host, conn.resource));
+        // RFC 6066 SNI + RFC 6125 host-name verification (verify_peer only checks the
+        // chain), shared with the HTTP/2 path via one owner.
+        applyClientTlsIdentity(*conn.tlsStream, config_.host, conn.resource);
         setDeadline(conn, config_.connectTimeout, Connection::DeadlineKind::kSocket);
         const auto handshakeEc = co_await asyncError([&](auto handler) {
             conn.tlsStream->async_handshake(
