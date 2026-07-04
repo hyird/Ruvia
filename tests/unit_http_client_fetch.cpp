@@ -15,6 +15,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <functional>
@@ -182,6 +183,64 @@ FetchOutcome runOneFetch(
         [&]() -> asio::awaitable<void> {
             try {
                 ruvia::FetchOptions options;
+                auto response = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetch("/", options, std::pmr::get_default_resource()));
+                out.ok = true;
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
+            } catch (const std::exception& e) {
+                out.error += std::string("client:") + e.what();
+            }
+            pool->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
+FetchOutcome runFetchWithRequestHeader(ruvia::HttpHeaderView header) {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    FetchOutcome out;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::streambuf request;
+                co_await asio::async_read_until(
+                    sock, request, std::string("\r\n\r\n"), asio::use_awaitable);
+                co_await asio::async_write(
+                    sock,
+                    asio::buffer(std::string("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")),
+                    asio::use_awaitable);
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                std::array<ruvia::HttpHeaderView, 1> headers{header};
+                ruvia::FetchOptions options;
+                options.headers = headers;
                 auto response = co_await ruvia::detail::taskAsAwaitable(
                     pool->fetch("/", options, std::pmr::get_default_resource()));
                 out.ok = true;
@@ -861,6 +920,21 @@ RUVIA_TEST(http_client_fetch_content_length) {
     RUVIA_CHECK(out.ok);
     RUVIA_CHECK_EQ(out.status, 200);
     RUVIA_CHECK_EQ(out.body, std::string("Hello, world"));
+}
+
+RUVIA_TEST(http_client_rejects_hop_by_hop_request_headers) {
+    for (const auto header : {
+             ruvia::HttpHeaderView{"Keep-Alive", "timeout=5"},
+             ruvia::HttpHeaderView{"Proxy-Connection", "keep-alive"},
+             ruvia::HttpHeaderView{"TE", "trailers"},
+             ruvia::HttpHeaderView{"Trailer", "Digest"},
+             ruvia::HttpHeaderView{"Upgrade", "websocket"},
+         }) {
+        const auto out = runFetchWithRequestHeader(header);
+        RUVIA_CHECK(!out.ok);
+        RUVIA_CHECK(out.error.find("client:http client: request header is managed by the client") !=
+                    std::string::npos);
+    }
 }
 
 // --- Chunked body reassembly (data buffered with the head) ---------------
