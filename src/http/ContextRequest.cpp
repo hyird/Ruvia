@@ -547,13 +547,13 @@ std::optional<std::string_view> Context::requestQuery(std::string_view name) con
             }
             if (!detail::hasUrlEncoding(encodedValue, detail::UrlDecodeMode::kForm)) {
                 result = encodedValue;
-                return false;
+                return true;
             }
 
             auto& decoded = memory_.emplace<std::pmr::string>(resource());
             assignUrlDecodedOrCopy(decoded, encodedValue, detail::UrlDecodeMode::kForm);
             result = storedStringView(decoded);
-            return false;
+            return true;
         });
     return result;
 }
