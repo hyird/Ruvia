@@ -82,6 +82,22 @@ RUVIA_TEST(multipart_part_headers_status_codes) {
                 HttpMultipartPartHeaderStatus::kInvalidDisposition);
 }
 
+RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+    using ruvia::detail::HttpMultipartPartHeaders;
+    using ruvia::detail::HttpMultipartPartHeaderStatus;
+
+    // HTTP field names are case-insensitive; a part that lowercases them (some
+    // clients do) must still be recognized, with name and content type extracted.
+    HttpMultipartPartHeaders headers;
+    RUVIA_CHECK(httpParseMultipartPartHeaders(
+                    "content-disposition: form-data; name=\"field\"\r\n"
+                    "content-type: image/png",
+                    headers) == HttpMultipartPartHeaderStatus::kOk);
+    RUVIA_CHECK_EQ(headers.name, std::string_view("field"));
+    RUVIA_CHECK_EQ(headers.contentType, std::string_view("image/png"));
+}
+
 RUVIA_TEST(multipart_header_value_in_block_lookup) {
     using ruvia::detail::httpHeaderValueInBlock;
     const std::string_view block =
