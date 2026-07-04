@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/model/JsonParser.h"
 #include "ruvia/http/detail/model/FormParser.h"
@@ -11,23 +12,10 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline unsigned char modelLowerAscii(unsigned char c) noexcept {
-    return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
-}
-
+// Thin alias over the shared ASCII case owner (ruvia/detail/AsciiCase.h). Kept as
+// a public-header-safe name so it does not reach into the internal src/ helpers.
 [[nodiscard]] inline bool modelAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        if (modelLowerAscii(static_cast<unsigned char>(left[i])) !=
-            modelLowerAscii(static_cast<unsigned char>(right[i]))) {
-            return false;
-        }
-    }
-
-    return true;
+    return asciiEqualsIgnoreCase(left, right);
 }
 
 [[nodiscard]] inline std::string_view modelTrimOws(std::string_view value) noexcept {

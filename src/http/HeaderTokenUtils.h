@@ -4,32 +4,17 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/detail/AsciiCase.h"
+
 namespace ruvia::detail {
 
+// Thin HTTP-layer aliases over the shared ASCII case owner (ruvia/detail/AsciiCase.h).
 [[nodiscard]] inline unsigned char httpLowerAscii(unsigned char c) noexcept {
-    return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+    return asciiToLower(c);
 }
 
 [[nodiscard]] inline bool httpAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        auto a = static_cast<unsigned char>(left[i]);
-        auto b = static_cast<unsigned char>(right[i]);
-        if (a >= 'A' && a <= 'Z') {
-            a = static_cast<unsigned char>(a + ('a' - 'A'));
-        }
-        if (b >= 'A' && b <= 'Z') {
-            b = static_cast<unsigned char>(b + ('a' - 'A'));
-        }
-        if (a != b) {
-            return false;
-        }
-    }
-
-    return true;
+    return asciiEqualsIgnoreCase(left, right);
 }
 
 [[nodiscard]] inline std::string_view httpTrimOws(std::string_view value) noexcept {

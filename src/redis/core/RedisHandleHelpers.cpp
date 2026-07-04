@@ -1,6 +1,7 @@
 #include "RedisHandleHelpers.h"
 
 #include "RedisUtils.h"
+#include "ruvia/detail/AsciiCase.h"
 
 #include <stdexcept>
 #include <utility>
@@ -44,17 +45,7 @@ void throwIfRedisError(const RedisValue& value) {
 }
 
 bool redisAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        const auto a = left[i] >= 'A' && left[i] <= 'Z' ? static_cast<char>(left[i] + ('a' - 'A')) : left[i];
-        const auto b = right[i] >= 'A' && right[i] <= 'Z' ? static_cast<char>(right[i] + ('a' - 'A')) : right[i];
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
+    return asciiEqualsIgnoreCase(left, right);
 }
 
 Task<RedisValue> executeOwnedRedisCommand(
