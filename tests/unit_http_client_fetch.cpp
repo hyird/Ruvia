@@ -1360,6 +1360,17 @@ RUVIA_TEST(http_client_redirect_no_location_returned) {
     RUVIA_CHECK_EQ(out.requestLines.size(), std::size_t{1});
 }
 
+RUVIA_TEST(http_client_redirect_duplicate_location_not_followed) {
+    ruvia::FetchOptions options;
+    const auto out = runRedirectFetch(
+        {"HTTP/1.1 302 Found\r\nLocation: /first\r\nLocation: /second\r\nContent-Length: 0\r\n\r\n"},
+        options);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.status, 302);
+    RUVIA_CHECK_EQ(out.requestLines.size(), std::size_t{1});
+}
+
 // --- Streaming: Content-Length body pulled incrementally -----------------
 RUVIA_TEST(http_client_stream_content_length) {
     const std::string body(5000, 'C');
