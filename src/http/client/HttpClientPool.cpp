@@ -17,6 +17,7 @@
 
 #include "../../runtime/AsioAwait.h"
 #include "../HeaderTokenUtils.h"
+#include "HttpClientAccess.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientRedirect.h"
 #include "HttpClientResponseLimits.h"

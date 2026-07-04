@@ -15,6 +15,7 @@
 #include <utility>
 
 #include "FetchStreamSource.h"
+#include "HttpClientAccess.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
