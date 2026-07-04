@@ -110,6 +110,23 @@ RUVIA_TEST(hpack_integer_overflow_is_rejected) {
     RUVIA_CHECK(result.error == HpackError::kIntegerOverflow);
 }
 
+RUVIA_TEST(hpack_integer_overflow_chunk_bound_is_rejected) {
+    using ruvia::detail::HpackError;
+    // The continuation decode has a second, distinct overflow guard from the
+    // accumulated-sum one above: once the shift reaches 28, a chunk whose 7-bit
+    // payload exceeds 0x0f is rejected up front, because (payload << 28) would
+    // lose its high bits to uint32 truncation and could then slip past the
+    // sum guard. FF 80 80 80 80 1F holds the running value at 0x7f through four
+    // zero-payload continuations, so ONLY this chunk-bound guard can catch the
+    // final 0x1f<<28 overflow -- removing it would silently wrap (RFC 7541 5.1).
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    Collector out;
+    const auto block = bytes({0xFF, 0x80, 0x80, 0x80, 0x80, 0x1F});
+    const auto result = decoder.decode(block, &out, &collect);
+    RUVIA_CHECK(!result.ok());
+    RUVIA_CHECK(result.error == HpackError::kIntegerOverflow);
+}
+
 RUVIA_TEST(hpack_long_value_round_trips) {
     // A value longer than 127 bytes forces a multi-byte length prefix, exercising
     // the continuation-integer decode on the valid (non-overflowing) path.
