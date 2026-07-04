@@ -3,26 +3,46 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/HttpParserInternal.h"
 #include "net/http2/Http2WebSocketHandshake.h"
-#include "http/HttpRequestInternal.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace {
 
-using ruvia::HttpHeaderView;
 using ruvia::HttpRequest;
 using ruvia::detail::Http2StreamState;
-using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::RequestKnownHeader;
+using ruvia::detail::HttpServerParser;
 using ruvia::detail::http2ChooseWebSocketSubprotocol;
 using ruvia::detail::http2IsValidWebSocketRequest;
 
-HttpRequest requestWith(RequestKnownHeader known, std::string_view name, std::string_view value) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request, HttpHeaderView{name, value},
-                                 HttpRequestAccess::knownHeaderSlot(known));
-    return request;
+HttpRequest parseRequest(std::string_view rawRequest) {
+    HttpServerParser parser;
+    const auto parsed = parser.parse(rawRequest);
+    return parsed.request;
+}
+
+HttpRequest requestWithProtocol() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Protocol: chat, superchat\r\n"
+        "\r\n");
+}
+
+HttpRequest requestWithVersion() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n");
+}
+
+HttpRequest requestWithBadVersion() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Version: 8\r\n"
+        "\r\n");
 }
 
 Http2StreamState makeStream() {
@@ -32,8 +52,7 @@ Http2StreamState makeStream() {
 }  // namespace
 
 RUVIA_TEST(websocket_subprotocol_negotiation) {
-    const auto request = requestWith(RequestKnownHeader::kSecWebSocketProtocol,
-                                     "sec-websocket-protocol", "chat, superchat");
+    const auto request = requestWithProtocol();
     // Server preference wins: the first supported token the client also offered.
     RUVIA_CHECK_EQ(http2ChooseWebSocketSubprotocol(request, "superchat, chat"),
                    std::string_view("superchat"));
@@ -42,14 +61,12 @@ RUVIA_TEST(websocket_subprotocol_negotiation) {
     RUVIA_CHECK(http2ChooseWebSocketSubprotocol(request, "binary").empty());
 
     // A request offering nothing yields no subprotocol.
-    HttpRequest none = HttpRequestAccess::make();
-    HttpRequestAccess::reset(none);
+    const auto none = parseRequest("GET /ws HTTP/1.1\r\nHost: example.test\r\n\r\n");
     RUVIA_CHECK(http2ChooseWebSocketSubprotocol(none, "chat").empty());
 }
 
 RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
-    const auto request = requestWith(RequestKnownHeader::kSecWebSocketVersion,
-                                     "sec-websocket-version", "13");
+    const auto request = requestWithVersion();
 
     auto valid = makeStream();
     valid.markExtendedConnectWebSocket();
@@ -69,8 +86,7 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     RUVIA_CHECK(!http2IsValidWebSocketRequest(withContentLength, request));
 
     // The Sec-WebSocket-Version must be exactly 13.
-    const auto badVersion = requestWith(RequestKnownHeader::kSecWebSocketVersion,
-                                        "sec-websocket-version", "8");
+    const auto badVersion = requestWithBadVersion();
     auto stream = makeStream();
     stream.markExtendedConnectWebSocket();
     stream.markWebSocketTunnel();
