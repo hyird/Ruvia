@@ -9,8 +9,31 @@ namespace {
 using ruvia::detail::httpAcceptsMediaType;
 using ruvia::detail::httpMediaRangeMatches;
 using ruvia::detail::httpMediaRangeSpecificity;
+using ruvia::detail::httpParseQualityValue;
 
 }  // namespace
+
+RUVIA_TEST(parse_quality_value_rfc7231_grammar) {
+    // qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] ), mapped to
+    // milli-units 0..1000.
+    RUVIA_CHECK_EQ(httpParseQualityValue("1"), 1000);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0"), 0);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.5"), 500);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.500"), 500);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.123"), 123);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.999"), 999);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.0"), 1000);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.000"), 1000);
+
+    // Invalid qvalues yield -1: greater than 1, a non-zero fraction on 1.x, more
+    // than three fraction digits, an out-of-range integer, and non-numeric input.
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.5"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue("1.1"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue("0.1234"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue("2"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue("abc"), -1);
+    RUVIA_CHECK_EQ(httpParseQualityValue(""), -1);
+}
 
 RUVIA_TEST(media_range_matches_type_subtype_and_wildcards) {
     RUVIA_CHECK(httpMediaRangeMatches("text/html", "text/html"));
