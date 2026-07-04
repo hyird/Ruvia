@@ -234,7 +234,6 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
     App& setGlobalRateLimit(RateLimitRule rule);
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
