@@ -145,3 +145,24 @@ RUVIA_TEST(dotenv_rejects_invalid_key) {
     RUVIA_CHECK_EQ(entries.size(), std::size_t{1});
     RUVIA_CHECK_EQ(std::string_view(entries[0].name), std::string_view("_MY_KEY2"));
 }
+
+RUVIA_TEST(dotenv_hash_is_literal_unless_space_preceded) {
+    // A '#' only starts an inline comment when preceded by whitespace. A '#' in the
+    // MIDDLE of an unquoted value (no preceding space) is a literal character, so a
+    // URL fragment or a '#'-bearing secret is not silently truncated. The existing
+    // test only covers the space-preceded (comment) case, so a regression dropping
+    // the "preceded by space" guard would pass it while corrupting these values.
+    const auto path = writeTempEnv("ruvia_dotenv_hash.env",
+        "MIDHASH=a#b\n"                          // '#' not space-preceded -> literal
+        "URL=http://host/path#frag\n"            // a URL fragment must survive
+        "HASHSTART=# rest\n"                     // '#' at value start -> whole value commented (empty)
+        "QUOTEDNOTE=\"kept\" # trailing note\n"); // a comment after a quoted value is allowed
+    const auto entries = readDotenvEntries(path);
+    std::filesystem::remove(path);
+
+    RUVIA_CHECK_EQ(entries.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(std::string_view(entries[0].value), std::string_view("a#b"));
+    RUVIA_CHECK_EQ(std::string_view(entries[1].value), std::string_view("http://host/path#frag"));
+    RUVIA_CHECK(entries[2].value.empty());  // '#' at the start comments out the whole value
+    RUVIA_CHECK_EQ(std::string_view(entries[3].value), std::string_view("kept"));
+}
