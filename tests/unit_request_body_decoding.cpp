@@ -11,10 +11,14 @@
 #include <zstd.h>
 
 #include "http/RequestBodyDecoding.h"
+#include "net/body/HttpTransferCodingDecoder.h"
 
 namespace {
 
 using ruvia::detail::HttpContentCoding;
+using ruvia::detail::HttpTransferCoding;
+using ruvia::detail::HttpTransferCodings;
+using ruvia::detail::TransferCodingDecoder;
 using ruvia::detail::decodeRequestContentEncoding;
 using ruvia::detail::kMaxDecodedRequestBodyBytes;
 using ruvia::detail::requestContentCoding;
@@ -142,4 +146,41 @@ RUVIA_TEST(request_body_zstd_bomb_rejected) {
     std::pmr::string out(std::pmr::get_default_resource());
     // A small cap must stop the expansion mid-stream, not decode the whole megabyte.
     RUVIA_CHECK(!decodeRequestContentEncoding(HttpContentCoding::kZstd, zz, out, 1024));
+}
+
+RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
+    auto* resource = std::pmr::get_default_resource();
+    HttpTransferCodings codings{};
+    codings.values[0] = HttpTransferCoding::kGzip;
+    codings.count = 1;
+    TransferCodingDecoder decoder(codings, std::pmr::polymorphic_allocator<char>(resource), 1u << 20);
+
+    const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
+    const std::string gz = gzipCompress(plain);
+    std::pmr::string output(resource);
+    decoder.decodeAppend(gz, output);
+    decoder.finish();
+    RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
+}
+
+RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
+    auto* resource = std::pmr::get_default_resource();
+    HttpTransferCodings codings{};
+    codings.values[0] = HttpTransferCoding::kGzip;
+    codings.count = 1;
+    // A 1 MiB body compresses to a tiny gzip; the decoder must abort the
+    // expansion once it passes the small cap, not stage the whole megabyte.
+    TransferCodingDecoder decoder(codings, std::pmr::polymorphic_allocator<char>(resource), 1024);
+
+    const std::string big(1u << 20, 'a');
+    const std::string gz = gzipCompress(big);
+    std::pmr::string output(resource);
+    bool threw = false;
+    try {
+        decoder.decodeAppend(gz, output);
+        decoder.finish();
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }
