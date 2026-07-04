@@ -138,14 +138,23 @@ struct Http2UpgradeRequest final {
     }
 
     std::string_view encodedSettings;
+    bool seenSettings = false;
     for (const auto& header : parsed.request.headers()) {
         if (!httpAsciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
             continue;
         }
-        if (!encodedSettings.empty()) {
+        // RFC 7540 3.2.1: a request with more than one HTTP2-Settings header
+        // field is malformed. Track presence with a flag rather than the value's
+        // emptiness, so a duplicate whose first occurrence is empty is still
+        // rejected -- and so an absent header (only the Connection token) fails.
+        if (seenSettings) {
             return result;
         }
+        seenSettings = true;
         encodedSettings = header.value();
+    }
+    if (!seenSettings) {
+        return result;
     }
     if (!http2DecodeBase64Url(encodedSettings, result.settingsPayload)) {
         return result;
