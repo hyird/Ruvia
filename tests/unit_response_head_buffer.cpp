@@ -24,6 +24,41 @@ RUVIA_TEST(head_buffer_stack_appends) {
     RUVIA_CHECK(buffer.canAppendOnStack(1));
 }
 
+RUVIA_TEST(head_buffer_stack_cursor_bulk_write_commits_and_guards_bounds) {
+    ResponseHeadBuffer buffer(std::pmr::get_default_resource());
+
+    // The bulk fast path hands out a raw cursor when the bound fits; writing
+    // through it and committing the end advances the buffer, visible via view().
+    char* cursor = buffer.stackCursor(3);
+    RUVIA_CHECK(cursor != nullptr);
+    cursor[0] = 'a';
+    cursor[1] = 'b';
+    cursor[2] = 'c';
+    buffer.commitStack(cursor + 3);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("abc"));
+
+    // A subsequent cursor starts after the committed bytes (used_ advanced).
+    char* next = buffer.stackCursor(2);
+    RUVIA_CHECK(next != nullptr);
+    RUVIA_CHECK(next == cursor + 3);
+    next[0] = 'd';
+    next[1] = 'e';
+    buffer.commitStack(next + 2);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("abcde"));
+
+    // The overflow guard: a bound exceeding the remaining stack space yields
+    // nullptr (the caller must fall back to append) -- without it a bulk writer
+    // would run past the fixed stack buffer. Exactly-fits is still granted.
+    const auto remaining = kResponseHeadStackBytes - buffer.view().size();
+    RUVIA_CHECK(buffer.stackCursor(remaining + 1) == nullptr);
+    RUVIA_CHECK(buffer.stackCursor(remaining) != nullptr);
+
+    // Once spilled to the heap, no stack cursor is offered at all.
+    buffer.append(std::string(kResponseHeadStackBytes, 'x'));  // forces the spill
+    RUVIA_CHECK(!buffer.canAppendOnStack(1));
+    RUVIA_CHECK(buffer.stackCursor(1) == nullptr);
+}
+
 RUVIA_TEST(head_buffer_spills_to_heap_preserving_content) {
     ResponseHeadBuffer buffer(std::pmr::get_default_resource());
     const std::string large(kResponseHeadStackBytes + 100, 'x');  // exceeds the stack buffer
