@@ -66,6 +66,33 @@ RUVIA_TEST(db_interpolate_sql_renders_typed_literals) {
     mysql_close(&mysql);
 }
 
+RUVIA_TEST(db_interpolate_sql_escapes_backslash_and_injection_payloads) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    // A backslash is itself a MySQL escape character, so it must be doubled --
+    // otherwise a value ending in '\' would consume the closing quote and break out
+    // of the literal. This is a distinct escape path from the single-quote case and
+    // is the classic backslash-breakout bypass.
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a\\b"))}),
+                   std::string("WHERE p = 'a\\\\b'"));
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("x\\"))}),
+                   std::string("WHERE p = 'x\\\\'"));
+
+    // A full injection payload: every quote is escaped so it can neither terminate
+    // the literal nor append a clause.
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("' OR '1'='1"))}),
+                   std::string("WHERE p = '\\' OR \\'1\\'=\\'1'"));
+
+    // A '?' inside a PARAMETER VALUE is data, not a placeholder: it is escaped as an
+    // ordinary character and never consumes a parameter slot (the placeholder scan
+    // walks the SQL template, not the substituted values).
+    RUVIA_CHECK_EQ(interp(mysql, "WHERE p = ?", {DbValue(std::string_view("a?b"))}),
+                   std::string("WHERE p = 'a?b'"));
+
+    mysql_close(&mysql);
+}
+
 RUVIA_TEST(db_interpolate_sql_requires_matching_placeholder_count) {
     MYSQL mysql;
     mysql_init(&mysql);
