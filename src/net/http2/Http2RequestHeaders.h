@@ -154,7 +154,8 @@ struct Http2HeaderDecodeContext final {
         return false;
     }
 
-    return http2IsValidRegularHeader(name, value);
+    return http2IsValidRegularHeader(name, value) &&
+        !http2IsForbiddenTrailerHeader(name);
 }
 
 }  // namespace ruvia::detail

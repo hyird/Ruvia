@@ -209,6 +209,11 @@ RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {
     RUVIA_CHECK(http2OnDecodedTrailer(ctx, "x-trace-id", "abc"));
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, ":method", "GET"));      // no pseudo-headers in trailers
     RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "connection", "close"));  // forbidden framing field
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "host", "example.com"));  // routing is header-only
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-length", "0"));  // framing is header-only
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "te", "trailers"));       // connection option is header-only
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "trailer", "x-checksum"));
+    RUVIA_CHECK(!http2OnDecodedTrailer(ctx, "content-type", "text/plain"));
 }
 
 RUVIA_TEST(h2_headers_list_byte_limit) {
