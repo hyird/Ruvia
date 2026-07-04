@@ -312,6 +312,16 @@ public:
     }
 };
 
+// Throws before calling next(): the chain is short-circuited and the exception
+// must be mapped to an error response (never escaping the dispatch).
+class ChainMwThrows final : public ruvia::Middleware<ChainMwThrows> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
+        throw ruvia::HttpError(401, "mw_rejected", "middleware rejected the request");
+        co_return;  // unreachable
+    }
+};
+
 ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
     g_chainOrder.push_back(0);
     co_return context.body("ok");
@@ -392,6 +402,20 @@ RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
     RUVIA_CHECK_EQ(handlerRuns, std::size_t{1});
     // The response is the "next called multiple times" error, not the handler body.
     RUVIA_CHECK(body != std::string("ok"));
+}
+
+RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {
+    g_chainOrder.clear();
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwThrows>(),
+    };
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    // A middleware that throws before next() short-circuits the chain: the handler
+    // (which records 0) never runs, and the HttpError is mapped to an error
+    // response through the same handleException path as a handler exception -- its
+    // "code" survives, so it is not swallowed into a generic 500.
+    RUVIA_CHECK(g_chainOrder.empty());
+    RUVIA_CHECK(body.find("\"code\":\"mw_rejected\"") != std::string::npos);
 }
 
 namespace {
