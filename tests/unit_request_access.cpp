@@ -69,6 +69,15 @@ RUVIA_TEST(request_access_add_header_appends_and_caches) {
                    std::string_view("example.com"));
 }
 
+RUVIA_TEST(request_access_unknown_header_lookup_uses_last_match) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"X-Trace", "first"}));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x-trace", "second"}));
+
+    RUVIA_CHECK_EQ(request.header("X-Trace"), std::string_view("second"));
+}
+
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
