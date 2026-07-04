@@ -7,6 +7,7 @@ add_executable(ruvia_unit_tests
     unit_http_parsing.cpp
     unit_multipart.cpp
     unit_content_negotiation.cpp
+    unit_accept_media_type.cpp
     unit_rate_limiter.cpp
     unit_chunk_size.cpp
     unit_conditional_request.cpp
