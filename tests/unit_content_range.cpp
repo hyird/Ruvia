@@ -246,3 +246,47 @@ RUVIA_TEST(static_file_serves_precompressed_gzip_variant) {
 
     fs::remove_all(dir);
 }
+
+RUVIA_TEST(static_file_if_modified_since_serving) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_ims_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(50, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::string_view ifModifiedSince) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        HttpRequestAccess::addHeader(
+            request,
+            HttpHeaderView{"If-Modified-Since", ifModifiedSince},
+            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfModifiedSince));
+        auto context = ContextAccess::make(memory, request);
+        return context.staticFile(root, "data.txt", "text/plain").status();
+    };
+
+    // The file was just written, so an If-Modified-Since far in the future means
+    // "not modified since then" -> 304; one far in the past means it HAS changed
+    // -> 200.
+    RUVIA_CHECK_EQ(serve("Fri, 01 Jan 2100 00:00:00 GMT"), std::uint16_t{304});
+    RUVIA_CHECK_EQ(serve("Sat, 01 Jan 2000 00:00:00 GMT"), std::uint16_t{200});
+
+    fs::remove_all(dir);
+}
