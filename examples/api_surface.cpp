@@ -655,7 +655,19 @@ concept HasFetchResponseStatusGetter = requires(const T& response) {
 template <typename T>
 concept HasFetchOptionsHeaderViews = requires(T& options, std::span<const ruvia::HttpHeaderView> headers) {
     options.headers = headers;
-    { options.headers } -> std::same_as<std::span<const ruvia::HttpHeaderView>&>;
+    { std::span<const ruvia::HttpHeaderView>(options.headers) } -> std::same_as<std::span<const ruvia::HttpHeaderView>>;
+};
+
+template <typename T>
+concept HasFetchOptionsHeaderArray = requires(T& options, const ruvia::HttpHeaderView (&headers)[1]) {
+    options.headers = headers;
+};
+
+template <typename T>
+concept HasFetchOptionsInitializerListHeaders = requires(
+    T& options,
+    std::initializer_list<ruvia::HttpHeaderView> headers) {
+    options.headers = headers;
 };
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -1595,6 +1607,8 @@ static_assert(!HasResponseSetBodyOwnedAlias<ruvia::HttpResponse>);
 static_assert(!HasFetchResponseStatusCodeField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseStatusGetter<ruvia::FetchResponse>);
 static_assert(HasFetchOptionsHeaderViews<ruvia::FetchOptions>);
+static_assert(HasFetchOptionsHeaderArray<ruvia::FetchOptions>);
+static_assert(!HasFetchOptionsInitializerListHeaders<ruvia::FetchOptions>);
 static_assert(!HasFetchResponseHeadersField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseHeadersGetter<ruvia::FetchResponse>);
 static_assert(!HasFetchResponseBodyField<ruvia::FetchResponse>);

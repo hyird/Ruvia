@@ -2,6 +2,7 @@
 
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -101,9 +102,79 @@ private:
 };
 
 struct FetchOptions {
+    class HeaderInit final {
+    public:
+        constexpr HeaderInit() noexcept = default;
+
+        constexpr HeaderInit(std::span<const HttpHeaderView> headers) noexcept
+            : headers_(headers) {}
+
+        template <std::size_t N>
+        constexpr HeaderInit(const HttpHeaderView (&headers)[N]) noexcept
+            : headers_(headers, N) {}
+
+        template <std::size_t N>
+        constexpr HeaderInit(const std::array<HttpHeaderView, N>& headers) noexcept
+            : headers_(headers.data(), headers.size()) {}
+
+        template <typename Allocator>
+        HeaderInit(const std::vector<HttpHeaderView, Allocator>& headers) noexcept
+            : headers_(headers.data(), headers.size()) {}
+
+        constexpr HeaderInit(std::initializer_list<HttpHeaderView>) = delete;
+
+        constexpr HeaderInit& operator=(std::span<const HttpHeaderView> headers) noexcept {
+            headers_ = headers;
+            return *this;
+        }
+
+        template <std::size_t N>
+        constexpr HeaderInit& operator=(const HttpHeaderView (&headers)[N]) noexcept {
+            headers_ = std::span<const HttpHeaderView>(headers, N);
+            return *this;
+        }
+
+        template <std::size_t N>
+        constexpr HeaderInit& operator=(const std::array<HttpHeaderView, N>& headers) noexcept {
+            headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
+            return *this;
+        }
+
+        template <typename Allocator>
+        HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>& headers) noexcept {
+            headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
+            return *this;
+        }
+
+        HeaderInit& operator=(std::initializer_list<HttpHeaderView>) = delete;
+
+        [[nodiscard]] constexpr operator std::span<const HttpHeaderView>() const noexcept {
+            return headers_;
+        }
+
+        [[nodiscard]] constexpr auto begin() const noexcept {
+            return headers_.begin();
+        }
+
+        [[nodiscard]] constexpr auto end() const noexcept {
+            return headers_.end();
+        }
+
+        [[nodiscard]] constexpr std::size_t size() const noexcept {
+            return headers_.size();
+        }
+
+        [[nodiscard]] constexpr bool empty() const noexcept {
+            return headers_.empty();
+        }
+
+    private:
+        std::span<const HttpHeaderView> headers_{};
+    };
+
     std::string_view method{"GET"};
     // Borrowed header table; elements and pointed-to strings must remain valid through co_await.
-    std::span<const HttpHeaderView> headers{};
+    HeaderInit headers{};
     std::string_view body{};  // borrowed; must remain valid through co_await
     // If set, streams the request body from this producer instead of `body` (which must be empty).
     // Borrowed; the target and returned chunk views must outlive their awaited write.
