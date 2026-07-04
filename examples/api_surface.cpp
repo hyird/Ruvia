@@ -569,6 +569,11 @@ concept HasResponseHeaderRemoveSetter = requires(T& response) {
 };
 
 template <typename T>
+concept HasResponseHeaderInitInitializerListConstructor = requires {
+    T(std::initializer_list<ruvia::HttpHeaderView>{});
+};
+
+template <typename T>
 concept HasResponseHeadersEraseAlias = requires(T& response) {
     response.headers().erase(std::string_view{});
 };
@@ -1528,6 +1533,7 @@ static_assert(!HasResponseAppendHeaderAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseRemoveHeaderAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHasHeaderAlias<ruvia::HttpResponse>);
 static_assert(HasResponseHeaderOptionsSetter<ruvia::HttpResponse>);
+static_assert(!HasResponseHeaderInitInitializerListConstructor<ruvia::Context::ResponseHeaderInit>);
 static_assert(HasResponseHeaderRemoveSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersEraseAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersGetAlias<ruvia::HttpResponse>);
@@ -2091,7 +2097,8 @@ private:
     ruvia::Task<ruvia::HttpResponse> rawBody(ruvia::Context& c) {
         c.header("X-Raw", "first");
         c.header("X-Raw", "second", {.append = true});
-        co_return c.body("raw body\n", {.status = 202, .headers = {{"X-Raw-Init", "true"}}});
+        const ruvia::HttpHeaderView headers[] = {{"X-Raw-Init", "true"}};
+        co_return c.body("raw body\n", {.status = 202, .headers = headers});
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSlot(ruvia::Context& c) {
