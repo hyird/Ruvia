@@ -39,7 +39,9 @@ inline constexpr std::size_t kResponseKnownHeaderCount = 22;
 }
 
 [[nodiscard]] inline bool responseHeaderAppendForbidden(std::uint32_t bit) noexcept {
-    return bit == kResponseHeaderContentLength || bit == kResponseHeaderTransferEncoding;
+    return bit == kResponseHeaderContentLength ||
+        bit == kResponseHeaderTransferEncoding ||
+        bit == kResponseHeaderLocation;
 }
 
 }  // namespace ruvia::detail
