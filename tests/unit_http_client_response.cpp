@@ -152,6 +152,17 @@ RUVIA_TEST(http_client_head_has_no_body) {
     RUVIA_CHECK(head.hasContentLength);
 }
 
+RUVIA_TEST(http_client_205_and_1xx_are_bodiless) {
+    // The no-body status set is 204/205/304 plus every 1xx (status < 200). Only 204
+    // and 304 were pinned; 205 Reset Content (RFC 7231 6.3.6) and interim 1xx
+    // responses are equally bodiless -- a framed body there would desync the stream.
+    RUVIA_CHECK(!parseHead("GET", "HTTP/1.1 205 Reset Content").responseMayHaveBody);
+    RUVIA_CHECK(!parseHead("GET", "HTTP/1.1 100 Continue").responseMayHaveBody);
+    RUVIA_CHECK(!parseHead("GET", "HTTP/1.1 103 Early Hints").responseMayHaveBody);
+    // Positive control: a normal 200 GET response does expect a body.
+    RUVIA_CHECK(parseHead("GET", "HTTP/1.1 200 OK").responseMayHaveBody);
+}
+
 // --- Content-Encoding detection ------------------------------------------
 RUVIA_TEST(http_client_content_encoding_gzip) {
     const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 3");
