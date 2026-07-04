@@ -88,6 +88,16 @@ RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
                    std::string_view("second.example"));
 }
 
+RUVIA_TEST(request_access_query_lookup_uses_last_match) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "a=first&b=2&a=second");
+
+    const auto value = request.query("a");
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK_EQ(*value, std::string_view("second"));
+}
+
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
