@@ -42,6 +42,28 @@ RUVIA_TEST(http1_parse_missing_host_rejected) {
     RUVIA_CHECK(result.error == HttpParseError::kMissingHost);
 }
 
+RUVIA_TEST(http1_parse_rejects_header_smuggling_vectors) {
+    const auto rejected = [](std::string_view request) {
+        HttpServerParser parser;
+        return parser.parse(request).status == HttpParseStatus::kError;
+    };
+
+    // obs-fold: a continuation line (leading SP or HTAB) must be rejected, not
+    // folded into the previous value -- a classic request-smuggling vector
+    // (RFC 9112 5.2 deprecates obs-fold in requests).
+    RUVIA_CHECK(rejected("GET / HTTP/1.1\r\nHost: x\r\nX-Foo: bar\r\n baz\r\n\r\n"));
+    RUVIA_CHECK(rejected("GET / HTTP/1.1\r\nHost: x\r\nX-Foo: bar\r\n\tbaz\r\n\r\n"));
+
+    // Whitespace between the field name and the colon is rejected (it causes a
+    // parsing differential across proxies that enables smuggling).
+    RUVIA_CHECK(rejected("GET / HTTP/1.1\r\nHost: x\r\nX-Foo : bar\r\n\r\n"));
+
+    // A bare LF or bare CR inside a field value cannot smuggle a second header
+    // line: the value stops at the control byte and the required CRLF is absent.
+    RUVIA_CHECK(rejected("GET / HTTP/1.1\r\nHost: x\r\nX-Foo: a\nb\r\n\r\n"));
+    RUVIA_CHECK(rejected("GET / HTTP/1.1\r\nHost: x\r\nX-Foo: a\rb\r\n\r\n"));
+}
+
 RUVIA_TEST(http1_parse_invalid_request_line_rejected) {
     HttpServerParser parser;
     const auto result = parser.parse("!!!garbage!!!\r\n\r\n");
