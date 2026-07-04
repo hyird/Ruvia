@@ -118,8 +118,7 @@ struct FetchOptions {
             : headers_(headers.data(), headers.size()) {}
 
         template <typename Allocator>
-        HeaderInit(const std::vector<HttpHeaderView, Allocator>& headers) noexcept
-            : headers_(headers.data(), headers.size()) {}
+        HeaderInit(const std::vector<HttpHeaderView, Allocator>&) = delete;
 
         constexpr HeaderInit(std::initializer_list<HttpHeaderView>) = delete;
 
@@ -141,10 +140,7 @@ struct FetchOptions {
         }
 
         template <typename Allocator>
-        HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>& headers) noexcept {
-            headers_ = std::span<const HttpHeaderView>(headers.data(), headers.size());
-            return *this;
-        }
+        HeaderInit& operator=(const std::vector<HttpHeaderView, Allocator>&) = delete;
 
         HeaderInit& operator=(std::initializer_list<HttpHeaderView>) = delete;
 
