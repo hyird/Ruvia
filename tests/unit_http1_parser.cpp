@@ -87,6 +87,35 @@ RUVIA_TEST(http1_parse_conflicting_content_length_rejected) {
     RUVIA_CHECK(result.error == HttpParseError::kConflictingContentLength);
 }
 
+RUVIA_TEST(http1_parse_content_length_smuggling_forms_rejected) {
+    // A Content-Length must be a single run of decimal digits. A comma-list value
+    // ("5, 5") is a request-smuggling vector -- a lenient parser that split on ','
+    // and took one value would frame the body differently from a strict one. A
+    // leading sign, a hex literal, and trailing junk are likewise rejected so no
+    // parser-differential can arise. Each is a distinct kInvalidContentLength.
+    for (const auto* value : {"5, 5", "5,6", "+5", "-5", "0x10", "5abc"}) {
+        HttpServerParser parser;
+        const std::string raw =
+            std::string("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: ") + value + "\r\n\r\n";
+        const auto result = parser.parse(raw);
+        RUVIA_CHECK(result.status == HttpParseStatus::kError);
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidContentLength);
+    }
+}
+
+RUVIA_TEST(http1_parse_identical_duplicate_content_length_accepted) {
+    // RFC 7230 3.3.2: multiple Content-Length fields carrying the SAME value are not
+    // a conflict -- only differing values are (rejected above). Pin the accept side
+    // so a refactor can neither start rejecting all duplicates (breaking clients that
+    // legitimately repeat the header) nor, worse, start accepting differing ones
+    // (which would reopen the CL-vs-CL smuggling hole).
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello");
+    RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
+    RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
+}
+
 RUVIA_TEST(http1_parse_content_length_with_transfer_encoding_rejected) {
     // TE + CL together is a request-smuggling vector and must be rejected
     // (RFC 7230 3.3.3).
