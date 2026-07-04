@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <string>
 #include <string_view>
 
 #include "http/HttpParserInternal.h"
@@ -13,6 +14,7 @@ using ruvia::HttpMethod;
 using ruvia::HttpParseError;
 using ruvia::HttpParseStatus;
 using ruvia::detail::HttpServerParser;
+using ruvia::detail::HttpServerParseResult;
 
 }  // namespace
 
@@ -128,4 +130,52 @@ RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     const auto result = parser.parse("GET / HTTP/1.0\r\n\r\n");
     RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
     RUVIA_CHECK(result.request.method() == HttpMethod::kGet);
+}
+
+RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidContentLength);
+}
+
+RUVIA_TEST(http1_parse_too_many_headers_rejected) {
+    std::string request = "GET / HTTP/1.1\r\nHost: x\r\n";
+    for (int i = 0; i < 70; ++i) {  // exceeds kMaxRequestHeaders (64)
+        request += "x-h-" + std::to_string(i) + ": v\r\n";
+    }
+    request += "\r\n";
+    HttpServerParser parser;
+    const auto result = parser.parse(request);
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kTooManyHeaders);
+}
+
+RUVIA_TEST(http1_parse_chunk_size_overflow_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+        "10000000000000000\r\nx\r\n0\r\n\r\n");  // 2^64 chunk size overflows
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kChunkSizeOverflow);
+}
+
+RUVIA_TEST(http1_parse_invalid_chunk_size_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nx\r\n0\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidChunkSize);
+}
+
+RUVIA_TEST(http1_parse_incremental_headers_then_body) {
+    // parseHeaders + parseBody drive the same reused result the read loop uses.
+    HttpServerParser parser;
+    HttpServerParseResult result;
+    const std::string_view request = "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello";
+    parser.parseHeaders(request, result);
+    parser.parseBody(request, result);
+    RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
+    RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
+    RUVIA_CHECK(result.request.method() == HttpMethod::kPost);
 }
