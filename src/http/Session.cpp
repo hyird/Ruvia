@@ -4,7 +4,7 @@
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/http/Csrf.h"
+#include "CsrfInternal.h"
 #include "ruvia/redis/RedisHandle.h"
 
 #include <array>

@@ -1,33 +1,11 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
-#include <span>
-#include <string_view>
-
 #include "ruvia/app/Task.h"
-#include "ruvia/detail/ConstantTime.h"
 #include "ruvia/http/Context.h"
-#include "ruvia/http/Cookies.h"
-#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/Next.h"
 
 namespace ruvia {
-
-namespace detail {
-
-// Fills `buffer` (which must hold at least 48 bytes) with a cryptographically
-// random hex token and returns a view of it, or an empty view on RNG failure.
-[[nodiscard]] std::string_view generateCsrfToken(std::span<char> buffer) noexcept;
-
-// Length-checked constant-time compare of the double-submit CSRF token; see
-// constantTimeBytesEqual for the timing-safety rationale.
-[[nodiscard]] inline bool csrfTokensEqual(std::string_view left, std::string_view right) noexcept {
-    return constantTimeBytesEqual(left, right);
-}
-
-}  // namespace detail
 
 // Stateless CSRF protection using the double-submit-cookie pattern (no
 // server-side session store needed, so it works across SO_REUSEPORT workers).
@@ -38,30 +16,7 @@ namespace detail {
 // route that should enforce browser XSRF checks.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
-    Task<void> handle(Context& c, Next& next) {
-        const auto method = c.req().method();
-        const bool safe = method == "GET" ||
-            method == "HEAD" ||
-            method == "OPTIONS";
-        const auto cookie = c.req().cookie("XSRF-TOKEN");
-        if (!safe) {
-            const auto header = c.req().header("X-XSRF-TOKEN");
-            if (!cookie || cookie->empty() || !header || header->empty() ||
-                !detail::csrfTokensEqual(*cookie, *header)) {
-                c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
-                co_return;
-            }
-        } else if (!cookie) {
-            std::array<char, 64> buffer;
-            const auto token = detail::generateCsrfToken(buffer);
-            CookieOptions options;
-            options.path = "/";
-            options.sameSite = "Lax";
-            options.secure = c.req().raw().isSecure();
-            c.setCookie("XSRF-TOKEN", token, options);
-        }
-        co_await next();
-    }
+    Task<void> handle(Context& c, Next& next);
 };
 
 }  // namespace ruvia

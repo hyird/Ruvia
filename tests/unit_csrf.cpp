@@ -5,7 +5,7 @@
 #include <span>
 #include <string>
 
-#include "ruvia/http/Csrf.h"
+#include "../src/http/CsrfInternal.h"
 
 namespace {
 
