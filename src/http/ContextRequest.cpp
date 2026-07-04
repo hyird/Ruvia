@@ -537,6 +537,27 @@ const RequestNameValueList& Context::requestQuery() const {
     return *requestQuery_;
 }
 
+std::optional<std::string_view> Context::requestQuery(std::string_view name) const {
+    std::optional<std::string_view> result;
+    (void)detail::visitUrlEncodedPairs(
+        request_.queryString(),
+        [this, name, &result](std::string_view encodedName, std::string_view encodedValue) {
+            if (!detail::urlComponentEquals(encodedName, name, detail::UrlDecodeMode::kForm)) {
+                return true;
+            }
+            if (!detail::hasUrlEncoding(encodedValue, detail::UrlDecodeMode::kForm)) {
+                result = encodedValue;
+                return false;
+            }
+
+            auto& decoded = memory_.emplace<std::pmr::string>(resource());
+            assignUrlDecodedOrCopy(decoded, encodedValue, detail::UrlDecodeMode::kForm);
+            result = storedStringView(decoded);
+            return false;
+        });
+    return result;
+}
+
 const RequestValueGroupList& Context::requestQueries() const {
     ensureRequestQuery();
     return *requestQueries_;

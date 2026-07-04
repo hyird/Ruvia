@@ -1886,6 +1886,7 @@ private:
     [[nodiscard]] std::optional<std::string_view> routeParam(std::string_view name) const;
     [[nodiscard]] bool requestAccepts(std::string_view mediaType) const noexcept;
     void ensureRequestQuery() const;
+    [[nodiscard]] std::optional<std::string_view> requestQuery(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
     [[nodiscard]] std::optional<std::string_view> requestCookie(std::string_view name) const;
@@ -2070,7 +2071,7 @@ inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
 }
 
 inline std::optional<std::string_view> ContextRequest::query(std::string_view name) const {
-    return context_->requestQuery().get(name);
+    return context_->requestQuery(name);
 }
 
 inline std::optional<std::span<const std::string_view>> ContextRequest::queries(std::string_view name) const {

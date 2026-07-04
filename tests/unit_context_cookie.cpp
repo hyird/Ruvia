@@ -39,3 +39,19 @@ RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list
     RUVIA_CHECK_EQ(*cookie, std::string_view("3"));
     RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
 }
+
+RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_query_tables) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "a=one+two&b=2&a=3");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto query = context.req().query("a");
+    RUVIA_CHECK(query.has_value());
+    RUVIA_CHECK_EQ(*query, std::string_view("one two"));
+    RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
+}

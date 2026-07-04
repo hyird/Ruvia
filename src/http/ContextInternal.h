@@ -124,6 +124,10 @@ struct ContextAccess final {
         return context.requestCookies_ != nullptr;
     }
 
+    [[nodiscard]] static bool requestQueryMaterialized(const Context& context) noexcept {
+        return context.requestQuery_ != nullptr || context.requestQueries_ != nullptr;
+    }
+
     static void setResponse(Context& context, HttpResponse&& response) {
         context.storeResponse(std::move(response));
     }
