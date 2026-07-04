@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <array>
 #include <string_view>
 
 #include "http/HeaderTokenUtils.h"
@@ -8,7 +9,17 @@ namespace {
 
 using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
+using ruvia::detail::httpUpdateConnectionFlags;
 using ruvia::detail::httpUpdateExpectContinueFlag;
+
+// {close, keepAlive, upgrade} after parsing a Connection header value.
+std::array<bool, 3> connectionFlags(std::string_view value) {
+    bool close = false;
+    bool keepAlive = false;
+    bool upgrade = false;
+    httpUpdateConnectionFlags(value, close, keepAlive, upgrade);
+    return {close, keepAlive, upgrade};
+}
 
 }  // namespace
 
@@ -95,4 +106,31 @@ RUVIA_TEST(find_semicolon_parameter_matches_whole_name_not_substring) {
         "multipart/form-data; notboundary=evil; boundary=real", "boundary");
     RUVIA_CHECK(real.has_value());
     RUVIA_CHECK_EQ(*real, std::string_view("real"));
+}
+
+RUVIA_TEST(connection_flags_parses_tokens_case_insensitively) {
+    using Arr = std::array<bool, 3>;  // {close, keepAlive, upgrade}
+
+    // Single tokens, matched case-insensitively.
+    RUVIA_CHECK((connectionFlags("close") == Arr{true, false, false}));
+    RUVIA_CHECK((connectionFlags("CLOSE") == Arr{true, false, false}));
+    RUVIA_CHECK((connectionFlags("keep-alive") == Arr{false, true, false}));
+    RUVIA_CHECK((connectionFlags("Keep-Alive") == Arr{false, true, false}));
+    RUVIA_CHECK((connectionFlags("Upgrade") == Arr{false, false, true}));
+    RUVIA_CHECK((connectionFlags("UPGRADE") == Arr{false, false, true}));
+
+    // A comma list sets each recognised token; OWS around tokens is trimmed.
+    RUVIA_CHECK((connectionFlags("keep-alive, Upgrade") == Arr{false, true, true}));
+    RUVIA_CHECK((connectionFlags("close , upgrade") == Arr{true, false, true}));
+    RUVIA_CHECK((connectionFlags("close, keep-alive, upgrade") == Arr{true, true, true}));
+
+    // Empty list items (leading / trailing / doubled comma) are skipped, not fatal.
+    RUVIA_CHECK((connectionFlags(",close") == Arr{true, false, false}));
+    RUVIA_CHECK((connectionFlags("close,") == Arr{true, false, false}));
+    RUVIA_CHECK((connectionFlags("keep-alive,,upgrade") == Arr{false, true, true}));
+
+    // Unrecognised tokens are ignored; a recognised neighbour still registers.
+    RUVIA_CHECK((connectionFlags("TE, close") == Arr{true, false, false}));
+    RUVIA_CHECK((connectionFlags("x-foo") == Arr{false, false, false}));
+    RUVIA_CHECK((connectionFlags("") == Arr{false, false, false}));
 }
