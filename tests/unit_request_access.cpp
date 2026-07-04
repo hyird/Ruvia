@@ -39,18 +39,16 @@ RUVIA_TEST(request_access_known_header_slot_mapping) {
                 HttpRequestAccess::kCachedHeaderSlots);
 }
 
-RUVIA_TEST(request_access_known_header_first_write_wins) {
+RUVIA_TEST(request_access_known_header_last_write_wins) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
     HttpRequestAccess::setKnownHeaderSlot(request, slot, "first.example");
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kHost),
                    std::string_view("first.example"));
-    // A second write to a populated slot is ignored: a duplicate known header
-    // keeps the first value.
     HttpRequestAccess::setKnownHeaderSlot(request, slot, "second.example");
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kHost),
-                   std::string_view("first.example"));
+                   std::string_view("second.example"));
     // An unpopulated known header reads back empty.
     RUVIA_CHECK(requestKnownHeader(request, RequestKnownHeader::kUserAgent).empty());
 }
@@ -76,6 +74,18 @@ RUVIA_TEST(request_access_unknown_header_lookup_uses_last_match) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x-trace", "second"}));
 
     RUVIA_CHECK_EQ(request.header("X-Trace"), std::string_view("second"));
+}
+
+RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Host", "first.example"}, slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"host", "second.example"}, slot));
+
+    RUVIA_CHECK_EQ(request.header("Host"), std::string_view("second.example"));
+    RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kHost),
+                   std::string_view("second.example"));
 }
 
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
