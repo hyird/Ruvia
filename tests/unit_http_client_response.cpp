@@ -106,10 +106,8 @@ RUVIA_TEST(http_client_te_list_with_chunked_is_unsupported) {
 }
 
 RUVIA_TEST(http_client_multiple_te_headers_unsupported) {
-    const auto head = parseHead(
-        "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked");
-    RUVIA_CHECK(head.hasTransferEncoding);
-    RUVIA_CHECK(!head.isChunked);
+    RUVIA_CHECK(parseThrows(
+        "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked"));
 }
 
 // --- Request-smuggling guard: both CL and TE must be rejected -------------

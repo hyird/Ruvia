@@ -132,14 +132,12 @@ HttpClientResponseHead parseHttpClientResponseHead(
             parsed.closeAfterResponse = parsed.closeAfterResponse || httpHasToken(value, "close");
         } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
             if (parsed.hasTransferEncoding) {
-                // A second Transfer-Encoding header forms a coding list we cannot decode.
-                parsed.isChunked = false;
-            } else {
-                parsed.hasTransferEncoding = true;
-                // Only a sole "chunked" coding is self-delimiting and decodable here; any
-                // other coding (gzip, or "gzip, chunked", ...) is treated as unsupported.
-                parsed.isChunked = isSoleChunkedTransferCoding(value);
+                throw std::runtime_error("http client: repeated Transfer-Encoding header");
             }
+            parsed.hasTransferEncoding = true;
+            // Only a sole "chunked" coding is self-delimiting and decodable here; any
+            // other coding (gzip, or "gzip, chunked", ...) is treated as unsupported.
+            parsed.isChunked = isSoleChunkedTransferCoding(value);
         } else if (httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
             if (parsed.hasContentEncoding) {
                 // A second Content-Encoding header is a coding list we do not decode.
