@@ -219,6 +219,7 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
         const bool useTrailer = (ctx.path == "/trailer");
         const bool useBadTrailer = (ctx.path == "/bad-trailer");
         const bool useBadTrailerConnection = (ctx.path == "/bad-trailer-connection-header");
+        const bool useBadTrailerContentType = (ctx.path == "/bad-trailer-content-type");
         if (noContentWithData || resetContentWithData) {
             body = "illegal-body";
         }
@@ -229,13 +230,16 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
         do {
             const std::size_t chunk = std::min(body.size() - offset, kMaxFrame);
             const bool last = (offset + chunk == body.size());
+            const bool endsWithData =
+                last &&
+                !useTrailer &&
+                !useBadTrailer &&
+                !useBadTrailerConnection &&
+                !useBadTrailerContentType;
             char dataHeader[kHttp2FrameHeaderBytes];
             http2WriteFrameHeader(
                 dataHeader, static_cast<std::uint32_t>(chunk), Http2FrameType::kData,
-                static_cast<std::uint8_t>(
-                    (last && !useTrailer && !useBadTrailer && !useBadTrailerConnection)
-                        ? kHttp2FlagEndStream
-                        : 0),
+                static_cast<std::uint8_t>(endsWithData ? kHttp2FlagEndStream : 0),
                 header.streamId);
             if (!co_await writeAll(std::string_view(dataHeader, sizeof(dataHeader)))) {
                 co_return;
@@ -246,12 +250,14 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             offset += chunk;
         } while (offset < body.size());
 
-        if (useTrailer || useBadTrailer || useBadTrailerConnection) {
+        if (useTrailer || useBadTrailer || useBadTrailerConnection || useBadTrailerContentType) {
             std::pmr::string trailerBlock(resource);
             if (useBadTrailer) {
                 HpackEncoder::encodeStatus(trailerBlock, 200);
             } else if (useBadTrailerConnection) {
                 HpackEncoder::encodeHeader(trailerBlock, "connection", "close");
+            } else if (useBadTrailerContentType) {
+                HpackEncoder::encodeHeader(trailerBlock, "content-type", "text/plain");
             }
             char trailer[kHttp2FrameHeaderBytes];
             http2WriteFrameHeader(
@@ -1933,6 +1939,13 @@ RUVIA_TEST(http2_connection_specific_response_header_is_rejected) {
 
 RUVIA_TEST(http2_connection_specific_trailer_header_is_rejected) {
     const auto results = runH2Fetches({"/bad-trailer-connection-header"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
+RUVIA_TEST(http2_semantic_trailer_header_is_rejected) {
+    const auto results = runH2Fetches({"/bad-trailer-content-type"});
     RUVIA_CHECK_EQ(results.size(), std::size_t{1});
     RUVIA_CHECK(!results[0].ok);
     RUVIA_CHECK(!results[0].error.empty());
