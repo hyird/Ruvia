@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
+#include <vector>
 
 #include "net/http2/Http2StreamTable.h"
 
@@ -74,4 +75,32 @@ RUVIA_TEST(http2_idle_stream_detection) {
     // Any even id is idle: client-initiated streams are odd (RFC 7540 5.1.1).
     RUVIA_CHECK(http2IsIdleStream(2, 5));
     RUVIA_CHECK(http2IsIdleStream(4, 5));
+}
+
+RUVIA_TEST(stream_table_remove_reset_drops_reset_streams_across_storage) {
+    Http2StreamTable table(std::pmr::get_default_resource());
+    // 20 streams: 1..16 inline, 17..20 overflow (kInlineCapacity == 16).
+    for (std::uint32_t id = 1; id <= 20; ++id) {
+        RUVIA_CHECK(table.create(id, 65535) != nullptr);
+    }
+    RUVIA_CHECK_EQ(table.size(), std::size_t{20});
+
+    // A reset stream in inline storage, plus TWO CONSECUTIVE reset streams in
+    // overflow (18, 19): the in-place overflow erase must not skip the neighbour.
+    table.find(2)->markReset();
+    table.find(18)->markReset();
+    table.find(19)->markReset();
+
+    std::vector<std::uint32_t> removed;
+    table.removeReset([&removed](const auto& stream) { removed.push_back(stream.id()); });
+
+    RUVIA_CHECK_EQ(removed.size(), std::size_t{3});   // the callback fired once per reset stream
+    RUVIA_CHECK_EQ(table.size(), std::size_t{17});    // 20 - 3
+
+    RUVIA_CHECK(table.find(2) == nullptr);
+    RUVIA_CHECK(table.find(18) == nullptr);
+    RUVIA_CHECK(table.find(19) == nullptr);           // the consecutive overflow reset was not skipped
+    RUVIA_CHECK(table.find(1) != nullptr);
+    RUVIA_CHECK(table.find(17) != nullptr);
+    RUVIA_CHECK(table.find(20) != nullptr);
 }
