@@ -39,6 +39,21 @@ RUVIA_TEST(stream_request_data_cookie_overflow_rejected) {
     RUVIA_CHECK(data.cookie().empty());  // unchanged on rejection
 }
 
+RUVIA_TEST(stream_request_data_cookie_accumulation_overflow_rejected) {
+    // Individually-small crumbs that SUM past the limit are rejected too: an
+    // attacker can send many HTTP/2 Cookie fields (cheap to compress via HPACK, so
+    // the raw block stays under its own cap) that decode into a huge reassembled
+    // cookie. The crumb that would cross kMaxHttpHeaderBytes is refused, and the
+    // accumulated value is left exactly as it was (no partial append).
+    auto data = makeData();
+    const std::string chunk(30000, 'a');
+    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, false));         // 30000
+    RUVIA_CHECK(data.appendCookieHeaderValue(chunk, true));          // + "; " + 30000 = 60002
+    const std::string before(data.cookie());
+    RUVIA_CHECK(!data.appendCookieHeaderValue(chunk, true));         // would reach ~90004 > 64 KiB
+    RUVIA_CHECK_EQ(std::string(data.cookie()), before);             // unchanged, not partially grown
+}
+
 RUVIA_TEST(stream_request_data_body_accumulation) {
     auto data = makeData();
     RUVIA_CHECK(data.bodyEmpty());
