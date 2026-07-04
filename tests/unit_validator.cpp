@@ -62,6 +62,25 @@ RUVIA_TEST(validator_range_and_one_of) {
     RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("one_of"));
 }
 
+RUVIA_TEST(validator_range_upper_bound_inclusive_and_absent_skips) {
+    Validator v;
+    // The upper bound is enforced independently of the lower bound.
+    std::optional<int> high = 5;
+    v.range(high, "high", 1, 3);  // 5 > 3 -> range
+    RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
+    // Both bounds are inclusive: values exactly at min or max are accepted.
+    std::optional<int> atMin = 1;
+    std::optional<int> atMax = 10;
+    v.range(atMin, "atMin", 1, 10);
+    v.range(atMax, "atMax", 1, 10);
+    RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
+    // An absent value skips range validation entirely.
+    std::optional<int> absent;
+    v.range(absent, "absent", 1, 3);
+    RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
+}
+
 RUVIA_TEST(validation_error_serializes_issues_to_json) {
     Validator v;
     std::optional<std::string> absent;
