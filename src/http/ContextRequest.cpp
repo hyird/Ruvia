@@ -564,30 +564,41 @@ const RequestValueGroupList& Context::requestQueries() const {
 }
 
 std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
-    const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
-    std::optional<std::string_view> result;
-    detail::httpVisitSemicolonParameters(
-        input,
-        [name, &result](std::string_view key, std::string_view value) {
-            if (key == name) {
-                result = value;
-            }
-            return true;
-        });
-    return result;
+    const auto headers = request_.headers();
+    for (std::size_t i = headers.size(); i > 0; --i) {
+        const auto& header = headers[i - 1];
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+            continue;
+        }
+        if (auto value = detail::httpFindSemicolonParameter(header.value(), name)) {
+            return value;
+        }
+    }
+    return std::nullopt;
 }
 
 const RequestNameValueList& Context::requestCookies() const {
     if (requestCookies_ == nullptr) {
-        const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
+        std::size_t cookieCount = 0;
+        for (const auto& header : request_.headers()) {
+            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+                cookieCount += delimitedFieldCount(header.value(), ';');
+            }
+        }
+
         auto& cookies = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
-        cookies.reserve(delimitedFieldCount(input, ';'));
-        detail::httpVisitSemicolonParameters(
-            input,
-            [&cookies](std::string_view key, std::string_view value) {
-                cookies.push_back(detail::RequestNameValueViewAccess::make(key, value));
-                return true;
-            });
+        cookies.reserve(cookieCount);
+        for (const auto& header : request_.headers()) {
+            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
+                continue;
+            }
+            detail::httpVisitSemicolonParameters(
+                header.value(),
+                [&cookies](std::string_view key, std::string_view value) {
+                    cookies.push_back(detail::RequestNameValueViewAccess::make(key, value));
+                    return true;
+                });
+        }
         requestCookies_ = &cookies;
     }
     return *requestCookies_;

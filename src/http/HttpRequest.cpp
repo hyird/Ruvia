@@ -50,9 +50,16 @@ std::optional<std::string_view> HttpRequest::query(std::string_view name) const 
 }
 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
-    return detail::httpFindSemicolonParameter(
-        detail::requestKnownHeader(*this, detail::RequestKnownHeader::kCookie),
-        name);
+    for (std::size_t i = headerCount_; i > 0; --i) {
+        const auto index = i - 1;
+        if (!detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), "Cookie")) {
+            continue;
+        }
+        if (auto value = detail::httpFindSemicolonParameter(headers_[index].value(), name)) {
+            return value;
+        }
+    }
+    return std::nullopt;
 }
 
 std::pmr::memory_resource* HttpRequest::resource() const noexcept {

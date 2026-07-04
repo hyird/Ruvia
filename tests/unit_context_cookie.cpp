@@ -52,6 +52,49 @@ RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list
     RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
 }
 
+RUVIA_TEST(context_request_cookie_single_lookup_scans_repeated_cookie_fields) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1"}, slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "b=2"}, slot));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto cookie = context.req().cookie("a");
+    RUVIA_CHECK(cookie.has_value());
+    RUVIA_CHECK_EQ(*cookie, std::string_view("1"));
+    RUVIA_CHECK(!ContextAccess::requestCookiesMaterialized(context));
+}
+
+RUVIA_TEST(context_request_cookie_fields_include_repeated_cookie_headers) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1"}, slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "b=2; a=3"}, slot));
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    const auto& cookies = ruvia::detail::requestCookieFields(context.req());
+    RUVIA_CHECK_EQ(cookies.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(cookies[0].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(cookies[0].value(), std::string_view("1"));
+    RUVIA_CHECK_EQ(cookies[1].name(), std::string_view("b"));
+    RUVIA_CHECK_EQ(cookies[1].value(), std::string_view("2"));
+    RUVIA_CHECK_EQ(cookies[2].name(), std::string_view("a"));
+    RUVIA_CHECK_EQ(cookies[2].value(), std::string_view("3"));
+    const auto latest = cookies.get("a");
+    RUVIA_CHECK(latest.has_value());
+    RUVIA_CHECK_EQ(*latest, std::string_view("3"));
+}
+
 RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_query_tables) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
