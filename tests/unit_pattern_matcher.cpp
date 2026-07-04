@@ -94,9 +94,13 @@ RUVIA_TEST(pattern_match_char_class) {
     RUVIA_CHECK(matchPatternClass("0-9a-f", 0, 6, 'c'));
     RUVIA_CHECK(matchPatternClass("0-9a-f", 0, 6, '7'));
     RUVIA_CHECK(!matchPatternClass("0-9a-f", 0, 6, 'z'));
-    // A leading '^' negates the class.
-    RUVIA_CHECK(matchPatternClass("^0-9", 0, 4, 'a'));
-    RUVIA_CHECK(!matchPatternClass("^0-9", 0, 4, '5'));
+    // matchPatternClass does NOT interpret negation: the compiler strips a class's
+    // leading '[^' and records it on the atom (see matchPatternAtom), so here a '^'
+    // in the body is an ordinary literal member. The class "^0-9" matches '^' or a
+    // digit; 'a' matches neither.
+    RUVIA_CHECK(matchPatternClass("^0-9", 0, 4, '^'));
+    RUVIA_CHECK(matchPatternClass("^0-9", 0, 4, '5'));
+    RUVIA_CHECK(!matchPatternClass("^0-9", 0, 4, 'a'));
     // An escape inside the class.
     RUVIA_CHECK(matchPatternClass("\\d", 0, 2, '5'));
     RUVIA_CHECK(!matchPatternClass("\\d", 0, 2, 'a'));
@@ -108,4 +112,25 @@ RUVIA_TEST(pattern_match_char_class) {
     // check stops "A-\\d" from being misread as the range A(0x41)-\\(0x5C) --
     // which would otherwise wrongly match 'B'.
     RUVIA_CHECK(!matchPatternClass("A-\\d", 0, 4, 'B'));
+}
+
+RUVIA_TEST(pattern_match_negated_class_with_caret_member) {
+    // Through the real compile+match pipeline. The negation '^' of a class is
+    // consumed by the compiler (which sets the atom's negate flag); a SECOND '^'
+    // is an ordinary literal member. So [^^] means "any char except '^'" and must
+    // not be double-negated into "matches nothing".
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("x"));   // 'x' is not '^'
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^]$"}>("^"));  // '^' is excluded
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("b"));  // not '^' and not 'a'
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("a")); // 'a' is excluded
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^^a]$"}>("^")); // '^' is excluded
+
+    // A caret as a non-first literal member of a positive class stays literal.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[a^]$"}>("^"));
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[a^]$"}>("a"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[a^]$"}>("b"));
+
+    // Sanity: an ordinary negated class is unaffected.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[^0-9]$"}>("a"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[^0-9]$"}>("5"));
 }
