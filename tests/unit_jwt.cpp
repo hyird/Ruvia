@@ -2,10 +2,12 @@
 
 #include <chrono>
 #include <exception>
+#include <memory_resource>
 #include <string>
 #include <string_view>
 
 #include "ruvia/auth/Jwt.h"
+#include "auth/JwtInternal.h"
 
 namespace {
 
@@ -137,6 +139,36 @@ RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("not-a-jwt", verify); }));
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("only.two", verify); }));       // two sections
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("a.b.c.d", verify); }));        // four sections
+}
+
+RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {
+    using ruvia::detail::jwtBase64UrlDecode;
+    using ruvia::detail::jwtBase64UrlEncode;
+    auto* res = std::pmr::get_default_resource();
+
+    // Round trip over every remainder length, including bytes that need the -/_
+    // alphabet (0xFB 0xFF 0xBF -> "-_-_").
+    for (const std::string_view sample : {std::string_view(""), std::string_view("f"),
+                                          std::string_view("fo"), std::string_view("foo"),
+                                          std::string_view("\xfb\xff\xbf")}) {
+        const auto encoded = jwtBase64UrlEncode(sample, res);
+        const auto decoded = jwtBase64UrlDecode(std::string_view(encoded.data(), encoded.size()), res);
+        RUVIA_CHECK_EQ(std::string_view(decoded.data(), decoded.size()), sample);
+    }
+
+    // "QQ" is the canonical encoding of the single byte 'A'. "QR" would decode to
+    // the same byte but leaves non-zero trailing bits, so it must be rejected --
+    // otherwise a token part would have multiple valid spellings (malleability).
+    const auto canonical = jwtBase64UrlDecode("QQ", res);
+    RUVIA_CHECK(canonical.size() == 1 && canonical[0] == 'A');
+    RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("QR", res); }));
+
+    // '=' padding and the standard-base64 '+' '/' are not part of base64url.
+    RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("QQ==", res); }));
+    RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("a+/b", res); }));
+
+    // A length of 1 (mod 4) cannot encode a whole byte group.
+    RUVIA_CHECK(throwsOn([&] { (void)jwtBase64UrlDecode("abcde", res); }));
 }
 
 RUVIA_TEST(jwt_bearer_token_extraction) {
