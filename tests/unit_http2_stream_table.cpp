@@ -61,3 +61,17 @@ RUVIA_TEST(stream_table_apply_send_window_delta) {
     table.find(1)->setSendWindow(std::numeric_limits<std::int32_t>::max());
     RUVIA_CHECK(!table.applySendWindowDelta(1));
 }
+
+RUVIA_TEST(http2_idle_stream_detection) {
+    using ruvia::detail::http2IsIdleStream;
+    // A stream id higher than any seen has never been opened -> idle.
+    RUVIA_CHECK(http2IsIdleStream(7, 5));
+    RUVIA_CHECK(http2IsIdleStream(6, 5));
+    RUVIA_CHECK(http2IsIdleStream(7, 6));
+    // An odd id at or below the highest seen is active/closed -> not idle.
+    RUVIA_CHECK(!http2IsIdleStream(5, 5));
+    RUVIA_CHECK(!http2IsIdleStream(3, 5));
+    // Any even id is idle: client-initiated streams are odd (RFC 7540 5.1.1).
+    RUVIA_CHECK(http2IsIdleStream(2, 5));
+    RUVIA_CHECK(http2IsIdleStream(4, 5));
+}
