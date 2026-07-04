@@ -113,6 +113,11 @@ if(RUVIA_ENABLE_JWT)
     target_sources(ruvia_unit_tests PRIVATE unit_jwt.cpp)
 endif()
 
+# The Redis RESP-protocol suite links appendRespCommand, gated the same way.
+if(RUVIA_ENABLE_REDIS)
+    target_sources(ruvia_unit_tests PRIVATE unit_redis_protocol.cpp)
+endif()
+
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
 
 # Unit tests reach into internal detail headers under src/ (e.g. core/Base64.h,

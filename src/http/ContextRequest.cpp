@@ -408,9 +408,9 @@ void compactParsedBodyFields(
 }  // namespace
 
 std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
-    for (const auto& header : headers_) {
-        if (equalsIgnoreAsciiCase(header.name(), name)) {
-            return header.value();
+    for (auto it = headers_.rbegin(); it != headers_.rend(); ++it) {
+        if (equalsIgnoreAsciiCase(it->name(), name)) {
+            return it->value();
         }
     }
     return {};
