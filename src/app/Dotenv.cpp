@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
@@ -53,35 +54,17 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
         return false;
     }
 
-    // ASCII-only case fold: the boolean tokens are ASCII, and std::tolower is
-    // locale-dependent (a non-"C" LC_CTYPE set by the host app could fold bytes
-    // unexpectedly). Matches how the rest of the codebase folds ASCII.
-    const auto asciiLower = [](unsigned char c) noexcept -> unsigned char {
-        return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
-    };
-    const auto equalsIgnoreCase = [&asciiLower](std::string_view left, std::string_view right) noexcept {
-        if (left.size() != right.size()) {
-            return false;
-        }
-
-        for (std::size_t index = 0; index < left.size(); ++index) {
-            if (asciiLower(static_cast<unsigned char>(left[index])) !=
-                asciiLower(static_cast<unsigned char>(right[index]))) {
-                return false;
-            }
-        }
-
-        return true;
-    };
-
-    if (equalsIgnoreCase(value, "true") ||
-        equalsIgnoreCase(value, "yes") ||
-        equalsIgnoreCase(value, "on")) {
+    // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
+    // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
+    // fold bytes unexpectedly).
+    if (detail::asciiEqualsIgnoreCase(value, "true") ||
+        detail::asciiEqualsIgnoreCase(value, "yes") ||
+        detail::asciiEqualsIgnoreCase(value, "on")) {
         return true;
     }
-    if (equalsIgnoreCase(value, "false") ||
-        equalsIgnoreCase(value, "no") ||
-        equalsIgnoreCase(value, "off")) {
+    if (detail::asciiEqualsIgnoreCase(value, "false") ||
+        detail::asciiEqualsIgnoreCase(value, "no") ||
+        detail::asciiEqualsIgnoreCase(value, "off")) {
         return false;
     }
 
