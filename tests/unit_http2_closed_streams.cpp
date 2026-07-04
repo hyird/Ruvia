@@ -44,3 +44,28 @@ RUVIA_TEST(closed_streams_evict_oldest_when_full) {
     RUVIA_CHECK(history.source(2) == Http2StreamCloseSource::kLocal);      // retained
     RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kPeer);
 }
+
+RUVIA_TEST(closed_streams_eviction_survives_ring_buffer_wraparound) {
+    // The single-eviction test only advances the replace cursor from 0 to 1. Under
+    // sustained reset flooding (the HTTP/2 rapid-reset scenario) the ring buffer
+    // wraps many times via `% kRecordLimit`, so an off-by-one in the wrap would
+    // corrupt closed-stream tracking under exactly that attack. Insert twice the
+    // capacity and confirm FIFO eviction holds across the wrap: the first `limit`
+    // ids are all gone, the most recent `limit` are all kept.
+    Http2ClosedStreamHistory history;
+    const std::uint32_t limit = kHttp2LocalMaxConcurrentStreams * 4;  // kRecordLimit
+    for (std::uint32_t id = 1; id <= 2 * limit; ++id) {
+        history.remember(id, Http2StreamCloseSource::kLocal);
+    }
+    RUVIA_CHECK(history.source(1) == Http2StreamCloseSource::kNone);           // long evicted
+    RUVIA_CHECK(history.source(limit) == Http2StreamCloseSource::kNone);       // evicted at the wrap
+    RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kLocal);  // oldest still-tracked
+    RUVIA_CHECK(history.source(2 * limit) == Http2StreamCloseSource::kLocal);  // newest
+
+    // One further insert evicts exactly the current oldest (limit+1), proving the
+    // wrapped cursor still points at the true FIFO front rather than a stale slot.
+    history.remember(2 * limit + 1, Http2StreamCloseSource::kPeer);
+    RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kNone);   // evicted post-wrap
+    RUVIA_CHECK(history.source(limit + 2) == Http2StreamCloseSource::kLocal);  // still tracked
+    RUVIA_CHECK(history.source(2 * limit + 1) == Http2StreamCloseSource::kPeer);
+}
