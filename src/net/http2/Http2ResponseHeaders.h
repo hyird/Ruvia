@@ -115,6 +115,7 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     return httpAsciiEqualsIgnoreCase(name, "connection") ||
         httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
         httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+        httpAsciiEqualsIgnoreCase(name, "te") ||
         httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
         httpAsciiEqualsIgnoreCase(name, "upgrade");
 }

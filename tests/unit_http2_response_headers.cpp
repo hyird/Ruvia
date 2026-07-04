@@ -90,3 +90,24 @@ RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
     RUVIA_CHECK(hasHeader(headers, ":status", "304"));
     RUVIA_CHECK(!hasHeaderName(headers, "content-length"));
 }
+
+RUVIA_TEST(http2_response_headers_omit_hop_by_hop_fields) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.header("Connection", "close");
+    response.header("Keep-Alive", "timeout=5");
+    response.header("Proxy-Connection", "keep-alive");
+    response.header("TE", "trailers");
+    response.header("Transfer-Encoding", "chunked");
+    response.header("Upgrade", "websocket");
+    response.header("X-Ok", "yes");
+
+    Collector headers;
+    RUVIA_CHECK(decodeResponseHeaders(response, 0, headers));
+    RUVIA_CHECK(!hasHeaderName(headers, "connection"));
+    RUVIA_CHECK(!hasHeaderName(headers, "keep-alive"));
+    RUVIA_CHECK(!hasHeaderName(headers, "proxy-connection"));
+    RUVIA_CHECK(!hasHeaderName(headers, "te"));
+    RUVIA_CHECK(!hasHeaderName(headers, "transfer-encoding"));
+    RUVIA_CHECK(!hasHeaderName(headers, "upgrade"));
+    RUVIA_CHECK(hasHeader(headers, "x-ok", "yes"));
+}
