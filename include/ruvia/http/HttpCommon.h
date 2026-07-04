@@ -402,17 +402,6 @@ public:
         kForm
     };
 
-    RequestValue() = default;
-    RequestValue(
-        std::optional<std::string_view> value,
-        std::pmr::memory_resource* resource = nullptr,
-        DecodeMode decodeMode = DecodeMode::kNone) noexcept
-        : RequestValue(
-              detail::ResolvedPmrResourceTag{},
-              value,
-              detail::pmrResourceOrDefault(resource),
-              decodeMode) {}
-
     [[nodiscard]] explicit operator bool() const noexcept {
         return value_.has_value();
     }
@@ -429,6 +418,17 @@ public:
     [[nodiscard]] std::optional<std::uint64_t> toUInt64() const noexcept;
 
 private:
+    RequestValue() = default;
+    RequestValue(
+        std::optional<std::string_view> value,
+        std::pmr::memory_resource* resource = nullptr,
+        DecodeMode decodeMode = DecodeMode::kNone) noexcept
+        : RequestValue(
+              detail::ResolvedPmrResourceTag{},
+              value,
+              detail::pmrResourceOrDefault(resource),
+              decodeMode) {}
+
     RequestValue(
         detail::ResolvedPmrResourceTag,
         std::optional<std::string_view> value,

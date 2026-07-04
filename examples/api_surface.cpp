@@ -1410,6 +1410,11 @@ static_assert(!HasRequestValueHasValueAlias<ruvia::RequestValue>);
 static_assert(!HasRequestValueValueOrAlias<ruvia::RequestValue>);
 static_assert(!HasRequestValuePlatformIntAliases<ruvia::RequestValue>);
 static_assert(HasRequestValueGetter<ruvia::RequestValue>);
+static_assert(!std::is_default_constructible_v<ruvia::RequestValue>);
+static_assert(!std::is_constructible_v<
+    ruvia::RequestValue,
+    std::optional<std::string_view>,
+    std::pmr::memory_resource*>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpRequest>);
 static_assert(HasHttpRequestQueryGetter<ruvia::HttpRequest>);
 static_assert(!HasHttpRequestDecodedPathAlias<ruvia::HttpRequest>);
