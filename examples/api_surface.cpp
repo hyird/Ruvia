@@ -1007,6 +1007,35 @@ concept HasAppUseMiddlewareTemplate = requires {
 };
 
 template <typename T>
+concept HasControllerRouteBuilderPublicRegisterRoute = requires(
+    const T& builder,
+    ruvia::detail::ControllerRouteHandler handler) {
+    builder.registerRoute(
+        ruvia::Get,
+        std::string_view{"/"},
+        handler,
+        ruvia::detail::RequestBodyMode::kBuffered,
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+};
+
+template <typename T>
+concept HasControllerRouteBuilderPublicRegisterStreamRoute = requires(
+    const T& builder,
+    ruvia::detail::ControllerRouteStreamHandler handler) {
+    builder.registerStreamRoute(
+        ruvia::Get,
+        std::string_view{"/"},
+        handler,
+        ruvia::detail::ResponseBodyMode::kStream,
+        std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+};
+
+template <typename T>
+concept HasControllerRouteBuilderPublicCreateScope = requires(const T& builder) {
+    builder.createScope(std::string_view{"/"});
+};
+
+template <typename T>
 concept HasDbRowPublicMutators = requires(T& row, ruvia::DbField field) {
     row.reserve(std::size_t{1});
     row.push_back(std::move(field));
@@ -1584,6 +1613,10 @@ static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
 static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
+static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
+static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
+static_assert(!HasControllerRouteBuilderPublicRegisterStreamRoute<ruvia::detail::ControllerRouteBuilder>);
+static_assert(!HasControllerRouteBuilderPublicCreateScope<ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);
