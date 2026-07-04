@@ -44,6 +44,7 @@ add_executable(ruvia_unit_tests
     unit_websocket_heartbeat.cpp
     unit_websocket_close.cpp
     unit_config_validation.cpp
+    unit_server_options_validation.cpp
     unit_response_head_buffer.cpp
     unit_pmr_string.cpp
     unit_http2_offset_vector.cpp
