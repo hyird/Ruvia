@@ -1,9 +1,11 @@
 #include "test_harness.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -186,4 +188,28 @@ RUVIA_TEST(number_append_formatted) {
     ruvia::detail::appendFormattedNumber(out, 42, "err");
     ruvia::detail::appendFormattedNumber(out, -7, "err");
     RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("42-7"));
+}
+
+RUVIA_TEST(number_append_formatted_finite_rejects_non_finite) {
+    // A finite double formats as usual.
+    std::pmr::string out(std::pmr::get_default_resource());
+    ruvia::detail::appendFormattedFiniteNumber(out, 3.5, "not finite", "bad format");
+    RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("3.5"));
+
+    // NaN and both infinities are rejected rather than emitted as the words
+    // "nan"/"inf", which are not valid SQL/RESP numeric literals and would splice
+    // in unquoted. Nothing is appended on rejection.
+    for (const double bad : {std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity()}) {
+        std::pmr::string sink(std::pmr::get_default_resource());
+        bool threw = false;
+        try {
+            ruvia::detail::appendFormattedFiniteNumber(sink, bad, "not finite", "bad format");
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+        RUVIA_CHECK(sink.empty());
+    }
 }
