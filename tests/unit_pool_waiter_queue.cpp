@@ -69,6 +69,35 @@ RUVIA_TEST(pool_waiter_queue_remove_unlinks_middle_and_is_idempotent) {
     RUVIA_CHECK(queue.empty());
 }
 
+RUVIA_TEST(pool_waiter_queue_remove_tail_repoints_tail_for_next_enqueue) {
+    // Removing the tail must repoint tail_ to its predecessor. Otherwise the next
+    // enqueue links the new waiter off the removed (detached) node, so it is never
+    // reachable from head_ and never resumed -- a permanently hung pool acquirer.
+    PoolWaiterQueue queue;
+    bool ready[4] = {false, false, false, false};
+    bool timedOut[4] = {false, false, false, false};
+    std::size_t index[4] = {0, 0, 0, 0};
+    PoolWaiter waiters[4];
+    for (int i = 0; i < 3; ++i) {
+        waiters[i].bind(ready[i], timedOut[i], index[i], kNever, {});
+        queue.enqueue(waiters[i]);
+    }
+    queue.remove(waiters[2]);  // unlink the tail
+
+    // The new waiter must link off the new tail (w1), not the removed w2.
+    waiters[3].bind(ready[3], timedOut[3], index[3], kNever, {});
+    queue.enqueue(waiters[3]);
+
+    RUVIA_CHECK(queue.resumeNext(20));
+    RUVIA_CHECK_EQ(index[0], std::size_t{20});
+    RUVIA_CHECK(queue.resumeNext(21));
+    RUVIA_CHECK_EQ(index[1], std::size_t{21});
+    RUVIA_CHECK(queue.resumeNext(22));
+    RUVIA_CHECK_EQ(index[3], std::size_t{22});  // reachable only via a correct new tail
+    RUVIA_CHECK(!ready[2]);                      // the removed tail is never resumed
+    RUVIA_CHECK(queue.empty());
+}
+
 RUVIA_TEST(pool_waiter_queue_remove_head) {
     PoolWaiterQueue queue;
     bool ready[2] = {false, false};
