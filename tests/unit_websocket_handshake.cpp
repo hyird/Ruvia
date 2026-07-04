@@ -69,6 +69,17 @@ HttpRequest badVersionHandshake() {
         "\r\n");
 }
 
+HttpRequest contentLengthZeroHandshake() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Content-Length: 0\r\n"
+        "\r\n");
+}
+
 HttpRequestFlags validHandshakeFlags() {
     HttpRequestFlags flags;
     flags.upgrade = true;
@@ -112,6 +123,7 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
     RUVIA_CHECK(!isValidWebSocketRequest(postHandshake(), flags));        // not GET
     RUVIA_CHECK(!isValidWebSocketRequest(http10Handshake(), flags));      // not 1.1
     RUVIA_CHECK(!isValidWebSocketRequest(badVersionHandshake(), flags));  // version != 13
+    RUVIA_CHECK(!isValidWebSocketRequest(contentLengthZeroHandshake(), flags)); // no HTTP body framing
 
     {
         HttpRequestFlags noUpgrade = flags;

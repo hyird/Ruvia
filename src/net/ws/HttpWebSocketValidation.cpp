@@ -97,6 +97,7 @@ bool isValidWebSocketRequest(const HttpRequest& request, const HttpRequestFlags&
     return request.method() == HttpMethod::kGet &&
         request.httpVersion() == "HTTP/1.1" &&
         webSocketHeaderEquals(requestKnownHeader(request, RequestKnownHeader::kUpgrade), "websocket") &&
+        requestKnownHeader(request, RequestKnownHeader::kContentLength).empty() &&
         flags.upgrade &&
         flags.secWebSocketKeyCount == 1 &&
         flags.secWebSocketVersionCount == 1 &&
