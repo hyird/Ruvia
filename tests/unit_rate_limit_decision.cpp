@@ -1,5 +1,7 @@
 #include "test_harness.h"
 
+#include <chrono>
+#include <string>
 #include <string_view>
 
 #include "net/server/RateLimitDecision.h"
@@ -26,6 +28,49 @@ RUVIA_TEST(rate_limit_allowed_when_limiter_disabled) {
     RateLimiter limiter(rule);
     RUVIA_CHECK(!limiter.enabled());
     RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "1.2.3.4").allowed);
+}
+
+RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
+    // The core allow/deny behavior: within a single window a key gets exactly
+    // maxRequests admissions and is then denied, while a different key is counted
+    // independently and is unaffected. A 60s window keeps every call in the test
+    // inside one window, so the outcome is deterministic without clock control.
+    RateLimitRule rule;
+    rule.maxRequests = 3;
+    rule.window = std::chrono::seconds(60);
+    rule.slotCount = 16;
+    RateLimiter limiter(rule);
+    RUVIA_CHECK(limiter.enabled());
+
+    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
+    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
+    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
+    const auto denied = rateLimitRequestAllowed(&limiter, "10.0.0.1");
+    RUVIA_CHECK(!denied.allowed);
+    // A denied request reports a positive time until the window resets.
+    RUVIA_CHECK(denied.resetAfterMs > 0);
+
+    // A different address has its own budget and is still admitted.
+    RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.2").allowed);
+}
+
+RUVIA_TEST(rate_limit_oversized_key_honors_fail_mode) {
+    // A remote address longer than the fixed 64-byte key buffer cannot be tracked.
+    // Under failClosed (the default) such a request is DENIED rather than silently
+    // admitted, so an attacker cannot bypass the limiter with an overlong key.
+    RateLimitRule closed;
+    closed.maxRequests = 5;
+    closed.slotCount = 8;
+    closed.failClosed = true;
+    RateLimiter closedLimiter(closed);
+    const std::string longKey(65, 'a');  // > kMaxKeyBytes (64)
+    RUVIA_CHECK(!rateLimitRequestAllowed(&closedLimiter, longKey).allowed);
+
+    // Under failOpen the same request is admitted (availability over strictness).
+    RateLimitRule open = closed;
+    open.failClosed = false;
+    RateLimiter openLimiter(open);
+    RUVIA_CHECK(rateLimitRequestAllowed(&openLimiter, longKey).allowed);
 }
 
 RUVIA_TEST(rate_limiter_now_ms_is_positive_and_monotonic) {
