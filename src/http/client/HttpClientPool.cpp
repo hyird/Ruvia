@@ -31,8 +31,13 @@ namespace {
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
     return httpAsciiEqualsIgnoreCase(name, "Host") ||
         httpAsciiEqualsIgnoreCase(name, "Connection") ||
+        httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+        httpAsciiEqualsIgnoreCase(name, "Proxy-Connection") ||
+        httpAsciiEqualsIgnoreCase(name, "TE") ||
+        httpAsciiEqualsIgnoreCase(name, "Trailer") ||
         httpAsciiEqualsIgnoreCase(name, "Content-Length") ||
-        httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding");
+        httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
+        httpAsciiEqualsIgnoreCase(name, "Upgrade");
 }
 
 void validateHttpClientRequestHead(
