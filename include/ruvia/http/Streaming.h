@@ -169,6 +169,7 @@ public:
 
 private:
     friend class Context;
+    friend struct detail::StreamingAccess;
 
     explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
 

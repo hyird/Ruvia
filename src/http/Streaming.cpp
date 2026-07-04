@@ -9,6 +9,16 @@
 namespace ruvia {
 
 Task<void> SseWriter::writeSSE(const SseMessage& message) {
+    // event and id are single-line SSE fields. A CR or LF in either would start a
+    // new field -- or, with a blank line, a whole new event -- letting a
+    // caller-supplied value inject arbitrary content into the stream. The data
+    // field is safely split per line (see appendData); hold event/id to the same
+    // bar rather than emitting them verbatim.
+    if (message.event.find_first_of("\r\n") != std::string_view::npos ||
+        message.id.find_first_of("\r\n") != std::string_view::npos) {
+        throw std::invalid_argument("SSE event and id must not contain CR or LF");
+    }
+
     auto& frame = detail::StreamingAccess::scratch(writer_);
     frame.clear();
     if (!message.event.empty()) {
