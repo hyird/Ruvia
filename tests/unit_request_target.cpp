@@ -68,6 +68,40 @@ RUVIA_TEST(parse_request_target_origin_form) {
     RUVIA_CHECK_EQ(out.query, std::string_view(""));
 }
 
+RUVIA_TEST(parse_request_target_absolute_form) {
+    RequestTargetView out;
+
+    // Absolute-form (proxy/smuggling surface): authority is split off and the
+    // path/query recovered, with the scheme fixing the default port.
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com/path?q=1", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/path"));
+    RUVIA_CHECK_EQ(out.query, std::string_view("q=1"));
+    RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{80});
+
+    // No path component defaults the path to "/".
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/"));
+    RUVIA_CHECK_EQ(out.query, std::string_view(""));
+
+    // A query immediately after the authority still yields path "/".
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com?q=1", out));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/"));
+    RUVIA_CHECK_EQ(out.query, std::string_view("q=1"));
+
+    // https fixes the default port to 443; an explicit port is kept in the authority.
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "https://example.com:8080/x", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:8080"));
+    RUVIA_CHECK_EQ(out.path, std::string_view("/x"));
+    RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{443});
+
+    // Unknown scheme, empty authority, and an invalid authority are all rejected.
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "ftp://example.com/x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "http://", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "http://exa@mple.com/x", out));
+}
+
 RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RequestTargetView out;
     // Asterisk-form is valid only for OPTIONS.
