@@ -98,6 +98,19 @@ RUVIA_TEST(request_access_query_lookup_uses_last_match) {
     RUVIA_CHECK_EQ(*value, std::string_view("second"));
 }
 
+RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Cookie", "sid=first; theme=dark; sid=second"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie)));
+
+    const auto value = request.cookie("sid");
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK_EQ(*value, std::string_view("second"));
+}
+
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
