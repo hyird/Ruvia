@@ -1,5 +1,6 @@
 #include "RedisHandleHelpers.h"
 
+#include "RedisTypesAccess.h"
 #include "RedisUtils.h"
 
 #include <charconv>
@@ -41,7 +42,7 @@ std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto key = redisValueString(values[i]);
         const auto fieldValue = redisValueString(values[i + 1]);
-        result.push_back(RedisKeyValue(key, fieldValue, resource));
+        result.push_back(RedisTypesAccess::keyValue(key, fieldValue, resource));
     }
     return result;
 }
@@ -60,7 +61,7 @@ std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
         const auto member = redisValueString(values[i]);
         const auto scoreText = redisValueString(values[i + 1]);
         result.push_back(
-            RedisScoredValue(member, parseRedisDouble(scoreText, "invalid redis score"), resource));
+            RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis score"), resource));
     }
     return result;
 }
@@ -73,12 +74,13 @@ RedisScanResult parseRedisScanResult(const RedisValue& value, std::pmr::memory_r
     }
     const auto cursor = parseRedisCursor(redisValueString(root[0]));
     const auto values = root[1].array();
-    RedisScanResult result(resource);
-    result.cursor_ = cursor;
-    result.values_.reserve(values.size());
+    RedisScanResult result = RedisTypesAccess::scanResult(resource);
+    RedisTypesAccess::cursor(result) = cursor;
+    auto& outputValues = RedisTypesAccess::values(result);
+    outputValues.reserve(values.size());
     for (const auto& item : values) {
         const auto text = redisValueString(item);
-        emplaceRedisString(result.values_, text);
+        emplaceRedisString(outputValues, text);
     }
     return result;
 }
@@ -94,13 +96,14 @@ RedisHashScanResult parseRedisHashScanResult(const RedisValue& value, std::pmr::
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis hscan entry count");
     }
-    RedisHashScanResult result(resource);
-    result.cursor_ = cursor;
-    result.entries_.reserve(values.size() / 2);
+    RedisHashScanResult result = RedisTypesAccess::hashScanResult(resource);
+    RedisTypesAccess::cursor(result) = cursor;
+    auto& outputEntries = RedisTypesAccess::entries(result);
+    outputEntries.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto key = redisValueString(values[i]);
         const auto fieldValue = redisValueString(values[i + 1]);
-        result.entries_.push_back(RedisKeyValue(key, fieldValue, resource));
+        outputEntries.push_back(RedisTypesAccess::keyValue(key, fieldValue, resource));
     }
     return result;
 }
@@ -116,14 +119,15 @@ RedisZScanResult parseRedisZScanResult(const RedisValue& value, std::pmr::memory
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis zscan entry count");
     }
-    RedisZScanResult result(resource);
-    result.cursor_ = cursor;
-    result.entries_.reserve(values.size() / 2);
+    RedisZScanResult result = RedisTypesAccess::zScanResult(resource);
+    RedisTypesAccess::cursor(result) = cursor;
+    auto& outputEntries = RedisTypesAccess::entries(result);
+    outputEntries.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto member = redisValueString(values[i]);
         const auto scoreText = redisValueString(values[i + 1]);
-        result.entries_.push_back(
-            RedisScoredValue(member, parseRedisDouble(scoreText, "invalid redis zscan score"), resource));
+        outputEntries.push_back(
+            RedisTypesAccess::scoredValue(member, parseRedisDouble(scoreText, "invalid redis zscan score"), resource));
     }
     return result;
 }
@@ -141,7 +145,7 @@ std::optional<RedisKeyValue> parseRedisBlockingPopReply(
     }
     const auto key = redisValueString(items[0]);
     const auto item = redisValueString(items[1]);
-    return RedisKeyValue(key, item, resource);
+    return RedisTypesAccess::keyValue(key, item, resource);
 }
 
 }  // namespace ruvia::detail
