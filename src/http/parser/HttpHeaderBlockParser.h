@@ -46,6 +46,7 @@ struct ParsedRequestHeaderBlock {
     HttpRequestFlags flags;
     std::size_t contentLength{0};
     bool sawContentLength{false};
+    bool sawContentType{false};
     bool sawChunked{false};
     bool sawTransferEncoding{false};
     HttpAcceptedEncodingQuality gzipEncoding;
