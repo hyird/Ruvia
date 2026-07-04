@@ -23,6 +23,7 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
+#include "HttpClientAccess.h"
 #include "HttpClientBackend.h"
 #include "../../net/http2/Http2Hpack.h"
 #include "../../net/http2/Http2FrameTypes.h"

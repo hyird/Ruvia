@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "../RequestBodyDecoding.h"
+#include "HttpClientAccess.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpClient.h"
 

@@ -8,6 +8,7 @@
 #include "../HeaderTokenUtils.h"
 #include "../RequestBodyDecoding.h"
 #include "../parser/HttpParserSyntax.h"
+#include "HttpClientAccess.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {

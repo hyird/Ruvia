@@ -684,6 +684,11 @@ concept HasFetchResponseHeaderValueGetter = requires(const T& header) {
 };
 
 template <typename T>
+concept HasCompleteType = requires {
+    sizeof(T);
+};
+
+template <typename T>
 concept HasHttpHeaderViewPublicFields = requires(T& header) {
     header.name;
     header.value;
@@ -1500,6 +1505,9 @@ static_assert(!HasFetchResponseHeaderNameField<ruvia::FetchResponseHeader>);
 static_assert(HasFetchResponseHeaderNameGetter<ruvia::FetchResponseHeader>);
 static_assert(!HasFetchResponseHeaderValueField<ruvia::FetchResponseHeader>);
 static_assert(HasFetchResponseHeaderValueGetter<ruvia::FetchResponseHeader>);
+static_assert(!HasCompleteType<ruvia::detail::FetchResponseHeaderAccess>);
+static_assert(!HasCompleteType<ruvia::detail::FetchResponseAccess>);
+static_assert(!HasCompleteType<ruvia::detail::FetchResponseStreamAccess>);
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);

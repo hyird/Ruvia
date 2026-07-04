@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "http/client/HttpClientRedirect.h"
+#include "http/client/HttpClientAccess.h"
 #include "http/client/HttpClientResponseParser.h"
 
 namespace {
