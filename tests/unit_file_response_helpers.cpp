@@ -32,8 +32,19 @@ RUVIA_TEST(content_type_guessing) {
     RUVIA_CHECK_EQ(guess("data.json"), std::string_view("application/json; charset=utf-8"));
     RUVIA_CHECK_EQ(guess("photo.png"), std::string_view("image/png"));
     RUVIA_CHECK_EQ(guess("photo.jpeg"), std::string_view("image/jpeg"));
+    // ".jpg" is a distinct token in the same branch as ".jpeg" and is the far more
+    // common spelling -- pin it so a regression can't silently serve it as a
+    // download (octet-stream) instead of an image.
+    RUVIA_CHECK_EQ(guess("photo.jpg"), std::string_view("image/jpeg"));
+    RUVIA_CHECK_EQ(guess("anim.gif"), std::string_view("image/gif"));
+    RUVIA_CHECK_EQ(guess("notes.txt"), std::string_view("text/plain; charset=utf-8"));
+    RUVIA_CHECK_EQ(guess("server.log"), std::string_view("text/plain; charset=utf-8"));
     RUVIA_CHECK_EQ(guess("icon.svg"), std::string_view("image/svg+xml"));
     RUVIA_CHECK_EQ(guess("mod.wasm"), std::string_view("application/wasm"));
+    // The extension match is case-insensitive end to end, so an uppercase extension
+    // maps just like its lowercase form (not to the octet-stream fallback).
+    RUVIA_CHECK_EQ(guess("PHOTO.PNG"), std::string_view("image/png"));
+    RUVIA_CHECK_EQ(guess("PAGE.HTML"), std::string_view("text/html; charset=utf-8"));
     // Unknown extension and no extension fall back to a non-executable octet-stream.
     RUVIA_CHECK_EQ(guess("archive.xyz"), std::string_view("application/octet-stream"));
     RUVIA_CHECK_EQ(guess("noext"), std::string_view("application/octet-stream"));
