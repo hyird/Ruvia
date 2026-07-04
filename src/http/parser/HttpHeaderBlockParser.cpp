@@ -239,6 +239,12 @@ HttpParseError parseHttpHeaderBlock(
                 }
                 block.sawContentType = true;
                 break;
+            case RequestHeaderKind::kRange:
+                if (block.sawRange) {
+                    return HttpParseError::kInvalidHeader;
+                }
+                block.sawRange = true;
+                break;
             case RequestHeaderKind::kConnection: {
                 auto connectionClose = block.flags.connectionClose;
                 auto connectionKeepAlive = block.flags.connectionKeepAlive;
@@ -293,7 +299,6 @@ HttpParseError parseHttpHeaderBlock(
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
             case RequestHeaderKind::kOrigin:
-            case RequestHeaderKind::kRange:
             case RequestHeaderKind::kUpgrade:
             case RequestHeaderKind::kUserAgent:
                 break;

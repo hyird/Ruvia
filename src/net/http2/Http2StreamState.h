@@ -391,6 +391,10 @@ public:
         requestState_.markRegularHeaderSeen();
     }
 
+    [[nodiscard]] bool markSingletonRequestHeader(std::uint32_t bit) noexcept {
+        return requestState_.markSingletonHeader(bit);
+    }
+
     [[nodiscard]] bool headersDecoded() const noexcept {
         return requestState_.headersDecoded();
     }

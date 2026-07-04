@@ -53,6 +53,40 @@ struct Http2HeaderDecodeContext final {
     return true;
 }
 
+[[nodiscard]] inline std::uint32_t http2SingletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
+    switch (kind) {
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kRange:
+            return 1U << static_cast<std::uint32_t>(kind);
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentEncoding:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kUserAgent:
+            return 0;
+    }
+    return 0;
+}
+
 [[nodiscard]] inline bool http2OnDecodedInitialHeader(
     Http2HeaderDecodeContext& context,
     std::string_view name,
@@ -132,6 +166,11 @@ struct Http2HeaderDecodeContext final {
     }
     if (kind == RequestHeaderKind::kCookie) {
         return http2AppendCookieHeaderValue(stream, value);
+    }
+    if (const auto singletonBit = http2SingletonRequestHeaderBit(kind); singletonBit != 0) {
+        if (!stream.markSingletonRequestHeader(singletonBit)) {
+            return false;
+        }
     }
     if (kind == RequestHeaderKind::kContentLength) {
         std::size_t parsed = 0;

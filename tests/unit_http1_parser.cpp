@@ -107,6 +107,16 @@ RUVIA_TEST(http1_parse_duplicate_content_type_rejected) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
 }
 
+RUVIA_TEST(http1_parse_duplicate_range_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "GET /file HTTP/1.1\r\nHost: x\r\n"
+        "Range: bytes=0-99\r\n"
+        "Range: bytes=200-299\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(http1_parse_chunked_body) {
     HttpServerParser parser;
     const auto result = parser.parse(
