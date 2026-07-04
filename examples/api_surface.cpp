@@ -1141,6 +1141,11 @@ concept HasDbRowPublicMutators = requires(T& row, ruvia::DbField field) {
 };
 
 template <typename T>
+concept HasDbValuePmrStringConstructor = requires(std::pmr::string value) {
+    T(std::move(value));
+};
+
+template <typename T>
 concept HasDbRowCanonicalReadAccessors = requires(const T& row) {
     { row.empty() } -> std::same_as<bool>;
     { row.size() } -> std::same_as<std::size_t>;
@@ -1692,6 +1697,7 @@ static_assert(!HasCompleteType<ruvia::detail::RequestFormFieldAccess>);
 static_assert(!HasCompleteType<ruvia::detail::StreamingAccess>);
 static_assert(!HasCompleteType<ruvia::detail::SessionAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestObjectAccess>);
+static_assert(!HasCompleteType<ruvia::detail::DbValueAccess>);
 #ifndef _MSC_VER
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 #endif
@@ -1779,6 +1785,7 @@ static_assert(!HasControllerMiddlewareDescriptorPublicCallbackConstructor<ruvia:
 static_assert(!HasControllerStorePublicMutators<ruvia::detail::ControllerStore>);
 static_assert(!HasControllerStorePublicSize<ruvia::detail::ControllerStore>);
 static_assert(!HasDbRowPublicMutators<ruvia::DbRow>);
+static_assert(!HasDbValuePmrStringConstructor<ruvia::DbValue>);
 static_assert(!std::is_default_constructible_v<ruvia::DbRow>);
 static_assert(!std::is_constructible_v<ruvia::DbRow, std::pmr::memory_resource*>);
 static_assert(HasDbRowCanonicalReadAccessors<ruvia::DbRow>);
