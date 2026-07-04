@@ -120,26 +120,9 @@ inline void addVaryTokens(
 }
 
 inline void addVaryToken(HttpResponse& response, std::string_view token) {
-    if (token.empty()) {
-        return;
-    }
-
-    const auto vary = responseKnownHeader(response, kResponseHeaderVary);
-    if (!vary.empty() && httpHasToken(vary, token)) {
-        return;
-    }
-    if (vary.empty() && setKnownStaticVaryToken(response, token)) {
-        return;
-    }
-
-    std::pmr::string updated(responseResource(response));
-    updated.reserve(vary.size() + token.size() + (vary.empty() ? 0 : 2));
-    if (!vary.empty()) {
-        updated.append(vary);
-        updated.append(", ");
-    }
-    updated.append(token.data(), token.size());
-    response.header("Vary", updated);
+    // A single token is exactly a one-element batch; delegate so the dedup,
+    // static-token fast path, and precise-reserve logic live in one place.
+    addVaryTokens(response, &token, 1);
 }
 
 }  // namespace ruvia::detail
