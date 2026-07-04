@@ -260,4 +260,16 @@ RUVIA_TEST(json_depth_beyond_limit_rejected) {
     tooDeep.append(200, ']');
     std::string_view in(tooDeep);
     RUVIA_CHECK(!ruvia::detail::skipJsonValue(in));
+
+    // Objects have their own depth guard (skipJsonObject), a distinct code path
+    // from arrays: a deeply nested object must be rejected too, or a stack-overflow
+    // DoS reopens through the object branch alone.
+    std::string deepObj;
+    for (int i = 0; i < 200; ++i) {
+        deepObj += "{\"k\":";
+    }
+    deepObj += "1";
+    deepObj.append(200, '}');
+    std::string_view objIn(deepObj);
+    RUVIA_CHECK(!ruvia::detail::skipJsonValue(objIn));
 }
