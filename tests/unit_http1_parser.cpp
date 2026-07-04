@@ -179,3 +179,23 @@ RUVIA_TEST(http1_parse_incremental_headers_then_body) {
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
     RUVIA_CHECK(result.request.method() == HttpMethod::kPost);
 }
+
+RUVIA_TEST(http1_parse_header_block_too_large_rejected) {
+    // A header section that reaches the byte cap without terminating is a DoS
+    // guard (kMaxHttpHeaderBytes is 64 KiB).
+    std::string request = "GET / HTTP/1.1\r\nX-Big: ";
+    request += std::string(64 * 1024, 'a');  // pushes past the cap, no blank line
+    HttpServerParser parser;
+    const auto result = parser.parse(request);
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kHeaderTooLarge);
+}
+
+RUVIA_TEST(http1_parse_invalid_request_target_rejected) {
+    // An origin-form target must begin with '/'; a bare word is not a valid
+    // request target for GET.
+    HttpServerParser parser;
+    const auto result = parser.parse("GET foobar HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+}
