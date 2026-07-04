@@ -72,12 +72,12 @@ struct FileConditionalHeaders final {
 }
 
 [[nodiscard]] bool httpDateNotModified(std::string_view header, std::time_t modifiedSeconds) noexcept {
-    const auto date = detail::httpParseImfFixdate(detail::httpTrimOws(header));
+    const auto date = detail::httpParseHttpDate(detail::httpTrimOws(header));
     return date.has_value() && modifiedSeconds <= *date;
 }
 
 [[nodiscard]] bool httpDateUnmodified(std::string_view header, std::time_t modifiedSeconds) noexcept {
-    const auto date = detail::httpParseImfFixdate(detail::httpTrimOws(header));
+    const auto date = detail::httpParseHttpDate(detail::httpTrimOws(header));
     return !date.has_value() || modifiedSeconds <= *date;
 }
 

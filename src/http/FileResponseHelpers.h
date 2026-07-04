@@ -265,9 +265,36 @@ inline void httpAppendUnsigned(std::pmr::string& output, std::uint64_t value) {
     return static_cast<std::int64_t>(era) * 146097 + static_cast<std::int64_t>(doe) - 719468;
 }
 
+// Assemble a UTC civil time into a std::time_t, validating field ranges and
+// clamping to the platform's time_t domain. Shared by all three HTTP-date
+// formats so the range/overflow policy lives in exactly one place.
+[[nodiscard]] inline std::optional<std::time_t> httpCivilToTimeT(
+    int year, int month, int day, int hour, int minute, int second) noexcept {
+    if (month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60) {
+        return std::nullopt;
+    }
+    const auto days = httpDaysFromCivil(year, static_cast<unsigned>(month), static_cast<unsigned>(day));
+    const auto total = days * 86400 +
+        static_cast<std::int64_t>(hour) * 3600 +
+        static_cast<std::int64_t>(minute) * 60 +
+        static_cast<std::int64_t>(second);
+    if constexpr (std::numeric_limits<std::time_t>::is_signed) {
+        if (total < static_cast<std::int64_t>((std::numeric_limits<std::time_t>::min)()) ||
+            total > static_cast<std::int64_t>((std::numeric_limits<std::time_t>::max)())) {
+            return std::nullopt;
+        }
+    } else if (total < 0 ||
+               static_cast<std::uint64_t>(total) > static_cast<std::uint64_t>((std::numeric_limits<std::time_t>::max)())) {
+        return std::nullopt;
+    }
+    return static_cast<std::time_t>(total);
+}
+
 [[nodiscard]] inline std::optional<std::time_t> httpParseImfFixdate(std::string_view value) noexcept {
-    value = value.size() == 29 ? value : std::string_view{};
-    if (value.empty() ||
+    // IMF-fixdate: "Sun, 06 Nov 1994 08:49:37 GMT" (the only format a conforming
+    // sender emits).
+    if (value.size() != 29 ||
         value[3] != ',' || value[4] != ' ' || value[7] != ' ' || value[11] != ' ' ||
         value[16] != ' ' || value[19] != ':' || value[22] != ':' || value[25] != ' ' ||
         value.substr(26, 3) != "GMT") {
@@ -280,26 +307,77 @@ inline void httpAppendUnsigned(std::pmr::string& output, std::uint64_t value) {
     const auto hour = httpParseFixedDigits(value.substr(17, 2));
     const auto minute = httpParseFixedDigits(value.substr(20, 2));
     const auto second = httpParseFixedDigits(value.substr(23, 2));
-    if (!day || month == 0 || !year || !hour || !minute || !second ||
-        *day < 1 || *day > 31 || *hour > 23 || *minute > 59 || *second > 60) {
+    if (!day || month == 0 || !year || !hour || !minute || !second) {
         return std::nullopt;
     }
+    return httpCivilToTimeT(*year, month, *day, *hour, *minute, *second);
+}
 
-    const auto days = httpDaysFromCivil(*year, static_cast<unsigned>(month), static_cast<unsigned>(*day));
-    const auto total = days * 86400 +
-        static_cast<std::int64_t>(*hour) * 3600 +
-        static_cast<std::int64_t>(*minute) * 60 +
-        static_cast<std::int64_t>(*second);
-    if constexpr (std::numeric_limits<std::time_t>::is_signed) {
-        if (total < static_cast<std::int64_t>((std::numeric_limits<std::time_t>::min)()) ||
-            total > static_cast<std::int64_t>((std::numeric_limits<std::time_t>::max)())) {
-            return std::nullopt;
-        }
-    } else if (total < 0 ||
-               static_cast<std::uint64_t>(total) > static_cast<std::uint64_t>((std::numeric_limits<std::time_t>::max)())) {
+[[nodiscard]] inline std::optional<std::time_t> httpParseAsctimeDate(std::string_view value) noexcept {
+    // asctime(): "Sun Nov  6 08:49:37 1994" -- the day-of-month is space-padded
+    // and there is no zone field (GMT is assumed per RFC 7231 section 7.1.1.1).
+    if (value.size() != 24 ||
+        value[3] != ' ' || value[7] != ' ' || value[10] != ' ' ||
+        value[13] != ':' || value[16] != ':' || value[19] != ' ') {
         return std::nullopt;
     }
-    return static_cast<std::time_t>(total);
+    const auto month = httpMonthIndex(value.substr(4, 3));
+    auto dayField = value.substr(8, 2);
+    if (dayField.front() == ' ') {
+        dayField.remove_prefix(1);  // a single-digit day is space-padded
+    }
+    const auto day = httpParseFixedDigits(dayField);
+    const auto hour = httpParseFixedDigits(value.substr(11, 2));
+    const auto minute = httpParseFixedDigits(value.substr(14, 2));
+    const auto second = httpParseFixedDigits(value.substr(17, 2));
+    const auto year = httpParseFixedDigits(value.substr(20, 4));
+    if (month == 0 || !day || !hour || !minute || !second || !year) {
+        return std::nullopt;
+    }
+    return httpCivilToTimeT(*year, month, *day, *hour, *minute, *second);
+}
+
+[[nodiscard]] inline std::optional<std::time_t> httpParseRfc850Date(std::string_view value) noexcept {
+    // RFC 850 (obsolete): "Sunday, 06-Nov-94 08:49:37 GMT" -- a variable-length
+    // weekday name, a two-digit year, and dash-separated date parts.
+    const auto comma = value.find(", ");
+    if (comma == std::string_view::npos || comma == 0) {
+        return std::nullopt;
+    }
+    const auto body = value.substr(comma + 2);
+    if (body.size() != 22 ||
+        body[2] != '-' || body[6] != '-' || body[9] != ' ' ||
+        body[12] != ':' || body[15] != ':' || body[18] != ' ' ||
+        body.substr(19, 3) != "GMT") {
+        return std::nullopt;
+    }
+    const auto day = httpParseFixedDigits(body.substr(0, 2));
+    const auto month = httpMonthIndex(body.substr(3, 3));
+    const auto shortYear = httpParseFixedDigits(body.substr(7, 2));
+    const auto hour = httpParseFixedDigits(body.substr(10, 2));
+    const auto minute = httpParseFixedDigits(body.substr(13, 2));
+    const auto second = httpParseFixedDigits(body.substr(16, 2));
+    if (!day || month == 0 || !shortYear || !hour || !minute || !second) {
+        return std::nullopt;
+    }
+    // The two-digit year uses the POSIX pivot (00-68 => 2000-2068, 69-99 =>
+    // 1969-1999): a deterministic reading of RFC 7231's "50 years in the future"
+    // guidance that keeps this parser pure (no dependence on the current time).
+    const int year = *shortYear <= 68 ? 2000 + *shortYear : 1900 + *shortYear;
+    return httpCivilToTimeT(year, month, *day, *hour, *minute, *second);
+}
+
+[[nodiscard]] inline std::optional<std::time_t> httpParseHttpDate(std::string_view value) noexcept {
+    // RFC 7231 section 7.1.1.1: a recipient MUST accept all three HTTP-date
+    // formats. IMF-fixdate is by far the most common, so try it first; the two
+    // obsolete formats are disjoint from it and from each other structurally.
+    if (const auto imf = httpParseImfFixdate(value)) {
+        return imf;
+    }
+    if (const auto rfc850 = httpParseRfc850Date(value)) {
+        return rfc850;
+    }
+    return httpParseAsctimeDate(value);
 }
 
 [[nodiscard]] inline std::string_view httpTrimWeakEtagPrefix(std::string_view value) noexcept {
