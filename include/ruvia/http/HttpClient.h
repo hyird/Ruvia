@@ -20,6 +20,7 @@ namespace ruvia::detail {
 inline constexpr std::string_view kDefaultHttpClientAlias = "default";
 struct FetchResponseHeaderAccess;
 struct FetchResponseAccess;
+struct FetchResponseStreamAccess;
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -214,8 +215,6 @@ struct FetchStreamSourceDeleter final {
 class FetchResponseStream final {
 public:
     FetchResponseStream() noexcept = default;
-    explicit FetchResponseStream(
-        std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source) noexcept;
 
     FetchResponseStream(const FetchResponseStream&) = delete;
     FetchResponseStream& operator=(const FetchResponseStream&) = delete;
@@ -233,8 +232,24 @@ public:
     [[nodiscard]] explicit operator bool() const noexcept { return source_ != nullptr; }
 
 private:
+    friend struct detail::FetchResponseStreamAccess;
+
+    explicit FetchResponseStream(
+        std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source) noexcept;
+
     std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source_;
 };
+
+namespace detail {
+
+struct FetchResponseStreamAccess final {
+    [[nodiscard]] static FetchResponseStream make(
+        std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> source) noexcept {
+        return FetchResponseStream(std::move(source));
+    }
+};
+
+}  // namespace detail
 
 }  // namespace ruvia
 

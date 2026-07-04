@@ -337,7 +337,7 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         requestResource, this, std::move(guard), response.status(),
         std::move(FetchResponseAccess::headers(response)), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), idleTimeout, requestResource);
-    co_return FetchResponseStream(
+    co_return FetchResponseStreamAccess::make(
         std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
 }
 
