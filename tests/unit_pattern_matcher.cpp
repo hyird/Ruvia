@@ -46,6 +46,33 @@ RUVIA_TEST(pattern_match_plan_quantifiers_and_anchoring) {
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d\\d$"}>("123"));  // too long
 }
 
+RUVIA_TEST(pattern_match_multiple_quantifiers_backtrack_correctly) {
+    // Interleaved quantifiers must backtrack across each other to find a match (or
+    // correctly report none). A single-quantifier test cannot reach this multi-atom
+    // backtracking. These also guard the match results against a future rewrite of
+    // the matcher's search (e.g. memoization to bound worst-case backtracking).
+
+    // Two adjacent greedy stars.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>(""));      // both take zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aaa"));   // b* takes zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("bbb"));   // a* takes zero
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aabb"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("aba"));  // 'a' after b cannot match
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*b*$"}>("ba"));   // wrong order
+
+    // Overlapping quantifiers on the same atom: a* must give a byte back to a+.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("a"));     // a* zero, a+ one
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a+$"}>("aaaa"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a+$"}>(""));     // a+ needs >= 1
+
+    // A separator between two digit runs -- a realistic multi-quantifier pattern.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-34"));
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("-"));     // both runs empty
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("12-3a"));  // trailing non-digit
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*-\\d*$"}>("1234"));   // no separator
+}
+
 RUVIA_TEST(pattern_match_escape_classes) {
     RUVIA_CHECK(matchPatternEscape('d', '5'));
     RUVIA_CHECK(!matchPatternEscape('d', 'a'));
