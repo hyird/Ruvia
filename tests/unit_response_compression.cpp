@@ -47,6 +47,22 @@ RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
 }
 
+RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
+    // The gzip path is covered above; brotli and zstd are equally supported
+    // codings and must set their own Content-Encoding token after compressing.
+    {
+        auto response = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(tryCompress(response, Compression{true, 16}, HttpContentCoding::kBrotli));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
+        RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
+    }
+    {
+        auto response = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(tryCompress(response, Compression{true, 16}, HttpContentCoding::kZstd));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
+    }
+}
+
 RUVIA_TEST(compress_skips_when_disabled_none_or_skipbody) {
     {
         auto response = responseWithBody(kCompressibleBody);
