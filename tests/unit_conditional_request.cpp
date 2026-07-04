@@ -87,6 +87,16 @@ RUVIA_TEST(imf_fixdate_rejects_malformed) {
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 32 Jan 1970 00:00:00 GMT").has_value());   // day > 31
     RUVIA_CHECK(!httpParseImfFixdate("Thu, 01 Jan 1970 00:60:00 GMT").has_value());   // minute > 59
     RUVIA_CHECK(!httpParseImfFixdate("Thu; 01 Jan 1970 00:00:00 GMT").has_value());   // wrong separator
+
+    // The two obsolete-but-valid HTTP-date formats (RFC 9110 §5.6.7) are deliberately
+    // NOT parsed -- only IMF-fixdate is. This is safe: every conditional-request call
+    // site (If-Modified-Since / If-Unmodified-Since / If-Range) treats an unparseable
+    // date as "ignore the precondition" (serve full 200, apply no precondition, refuse
+    // the range), so an obsolete format can only ever cost a missed 304, never a wrong
+    // cache or precondition result. Pin the rejection so a future half-implementation
+    // can't silently start parsing one while breaking the length invariant.
+    RUVIA_CHECK(!httpParseImfFixdate("Sunday, 06-Nov-94 08:49:37 GMT").has_value());  // RFC 850
+    RUVIA_CHECK(!httpParseImfFixdate("Sun Nov  6 08:49:37 1994").has_value());        // asctime()
 }
 
 RUVIA_TEST(imf_fixdate_leap_second_boundary) {
