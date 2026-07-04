@@ -12,6 +12,7 @@
 
 #include "HeaderAcceptUtils.h"
 #include "HeaderTokenUtils.h"
+#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 
@@ -159,6 +160,22 @@ inline bool zstdInflateRequestBody(std::string_view input, std::pmr::string& out
         return HttpContentCoding::kZstd;
     }
     return HttpContentCoding::kNone;
+}
+
+[[nodiscard]] inline HttpContentCoding requestContentCoding(const HttpRequest& request) noexcept {
+    bool seen = false;
+    std::string_view value;
+    for (const auto& header : request.headers()) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
+            continue;
+        }
+        if (seen) {
+            return HttpContentCoding::kNone;
+        }
+        seen = true;
+        value = header.value();
+    }
+    return seen ? requestContentCoding(value) : HttpContentCoding::kNone;
 }
 
 }  // namespace ruvia::detail
