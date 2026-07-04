@@ -123,22 +123,6 @@ template <typename T>
                     return parseFormNumber(decoded, value.value);
                 });
         }
-    } else if constexpr (std::is_same_v<FieldT, bool>) {
-        return withDecodedFormView(
-            ResolvedPmrResourceTag{},
-            input,
-            resource,
-            [&value](std::string_view decoded) {
-                return parseFormBool(decoded, value);
-            });
-    } else if constexpr (std::is_integral_v<FieldT> || std::is_floating_point_v<FieldT>) {
-        return withDecodedFormView(
-            ResolvedPmrResourceTag{},
-            input,
-            resource,
-            [&value](std::string_view decoded) {
-                return parseFormNumber(decoded, value);
-            });
     } else {
         static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL form field type is not supported");
     }
@@ -164,10 +148,6 @@ template <typename T>
         } else {
             return parseFormNumber(input, value.value);
         }
-    } else if constexpr (std::is_same_v<FieldT, bool>) {
-        return parseFormBool(input, value);
-    } else if constexpr (std::is_integral_v<FieldT> || std::is_floating_point_v<FieldT>) {
-        return parseFormNumber(input, value);
     } else {
         static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL form field type is not supported");
     }
