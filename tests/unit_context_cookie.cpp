@@ -32,6 +32,14 @@ asio::awaitable<void> cloneHeaderValue(ruvia::Context& context, std::string& out
     output.assign(value.data(), value.size());
 }
 
+asio::awaitable<void> cloneParseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    const auto form = clone.parseBody({.dot = true});
+    const auto safe = form.get("safe").value();
+    safeOk = safe.has_value() && *safe == std::string_view("ok");
+    protoDropped = !static_cast<bool>(form.get("__proto__"));
+}
+
 }  // namespace
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
@@ -155,6 +163,33 @@ RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
     io.run();
 
     RUVIA_CHECK_EQ(header, std::string("second"));
+}
+
+RUVIA_TEST(context_clone_parse_body_drops_prototype_pollution_keys) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "__proto__.evil=1&safe=ok");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // With dot-path parsing on, a field whose name traverses "__proto__." is
+    // dropped (prototype-pollution defense for the nested-object binding) while a
+    // benign sibling survives.
+    asio::io_context io;
+    bool safeOk = false;
+    bool protoDropped = false;
+    asio::co_spawn(io, cloneParseProtoBody(context, safeOk, protoDropped), asio::detached);
+    io.run();
+
+    RUVIA_CHECK(safeOk);
+    RUVIA_CHECK(protoDropped);
 }
 
 RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
