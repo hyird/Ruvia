@@ -210,8 +210,6 @@ struct FetchStreamSourceDeleter final {
 // transparently decoded (the caller sees the encoded bytes and any Content-Encoding header).
 class FetchResponseStream final {
 public:
-    FetchResponseStream() noexcept = default;
-
     FetchResponseStream(const FetchResponseStream&) = delete;
     FetchResponseStream& operator=(const FetchResponseStream&) = delete;
     FetchResponseStream(FetchResponseStream&&) noexcept;
@@ -229,6 +227,8 @@ public:
 
 private:
     friend struct detail::FetchResponseStreamAccess;
+
+    FetchResponseStream() noexcept = default;
 
     explicit FetchResponseStream(
         std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source) noexcept;

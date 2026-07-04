@@ -1474,6 +1474,7 @@ static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
 static_assert(!HasFetchResponseStreamStatusCodeAlias<ruvia::FetchResponseStream>);
 static_assert(HasFetchResponseStreamStatusGetter<ruvia::FetchResponseStream>);
+static_assert(!std::is_default_constructible_v<ruvia::FetchResponseStream>);
 static_assert(!std::is_constructible_v<
     ruvia::FetchResponseStream,
     std::unique_ptr<ruvia::detail::FetchStreamSource, ruvia::detail::FetchStreamSourceDeleter>>);
