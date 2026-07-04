@@ -11,7 +11,7 @@
     class T {                                                               \
     public:                                                                 \
         explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \
-            : body_(::ruvia::detail::RequestObjectAccess::makeJson(::std::string_view{"{}"}, resource)) { \
+            : body_(::ruvia::detail::makeJsonRequestObject(::std::string_view{"{}"}, resource)) { \
             ruviaParsed_ = true;                                             \
         }                                                                   \
         template <typename RuviaResourceOwnerT>                               \
@@ -36,7 +36,7 @@
             if (!json) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::detail::RequestObjectAccess::makeJson(json->view(), resource)}; \
+            T request{::ruvia::detail::makeJsonRequestObject(json->view(), resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
@@ -49,7 +49,7 @@
             if (!form) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::detail::RequestObjectAccess::makeForm(form->view(), resource)}; \
+            T request{::ruvia::detail::makeFormRequestObject(form->view(), resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
@@ -58,7 +58,7 @@
         static ::std::optional<T> ruviaParseFormFields(                      \
             const ::ruvia::RequestNameValueList& fields,                    \
             ::std::pmr::memory_resource* resource) {                        \
-            T request{::ruvia::detail::RequestObjectAccess::makeFormFields(fields, resource)}; \
+            T request{::ruvia::detail::makeFormFieldsRequestObject(fields, resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
