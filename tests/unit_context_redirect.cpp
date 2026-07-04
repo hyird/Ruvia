@@ -8,6 +8,7 @@
 #include "http/HttpRequestInternal.h"
 #include "http/HttpResponseBodyAccess.h"
 #include "ruvia/http/Context.h"
+#include "ruvia/http/ContextModel.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -105,4 +106,19 @@ RUVIA_TEST(context_html_sets_html_content_type) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("<h1>hi</h1>"));
+}
+
+RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+
+    const auto number = context.json(42, std::uint16_t{200});
+    RUVIA_CHECK_EQ(number.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(number.header("Content-Type"), std::string_view("application/json"));
+    RUVIA_CHECK_EQ(responseBodyBytes(number), std::string_view("42"));
+
+    const auto boolean = context.json(true, std::uint16_t{200});
+    RUVIA_CHECK_EQ(responseBodyBytes(boolean), std::string_view("true"));
+
+    const auto real = context.json(3.5, std::uint16_t{200});
+    RUVIA_CHECK_EQ(responseBodyBytes(real), std::string_view("3.5"));
 }
