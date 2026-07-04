@@ -5,6 +5,7 @@
 
 #include "Http2HeaderRules.h"
 #include "Http2StreamState.h"
+#include "../../http/parser/HttpRequestTarget.h"
 #include "../../http/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpLimits.h"
 
@@ -100,7 +101,7 @@ struct Http2HeaderDecodeContext final {
             return true;
         }
         if (name == ":path") {
-            if (stream.hasPath() || value.empty()) {
+            if (stream.hasPath() || !isValidOriginFormTarget(value)) {
                 return false;
             }
             stream.assignRequestPath(value);

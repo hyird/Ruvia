@@ -1,8 +1,10 @@
 #pragma once
 
+#include "HttpParserSyntax.h"
 #include "ruvia/http/HttpTypes.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -13,6 +15,34 @@ struct RequestTargetView {
     std::string_view authority;
     std::uint16_t defaultPort{0};
 };
+
+[[nodiscard]] inline bool isValidRequestTargetBytes(std::string_view target) noexcept {
+    if (target.empty()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        const auto c = static_cast<unsigned char>(target[i]);
+        if (c <= 0x20 || c == 0x7F || c == '#' || c == '\\') {
+            return false;
+        }
+        if (c == '%') {
+            if (i + 2 >= target.size() ||
+                !isHttpHexDigit(static_cast<unsigned char>(target[i + 1])) ||
+                !isHttpHexDigit(static_cast<unsigned char>(target[i + 2]))) {
+                return false;
+            }
+            i += 2;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool isValidOriginFormTarget(std::string_view target) noexcept {
+    if (target == "*") {
+        return true;
+    }
+    return !target.empty() && target.front() == '/' && isValidRequestTargetBytes(target);
+}
 
 [[nodiscard]] bool isValidHostHeader(std::string_view value) noexcept;
 [[nodiscard]] bool parseRequestTarget(
