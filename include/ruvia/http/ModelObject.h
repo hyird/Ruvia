@@ -247,6 +247,15 @@ private:
 namespace detail {
 
 struct RequestObjectAccess;
+[[nodiscard]] RequestObject makeJsonRequestObject(
+    std::string_view body,
+    std::pmr::memory_resource* resource) noexcept;
+[[nodiscard]] RequestObject makeFormRequestObject(
+    std::string_view body,
+    std::pmr::memory_resource* resource) noexcept;
+[[nodiscard]] RequestObject makeFormFieldsRequestObject(
+    const RequestNameValueList& fields,
+    std::pmr::memory_resource* resource) noexcept;
 
 template <typename T>
 [[nodiscard]] std::optional<T> getDecodedFormField(
@@ -340,7 +349,15 @@ public:
     }
 
 private:
-    friend struct detail::RequestObjectAccess;
+    friend RequestObject detail::makeJsonRequestObject(
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept;
+    friend RequestObject detail::makeFormRequestObject(
+        std::string_view body,
+        std::pmr::memory_resource* resource) noexcept;
+    friend RequestObject detail::makeFormFieldsRequestObject(
+        const RequestNameValueList& fields,
+        std::pmr::memory_resource* resource) noexcept;
 
     RequestObject() noexcept = default;
 
@@ -378,25 +395,23 @@ private:
 
 namespace detail {
 
-struct RequestObjectAccess final {
-    [[nodiscard]] static RequestObject makeJson(
-        std::string_view body,
-        std::pmr::memory_resource* resource) noexcept {
-        return RequestObject(RequestObjectKind::kJson, body, resource);
-    }
+[[nodiscard]] inline RequestObject makeJsonRequestObject(
+    std::string_view body,
+    std::pmr::memory_resource* resource) noexcept {
+    return RequestObject(RequestObjectKind::kJson, body, resource);
+}
 
-    [[nodiscard]] static RequestObject makeForm(
-        std::string_view body,
-        std::pmr::memory_resource* resource) noexcept {
-        return RequestObject(RequestObjectKind::kForm, body, resource);
-    }
+[[nodiscard]] inline RequestObject makeFormRequestObject(
+    std::string_view body,
+    std::pmr::memory_resource* resource) noexcept {
+    return RequestObject(RequestObjectKind::kForm, body, resource);
+}
 
-    [[nodiscard]] static RequestObject makeFormFields(
-        const RequestNameValueList& fields,
-        std::pmr::memory_resource* resource) noexcept {
-        return RequestObject(fields, resource);
-    }
-};
+[[nodiscard]] inline RequestObject makeFormFieldsRequestObject(
+    const RequestNameValueList& fields,
+    std::pmr::memory_resource* resource) noexcept {
+    return RequestObject(fields, resource);
+}
 
 }  // namespace detail
 
