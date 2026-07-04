@@ -300,3 +300,19 @@ RUVIA_TEST(h2_headers_list_byte_limit) {
     const std::string big(64 * 1024, 'x');
     RUVIA_CHECK(!http2AccumulateHeaderListBytes(ctx, "name", big));
 }
+
+RUVIA_TEST(h2_headers_list_byte_limit_accumulates_across_entries) {
+    // The real header-flood DoS vector: many individually-legal headers that
+    // together exceed the 64 KiB list budget (each entry also costs a 32-byte
+    // overhead, RFC 9113 6.5.2). The accumulator must reject once the running total
+    // would exceed the budget -- not merely reject a single oversized field.
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    const std::string value(1000, 'v');  // ~1037 bytes per entry incl. name + overhead
+    bool rejected = false;
+    for (int i = 0; i < 200 && !rejected; ++i) {
+        rejected = !http2AccumulateHeaderListBytes(ctx, "x-pad", value);
+    }
+    RUVIA_CHECK(rejected);                                    // the running total is bounded
+    RUVIA_CHECK(ctx.decodedHeaderListBytes <= 64 * 1024);    // never exceeds the budget
+}
