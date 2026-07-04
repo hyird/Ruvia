@@ -1,5 +1,6 @@
 #include "../DbInternal.h"
 #include "DbConfigValidation.h"
+#include "DbMigrationValidation.h"
 #include "DbUtils.h"
 #include "ruvia/db/Db.h"
 
@@ -18,50 +19,13 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool isValidMigrationTableName(std::string_view name) noexcept {
-    if (name.empty()) {
-        return false;
-    }
-    for (const auto ch : name) {
-        const auto c = static_cast<unsigned char>(ch);
-        if ((c >= 'a' && c <= 'z') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') ||
-            c == '_') {
-            continue;
-        }
-        return false;
-    }
-    return true;
-}
-
 void appendQuotedIdentifier(std::pmr::string& sql, std::string_view identifier) {
-    if (!isValidMigrationTableName(identifier)) {
-        throw std::invalid_argument("database migration table must contain only letters, digits and underscores");
+    if (!detail::isValidMigrationTableName(identifier)) {
+        throw std::invalid_argument("database migration table must be 1-64 letters, digits or underscores");
     }
     sql.push_back('`');
     sql.append(identifier);
     sql.push_back('`');
-}
-
-void validateMigrationList(std::span<const DbMigration> migrations) {
-    for (std::size_t i = 0; i < migrations.size(); ++i) {
-        const auto& migration = migrations[i];
-        if (migration.id.empty()) {
-            throw std::invalid_argument("database migration id must not be empty");
-        }
-        if (migration.id.size() > 190) {
-            throw std::invalid_argument("database migration id must not exceed 190 bytes");
-        }
-        if (migration.sql.empty()) {
-            throw std::invalid_argument("database migration SQL must not be empty");
-        }
-        for (std::size_t j = i + 1; j < migrations.size(); ++j) {
-            if (migrations[j].id == migration.id) {
-                throw std::invalid_argument("database migration ids must be unique");
-            }
-        }
-    }
 }
 
 [[nodiscard]] std::pmr::string buildMigrationLockName(
@@ -136,9 +100,9 @@ public:
         DbMigrationReport& report,
         std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
-        validateMigrationList(migrations);
-        if (!isValidMigrationTableName(options.table)) {
-            throw std::invalid_argument("database migration table must contain only letters, digits and underscores");
+        detail::validateMigrationList(migrations);
+        if (!detail::isValidMigrationTableName(options.table)) {
+            throw std::invalid_argument("database migration table must be 1-64 letters, digits or underscores");
         }
 
         config.poolSize = 1;
