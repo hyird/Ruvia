@@ -8,25 +8,7 @@
 
 namespace ruvia::detail {
 
-// Privileged access to a Context's session slot, used by the session middleware
-// to load the stored blob in and read what the handler left behind.
-struct SessionAccess final {
-    static void setId(Context& context, std::string_view id) {
-        context.sessionIdStorage().assign(id.data(), id.size());
-    }
-    static void load(Context& context, std::string_view data) {
-        assignStableString(context.sessionDataStorage(), data);
-    }
-    [[nodiscard]] static bool dirty(const Context& context) noexcept {
-        return context.sessionDirty_;
-    }
-    [[nodiscard]] static std::string_view id(const Context& context) noexcept {
-        return context.sessionId();
-    }
-    [[nodiscard]] static std::string_view data(const Context& context) noexcept {
-        return context.session();
-    }
-};
+struct SessionAccess;
 
 [[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 128) {
@@ -60,15 +42,9 @@ inline void appendSessionCookieHeader(
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include <array>
-#include <chrono>
-
 #include "ruvia/app/Task.h"
-#include "ruvia/http/Cookies.h"
-#include "ruvia/http/Csrf.h"
 #include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/Next.h"
-#include "ruvia/redis/RedisHandle.h"
 
 namespace ruvia {
 
@@ -80,43 +56,7 @@ namespace ruvia {
 // Uses the "default" Redis connection.
 class SessionMiddleware final : public Middleware<SessionMiddleware> {
 public:
-    Task<void> handle(Context& c, Next& next) {
-        const auto cookie = c.req().cookie("sid");
-        if (cookie && detail::isValidSessionId(*cookie)) {
-            detail::SessionAccess::setId(c, *cookie);
-            std::pmr::string key(c.resource());
-            key.append("sess:");
-            key.append(cookie->data(), cookie->size());
-            if (auto stored = co_await c.redis("default").get(key)) {
-                detail::SessionAccess::load(c, *stored);
-            }
-        }
-
-        co_await next();
-
-        if (detail::SessionAccess::dirty(c)) {
-            auto& response = c.res();
-            std::array<char, 64> idBuffer;
-            auto id = detail::SessionAccess::id(c);
-            if (id.empty()) {
-                detail::SessionAccess::setId(c, detail::generateCsrfToken(idBuffer));
-                id = detail::SessionAccess::id(c);
-                // The session id is only known after the handler ran, so the
-                // cookie goes straight onto the already-built response rather
-                // than through the context (whose headers were applied earlier).
-                detail::appendSessionCookieHeader(response, c.resource(), id, c.req().raw().isSecure());
-            }
-            std::pmr::string key(c.resource());
-            key.append("sess:");
-            key.append(id.data(), id.size());
-            const auto data = detail::SessionAccess::data(c);
-            if (data.empty()) {
-                co_await c.redis("default").del(key);
-            } else {
-                co_await c.redis("default").setEx(key, std::chrono::seconds(86400), data);
-            }
-        }
-    }
+    Task<void> handle(Context& c, Next& next);
 };
 
 }  // namespace ruvia
