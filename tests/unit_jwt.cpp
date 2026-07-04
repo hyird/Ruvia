@@ -38,6 +38,24 @@ std::string sign(const JwtSignOptions& options) {
     return std::string(token.data(), token.size());
 }
 
+std::string signedTokenWithPayload(std::string_view secret, std::string_view payloadJson) {
+    auto* const resource = std::pmr::get_default_resource();
+    const auto header = ruvia::detail::jwtBase64UrlEncode(R"({"alg":"HS256","typ":"JWT"})", resource);
+    const auto payload = ruvia::detail::jwtBase64UrlEncode(payloadJson, resource);
+    std::pmr::string signingInput(resource);
+    signingInput.append(header);
+    signingInput.push_back('.');
+    signingInput.append(payload);
+    const auto signature = ruvia::detail::jwtHmacSign(
+        JwtAlgorithm::kHs256,
+        secret,
+        std::string_view(signingInput.data(), signingInput.size()),
+        resource);
+    signingInput.push_back('.');
+    signingInput.append(signature);
+    return std::string(signingInput.data(), signingInput.size());
+}
+
 template <typename Fn>
 bool throwsOn(Fn&& fn) {
     try {
@@ -139,6 +157,13 @@ RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("not-a-jwt", verify); }));
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("only.two", verify); }));       // two sections
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("a.b.c.d", verify); }));        // four sections
+}
+
+RUVIA_TEST(jwt_verify_rejects_signed_non_object_payload) {
+    auto verify = verifyOptions("secret");
+    verify.requireExpiration = false;
+    const auto token = signedTokenWithPayload("secret", "not-json");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, verify); }));
 }
 
 RUVIA_TEST(jwt_base64url_round_trip_and_strict_decode) {

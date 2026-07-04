@@ -6,6 +6,7 @@
 
 #include <charconv>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia {
@@ -136,7 +137,7 @@ JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::
     bool nbfSeen = false;
     bool iatSeen = false;
 
-    (void)detail::visitJsonObjectFields(
+    const bool valid = detail::visitJsonObjectFields(
         detail::ResolvedPmrResourceTag{},
         json,
         resolved,
@@ -206,6 +207,9 @@ JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::
             }
             return true;
         });
+    if (!valid) {
+        throw std::runtime_error("JWT payload is not a JSON object");
+    }
     return payload;
 }
 
