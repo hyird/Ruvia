@@ -1,5 +1,7 @@
 #include "test_harness.h"
 
+#include <cstddef>
+#include <memory_resource>
 #include <string_view>
 
 #include "net/http2/Http2HeaderDecode.h"
@@ -17,6 +19,7 @@ using ruvia::detail::http2ClassifyHeaderDecodeResult;
 using ruvia::detail::http2ShouldDropInvalidCleartextPreface;
 using ruvia::detail::HttpServerParser;
 using ruvia::detail::isHttp2UpgradeAttempt;
+using ruvia::detail::parseHttp2UpgradeRequest;
 
 }  // namespace
 
@@ -82,4 +85,40 @@ RUVIA_TEST(http2_upgrade_attempt_detection) {
     // A plain request is not an upgrade at all.
     const auto plain = parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
     RUVIA_CHECK(!isHttp2UpgradeAttempt(plain));
+}
+
+RUVIA_TEST(parse_http2_upgrade_request) {
+    HttpServerParser parser;
+    auto* const resource = std::pmr::new_delete_resource();
+
+    // A valid h2c upgrade with a well-formed HTTP2-Settings (6-byte entry).
+    const auto valid = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+        "Upgrade: h2c\r\nHTTP2-Settings: AAQAAQAA\r\n\r\n");
+    const auto validResult = parseHttp2UpgradeRequest(valid, resource);
+    RUVIA_CHECK(validResult.valid);
+    RUVIA_CHECK_EQ(validResult.settingsPayload.size(), std::size_t{6});
+
+    // Not an h2c upgrade -> invalid.
+    const auto websocket = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(websocket, resource).valid);
+
+    // h2c, but Connection lacks the HTTP2-Settings token -> invalid.
+    const auto noToken = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n"
+        "HTTP2-Settings: AAQAAQAA\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(noToken, resource).valid);
+
+    // Duplicate HTTP2-Settings headers -> invalid.
+    const auto duplicate = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+        "Upgrade: h2c\r\nHTTP2-Settings: AAQAAQAA\r\nHTTP2-Settings: AAQAAQAA\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(duplicate, resource).valid);
+
+    // Malformed base64url in HTTP2-Settings -> invalid.
+    const auto badSettings = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+        "Upgrade: h2c\r\nHTTP2-Settings: @@@bad\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(badSettings, resource).valid);
 }
