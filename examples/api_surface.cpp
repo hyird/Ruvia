@@ -642,6 +642,7 @@ concept HasResponseSetBodyOwnedAlias = requires(T& response, std::pmr::string bo
     response.setBodyOwned(std::move(body));
 };
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 template <typename T>
 concept HasFetchResponseStatusCodeField = requires(const T& response) {
     response.statusCode;
@@ -669,6 +670,7 @@ concept HasFetchOptionsInitializerListHeaders = requires(
     std::initializer_list<ruvia::HttpHeaderView> headers) {
     options.headers = headers;
 };
+#endif
 
 #ifdef RUVIA_ENABLE_MARIADB
 template <typename T>
@@ -702,6 +704,7 @@ concept HasDbTransactionInitializerListParams = requires(
 };
 #endif
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 template <typename T>
 concept HasFetchResponseHeadersField = requires(const T& response) {
     response.headers;
@@ -741,6 +744,7 @@ template <typename T>
 concept HasFetchResponseHeaderValueGetter = requires(const T& header) {
     { header.value() } -> std::same_as<std::string_view>;
 };
+#endif
 
 template <typename T>
 concept HasCompleteType = requires {
@@ -759,6 +763,7 @@ concept HasHttpHeaderViewCanonicalReadAccessors = requires(const T& header) {
     { header.value() } -> std::same_as<std::string_view>;
 };
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 template <typename T>
 concept HasFetchResponseStreamStatusCodeAlias = requires(const T& response) {
     response.statusCode();
@@ -778,6 +783,7 @@ template <typename T>
 concept HasRequestBodyStreamBool = requires(const T& stream) {
     static_cast<bool>(stream);
 };
+#endif
 
 template <typename T>
 concept HasMultipartPartPublicFields = requires(T& part) {
@@ -1618,6 +1624,7 @@ static_assert(HasResponseStatusSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseStatusCodeAlias<ruvia::HttpResponse>);
 static_assert(HasResponseStatusGetter<ruvia::HttpResponse>);
 static_assert(!HasResponseSetBodyOwnedAlias<ruvia::HttpResponse>);
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 static_assert(!HasFetchResponseStatusCodeField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseStatusGetter<ruvia::FetchResponse>);
 static_assert(HasFetchOptionsHeaderViews<ruvia::FetchOptions>);
@@ -1627,12 +1634,14 @@ static_assert(!HasFetchResponseHeadersField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseHeadersGetter<ruvia::FetchResponse>);
 static_assert(!HasFetchResponseBodyField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseBodyGetter<ruvia::FetchResponse>);
+#endif
 #ifdef RUVIA_ENABLE_MARIADB
 static_assert(HasDbHandleDefaultParams<ruvia::DbHandle>);
 static_assert(!HasDbHandleInitializerListParams<ruvia::DbHandle>);
 static_assert(HasDbTransactionDefaultParams<ruvia::DbTransaction>);
 static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 #endif
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 static_assert(!std::is_default_constructible_v<ruvia::FetchResponse>);
 static_assert(!std::is_constructible_v<ruvia::FetchResponse, std::pmr::memory_resource*>);
 static_assert(!std::is_default_constructible_v<ruvia::FetchResponseHeader>);
@@ -1648,6 +1657,7 @@ static_assert(HasFetchResponseHeaderValueGetter<ruvia::FetchResponseHeader>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseHeaderAccess>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseAccess>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseStreamAccess>);
+#endif
 static_assert(!HasCompleteType<ruvia::detail::HttpParseResultAccess>);
 static_assert(!HasCompleteType<ruvia::detail::MultipartPartAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestNameValueViewAccess>);
@@ -1662,6 +1672,7 @@ static_assert(!HasCompleteType<ruvia::detail::RequestObjectAccess>);
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
 static_assert(!HasFetchResponseStreamStatusCodeAlias<ruvia::FetchResponseStream>);
 static_assert(HasFetchResponseStreamStatusGetter<ruvia::FetchResponseStream>);
 static_assert(!std::is_default_constructible_v<ruvia::FetchResponseStream>);
@@ -1670,6 +1681,7 @@ static_assert(!std::is_constructible_v<
     std::unique_ptr<ruvia::detail::FetchStreamSource, ruvia::detail::FetchStreamSourceDeleter>>);
 static_assert(!HasRequestBodyStreamValidAlias<ruvia::RequestBodyStream>);
 static_assert(HasRequestBodyStreamBool<ruvia::RequestBodyStream>);
+#endif
 static_assert(!HasMultipartPartPublicFields<ruvia::MultipartPart>);
 static_assert(HasMultipartPartCanonicalReadAccessors<ruvia::MultipartPart>);
 static_assert(!HasMultipartStreamPartPublicFields<ruvia::MultipartStreamPart>);
