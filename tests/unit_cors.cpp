@@ -169,3 +169,42 @@ RUVIA_TEST(cors_runtime_skips_non_cors_and_disabled) {
         RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
     }
 }
+
+RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Access-Control-Request-Method: POST\r\n"
+        "Access-Control-Request-Headers: X-Custom\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.header("Allow", "GET, POST, OPTIONS");  // the route-advertised methods
+
+    auto cors = corsOptions(true, "https://app.example", false);
+    cors.maxAge = std::chrono::seconds(600);
+    // No configured allowHeaders -> the requested headers are reflected.
+    applyCorsHeaders(result.request, response, cors);
+
+    RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Methods"),
+                   std::string_view("GET, POST, OPTIONS"));
+    RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Headers"), std::string_view("X-Custom"));
+    RUVIA_CHECK_EQ(response.header("Access-Control-Max-Age"), std::string_view("600"));
+    RUVIA_CHECK(response.header("Vary").find("Access-Control-Request-Method") != std::string_view::npos);
+    RUVIA_CHECK(response.header("Vary").find("Access-Control-Request-Headers") != std::string_view::npos);
+}
+
+RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Access-Control-Request-Method: POST\r\n"
+        "Access-Control-Request-Headers: X-Requested\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+
+    auto cors = corsOptions(true, "https://app.example", false);
+    cors.allowHeaders.assign("Authorization, X-Configured");
+    applyCorsHeaders(result.request, response, cors);
+
+    // The configured allow-list wins over reflecting the requested headers.
+    RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Headers"),
+                   std::string_view("Authorization, X-Configured"));
+}
