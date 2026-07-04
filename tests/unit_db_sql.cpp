@@ -3,6 +3,7 @@
 #include <mysql/mysql.h>
 
 #include <exception>
+#include <limits>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -62,6 +63,30 @@ RUVIA_TEST(db_interpolate_sql_renders_typed_literals) {
         interp(mysql, "VALUES (?, ?, ?, ?)",
                {DbValue(42), DbValue(true), DbValue(nullptr), DbValue(std::string_view("x"))}),
         std::string("VALUES (42, 1, NULL, 'x')"));
+
+    mysql_close(&mysql);
+}
+
+RUVIA_TEST(db_interpolate_sql_double_finite_renders_nonfinite_rejected) {
+    MYSQL mysql;
+    RUVIA_CHECK(mysql_init(&mysql) != nullptr);
+
+    // A finite double renders as an unquoted numeric literal (the typed-literals
+    // test covered int/bool/null/string but never a double).
+    RUVIA_CHECK_EQ(interp(mysql, "VALUES (?)", {DbValue(3.5)}), std::string("VALUES (3.5)"));
+
+    // A non-finite double must be REJECTED, not spliced as the bare words "inf"/"nan"
+    // that std::to_chars produces -- those are not valid SQL numerics and would land
+    // UNQUOTED in the statement. Positive/negative infinity and NaN all throw.
+    RUVIA_CHECK(throwsOn([&] {
+        (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::infinity())});
+    }));
+    RUVIA_CHECK(throwsOn([&] {
+        (void)interp(mysql, "VALUES (?)", {DbValue(-std::numeric_limits<double>::infinity())});
+    }));
+    RUVIA_CHECK(throwsOn([&] {
+        (void)interp(mysql, "VALUES (?)", {DbValue(std::numeric_limits<double>::quiet_NaN())});
+    }));
 
     mysql_close(&mysql);
 }
