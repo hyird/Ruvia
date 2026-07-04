@@ -70,10 +70,22 @@ RUVIA_TEST(flow_send_window_available_is_min_of_connection_and_stream) {
     RUVIA_CHECK(!http2SendWindowAvailable(0, stream));
 }
 
-RUVIA_TEST(flow_available_send_window_clamps_non_positive) {
+RUVIA_TEST(flow_available_send_window_clamps_to_zero_when_negative) {
+    // RFC 7540 6.9.2: lowering SETTINGS_INITIAL_WINDOW_SIZE can drive a stream's
+    // send window negative. The available-to-send count must clamp to zero and
+    // never wrap to a huge size_t, which would let a full DATA frame be sent past
+    // an exhausted window (a flow-control violation).
     auto stream = makeStream();
-    stream.setSendWindow(-10);
-    RUVIA_CHECK_EQ(http2AvailableSendWindow(100, stream), std::size_t{0});
+    const auto streamWindow = stream.sendWindow();
+    RUVIA_CHECK(stream.addSendWindow(-(static_cast<std::int64_t>(streamWindow) + 1000)));
+    RUVIA_CHECK(stream.sendWindow() < 0);
+
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(65535, stream), std::size_t{0});
+    RUVIA_CHECK(!http2SendWindowAvailable(65535, stream));
+
+    // A non-positive connection window is likewise clamped, not wrapped.
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(-5, makeStream()), std::size_t{0});
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(0, makeStream()), std::size_t{0});
 
     stream.setSendWindow(100);
     RUVIA_CHECK_EQ(http2AvailableSendWindow(0, stream), std::size_t{0});
