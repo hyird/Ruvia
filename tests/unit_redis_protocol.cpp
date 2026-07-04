@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <cstddef>
 #include <exception>
 #include <memory_resource>
 #include <span>
@@ -7,12 +8,53 @@
 #include <string_view>
 #include <vector>
 
+#include <hiredis/hiredis.h>
+
 #include "redis/core/RedisProtocol.h"
+#include "ruvia/redis/RedisTypes.h"
 
 namespace {
 
+using ruvia::RedisValue;
 using ruvia::detail::appendRespCommand;
+using ruvia::detail::hiredisReplyToValue;
+using ruvia::detail::parseRedisKeyValueArray;
+using ruvia::detail::parseRedisScoredArray;
 using ruvia::detail::respCommandSerializedSize;
+
+// Build a bulk-string hiredis reply pointing at `text` (borrowed, must outlive use).
+redisReply stringReply(std::string_view text) {
+    redisReply reply{};
+    reply.type = REDIS_REPLY_STRING;
+    reply.str = const_cast<char*>(text.data());
+    reply.len = text.size();
+    return reply;
+}
+
+// Build an array hiredis reply over `elements` (borrowed).
+redisReply arrayReply(redisReply** elements, std::size_t count) {
+    redisReply reply{};
+    reply.type = REDIS_REPLY_ARRAY;
+    reply.elements = count;
+    reply.element = elements;
+    return reply;
+}
+
+// Convert a constructed hiredis array reply into a RedisValue for the parsers.
+RedisValue toValue(redisReply** elements, std::size_t count) {
+    const auto reply = arrayReply(elements, count);
+    return hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource());
+}
+
+template <typename Fn>
+bool throwsOn(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
 
 std::span<const std::string_view> asSpan(const std::vector<std::string_view>& args) {
     return std::span<const std::string_view>(args.data(), args.size());
@@ -55,6 +97,50 @@ RUVIA_TEST(resp_serialized_size_matches_written_output) {
         appendRespCommand(out, span);
         RUVIA_CHECK_EQ(hinted, out.size());
     }
+}
+
+RUVIA_TEST(redis_parse_key_value_array_pairs_and_rejects_odd_length) {
+    auto* resource = std::pmr::get_default_resource();
+    redisReply k1 = stringReply("field1");
+    redisReply v1 = stringReply("value1");
+    redisReply k2 = stringReply("field2");
+    redisReply v2 = stringReply("value2");
+
+    // An even-length array (e.g. HGETALL) yields the field/value pairs in order.
+    redisReply* even[] = {&k1, &v1, &k2, &v2};
+    const auto pairs = parseRedisKeyValueArray(toValue(even, 4), resource, "hgetall");
+    RUVIA_CHECK_EQ(pairs.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(pairs[0].key(), std::string_view("field1"));
+    RUVIA_CHECK_EQ(pairs[0].value(), std::string_view("value1"));
+    RUVIA_CHECK_EQ(pairs[1].key(), std::string_view("field2"));
+    RUVIA_CHECK_EQ(pairs[1].value(), std::string_view("value2"));
+
+    // An odd-length reply is malformed and must be rejected, not truncated.
+    redisReply* odd[] = {&k1, &v1, &k2};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisKeyValueArray(toValue(odd, 3), resource, "hgetall"); }));
+}
+
+RUVIA_TEST(redis_parse_scored_array_parses_scores_and_rejects_odd_length) {
+    auto* resource = std::pmr::get_default_resource();
+    redisReply m1 = stringReply("member1");
+    redisReply s1 = stringReply("1.5");
+    redisReply m2 = stringReply("member2");
+    redisReply s2 = stringReply("-2");
+
+    // ZSCAN/ZRANGE WITHSCORES: member/score pairs; the score text becomes a double.
+    redisReply* even[] = {&m1, &s1, &m2, &s2};
+    const auto scored = parseRedisScoredArray(toValue(even, 4), resource);
+    RUVIA_CHECK_EQ(scored.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(scored[0].value(), std::string_view("member1"));
+    RUVIA_CHECK_EQ(scored[0].score(), 1.5);
+    RUVIA_CHECK_EQ(scored[1].score(), -2.0);
+
+    // Odd length -> rejected. A non-numeric score -> rejected.
+    redisReply* odd[] = {&m1, &s1, &m2};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(odd, 3), resource); }));
+    redisReply badScore = stringReply("notanumber");
+    redisReply* bad[] = {&m1, &badScore};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(bad, 2), resource); }));
 }
 
 RUVIA_TEST(resp_command_rejects_empty_argument_list) {
