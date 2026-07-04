@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <array>
+#include <optional>
 #include <string_view>
 
 #include "http/HeaderTokenUtils.h"
@@ -106,6 +107,29 @@ RUVIA_TEST(find_semicolon_parameter_matches_whole_name_not_substring) {
         "multipart/form-data; notboundary=evil; boundary=real", "boundary");
     RUVIA_CHECK(real.has_value());
     RUVIA_CHECK_EQ(*real, std::string_view("real"));
+}
+
+RUVIA_TEST(find_semicolon_parameter_is_case_sensitive_and_whole_name) {
+    using ruvia::detail::httpFindSemicolonParameter;
+    // This plain finder backs cookie lookup: cookie names are case-SENSITIVE
+    // (RFC 6265), unlike the case-insensitive media-type variants. "sid" and
+    // "SID" are distinct keys.
+    RUVIA_CHECK_EQ(httpFindSemicolonParameter("sid=1; SID=2", "sid").value_or(""),
+                   std::string_view("1"));
+    RUVIA_CHECK_EQ(httpFindSemicolonParameter("sid=1; SID=2", "SID").value_or(""),
+                   std::string_view("2"));
+    // OWS around '=' is trimmed; a value may itself contain '='.
+    RUVIA_CHECK_EQ(httpFindSemicolonParameter("theme = dark", "theme").value_or(""),
+                   std::string_view("dark"));
+    RUVIA_CHECK_EQ(httpFindSemicolonParameter("data=a=b", "data").value_or(""),
+                   std::string_view("a=b"));
+    // An empty value is present (not absent); a valueless item is skipped entirely.
+    RUVIA_CHECK(httpFindSemicolonParameter("flag=", "flag") == std::optional<std::string_view>(""));
+    RUVIA_CHECK(!httpFindSemicolonParameter("flag", "flag").has_value());
+    // Whole-name match only: a decoy sharing a prefix or suffix must not match, so a
+    // "xsid=" can never be read as "sid" (cookie confusion).
+    RUVIA_CHECK(!httpFindSemicolonParameter("xsid=evil", "sid").has_value());
+    RUVIA_CHECK(!httpFindSemicolonParameter("sidx=evil", "sid").has_value());
 }
 
 RUVIA_TEST(connection_flags_parses_tokens_case_insensitively) {
