@@ -327,13 +327,14 @@ ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
     co_return context.body("ok");
 }
 
-std::string dispatchChain(std::span<const ControllerMiddlewareDescriptor> middlewares) {
+std::string dispatchChain(
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(
         HttpMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler),
-        RequestBodyMode::kBuffered, middlewares,
-        std::span<const ControllerMiddlewareDescriptor>{});
+        RequestBodyMode::kBuffered, controllerMiddlewares, routeMiddlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
 
@@ -416,6 +417,27 @@ RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {
     // "code" survives, so it is not swallowed into a generic 500.
     RUVIA_CHECK(g_chainOrder.empty());
     RUVIA_CHECK(body.find("\"code\":\"mw_rejected\"") != std::string::npos);
+}
+
+RUVIA_TEST(middleware_chain_controller_middleware_wraps_route_middleware) {
+    g_chainOrder.clear();
+    // Controller-level middleware and route-level middleware are combined into one
+    // chain; controller middleware must be OUTERMOST (it wraps the route's), so a
+    // controller-level auth/logging guard always brackets route-specific logic.
+    const ControllerMiddlewareDescriptor controllerMws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    const ControllerMiddlewareDescriptor routeMws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
+    };
+    const auto body = dispatchChain(
+        std::span<const ControllerMiddlewareDescriptor>(controllerMws, 1),
+        std::span<const ControllerMiddlewareDescriptor>(routeMws, 1));
+    RUVIA_CHECK_EQ(body, std::string("ok"));
+    // A(controller) pre, B(route) pre, handler, B post, A post. A regression that
+    // swapped the two spans would run route middleware outside controller middleware.
+    const std::vector<int> expected{1, 2, 0, -2, -1};
+    RUVIA_CHECK(g_chainOrder == expected);
 }
 
 namespace {
