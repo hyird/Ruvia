@@ -75,4 +75,10 @@ RUVIA_TEST(pattern_match_char_class) {
     RUVIA_CHECK(!matchPatternClass("\\d", 0, 2, 'a'));
     // An inverted range (first > last) matches nothing.
     RUVIA_CHECK(!matchPatternClass("z-a", 0, 3, 'm'));
+    // A range whose end is a backslash is malformed and matches nothing. This is
+    // a distinct guard from the inverted-range one: with a low start like 'A'
+    // (<= '\\'), first>last does NOT hold, so only the explicit backslash-end
+    // check stops "A-\\d" from being misread as the range A(0x41)-\\(0x5C) --
+    // which would otherwise wrongly match 'B'.
+    RUVIA_CHECK(!matchPatternClass("A-\\d", 0, 4, 'B'));
 }
