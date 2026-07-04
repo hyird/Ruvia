@@ -59,9 +59,6 @@ class RateLimiter;
 class RequestBodyLoader;
 struct ContextAccess;
 class ContextServices;
-struct RouteRateLimitOptions;
-class RouteRateLimitResult;
-RouteRateLimitResult checkRouteRateLimit(Context& context, const RouteRateLimitOptions& options) noexcept;
 struct SessionAccess;
 struct RequestFormFieldAccess;
 const RequestNameValueList& requestHeaderFields(const ContextRequest& request);
@@ -1106,9 +1103,6 @@ private:
     friend std::string_view routePath(const Context& context) noexcept;
     friend std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context);
     friend struct detail::SessionAccess;
-    friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
-        Context& context,
-        const detail::RouteRateLimitOptions& options) noexcept;
     template <typename T>
     friend void detail::setValidatedBody(Context& context, ValidationTarget target, T&& body);
 

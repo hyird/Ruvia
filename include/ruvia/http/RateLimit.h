@@ -1,17 +1,12 @@
 #pragma once
 
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
-#include <system_error>
-#include <utility>
 
 #include "ruvia/app/RateLimitRule.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
-#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/Next.h"
 
@@ -23,34 +18,10 @@ struct RouteRateLimitOptions final {
     RateLimitRule rule;
 };
 
-class RouteRateLimitResult final {
-public:
-    [[nodiscard]] bool allowed() const noexcept {
-        return allowed_;
-    }
-
-    [[nodiscard]] std::chrono::milliseconds resetAfter() const noexcept {
-        return std::chrono::milliseconds(resetAfterMs_);
-    }
-
-private:
-    friend RouteRateLimitResult checkRouteRateLimit(
-        Context& context,
-        const RouteRateLimitOptions& options) noexcept;
-
-    constexpr RouteRateLimitResult() noexcept = default;
-
-    constexpr RouteRateLimitResult(bool allowed, std::int64_t resetAfterMs) noexcept
-        : allowed_(allowed),
-          resetAfterMs_(resetAfterMs) {}
-
-    bool allowed_{true};
-    std::int64_t resetAfterMs_{1};
-};
-
-[[nodiscard]] RouteRateLimitResult checkRouteRateLimit(
+[[nodiscard]] bool applyRouteRateLimit(
     Context& context,
-    const RouteRateLimitOptions& options) noexcept;
+    const RouteRateLimitOptions& options,
+    std::size_t maxRequests);
 
 [[nodiscard]] constexpr RouteRateLimitOptions routeRateLimitOptions(
     std::size_t maxRequests,
@@ -74,14 +45,7 @@ public:
             Derived::ruviaRateLimitWindowMs > 0,
             "route rate limit window must be greater than 0ms");
 
-        const auto check = detail::checkRouteRateLimit(context, routeRateLimitOptions());
-        if (!check.allowed()) {
-            auto response = context.error(429, "too_many_requests", "rate limit exceeded");
-            setUnsignedHeader(response, "Retry-After", retryAfterSeconds(check.resetAfter().count()));
-            setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
-            setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
-            setUnsignedHeader(response, "X-RateLimit-Reset", retryAfterSeconds(check.resetAfter().count()));
-            context.res(std::move(response));
+        if (!detail::applyRouteRateLimit(context, routeRateLimitOptions(), Derived::ruviaRateLimitMaxRequests)) {
             co_return;
         }
 
@@ -89,18 +53,6 @@ public:
     }
 
 private:
-    static void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
-        char buffer[24];
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            response.header(name, std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
-        }
-    }
-
-    [[nodiscard]] static std::uint64_t retryAfterSeconds(std::int64_t resetAfterMs) noexcept {
-        return static_cast<std::uint64_t>((resetAfterMs <= 0 ? 1 : resetAfterMs + 999) / 1000);
-    }
-
     [[nodiscard]] static const detail::RouteRateLimitOptions& routeRateLimitOptions() noexcept {
         static constexpr auto options = detail::routeRateLimitOptions(
             Derived::ruviaRateLimitMaxRequests,

@@ -26,6 +26,10 @@
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/redis/RedisTypes.h"
 
+namespace ruvia::detail {
+class RouteRateLimitResult;
+}  // namespace ruvia::detail
+
 #ifdef RUVIA_GET_DYNAMIC
 #error "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
 #endif
@@ -1376,18 +1380,6 @@ concept HasHttpErrorInfoCanonicalReadAccessors = requires(const T& info) {
 };
 
 template <typename T>
-concept HasRouteRateLimitResultPublicFields = requires(T& result) {
-    result.allowed;
-    result.resetAfterMs;
-};
-
-template <typename T>
-concept HasRouteRateLimitResultCanonicalReadAccessors = requires(const T& result) {
-    { result.allowed() } -> std::same_as<bool>;
-    { result.resetAfter() } -> std::same_as<std::chrono::milliseconds>;
-};
-
-template <typename T>
 concept HasHttpParseResultPublicFields = requires(T& result) {
     result.status;
     result.error;
@@ -1888,8 +1880,7 @@ static_assert(!HasValidationIssuePublicFields<ruvia::ValidationIssue>);
 static_assert(HasValidationIssueCanonicalReadAccessors<ruvia::ValidationIssue>);
 static_assert(!HasHttpErrorInfoPublicFields<ruvia::HttpErrorInfo>);
 static_assert(HasHttpErrorInfoCanonicalReadAccessors<ruvia::HttpErrorInfo>);
-static_assert(!HasRouteRateLimitResultPublicFields<ruvia::detail::RouteRateLimitResult>);
-static_assert(HasRouteRateLimitResultCanonicalReadAccessors<ruvia::detail::RouteRateLimitResult>);
+static_assert(!HasCompleteType<ruvia::detail::RouteRateLimitResult>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpParseResult>);
 #ifndef _MSC_VER
 static_assert(!HasHttpParseResultPublicFields<ruvia::HttpParseResult>);
