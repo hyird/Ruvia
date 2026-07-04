@@ -218,6 +218,18 @@ RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
     RUVIA_CHECK_EQ(out2.headers.size(), std::size_t{1});
 }
 
+RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
+    // RFC 7541 §6.3: a dynamic-table size update must not exceed the maximum the
+    // decoder advertised via SETTINGS_HEADER_TABLE_SIZE (default 4096). Accepting a
+    // larger value would let a peer coerce an oversized dynamic table (a memory-DoS
+    // vector). A size update to exactly the ceiling is allowed; one byte over is not.
+    // Encoding: 0x20 | 5-bit-prefix(31), then the HPACK varint remainder.
+    Collector atCeiling;
+    RUVIA_CHECK(decodeBlock(bytes({0x3f, 0xe1, 0x1f}), atCeiling));     // 31 + 97 + 31*128 = 4096
+    Collector overCeiling;
+    RUVIA_CHECK(!decodeBlock(bytes({0x3f, 0xe2, 0x1f}), overCeiling));  // 4097 > 4096 -> rejected
+}
+
 RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
     using ruvia::detail::HpackError;
     // The dynamic table persists across decode() calls, so use one decoder.
