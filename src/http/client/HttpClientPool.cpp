@@ -28,6 +28,8 @@
 namespace ruvia::detail {
 namespace {
 
+inline constexpr std::size_t kMaxHttpClientInterimResponses = 8;
+
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
     return httpAsciiEqualsIgnoreCase(name, "Host") ||
         httpAsciiEqualsIgnoreCase(name, "Connection") ||
@@ -641,6 +643,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     readBuf.clear();
     readBuf.reserve(4096);
 
+    std::size_t interimResponses = 0;
     for (;;) {
         auto headerEnd = readBuf.find("\r\n\r\n");
         while (headerEnd == std::pmr::string::npos) {
@@ -678,6 +681,10 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
             requestResource);
         const auto status = response.status();
         if (status >= 100 && status < 200 && status != 101) {
+            if (++interimResponses > kMaxHttpClientInterimResponses) {
+                closeConnection(conn);
+                throw std::runtime_error("http client: too many interim responses");
+            }
             readBuf.erase(0, headerEnd + 4);
             FetchResponseAccess::setStatus(response, 0);
             FetchResponseAccess::headers(response).clear();
