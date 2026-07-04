@@ -36,15 +36,61 @@ namespace ruvia::detail {
 }
 
 // Fields that must never appear in a trailer section because they govern message
-// framing, connection management, or routing (RFC 9110 §6.5.1, RFC 9113 §8.1).
+// framing, routing, authentication, response controls, or content format
+// (RFC 9110 §6.5.1, RFC 9113 §8.1).
 [[nodiscard]] inline bool isForbiddenResponseTrailerName(std::string_view name) noexcept {
-    return httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
-        httpAsciiEqualsIgnoreCase(name, "Content-Length") ||
-        httpAsciiEqualsIgnoreCase(name, "Host") ||
-        httpAsciiEqualsIgnoreCase(name, "TE") ||
-        httpAsciiEqualsIgnoreCase(name, "Connection") ||
-        httpAsciiEqualsIgnoreCase(name, "Trailer") ||
-        httpAsciiEqualsIgnoreCase(name, "Upgrade");
+    switch (classifyRequestHeader(name)) {
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentEncoding:
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kRange:
+        case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kAuthorization:
+            return true;
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kUserAgent:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
+            break;
+    }
+
+    switch (name.size()) {
+        case 2:
+            return httpAsciiEqualsIgnoreCase(name, "TE");
+        case 7:
+            return httpAsciiEqualsIgnoreCase(name, "Trailer");
+        case 10:
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
+        case 12:
+            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
+        case 13:
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
+                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Range");
+        case 18:
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+        case 19:
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
+        default:
+            return false;
+    }
 }
 
 // True if (name, value) is an acceptable response trailer field. Shared by the

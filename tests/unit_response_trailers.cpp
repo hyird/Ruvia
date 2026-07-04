@@ -37,7 +37,7 @@ RUVIA_TEST(response_trailer_value_rejects_splitting_bytes) {
 }
 
 RUVIA_TEST(response_trailer_forbidden_names) {
-    // Framing / connection / routing fields are forbidden in a trailer section.
+    // Framing / connection / routing / content semantics are header-only.
     RUVIA_CHECK(isForbiddenResponseTrailerName("Transfer-Encoding"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Content-Length"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Host"));
@@ -45,9 +45,16 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Connection"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Trailer"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Upgrade"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Content-Type"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Content-Encoding"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Content-Range"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Set-Cookie"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Cache-Control"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Proxy-Authenticate"));
     // The check is case-insensitive.
     RUVIA_CHECK(isForbiddenResponseTrailerName("transfer-encoding"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("content-length"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("content-type"));
     // An ordinary field is allowed.
     RUVIA_CHECK(!isForbiddenResponseTrailerName("X-Trace-Id"));
 }
@@ -60,6 +67,8 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     // Forbidden name.
     RUVIA_CHECK(!responseTrailerFieldValid("Content-Length", "5"));
     RUVIA_CHECK(!responseTrailerFieldValid("transfer-encoding", "chunked"));
+    RUVIA_CHECK(!responseTrailerFieldValid("Content-Type", "text/plain"));
+    RUVIA_CHECK(!responseTrailerFieldValid("Set-Cookie", "a=b"));
     // Invalid value.
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", std::string_view("a\r\nb", 4)));
 }
