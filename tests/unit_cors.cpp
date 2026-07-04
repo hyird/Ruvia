@@ -1,10 +1,15 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <memory_resource>
 #include <stdexcept>
 #include <string_view>
 
+#include "http/HttpCors.h"
 #include "http/HttpCorsConfigValidation.h"
+#include "http/HttpParserInternal.h"
+#include "ruvia/app/App.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace {
 
@@ -78,4 +83,89 @@ RUVIA_TEST(cors_negative_max_age_rejected) {
     RUVIA_CHECK(corsFieldsThrow(true, origin, "", "", std::chrono::seconds(-1), false));
     RUVIA_CHECK(!corsFieldsThrow(true, origin, "", "", std::chrono::seconds(0), false));
     RUVIA_CHECK(!corsFieldsThrow(true, origin, "", "", std::chrono::seconds(3600), false));
+}
+
+namespace {
+
+using ruvia::HttpResponse;
+using ruvia::HttpServerOptions;
+using ruvia::detail::HttpServerParser;
+using ruvia::detail::applyCorsHeaders;
+
+HttpServerOptions::Cors corsOptions(bool enabled, std::string_view allowOrigin, bool credentials) {
+    HttpServerOptions::Cors cors;
+    cors.enabled = enabled;
+    cors.allowOrigin.assign(allowOrigin.data(), allowOrigin.size());
+    cors.allowCredentials = credentials;
+    return cors;
+}
+
+}  // namespace
+
+RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+    applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", false));
+
+    // The configured origin is emitted verbatim -- the request Origin is never reflected.
+    RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin"),
+                   std::string_view("https://app.example"));
+    // A specific (non-wildcard) origin varies the response by Origin.
+    RUVIA_CHECK(response.header("Vary").find("Origin") != std::string_view::npos);
+    RUVIA_CHECK(response.header("Access-Control-Allow-Credentials").empty());
+}
+
+RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://any.example\r\n\r\n");
+    HttpResponse response(std::pmr::new_delete_resource());
+    applyCorsHeaders(result.request, response, corsOptions(true, "*", false));
+
+    RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Origin"), std::string_view("*"));
+    RUVIA_CHECK(response.header("Vary").find("Origin") == std::string_view::npos);
+}
+
+RUVIA_TEST(cors_runtime_credentials_require_specific_origin) {
+    // Specific origin + credentials -> Access-Control-Allow-Credentials: true.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse(
+            "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", true));
+        RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Credentials"), std::string_view("true"));
+    }
+    // Defense in depth: even if a wildcard+credentials config slipped past validation,
+    // the runtime must never emit credentials alongside a wildcard origin.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse(
+            "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        applyCorsHeaders(result.request, response, corsOptions(true, "*", true));
+        RUVIA_CHECK(response.header("Access-Control-Allow-Credentials").empty());
+    }
+}
+
+RUVIA_TEST(cors_runtime_skips_non_cors_and_disabled) {
+    // No Origin header -> not a CORS request -> no CORS headers emitted.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", false));
+        RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
+    }
+    // Disabled CORS -> no headers even when an Origin is present.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse(
+            "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        applyCorsHeaders(result.request, response, corsOptions(false, "https://app.example", false));
+        RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
+    }
 }
