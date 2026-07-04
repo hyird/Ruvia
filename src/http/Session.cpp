@@ -14,6 +14,10 @@
 namespace ruvia {
 
 Task<void> SessionMiddleware::handle(Context& c, Next& next) {
+    // Whether the client's `sid` was recognized -- i.e. an actual session blob
+    // was found in the store under it. An id the client presents that is NOT in
+    // the store must never be adopted (see the mint decision below).
+    bool recognized = false;
     const auto cookie = c.req().cookie("sid");
     if (cookie && detail::isValidSessionId(*cookie)) {
         detail::SessionAccess::setId(c, *cookie);
@@ -22,6 +26,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         key.append(cookie->data(), cookie->size());
         if (auto stored = co_await c.redis("default").get(key)) {
             detail::SessionAccess::load(c, *stored);
+            recognized = true;
         }
     }
 
@@ -31,7 +36,13 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         auto& response = c.res();
         std::array<char, 64> idBuffer;
         auto id = detail::SessionAccess::id(c);
-        if (id.empty()) {
+        // Mint a fresh id for a brand-new session AND whenever the client
+        // presented an id that was not recognized (not found in the store).
+        // Adopting an unrecognized client id would enable session fixation: an
+        // attacker plants a known `sid`, then the victim authenticates and their
+        // session is stored under the attacker-known id. A session that simply
+        // expired out of the store is likewise renewed under a fresh id here.
+        if (id.empty() || !recognized) {
             detail::SessionAccess::setId(c, detail::generateCsrfToken(idBuffer));
             id = detail::SessionAccess::id(c);
             // The session id is only known after the handler ran, so the
