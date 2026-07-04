@@ -208,3 +208,35 @@ RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
     RUVIA_CHECK_EQ(response.header("Access-Control-Allow-Headers"),
                    std::string_view("Authorization, X-Configured"));
 }
+
+RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
+    // A simple (non-preflight) response advertises which response headers
+    // cross-origin script may read, via Access-Control-Expose-Headers. This
+    // runtime branch had no coverage -- only the config validation of
+    // exposeHeaders did -- so a regression dropping it would silently break
+    // cross-origin header access.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse(
+            "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        auto cors = corsOptions(true, "https://app.example", false);
+        cors.exposeHeaders.assign("X-Total-Count, X-Request-Id");
+        applyCorsHeaders(result.request, response, cors);
+        RUVIA_CHECK_EQ(response.header("Access-Control-Expose-Headers"),
+                       std::string_view("X-Total-Count, X-Request-Id"));
+    }
+    // Expose-Headers is meaningless on a preflight response and must NOT be
+    // emitted there: the preflight path returns before the expose-headers branch.
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse(
+            "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+            "Access-Control-Request-Method: POST\r\n\r\n");
+        HttpResponse response(std::pmr::new_delete_resource());
+        auto cors = corsOptions(true, "https://app.example", false);
+        cors.exposeHeaders.assign("X-Total-Count");
+        applyCorsHeaders(result.request, response, cors);
+        RUVIA_CHECK(response.header("Access-Control-Expose-Headers").empty());
+    }
+}
