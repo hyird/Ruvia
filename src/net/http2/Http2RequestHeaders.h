@@ -56,6 +56,11 @@ struct Http2HeaderDecodeContext final {
 [[nodiscard]] inline std::uint32_t http2SingletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
     switch (kind) {
         case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kRange:
             return 1U << static_cast<std::uint32_t>(kind);
         case RequestHeaderKind::kOther:
@@ -70,11 +75,6 @@ struct Http2HeaderDecodeContext final {
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kExpect:
         case RequestHeaderKind::kHost:
-        case RequestHeaderKind::kIfMatch:
-        case RequestHeaderKind::kIfModifiedSince:
-        case RequestHeaderKind::kIfNoneMatch:
-        case RequestHeaderKind::kIfRange:
-        case RequestHeaderKind::kIfUnmodifiedSince:
         case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:

@@ -202,6 +202,13 @@ RUVIA_TEST(h2_headers_duplicate_singleton_regular_headers_rejected) {
     }
 }
 
+RUVIA_TEST(h2_headers_duplicate_conditional_header_rejected) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "if-none-match", R"("old")"));
+    RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "if-none-match", R"("new")"));
+}
+
 RUVIA_TEST(h2_headers_content_length_and_cookie) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
