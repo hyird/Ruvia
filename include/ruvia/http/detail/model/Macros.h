@@ -11,8 +11,7 @@
     class T {                                                               \
     public:                                                                 \
         explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \
-            : body_(::ruvia::RequestObject(                                  \
-                  ::ruvia::RequestObjectKind::kJson, ::std::string_view{"{}"}, resource)) { \
+            : body_(::ruvia::detail::RequestObjectAccess::makeJson(::std::string_view{"{}"}, resource)) { \
             ruviaParsed_ = true;                                             \
         }                                                                   \
         template <typename RuviaResourceOwnerT>                               \
@@ -21,7 +20,6 @@
             }                                                               \
         explicit T(RuviaResourceOwnerT& owner) noexcept                       \
             : T(owner.resource()) {}                                         \
-        explicit T(::ruvia::RequestObject body) noexcept : body_(body) {}     \
         static ::std::optional<T> ruviaParseJsonBody(                        \
             ::std::string_view body,                                        \
             ::std::pmr::memory_resource* resource) {                        \
@@ -38,8 +36,7 @@
             if (!json) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::RequestObject(                                \
-                ::ruvia::RequestObjectKind::kJson, json->view(), resource)};  \
+            T request{::ruvia::detail::RequestObjectAccess::makeJson(json->view(), resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
@@ -52,8 +49,7 @@
             if (!form) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::RequestObject(                                \
-                ::ruvia::RequestObjectKind::kForm, form->view(), resource)};  \
+            T request{::ruvia::detail::RequestObjectAccess::makeForm(form->view(), resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
@@ -62,14 +58,11 @@
         static ::std::optional<T> ruviaParseFormFields(                      \
             const ::ruvia::RequestNameValueList& fields,                    \
             ::std::pmr::memory_resource* resource) {                        \
-            T request{::ruvia::RequestObject(fields, resource)};             \
+            T request{::ruvia::detail::RequestObjectAccess::makeFormFields(fields, resource)}; \
             if (!request.ruviaEnsureParsed()) {                              \
                 return ::std::nullopt;                                      \
             }                                                               \
             return ::std::move(request);                                     \
-        }                                                                   \
-        [[nodiscard]] const ::ruvia::RequestObject& body() const noexcept {   \
-            return body_;                                                    \
         }                                                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
         [[nodiscard]] ::std::optional<::std::string_view> get(              \
@@ -121,6 +114,7 @@
             return size;                                                    \
         }                                                                   \
     private:                                                                \
+        explicit T(::ruvia::RequestObject body) noexcept : body_(body) {}     \
         bool ruviaEnsureParsed() const {                                     \
             if (ruviaParsed_) {                                              \
                 return !ruviaInvalid_;                                       \
