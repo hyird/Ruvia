@@ -678,8 +678,7 @@ Task<std::string_view> Context::requestBody() const {
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
-    const auto coding = detail::requestContentCoding(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentEncoding));
+    const auto coding = detail::requestContentCoding(request_);
     if (coding == detail::HttpContentCoding::kNone || raw.empty()) {
         co_return raw;
     }

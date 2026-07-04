@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "http/HttpRequestInternal.h"
+#include "http/RequestBodyDecoding.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -13,7 +14,9 @@ using ruvia::HttpHeaderView;
 using ruvia::HttpMethod;
 using ruvia::HttpRequest;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::HttpContentCoding;
 using ruvia::detail::RequestKnownHeader;
+using ruvia::detail::requestContentCoding;
 using ruvia::detail::requestBodyBytes;
 using ruvia::detail::requestKnownHeader;
 
@@ -86,6 +89,17 @@ RUVIA_TEST(request_access_known_header_lookup_uses_last_match) {
     RUVIA_CHECK_EQ(request.header("Host"), std::string_view("second.example"));
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kHost),
                    std::string_view("second.example"));
+}
+
+RUVIA_TEST(request_content_coding_rejects_repeated_header_fields) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentEncoding);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "br"}, slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
+
+    RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kContentEncoding), std::string_view("gzip"));
+    RUVIA_CHECK(requestContentCoding(request) == HttpContentCoding::kNone);
 }
 
 RUVIA_TEST(request_access_query_lookup_uses_last_match) {
