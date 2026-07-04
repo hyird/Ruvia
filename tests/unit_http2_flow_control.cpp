@@ -10,11 +10,15 @@
 
 namespace {
 
+using ruvia::detail::Http2ReceiveWindowResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2WindowUpdateResult;
+using ruvia::detail::http2ApplyStreamWindowUpdate;
 using ruvia::detail::http2ApplyWindowUpdate;
 using ruvia::detail::http2AvailableSendWindow;
+using ruvia::detail::http2ConsumeReceiveWindows;
 using ruvia::detail::http2ConsumeSendWindow;
+using ruvia::detail::http2RestoreReceiveWindows;
 using ruvia::detail::http2SendWindowAvailable;
 using ruvia::detail::http2WindowUpdateIncrement;
 
@@ -73,4 +77,51 @@ RUVIA_TEST(flow_consume_send_window_deducts_both) {
     http2ConsumeSendWindow(connectionWindow, stream, 200);
     RUVIA_CHECK_EQ(connectionWindow, 800);
     RUVIA_CHECK_EQ(stream.sendWindow(), beforeStream - 200);
+}
+
+RUVIA_TEST(flow_consume_receive_window_enforces_connection_then_stream) {
+    auto stream = makeStream();
+    std::int32_t connection = 1000;
+    // More than the connection window is rejected without mutating it.
+    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 2000) ==
+                Http2ReceiveWindowResult::kConnectionExceeded);
+    RUVIA_CHECK_EQ(connection, 1000);
+    // A normal receive deducts the connection window.
+    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 300) ==
+                Http2ReceiveWindowResult::kOk);
+    RUVIA_CHECK_EQ(connection, 700);
+
+    // Within the connection window but beyond the stream's 1 MiB receive window
+    // is a stream error.
+    auto other = makeStream();
+    std::int32_t bigConnection = 2'000'000;
+    RUVIA_CHECK(http2ConsumeReceiveWindows(bigConnection, other, 1'100'000) ==
+                Http2ReceiveWindowResult::kStreamExceeded);
+    RUVIA_CHECK_EQ(bigConnection, 2'000'000);  // unchanged when the stream is exceeded
+}
+
+RUVIA_TEST(flow_restore_receive_window_reopens_capacity) {
+    auto stream = makeStream();
+    std::int32_t connection = 500;
+    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 200) ==
+                Http2ReceiveWindowResult::kOk);
+    RUVIA_CHECK_EQ(connection, 300);
+    http2RestoreReceiveWindows(connection, stream, 200);
+    RUVIA_CHECK_EQ(connection, 500);
+    // The stream window was restored too, so it can receive again.
+    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 200) ==
+                Http2ReceiveWindowResult::kOk);
+}
+
+RUVIA_TEST(flow_apply_stream_window_update) {
+    auto stream = makeStream();
+    RUVIA_CHECK(http2ApplyStreamWindowUpdate(stream, 0) == Http2WindowUpdateResult::kZeroIncrement);
+    const auto before = stream.sendWindow();
+    RUVIA_CHECK(http2ApplyStreamWindowUpdate(stream, 100) == Http2WindowUpdateResult::kOk);
+    RUVIA_CHECK_EQ(stream.sendWindow(), before + 100);
+
+    // An increment that would push the send window past 2^31-1 overflows.
+    auto overflowing = makeStream();
+    RUVIA_CHECK(http2ApplyStreamWindowUpdate(overflowing, static_cast<std::uint32_t>(kInt32Max)) ==
+                Http2WindowUpdateResult::kOverflow);
 }
