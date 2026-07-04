@@ -201,7 +201,7 @@ public:
         auto* const resource = resource_;
         std::optional<T> result;
         bool parseFailed = false;
-        detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
+        const bool valid = detail::visitRawFormFields(body_, [&](std::string_view name, std::string_view valueView) {
             if (!detail::formFieldNameEquals(name, field)) {
                 return true;
             }
@@ -216,10 +216,10 @@ public:
                 return false;
             }
             result.emplace(std::move(value));
-            return false;
+            return true;
         });
 
-        if (parseFailed) {
+        if (!valid || parseFailed) {
             return std::nullopt;
         }
         return result;
