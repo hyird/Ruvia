@@ -71,6 +71,32 @@ RUVIA_TEST(ready_queue_remove) {
     RUVIA_CHECK(!queue.hasReady());
 }
 
+RUVIA_TEST(ready_queue_remove_after_pop_discards_consumed_prefix) {
+    // After some pops the queue has a consumed prefix (offset_ > 0). remove() compacts
+    // the ACTIVE range to the front and drops that prefix -- an already-popped stream
+    // must never resurface, or it would be dispatched twice.
+    Http2ReadyQueue queue;
+    RUVIA_CHECK(queue.push(1));
+    RUVIA_CHECK(queue.push(2));
+    RUVIA_CHECK(queue.push(3));
+    RUVIA_CHECK(queue.push(4));
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{1});  // consumed
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{2});  // consumed; offset_ now past 1 and 2
+
+    queue.remove(3);  // remove a live entry while a consumed prefix exists
+
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{4});  // only 4 survives; 1 and 2 do not return
+    RUVIA_CHECK(!queue.hasReady());
+
+    // Removing an id that is not present leaves the surviving order intact.
+    RUVIA_CHECK(queue.push(5));
+    RUVIA_CHECK(queue.push(6));
+    queue.remove(99);  // absent
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{5});
+    RUVIA_CHECK_EQ(queue.pop(), std::uint32_t{6});
+    RUVIA_CHECK(!queue.hasReady());
+}
+
 RUVIA_TEST(ready_queue_preserves_order_across_compaction) {
     Http2ReadyQueue queue;
     for (std::uint32_t id = 1; id <= 70; ++id) {
