@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/Error.h"
 #include "ruvia/http/Validation.h"
 
 namespace {
@@ -59,6 +60,40 @@ RUVIA_TEST(validator_range_and_one_of) {
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
     RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
     RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("one_of"));
+}
+
+RUVIA_TEST(validation_error_serializes_issues_to_json) {
+    Validator v;
+    std::optional<std::string> absent;
+    v.required(absent, "email", "email is required");
+    std::optional<std::string> shortName = std::string("a");
+    v.minLength(shortName, "name", 3, "too short");
+
+    try {
+        v.throwIfInvalid();
+        RUVIA_CHECK(false);  // must have thrown
+    } catch (const ruvia::ValidationError& error) {
+        RUVIA_CHECK_EQ(
+            error.info().detailsJson(),
+            std::string_view(
+                R"([{"field":"email","code":"required","message":"email is required"},)"
+                R"({"field":"name","code":"min_length","message":"too short"}])"));
+    }
+}
+
+RUVIA_TEST(validation_error_json_escapes_special_characters) {
+    Validator v;
+    // A field/message carrying a quote and backslash must be JSON-escaped so the
+    // error body stays well-formed and cannot be broken out of.
+    v.add("f\"x", "code", "a\"b\\c");
+    try {
+        v.throwIfInvalid();
+        RUVIA_CHECK(false);
+    } catch (const ruvia::ValidationError& error) {
+        const auto json = error.info().detailsJson();
+        RUVIA_CHECK(json.find(R"("field":"f\"x")") != std::string_view::npos);
+        RUVIA_CHECK(json.find(R"("message":"a\"b\\c")") != std::string_view::npos);
+    }
 }
 
 RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
