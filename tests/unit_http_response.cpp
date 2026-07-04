@@ -164,3 +164,29 @@ RUVIA_TEST(response_header_append_rejects_single_value_headers) {
         response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
     }));
 }
+
+RUVIA_TEST(response_header_rejects_name_and_value_injection) {
+    auto response = makeResponse();
+    // The developer-facing header setter is the header-injection chokepoint: a CR or
+    // LF in the value (the classic response-splitting vector) is rejected rather than
+    // written into the response head.
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("X-Foo", std::string_view("a\r\nInjected: x", 14));
+    }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\nb", 3)); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\rb", 3)); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("X-Foo", std::string_view("a\0b", 3)); }));  // NUL
+
+    // The name is validated too: a CR/LF or a non-token byte (space) is rejected.
+    RUVIA_CHECK(throwsInvalid([&] { response.header(std::string_view("Bad\r\nName", 9), "v"); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.header("Bad Name", "v"); }));
+
+    // The append path funnels through the same validation, not just replace.
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("X-Foo", std::string_view("a\r\nb", 4), HttpResponse::HeaderOptions{true});
+    }));
+
+    // A clean header is accepted.
+    RUVIA_CHECK(!throwsInvalid([&] { response.header("X-Clean", "ok"); }));
+    RUVIA_CHECK_EQ(response.header("X-Clean"), std::string_view("ok"));
+}
