@@ -166,12 +166,16 @@ struct RequestNameValueViewAccess final {
 }  // namespace detail
 
 class RequestNameValueList final {
+    struct Token final {
+        explicit Token() = default;
+    };
+
 public:
     using value_type = RequestNameValueView;
     using iterator = std::pmr::vector<RequestNameValueView>::iterator;
     using const_iterator = std::pmr::vector<RequestNameValueView>::const_iterator;
 
-    explicit RequestNameValueList(std::pmr::memory_resource* resource = nullptr)
+    explicit RequestNameValueList(Token, std::pmr::memory_resource* resource = nullptr)
         : items_(detail::pmrResourceOrDefault(resource)) {}
 
     RequestNameValueList(const RequestNameValueList&) = delete;
@@ -254,8 +258,12 @@ private:
 };
 
 class RequestValueGroup final {
+    struct Token final {
+        explicit Token() = default;
+    };
+
 public:
-    RequestValueGroup(std::pmr::memory_resource* resource, std::string_view name)
+    RequestValueGroup(Token, std::pmr::memory_resource* resource, std::string_view name)
         : name_(name),
           values_(detail::pmrResourceOrDefault(resource)) {}
 
@@ -292,12 +300,16 @@ private:
 };
 
 class RequestValueGroupList final {
+    struct Token final {
+        explicit Token() = default;
+    };
+
 public:
     using value_type = RequestValueGroup;
     using iterator = std::pmr::vector<RequestValueGroup>::iterator;
     using const_iterator = std::pmr::vector<RequestValueGroup>::const_iterator;
 
-    explicit RequestValueGroupList(std::pmr::memory_resource* resource = nullptr)
+    explicit RequestValueGroupList(Token, std::pmr::memory_resource* resource = nullptr)
         : groups_(detail::pmrResourceOrDefault(resource)) {}
 
     RequestValueGroupList(const RequestValueGroupList&) = delete;
