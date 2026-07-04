@@ -1321,7 +1321,7 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
     auto* source = constructPmrObject<Http2StreamSource>(
         requestResource, this, id, stream->response.status(),
         std::move(FetchResponseAccess::headers(stream->response)), requestResource);
-    co_return FetchResponseStream(
+    co_return FetchResponseStreamAccess::make(
         std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
 }
 
