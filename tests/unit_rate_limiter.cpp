@@ -74,6 +74,20 @@ RUVIA_TEST(rate_limiter_route_scope_independent_of_global) {
     RUVIA_CHECK(!limiter.allowRoute(routeScope, "ip", routeRule).allowed);
 }
 
+RUVIA_TEST(rate_limiter_route_enforced_when_app_rule_disabled) {
+    // A disabled app rule (maxRequests == 0) does NOT disable route rate limiting:
+    // route rules share the limiter's slot table, so the slots must exist and be
+    // enforced even though allowGlobal always allows. This is why construction cannot
+    // skip slot allocation based on the app rule alone.
+    RateLimiter limiter(ruleWith(0));
+    RUVIA_CHECK(!limiter.enabled());
+    RUVIA_CHECK(limiter.allowGlobal("ip").allowed);   // global off -> always allowed
+    RUVIA_CHECK(limiter.allowGlobal("ip").allowed);
+    const RateLimitRule routeRule = ruleWith(1);
+    RUVIA_CHECK(limiter.allowRoute(0x1234, "ip", routeRule).allowed);   // route budget: 1
+    RUVIA_CHECK(!limiter.allowRoute(0x1234, "ip", routeRule).allowed);  // route still enforced
+}
+
 RUVIA_TEST(rate_limiter_oversized_key_follows_fail_closed) {
     const std::string oversized(100, 'a');  // exceeds the 64-byte key cap
     RateLimiter closed(ruleWith(1, /*failClosed=*/true));
