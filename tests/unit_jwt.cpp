@@ -175,6 +175,27 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
     RUVIA_CHECK_EQ(jwtVerify(recentlyExpired, lenient).subject(), std::string_view("user-1"));
 }
 
+RUVIA_TEST(jwt_exp_nbf_boundaries_follow_rfc7519) {
+    // The exact exp/nbf boundary can't be pinned against the live clock inside
+    // jwtVerify, so exercise the pure predicates it delegates to. RFC 7519 §4.1.4:
+    // a token is rejected at now == exp (no leeway); §4.1.5: it is valid at
+    // now == nbf. leeway widens each window (later for exp, earlier for nbf).
+    using std::chrono::seconds;
+    const auto t = std::chrono::system_clock::from_time_t(1'000'000'000);
+
+    RUVIA_CHECK(ruvia::detail::jwtTokenExpired(t, t, seconds{0}));                 // now == exp -> expired
+    RUVIA_CHECK(ruvia::detail::jwtTokenExpired(t + seconds{1}, t, seconds{0}));    // after exp
+    RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(t - seconds{1}, t, seconds{0}));   // before exp
+    RUVIA_CHECK(!ruvia::detail::jwtTokenExpired(t + seconds{5}, t, seconds{10}));  // inside leeway grace
+    RUVIA_CHECK(ruvia::detail::jwtTokenExpired(t + seconds{10}, t, seconds{10}));  // now == exp+leeway -> expired
+
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t, t, seconds{0}));            // now == nbf -> valid
+    RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(t - seconds{1}, t, seconds{0}));   // before nbf
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t + seconds{1}, t, seconds{0}));  // after nbf
+    RUVIA_CHECK(!ruvia::detail::jwtTokenNotYetValid(t - seconds{5}, t, seconds{10}));  // inside leeway grace
+    RUVIA_CHECK(ruvia::detail::jwtTokenNotYetValid(t - seconds{11}, t, seconds{10}));  // before nbf-leeway
+}
+
 RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
     // jwtDecodeUnverified reads the payload WITHOUT checking the signature -- it
     // provides no authentication. Pin that contract: it returns the claims even

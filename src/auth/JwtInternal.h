@@ -39,6 +39,27 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
 [[nodiscard]] std::int64_t jwtEpochSeconds(std::chrono::system_clock::time_point value);
 [[nodiscard]] std::chrono::system_clock::time_point jwtFromEpochSeconds(std::int64_t value);
 
+// RFC 7519 §4.1.4: a token is valid only while the current time is *before*
+// "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
+// accepted window past exp. Split out as a pure predicate so the exact boundary
+// is deterministically testable without a live-clock dependency.
+[[nodiscard]] inline bool jwtTokenExpired(
+    std::chrono::system_clock::time_point now,
+    std::chrono::system_clock::time_point expiresAt,
+    std::chrono::seconds leeway) noexcept {
+    return now >= expiresAt + leeway;
+}
+
+// RFC 7519 §4.1.5: a token is valid only when the current time is *after or
+// equal to* "nbf"; leeway widens the accepted window earlier. Rejected while
+// now (plus leeway) is still strictly before nbf.
+[[nodiscard]] inline bool jwtTokenNotYetValid(
+    std::chrono::system_clock::time_point now,
+    std::chrono::system_clock::time_point notBefore,
+    std::chrono::seconds leeway) noexcept {
+    return now + leeway < notBefore;
+}
+
 struct JwtTokenParts final {
     std::string_view header;
     std::string_view payload;

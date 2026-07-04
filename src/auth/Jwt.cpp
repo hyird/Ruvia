@@ -94,10 +94,10 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
     if (options.requireExpiration && !payload.expiresAt()) {
         throw std::runtime_error("JWT token is missing exp claim");
     }
-    if (payload.expiresAt() && now > *payload.expiresAt() + options.leeway) {
+    if (payload.expiresAt() && detail::jwtTokenExpired(now, *payload.expiresAt(), options.leeway)) {
         throw std::runtime_error("JWT token is expired");
     }
-    if (payload.notBefore() && now + options.leeway < *payload.notBefore()) {
+    if (payload.notBefore() && detail::jwtTokenNotYetValid(now, *payload.notBefore(), options.leeway)) {
         throw std::runtime_error("JWT token is not yet valid");
     }
     if (!options.issuer.empty() && payload.issuer() != options.issuer) {
