@@ -55,6 +55,7 @@ add_executable(ruvia_unit_tests
     unit_response_trailers.cpp
     unit_http2_frame_payload.cpp
     unit_static_response_headers.cpp
+    unit_streaming.cpp
     unit_vary_headers.cpp
     unit_content_range.cpp
     unit_static_path_normalization.cpp

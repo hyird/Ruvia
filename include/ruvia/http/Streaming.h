@@ -51,6 +51,7 @@ public:
     // Writes chunk followed by "\n" as a single chunk.
     Task<void> writeln(std::string_view chunk) {
         auto& buffer = scratch_(target_);
+        buffer.clear();
         buffer.reserve(chunk.size() + 1);
         if (!chunk.empty()) {
             buffer.append(chunk.data(), chunk.size());
