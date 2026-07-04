@@ -81,6 +81,22 @@ RUVIA_TEST(chunk_decoder_accumulated_body_over_limit_rejected) {
     RUVIA_CHECK(sizeLineThrows(decoder, "5"));
 }
 
+RUVIA_TEST(chunk_decoder_rejects_decoded_size_integer_overflow) {
+    // With no body-size limit (maxBodyBytes_ == 0) the per-chunk and cumulative
+    // limit guards are both inert, so the ONLY defense against decodedBytes_ +
+    // chunkSize wrapping past SIZE_MAX -- which would silently reset the running
+    // total and defeat size accounting -- is the overflow guard. parseSizeLine
+    // accepts a chunk size right up to SIZE_MAX, so a near-max chunk followed by
+    // a small one must trip 413 rather than wrap. (32-bit size_t cannot express a
+    // 64-bit near-max literal, which parseSizeLine rejects earlier, so guard it.)
+    if constexpr (sizeof(std::size_t) >= 8) {
+        HttpChunkDecoder decoder(0);  // unlimited
+        std::size_t size = 0;
+        RUVIA_CHECK(decoder.parseSizeLine("fffffffffffffff0", size));  // SIZE_MAX - 15
+        RUVIA_CHECK(sizeLineThrows(decoder, "20"));  // +0x20 overflows the total -> 413
+    }
+}
+
 RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
     // With a tiny limit, the accumulated size-line + CRLF framing overhead alone
     // must eventually trip the 413 guard even for zero-length chunks.
