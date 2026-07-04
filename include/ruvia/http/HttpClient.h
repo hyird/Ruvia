@@ -88,7 +88,12 @@ public:
           nextChunk_(nextChunk) {}
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept { return nextChunk_ != nullptr; }
-    [[nodiscard]] Task<std::string_view> nextChunk() const { return nextChunk_(target_); }
+    [[nodiscard]] Task<std::string_view> nextChunk() const {
+        if (nextChunk_ == nullptr) {
+            co_return std::string_view{};
+        }
+        co_return co_await nextChunk_(target_);
+    }
 
 private:
     void* target_{nullptr};

@@ -93,6 +93,25 @@ struct TestBodyProducer final {
     }
 };
 
+RUVIA_TEST(request_body_stream_empty_producer_yields_eof) {
+    asio::io_context io;
+    bool completed = false;
+    std::string_view chunk = "not empty";
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            ruvia::RequestBodyStream stream;
+            chunk = co_await ruvia::detail::taskAsAwaitable(stream.nextChunk());
+            completed = true;
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(chunk.empty());
+}
+
 enum class WriteMode {
     kWhole,        // one write of the entire response
     kHeadThenBody, // head, then the whole body (forces at least one socket read of the body)
