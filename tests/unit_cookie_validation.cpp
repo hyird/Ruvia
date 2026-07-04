@@ -131,3 +131,45 @@ RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
     partitioned.partitioned = true;  // partitioned requires Secure
     RUVIA_CHECK(rejectsCookie("sid", "value", partitioned));
 }
+
+RUVIA_TEST(cookie_secure_prefix_requires_secure) {
+    ruvia::CookieOptions secured;
+    secured.prefix = ruvia::CookiePrefix::kSecure;
+    secured.secure = true;
+    RUVIA_CHECK(!rejects(secured));
+
+    ruvia::CookieOptions insecure;
+    insecure.prefix = ruvia::CookiePrefix::kSecure;
+    insecure.secure = false;
+    RUVIA_CHECK(rejects(insecure));  // __Secure- requires Secure
+}
+
+RUVIA_TEST(cookie_host_prefix_requires_secure_root_path_no_domain) {
+    // __Host- is the strictest prefix (RFC 6265bis 4.1.3.2).
+    ruvia::CookieOptions valid;
+    valid.prefix = ruvia::CookiePrefix::kHost;
+    valid.secure = true;  // path defaults to "/", domain is empty
+    RUVIA_CHECK(!rejects(valid));
+
+    ruvia::CookieOptions notSecure = valid;
+    notSecure.secure = false;
+    RUVIA_CHECK(rejects(notSecure));
+
+    ruvia::CookieOptions subPath = valid;
+    subPath.path = "/sub";
+    RUVIA_CHECK(rejects(subPath));  // Path must be exactly "/"
+
+    ruvia::CookieOptions withDomain = valid;
+    withDomain.domain = "example.com";
+    RUVIA_CHECK(rejects(withDomain));  // Domain must be absent
+}
+
+RUVIA_TEST(cookie_max_age_capped_at_400_days) {
+    ruvia::CookieOptions atCap;
+    atCap.maxAge = 34560000;  // exactly 400 days is allowed
+    RUVIA_CHECK(!rejects(atCap));
+
+    ruvia::CookieOptions overCap;
+    overCap.maxAge = 34560001;
+    RUVIA_CHECK(rejects(overCap));
+}
