@@ -146,6 +146,29 @@ RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
 }
 
+RUVIA_TEST(http1_parse_connect_requires_authority_form) {
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
+        RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
+        RUVIA_CHECK(result.request.method() == HttpMethod::kConnect);
+        RUVIA_CHECK_EQ(result.request.target(), std::string_view("example.com:443"));
+        RUVIA_CHECK_EQ(result.request.path(), std::string_view("example.com:443"));
+    }
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse("CONNECT / HTTP/1.1\r\nHost: example.com\r\n\r\n");
+        RUVIA_CHECK(result.status == HttpParseStatus::kError);
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+    }
+    {
+        HttpServerParser parser;
+        const auto result = parser.parse("CONNECT http://example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n");
+        RUVIA_CHECK(result.status == HttpParseStatus::kError);
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+    }
+}
+
 RUVIA_TEST(http1_parse_http10_without_host_allowed) {
     // HTTP/1.0 does not require a Host header.
     HttpServerParser parser;

@@ -102,6 +102,24 @@ RUVIA_TEST(parse_request_target_absolute_form) {
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "http://exa@mple.com/x", out));
 }
 
+RUVIA_TEST(parse_request_target_connect_authority_form) {
+    RequestTargetView out;
+
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kConnect, "example.com:443", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:443"));
+    RUVIA_CHECK_EQ(out.path, std::string_view("example.com:443"));
+    RUVIA_CHECK_EQ(out.query, std::string_view(""));
+
+    RUVIA_CHECK(parseRequestTarget(HttpMethod::kConnect, "[::1]:8443", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("[::1]:8443"));
+
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "/", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "/tunnel", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "example.com", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "http://example.com:443", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "*", out));
+}
+
 RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RequestTargetView out;
     // Asterisk-form is valid only for OPTIONS.

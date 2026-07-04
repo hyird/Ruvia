@@ -162,6 +162,19 @@ struct AuthorityParts {
     return !output.path.empty() && output.path.front() == '/';
 }
 
+[[nodiscard]] bool isValidConnectAuthorityForm(std::string_view target) noexcept {
+    if (!isValidHostHeader(target)) {
+        return false;
+    }
+    if (target.front() == '[') {
+        const auto close = target.find(']');
+        return close != std::string_view::npos &&
+            close + 2 < target.size() &&
+            target[close + 1] == ':';
+    }
+    return target.find(':') != std::string_view::npos;
+}
+
 }  // namespace
 
 bool isValidHostHeader(std::string_view value) noexcept {
@@ -236,6 +249,16 @@ bool parseRequestTarget(
         output.path = "*";
         output.query = {};
         output.authority = {};
+        output.defaultPort = 0;
+        return true;
+    }
+    if (method == HttpMethod::kConnect) {
+        if (!isValidConnectAuthorityForm(target)) {
+            return false;
+        }
+        output.path = target;
+        output.query = {};
+        output.authority = target;
         output.defaultPort = 0;
         return true;
     }
