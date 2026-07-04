@@ -68,3 +68,29 @@ RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
     // The classification is case-insensitive, so a lowercase spelling is caught too.
     RUVIA_CHECK(validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanStatus::kInvalidTrailer);
 }
+
+RUVIA_TEST(chunk_trailers_reject_remaining_forbidden_fields) {
+    // The forbidden-trailer set has two tiers: the classified-header path and a
+    // name-length switch for the less-common names. The tests above cover only a
+    // few of each; the rest were unpinned even though the source comment warns
+    // that "dropping one reopens trailer smuggling". Cover them all here.
+    //
+    // Upgrade is a NOTABLE case: the HTTP/1 list forbids it as a trailer, but the
+    // HTTP/2 forbidden-trailer set (http2IsForbiddenTrailerHeader) omits it,
+    // because HTTP/2 already bans Upgrade as a connection-specific regular header
+    // upstream. Over HTTP/1 there is no such upstream ban, so the trailer check is
+    // the guard that stops a smuggled protocol-switch request modifier -- pin it.
+    RUVIA_CHECK(validateHttpChunkTrailers("Upgrade: websocket\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+
+    // The name-length switch tier (each an RFC 7230 §4.1.2 / 7231 control or
+    // routing/auth field that must not be delivered late in a trailer).
+    RUVIA_CHECK(validateHttpChunkTrailers("Keep-Alive: timeout=5\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Max-Forwards: 10\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Cache-Control: no-cache\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Accept-Ranges: bytes\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Content-Range: bytes 0-1/2\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authenticate: Basic\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Proxy-Authorization: Basic eA==\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    // A genuinely trailer-safe field is still accepted (negative control).
+    RUVIA_CHECK(validateHttpChunkTrailers("X-Checksum: abc\r\n") == HttpChunkScanStatus::kComplete);
+}
