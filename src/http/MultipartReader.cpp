@@ -178,8 +178,23 @@ MultipartStreamPart MultipartReader::makePart(std::string_view body, bool partEn
 Task<std::optional<MultipartStreamPart>> MultipartReader::readBodyChunk() {
     for (;;) {
         const auto buffer = bufferView();
-        const auto boundary = buffer.find(boundaryPrefix_);
-        if (boundary != std::string_view::npos) {
+        // Match the buffered parser's boundary detection (httpMultipartBoundaryAt via
+        // this helper): a "\r\n--<boundary>" run is a real delimiter only when it ends
+        // in CRLF or "--". A raw find() would treat the boundary token appearing inside
+        // a part body (e.g. "...\r\n--<boundary>x...") as a delimiter, truncating the
+        // part and then rejecting the stream, diverging from the buffered path. Sole
+        // owner of boundary detection now shared by both parsers. boundaryPrefix_ is
+        // "\r\n--<boundary>", so substr(4) is the bare boundary token.
+        const auto boundary = detail::httpFindMultipartBoundaryPrefix(
+            buffer, std::string_view(boundaryPrefix_).substr(4));
+        // httpFindMultipartBoundaryPrefix returns an EOF-possible match when the
+        // terminator (CRLF / "--") is not buffered yet. Commit only once both
+        // terminator bytes are present, so a boundary token split across reads -- or a
+        // boundary prefix appearing inside a part body -- is not mistaken for a
+        // delimiter before its terminator can be confirmed (or rejected as content).
+        const bool boundaryConfirmed = boundary != std::string_view::npos &&
+            boundary + boundaryPrefix_.size() + 2 <= buffer.size();
+        if (boundaryConfirmed) {
             if (boundary > 0 || partBegin_) {
                 auto part = makePart(buffer.substr(0, boundary), true);
                 pendingEraseBytes_ = boundary;
