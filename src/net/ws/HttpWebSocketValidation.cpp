@@ -172,8 +172,11 @@ std::size_t encodeWebSocketClosePayload(
 }
 
 void validateWebSocketClosePayload(std::string_view payload) {
+    // Incoming Close frame (RFC 6455 §5.5.1). A malformed frame is a protocol
+    // error (close 1002); an otherwise-valid frame whose reason is not valid
+    // UTF-8 is invalid payload data (close 1007, §8.1).
     if (payload.size() == 1) {
-        throw std::invalid_argument("invalid websocket close payload");
+        throw WebSocketProtocolError(1002, "invalid websocket close payload");
     }
     if (payload.size() < 2) {
         return;
@@ -181,8 +184,11 @@ void validateWebSocketClosePayload(std::string_view payload) {
     const auto code = static_cast<std::uint16_t>(
         (static_cast<unsigned char>(payload[0]) << 8) |
         static_cast<unsigned char>(payload[1]));
-    if (!isValidWebSocketCloseCode(code) || !isValidUtf8(payload.substr(2))) {
-        throw std::invalid_argument("invalid websocket close payload");
+    if (!isValidWebSocketCloseCode(code)) {
+        throw WebSocketProtocolError(1002, "invalid websocket close code");
+    }
+    if (!isValidUtf8(payload.substr(2))) {
+        throw WebSocketProtocolError(1007, "invalid websocket close reason");
     }
 }
 

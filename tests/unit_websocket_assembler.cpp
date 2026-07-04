@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -16,6 +17,7 @@ using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketInboundAction;
 using ruvia::detail::WebSocketInboundAssembler;
 using ruvia::detail::WebSocketMessageAccess;
+using ruvia::detail::WebSocketProtocolError;
 
 WebSocketFrameView frame(
     WebSocketOpcode opcode, std::string_view payload, bool fin,
@@ -32,6 +34,18 @@ bool acceptThrows(WebSocketInboundAssembler& assembler, const WebSocketFrameView
         return false;
     } catch (const std::invalid_argument&) {
         return true;
+    }
+}
+
+// The RFC 6455 §7.4.1 close code the violation must be reported with (0 if none).
+std::uint16_t acceptCloseCode(
+    WebSocketInboundAssembler& assembler, const WebSocketFrameView& f, std::size_t maxBytes) {
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
+    try {
+        (void)assembler.accept(f, maxBytes, out);
+        return 0;
+    } catch (const WebSocketProtocolError& error) {
+        return error.closeCode();
     }
 }
 
@@ -131,4 +145,24 @@ RUVIA_TEST(ws_assembler_protocol_errors) {
     RUVIA_CHECK(tooBig.accept(frame(WebSocketOpcode::kText, "12345", false), 10, out) ==
                 WebSocketInboundAction::kContinue);
     RUVIA_CHECK(acceptThrows(tooBig, frame(WebSocketOpcode::kText, "678901", true, true), 10));
+}
+
+RUVIA_TEST(ws_assembler_violations_carry_rfc_close_code) {
+    // RFC 6455 §7.4.1: framing/fragmentation violations report 1002 (protocol
+    // error); a size-limit breach reports 1009 (message too big). The read loop
+    // sends this code rather than the generic 1011 (internal error).
+    WebSocketInboundAssembler noStart(std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(acceptCloseCode(noStart, frame(WebSocketOpcode::kText, "x", true, true), 1000),
+                   std::uint16_t{1002});  // continuation with no message open
+
+    WebSocketInboundAssembler interleaved(std::pmr::get_default_resource());
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
+    (void)interleaved.accept(frame(WebSocketOpcode::kText, "start", false), 1000, out);
+    RUVIA_CHECK_EQ(acceptCloseCode(interleaved, frame(WebSocketOpcode::kText, "new", true), 1000),
+                   std::uint16_t{1002});  // interleaved non-continuation data frame
+
+    WebSocketInboundAssembler tooBig(std::pmr::get_default_resource());
+    (void)tooBig.accept(frame(WebSocketOpcode::kText, "12345", false), 10, out);
+    RUVIA_CHECK_EQ(acceptCloseCode(tooBig, frame(WebSocketOpcode::kText, "678901", true, true), 10),
+                   std::uint16_t{1009});  // per-message size limit exceeded
 }

@@ -24,6 +24,23 @@ using WebSocketFrameHeader = std::array<char, 10>;
 using WebSocketClosePayload = std::array<char, 125>;
 using WebSocketAcceptKey = std::array<char, 28>;
 
+// A wire-level protocol violation detected while decoding or reassembling an
+// inbound frame. Carries the RFC 6455 §7.4.1 close code the peer must receive:
+// 1002 (protocol error) for malformed framing, 1007 (invalid payload data) for
+// bad UTF-8 in a close reason, 1009 (message too big) for a size-limit breach.
+// Derives from std::invalid_argument so existing catch sites (and tests that
+// assert these paths throw) keep working unchanged.
+class WebSocketProtocolError final : public std::invalid_argument {
+public:
+    WebSocketProtocolError(std::uint16_t closeCode, const char* message)
+        : std::invalid_argument(message), closeCode_(closeCode) {}
+
+    [[nodiscard]] std::uint16_t closeCode() const noexcept { return closeCode_; }
+
+private:
+    std::uint16_t closeCode_;
+};
+
 struct WebSocketFrameStart final {
     WebSocketOpcode opcode;
     bool fin{false};
@@ -260,7 +277,8 @@ enum class WebSocketInboundAction : std::uint8_t {
 // per-message size limits and UTF-8 validation. Shared by the HTTP/1.1 and
 // HTTP/2 transports, which differ only in how they read frames and echo Close,
 // so only those parts stay in each connection's read loop. Throws
-// std::invalid_argument on protocol violations, matching the prior behavior.
+// WebSocketProtocolError (carrying the RFC 6455 §7.4.1 close code) on protocol
+// violations; the read loop maps it to the matching Close.
 class WebSocketInboundAssembler final {
 public:
     explicit WebSocketInboundAssembler(std::pmr::memory_resource* resource)
@@ -282,10 +300,10 @@ public:
         }
         if (frame.continuation) {
             if (!fragmented_) {
-                throw std::invalid_argument("unexpected websocket continuation frame");
+                throw WebSocketProtocolError(1002, "unexpected websocket continuation frame");
             }
             if (webSocketAppendExceedsLimit(message_.size(), frame.payload.size(), maxMessageBytes)) {
-                throw std::invalid_argument("websocket message is too large");
+                throw WebSocketProtocolError(1009, "websocket message is too large");
             }
             message_.append(frame.payload.data(), frame.payload.size());
             if (!frame.fin) {
@@ -307,7 +325,7 @@ public:
         }
         if (frame.opcode == WebSocketOpcode::kText || frame.opcode == WebSocketOpcode::kBinary) {
             if (fragmented_) {
-                throw std::invalid_argument("invalid websocket fragmented message");
+                throw WebSocketProtocolError(1002, "invalid websocket fragmented message");
             }
             if (frame.fin) {
                 out = WebSocketMessageAccess::make(frame.opcode, frame.payload);
@@ -369,7 +387,7 @@ template <typename Ensure>
     std::size_t headerSize = 2;
 
     if (!decodeWebSocketFrameStart(first, second, frameStart, permessageDeflate)) {
-        throw std::invalid_argument("invalid websocket frame");
+        throw WebSocketProtocolError(1002, "invalid websocket frame");
     }
     if (length == 126) {
         if (!(co_await ensure(headerSize + 2))) {
@@ -382,19 +400,19 @@ template <typename Ensure>
             throw std::invalid_argument("incomplete websocket frame");
         }
         if (!readWebSocketUint64(buffer.data() + offset + headerSize, length)) {
-            throw std::invalid_argument("invalid websocket frame length");
+            throw WebSocketProtocolError(1002, "invalid websocket frame length");
         }
         headerSize += 8;
     }
 
     if (isInvalidWebSocketControlFrame(frameStart, length)) {
-        throw std::invalid_argument("invalid websocket control frame");
+        throw WebSocketProtocolError(1002, "invalid websocket control frame");
     }
     if (webSocketFrameLengthExceedsLimit(length, maxMessageBytes)) {
-        throw std::invalid_argument("websocket message is too large");
+        throw WebSocketProtocolError(1009, "websocket message is too large");
     }
     if (webSocketMaskedFrameReadSizeOverflows(length, headerSize)) {
-        throw std::invalid_argument("invalid websocket frame length");
+        throw WebSocketProtocolError(1002, "invalid websocket frame length");
     }
     if (!(co_await ensure(headerSize + 4 + static_cast<std::size_t>(length)))) {
         throw std::invalid_argument("incomplete websocket frame");

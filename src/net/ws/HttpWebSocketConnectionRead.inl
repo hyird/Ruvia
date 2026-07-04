@@ -5,12 +5,35 @@ namespace ruvia::detail {
 template <typename Transport>
 Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
     for (;;) {
-        auto frame = co_await readFrame();
-        if (!frame) {
+        std::optional<WebSocketFrameView> frame;
+        auto message = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
+        WebSocketInboundAction action;
+        // co_await is not allowed inside a catch handler, so record the violation
+        // and send the Close after the try. A protocol violation sets a nonzero
+        // close code; an abnormal mid-frame EOF ends the loop with no Close frame.
+        std::uint16_t violationCloseCode = 0;
+        std::string violationReason;
+        try {
+            frame = co_await readFrame();
+            if (!frame) {
+                co_return std::nullopt;
+            }
+            action = inbound_.accept(*frame, maxMessageBytes_, message);
+        } catch (const WebSocketProtocolError& error) {
+            // Wire-level violation: reply with the RFC 6455 §7.4.1 close code the
+            // peer expects (1002/1007/1009) instead of the generic 1011.
+            violationCloseCode = error.closeCode();
+            violationReason = error.what();
+        } catch (const std::invalid_argument&) {
+            // Mid-frame EOF (peer vanished): abnormal closure (1006), which is
+            // never sent on the wire — just end the read loop without a Close.
             co_return std::nullopt;
         }
-        auto message = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
-        switch (inbound_.accept(*frame, maxMessageBytes_, message)) {
+        if (violationCloseCode != 0) {
+            co_await close(violationCloseCode, violationReason);
+            co_return std::nullopt;
+        }
+        switch (action) {
             case WebSocketInboundAction::kSendPong:
                 co_await write(WebSocketOpcode::kPong, frame->payload);
                 continue;
