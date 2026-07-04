@@ -1695,6 +1695,7 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::SseWriter&>().aborted()),
     bool>);
+static_assert(!std::is_constructible_v<ruvia::SseWriter, ruvia::ResponseStreamWriter&>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().queries(std::string_view{})),
     std::optional<std::span<const std::string_view>>>);

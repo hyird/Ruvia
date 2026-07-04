@@ -201,8 +201,6 @@ struct SseMessage final {
 
 class SseWriter final {
 public:
-    explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
-
     Task<void> writeSSE(const SseMessage& message) {
         auto& frame = detail::StreamingAccess::scratch(writer_);
         if (!message.event.empty()) {
@@ -242,6 +240,10 @@ public:
     }
 
 private:
+    friend class Context;
+
+    explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
+
     static void appendData(std::pmr::string& frame, std::string_view data) {
         while (true) {
             const auto next = data.find('\n');
