@@ -67,3 +67,27 @@ RUVIA_TEST(dotenv_missing_file_is_empty) {
     std::filesystem::remove(path);  // ensure it does not exist
     RUVIA_CHECK(readDotenvEntries(path).empty());
 }
+
+RUVIA_TEST(dotenv_double_quote_escapes) {
+    const auto path = writeTempEnv("ruvia_dotenv_dq.env",
+        "NEWLINE=\"a\\nb\"\n"
+        "TAB=\"a\\tb\"\n"
+        "QUOTE=\"a\\\"b\"\n"
+        "BACKSLASH=\"a\\\\b\"\n");
+    const auto entries = readDotenvEntries(path);
+    std::filesystem::remove(path);
+    RUVIA_CHECK_EQ(entries.size(), std::size_t{4});
+    RUVIA_CHECK_EQ(std::string_view(entries[0].value), std::string_view("a\nb"));
+    RUVIA_CHECK_EQ(std::string_view(entries[1].value), std::string_view("a\tb"));
+    RUVIA_CHECK_EQ(std::string_view(entries[2].value), std::string_view("a\"b"));
+    RUVIA_CHECK_EQ(std::string_view(entries[3].value), std::string_view("a\\b"));
+}
+
+RUVIA_TEST(dotenv_single_quote_is_literal) {
+    const auto path = writeTempEnv("ruvia_dotenv_sq.env", "LITERAL='a\\nb'\n");
+    const auto entries = readDotenvEntries(path);
+    std::filesystem::remove(path);
+    RUVIA_CHECK_EQ(entries.size(), std::size_t{1});
+    // Single quotes are literal: a backslash-n is not an escape sequence.
+    RUVIA_CHECK_EQ(std::string_view(entries[0].value), std::string_view("a\\nb"));
+}
