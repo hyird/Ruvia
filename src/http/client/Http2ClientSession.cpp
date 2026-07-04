@@ -27,6 +27,7 @@
 #include "HttpClientContentEncoding.h"
 #include "HttpClientConfigValidation.h"
 #include "HttpClientRedirect.h"
+#include "HttpClientResponseLimits.h"
 #include "HttpClientTlsVerification.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/memory/PmrResource.h"
@@ -876,7 +877,8 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
         ok = result.ok() && !ctx.malformed && ctx.sawStatus;
         if (ok) {
             if (ctx.status < 200) {
-                ok = !endStream;
+                ok = !endStream &&
+                    ++stream->informationalResponses <= kMaxHttpClientInterimResponses;
             } else {
                 FetchResponseAccess::setStatus(stream->response, ctx.status);
                 stream->headersComplete = true;

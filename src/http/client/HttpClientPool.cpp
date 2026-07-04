@@ -19,6 +19,7 @@
 #include "../HeaderTokenUtils.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientRedirect.h"
+#include "HttpClientResponseLimits.h"
 #include "HttpClientResponseParser.h"
 #include "HttpClientTlsVerification.h"
 #include "ruvia/http/HttpCommon.h"
@@ -27,8 +28,6 @@
 
 namespace ruvia::detail {
 namespace {
-
-inline constexpr std::size_t kMaxHttpClientInterimResponses = 8;
 
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
     return httpAsciiEqualsIgnoreCase(name, "Host") ||
