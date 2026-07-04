@@ -130,7 +130,7 @@ public:
     [[nodiscard]] std::optional<T> get(std::string_view field) const {
         auto* const resource = resource_;
         std::optional<T> result;
-        bool parseFailed = false;
+        bool lastMatchFailed = false;
         const bool valid = detail::visitJsonObjectFields(
             detail::ResolvedPmrResourceTag{},
             body_,
@@ -144,14 +144,16 @@ public:
                 auto value = detail::parseJsonValue<T>(valueInput, resource);
                 detail::skipJsonWhitespace(valueInput);
                 if (!value || !valueInput.empty()) {
-                    parseFailed = true;
-                    return false;
+                    result.reset();
+                    lastMatchFailed = true;
+                    return true;
                 }
                 result.emplace(std::move(*value));
-                return false;
+                lastMatchFailed = false;
+                return true;
             });
 
-        if (!valid || parseFailed) {
+        if (!valid || lastMatchFailed) {
             return std::nullopt;
         }
         return result;
