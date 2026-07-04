@@ -4,7 +4,9 @@
 #include "ruvia/http/HttpTypes.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 
@@ -32,16 +34,22 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return true;
 }
 
-// Case-insensitive match to the canonical Priority token; empty on no match.
-[[nodiscard]] inline std::string_view cookiePriorityToken(std::string_view priority) noexcept {
-    constexpr std::string_view tokens[] = {"Low", "Medium", "High"};
+// Case-insensitive match of `value` against a fixed set of canonical tokens,
+// returning the canonical spelling (so a caller emits a normalized attribute)
+// or an empty view on no match. The Priority and SameSite validators differ
+// only in their token set, so both share this scan. Every token is ASCII
+// letters, for which the `| 0x20` case-fold is exact: no non-letter byte can
+// collide with a letter under it, so a stray symbol never spoofs a token.
+[[nodiscard]] inline std::string_view matchCanonicalToken(
+    std::string_view value,
+    std::span<const std::string_view> tokens) noexcept {
     for (const auto token : tokens) {
-        if (priority.size() != token.size()) {
+        if (value.size() != token.size()) {
             continue;
         }
         bool matches = true;
         for (std::size_t i = 0; i < token.size(); ++i) {
-            const auto left = static_cast<unsigned char>(priority[i]);
+            const auto left = static_cast<unsigned char>(value[i]);
             const auto right = static_cast<unsigned char>(token[i]);
             if ((left | 0x20) != (right | 0x20)) {
                 matches = false;
@@ -55,27 +63,16 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
     return {};
 }
 
+// Case-insensitive match to the canonical Priority token; empty on no match.
+[[nodiscard]] inline std::string_view cookiePriorityToken(std::string_view priority) noexcept {
+    static constexpr std::string_view tokens[] = {"Low", "Medium", "High"};
+    return matchCanonicalToken(priority, tokens);
+}
+
 // Case-insensitive match to a canonical SameSite token; empty on no match.
 [[nodiscard]] inline std::string_view cookieSameSiteToken(std::string_view sameSite) noexcept {
-    constexpr std::string_view tokens[] = {"Strict", "Lax", "None"};
-    for (const auto token : tokens) {
-        if (sameSite.size() != token.size()) {
-            continue;
-        }
-        bool matches = true;
-        for (std::size_t i = 0; i < token.size(); ++i) {
-            const auto left = static_cast<unsigned char>(sameSite[i]);
-            const auto right = static_cast<unsigned char>(token[i]);
-            if ((left | 0x20) != (right | 0x20)) {
-                matches = false;
-                break;
-            }
-        }
-        if (matches) {
-            return token;
-        }
-    }
-    return {};
+    static constexpr std::string_view tokens[] = {"Strict", "Lax", "None"};
+    return matchCanonicalToken(sameSite, tokens);
 }
 
 [[nodiscard]] inline std::string_view cookiePrefixText(CookiePrefix prefix) noexcept {
