@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "db/core/DbConfigValidation.h"
 #include "db/core/DbMigrationValidation.h"
 #include "db/core/DbSql.h"
 #include "ruvia/db/DbTypes.h"
@@ -118,4 +119,26 @@ RUVIA_TEST(db_migration_list_validation_enforces_integrity) {
     const std::string longId(191, 'x');
     const DbMigration tooLong[] = {{longId, "SQL"}};
     RUVIA_CHECK(throwsOn([&] { validateMigrationList(std::span<const DbMigration>(tooLong, 1)); }));
+}
+
+RUVIA_TEST(db_config_validation_checks_every_field) {
+    using ruvia::DbConfig;
+    using ruvia::detail::validateDbConfig;
+    using std::chrono::milliseconds;
+
+    // A default config is valid (localhost, port 3306, pool 4, timeouts 0).
+    RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{}); }));
+
+    // Host, port and pool size each have a required-value guard.
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.host.clear(); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.port = 0; validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.poolSize = 0; validateDbConfig(c); }));
+
+    // Every one of the five timeouts must be non-negative -- a negative value in
+    // any of them is rejected (verifies the whole fold is wired, not just one).
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.connectTimeout = milliseconds(-1); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.readTimeout = milliseconds(-1); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.writeTimeout = milliseconds(-1); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.queryTimeout = milliseconds(-1); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.acquireTimeout = milliseconds(-1); validateDbConfig(c); }));
 }
