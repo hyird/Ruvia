@@ -18,10 +18,30 @@ using ruvia::detail::HpackError;
 using ruvia::detail::http2ClassifyHeaderDecodeResult;
 using ruvia::detail::http2ShouldDropInvalidCleartextPreface;
 using ruvia::detail::HttpServerParser;
+using ruvia::detail::http2Base64UrlValue;
 using ruvia::detail::isHttp2UpgradeAttempt;
 using ruvia::detail::parseHttp2UpgradeRequest;
 
 }  // namespace
+
+RUVIA_TEST(http2_base64url_alphabet_values) {
+    // The base64url alphabet (RFC 4648 5): A-Z -> 0-25, a-z -> 26-51,
+    // 0-9 -> 52-61, '-' -> 62, '_' -> 63.
+    RUVIA_CHECK_EQ(http2Base64UrlValue('A'), 0);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('Z'), 25);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('a'), 26);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('z'), 51);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('0'), 52);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('9'), 61);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('-'), 62);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('_'), 63);
+    // base64url uses '-'/'_', so the standard '+'/'/' and other bytes are invalid.
+    RUVIA_CHECK_EQ(http2Base64UrlValue('+'), -1);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('/'), -1);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('='), -1);
+    RUVIA_CHECK_EQ(http2Base64UrlValue(' '), -1);
+    RUVIA_CHECK_EQ(http2Base64UrlValue('!'), -1);
+}
 
 RUVIA_TEST(classify_header_decode_result) {
     // A clean decode is OK.
