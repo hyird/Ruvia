@@ -1515,6 +1515,7 @@ static_assert(!HasCompleteType<ruvia::detail::MultipartStreamPartAccess>);
 static_assert(!HasCompleteType<ruvia::detail::WebSocketMessageAccess>);
 static_assert(!HasCompleteType<ruvia::detail::AccessLogRecordAccess>);
 static_assert(!HasCompleteType<ruvia::detail::DotenvResultAccess>);
+static_assert(!HasCompleteType<ruvia::detail::RequestFormFieldAccess>);
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
