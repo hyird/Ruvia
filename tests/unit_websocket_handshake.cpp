@@ -2,51 +2,71 @@
 
 #include <string_view>
 
+#include "http/HttpParserInternal.h"
 #include "net/ws/HttpWebSocketUtils.h"
-#include "http/HttpRequestInternal.h"
 #include "http/HttpRequestFlags.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpTypes.h"
 
 namespace {
 
-using ruvia::HttpHeaderView;
-using ruvia::HttpMethod;
 using ruvia::HttpRequest;
-using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::HttpRequestFlags;
-using ruvia::detail::RequestKnownHeader;
+using ruvia::detail::HttpServerParser;
 using ruvia::detail::chooseWebSocketSubprotocol;
 using ruvia::detail::isValidWebSocketRequest;
 using ruvia::detail::webSocketProtocolOffered;
 
-std::size_t slot(RequestKnownHeader known) {
-    return HttpRequestAccess::knownHeaderSlot(known);
+HttpRequest parseRequest(std::string_view rawRequest) {
+    HttpServerParser parser;
+    const auto parsed = parser.parse(rawRequest);
+    return parsed.request;
 }
 
-HttpRequest offering(std::string_view protocols) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Sec-WebSocket-Protocol", protocols},
-                                 slot(RequestKnownHeader::kSecWebSocketProtocol));
-    return request;
+HttpRequest offering() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Protocol: chat, superchat\r\n"
+        "\r\n");
 }
 
-// The RFC 6455 §1.3 example key: base64 of a 16-byte nonce, so it decodes cleanly.
-constexpr std::string_view kValidKey = "dGhlIHNhbXBsZSBub25jZQ==";
+HttpRequest validHandshake() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "\r\n");
+}
 
-HttpRequest handshake(HttpMethod method, std::string_view httpVersion, std::string_view wsVersion) {
-    HttpRequest request = HttpRequestAccess::make();
-    HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, method);
-    HttpRequestAccess::setHttpVersion(request, httpVersion);
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Upgrade", "websocket"},
-                                 slot(RequestKnownHeader::kUpgrade));
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Sec-WebSocket-Version", wsVersion},
-                                 slot(RequestKnownHeader::kSecWebSocketVersion));
-    HttpRequestAccess::addHeader(request, HttpHeaderView{"Sec-WebSocket-Key", kValidKey},
-                                 slot(RequestKnownHeader::kSecWebSocketKey));
-    return request;
+HttpRequest postHandshake() {
+    return parseRequest(
+        "POST /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "\r\n");
+}
+
+HttpRequest http10Handshake() {
+    return parseRequest(
+        "GET /ws HTTP/1.0\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "\r\n");
+}
+
+HttpRequest badVersionHandshake() {
+    return parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 8\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "\r\n");
 }
 
 HttpRequestFlags validHandshakeFlags() {
@@ -60,7 +80,7 @@ HttpRequestFlags validHandshakeFlags() {
 }  // namespace
 
 RUVIA_TEST(ws_subprotocol_negotiation_prefers_server_order) {
-    const auto request = offering("chat, superchat");
+    const auto request = offering();
     HttpRequestFlags flags;
     flags.secWebSocketProtocolCount = 1;
     // Server preference wins: the first supported token the client also offered.
@@ -71,13 +91,12 @@ RUVIA_TEST(ws_subprotocol_negotiation_prefers_server_order) {
     RUVIA_CHECK(chooseWebSocketSubprotocol(request, flags, "binary").empty());
 
     // A request offering nothing yields no subprotocol.
-    HttpRequest none = HttpRequestAccess::make();
-    HttpRequestAccess::reset(none);
+    const auto none = parseRequest("GET /ws HTTP/1.1\r\nHost: example.test\r\n\r\n");
     RUVIA_CHECK(chooseWebSocketSubprotocol(none, flags, "chat").empty());
 }
 
 RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
-    const auto request = offering("chat, superchat");
+    const auto request = offering();
     RUVIA_CHECK(webSocketProtocolOffered(request, "chat"));
     RUVIA_CHECK(webSocketProtocolOffered(request, "superchat"));
     RUVIA_CHECK(!webSocketProtocolOffered(request, "super"));   // prefix, not a whole token
@@ -87,21 +106,21 @@ RUVIA_TEST(ws_protocol_offered_matches_whole_tokens_only) {
 RUVIA_TEST(ws_valid_request_requires_all_conditions) {
     const auto flags = validHandshakeFlags();
 
-    RUVIA_CHECK(isValidWebSocketRequest(handshake(HttpMethod::kGet, "HTTP/1.1", "13"), flags));
+    RUVIA_CHECK(isValidWebSocketRequest(validHandshake(), flags));
 
     // Every individual requirement is necessary.
-    RUVIA_CHECK(!isValidWebSocketRequest(handshake(HttpMethod::kPost, "HTTP/1.1", "13"), flags));  // not GET
-    RUVIA_CHECK(!isValidWebSocketRequest(handshake(HttpMethod::kGet, "HTTP/1.0", "13"), flags));   // not 1.1
-    RUVIA_CHECK(!isValidWebSocketRequest(handshake(HttpMethod::kGet, "HTTP/1.1", "8"), flags));    // version != 13
+    RUVIA_CHECK(!isValidWebSocketRequest(postHandshake(), flags));        // not GET
+    RUVIA_CHECK(!isValidWebSocketRequest(http10Handshake(), flags));      // not 1.1
+    RUVIA_CHECK(!isValidWebSocketRequest(badVersionHandshake(), flags));  // version != 13
 
     {
         HttpRequestFlags noUpgrade = flags;
         noUpgrade.upgrade = false;  // Connection: Upgrade absent
-        RUVIA_CHECK(!isValidWebSocketRequest(handshake(HttpMethod::kGet, "HTTP/1.1", "13"), noUpgrade));
+        RUVIA_CHECK(!isValidWebSocketRequest(validHandshake(), noUpgrade));
     }
     {
         HttpRequestFlags duplicateKey = flags;
         duplicateKey.secWebSocketKeyCount = 2;  // Sec-WebSocket-Key must appear exactly once
-        RUVIA_CHECK(!isValidWebSocketRequest(handshake(HttpMethod::kGet, "HTTP/1.1", "13"), duplicateKey));
+        RUVIA_CHECK(!isValidWebSocketRequest(validHandshake(), duplicateKey));
     }
 }
