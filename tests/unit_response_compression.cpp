@@ -6,9 +6,14 @@
 #include <string>
 #include <string_view>
 
+#include <brotli/decode.h>
+#include <zlib.h>
+#include <zstd.h>
+
 #include "ruvia/http/HttpResponse.h"
 #include "net/server/HttpResponseCompression.h"
 #include "http/HeaderAcceptUtils.h"
+#include "http/HttpResponseBodyAccess.h"
 
 namespace {
 
@@ -16,8 +21,61 @@ using ruvia::HttpResponse;
 using ruvia::HttpServerOptions;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::compressResponseBodyIfAccepted;
+using ruvia::detail::responseBodyBytes;
 
 using Compression = HttpServerOptions::Compression;
+
+// Reference decompressors. Each returns "\x01decompress-failed" on error, a
+// sentinel no real body equals, so a failure is a visible mismatch not a match.
+const std::string kDecompressFailed = "\x01" "decompress-failed";
+
+std::string gzipDecompress(std::string_view data) {
+    z_stream stream{};
+    // 15 + 32 auto-detects the gzip (or zlib) wrapper on the stream.
+    if (inflateInit2(&stream, 15 + 32) != Z_OK) {
+        return kDecompressFailed;
+    }
+    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data.data()));
+    stream.avail_in = static_cast<uInt>(data.size());
+    std::string out;
+    char buffer[16384];
+    int status = Z_OK;
+    do {
+        stream.next_out = reinterpret_cast<Bytef*>(buffer);
+        stream.avail_out = sizeof(buffer);
+        status = inflate(&stream, Z_NO_FLUSH);
+        if (status != Z_OK && status != Z_STREAM_END) {
+            (void)inflateEnd(&stream);
+            return kDecompressFailed;
+        }
+        out.append(buffer, sizeof(buffer) - stream.avail_out);
+    } while (status != Z_STREAM_END);
+    (void)inflateEnd(&stream);
+    return out;
+}
+
+std::string brotliDecompress(std::string_view data) {
+    std::string out(64 * 1024, '\0');
+    std::size_t outSize = out.size();
+    const auto result = BrotliDecoderDecompress(
+        data.size(), reinterpret_cast<const std::uint8_t*>(data.data()),
+        &outSize, reinterpret_cast<std::uint8_t*>(out.data()));
+    if (result != BROTLI_DECODER_RESULT_SUCCESS) {
+        return kDecompressFailed;
+    }
+    out.resize(outSize);
+    return out;
+}
+
+std::string zstdDecompress(std::string_view data) {
+    std::string out(64 * 1024, '\0');
+    const auto size = ZSTD_decompress(out.data(), out.size(), data.data(), data.size());
+    if (ZSTD_isError(size)) {
+        return kDecompressFailed;
+    }
+    out.resize(size);
+    return out;
+}
 
 // A highly compressible payload comfortably above any minBytes used here.
 const std::string kCompressibleBody(2048, 'a');
@@ -38,6 +96,46 @@ bool tryCompress(
 }
 
 }  // namespace
+
+RUVIA_TEST(compress_output_round_trips_for_each_coding) {
+    // The Content-Encoding label tests do not prove the emitted bytes are a valid
+    // stream. Decompress the produced body with the reference library and confirm it
+    // equals the original -- catching a corrupt stream (wrong gzip window bits,
+    // truncation, bad framing) that a header-only assertion would silently miss.
+    // The compressor writes into `scratch` and points the response body view at it
+    // (zero-copy), so scratch must outlive the body read -- the shared tryCompress
+    // helper's local scratch would dangle, hence the explicit local here.
+    const std::string original =
+        "Ruvia response compression round-trip payload. "
+        "The quick brown fox jumps over the lazy dog. 0123456789. "
+        "Repeated content compresses well; repeated content compresses well.";
+
+    {
+        auto response = responseWithBody(original);
+        std::pmr::string scratch(std::pmr::new_delete_resource());
+        RUVIA_CHECK(compressResponseBodyIfAccepted(
+            HttpContentCoding::kGzip, response, Compression{true, 16}, scratch));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+        RUVIA_CHECK(responseBodyBytes(response).size() < original.size());  // actually shrank
+        RUVIA_CHECK_EQ(gzipDecompress(responseBodyBytes(response)), original);
+    }
+    {
+        auto response = responseWithBody(original);
+        std::pmr::string scratch(std::pmr::new_delete_resource());
+        RUVIA_CHECK(compressResponseBodyIfAccepted(
+            HttpContentCoding::kBrotli, response, Compression{true, 16}, scratch));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
+        RUVIA_CHECK_EQ(brotliDecompress(responseBodyBytes(response)), original);
+    }
+    {
+        auto response = responseWithBody(original);
+        std::pmr::string scratch(std::pmr::new_delete_resource());
+        RUVIA_CHECK(compressResponseBodyIfAccepted(
+            HttpContentCoding::kZstd, response, Compression{true, 16}, scratch));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
+        RUVIA_CHECK_EQ(zstdDecompress(responseBodyBytes(response)), original);
+    }
+}
 
 RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     auto response = responseWithBody(kCompressibleBody);
