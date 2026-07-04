@@ -1262,9 +1262,13 @@ concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
 };
 
 template <typename T>
-concept HasAppGlobalRateLimitSetter = requires(T& app) {
-    { app.setGlobalRateLimit(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
+concept HasAppGlobalRateLimitRuleSetter = requires(T& app) {
     { app.setGlobalRateLimit(ruvia::RateLimitRule{}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppGlobalRateLimitTupleSetter = requires(T& app) {
+    { app.setGlobalRateLimit(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -1762,7 +1766,8 @@ static_assert(!std::is_default_constructible_v<ruvia::RedisZScanResult>);
 static_assert(!std::is_constructible_v<ruvia::RedisZScanResult, std::pmr::memory_resource*>);
 static_assert(!HasRedisZScanResultPublicFields<ruvia::RedisZScanResult>);
 static_assert(HasRedisZScanResultCanonicalReadAccessors<ruvia::RedisZScanResult>);
-static_assert(HasAppGlobalRateLimitSetter<ruvia::App>);
+static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
+static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<
     ruvia::AccessLogRecord,

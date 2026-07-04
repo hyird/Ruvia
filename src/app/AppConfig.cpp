@@ -245,13 +245,6 @@ App& App::onStop(AppHook hook) {
         });
 }
 
-App& App::setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window) {
-    RateLimitRule rule;
-    rule.maxRequests = maxRequests;
-    rule.window = window;
-    return setGlobalRateLimit(rule);
-}
-
 App& App::setGlobalRateLimit(RateLimitRule rule) {
     return detail::mutateStoppedApp(
         *this,
