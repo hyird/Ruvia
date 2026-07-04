@@ -19,13 +19,16 @@ struct Parsed final {
     bool sawChunked;
     bool sawContentLength;
     std::size_t contentLength;
+    std::size_t transferCodingCount;
+    ruvia::detail::HttpTransferCoding firstTransferCoding;
 };
 
 Parsed parse(std::string_view head) {
     ParsedRequestHeaderBlock block{};
     const auto headerBytes = findHttpHeaderEnd(head, 0);
     const auto error = parseHttpHeaderBlock(head, headerBytes, block);
-    return {error, block.flags.hasHost, block.sawChunked, block.sawContentLength, block.contentLength};
+    return {error, block.flags.hasHost, block.sawChunked, block.sawContentLength, block.contentLength,
+            block.transferCodings.count, block.transferCodings.values[0]};
 }
 
 }  // namespace
@@ -132,6 +135,26 @@ RUVIA_TEST(header_block_accepts_transfer_encoding_quoted_comma_parameter) {
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked;note=\"a,b\"\r\n\r\n");
     RUVIA_CHECK(result.error == HttpParseError::kNone);
     RUVIA_CHECK(result.sawChunked);
+}
+
+RUVIA_TEST(header_block_transfer_coding_combined_with_chunked_is_rejected) {
+    // Despite the HttpTransferCoding.h comment ("one request transfer-coding is
+    // allowed before final chunked framing"), the parser REJECTS a coding combined
+    // with chunked: "gzip, chunked" is unsupported, only bare "chunked" is accepted.
+    // Pin the real, conservative behavior (a coding+chunked would require staging a
+    // decoded body, which this framing deliberately avoids).
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n").error ==
+                HttpParseError::kUnsupportedTransferEncoding);
+
+    // At the header-block layer a lone non-chunked coding parses and IS recorded in
+    // transferCodings (the population path). It is the request-level parser that
+    // then rejects any Transfer-Encoding whose final coding isn't chunked, so a
+    // non-empty transferCodings never actually survives to an accepted request.
+    const auto lone = parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
+    RUVIA_CHECK(lone.error == HttpParseError::kNone);
+    RUVIA_CHECK(!lone.sawChunked);
+    RUVIA_CHECK_EQ(lone.transferCodingCount, std::size_t{1});
+    RUVIA_CHECK(lone.firstTransferCoding == ruvia::detail::HttpTransferCoding::kGzip);
 }
 
 RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
