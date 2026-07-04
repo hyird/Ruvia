@@ -1,11 +1,22 @@
 #include "test_harness.h"
 
+#include <asio/co_spawn.hpp>
+#include <asio/io_context.hpp>
+#include <asio/use_future.hpp>
+
 #include <exception>
 #include <memory_resource>
 #include <span>
 #include <string_view>
+#include <vector>
 
+#include "http/ContextInternal.h"
+#include "http/HttpRequestInternal.h"
+#include "http/HttpResponseBodyAccess.h"
+#include "runtime/AsioAwait.h"
 #include "ruvia/http/Context.h"
+#include "ruvia/http/MiddlewareRuntime.h"
+#include "ruvia/memory/MemoryPool.h"
 #include "ruvia/router/Router.h"
 #include "router/RouterInternal.h"
 #include "router/RouteResolution.h"
@@ -254,4 +265,100 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     const auto missing = r.impl.routeTable().resolve(HttpMethod::kGet, "/nope", missMatch);
     RUVIA_CHECK(!missing.found());
     RUVIA_CHECK(!missing.methodNotAllowed());
+}
+
+namespace {
+
+// Records the order middlewares and the handler run: positive on entry (before
+// next()), negative on unwind (after next()), 0 for the handler.
+std::vector<int> g_chainOrder;
+
+class ChainMwA final : public ruvia::Middleware<ChainMwA> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        g_chainOrder.push_back(1);
+        co_await next();
+        g_chainOrder.push_back(-1);
+    }
+};
+
+class ChainMwB final : public ruvia::Middleware<ChainMwB> {
+public:
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next& next) {
+        g_chainOrder.push_back(2);
+        co_await next();
+        g_chainOrder.push_back(-2);
+    }
+};
+
+// Short-circuits: sets a response and does NOT call next().
+class ChainMwStop final : public ruvia::Middleware<ChainMwStop> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next&) {
+        g_chainOrder.push_back(9);
+        context.res(context.body("stopped"));
+        co_return;
+    }
+};
+
+ruvia::Task<ruvia::HttpResponse> chainHandler(void*, ruvia::Context& context) {
+    g_chainOrder.push_back(0);
+    co_return context.body("ok");
+}
+
+std::string dispatchChain(std::span<const ControllerMiddlewareDescriptor> middlewares) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(
+        HttpMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler),
+        RequestBodyMode::kBuffered, middlewares,
+        std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kGet);
+    ruvia::detail::HttpRequestAccess::setPath(request, "/chain");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    auto response = future.get();
+    const auto body = ruvia::detail::responseBodyBytes(response);
+    return std::string(body.data(), body.size());
+}
+
+}  // namespace
+
+RUVIA_TEST(middleware_chain_runs_in_onion_order) {
+    g_chainOrder.clear();
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwB>(),
+    };
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(mws, 2));
+    RUVIA_CHECK_EQ(body, std::string("ok"));
+    // Onion order: A pre, B pre, handler, B post, A post.
+    const std::vector<int> expected{1, 2, 0, -2, -1};
+    RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(middleware_chain_short_circuits_without_next) {
+    g_chainOrder.clear();
+    // A middleware that does not call next() stops the chain: the next middleware
+    // and the handler never run, and the middleware's response is used.
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwStop>(),
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    const auto body = dispatchChain(std::span<const ControllerMiddlewareDescriptor>(mws, 2));
+    RUVIA_CHECK_EQ(body, std::string("stopped"));
+    const std::vector<int> expected{9};
+    RUVIA_CHECK(g_chainOrder == expected);
 }
