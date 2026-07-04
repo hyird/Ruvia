@@ -933,6 +933,18 @@ RUVIA_TEST(http_client_fetch_skips_100_continue) {
     RUVIA_CHECK_EQ(out.body, std::string("final"));
 }
 
+RUVIA_TEST(http_client_fetch_rejects_too_many_interim_responses) {
+    std::string response;
+    for (int i = 0; i < 9; ++i) {
+        response += "HTTP/1.1 100 Continue\r\n\r\n";
+    }
+    response += "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfinal";
+
+    const auto out = runOneFetch(std::move(response), WriteMode::kWhole);
+    RUVIA_CHECK(!out.ok);
+    RUVIA_CHECK(out.error.find("client:http client: too many interim responses") != std::string::npos);
+}
+
 RUVIA_TEST(http_client_rejects_hop_by_hop_request_headers) {
     for (const auto header : {
              ruvia::HttpHeaderView{"Keep-Alive", "timeout=5"},
