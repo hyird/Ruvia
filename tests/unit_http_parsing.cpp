@@ -110,6 +110,15 @@ RUVIA_TEST(form_object_get_uses_last_match) {
     RUVIA_CHECK_EQ(value->view(), std::string_view("second"));
 }
 
+RUVIA_TEST(form_object_get_uses_last_match_after_invalid_duplicate) {
+    auto form = ruvia::FormObject::parse("age=nope&other=x&age=42", std::pmr::get_default_resource());
+    RUVIA_CHECK(form.has_value());
+
+    const auto value = form->get<ruvia::Int32>("age");
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK_EQ(static_cast<std::int32_t>(*value), 42);
+}
+
 RUVIA_TEST(json_object_get_uses_last_match) {
     auto json = ruvia::JsonObject::parse(R"({"name":"first","other":"x","name":"second"})", std::pmr::get_default_resource());
     RUVIA_CHECK(json.has_value());
