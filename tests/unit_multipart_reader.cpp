@@ -206,3 +206,24 @@ RUVIA_TEST(multipart_reader_rejects_malformed_parts) {
     bigHeaders.append(70 * 1024, 'a');
     RUVIA_CHECK(throwsOn(std::move(bigHeaders)));
 }
+
+RUVIA_TEST(multipart_reader_boundary_prefix_in_content_is_not_a_delimiter) {
+    // RFC 2046 5.1.1: "\r\n--<boundary>" is a delimiter only when it ends in CRLF
+    // (next part) or "--" (close). The boundary token appearing inside a part body
+    // followed by any other byte is content -- the streaming reader must agree with
+    // the buffered parser and not truncate/reject. Exercised across chunk sizes so
+    // the false boundary lands both mid-buffer and split across a read edge.
+    const std::string body =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "before\r\n--BOUNDARYx after"   // "\r\n--BOUNDARYx": false boundary ('x' != CRLF/--)
+        "\r\n--BOUNDARY--\r\n";         // the real close delimiter
+    for (const std::size_t chunkSize :
+         {std::size_t{1}, std::size_t{5}, std::size_t{19}, std::size_t{4096}}) {
+        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(parts[0].name, std::string("field"));
+        RUVIA_CHECK_EQ(parts[0].body, std::string("before\r\n--BOUNDARYx after"));
+    }
+}
