@@ -35,6 +35,19 @@ RUVIA_TEST(json_object_fields_basic) {
     RUVIA_CHECK_EQ(fields[3].second, std::string("null"));
 }
 
+RUVIA_TEST(json_object_fields_emits_duplicate_keys_in_order) {
+    // Duplicate keys are a JSON parser-differential surface. The iterator emits
+    // every occurrence in source order -- it neither dedups nor rejects -- so the
+    // binding layer's last-write-wins is well defined and reviewable.
+    std::vector<Field> fields;
+    RUVIA_CHECK(collect(R"({"a":1,"b":2,"a":3})", fields));
+    RUVIA_CHECK_EQ(fields.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(fields[0].first, std::string("a"));
+    RUVIA_CHECK_EQ(fields[0].second, std::string("1"));
+    RUVIA_CHECK_EQ(fields[2].first, std::string("a"));
+    RUVIA_CHECK_EQ(fields[2].second, std::string("3"));
+}
+
 RUVIA_TEST(json_object_fields_empty_object) {
     std::vector<Field> fields;
     RUVIA_CHECK(collect("{}", fields));
