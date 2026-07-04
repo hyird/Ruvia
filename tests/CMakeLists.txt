@@ -112,6 +112,7 @@ add_executable(ruvia_unit_tests
     unit_http2_websocket_handshake.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
+    unit_http_client_config.cpp
     unit_http2_client.cpp
     unit_routing.cpp
     unit_cors.cpp
@@ -130,7 +131,10 @@ endif()
 
 # The DB SQL-interpolation suite links interpolateSql (and libmariadb's escaper).
 if(RUVIA_ENABLE_MARIADB)
-    target_sources(ruvia_unit_tests PRIVATE unit_db_sql.cpp)
+    target_sources(ruvia_unit_tests PRIVATE
+        unit_db_api_surface.cpp
+        unit_db_sql.cpp
+    )
 endif()
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
