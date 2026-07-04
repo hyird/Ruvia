@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/memory/PmrResource.h"
 
@@ -43,11 +44,6 @@ struct HttpClientConfig {
     std::chrono::milliseconds acquireTimeout{0};
     // Set to 0 to disable the response body limit.
     std::size_t maxResponseBodyBytes{kDefaultMaxBufferedBodyBytes};
-};
-
-struct FetchRequestHeader {
-    std::string_view name;   // borrowed; must remain valid through co_await
-    std::string_view value;  // borrowed; must remain valid through co_await
 };
 
 class FetchResponseHeader final {
@@ -102,7 +98,7 @@ private:
 struct FetchOptions {
     std::string_view method{"GET"};
     // Borrowed header table; elements and pointed-to strings must remain valid through co_await.
-    std::span<const FetchRequestHeader> headers{};
+    std::span<const HttpHeaderView> headers{};
     std::string_view body{};  // borrowed; must remain valid through co_await
     // If set, streams the request body from this producer instead of `body` (which must be empty).
     // Borrowed; the target and returned chunk views must outlive their awaited write.

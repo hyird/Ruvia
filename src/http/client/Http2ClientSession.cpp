@@ -1202,18 +1202,20 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     HpackEncoder::encodeHeader(encodeScratch_, ":path", target);
     std::pmr::string lowerName(resource_);
     for (const auto& userHeader : options.headers) {
-        if (!isValidHttpHeaderName(userHeader.name) || !isValidHttpHeaderValue(userHeader.value)) {
+        const auto name = userHeader.name();
+        const auto value = userHeader.value();
+        if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
             throw std::invalid_argument("http/2: invalid request header");
         }
-        if (!isAllowedH2RequestHeader(userHeader.name, userHeader.value)) {
+        if (!isAllowedH2RequestHeader(name, value)) {
             throw std::invalid_argument("http/2: request header is not allowed over HTTP/2");
         }
         lowerName.clear();
-        lowerName.reserve(userHeader.name.size());
-        for (const auto ch : userHeader.name) {
+        lowerName.reserve(name.size());
+        for (const auto ch : name) {
             lowerName.push_back(asciiLower(ch));
         }
-        HpackEncoder::encodeHeader(encodeScratch_, lowerName, userHeader.value);
+        HpackEncoder::encodeHeader(encodeScratch_, lowerName, value);
     }
 
     const bool streamedBody = static_cast<bool>(options.bodyStream);
