@@ -187,3 +187,34 @@ RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
     RUVIA_CHECK(decodeBlock(bytes({0x20, 0x82}), out2));
     RUVIA_CHECK_EQ(out2.headers.size(), std::size_t{1});
 }
+
+RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
+    using ruvia::detail::HpackError;
+    // The dynamic table persists across decode() calls, so use one decoder.
+    HpackDecoder decoder(std::pmr::get_default_resource());
+
+    // Literal with incremental indexing adds "custom-key: custom-value".
+    std::string add;
+    add += static_cast<char>(0x40);  // literal, incremental indexing, new name
+    add += static_cast<char>(0x0A);  // name length 10
+    add += "custom-key";
+    add += static_cast<char>(0x0C);  // value length 12
+    add += "custom-value";
+    Collector added;
+    RUVIA_CHECK(decoder.decode(add, &added, &collect).ok());
+
+    // Index 62 (static 61 + newest dynamic) resolves to the entry just added.
+    Collector referenced;
+    RUVIA_CHECK(decoder.decode(bytes({0xBE}), &referenced, &collect).ok());
+    RUVIA_CHECK_EQ(referenced.headers.size(), std::size_t{1});
+
+    // A size update to 0 (0x20) must evict every dynamic entry (RFC 7541 4.3).
+    Collector evicted;
+    RUVIA_CHECK(decoder.decode(bytes({0x20}), &evicted, &collect).ok());
+
+    // The evicted entry is no longer in the table: index 62 is now out of range.
+    Collector dangling;
+    const auto result = decoder.decode(bytes({0xBE}), &dangling, &collect);
+    RUVIA_CHECK(!result.ok());
+    RUVIA_CHECK(result.error == HpackError::kInvalidIndex);
+}
