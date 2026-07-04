@@ -54,3 +54,19 @@ RUVIA_TEST(vary_skips_empty_tokens_and_null_batch) {
     addVaryTokens(response, nullptr, 0);
     RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin"));
 }
+
+RUVIA_TEST(vary_batch_dedups_case_insensitively_within_batch) {
+    auto response = makeResponse();
+    // A batch listing the same field in DIFFERENT cases must collapse to one token:
+    // the within-batch dedup is case-insensitive, matching the existing-header dedup.
+    // (The prior batch test only used same-case repeats, so a regression to a
+    // case-sensitive batch compare would have passed it.) The first-seen case wins.
+    const std::string_view batch[] = {"Origin", "ORIGIN", "origin"};
+    addVaryTokens(response, batch, 3);
+    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin"));
+
+    // A differently-cased token already present is likewise not re-added.
+    const std::string_view more[] = {"oRiGiN", "Accept-Encoding"};
+    addVaryTokens(response, more, 2);
+    RUVIA_CHECK_EQ(response.header("Vary"), std::string_view("Origin, Accept-Encoding"));
+}
