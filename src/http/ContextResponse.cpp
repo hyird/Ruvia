@@ -9,6 +9,7 @@
 #include "HttpResponseHeaderState.h"
 #include "ruvia/detail/NumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
+#include "ruvia/http/detail/Hex.h"
 
 #include <array>
 #include <charconv>
@@ -145,10 +146,9 @@ void assignResponseSlotHeaders(HttpResponse& response, const HttpResponse& slot)
 }
 
 void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
-    static constexpr char kHex[] = "0123456789ABCDEF";
     output.push_back('%');
-    output.push_back(kHex[ch >> 4]);
-    output.push_back(kHex[ch & 0x0F]);
+    output.push_back(detail::upperHexDigit(ch >> 4));
+    output.push_back(detail::upperHexDigit(ch & 0x0F));
 }
 
 [[nodiscard]] std::pmr::string encodeRedirectLocation(
