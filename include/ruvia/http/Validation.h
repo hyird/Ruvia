@@ -21,18 +21,6 @@ namespace ruvia {
 
 class ValidationIssue final {
 public:
-    ValidationIssue(
-        std::string_view fieldName,
-        std::string_view codeValue,
-        std::string_view messageValue,
-        std::pmr::memory_resource* resource = nullptr)
-        : ValidationIssue(
-              detail::ResolvedPmrResourceTag{},
-              fieldName,
-              codeValue,
-              messageValue,
-              detail::pmrResourceOrDefault(resource)) {}
-
     [[nodiscard]] std::string_view field() const noexcept {
         return field_;
     }
@@ -46,6 +34,21 @@ public:
     }
 
 private:
+    friend class ValidationError;
+    friend class Validator;
+
+    ValidationIssue(
+        std::string_view fieldName,
+        std::string_view codeValue,
+        std::string_view messageValue,
+        std::pmr::memory_resource* resource = nullptr)
+        : ValidationIssue(
+              detail::ResolvedPmrResourceTag{},
+              fieldName,
+              codeValue,
+              messageValue,
+              detail::pmrResourceOrDefault(resource)) {}
+
     ValidationIssue(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : field_(resource),
           code_(resource),
@@ -97,7 +100,7 @@ public:
           detailsJson_(resource_) {
         issues_.reserve(issues.size());
         for (const auto& issue : issues) {
-            issues_.emplace_back(issue.field(), issue.code(), issue.message(), resource_);
+            issues_.push_back(ValidationIssue(issue.field(), issue.code(), issue.message(), resource_));
         }
         buildDetailsJson();
     }
@@ -183,7 +186,7 @@ public:
         std::string_view field,
         std::string_view code,
         std::string_view message) {
-        issues_.emplace_back(field, code, message, resource_);
+        issues_.push_back(ValidationIssue(field, code, message, resource_));
         return *this;
     }
 
