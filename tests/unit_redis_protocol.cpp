@@ -29,6 +29,9 @@ using ruvia::detail::parseRedisKeyValueArray;
 using ruvia::detail::parseRedisScanResult;
 using ruvia::detail::parseRedisScoredArray;
 using ruvia::detail::respCommandSerializedSize;
+using ruvia::detail::redisValueArray;
+using ruvia::detail::redisValueInteger;
+using ruvia::detail::redisValueString;
 
 // Build a nil hiredis reply (e.g. a BLPOP timeout).
 redisReply nilReply() {
@@ -72,6 +75,21 @@ bool throwsOn(Fn&& fn) {
         return false;
     } catch (const std::exception&) {
         return true;
+    }
+}
+
+// True only if fn throws ruvia::RedisError specifically. A std::logic_error (the
+// raw accessors' exception) returns false, so this distinguishes "honors the
+// RedisError contract" from "escapes it".
+template <typename Fn>
+bool throwsRedisError(Fn&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const ruvia::RedisError&) {
+        return true;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -286,4 +304,28 @@ RUVIA_TEST(resp_command_bulk_strings_are_binary_safe) {
     // An embedded NUL is likewise just another length-counted byte.
     RUVIA_CHECK_EQ(encode({"SET", "k", std::string_view("a\0b", 3)}),
                    std::string("*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$3\r\na\0b\r\n", 29));
+}
+
+RUVIA_TEST(redis_wrong_reply_type_throws_RedisError_not_logic_error) {
+    // A reply's RESP type is chosen by the (untrusted) server, so a type mismatch is
+    // a protocol condition the caller catches via RedisError -- not a std::logic_error
+    // that escapes `catch (const RedisError&)` and can std::terminate a coroutine.
+    auto* res = std::pmr::get_default_resource();
+    const auto str = RedisTypesAccess::stringValue("foo", res);
+    const auto num = RedisTypesAccess::integerValue(5, res);
+
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueInteger(str); }));  // INCR answered with a string
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueArray(num); }));    // MGET answered with an integer
+    RUVIA_CHECK(throwsRedisError([&] { (void)redisValueString(num); }));   // GET answered with an integer
+
+    // End-to-end: a SCAN reply whose second element is an integer, not the value array.
+    std::pmr::vector<RedisValue> root(res);
+    root.push_back(RedisTypesAccess::stringValue("0", res));
+    root.push_back(RedisTypesAccess::integerValue(7, res));
+    const auto badScan = RedisTypesAccess::arrayValue(std::move(root), res);
+    RUVIA_CHECK(throwsRedisError([&] { (void)parseRedisScanResult(badScan, res); }));
+
+    // Correct types must still pass (no false rejections).
+    RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueInteger(num); }));
+    RUVIA_CHECK(!throwsRedisError([&] { (void)redisValueString(str); }));
 }

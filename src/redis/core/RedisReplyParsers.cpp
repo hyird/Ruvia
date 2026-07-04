@@ -33,7 +33,7 @@ std::pmr::vector<RedisKeyValue> parseRedisKeyValueArray(
     std::pmr::memory_resource* resource,
     std::string_view context) {
     throwIfRedisError(value);
-    const auto values = value.array();
+    const auto values = redisValueArray(value);
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, context);
     }
@@ -51,7 +51,7 @@ std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
     const RedisValue& value,
     std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
-    const auto values = value.array();
+    const auto values = redisValueArray(value);
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis scored array reply");
     }
@@ -68,12 +68,12 @@ std::pmr::vector<RedisScoredValue> parseRedisScoredArray(
 
 RedisScanResult parseRedisScanResult(const RedisValue& value, std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
-    const auto root = value.array();
+    const auto root = redisValueArray(value);
     if (root.size() != 2) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis scan reply");
     }
     const auto cursor = parseRedisCursor(redisValueString(root[0]));
-    const auto values = root[1].array();
+    const auto values = redisValueArray(root[1]);
     RedisScanResult result = RedisTypesAccess::scanResult(resource);
     RedisTypesAccess::cursor(result) = cursor;
     auto& outputValues = RedisTypesAccess::values(result);
@@ -87,12 +87,12 @@ RedisScanResult parseRedisScanResult(const RedisValue& value, std::pmr::memory_r
 
 RedisHashScanResult parseRedisHashScanResult(const RedisValue& value, std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
-    const auto root = value.array();
+    const auto root = redisValueArray(value);
     if (root.size() != 2) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis hscan reply");
     }
     const auto cursor = parseRedisCursor(redisValueString(root[0]));
-    const auto values = root[1].array();
+    const auto values = redisValueArray(root[1]);
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis hscan entry count");
     }
@@ -110,12 +110,12 @@ RedisHashScanResult parseRedisHashScanResult(const RedisValue& value, std::pmr::
 
 RedisZScanResult parseRedisZScanResult(const RedisValue& value, std::pmr::memory_resource* resource) {
     throwIfRedisError(value);
-    const auto root = value.array();
+    const auto root = redisValueArray(value);
     if (root.size() != 2) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis zscan reply");
     }
     const auto cursor = parseRedisCursor(redisValueString(root[0]));
-    const auto values = root[1].array();
+    const auto values = redisValueArray(root[1]);
     if (values.size() % 2 != 0) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis zscan entry count");
     }
@@ -139,7 +139,7 @@ std::optional<RedisKeyValue> parseRedisBlockingPopReply(
     if (value.null()) {
         return std::nullopt;
     }
-    const auto items = value.array();
+    const auto items = redisValueArray(value);
     if (items.size() != 2) {
         throw RedisError(RedisError::Code::kProtocolError, "unexpected redis blocking pop reply");
     }
