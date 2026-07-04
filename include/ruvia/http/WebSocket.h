@@ -20,6 +20,7 @@ enum class WebSocketOpcode : std::uint8_t {
 
 namespace detail {
 struct WebSocketMessageAccess;
+struct WebSocketAccess;
 }  // namespace detail
 
 class WebSocketMessage final {
@@ -73,9 +74,6 @@ public:
     using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
     using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
 
-    constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
-        : target_(target), read_(read), write_(write), close_(close) {}
-
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
@@ -104,6 +102,11 @@ public:
     }
 
 private:
+    friend struct detail::WebSocketAccess;
+
+    constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
+        : target_(target), read_(read), write_(write), close_(close) {}
+
     Task<void> write(WebSocketOpcode opcode, std::string_view payload) {
         return write_(target_, opcode, payload);
     }

@@ -5,6 +5,7 @@
 #include "HttpWebSocketConnection.h"
 #include "../server/ConnectionScanner.h"
 #include "../../router/RouteTable.h"
+#include "../../http/WebSocketInternal.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/WebSocket.h"
@@ -28,7 +29,7 @@ Task<void> webSocketCloseThunk(void* target, std::uint16_t code, std::string_vie
 
 template <typename Connection>
 [[nodiscard]] WebSocket makeWebSocketFacade(Connection& connection) noexcept {
-    return WebSocket(
+    return WebSocketAccess::make(
         &connection,
         &webSocketReadThunk<Connection>,
         &webSocketWriteThunk<Connection>,
