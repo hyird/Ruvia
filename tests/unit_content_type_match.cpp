@@ -7,8 +7,25 @@
 namespace {
 
 using ruvia::detail::contentTypeMatches;
+using ruvia::detail::modelAsciiEqualsIgnoreCase;
 
 }  // namespace
+
+RUVIA_TEST(model_ascii_equals_ignore_case_folds_only_letters) {
+    RUVIA_CHECK(modelAsciiEqualsIgnoreCase("Text/HTML", "text/html"));
+    RUVIA_CHECK(modelAsciiEqualsIgnoreCase("", ""));
+    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("abc", "abcd"));  // length mismatch
+    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("abc", "abd"));
+
+    // Only A-Z fold. A naive `| 0x20` fold would wrongly equate the punctuation
+    // adjacent to the letter ranges ('[' 0x5B with '{' 0x7B, '@' 0x40 with '`').
+    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("[", "{"));
+    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("@", "`"));
+
+    // High (non-ASCII) bytes are compared exactly, never folded.
+    RUVIA_CHECK(modelAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
+    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
+}
 
 RUVIA_TEST(content_type_matches_ignoring_parameters) {
     RUVIA_CHECK(contentTypeMatches("application/json", "application/json"));
