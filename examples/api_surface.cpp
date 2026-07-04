@@ -665,6 +665,11 @@ concept HasFetchOptionsHeaderArray = requires(T& options, const ruvia::HttpHeade
 };
 
 template <typename T>
+concept HasFetchOptionsHeaderVector = requires(T& options, const std::vector<ruvia::HttpHeaderView>& headers) {
+    options.headers = headers;
+};
+
+template <typename T>
 concept HasFetchOptionsInitializerListHeaders = requires(
     T& options,
     std::initializer_list<ruvia::HttpHeaderView> headers) {
@@ -1646,6 +1651,7 @@ static_assert(!HasFetchResponseStatusCodeField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseStatusGetter<ruvia::FetchResponse>);
 static_assert(HasFetchOptionsHeaderViews<ruvia::FetchOptions>);
 static_assert(HasFetchOptionsHeaderArray<ruvia::FetchOptions>);
+static_assert(!HasFetchOptionsHeaderVector<ruvia::FetchOptions>);
 static_assert(!HasFetchOptionsInitializerListHeaders<ruvia::FetchOptions>);
 static_assert(!HasFetchResponseHeadersField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseHeadersGetter<ruvia::FetchResponse>);
