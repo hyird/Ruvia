@@ -16,7 +16,7 @@ bool Http2ServerSession<Stream>::seedUpgradedStream(
         stream->markHost();
     }
     stream->markMethod();
-    stream->markScheme();
+    stream->markScheme(80);
     stream->markPath();
     if (!parsed.chunked && parsed.contentLength != 0) {
         if (body.size() != parsed.contentLength) {
