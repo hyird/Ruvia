@@ -17,7 +17,7 @@ using ruvia::HttpMethod;
 using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
-using ruvia::RequestBodyMode;
+using ruvia::detail::RequestBodyMode;
 
 // Never invoked — resolve() only needs a registered route with a valid handler.
 ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {

@@ -8,7 +8,7 @@
 
 namespace {
 
-using ruvia::RequestBodyMode;
+using ruvia::detail::RequestBodyMode;
 using ruvia::detail::Http2StreamRouting;
 using ruvia::detail::RouteResolution;
 

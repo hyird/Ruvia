@@ -55,7 +55,7 @@ protected:
         HttpMethod method,
         std::string_view path,
         detail::ControllerRouteHandler handler,
-        RequestBodyMode bodyMode,
+        detail::RequestBodyMode bodyMode,
         std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
@@ -65,7 +65,7 @@ protected:
         HttpMethod method,
         std::string_view path,
         detail::ControllerRouteStreamHandler handler,
-        ResponseBodyMode responseMode,
+        detail::ResponseBodyMode responseMode,
         std::span<const detail::ControllerMiddlewareDescriptor> middlewares,
         WebSocketRouteOptions webSocketOptions = {}) {
         scope.registerStreamRoute(
