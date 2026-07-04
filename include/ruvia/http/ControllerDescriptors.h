@@ -20,6 +20,8 @@
 namespace ruvia {
 
 class Router;
+template <typename ControllerT>
+class Controller;
 
 }  // namespace ruvia
 
@@ -75,16 +77,21 @@ using ControllerRouteStreamHandler = CallableRef<void, Context&>;
 
 class ControllerRouteBuilder final {
 public:
-    ControllerRouteBuilder(
-        Router& router,
-        std::string_view prefix,
-        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
-            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
     ControllerRouteBuilder(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder& operator=(ControllerRouteBuilder&&) noexcept;
     ControllerRouteBuilder(const ControllerRouteBuilder&) = delete;
     ControllerRouteBuilder& operator=(const ControllerRouteBuilder&) = delete;
     ~ControllerRouteBuilder();
+
+private:
+    template <typename ControllerT>
+    friend class ::ruvia::Controller;
+
+    ControllerRouteBuilder(
+        Router& router,
+        std::string_view prefix,
+        std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
+            std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
 
     void registerRoute(
         HttpMethod method,
@@ -105,7 +112,6 @@ public:
         std::pmr::vector<ControllerMiddlewareDescriptor> middlewares =
             std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource())) const;
 
-private:
     struct OwnedPrefixTag final {};
     ControllerRouteBuilder(
         Router& router,
