@@ -10,6 +10,7 @@ on:
       - "include/**"
       - "src/**"
       - "examples/**"
+      - "tests/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
   pull_request:
@@ -20,6 +21,7 @@ on:
       - "include/**"
       - "src/**"
       - "examples/**"
+      - "tests/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
 
@@ -85,11 +87,15 @@ jobs:
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
+            -DRUVIA_BUILD_TESTS=ON \
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build build-test --config "$BUILD_TYPE"
+
+      - name: Test
+        run: ctest --test-dir build-test --output-on-failure --build-config "$BUILD_TYPE"
 
   windows_build:
     name: Windows build
@@ -137,9 +143,14 @@ jobs:
             -DRUVIA_ENABLE_REDIS=ON `
             -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
+            -DRUVIA_BUILD_TESTS=ON `
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
       - name: Build
         shell: pwsh
         run: cmake --build build-test --config "$env:BUILD_TYPE"
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build-test --output-on-failure --build-config "$env:BUILD_TYPE"
