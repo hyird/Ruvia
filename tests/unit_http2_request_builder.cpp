@@ -3,6 +3,7 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/HttpRequestInternal.h"
 #include "net/http2/Http2RequestBuilder.h"
 
 namespace {
@@ -10,6 +11,7 @@ namespace {
 using ruvia::HttpMethod;
 using ruvia::detail::Http2RequestBuilder;
 using ruvia::detail::Http2StreamState;
+using ruvia::detail::HttpRequestAccess;
 
 Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
@@ -47,6 +49,21 @@ RUVIA_TEST(h2_request_builder_asterisk_form_target) {
     stream.assignRequestPath("*");
     // The asterisk-form target (OPTIONS *) keeps "*" as the path.
     RUVIA_CHECK_EQ(Http2RequestBuilder::requestPath(stream), std::string_view("*"));
+}
+
+RUVIA_TEST(h2_request_builder_rejects_non_options_asterisk_target) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.setRequestMethod(HttpMethod::kGet);
+    stream.assignRequestPath("*");
+    RUVIA_CHECK(!Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource()));
+
+    auto optionsRequest = HttpRequestAccess::make();
+    auto optionsStream = makeStream();
+    optionsStream.setRequestMethod(HttpMethod::kOptions);
+    optionsStream.assignRequestPath("*");
+    RUVIA_CHECK(Http2RequestBuilder::build(optionsStream, optionsRequest, std::pmr::new_delete_resource()));
+    RUVIA_CHECK_EQ(optionsRequest.path(), std::string_view("*"));
 }
 
 RUVIA_TEST(h2_request_builder_empty_query_after_question_mark) {
