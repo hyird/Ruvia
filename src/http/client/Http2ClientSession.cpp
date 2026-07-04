@@ -52,7 +52,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     }
     static constexpr std::string_view kForbidden[] = {
         "connection", "keep-alive", "proxy-connection", "transfer-encoding",
-        "upgrade", "host", "content-length"};
+        "upgrade", "host", "content-length", "trailer"};
     for (const auto forbidden : kForbidden) {
         if (httpAsciiEqualsIgnoreCase(name, forbidden)) {
             return true;

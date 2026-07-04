@@ -1902,6 +1902,13 @@ RUVIA_TEST(http2_request_te_header_must_be_trailers) {
     RUVIA_CHECK(!results[0].error.empty());
 }
 
+RUVIA_TEST(http2_request_trailer_header_is_client_managed) {
+    const auto results = runH2Fetches({"/echo"}, {{"trailer", "Digest"}});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
+}
+
 // --- Streamed request body uses DATA frames over HTTP/2 ------------------
 RUVIA_TEST(http2_streamed_request_body) {
     const auto body = runH2UploadFetch();
