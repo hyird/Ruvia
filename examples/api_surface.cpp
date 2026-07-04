@@ -24,6 +24,14 @@
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/redis/RedisTypes.h"
 
+#ifdef RUVIA_GET_DYNAMIC
+#error "RUVIA_GET_DYNAMIC must not be public; use RUVIA_GET_STREAM or RUVIA_GET_SSE for explicit response streaming"
+#endif
+
+#ifdef RUVIA_POST_DYNAMIC
+#error "RUVIA_POST_DYNAMIC must not be public; ordinary routes must not enter response streaming dynamically"
+#endif
+
 namespace {
 
 struct CurrentUser final {
