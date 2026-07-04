@@ -15,6 +15,7 @@ using ruvia::WebSocketOpcode;
 using ruvia::detail::WebSocketFrameView;
 using ruvia::detail::WebSocketInboundAction;
 using ruvia::detail::WebSocketInboundAssembler;
+using ruvia::detail::WebSocketMessageAccess;
 
 WebSocketFrameView frame(
     WebSocketOpcode opcode, std::string_view payload, bool fin,
@@ -25,7 +26,7 @@ WebSocketFrameView frame(
 }
 
 bool acceptThrows(WebSocketInboundAssembler& assembler, const WebSocketFrameView& f, std::size_t maxBytes) {
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     try {
         (void)assembler.accept(f, maxBytes, out);
         return false;
@@ -38,7 +39,7 @@ bool acceptThrows(WebSocketInboundAssembler& assembler, const WebSocketFrameView
 
 RUVIA_TEST(ws_assembler_control_frames) {
     WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kPing, "p", true), 1000, out) ==
                 WebSocketInboundAction::kSendPong);
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kPong, "", true), 1000, out) ==
@@ -49,7 +50,7 @@ RUVIA_TEST(ws_assembler_control_frames) {
 
 RUVIA_TEST(ws_assembler_single_frame_messages) {
     WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "hello", true), 1000, out) ==
                 WebSocketInboundAction::kDeliver);
     RUVIA_CHECK_EQ(out.payload(), std::string_view("hello"));
@@ -64,7 +65,7 @@ RUVIA_TEST(ws_assembler_single_frame_messages) {
 
 RUVIA_TEST(ws_assembler_invalid_utf8_text) {
     WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     const std::string overlong("\xc0\x80", 2);  // overlong encoding of NUL
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, overlong, true), 1000, out) ==
                 WebSocketInboundAction::kInvalidUtf8);
@@ -72,7 +73,7 @@ RUVIA_TEST(ws_assembler_invalid_utf8_text) {
 
 RUVIA_TEST(ws_assembler_fragmented_message) {
     WebSocketInboundAssembler assembler(std::pmr::get_default_resource());
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "hel", false), 1000, out) ==
                 WebSocketInboundAction::kContinue);
     RUVIA_CHECK(assembler.accept(frame(WebSocketOpcode::kText, "lo ", false, true), 1000, out) ==
@@ -89,7 +90,7 @@ RUVIA_TEST(ws_assembler_protocol_errors) {
 
     // A new data frame while a fragmented message is in progress is a violation.
     WebSocketInboundAssembler interleaved(std::pmr::get_default_resource());
-    WebSocketMessage out;
+    auto out = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
     RUVIA_CHECK(interleaved.accept(frame(WebSocketOpcode::kText, "start", false), 1000, out) ==
                 WebSocketInboundAction::kContinue);
     RUVIA_CHECK(acceptThrows(interleaved, frame(WebSocketOpcode::kText, "new", true), 1000));

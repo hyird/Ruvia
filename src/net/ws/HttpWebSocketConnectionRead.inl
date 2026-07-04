@@ -9,7 +9,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
         if (!frame) {
             co_return std::nullopt;
         }
-        WebSocketMessage message;
+        auto message = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
         switch (inbound_.accept(*frame, maxMessageBytes_, message)) {
             case WebSocketInboundAction::kSendPong:
                 co_await write(WebSocketOpcode::kPong, frame->payload);

@@ -24,7 +24,6 @@ struct WebSocketMessageAccess;
 
 class WebSocketMessage final {
 public:
-    constexpr WebSocketMessage() noexcept = default;
     WebSocketMessage(const WebSocketMessage&) noexcept = default;
     WebSocketMessage& operator=(const WebSocketMessage&) noexcept = default;
     WebSocketMessage(WebSocketMessage&&) noexcept = default;
@@ -48,6 +47,8 @@ public:
 
 private:
     friend struct detail::WebSocketMessageAccess;
+
+    constexpr WebSocketMessage() noexcept = default;
 
     constexpr WebSocketMessage(WebSocketOpcode opcode, std::string_view payload) noexcept
         : opcode_(opcode), payload_(payload) {}
