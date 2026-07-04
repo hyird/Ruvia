@@ -7,14 +7,14 @@
 #include "HttpRequestFlags.h"
 #include "HttpTransferCoding.h"
 #include "ruvia/http/HttpParseTypes.h"
-#include "ruvia/http/HttpRequest.h"
+#include "HttpRequestInternal.h"
 
 namespace ruvia::detail {
 
 struct HttpServerParseResult {
     HttpParseStatus status{HttpParseStatus::kIncomplete};
     HttpParseError error{HttpParseError::kNone};
-    HttpRequest request;
+    HttpRequest request{HttpRequestAccess::make()};
     std::size_t headerBytes{0};
     std::size_t contentLength{0};
     std::size_t consumedBytes{0};

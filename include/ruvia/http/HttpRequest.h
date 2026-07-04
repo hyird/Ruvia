@@ -69,6 +69,8 @@ private:
 
     static constexpr std::size_t kCachedHeaderSlots = 25;
 
+    HttpRequest() noexcept = default;
+
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
 
     HttpMethod method_{HttpMethod::kUnknown};

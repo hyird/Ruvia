@@ -18,7 +18,7 @@ using ruvia::detail::http2ChooseWebSocketSubprotocol;
 using ruvia::detail::http2IsValidWebSocketRequest;
 
 HttpRequest requestWith(RequestKnownHeader known, std::string_view name, std::string_view value) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::addHeader(request, HttpHeaderView{name, value},
                                  HttpRequestAccess::knownHeaderSlot(known));
@@ -42,7 +42,7 @@ RUVIA_TEST(websocket_subprotocol_negotiation) {
     RUVIA_CHECK(http2ChooseWebSocketSubprotocol(request, "binary").empty());
 
     // A request offering nothing yields no subprotocol.
-    HttpRequest none;
+    HttpRequest none = HttpRequestAccess::make();
     HttpRequestAccess::reset(none);
     RUVIA_CHECK(http2ChooseWebSocketSubprotocol(none, "chat").empty());
 }

@@ -179,7 +179,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
 int main() {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    ruvia::HttpRequest request;
+    auto request = ruvia::detail::HttpRequestAccess::make();
 
     exerciseGenerateCookieSerialization(memory, request);
     exerciseSetCookieMatchesGenerate(memory, request);

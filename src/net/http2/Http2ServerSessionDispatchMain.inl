@@ -10,7 +10,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
         std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
     const auto baseServices = routeServices();
 
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     if (!Http2RequestBuilder::build(stream, request, requestMemory.resource())) {
         HttpResponse response = co_await routes_.handleError(
             request,

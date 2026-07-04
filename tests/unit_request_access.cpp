@@ -20,7 +20,7 @@ using ruvia::detail::requestKnownHeader;
 }  // namespace
 
 RUVIA_TEST(request_access_reset_initializes_defaults) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(request.method() == HttpMethod::kUnknown);
     RUVIA_CHECK_EQ(request.httpVersion(), std::string_view("HTTP/1.1"));
@@ -40,7 +40,7 @@ RUVIA_TEST(request_access_known_header_slot_mapping) {
 }
 
 RUVIA_TEST(request_access_known_header_first_write_wins) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost);
     HttpRequestAccess::setKnownHeaderSlot(request, slot, "first.example");
@@ -56,7 +56,7 @@ RUVIA_TEST(request_access_known_header_first_write_wins) {
 }
 
 RUVIA_TEST(request_access_add_header_appends_and_caches) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     RUVIA_CHECK(HttpRequestAccess::addHeader(
         request, HttpHeaderView{"host", "example.com"},
@@ -70,7 +70,7 @@ RUVIA_TEST(request_access_add_header_appends_and_caches) {
 }
 
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     for (int i = 0; i < 64; ++i) {  // kMaxRequestHeaders == 64
         RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x", "y"}));
@@ -81,7 +81,7 @@ RUVIA_TEST(request_access_add_header_rejects_when_full) {
 }
 
 RUVIA_TEST(request_access_reset_clears_cached_headers_and_transport) {
-    HttpRequest request;
+    HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::setKnownHeaderSlot(
         request, HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kHost), "h");
