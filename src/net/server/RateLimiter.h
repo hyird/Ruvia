@@ -66,7 +66,12 @@ public:
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
         const RateLimitRule& rule) noexcept {
-        return allow(routeScope == 0 ? kFallbackRouteScope : routeScope, remoteAddress, rule, appRule_.failClosed);
+        const auto normalized = normalizeRateLimitRule(rule);
+        return allow(
+            routeScope == 0 ? kFallbackRouteScope : routeScope,
+            remoteAddress,
+            normalized,
+            normalized.failClosed);
     }
 
 private:

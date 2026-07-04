@@ -53,7 +53,7 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 400, .message = "invalid http2 upgrade"},
+            HttpErrorInfo(400, {}, "invalid http2 upgrade"),
             true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
@@ -63,7 +63,7 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 413, .message = "request body is too large"},
+            HttpErrorInfo(413, {}, "request body is too large"),
             true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
@@ -109,13 +109,14 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
-            HttpErrorInfo{
-                .statusCode = parsed.status == HttpParseStatus::kError
+            HttpErrorInfo(
+                parsed.status == HttpParseStatus::kError
                     ? httpParseErrorStatus(parsed.error)
                     : static_cast<std::uint16_t>(400),
-                .message = parsed.status == HttpParseStatus::kError
+                {},
+                parsed.status == HttpParseStatus::kError
                     ? httpParseErrorMessage(parsed.error)
-                    : "incomplete http2 upgrade body"},
+                    : "incomplete http2 upgrade body"),
             true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);

@@ -166,13 +166,13 @@ template <ValidationTarget Target, typename BodyT>
     } else if constexpr (Target == ValidationTarget::kForm) {
         co_return co_await c.req().template form<BodyT>();
     } else if constexpr (Target == ValidationTarget::kQuery) {
-        co_return parseValidatedFields<Target, BodyT>(c, c.req().query());
+        co_return parseValidatedFields<Target, BodyT>(c, detail::requestQueryFields(c.req()));
     } else if constexpr (Target == ValidationTarget::kParam) {
-        co_return parseValidatedFields<Target, BodyT>(c, c.req().param());
+        co_return parseValidatedFields<Target, BodyT>(c, detail::requestParamFields(c.req()));
     } else if constexpr (Target == ValidationTarget::kHeader) {
-        co_return parseValidatedFields<Target, BodyT>(c, c.req().header());
+        co_return parseValidatedFields<Target, BodyT>(c, detail::requestHeaderFields(c.req()));
     } else if constexpr (Target == ValidationTarget::kCookie) {
-        co_return parseValidatedFields<Target, BodyT>(c, c.req().cookie());
+        co_return parseValidatedFields<Target, BodyT>(c, detail::requestCookieFields(c.req()));
     } else {
         static_assert(alwaysFalse<BodyT>, "unsupported validator target");
     }

@@ -91,7 +91,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
 }
 
-[[nodiscard]] bool http2ResponseStatusMayHaveBody(int status) noexcept {
+[[nodiscard]] bool http2ResponseStatusMayHaveBody(std::uint16_t status) noexcept {
     return status >= 200 && status != 204 && status != 205 && status != 304;
 }
 
@@ -803,7 +803,7 @@ struct H2DecodeContext final {
     std::pmr::memory_resource* resource{nullptr};
     std::size_t headerCount{0};
     std::size_t contentLength{0};
-    int status{0};
+    std::uint16_t status{0};
     bool sawStatus{false};
     bool sawRegular{false};
     bool hasContentLength{false};
@@ -828,7 +828,7 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
             ctx->malformed = true;
             return false;
         }
-        ctx->status = status;
+        ctx->status = static_cast<std::uint16_t>(status);
         ctx->sawStatus = true;
         return true;
     }
@@ -858,10 +858,11 @@ bool h2OnDecodedHeader(void* target, std::string_view name, std::string_view val
     if (ctx->status < 200) {
         return true;
     }
-    if (ctx->response->headers.empty()) {
-        ctx->response->headers.reserve(8);
+    auto& headers = FetchResponseAccess::headers(*ctx->response);
+    if (headers.empty()) {
+        headers.reserve(8);
     }
-    ctx->response->headers.emplace_back(name, value, ctx->resource);
+    headers.emplace_back(FetchResponseHeaderAccess::make(name, value, ctx->resource));
     return true;
 }
 
@@ -894,11 +895,11 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
             if (ctx.status < 200) {
                 ok = !endStream;
             } else {
-                stream->response.statusCode = ctx.status;
+                FetchResponseAccess::setStatus(stream->response, ctx.status);
                 stream->headersComplete = true;
                 stream->responseBodyAllowed =
                     stream->responseBodyAllowed &&
-                    http2ResponseStatusMayHaveBody(stream->response.statusCode);
+                    http2ResponseStatusMayHaveBody(stream->response.status());
                 stream->responseHasContentLength = ctx.hasContentLength;
                 stream->responseContentLength = ctx.contentLength;
             }
@@ -1003,18 +1004,18 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
     if (stream->streaming) {
         // Backpressure: buffer the data and defer the WINDOW_UPDATE until readChunk consumes it,
         // so a slow reader stalls the peer instead of growing memory without bound.
-        stream->response.body.append(data.data(), data.size());
+        FetchResponseAccess::body(stream->response).append(data.data(), data.size());
         stream->flowDebt += consumed;
         wakeReader(*stream);
     } else if (stream->maxBodyBytes != 0 &&
-               stream->response.body.size() + data.size() > stream->maxBodyBytes) {
+               FetchResponseAccess::body(stream->response).size() + data.size() > stream->maxBodyBytes) {
         sendRstStream(stream->id, Http2ErrorCode::kCancel);
         failStream(*stream, Http2ErrorCode::kCancel);
         queueWindowUpdate(0, static_cast<std::uint32_t>(consumed), false);
         wakeFlusher();
         return true;
     } else {
-        stream->response.body.append(data.data(), data.size());
+        FetchResponseAccess::body(stream->response).append(data.data(), data.size());
         stream->flow.restoreReceive(consumed);
         queueWindowUpdate(header.streamId, static_cast<std::uint32_t>(consumed), true);
         wakeFlusher();
@@ -1119,7 +1120,7 @@ public:
     Http2StreamSource(
         Http2ClientSession* session,
         std::uint32_t streamId,
-        int status,
+        std::uint16_t status,
         std::pmr::vector<FetchResponseHeader> headers,
         std::pmr::memory_resource* resource) noexcept
         : session_(session),
@@ -1130,7 +1131,7 @@ public:
 
     ~Http2StreamSource() override { close(); }
 
-    [[nodiscard]] int statusCode() const noexcept override { return status_; }
+    [[nodiscard]] std::uint16_t status() const noexcept override { return status_; }
     [[nodiscard]] const std::pmr::vector<FetchResponseHeader>& headers() const noexcept override {
         return headers_;
     }
@@ -1150,7 +1151,7 @@ private:
     std::pmr::vector<FetchResponseHeader> headers_;
     std::pmr::memory_resource* resource_;
     std::uint32_t streamId_;
-    int status_;
+    std::uint16_t status_;
     bool closed_{false};
 };
 
@@ -1189,7 +1190,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     if (options.timeout.count() < 0) {
         throw std::invalid_argument("http/2 request timeout must not be negative");
     }
-    if (options.bodyStream.valid() && !options.body.empty()) {
+    if (options.bodyStream && !options.body.empty()) {
         throw std::invalid_argument("http/2: set either body or bodyStream, not both");
     }
 
@@ -1215,7 +1216,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         HpackEncoder::encodeHeader(encodeScratch_, lowerName, userHeader.value);
     }
 
-    const bool streamedBody = options.bodyStream.valid();
+    const bool streamedBody = static_cast<bool>(options.bodyStream);
     const bool hasBody = !options.body.empty() || streamedBody;
     const auto id = nextStreamId_;
     nextStreamId_ += 2;
@@ -1284,10 +1285,10 @@ Task<FetchResponse> Http2ClientSession::fetch(
                 ? config_.maxResponseBodyBytes
                 : kMaxDecodedRequestBodyBytes);
 
-        if (hopsRemaining == 0 || !isHttpClientRedirectStatus(response.statusCode)) {
+        if (hopsRemaining == 0 || !isHttpClientRedirectStatus(response.status())) {
             co_return response;
         }
-        if (!canReplayHttpClientRedirectRequest(currentOptions, response.statusCode)) {
+        if (!canReplayHttpClientRedirectRequest(currentOptions, response.status())) {
             co_return response;
         }
         const auto location = findHttpClientResponseHeader(response, "location");
@@ -1296,7 +1297,7 @@ Task<FetchResponse> Http2ClientSession::fetch(
             co_return response;
         }
         currentPath = redirectTarget;
-        applyHttpClientRedirectMethod(currentOptions, response.statusCode);
+        applyHttpClientRedirectMethod(currentOptions, response.status());
         --hopsRemaining;
     }
 }
@@ -1318,8 +1319,8 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
 
     // Hand the status + headers to the source; the stream keeps buffering DATA for readChunk().
     auto* source = constructPmrObject<Http2StreamSource>(
-        requestResource, this, id, stream->response.statusCode,
-        std::move(stream->response.headers), requestResource);
+        requestResource, this, id, stream->response.status(),
+        std::move(FetchResponseAccess::headers(stream->response)), requestResource);
     co_return FetchResponseStream(
         std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
 }
@@ -1336,9 +1337,10 @@ Task<std::pmr::string> Http2ClientSession::streamReadChunk(std::uint32_t streamI
             (void)chunkResource;
             throw std::runtime_error("http/2 stream failed");
         }
-        if (!stream->response.body.empty()) {
+        auto& responseBody = FetchResponseAccess::body(stream->response);
+        if (!responseBody.empty()) {
             std::pmr::string chunk(stream->requestResource);
-            chunk.swap(stream->response.body);
+            chunk.swap(responseBody);
             if (stream->flowDebt > 0) {
                 stream->flow.restoreReceive(stream->flowDebt);
                 // Once the stream is closed, only the connection window needs crediting; a

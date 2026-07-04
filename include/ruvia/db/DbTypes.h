@@ -99,9 +99,6 @@ private:
 
 class DbField final {
 public:
-    explicit DbField(std::pmr::memory_resource* resource = nullptr);
-    DbField(std::nullptr_t, std::pmr::memory_resource* resource);
-    DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(DbField&& other) noexcept;
     DbField& operator=(DbField&& other) noexcept;
 
@@ -116,6 +113,9 @@ private:
 
     struct BorrowedTag final {};
 
+    explicit DbField(std::pmr::memory_resource* resource);
+    DbField(std::nullptr_t, std::pmr::memory_resource* resource);
+    DbField(std::string_view value, std::pmr::memory_resource* resource);
     DbField(BorrowedTag, std::string_view value, std::pmr::memory_resource* resource);
     [[nodiscard]] static DbField borrowed(std::string_view value, std::pmr::memory_resource* resource);
     void refreshView() noexcept;
@@ -140,11 +140,6 @@ public:
     [[nodiscard]] const DbField& operator[](std::size_t index) const noexcept;
     [[nodiscard]] const DbField* begin() const noexcept;
     [[nodiscard]] const DbField* end() const noexcept;
-
-    void reserve(std::size_t size);
-    void push_back(DbField field);
-    void emplace_back(std::nullptr_t, std::pmr::memory_resource* resource);
-    void emplace_back(std::string_view value, std::pmr::memory_resource* resource);
 
 private:
     friend class detail::MariaDbPool;

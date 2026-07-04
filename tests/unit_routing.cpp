@@ -28,14 +28,18 @@ std::pmr::string path(std::string_view value) {
     return std::pmr::string(value, std::pmr::get_default_resource());
 }
 
-void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
+void addRoute(ruvia::detail::RouterImpl& impl, HttpMethod method, std::string_view route) {
     impl.registerRoute(
-        HttpMethod::kGet,
+        method,
         path(route),
         RouteHandler(nullptr, &dummyHandler),
         RequestBodyMode::kBuffered,
         std::span<const ControllerMiddlewareDescriptor>{},
         std::span<const ControllerMiddlewareDescriptor>{});
+}
+
+void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
+    addRoute(impl, HttpMethod::kGet, route);
 }
 
 // Registers the given routes and reports whether finalize() rejects them as a
@@ -66,8 +70,12 @@ struct Router final {
     }
 
     std::string_view routePathOf(std::string_view p) {
+        return routePathOf(HttpMethod::kGet, p);
+    }
+
+    std::string_view routePathOf(HttpMethod method, std::string_view p) {
         RouteMatch match;
-        const auto res = impl.routeTable().resolve(HttpMethod::kGet, p, match);
+        const auto res = impl.routeTable().resolve(method, p, match);
         return res.found() ? res.route().path() : "<none>";
     }
 
@@ -158,6 +166,7 @@ RUVIA_TEST(routing_deep_wildcard_with_static_prefix_allowed) {
     RUVIA_CHECK(!finalizeConflicts({"/:section/*", "/health/live"}));
     RUVIA_CHECK(!finalizeConflicts({"/files/:bucket/*", "/files/public/:id"}));
     RUVIA_CHECK(!finalizeConflicts({"/:section/*", "/health/*"}));
+    RUVIA_CHECK(!finalizeConflicts({"/:section/live", "/health/:probe"}));
 
     // Guards the fix must NOT regress (these genuinely shadow -> still conflicts):
     RUVIA_CHECK(finalizeConflicts({"/a/*", "/a/:x"}));   // wildcard vs param sibling at a shared node
@@ -185,4 +194,32 @@ RUVIA_TEST(routing_allowed_wildcard_overlaps_resolve_to_static_priority_branch) 
         RUVIA_CHECK_EQ(r.routePathOf("/files/public/5"), std::string_view("/files/public/:id"));
         RUVIA_CHECK_EQ(r.routePathOf("/files/private/a/b"), std::string_view("/files/:bucket/*"));
     }
+
+    {
+        Router r;
+        addRoute(r.impl, "/:section/live");
+        addRoute(r.impl, "/health/:probe");
+        r.finalize();
+        RUVIA_CHECK_EQ(r.routePathOf("/health/live"), std::string_view("/health/:probe"));
+        RUVIA_CHECK_EQ(r.routePathOf("/users/live"), std::string_view("/:section/live"));
+    }
+}
+
+RUVIA_TEST(routing_head_fallback_respects_static_priority_overlap) {
+    Router r;
+    addRoute(r.impl, "/:section/live");                   // implicit HEAD fallback
+    addRoute(r.impl, HttpMethod::kHead, "/health/:probe"); // explicit HEAD static branch
+    r.finalize();
+
+    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/health/live"), std::string_view("/health/:probe"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/users/live"), std::string_view("/:section/live"));
+}
+
+RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
+    Router r;
+    addRoute(r.impl, "/health/live");                       // implicit exact HEAD fallback
+    addRoute(r.impl, HttpMethod::kHead, "/:section/:probe"); // explicit HEAD route
+    r.finalize();
+
+    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/health/live"), std::string_view("/:section/:probe"));
 }

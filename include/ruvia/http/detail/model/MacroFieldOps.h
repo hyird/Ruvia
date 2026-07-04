@@ -99,18 +99,28 @@
     RUVIA_MODEL_FIELD_ACCESSORS_I(T, RUVIA_MODEL_UNPAREN x)
 #define RUVIA_MODEL_FIELD_ACCESSORS_I(T, ...) RUVIA_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
 #define RUVIA_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
-    [[nodiscard]] ::ruvia::ModelFieldRef<RUVIA_MODEL_UNPAREN type> field() { \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() { \
+        ruviaEnsureParsed(); \
+        return ruviaField_##field##_; \
+    } \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
+        ruviaEnsureParsed(); \
+        return ruviaField_##field##_; \
+    } \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
         ruviaEnsureParsed(); \
         auto* const ruviaResource = body_.resource(); \
-        return ::ruvia::ModelFieldRef<RUVIA_MODEL_UNPAREN type>( \
-            ::ruvia::detail::ResolvedPmrResourceTag{}, \
-            ruviaField_##field##_, \
-            ruviaState_##field##_, \
-            ruviaResource); \
+        if (!ruviaField_##field##_) { \
+            ruviaField_##field##_.emplace(::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
+                ::ruvia::detail::ResolvedPmrResourceTag{}, \
+                ruviaResource)); \
+        } \
+        ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
+        return *ruviaField_##field##_; \
     } \
-    [[nodiscard]] ::ruvia::ModelFieldConstRef<RUVIA_MODEL_UNPAREN type> field() const { \
-        ruviaEnsureParsed(); \
-        return ::ruvia::ModelFieldConstRef<RUVIA_MODEL_UNPAREN type>(ruviaField_##field##_); \
+    void field##Reset() noexcept { \
+        ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kMissing; \
+        ruviaField_##field##_.reset(); \
     } \
     template <typename RuviaFieldValueT> \
         requires ((::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \

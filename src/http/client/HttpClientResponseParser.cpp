@@ -7,12 +7,13 @@
 
 #include "../HeaderTokenUtils.h"
 #include "../RequestBodyDecoding.h"
+#include "../parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] int parseStatusCode(std::string_view statusLine) {
+[[nodiscard]] std::uint16_t parseStatusCode(std::string_view statusLine) {
     const auto sp1 = statusLine.find(' ');
     if (sp1 == std::string_view::npos) {
         throw std::runtime_error("http client: invalid response status line");
@@ -37,7 +38,30 @@ namespace {
         throw std::runtime_error("http client: invalid response status code");
     }
 
-    return statusCode;
+    return static_cast<std::uint16_t>(statusCode);
+}
+
+[[nodiscard]] bool isSoleChunkedTransferCoding(std::string_view value) noexcept {
+    bool sawItem = false;
+    bool chunked = false;
+    bool invalid = false;
+    httpVisitCommaSeparatedQuoted(value, [&](std::string_view item) noexcept {
+        if (sawItem) {
+            chunked = false;
+            return false;
+        }
+        sawItem = true;
+        if (const auto semicolon = item.find(';'); semicolon != std::string_view::npos) {
+            if (!isValidHttpChunkExtension(item.substr(semicolon))) {
+                invalid = true;
+                return false;
+            }
+            item = httpTrimOws(item.substr(0, semicolon));
+        }
+        chunked = httpAsciiEqualsIgnoreCase(item, "chunked");
+        return true;
+    });
+    return sawItem && chunked && !invalid;
 }
 
 }  // namespace
@@ -51,9 +75,9 @@ HttpClientResponseHead parseHttpClientResponseHead(
     const auto firstLine = crlfPos == std::string_view::npos
         ? headerSection
         : headerSection.substr(0, crlfPos);
-    const int statusCode = parseStatusCode(firstLine);
+    const auto statusCode = parseStatusCode(firstLine);
 
-    response.statusCode = statusCode;
+    FetchResponseAccess::setStatus(response, statusCode);
     HttpClientResponseHead parsed{
         .bodyOffset = headerSection.size() + 4,
         .responseMayHaveBody =
@@ -110,7 +134,7 @@ HttpClientResponseHead parseHttpClientResponseHead(
                 parsed.hasTransferEncoding = true;
                 // Only a sole "chunked" coding is self-delimiting and decodable here; any
                 // other coding (gzip, or "gzip, chunked", ...) is treated as unsupported.
-                parsed.isChunked = httpAsciiEqualsIgnoreCase(value, "chunked");
+                parsed.isChunked = isSoleChunkedTransferCoding(value);
             }
         } else if (httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
             if (parsed.hasContentEncoding) {
@@ -123,10 +147,11 @@ HttpClientResponseHead parseHttpClientResponseHead(
                 parsed.contentCoding = requestContentCoding(value);
             }
         }
-        if (response.headers.empty()) {
-            response.headers.reserve(8);
+        if (FetchResponseAccess::headers(response).empty()) {
+            FetchResponseAccess::headers(response).reserve(8);
         }
-        response.headers.emplace_back(name, value, resource);
+        FetchResponseAccess::headers(response).emplace_back(
+            FetchResponseHeaderAccess::make(name, value, resource));
 
         if (lineEnd == std::string_view::npos) {
             break;

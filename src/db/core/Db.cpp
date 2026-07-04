@@ -108,10 +108,10 @@ Task<std::optional<DbRow>> detail::MariaDbPool::readStreamRow(
         outputRow.ownedFields_.reserve(fieldCount);
         for (std::size_t i = 0; i < fieldCount; ++i) {
             if (row[i] == nullptr) {
-                outputRow.ownedFields_.emplace_back(nullptr, resource);
+                outputRow.ownedFields_.push_back(DbField(nullptr, resource));
                 continue;
             }
-            outputRow.ownedFields_.emplace_back(std::string_view(row[i], lengths[i]), resource);
+            outputRow.ownedFields_.push_back(DbField(std::string_view(row[i], lengths[i]), resource));
         }
         outputRow.refreshView();
         co_return outputRow;
@@ -225,7 +225,7 @@ Task<QueryResult> detail::MariaDbPool::executeOnSlot(
         const auto rowStart = result.fields_.size();
         for (std::size_t i = 0; i < fieldCount; ++i) {
             if (row[i] == nullptr) {
-                result.fields_.emplace_back(nullptr, resource);
+                result.fields_.push_back(DbField(nullptr, resource));
                 continue;
             }
             result.fields_.push_back(DbField::borrowed(std::string_view(row[i], lengths[i]), resource));

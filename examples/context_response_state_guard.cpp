@@ -49,14 +49,14 @@ void exerciseExplicitStatusWinsOnReturn(ruvia::RequestMemory& memory, const ruvi
     context.status(404);
     ruvia::detail::ContextAccess::setResponse(context, context.text("created", 201));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.statusCode() == 201);
+    check(response.status() == 201);
 }
 
 void exerciseExplicitStatusWinsOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(404);
     context.res(context.text("failed", 500));
-    check(context.res().statusCode() == 500);
+    check(context.res().status() == 500);
 }
 
 // The redirect target wins over a prepared context Location header.
@@ -73,7 +73,7 @@ void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const r
     context.status(404);
     ruvia::detail::ContextAccess::setResponse(context, ruvia::HttpResponse(context.resource()));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.statusCode() == 404);
+    check(response.status() == 404);
 }
 
 }  // namespace

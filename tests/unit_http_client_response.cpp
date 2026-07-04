@@ -16,7 +16,7 @@ using ruvia::detail::parseHttpClientResponseHead;
 // Parse a header block (as produced by the pool: status line + headers joined by
 // CRLF, WITHOUT the terminating CRLFCRLF).
 HttpClientResponseHead parseHead(std::string_view method, std::string_view headerSection) {
-    FetchResponse response(std::pmr::get_default_resource());
+    FetchResponse response = ruvia::detail::FetchResponseAccess::make(std::pmr::get_default_resource());
     return parseHttpClientResponseHead(
         method, headerSection, response, std::pmr::get_default_resource());
 }
@@ -58,6 +58,15 @@ RUVIA_TEST(http_client_chunked_is_reusable) {
 RUVIA_TEST(http_client_chunked_case_insensitive) {
     const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\ntransfer-encoding: Chunked");
     RUVIA_CHECK(head.isChunked);
+}
+
+RUVIA_TEST(http_client_chunked_transfer_parameter_is_reusable) {
+    const auto head = parseHead(
+        "GET",
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked;note=\"a,b\";foo=bar");
+    RUVIA_CHECK(head.hasTransferEncoding);
+    RUVIA_CHECK(head.isChunked);
+    RUVIA_CHECK(!head.closeAfterResponse);
 }
 
 // --- Undecodable transfer coding: body delimited by close ----------------

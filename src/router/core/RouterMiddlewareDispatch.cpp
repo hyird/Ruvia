@@ -20,10 +20,7 @@ void storeRepeatedNextError(Context& context) {
         context,
         makeErrorResponse(
             context.resource(),
-            HttpErrorInfo{
-                .statusCode = 500,
-                .code = "next_called_multiple_times",
-                .message = "next() called multiple times"}));
+            HttpErrorInfo(500, "next_called_multiple_times", "next() called multiple times")));
 }
 
 Next::State::Control* makeNextControl(Context& context) {

@@ -157,10 +157,6 @@ std::string_view HttpResponse::header(std::string_view name) const noexcept {
     return {};
 }
 
-bool HttpResponse::hasHeader(std::string_view name) const noexcept {
-    return findHeaderForRead(name, detail::classifyResponseHeaderName(name)) != nullptr;
-}
-
 void HttpResponse::rebuildKnownHeaderIndex() noexcept {
     knownHeaderBits_ = 0;
     knownHeaderIndexes_.fill(detail::kMissingResponseHeaderIndexSlot);
@@ -179,31 +175,30 @@ void HttpResponse::rebuildKnownHeaderIndex() noexcept {
     }
 }
 
-void HttpResponse::setHeader(std::string_view key, std::string_view value) {
+void HttpResponse::header(std::string_view key, std::string_view value) {
+    header(key, value, {});
+}
+
+void HttpResponse::header(std::string_view key, std::string_view value, HeaderOptions options) {
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
     if (!isValidHttpHeaderValue(value)) {
         throw std::invalid_argument("invalid HTTP header value");
     }
-    setHeaderValidated(key, value, detail::classifyResponseHeaderName(key));
+    const auto knownBit = detail::classifyResponseHeaderName(key);
+    if (options.append) {
+        appendHeaderValidated(key, value, knownBit);
+    } else {
+        setHeaderValidated(key, value, knownBit);
+    }
 }
 
-void HttpResponse::appendHeader(std::string_view key, std::string_view value) {
+void HttpResponse::header(std::string_view key, std::nullopt_t) {
     if (!isValidHttpHeaderName(key)) {
         throw std::invalid_argument("invalid HTTP header name");
     }
-    if (!isValidHttpHeaderValue(value)) {
-        throw std::invalid_argument("invalid HTTP header value");
-    }
-    appendHeaderValidated(key, value, detail::classifyResponseHeaderName(key));
-}
-
-bool HttpResponse::removeHeader(std::string_view key) {
-    if (!isValidHttpHeaderName(key)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-    return removeHeaderValidated(key, detail::classifyResponseHeaderName(key));
+    (void)removeHeaderValidated(key, detail::classifyResponseHeaderName(key));
 }
 
 void HttpResponse::setHeaderValidated(

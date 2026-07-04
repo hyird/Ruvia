@@ -26,8 +26,8 @@ FetchResponseStream::FetchResponseStream(FetchResponseStream&&) noexcept = defau
 FetchResponseStream& FetchResponseStream::operator=(FetchResponseStream&&) noexcept = default;
 FetchResponseStream::~FetchResponseStream() = default;
 
-int FetchResponseStream::statusCode() const noexcept {
-    return source_ ? source_->statusCode() : 0;
+std::uint16_t FetchResponseStream::status() const noexcept {
+    return source_ ? source_->status() : 0;
 }
 
 std::span<const FetchResponseHeader> FetchResponseStream::headers() const noexcept {

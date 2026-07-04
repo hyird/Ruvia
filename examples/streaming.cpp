@@ -37,10 +37,10 @@ private:
         std::size_t bytes = 0;
         auto reader = c.req().multipartReader();
         while (auto part = co_await reader.read()) {
-            if (part->partBegin) {
+            if (part->partBegin()) {
                 ++parts;
             }
-            bytes += part->body.size();
+            bytes += part->body().size();
         }
 
         std::pmr::string body(c.allocator<char>());

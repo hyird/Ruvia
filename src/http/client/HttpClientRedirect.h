@@ -31,22 +31,22 @@ namespace ruvia::detail {
     return true;
 }
 
-[[nodiscard]] inline bool isHttpClientRedirectStatus(int status) noexcept {
+[[nodiscard]] inline bool isHttpClientRedirectStatus(std::uint16_t status) noexcept {
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
 [[nodiscard]] inline std::string_view findHttpClientResponseHeader(
     const FetchResponse& response,
     std::string_view name) noexcept {
-    for (const auto& header : response.headers) {
-        if (httpAsciiEqualsIgnoreCase(header.name, name)) {
-            return std::string_view(header.value);
+    for (const auto& header : response.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), name)) {
+            return header.value();
         }
     }
     return {};
 }
 
-inline void applyHttpClientRedirectMethod(FetchOptions& options, int status) {
+inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t status) {
     if (status == 303) {
         if (!httpAsciiEqualsIgnoreCase(options.method, "HEAD")) {
             options.method = "GET";
@@ -67,8 +67,8 @@ inline void applyHttpClientRedirectMethod(FetchOptions& options, int status) {
 
 [[nodiscard]] inline bool canReplayHttpClientRedirectRequest(
     const FetchOptions& options,
-    int status) noexcept {
-    if (!options.bodyStream.valid()) {
+    std::uint16_t status) noexcept {
+    if (!options.bodyStream) {
         return true;
     }
     if (status == 303) {

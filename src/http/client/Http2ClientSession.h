@@ -72,7 +72,7 @@ private:
 
     struct Stream final {
         explicit Stream(std::pmr::memory_resource* requestResource)
-            : response(requestResource) {}
+            : response(FetchResponseAccess::make(requestResource)) {}
 
         Http2StreamFlowControl flow;
         FetchResponse response;         // status/headers accumulate here; body too (buffered mode)
@@ -112,7 +112,7 @@ private:
     struct StreamReaderAwaiter final {
         Stream* stream;
         [[nodiscard]] bool await_ready() const noexcept {
-            return !stream->response.body.empty() || stream->remoteEnded || stream->failed;
+            return !FetchResponseAccess::body(stream->response).empty() || stream->remoteEnded || stream->failed;
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept { stream->reader = handle; }
         void await_resume() const noexcept {}

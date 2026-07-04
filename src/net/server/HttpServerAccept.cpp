@@ -66,8 +66,7 @@ Task<void> HttpServer::acceptLoop() {
                 std::span<std::byte>(limitArenaBuffer.data(), limitArenaBuffer.size()));
             auto response = makeErrorResponse(
                 limitMemory.resource(),
-                HttpErrorInfo{
-                    .statusCode = 429},
+                HttpErrorInfo(429),
                 true);
             std::error_code writeEc;
             co_await writeResponse(socket, memory_, nullptr, nullptr, response, false, writeEc);

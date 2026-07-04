@@ -20,7 +20,7 @@ void setResponseHeaderIfEnabled(
     if (!overwriteExisting && !response.header(name).empty()) {
         return;
     }
-    response.setHeader(name, value);
+    response.header(name, value);
 }
 
 void setResponseHeader(
@@ -31,7 +31,7 @@ void setResponseHeader(
     if (!overwriteExisting && !response.header(name).empty()) {
         return;
     }
-    response.setHeader(name, value);
+    response.header(name, value);
 }
 
 }  // namespace

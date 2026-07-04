@@ -431,7 +431,7 @@ std::string runH2UploadFetch() {
                 options.method = "POST";
                 options.bodyStream = ruvia::RequestBodyStream(&producer, &TestBodyProducer::nextChunk);
                 auto response = co_await taskAsAwaitable(session->fetch("/upload", options, resource));
-                responseBody.assign(response.body.data(), response.body.size());
+                responseBody.assign(response.body().data(), response.body().size());
             } catch (const std::exception& e) {
                 error = e.what();
             }
@@ -571,7 +571,7 @@ std::string runH2EarlyResponseUpload() {
                 options.method = "POST";
                 options.bodyStream = ruvia::RequestBodyStream(&producer, &TestBodyProducer::nextChunk);
                 auto response = co_await taskAsAwaitable(session->fetch("/upload", options, resource));
-                responseBody.assign(response.body.data(), response.body.size());
+                responseBody.assign(response.body().data(), response.body().size());
             } catch (const std::exception& e) {
                 error = e.what();
             }
@@ -628,8 +628,8 @@ std::vector<H2Result> runH2Fetches(
                     auto response = co_await taskAsAwaitable(
                         session->fetch(paths[i], options, std::pmr::get_default_resource()));
                     results[i].ok = true;
-                    results[i].status = response.statusCode;
-                    results[i].body.assign(response.body.data(), response.body.size());
+                    results[i].status = response.status();
+                    results[i].body.assign(response.body().data(), response.body().size());
                 } catch (const std::exception& e) {
                     results[i].error = e.what();
                 }
@@ -907,8 +907,8 @@ H2BadFrameOutcome runH2DataBeforeHeaders() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/data-before-headers", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1067,8 +1067,8 @@ H2BadFrameOutcome runH2DataAfterEndStream() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/data-after-end", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1229,8 +1229,8 @@ H2BadFrameOutcome runH2HeadersAfterEndStream() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/headers-after-end", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1334,8 +1334,8 @@ H2BadFrameOutcome runH2DataOnIdleStream() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/idle-data", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1460,8 +1460,8 @@ H2BadFrameOutcome runH2TruncatedGoawayOnActiveStream() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/truncated-goaway", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1561,8 +1561,8 @@ H2BadFrameOutcome runH2MalformedPriority() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/malformed-priority", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1693,8 +1693,8 @@ H2BadFrameOutcome runH2SelfDependentPriority() {
             try {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(session->fetch("/self-dependent-priority", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -1833,8 +1833,8 @@ H2BadFrameOutcome runH2SelfDependentPriorityHeaders() {
                 ruvia::FetchOptions options;
                 auto response = co_await taskAsAwaitable(
                     session->fetch("/self-dependent-priority-headers", options, resource));
-                out.status = response.statusCode;
-                out.body.assign(response.body.data(), response.body.size());
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
             } catch (...) {
                 out.clientFailed = true;
             }
@@ -2199,7 +2199,7 @@ RUVIA_TEST(http2_stream_large_body) {
                 ruvia::FetchOptions options;
                 auto stream = co_await taskAsAwaitable(
                     session->fetchStream("/large", options, resource));
-                status = stream.statusCode();
+                status = stream.status();
                 for (;;) {
                     auto chunk = co_await taskAsAwaitable(stream.readChunk());
                     if (chunk.empty()) {

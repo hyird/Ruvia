@@ -14,7 +14,7 @@ Task<Http2RouteDispatchResult> Http2ServerSession<Stream>::dispatchHttp2WebSocke
         auto errorResponse = co_await routes_.handleError(
             request,
             requestMemory,
-            HttpErrorInfo{.statusCode = 400, .message = "invalid http2 websocket request"},
+            HttpErrorInfo(400, {}, "invalid http2 websocket request"),
             false,
             services);
         co_return Http2RouteDispatchResult::makeBufferedResponse(std::move(errorResponse));

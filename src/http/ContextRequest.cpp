@@ -136,14 +136,15 @@ void assignUrlDecodedOrCopy(
 void assignDotPath(
     ContextRequest::RequestFormField& field,
     std::pmr::memory_resource* resource) {
-    field.path.clear();
-    std::string_view remaining(field.name.data(), field.name.size());
+    auto& path = detail::RequestFormFieldAccess::path(field);
+    path.clear();
+    std::string_view remaining = field.name();
     while (!remaining.empty()) {
         const auto dot = remaining.find('.');
         const auto segment = dot == std::string_view::npos
             ? remaining
             : remaining.substr(0, dot);
-        field.path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
+        path.emplace_back(std::pmr::string(segment.data(), segment.size(), resource));
         if (dot == std::string_view::npos) {
             break;
         }
@@ -190,8 +191,8 @@ void assignDotPath(
         order.push_back(i);
     }
     std::stable_sort(order.begin(), order.end(), [&fields](std::size_t left, std::size_t right) noexcept {
-        const auto leftName = storedStringView(fields[left].name);
-        const auto rightName = storedStringView(fields[right].name);
+        const auto leftName = fields[left].name();
+        const auto rightName = fields[right].name();
         if (leftName == rightName) {
             return left < right;
         }
@@ -205,7 +206,7 @@ void appendParsedBodyField(
     ContextRequest::RequestFormField&& field,
     ContextRequest::ParseBodyOptions options) {
     if (options.dot) {
-        if (fieldNameHasProtoObject(std::string_view(field.name.data(), field.name.size()))) {
+        if (fieldNameHasProtoObject(field.name())) {
             return;
         }
         assignDotPath(field, fields.get_allocator().resource());
@@ -227,17 +228,17 @@ void compactParsedBodyFields(
     keep.resize(fields.size(), 0);
 
     for (std::size_t offset = 0; offset < order.size();) {
-        const auto name = storedStringView(fields[order[offset]].name);
+        const auto name = fields[order[offset]].name();
         std::optional<std::size_t> lastScalar;
         do {
             const auto index = order[offset];
-            if (fields[index].array) {
+            if (fields[index].array()) {
                 keep[index] = 1;
             } else {
                 lastScalar = index;
             }
             ++offset;
-        } while (offset < order.size() && storedStringView(fields[order[offset]].name) == name);
+        } while (offset < order.size() && fields[order[offset]].name() == name);
         if (lastScalar.has_value()) {
             keep[*lastScalar] = 1;
         }
@@ -298,11 +299,11 @@ void compactParsedBodyFields(
             throw std::invalid_argument("invalid multipart body");
         }
 
-        parts.emplace_back(MultipartPart{
-            .name = partHeaders.name,
-            .filename = partHeaders.filename,
-            .contentType = partHeaders.contentType,
-            .body = requestBody.substr(cursor, nextDelimiterPrefix - cursor)});
+        parts.push_back(detail::MultipartPartAccess::make(
+            partHeaders.name,
+            partHeaders.filename,
+            partHeaders.contentType,
+            requestBody.substr(cursor, nextDelimiterPrefix - cursor)));
 
         cursor = nextDelimiterPrefix + detail::httpMultipartBoundaryPrefixSize(boundaryValue);
     }
@@ -331,7 +332,7 @@ void compactParsedBodyFields(
             const bool array = fieldNameIsArray(std::string_view(decodedName->data(), decodedName->size()));
             appendParsedBodyField(
                 fields,
-                ContextRequest::RequestFormField(
+                detail::RequestFormFieldAccess::make(
                     resource,
                     std::move(*decodedName),
                     std::move(*decodedValue),
@@ -359,17 +360,21 @@ void compactParsedBodyFields(
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(parts.size());
     for (const auto& part : parts) {
-        std::pmr::string name(part.name.data(), part.name.size(), resource);
+        const auto partName = part.name();
+        const auto partBody = part.body();
+        const auto partFilename = part.filename();
+        const auto partContentType = part.contentType();
+        std::pmr::string name(partName.data(), partName.size(), resource);
         const bool array = fieldNameIsArray(std::string_view(name.data(), name.size()));
         appendParsedBodyField(
             fields,
-            ContextRequest::RequestFormField(
+            detail::RequestFormFieldAccess::make(
                 resource,
                 std::move(name),
-                std::pmr::string(part.body.data(), part.body.size(), resource),
-                std::pmr::string(part.filename.data(), part.filename.size(), resource),
-                std::pmr::string(part.contentType.data(), part.contentType.size(), resource),
-                !part.filename.empty(),
+                std::pmr::string(partBody.data(), partBody.size(), resource),
+                std::pmr::string(partFilename.data(), partFilename.size(), resource),
+                std::pmr::string(partContentType.data(), partContentType.size(), resource),
+                !partFilename.empty(),
                 array),
             options);
     }
@@ -437,11 +442,11 @@ const RequestNameValueList& Context::requestHeaders() const {
         headers.reserve(rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
             auto& name = names.emplace_back();
-            name.reserve(rawHeader.name.size());
-            appendLowerAscii(name, rawHeader.name);
-            headers.push_back(RequestNameValueView{
-                .name = std::string_view(name.data(), name.size()),
-                .value = rawHeader.value});
+            name.reserve(rawHeader.name().size());
+            appendLowerAscii(name, rawHeader.name());
+            headers.push_back(detail::RequestNameValueViewAccess::make(
+                std::string_view(name.data(), name.size()),
+                rawHeader.value()));
         }
         requestHeaders_ = &headers;
     }
@@ -454,8 +459,8 @@ std::optional<std::string_view> Context::requestHeader(std::string_view name) co
     // for the list accessor). Last match wins, mirroring RequestNameValueList::get()'s reverse scan.
     const auto rawHeaders = request_.headers();
     for (auto it = rawHeaders.rbegin(); it != rawHeaders.rend(); ++it) {
-        if (detail::httpAsciiEqualsIgnoreCase(it->name, name)) {
-            return it->value;
+        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
+            return it->value();
         }
     }
     return std::nullopt;
@@ -509,9 +514,9 @@ void Context::ensureRequestQuery() const {
     query.reserve(builds.size());
     groups.reserve(builds.size());
     for (const auto& build : builds) {
-        query.push_back(RequestNameValueView{
-            .name = storedStringView(storage[build.firstIndex * 2]),
-            .value = storedStringView(storage[build.firstIndex * 2 + 1])});
+        query.push_back(detail::RequestNameValueViewAccess::make(
+            storedStringView(storage[build.firstIndex * 2]),
+            storedStringView(storage[build.firstIndex * 2 + 1])));
 
         auto& group = groups.emplace_back(resource(), pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
@@ -544,7 +549,7 @@ const RequestNameValueList& Context::requestCookies() const {
         detail::httpVisitSemicolonParameters(
             input,
             [&cookies](std::string_view key, std::string_view value) {
-                cookies.push_back(RequestNameValueView{.name = key, .value = value});
+                cookies.push_back(detail::RequestNameValueViewAccess::make(key, value));
                 return true;
             });
         requestCookies_ = &cookies;
@@ -587,9 +592,9 @@ const RequestNameValueList& Context::routeParams() const {
             storage.push_back(std::move(name));
             storage.push_back(std::move(value));
             const auto nameIndex = storage.size() - 2;
-            params.push_back(RequestNameValueView{
-                .name = std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
-                .value = std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())});
+            params.push_back(detail::RequestNameValueViewAccess::make(
+                std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
+                std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
         }
         routeParamStorage_ = &storage;
         routeParams_ = &params;
@@ -665,20 +670,16 @@ std::optional<std::string_view> ContextRequest::signedCookie(
 Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
     RawRequestClone clone(context_->resource());
     clone.method_ = raw().method();
-    clone.target_.assign(raw().target().data(), raw().target().size());
     const auto requestUrl = url();
     clone.url_.assign(requestUrl.data(), requestUrl.size());
     clone.path_.assign(raw().path().data(), raw().path().size());
-    clone.queryString_.assign(raw().queryString().data(), raw().queryString().size());
-    clone.httpVersion_.assign(raw().httpVersion().data(), raw().httpVersion().size());
     clone.headers_.reserve(raw().headers().size());
     for (const auto& header : raw().headers()) {
-        clone.headers_.emplace_back(context_->resource(), header.name, header.value);
+        clone.headers_.push_back(
+            RawRequestClone::Header::make(context_->resource(), header.name(), header.value()));
     }
     const auto requestBody = co_await text();
     clone.body_.assign(requestBody.data(), requestBody.size());
-    clone.remoteAddress_.assign(raw().remoteAddress().data(), raw().remoteAddress().size());
-    clone.clientCertificate_.assign(raw().clientCertificate().data(), raw().clientCertificate().size());
     clone.secure_ = raw().isSecure();
     co_return std::move(clone);
 }

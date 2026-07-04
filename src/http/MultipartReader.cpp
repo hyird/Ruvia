@@ -163,13 +163,13 @@ Task<void> MultipartReader::processHeaders() {
 }
 
 MultipartStreamPart MultipartReader::makePart(std::string_view body, bool partEnd) {
-    MultipartStreamPart part;
-    part.name = currentName_;
-    part.filename = currentFilename_;
-    part.contentType = currentContentType_;
-    part.body = body;
-    part.partBegin = partBegin_;
-    part.partEnd = partEnd;
+    auto part = detail::MultipartStreamPartAccess::make(
+        currentName_,
+        currentFilename_,
+        currentContentType_,
+        body,
+        partBegin_,
+        partEnd);
     partBegin_ = false;
     return part;
 }

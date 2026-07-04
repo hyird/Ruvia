@@ -148,59 +148,23 @@ private:
 
 class HttpResponse final {
 public:
-    class ResponseHeaders final {
-    public:
-        using value_type = HttpResponseHeader;
-        using const_iterator = HttpResponseHeaders::const_iterator;
-
-        explicit constexpr ResponseHeaders(HttpResponse& response) noexcept
-            : response_(&response) {}
-
-        [[nodiscard]] const_iterator begin() const noexcept;
-
-        [[nodiscard]] const_iterator end() const noexcept;
-
-        [[nodiscard]] const_iterator cbegin() const noexcept;
-
-        [[nodiscard]] const_iterator cend() const noexcept;
-
-        [[nodiscard]] std::size_t size() const noexcept;
-
-        [[nodiscard]] bool empty() const noexcept;
-
-        [[nodiscard]] const HttpResponseHeaders& entries() const noexcept;
-
-        [[nodiscard]] std::string_view get(std::string_view name) const noexcept;
-
-        [[nodiscard]] bool has(std::string_view name) const noexcept;
-
-        void set(std::string_view name, std::string_view value) const;
-
-        void append(std::string_view name, std::string_view value) const;
-
-        bool remove(std::string_view name) const;
-
-        bool erase(std::string_view name) const;
-
-    private:
-        HttpResponse* response_;
+    struct HeaderOptions {
+        bool append{false};
     };
 
     explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
 
-    [[nodiscard]] std::uint16_t statusCode() const noexcept;
+    [[nodiscard]] std::uint16_t status() const noexcept;
     [[nodiscard]] std::string_view statusText() const noexcept;
-    [[nodiscard]] ResponseHeaders headers() noexcept;
+    [[nodiscard]] const HttpResponseHeaders& headers() noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
-    [[nodiscard]] bool hasHeader(std::string_view name) const noexcept;
-    void setStatus(std::uint16_t statusCode, std::string_view statusText);
-    void setHeader(std::string_view key, std::string_view value);
-    void appendHeader(std::string_view key, std::string_view value);
-    bool removeHeader(std::string_view key);
+    void status(std::uint16_t statusCode, std::string_view statusText = {});
+    void header(std::string_view key, std::string_view value);
+    void header(std::string_view key, std::string_view value, HeaderOptions options);
+    void header(std::string_view key, std::nullopt_t);
     void setBodyCopy(std::string_view value);
     void setBodyView(std::string_view value) noexcept;
-    void setBodyOwned(std::pmr::string&& value);
 
 private:
     friend struct detail::HttpResponseBodyAccess;
@@ -261,6 +225,7 @@ private:
     static constexpr std::size_t kKnownHeaderCount = 22;
 
     void setBodyStaticView(std::string_view value) noexcept;
+    void setBodyOwned(std::pmr::string&& value);
     void materializeBody();
     void setHeaderStableView(std::string_view key, std::string_view value);
     void setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit);
@@ -305,60 +270,8 @@ private:
     std::optional<FileBody> fileBody_;
 };
 
-inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::begin() const noexcept {
-    return entries().begin();
-}
-
-inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::end() const noexcept {
-    return entries().end();
-}
-
-inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::cbegin() const noexcept {
-    return begin();
-}
-
-inline HttpResponse::ResponseHeaders::const_iterator HttpResponse::ResponseHeaders::cend() const noexcept {
-    return end();
-}
-
-inline std::size_t HttpResponse::ResponseHeaders::size() const noexcept {
-    return entries().size();
-}
-
-inline bool HttpResponse::ResponseHeaders::empty() const noexcept {
-    return entries().empty();
-}
-
-inline const HttpResponseHeaders& HttpResponse::ResponseHeaders::entries() const noexcept {
-    return response_->headers_;
-}
-
-inline std::string_view HttpResponse::ResponseHeaders::get(std::string_view name) const noexcept {
-    return response_->header(name);
-}
-
-inline bool HttpResponse::ResponseHeaders::has(std::string_view name) const noexcept {
-    return response_->hasHeader(name);
-}
-
-inline void HttpResponse::ResponseHeaders::set(std::string_view name, std::string_view value) const {
-    response_->setHeader(name, value);
-}
-
-inline void HttpResponse::ResponseHeaders::append(std::string_view name, std::string_view value) const {
-    response_->appendHeader(name, value);
-}
-
-inline bool HttpResponse::ResponseHeaders::remove(std::string_view name) const {
-    return response_->removeHeader(name);
-}
-
-inline bool HttpResponse::ResponseHeaders::erase(std::string_view name) const {
-    return remove(name);
-}
-
-inline HttpResponse::ResponseHeaders HttpResponse::headers() noexcept {
-    return ResponseHeaders(*this);
+inline const HttpResponseHeaders& HttpResponse::headers() noexcept {
+    return headers_;
 }
 
 }  // namespace ruvia

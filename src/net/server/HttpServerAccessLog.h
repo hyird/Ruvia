@@ -26,13 +26,13 @@ inline void recordHttpAccess(
     const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - start)
                             .count();
-    const AccessLogRecord record{
-        .method = request.method(),
-        .path = request.path(),
-        .remoteAddress = remoteAddress,
-        .status = status,
-        .durationMicros = micros < 0 ? 0 : static_cast<std::uint64_t>(micros),
-        .http2 = http2};
+    const AccessLogRecord record = AccessLogRecordAccess::make(
+        request.method(),
+        request.path(),
+        remoteAddress,
+        status,
+        micros < 0 ? 0 : static_cast<std::uint64_t>(micros),
+        http2);
     accessLog.callback(accessLog.user, record);
 }
 

@@ -10,14 +10,76 @@
 
 namespace ruvia {
 
-struct MultipartStreamPart {
-    std::string_view name;
-    std::string_view filename;
-    std::string_view contentType;
-    std::string_view body;
-    bool partBegin{false};
-    bool partEnd{false};
+namespace detail {
+struct MultipartStreamPartAccess;
+}  // namespace detail
+
+class MultipartStreamPart final {
+public:
+    [[nodiscard]] std::string_view name() const noexcept {
+        return name_;
+    }
+
+    [[nodiscard]] std::string_view filename() const noexcept {
+        return filename_;
+    }
+
+    [[nodiscard]] std::string_view contentType() const noexcept {
+        return contentType_;
+    }
+
+    [[nodiscard]] std::string_view body() const noexcept {
+        return body_;
+    }
+
+    [[nodiscard]] bool partBegin() const noexcept {
+        return partBegin_;
+    }
+
+    [[nodiscard]] bool partEnd() const noexcept {
+        return partEnd_;
+    }
+
+private:
+    friend struct detail::MultipartStreamPartAccess;
+
+    constexpr MultipartStreamPart(
+        std::string_view name,
+        std::string_view filename,
+        std::string_view contentType,
+        std::string_view body,
+        bool partBegin,
+        bool partEnd) noexcept
+        : name_(name),
+          filename_(filename),
+          contentType_(contentType),
+          body_(body),
+          partBegin_(partBegin),
+          partEnd_(partEnd) {}
+
+    std::string_view name_;
+    std::string_view filename_;
+    std::string_view contentType_;
+    std::string_view body_;
+    bool partBegin_{false};
+    bool partEnd_{false};
 };
+
+namespace detail {
+
+struct MultipartStreamPartAccess final {
+    [[nodiscard]] static constexpr MultipartStreamPart make(
+        std::string_view name,
+        std::string_view filename,
+        std::string_view contentType,
+        std::string_view body,
+        bool partBegin,
+        bool partEnd) noexcept {
+        return MultipartStreamPart(name, filename, contentType, body, partBegin, partEnd);
+    }
+};
+
+}  // namespace detail
 
 class MultipartReader final {
 public:

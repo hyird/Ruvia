@@ -196,7 +196,7 @@ bool detail::RouteTable::sameDynamicShape(std::string_view left, std::string_vie
         const auto hasLeft = splitSegment(left, leftSegment, leftRest);
         const auto hasRight = splitSegment(right, rightSegment, rightRest);
         if (!hasLeft || !hasRight) {
-            return hasLeft == hasRight;
+            return hasLeft == hasRight && priority == ForkPriority::kShared;
         }
 
         if (leftSegment == "*" || rightSegment == "*") {

@@ -27,8 +27,8 @@ bool webSocketProtocolOffered(const HttpRequest& request, std::string_view proto
         return true;
     }
     for (const auto& header : request.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name, "Sec-WebSocket-Protocol") &&
-            httpHasExactToken(header.value, protocol)) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Protocol") &&
+            httpHasExactToken(header.value(), protocol)) {
             return true;
         }
     }

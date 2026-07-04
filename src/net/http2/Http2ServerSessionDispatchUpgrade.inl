@@ -31,13 +31,13 @@ bool Http2ServerSession<Stream>::seedUpgradedStream(
         stream->setReceivedBodyBytes(body.size());
     }
     for (const auto& header : parsed.request.headers()) {
-        if (http2IsForbiddenUpgradedRequestHeader(header.name)) {
+        if (http2IsForbiddenUpgradedRequestHeader(header.name())) {
             continue;
         }
         if (!stream->appendRequestHeader(
-            header.name,
-            header.value,
-            classifyRequestHeader(header.name))) {
+            header.name(),
+            header.value(),
+            classifyRequestHeader(header.name()))) {
             return false;
         }
     }

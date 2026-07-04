@@ -60,9 +60,14 @@ class RequestBodyLoader;
 struct ContextAccess;
 class ContextServices;
 struct RouteRateLimitOptions;
-struct RouteRateLimitResult;
+class RouteRateLimitResult;
 RouteRateLimitResult checkRouteRateLimit(Context& context, const RouteRateLimitOptions& options) noexcept;
 struct SessionAccess;
+struct RequestFormFieldAccess;
+const RequestNameValueList& requestHeaderFields(const ContextRequest& request);
+const RequestNameValueList& requestQueryFields(const ContextRequest& request);
+const RequestNameValueList& requestCookieFields(const ContextRequest& request);
+const RequestNameValueList& requestParamFields(const ContextRequest& request);
 template <typename T>
 void setValidatedBody(Context& context, ValidationTarget target, T&& body);
 [[noreturn]] void throwInvalidJsonContentType();
@@ -116,10 +121,6 @@ public:
             return bytes_;
         }
 
-        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
-            return bytes_;
-        }
-
         [[nodiscard]] std::string_view text() const noexcept {
             return std::string_view(
                 reinterpret_cast<const char*>(bytes_.data()),
@@ -150,13 +151,6 @@ public:
     public:
         class Header final {
         public:
-            Header(
-                std::pmr::memory_resource* resource,
-                std::string_view name,
-                std::string_view value)
-                : name_(name, resource),
-                  value_(value, resource) {}
-
             Header(const Header&) = delete;
             Header& operator=(const Header&) = delete;
             Header(Header&&) noexcept = default;
@@ -171,20 +165,25 @@ public:
             }
 
         private:
+            friend class ContextRequest;
+
+            [[nodiscard]] static Header make(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                std::string_view value) {
+                return Header(resource, name, value);
+            }
+
+            Header(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                std::string_view value)
+                : name_(name, resource),
+                  value_(value, resource) {}
+
             std::pmr::string name_;
             std::pmr::string value_;
         };
-
-        explicit RawRequestClone(std::pmr::memory_resource* resource)
-            : target_(resource),
-              url_(resource),
-              path_(resource),
-              queryString_(resource),
-              httpVersion_(resource),
-              headers_(resource),
-              body_(resource),
-              remoteAddress_(resource),
-              clientCertificate_(resource) {}
 
         RawRequestClone(const RawRequestClone&) = delete;
         RawRequestClone& operator=(const RawRequestClone&) = delete;
@@ -195,14 +194,6 @@ public:
             return methodName(method_);
         }
 
-        [[nodiscard]] HttpMethod methodEnum() const noexcept {
-            return method_;
-        }
-
-        [[nodiscard]] std::string_view target() const noexcept {
-            return std::string_view(target_.data(), target_.size());
-        }
-
         [[nodiscard]] std::string_view url() const noexcept {
             return std::string_view(url_.data(), url_.size());
         }
@@ -211,36 +202,20 @@ public:
             return std::string_view(path_.data(), path_.size());
         }
 
-        [[nodiscard]] std::string_view queryString() const noexcept {
-            return std::string_view(queryString_.data(), queryString_.size());
-        }
-
-        [[nodiscard]] std::string_view httpVersion() const noexcept {
-            return std::string_view(httpVersion_.data(), httpVersion_.size());
-        }
-
-        [[nodiscard]] std::span<const Header> headers() const noexcept {
-            return headers_;
-        }
-
         [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
 
         [[nodiscard]] std::string_view body() const noexcept {
             return std::string_view(body_.data(), body_.size());
         }
 
-        [[nodiscard]] std::string_view text() const noexcept {
-            return body();
-        }
-
-        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
+        [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
             return std::span<const std::byte>(
                 reinterpret_cast<const std::byte*>(body_.data()),
                 body_.size());
         }
 
         [[nodiscard]] RequestBlob blob() const noexcept {
-            return RequestBlob(arrayBuffer(), header("Content-Type"));
+            return RequestBlob(bytes(), header("Content-Type"));
         }
 
         [[nodiscard]] RequestFormData parseBody(ParseBodyOptions options) const;
@@ -261,14 +236,6 @@ public:
             return std::move(*parsed);
         }
 
-        [[nodiscard]] std::string_view remoteAddress() const noexcept {
-            return std::string_view(remoteAddress_.data(), remoteAddress_.size());
-        }
-
-        [[nodiscard]] std::string_view clientCertificate() const noexcept {
-            return std::string_view(clientCertificate_.data(), clientCertificate_.size());
-        }
-
         [[nodiscard]] bool isSecure() const noexcept {
             return secure_;
         }
@@ -276,20 +243,60 @@ public:
     private:
         friend class ContextRequest;
 
+        explicit RawRequestClone(std::pmr::memory_resource* resource)
+            : url_(resource),
+              path_(resource),
+              headers_(resource),
+              body_(resource) {}
+
         HttpMethod method_{HttpMethod::kUnknown};
-        std::pmr::string target_;
         std::pmr::string url_;
         std::pmr::string path_;
-        std::pmr::string queryString_;
-        std::pmr::string httpVersion_;
         std::pmr::vector<Header> headers_;
         std::pmr::string body_;
-        std::pmr::string remoteAddress_;
-        std::pmr::string clientCertificate_;
         bool secure_{false};
     };
 
     struct RequestFormField final {
+        [[nodiscard]] std::string_view name() const noexcept {
+            return std::string_view(name_.data(), name_.size());
+        }
+
+        [[nodiscard]] std::string_view value() const noexcept {
+            return std::string_view(value_.data(), value_.size());
+        }
+
+        [[nodiscard]] std::string_view filename() const noexcept {
+            return std::string_view(filename_.data(), filename_.size());
+        }
+
+        [[nodiscard]] std::string_view contentType() const noexcept {
+            return std::string_view(contentType_.data(), contentType_.size());
+        }
+
+        [[nodiscard]] std::span<const std::pmr::string> path() const noexcept {
+            return std::span<const std::pmr::string>(path_.data(), path_.size());
+        }
+
+        [[nodiscard]] bool file() const noexcept {
+            return file_;
+        }
+
+        [[nodiscard]] bool array() const noexcept {
+            return array_;
+        }
+
+        [[nodiscard]] RequestBlob blob() const noexcept {
+            return RequestBlob(
+                std::span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(value_.data()),
+                    value_.size()),
+                std::string_view(contentType_.data(), contentType_.size()));
+        }
+
+    private:
+        friend struct detail::RequestFormFieldAccess;
+
         RequestFormField(
             std::pmr::memory_resource* resource,
             std::pmr::string&& fieldName,
@@ -298,51 +305,21 @@ public:
             std::pmr::string&& fieldContentType = {},
             bool fieldFile = false,
             bool fieldArray = false)
-            : name(std::move(fieldName)),
-              value(std::move(fieldValue)),
-              filename(std::move(fieldFilename)),
-              contentType(std::move(fieldContentType)),
-              path(resource),
-              file(fieldFile),
-              array(fieldArray) {}
+            : name_(std::move(fieldName)),
+              value_(std::move(fieldValue)),
+              filename_(std::move(fieldFilename)),
+              contentType_(std::move(fieldContentType)),
+              path_(resource),
+              file_(fieldFile),
+              array_(fieldArray) {}
 
-        std::pmr::string name;
-        std::pmr::string value;
-        std::pmr::string filename;
-        std::pmr::string contentType;
-        std::pmr::vector<std::pmr::string> path;
-        bool file{false};
-        bool array{false};
-
-        [[nodiscard]] bool isFile() const noexcept {
-            return file;
-        }
-
-        [[nodiscard]] bool isArray() const noexcept {
-            return array;
-        }
-
-        [[nodiscard]] std::string_view text() const noexcept {
-            return std::string_view(value.data(), value.size());
-        }
-
-        [[nodiscard]] std::span<const std::byte> arrayBuffer() const noexcept {
-            return std::span<const std::byte>(
-                reinterpret_cast<const std::byte*>(value.data()),
-                value.size());
-        }
-
-        [[nodiscard]] RequestBlob blob() const noexcept {
-            return RequestBlob(arrayBuffer(), mediaType());
-        }
-
-        [[nodiscard]] std::string_view fileName() const noexcept {
-            return std::string_view(filename.data(), filename.size());
-        }
-
-        [[nodiscard]] std::string_view mediaType() const noexcept {
-            return std::string_view(contentType.data(), contentType.size());
-        }
+        std::pmr::string name_;
+        std::pmr::string value_;
+        std::pmr::string filename_;
+        std::pmr::string contentType_;
+        std::pmr::vector<std::pmr::string> path_;
+        bool file_{false};
+        bool array_{false};
     };
 
     class RequestFormData final {
@@ -386,7 +363,7 @@ public:
             }
 
             [[nodiscard]] bool empty() const noexcept {
-                return fields_.empty();
+                return size() == 0;
             }
 
             [[nodiscard]] bool array() const noexcept {
@@ -402,16 +379,7 @@ public:
                 if (selected == nullptr) {
                     return std::nullopt;
                 }
-                return std::string_view(selected->value.data(), selected->value.size());
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> values() const {
-                std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-                result.reserve(fields_.size());
-                for (const auto* field : fields_) {
-                    result.emplace_back(field->value.data(), field->value.size());
-                }
-                return result;
+                return selected->value();
             }
 
         private:
@@ -419,7 +387,7 @@ public:
 
             void add(const RequestFormField& field) {
                 fields_.push_back(&field);
-                array_ = array_ || field.array;
+                array_ = array_ || field.array();
             }
 
             std::string_view name_;
@@ -430,24 +398,15 @@ public:
 
         class Value final {
         public:
-            Value(std::pmr::memory_resource* resource, const Entry* entry) noexcept
-                : resource_(resource),
-                  entry_(entry) {}
+            explicit Value(const Entry* entry) noexcept
+                : entry_(entry) {}
 
             [[nodiscard]] explicit operator bool() const noexcept {
-                return exists();
-            }
-
-            [[nodiscard]] bool exists() const noexcept {
                 return field() != nullptr;
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
                 return entry_ == nullptr ? nullptr : entry_->field();
-            }
-
-            [[nodiscard]] const RequestFormField* operator->() const noexcept {
-                return field();
             }
 
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
@@ -466,39 +425,12 @@ public:
                 return entry_ != nullptr && entry_->multiple();
             }
 
-            [[nodiscard]] bool isArray() const noexcept {
+            [[nodiscard]] bool array() const noexcept {
                 return entry_ != nullptr && entry_->array();
             }
 
-            [[nodiscard]] bool isFile() const noexcept {
-                const auto* selected = field();
-                return selected != nullptr && selected->isFile();
-            }
-
-            [[nodiscard]] std::optional<std::string_view> text() const noexcept {
-                return entry_ == nullptr ? std::nullopt : entry_->value();
-            }
-
             [[nodiscard]] std::optional<std::string_view> value() const noexcept {
-                return text();
-            }
-
-            [[nodiscard]] std::string_view value_or(std::string_view fallback) const noexcept {
-                if (auto result = value()) {
-                    return *result;
-                }
-                return fallback;
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> texts() const {
-                if (entry_ == nullptr) {
-                    return std::pmr::vector<std::string_view>(resource());
-                }
-                return entry_->values();
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> values() const {
-                return texts();
+                return entry_ == nullptr ? std::nullopt : entry_->value();
             }
 
             [[nodiscard]] std::optional<RequestBlob> blob() const noexcept {
@@ -509,52 +441,34 @@ public:
                 return selected->blob();
             }
 
-            [[nodiscard]] std::optional<std::string_view> fileName() const noexcept {
-                const auto* selected = field();
-                if (selected == nullptr || !selected->isFile()) {
-                    return std::nullopt;
-                }
-                return selected->fileName();
-            }
-
-            [[nodiscard]] std::optional<std::string_view> mediaType() const noexcept {
-                const auto* selected = field();
-                if (selected == nullptr || !selected->isFile()) {
-                    return std::nullopt;
-                }
-                return selected->mediaType();
-            }
-
         private:
-            [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-                return resource_ == nullptr ? std::pmr::get_default_resource() : resource_;
-            }
-
-            std::pmr::memory_resource* resource_{nullptr};
             const Entry* entry_{nullptr};
         };
 
         class PathValue final {
         public:
+            explicit PathValue(const Entry* entry) noexcept
+                : entry_(entry),
+                  fields_(std::pmr::null_memory_resource()) {}
+
             explicit PathValue(
                 std::pmr::vector<const RequestFormField*>&& fields,
                 SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
                 : fields_(std::move(fields)),
                   singleValueSelection_(singleValueSelection) {
                 for (const auto* field : fields_) {
-                    array_ = array_ || (field != nullptr && field->array);
+                    array_ = array_ || (field != nullptr && field->array());
                 }
             }
 
             [[nodiscard]] explicit operator bool() const noexcept {
-                return exists();
-            }
-
-            [[nodiscard]] bool exists() const noexcept {
                 return field() != nullptr;
             }
 
             [[nodiscard]] const RequestFormField* field() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->field();
+                }
                 if (fields_.empty()) {
                     return nullptr;
                 }
@@ -563,67 +477,47 @@ public:
                     : fields_.back();
             }
 
-            [[nodiscard]] const RequestFormField* operator->() const noexcept {
-                return field();
-            }
-
             [[nodiscard]] std::span<const RequestFormField* const> fields() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->fields();
+                }
                 return std::span<const RequestFormField* const>(fields_.data(), fields_.size());
             }
 
             [[nodiscard]] std::size_t size() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->size();
+                }
                 return fields_.size();
             }
 
             [[nodiscard]] bool empty() const noexcept {
-                return fields_.empty();
+                return size() == 0;
             }
 
             [[nodiscard]] bool multiple() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->multiple();
+                }
                 return fields_.size() > 1;
             }
 
-            [[nodiscard]] bool isArray() const noexcept {
+            [[nodiscard]] bool array() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->array();
+                }
                 return array_ || multiple();
             }
 
-            [[nodiscard]] bool isFile() const noexcept {
-                const auto* selected = field();
-                return selected != nullptr && selected->isFile();
-            }
-
-            [[nodiscard]] std::optional<std::string_view> text() const noexcept {
+            [[nodiscard]] std::optional<std::string_view> value() const noexcept {
+                if (entry_ != nullptr) {
+                    return entry_->value();
+                }
                 const auto* selected = field();
                 if (selected == nullptr) {
                     return std::nullopt;
                 }
-                return std::string_view(selected->value.data(), selected->value.size());
-            }
-
-            [[nodiscard]] std::optional<std::string_view> value() const noexcept {
-                return text();
-            }
-
-            [[nodiscard]] std::string_view value_or(std::string_view fallback) const noexcept {
-                if (auto result = value()) {
-                    return *result;
-                }
-                return fallback;
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> texts() const {
-                std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-                result.reserve(fields_.size());
-                for (const auto* field : fields_) {
-                    if (field != nullptr) {
-                        result.emplace_back(field->value.data(), field->value.size());
-                    }
-                }
-                return result;
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> values() const {
-                return texts();
+                return selected->value();
             }
 
             [[nodiscard]] std::optional<RequestBlob> blob() const noexcept {
@@ -634,23 +528,8 @@ public:
                 return selected->blob();
             }
 
-            [[nodiscard]] std::optional<std::string_view> fileName() const noexcept {
-                const auto* selected = field();
-                if (selected == nullptr || !selected->isFile()) {
-                    return std::nullopt;
-                }
-                return selected->fileName();
-            }
-
-            [[nodiscard]] std::optional<std::string_view> mediaType() const noexcept {
-                const auto* selected = field();
-                if (selected == nullptr || !selected->isFile()) {
-                    return std::nullopt;
-                }
-                return selected->mediaType();
-            }
-
         private:
+            const Entry* entry_{nullptr};
             std::pmr::vector<const RequestFormField*> fields_;
             SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
             bool array_{false};
@@ -665,53 +544,11 @@ public:
                 rebuildEntries();
             }
 
-            [[nodiscard]] PathValue operator[](std::string_view name) const {
-                return at(name);
-            }
-
-            [[nodiscard]] PathValue at(std::string_view name) const {
-                if (hasNestedName(name)) {
-                    if (form_ == nullptr) {
-                        return emptyPathValue();
-                    }
-                    return PathValue(form_->getAllAtChild(path(), name), singleValueSelection());
+            [[nodiscard]] PathValue at(std::string_view name) const noexcept {
+                if (form_ == nullptr) {
+                    return PathValue(nullptr);
                 }
-                return PathValue(fieldsForName(name), singleValueSelection());
-            }
-
-            [[nodiscard]] PathValue get(std::string_view name) const {
-                return at(name);
-            }
-
-            [[nodiscard]] PathValue getAll(std::string_view name) const {
-                return at(name);
-            }
-
-            [[nodiscard]] std::optional<std::string_view> value(std::string_view name) const noexcept {
-                if (hasNestedName(name)) {
-                    return form_ == nullptr ? std::nullopt : form_->valueAtChild(path(), name);
-                }
-                const auto* formEntry = entry(name);
-                return formEntry == nullptr ? std::nullopt : formEntry->value();
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> values(std::string_view name) const {
-                if (hasNestedName(name)) {
-                    if (form_ == nullptr) {
-                        return std::pmr::vector<std::string_view>(resource());
-                    }
-                    return form_->valuesAtChild(path(), name);
-                }
-                std::pmr::vector<std::string_view> result(resource());
-                const auto* formEntry = entry(name);
-                if (formEntry == nullptr) {
-                    return result;
-                }
-                return formEntry->values();
-            }
-
-            [[nodiscard]] bool has(std::string_view name) const noexcept {
-                return count(name) != 0;
+                return PathValue(form_->pathEntryChild(path(), name));
             }
 
             [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
@@ -722,21 +559,8 @@ public:
                 return formEntry == nullptr ? 0 : formEntry->size();
             }
 
-            [[nodiscard]] std::span<const Entry> entries() const noexcept {
-                return std::span<const Entry>(entries_.data(), entries_.size());
-            }
-
             [[nodiscard]] std::span<const Entry> groups() const noexcept {
-                return entries();
-            }
-
-            [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
-                std::pmr::vector<std::string_view> result(resource());
-                result.reserve(entries_.size());
-                for (const auto& formEntry : entries_) {
-                    result.push_back(formEntry.name());
-                }
-                return result;
+                return std::span<const Entry>(entries_.data(), entries_.size());
             }
 
             [[nodiscard]] Object object(std::string_view name) const {
@@ -775,12 +599,6 @@ public:
                 return name.find('.') != std::string_view::npos;
             }
 
-            [[nodiscard]] PathValue emptyPathValue() const {
-                return PathValue(
-                    std::pmr::vector<const RequestFormField*>(resource()),
-                    singleValueSelection());
-            }
-
             [[nodiscard]] SingleValueSelection singleValueSelection() const noexcept {
                 return form_ == nullptr ? SingleValueSelection::kLast : form_->singleValueSelection_;
             }
@@ -794,40 +612,21 @@ public:
                 return nullptr;
             }
 
-            [[nodiscard]] std::pmr::vector<const RequestFormField*> fieldsForName(std::string_view name) const {
-                if (hasNestedName(name)) {
-                    if (form_ == nullptr) {
-                        return std::pmr::vector<const RequestFormField*>(resource());
-                    }
-                    return form_->getAllAtChild(path(), name);
-                }
-
-                std::pmr::vector<const RequestFormField*> result(resource());
-                const auto* formEntry = entry(name);
-                if (formEntry == nullptr) {
-                    return result;
-                }
-                result.reserve(formEntry->size());
-                for (const auto* field : formEntry->fields()) {
-                    result.push_back(field);
-                }
-                return result;
-            }
-
             [[nodiscard]] static std::string_view directChildName(
                 const RequestFormField& field,
                 std::string_view dotPath) noexcept {
-                if (field.path.empty()) {
+                const auto path = field.path();
+                if (path.empty()) {
                     return {};
                 }
 
                 std::size_t index = 0;
-                if (!consumePath(field, index, dotPath) || index >= field.path.size() ||
-                    index + 1 != field.path.size()) {
+                if (!consumePath(field, index, dotPath) || index >= path.size() ||
+                    index + 1 != path.size()) {
                     return {};
                 }
 
-                const auto& child = field.path[index];
+                const auto& child = path[index];
                 return std::string_view(child.data(), child.size());
             }
 
@@ -919,25 +718,8 @@ public:
             return fields_;
         }
 
-        [[nodiscard]] std::span<const RequestFormField> entries() const noexcept {
-            return fields_;
-        }
-
         [[nodiscard]] std::span<const Entry> groups() const noexcept {
             return entries_;
-        }
-
-        [[nodiscard]] std::pmr::vector<std::string_view> keys() const {
-            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            result.reserve(entries_.size());
-            for (const auto& entry : entries_) {
-                result.push_back(entry.name());
-            }
-            return result;
-        }
-
-        [[nodiscard]] std::span<const RequestFormField> values() const noexcept {
-            return fields_;
         }
 
         [[nodiscard]] const Entry* entry(std::string_view name) const noexcept {
@@ -954,49 +736,16 @@ public:
             return nullptr;
         }
 
-        [[nodiscard]] const RequestFormField* field(std::string_view name) const noexcept {
-            const auto* formEntry = entry(name);
-            if (formEntry == nullptr) {
-                return nullptr;
-            }
-            return formEntry->field();
-        }
-
-        [[nodiscard]] std::pmr::vector<const RequestFormField*> fields(std::string_view name) const {
-            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            const auto* formEntry = entry(name);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            result.reserve(formEntry->size());
-            for (const auto* field : formEntry->fields()) {
-                result.push_back(field);
-            }
-            return result;
-        }
-
         [[nodiscard]] Value get(std::string_view name) const noexcept {
-            return (*this)[name];
+            return Value(entry(name));
         }
 
-        [[nodiscard]] Value getAll(std::string_view name) const noexcept {
-            return (*this)[name];
-        }
-
-        [[nodiscard]] Value operator[](std::string_view name) const noexcept {
-            return Value(fields_.get_allocator().resource(), entry(name));
-        }
-
-        [[nodiscard]] PathValue at(std::string_view dotPath) const {
-            return PathValue(getAllAt(dotPath), singleValueSelection_);
+        [[nodiscard]] PathValue at(std::string_view dotPath) const noexcept {
+            return PathValue(pathEntry(dotPath));
         }
 
         [[nodiscard]] Object object(std::string_view dotPath) const {
             return Object(this, dotPath);
-        }
-
-        [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return entry(name) != nullptr;
         }
 
         [[nodiscard]] std::size_t count(std::string_view name) const noexcept {
@@ -1004,123 +753,9 @@ public:
             return formEntry == nullptr ? 0 : formEntry->size();
         }
 
-        [[nodiscard]] bool isArray(std::string_view name) const noexcept {
-            const auto* formEntry = entry(name);
-            return formEntry != nullptr && formEntry->array();
-        }
-
-        [[nodiscard]] std::optional<std::string_view> value(std::string_view name) const noexcept {
-            const auto* formEntry = entry(name);
-            if (formEntry == nullptr) {
-                return std::nullopt;
-            }
-            return formEntry->value();
-        }
-
-        [[nodiscard]] std::pmr::vector<std::string_view> values(std::string_view name) const {
-            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            const auto* formEntry = entry(name);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            return formEntry->values();
-        }
-
-        [[nodiscard]] const RequestFormField* getAt(std::string_view dotPath) const noexcept {
-            const auto* formEntry = pathEntry(dotPath);
-            return formEntry == nullptr ? nullptr : formEntry->field();
-        }
-
-        [[nodiscard]] bool hasAt(std::string_view dotPath) const noexcept {
-            return pathEntry(dotPath) != nullptr;
-        }
-
-        [[nodiscard]] std::size_t countAt(std::string_view dotPath) const noexcept {
-            const auto* formEntry = pathEntry(dotPath);
-            return formEntry == nullptr ? 0 : formEntry->size();
-        }
-
-        [[nodiscard]] bool isArrayAt(std::string_view dotPath) const noexcept {
-            const auto* formEntry = pathEntry(dotPath);
-            return formEntry != nullptr && formEntry->array();
-        }
-
-        [[nodiscard]] std::optional<std::string_view> valueAt(std::string_view dotPath) const noexcept {
-            const auto* field = getAt(dotPath);
-            if (field == nullptr) {
-                return std::nullopt;
-            }
-            return std::string_view(field->value.data(), field->value.size());
-        }
-
-        [[nodiscard]] std::pmr::vector<std::string_view> valuesAt(std::string_view dotPath) const {
-            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            const auto* formEntry = pathEntry(dotPath);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            return formEntry->values();
-        }
-
-        [[nodiscard]] std::pmr::vector<const RequestFormField*> getAllAt(std::string_view dotPath) const {
-            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            const auto* formEntry = pathEntry(dotPath);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            result.reserve(formEntry->size());
-            for (const auto* field : formEntry->fields()) {
-                result.push_back(field);
-            }
-            return result;
-        }
-
     private:
         [[nodiscard]] static bool isPathName(std::string_view name) noexcept {
             return name.find('.') != std::string_view::npos;
-        }
-
-        [[nodiscard]] std::pmr::vector<const RequestFormField*> getAllAtChild(
-            std::string_view dotPath,
-            std::string_view name) const {
-            std::pmr::vector<const RequestFormField*> result(fields_.get_allocator().resource());
-            const auto* formEntry = pathEntryChild(dotPath, name);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            result.reserve(formEntry->size());
-            for (const auto* field : formEntry->fields()) {
-                result.push_back(field);
-            }
-            return result;
-        }
-
-        [[nodiscard]] const RequestFormField* getAtChild(
-            std::string_view dotPath,
-            std::string_view name) const noexcept {
-            const auto* formEntry = pathEntryChild(dotPath, name);
-            return formEntry == nullptr ? nullptr : formEntry->field();
-        }
-
-        [[nodiscard]] std::optional<std::string_view> valueAtChild(
-            std::string_view dotPath,
-            std::string_view name) const noexcept {
-            const auto* field = getAtChild(dotPath, name);
-            if (field == nullptr) {
-                return std::nullopt;
-            }
-            return std::string_view(field->value.data(), field->value.size());
-        }
-
-        [[nodiscard]] std::pmr::vector<std::string_view> valuesAtChild(
-            std::string_view dotPath,
-            std::string_view name) const {
-            std::pmr::vector<std::string_view> result(fields_.get_allocator().resource());
-            const auto* formEntry = pathEntryChild(dotPath, name);
-            if (formEntry == nullptr) {
-                return result;
-            }
-            return formEntry->values();
         }
 
         [[nodiscard]] static bool consumePath(
@@ -1137,10 +772,11 @@ public:
                 const auto segment = dot == std::string_view::npos
                     ? dotPath.substr(offset)
                     : dotPath.substr(offset, dot - offset);
-                if (segment.empty() || index >= field.path.size()) {
+                const auto path = field.path();
+                if (segment.empty() || index >= path.size()) {
                     return false;
                 }
-                const auto stored = std::string_view(field.path[index].data(), field.path[index].size());
+                const auto stored = std::string_view(path[index].data(), path[index].size());
                 if (stored != segment) {
                     return false;
                 }
@@ -1155,26 +791,28 @@ public:
         [[nodiscard]] static bool pathMatches(
             const RequestFormField& field,
             std::string_view dotPath) noexcept {
-            if (field.path.empty() || dotPath.empty()) {
+            const auto path = field.path();
+            if (path.empty() || dotPath.empty()) {
                 return false;
             }
 
             std::size_t index = 0;
-            return consumePath(field, index, dotPath) && index == field.path.size();
+            return consumePath(field, index, dotPath) && index == path.size();
         }
 
         [[nodiscard]] static bool pathMatchesChild(
             const RequestFormField& field,
             std::string_view dotPath,
             std::string_view name) noexcept {
-            if (field.path.empty() || name.empty()) {
+            const auto path = field.path();
+            if (path.empty() || name.empty()) {
                 return false;
             }
 
             std::size_t index = 0;
             return consumePath(field, index, dotPath) &&
                 consumePath(field, index, name) &&
-                index == field.path.size();
+                index == path.size();
         }
 
         [[nodiscard]] const Entry* pathEntry(std::string_view dotPath) const noexcept {
@@ -1285,18 +923,19 @@ public:
         }
 
         [[nodiscard]] static std::string_view entryName(const RequestFormField& field) noexcept {
-            if (!field.path.empty()) {
-                const auto& name = field.path.front();
+            const auto path = field.path();
+            if (!path.empty()) {
+                const auto& name = path.front();
                 return std::string_view(name.data(), name.size());
             }
-            return std::string_view(field.name.data(), field.name.size());
+            return field.name();
         }
 
         void rebuildPathEntries(std::pmr::memory_resource* resource) {
             std::pmr::vector<std::size_t> order(resource);
             order.reserve(fields_.size());
             for (std::size_t i = 0; i < fields_.size(); ++i) {
-                if (!fields_[i].path.empty()) {
+                if (!fields_[i].path().empty()) {
                     order.push_back(i);
                 }
             }
@@ -1348,7 +987,7 @@ public:
         }
 
         [[nodiscard]] static std::string_view pathEntryName(const RequestFormField& field) noexcept {
-            return std::string_view(field.name.data(), field.name.size());
+            return field.name();
         }
 
         SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
@@ -1362,15 +1001,11 @@ public:
     [[nodiscard]] std::string_view method() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
-    [[nodiscard]] const RequestNameValueList& header() const;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
     [[nodiscard]] bool accepts(std::string_view mediaType) const noexcept;
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
-    [[nodiscard]] const RequestNameValueList& query() const;
     [[nodiscard]] std::optional<std::span<const std::string_view>> queries(std::string_view name) const;
-    [[nodiscard]] const RequestValueGroupList& queries() const;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
-    [[nodiscard]] const RequestNameValueList& cookie() const;
     // Verifies the "value.signature" format written by setSignedCookie; returns
     // the value view on a valid signature, nullopt when missing or tampered.
     [[nodiscard]] std::optional<std::string_view> signedCookie(
@@ -1421,19 +1056,13 @@ public:
 
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
 
-    [[nodiscard]] const RequestNameValueList& param() const;
-
-    [[nodiscard]] std::string_view routePath() const noexcept;
-
-    [[nodiscard]] std::span<const MatchedRoute> matchedRoutes() const;
-
-    [[nodiscard]] std::size_t routeIndex() const noexcept;
-
 private:
     friend class Context;
     friend Task<RawRequestClone> cloneRawRequest(const ContextRequest& request);
-    friend std::string_view routePath(const Context& context) noexcept;
-    friend std::span<const MatchedRoute> matchedRoutes(const Context& context);
+    friend const RequestNameValueList& detail::requestHeaderFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestQueryFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestCookieFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestParamFields(const ContextRequest& request);
 
     explicit constexpr ContextRequest(const Context& context) noexcept
         : context_(&context) {}
@@ -1447,10 +1076,48 @@ private:
     return request.cloneRawRequest();
 }
 
+namespace detail {
+
+struct RequestFormFieldAccess final {
+    [[nodiscard]] static ContextRequest::RequestFormField make(
+        std::pmr::memory_resource* resource,
+        std::pmr::string&& name,
+        std::pmr::string&& value,
+        std::pmr::string&& filename,
+        std::pmr::string&& contentType,
+        bool file,
+        bool array) {
+        return ContextRequest::RequestFormField(
+            resource,
+            std::move(name),
+            std::move(value),
+            std::move(filename),
+            std::move(contentType),
+            file,
+            array);
+    }
+
+    [[nodiscard]] static std::pmr::vector<std::pmr::string>& path(ContextRequest::RequestFormField& field) noexcept {
+        return field.path_;
+    }
+
+    [[nodiscard]] static const std::pmr::vector<std::pmr::string>& path(const ContextRequest::RequestFormField& field) noexcept {
+        return field.path_;
+    }
+};
+
+}  // namespace detail
+
 class Context final {
 private:
     friend class ContextRequest;
     friend struct detail::ContextAccess;
+    friend const RequestNameValueList& detail::requestHeaderFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestQueryFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestCookieFields(const ContextRequest& request);
+    friend const RequestNameValueList& detail::requestParamFields(const ContextRequest& request);
+    friend std::string_view routePath(const Context& context) noexcept;
+    friend std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context);
     friend struct detail::SessionAccess;
     friend detail::RouteRateLimitResult detail::checkRouteRateLimit(
         Context& context,
@@ -1534,18 +1201,8 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return get<T>(name) != nullptr;
-        }
-
-        template <typename T>
         [[nodiscard]] T* get(ContextKey<T> key) const noexcept {
             return context_->template get<T>(key);
-        }
-
-        template <typename T>
-        [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
-            return get<T>(key) != nullptr;
         }
 
         template <typename T>
@@ -1571,18 +1228,8 @@ public:
         }
 
         template <typename T>
-        [[nodiscard]] bool has(std::string_view name) const noexcept {
-            return get<T>(name) != nullptr;
-        }
-
-        template <typename T>
         [[nodiscard]] const T* get(ContextKey<T> key) const noexcept {
             return context_->template get<T>(key);
-        }
-
-        template <typename T>
-        [[nodiscard]] bool has(ContextKey<T> key) const noexcept {
-            return get<T>(key) != nullptr;
         }
 
         template <typename T>
@@ -2171,11 +1818,11 @@ public:
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(const char (&body)[N], ResponseInit init) const;
 
-    void setRenderer(Renderer renderer) noexcept;
+    void renderer(Renderer renderer) noexcept;
 
-    [[nodiscard]] Layout setLayout(Layout layout) noexcept;
+    [[nodiscard]] Layout layout(Layout layout) noexcept;
 
-    [[nodiscard]] Layout getLayout() const noexcept;
+    [[nodiscard]] Layout layout() const noexcept;
 
     [[nodiscard]] Task<HttpResponse> render(std::string_view body);
 
@@ -2370,27 +2017,12 @@ inline std::string_view ContextRequest::path() const noexcept {
     return raw().path();
 }
 
-inline std::string_view ContextRequest::routePath() const noexcept {
-    return context_->routePath_;
-}
-
-inline std::span<const ContextRequest::MatchedRoute> ContextRequest::matchedRoutes() const {
-    return context_->requestMatchedRoutes();
-}
-
-inline std::size_t ContextRequest::routeIndex() const noexcept {
-    if (context_->routePath_.empty() || context_->routeMethod_ == HttpMethod::kUnknown) {
-        return 0;
-    }
-    return context_->routeMiddlewareCount_;
-}
-
 inline std::string_view routePath(const Context& context) noexcept {
-    return context.req().routePath();
+    return context.routePath_;
 }
 
 inline std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context) {
-    return context.req().matchedRoutes();
+    return context.requestMatchedRoutes();
 }
 
 inline std::string_view routePath(const Context& context, std::ptrdiff_t index) {
@@ -2409,10 +2041,6 @@ inline std::string_view routePath(const Context& context, std::ptrdiff_t index) 
     return routes[static_cast<std::size_t>(resolved)].path;
 }
 
-inline const RequestNameValueList& ContextRequest::header() const {
-    return context_->requestHeaders();
-}
-
 inline std::optional<std::string_view> ContextRequest::header(std::string_view name) const {
     return context_->requestHeader(name);
 }
@@ -2425,25 +2053,37 @@ inline std::optional<std::string_view> ContextRequest::query(std::string_view na
     return context_->requestQuery().get(name);
 }
 
-inline const RequestNameValueList& ContextRequest::query() const {
-    return context_->requestQuery();
-}
-
 inline std::optional<std::span<const std::string_view>> ContextRequest::queries(std::string_view name) const {
-    return context_->requestQueries().get(name);
-}
-
-inline const RequestValueGroupList& ContextRequest::queries() const {
-    return context_->requestQueries();
+    auto values = context_->requestQueries().values(name);
+    if (values.empty()) {
+        return std::nullopt;
+    }
+    return values;
 }
 
 inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const {
     return context_->requestCookies().get(name);
 }
 
-inline const RequestNameValueList& ContextRequest::cookie() const {
-    return context_->requestCookies();
+namespace detail {
+
+inline const RequestNameValueList& requestHeaderFields(const ContextRequest& request) {
+    return request.context_->requestHeaders();
 }
+
+inline const RequestNameValueList& requestQueryFields(const ContextRequest& request) {
+    return request.context_->requestQuery();
+}
+
+inline const RequestNameValueList& requestCookieFields(const ContextRequest& request) {
+    return request.context_->requestCookies();
+}
+
+inline const RequestNameValueList& requestParamFields(const ContextRequest& request) {
+    return request.context_->routeParams();
+}
+
+}  // namespace detail
 
 
 inline Task<std::string_view> ContextRequest::text() const {
@@ -2494,10 +2134,6 @@ inline MultipartReader ContextRequest::multipartReader() const {
 
 inline std::optional<std::string_view> ContextRequest::param(std::string_view name) const {
     return context_->routeParam(name);
-}
-
-inline const RequestNameValueList& ContextRequest::param() const {
-    return context_->routeParams();
 }
 
 template <typename T>

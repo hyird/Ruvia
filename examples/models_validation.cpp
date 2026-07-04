@@ -209,12 +209,13 @@ private:
         const auto& request = c.req().valid<RegisterRequest>("json");
 
         RegisterResponse response(c);
-        response.username(request.username()->view());
-        if (request.roles()) {
-            response.roleCount(ruvia::UInt32{static_cast<std::uint32_t>(request.roles()->size())});
+        const auto username = request.username();
+        response.username(username->view());
+        if (const auto roles = request.roles()) {
+            response.roleCount(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
-        response.tags().emplace_back(ruvia::String("created", c.resource()));
-        response.tags().emplace_back(ruvia::String("validated", c.resource()));
+        response.tagsEnsure().emplace_back(ruvia::String("created", c.resource()));
+        response.tagsEnsure().emplace_back(ruvia::String("validated", c.resource()));
         co_return c.json(response, 201);
     }
 
@@ -222,28 +223,30 @@ private:
         const auto& form = c.req().valid<ContactForm>("form");
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
-        body.append(form.name()->view());
+        const auto name = form.name();
+        body.append(name->view());
         body.push_back('\n');
         co_return c.text(body);
     }
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
         const auto& query = c.req().valid<SearchQuery>("query");
-        const auto requestQuery = c.req().query().get("q");
+        const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
-        body.append(query.q()->view());
+        const auto q = query.q();
+        body.append(q->view());
         body.append("\nquery-shared=");
-        const auto queryValue = query.q()->view();
+        const auto queryValue = q->view();
         body.append(
             requestQuery.has_value() && requestQuery->data() == queryValue.data()
                     && requestQuery->size() == queryValue.size()
                 ? "true"
                 : "false");
-        if (query.page()) {
+        if (const auto page = query.page()) {
             body.append("\npage=");
             char buffer[16]{};
-            const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), query.page()->value);
+            const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page->value);
             if (ec == std::errc{}) {
                 body.append(buffer, static_cast<std::size_t>(ptr - buffer));
             }
@@ -255,7 +258,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> category(ruvia::Context& c) {
         Category root(c);
         root.name("root");
-        root.children().emplace().name("leaf");
+        root.childrenEnsure().emplace().name("leaf");
         co_return c.json(root);
     }
 
@@ -263,7 +266,8 @@ private:
         const auto& params = c.req().valid<CategoryParams>("param");
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
-        body.append(params.id()->view());
+        const auto id = params.id();
+        body.append(id->view());
         body.push_back('\n');
         co_return c.text(body);
     }
@@ -272,7 +276,8 @@ private:
         const auto& headers = c.req().valid<RequestHeaders>("header");
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
-        body.append(headers.requestId()->view());
+        const auto requestId = headers.requestId();
+        body.append(requestId->view());
         body.push_back('\n');
         co_return c.text(body);
     }
@@ -281,7 +286,8 @@ private:
         const auto& cookies = c.req().valid<PreferencesCookie>("cookie");
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
-        body.append(cookies.theme()->view());
+        const auto theme = cookies.theme();
+        body.append(theme->view());
         body.push_back('\n');
         co_return c.text(body);
     }

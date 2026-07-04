@@ -129,13 +129,13 @@ struct Http2UpgradeRequest final {
 
     std::string_view encodedSettings;
     for (const auto& header : parsed.request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name, "HTTP2-Settings")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
             continue;
         }
         if (!encodedSettings.empty()) {
             return result;
         }
-        encodedSettings = header.value;
+        encodedSettings = header.value();
     }
     if (!http2DecodeBase64Url(encodedSettings, result.settingsPayload)) {
         return result;

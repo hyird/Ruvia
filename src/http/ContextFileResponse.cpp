@@ -198,10 +198,10 @@ template <typename ApplyResponseState>
         if (contentType.empty()) {
             detail::setResponseHeaderStableView(response, "Content-Type", detail::httpGuessContentType(*filePath.path));
         } else {
-            response.setHeader("Content-Type", contentType);
+            response.header("Content-Type", contentType);
         }
         if (!cacheControl.empty()) {
-            response.setHeader("Cache-Control", cacheControl);
+            response.header("Cache-Control", cacheControl);
         }
         // A precompressed variant carries the original Content-Type with the
         // encoding declared here; Vary lets caches key on Accept-Encoding.
@@ -213,8 +213,8 @@ template <typename ApplyResponseState>
             detail::setResponseHeaderStableView(response, "Accept-Ranges", "bytes");
         }
         if (enableValidators) {
-            response.setHeader("ETag", etag);
-            response.setHeader("Last-Modified", lastModified);
+            response.header("ETag", etag);
+            response.header("Last-Modified", lastModified);
         }
     };
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) {

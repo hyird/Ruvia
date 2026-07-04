@@ -66,6 +66,43 @@ template <typename Predicate>
     return {};
 }
 
+// Iterate a comma-delimited HTTP list whose items may contain quoted-string
+// parameters. A comma inside "..." is data, not a list separator. Use for
+// Accept-style negotiation fields; simpler token-only lists can keep the faster
+// token scanner above.
+template <typename Visitor>
+inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visitor) {
+    std::size_t start = 0;
+    while (start <= value.size()) {
+        std::size_t end = value.size();
+        bool inQuotes = false;
+        for (std::size_t i = start; i < value.size(); ++i) {
+            const char c = value[i];
+            if (inQuotes) {
+                if (c == '\\' && i + 1 < value.size()) {
+                    ++i;
+                } else if (c == '"') {
+                    inQuotes = false;
+                }
+            } else if (c == '"') {
+                inQuotes = true;
+            } else if (c == ',') {
+                end = i;
+                break;
+            }
+        }
+
+        const auto item = httpTrimOws(value.substr(start, end - start));
+        if (!item.empty() && !visitor(item)) {
+            return;
+        }
+        if (end >= value.size()) {
+            return;
+        }
+        start = end + 1;
+    }
+}
+
 // Iterate the `key=value` parameters of a `;`-delimited list (cookie pairs,
 // Content-Type / Content-Disposition parameters). Each key and value is trimmed
 // of OWS; segments without '=' are skipped. The visitor returns false to stop

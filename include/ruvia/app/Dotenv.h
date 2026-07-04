@@ -13,6 +13,7 @@ namespace ruvia {
 namespace detail {
 
 struct EnvAccess;
+struct DotenvResultAccess;
 struct EnvState;
 struct EnvStateDeleter final {
     void operator()(EnvState* state) const noexcept;
@@ -25,11 +26,48 @@ struct DotenvOptions {
     bool required{false};
 };
 
-struct DotenvResult {
-    bool loaded{false};
-    std::size_t variablesSet{0};
-    std::size_t variablesSkipped{0};
+class DotenvResult final {
+public:
+    [[nodiscard]] bool loaded() const noexcept {
+        return loaded_;
+    }
+
+    [[nodiscard]] std::size_t variablesSet() const noexcept {
+        return variablesSet_;
+    }
+
+    [[nodiscard]] std::size_t variablesSkipped() const noexcept {
+        return variablesSkipped_;
+    }
+
+private:
+    friend struct detail::DotenvResultAccess;
+
+    explicit DotenvResult(bool loaded) noexcept
+        : loaded_(loaded) {}
+
+    bool loaded_{false};
+    std::size_t variablesSet_{0};
+    std::size_t variablesSkipped_{0};
 };
+
+namespace detail {
+
+struct DotenvResultAccess final {
+    [[nodiscard]] static DotenvResult make(bool loaded) noexcept {
+        return DotenvResult(loaded);
+    }
+
+    static void incrementVariablesSet(DotenvResult& result) noexcept {
+        ++result.variablesSet_;
+    }
+
+    static void incrementVariablesSkipped(DotenvResult& result) noexcept {
+        ++result.variablesSkipped_;
+    }
+};
+
+}  // namespace detail
 
 class Env final {
 public:

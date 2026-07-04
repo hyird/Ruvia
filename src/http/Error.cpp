@@ -10,38 +10,41 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] HttpErrorInfo normalizeError(HttpErrorInfo error) noexcept {
-    if (error.statusText.empty()) {
-        error.statusText = defaultStatusText(error.statusCode);
+    auto statusText = error.statusText();
+    auto code = error.code();
+    auto message = error.message();
+    if (statusText.empty()) {
+        statusText = defaultStatusText(error.status());
     }
-    if (error.code.empty()) {
-        error.code = defaultErrorCode(error.statusCode);
+    if (code.empty()) {
+        code = defaultErrorCode(error.status());
     }
-    if (error.message.empty()) {
-        error.message = error.statusText;
+    if (message.empty()) {
+        message = statusText;
     }
-    return error;
+    return HttpErrorInfo(error.status(), code, message, statusText, error.detailsJson());
 }
 
 void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
     std::size_t size =
-        std::string_view("{\"error\":").size() + detail::jsonStringSizeHint(error.statusText) +
-        std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(error.code) +
-        std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(error.message) +
+        std::string_view("{\"error\":").size() + detail::jsonStringSizeHint(error.statusText()) +
+        std::string_view(",\"code\":").size() + detail::jsonStringSizeHint(error.code()) +
+        std::string_view(",\"message\":").size() + detail::jsonStringSizeHint(error.message()) +
         1;
-    if (!error.detailsJson.empty()) {
-        size += std::string_view(",\"details\":").size() + error.detailsJson.size();
+    if (!error.detailsJson().empty()) {
+        size += std::string_view(",\"details\":").size() + error.detailsJson().size();
     }
     body.reserve(size);
 
     body.append("{\"error\":");
-    detail::appendJsonString(body, error.statusText);
+    detail::appendJsonString(body, error.statusText());
     body.append(",\"code\":");
-    detail::appendJsonString(body, error.code);
+    detail::appendJsonString(body, error.code());
     body.append(",\"message\":");
-    detail::appendJsonString(body, error.message);
-    if (!error.detailsJson.empty()) {
+    detail::appendJsonString(body, error.message());
+    if (!error.detailsJson().empty()) {
         body.append(",\"details\":");
-        body.append(error.detailsJson.data(), error.detailsJson.size());
+        body.append(error.detailsJson().data(), error.detailsJson().size());
     }
     body.push_back('}');
 }
@@ -90,10 +93,10 @@ void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
 }
 
 [[nodiscard]] bool isDefaultErrorBodyCandidate(HttpErrorInfo error) noexcept {
-    return error.detailsJson.empty() &&
-        error.statusText == defaultStatusText(error.statusCode) &&
-        error.code == defaultErrorCode(error.statusCode) &&
-        error.message == error.statusText;
+    return error.detailsJson().empty() &&
+        error.statusText() == defaultStatusText(error.status()) &&
+        error.code() == defaultErrorCode(error.status()) &&
+        error.message() == error.statusText();
 }
 
 }  // namespace
@@ -113,11 +116,7 @@ const char* HttpError::what() const noexcept {
 }
 
 HttpErrorInfo HttpError::info() const noexcept {
-    return HttpErrorInfo{
-        .statusCode = statusCode_,
-        .statusText = statusText_,
-        .code = code_,
-        .message = message_};
+    return HttpErrorInfo(statusCode_, code_, message_, statusText_);
 }
 
 std::string_view defaultStatusText(std::uint16_t statusCode) noexcept {
@@ -175,14 +174,14 @@ HttpResponse makeErrorResponse(
 
     HttpResponse response(resource);
     detail::reserveResponseHeaders(response, closeConnection ? 2 : 1);
-    response.setStatus(error.statusCode, error.statusText);
+    response.status(error.status(), error.statusText());
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     if (closeConnection) {
         detail::setResponseHeaderStableView(response, "Connection", "close");
     }
 
     if (isDefaultErrorBodyCandidate(error)) {
-        if (const auto body = defaultErrorBody(error.statusCode); !body.empty()) {
+        if (const auto body = defaultErrorBody(error.status()); !body.empty()) {
             detail::setResponseBodyStaticView(response, body);
             return response;
         }
@@ -190,7 +189,7 @@ HttpResponse makeErrorResponse(
 
     std::pmr::string body(resource);
     appendErrorBody(body, error);
-    response.setBodyOwned(std::move(body));
+    detail::setResponseBodyOwned(response, std::move(body));
     return response;
 }
 
@@ -213,18 +212,12 @@ Task<HttpResponse> makeErrorResponse(
         } catch (const std::exception& nested) {
             co_return makeErrorResponse(
                 context.resource(),
-                HttpErrorInfo{
-                    .statusCode = 500,
-                    .code = "error_handler_failed",
-                    .message = nested.what()},
+                HttpErrorInfo(500, "error_handler_failed", nested.what()),
                 closeConnection);
         } catch (...) {
             co_return makeErrorResponse(
                 context.resource(),
-                HttpErrorInfo{
-                    .statusCode = 500,
-                    .code = "error_handler_failed",
-                    .message = "error handler failed"},
+                HttpErrorInfo(500, "error_handler_failed", "error handler failed"),
                 closeConnection);
         }
     }

@@ -33,16 +33,78 @@
 
 namespace ruvia {
 
+namespace detail {
+struct AccessLogRecordAccess;
+}  // namespace detail
+
 // One completed request, passed to the access-log callback after the response is
 // written. Views borrow request memory and are valid only for the call.
-struct AccessLogRecord final {
-    HttpMethod method{};
-    std::string_view path;
-    std::string_view remoteAddress;
-    std::uint16_t status{0};
-    std::uint64_t durationMicros{0};
-    bool http2{false};
+class AccessLogRecord final {
+public:
+    [[nodiscard]] constexpr HttpMethod method() const noexcept {
+        return method_;
+    }
+
+    [[nodiscard]] constexpr std::string_view path() const noexcept {
+        return path_;
+    }
+
+    [[nodiscard]] constexpr std::string_view remoteAddress() const noexcept {
+        return remoteAddress_;
+    }
+
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] constexpr std::uint64_t durationMicros() const noexcept {
+        return durationMicros_;
+    }
+
+    [[nodiscard]] constexpr bool http2() const noexcept {
+        return http2_;
+    }
+
+private:
+    friend struct detail::AccessLogRecordAccess;
+
+    constexpr AccessLogRecord(
+        HttpMethod method,
+        std::string_view path,
+        std::string_view remoteAddress,
+        std::uint16_t status,
+        std::uint64_t durationMicros,
+        bool http2) noexcept
+        : method_(method),
+          path_(path),
+          remoteAddress_(remoteAddress),
+          status_(status),
+          durationMicros_(durationMicros),
+          http2_(http2) {}
+
+    HttpMethod method_;
+    std::string_view path_;
+    std::string_view remoteAddress_;
+    std::uint16_t status_;
+    std::uint64_t durationMicros_;
+    bool http2_;
 };
+
+namespace detail {
+
+struct AccessLogRecordAccess final {
+    [[nodiscard]] static constexpr AccessLogRecord make(
+        HttpMethod method,
+        std::string_view path,
+        std::string_view remoteAddress,
+        std::uint16_t status,
+        std::uint64_t durationMicros,
+        bool http2) noexcept {
+        return AccessLogRecord(method, path, remoteAddress, status, durationMicros, http2);
+    }
+};
+
+}  // namespace detail
 
 struct HttpServerOptions final {
     struct Tls final {
@@ -189,8 +251,6 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
-    App& setRateLimit(RateLimitRule rule);
     App& setGlobalRateLimit(std::size_t maxRequests, std::chrono::milliseconds window = std::chrono::seconds(1));
     App& setGlobalRateLimit(RateLimitRule rule);
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);

@@ -18,7 +18,7 @@ inline void setRetryAfterSeconds(HttpResponse& response, std::chrono::millisecon
     char buffer[20];
     const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), seconds);
     if (ec == std::errc{}) {
-        response.setHeader("Retry-After", std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
+        response.header("Retry-After", std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
     }
 }
 

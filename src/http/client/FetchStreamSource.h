@@ -2,6 +2,7 @@
 
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <string>
@@ -19,7 +20,7 @@ class FetchStreamSource {
 public:
     virtual ~FetchStreamSource() = default;
 
-    [[nodiscard]] virtual int statusCode() const noexcept = 0;
+    [[nodiscard]] virtual std::uint16_t status() const noexcept = 0;
     [[nodiscard]] virtual const std::pmr::vector<FetchResponseHeader>& headers() const noexcept = 0;
     [[nodiscard]] virtual Task<std::pmr::string> readChunk() = 0;
     virtual void close() noexcept = 0;

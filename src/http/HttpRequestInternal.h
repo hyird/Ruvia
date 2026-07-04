@@ -114,7 +114,7 @@ struct HttpRequestAccess final {
         if (!addHeader(request, header)) {
             return false;
         }
-        setKnownHeaderSlot(request, knownSlot, header.value);
+        setKnownHeaderSlot(request, knownSlot, header.value());
         return true;
     }
 

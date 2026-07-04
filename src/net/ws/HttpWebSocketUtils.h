@@ -291,9 +291,9 @@ public:
                 return WebSocketInboundAction::kContinue;
             }
             fragmented_ = false;
-            out = WebSocketMessage{
-                .opcode = opcode_,
-                .payload = std::string_view(message_.data(), message_.size())};
+            out = WebSocketMessageAccess::make(
+                opcode_,
+                std::string_view(message_.data(), message_.size()));
             // A compressed message must be inflated before UTF-8 can be judged,
             // so defer validation to the connection.
             if (compressed_) {
@@ -309,7 +309,7 @@ public:
                 throw std::invalid_argument("invalid websocket fragmented message");
             }
             if (frame.fin) {
-                out = WebSocketMessage{.opcode = frame.opcode, .payload = frame.payload};
+                out = WebSocketMessageAccess::make(frame.opcode, frame.payload);
                 if (frame.rsv1) {
                     return WebSocketInboundAction::kDeliverCompressed;
                 }
