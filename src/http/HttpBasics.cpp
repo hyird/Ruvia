@@ -17,6 +17,13 @@ bool isValidHttpHeaderName(std::string_view name) noexcept {
 }
 
 bool isValidHttpHeaderValue(std::string_view value) noexcept {
+    if (!value.empty()) {
+        const auto first = static_cast<unsigned char>(value.front());
+        const auto last = static_cast<unsigned char>(value.back());
+        if (first == ' ' || first == '\t' || last == ' ' || last == '\t') {
+            return false;
+        }
+    }
     for (const auto c : value) {
         if (!detail::isHttpFieldValueChar(static_cast<unsigned char>(c))) {
             return false;
