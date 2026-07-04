@@ -44,16 +44,8 @@ QueryResult DbHandle::mountResult(QueryResult result) const {
     return view;
 }
 
-Task<QueryResult> DbHandle::query(std::string_view sql, std::initializer_list<DbValue> params) const {
-    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
-}
-
 Task<QueryResult> DbHandle::query(std::string_view sql, std::span<const DbValue> params) const {
     return execute(sql, params);
-}
-
-Task<QueryResult> DbHandle::execute(std::string_view sql, std::initializer_list<DbValue> params) const {
-    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
 }
 
 Task<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValue> params) const {
@@ -64,10 +56,6 @@ Task<QueryResult> DbHandle::execute(std::string_view sql, std::span<const DbValu
 Task<QueryResult> DbHandle::executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const {
     auto result = co_await client_.execute(std::move(sql), std::move(params), resource_);
     co_return mountResult(std::move(result));
-}
-
-Task<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::initializer_list<DbValue> params) const {
-    return queryStream(sql, std::span<const DbValue>(params.begin(), params.size()));
 }
 
 Task<DbStreamResult> DbHandle::queryStream(std::string_view sql, std::span<const DbValue> params) const {
@@ -221,16 +209,8 @@ QueryResult DbTransaction::mountResult(QueryResult result) const {
     return view;
 }
 
-Task<QueryResult> DbTransaction::query(std::string_view sql, std::initializer_list<DbValue> params) {
-    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
-}
-
 Task<QueryResult> DbTransaction::query(std::string_view sql, std::span<const DbValue> params) {
     return execute(sql, params);
-}
-
-Task<QueryResult> DbTransaction::execute(std::string_view sql, std::initializer_list<DbValue> params) {
-    return execute(sql, std::span<const DbValue>(params.begin(), params.size()));
 }
 
 Task<QueryResult> DbTransaction::execute(std::string_view sql, std::span<const DbValue> params) {
