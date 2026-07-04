@@ -46,14 +46,14 @@ void validateHttpClientRequestHead(
     }
 }
 
-void validateHttpClientRequestHeader(const FetchRequestHeader& header) {
-    if (!isValidHttpHeaderName(header.name)) {
+void validateHttpClientRequestHeader(const HttpHeaderView& header) {
+    if (!isValidHttpHeaderName(header.name())) {
         throw std::invalid_argument("http client: invalid request header name");
     }
-    if (!isValidHttpHeaderValue(header.value)) {
+    if (!isValidHttpHeaderValue(header.value())) {
         throw std::invalid_argument("http client: invalid request header value");
     }
-    if (isReservedHttpClientRequestHeader(header.name)) {
+    if (isReservedHttpClientRequestHeader(header.name())) {
         throw std::invalid_argument("http client: request header is managed by the client");
     }
 }
@@ -568,9 +568,9 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     addHttpClientRequestHeadBytes(requestHeadBytes, std::string_view("\r\nConnection: keep-alive\r\n").size());
     for (const auto& hdr : options.headers) {
         validateHttpClientRequestHeader(hdr);
-        addHttpClientRequestHeadBytes(requestHeadBytes, hdr.name.size());
+        addHttpClientRequestHeadBytes(requestHeadBytes, hdr.name().size());
         addHttpClientRequestHeadBytes(requestHeadBytes, 2);
-        addHttpClientRequestHeadBytes(requestHeadBytes, hdr.value.size());
+        addHttpClientRequestHeadBytes(requestHeadBytes, hdr.value().size());
         addHttpClientRequestHeadBytes(requestHeadBytes, 2);
     }
     if (!contentLengthValue.empty()) {
@@ -594,9 +594,11 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     requestBuf.append("\r\nConnection: keep-alive\r\n");
 
     for (const auto& hdr : options.headers) {
-        requestBuf.append(hdr.name.data(), hdr.name.size());
+        const auto name = hdr.name();
+        const auto value = hdr.value();
+        requestBuf.append(name.data(), name.size());
         requestBuf.append(": ");
-        requestBuf.append(hdr.value.data(), hdr.value.size());
+        requestBuf.append(value.data(), value.size());
         requestBuf.append("\r\n");
     }
 

@@ -620,7 +620,7 @@ std::vector<H2Result> runH2Fetches(
             [&, i]() -> asio::awaitable<void> {
                 try {
                     ruvia::FetchOptions options;
-                    std::vector<ruvia::FetchRequestHeader> headers;
+                    std::vector<ruvia::HttpHeaderView> headers;
                     if (i < echoHeaders.size() && !echoHeaders[i].first.empty()) {
                         headers.push_back({echoHeaders[i].first, echoHeaders[i].second});
                         options.headers = headers;

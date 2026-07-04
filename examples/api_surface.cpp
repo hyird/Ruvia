@@ -622,6 +622,12 @@ concept HasFetchResponseStatusGetter = requires(const T& response) {
 };
 
 template <typename T>
+concept HasFetchOptionsHeaderViews = requires(T& options, std::span<const ruvia::HttpHeaderView> headers) {
+    options.headers = headers;
+    { options.headers } -> std::same_as<std::span<const ruvia::HttpHeaderView>&>;
+};
+
+template <typename T>
 concept HasFetchResponseHeadersField = requires(const T& response) {
     response.headers;
 };
@@ -1446,6 +1452,7 @@ static_assert(HasResponseStatusGetter<ruvia::HttpResponse>);
 static_assert(!HasResponseSetBodyOwnedAlias<ruvia::HttpResponse>);
 static_assert(!HasFetchResponseStatusCodeField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseStatusGetter<ruvia::FetchResponse>);
+static_assert(HasFetchOptionsHeaderViews<ruvia::FetchOptions>);
 static_assert(!HasFetchResponseHeadersField<ruvia::FetchResponse>);
 static_assert(HasFetchResponseHeadersGetter<ruvia::FetchResponse>);
 static_assert(!HasFetchResponseBodyField<ruvia::FetchResponse>);
