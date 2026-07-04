@@ -4,9 +4,7 @@
 #include "parser/HttpParserSyntax.h"
 #include "HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/memory/PmrResource.h"
 
-#include <charconv>
 #include <system_error>
 
 namespace ruvia {
@@ -28,71 +26,7 @@ static_assert(
     detail::kRequestHeaderKindCount ==
     static_cast<std::size_t>(detail::RequestKnownHeader::kUserAgent) + 2);
 
-template <typename T>
-std::optional<T> parseInteger(std::optional<std::string_view> input) noexcept {
-    if (!input || input->empty()) {
-        return std::nullopt;
-    }
-
-    T value{};
-    const auto* begin = input->data();
-    const auto* end = begin + input->size();
-    const auto [ptr, error] = std::from_chars(begin, end, value);
-    if (error != std::errc{} || ptr != end) {
-        return std::nullopt;
-    }
-
-    return value;
-}
-
 }  // namespace
-
-std::optional<std::pmr::string> RequestValue::toString() const {
-    if (!value_) {
-        return std::nullopt;
-    }
-
-    if (decodeMode_ != DecodeMode::kNone) {
-        const auto mode = decodeMode_ == DecodeMode::kForm
-            ? detail::UrlDecodeMode::kForm
-            : detail::UrlDecodeMode::kPercent;
-        if (detail::hasUrlEncoding(*value_, mode)) {
-            return detail::decodeUrlComponentToString(*value_, resource(), mode);
-        }
-    }
-
-    return std::pmr::string(value_->data(), value_->size(), resource());
-}
-
-std::optional<bool> RequestValue::toBool() const noexcept {
-    if (!value_) {
-        return std::nullopt;
-    }
-
-    if (*value_ == "1" || detail::httpAsciiEqualsIgnoreCase(*value_, "true")) {
-        return true;
-    }
-    if (*value_ == "0" || detail::httpAsciiEqualsIgnoreCase(*value_, "false")) {
-        return false;
-    }
-    return std::nullopt;
-}
-
-std::optional<std::int32_t> RequestValue::toInt32() const noexcept {
-    return parseInteger<std::int32_t>(value_);
-}
-
-std::optional<std::uint32_t> RequestValue::toUInt32() const noexcept {
-    return parseInteger<std::uint32_t>(value_);
-}
-
-std::optional<std::int64_t> RequestValue::toInt64() const noexcept {
-    return parseInteger<std::int64_t>(value_);
-}
-
-std::optional<std::uint64_t> RequestValue::toUInt64() const noexcept {
-    return parseInteger<std::uint64_t>(value_);
-}
 
 std::string_view HttpRequest::header(std::string_view name) const noexcept {
     const auto kind = detail::classifyRequestHeader(name);
