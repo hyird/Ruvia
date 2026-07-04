@@ -135,4 +135,22 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
         duplicateKey.secWebSocketKeyCount = 2;  // Sec-WebSocket-Key must appear exactly once
         RUVIA_CHECK(!isValidWebSocketRequest(validHandshake(), duplicateKey));
     }
+    {
+        HttpRequestFlags duplicateVersion = flags;
+        duplicateVersion.secWebSocketVersionCount = 2;  // Version must appear exactly once
+        RUVIA_CHECK(!isValidWebSocketRequest(validHandshake(), duplicateVersion));
+    }
+
+    // The Upgrade header must name "websocket", not another protocol token.
+    const auto wrongUpgrade = parseRequest(
+        "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: h2c\r\n"
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+    RUVIA_CHECK(!isValidWebSocketRequest(wrongUpgrade, flags));
+
+    // Sec-WebSocket-Key present exactly once but not a 16-byte base64 value
+    // (RFC 6455 4.1) -> invalid. "YWJj" decodes to 3 bytes.
+    const auto badKey = parseRequest(
+        "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n");
+    RUVIA_CHECK(!isValidWebSocketRequest(badKey, flags));
 }
