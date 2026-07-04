@@ -51,24 +51,6 @@ private:
     std::size_t variablesSkipped_{0};
 };
 
-namespace detail {
-
-struct DotenvResultAccess final {
-    [[nodiscard]] static DotenvResult make(bool loaded) noexcept {
-        return DotenvResult(loaded);
-    }
-
-    static void incrementVariablesSet(DotenvResult& result) noexcept {
-        ++result.variablesSet_;
-    }
-
-    static void incrementVariablesSkipped(DotenvResult& result) noexcept {
-        ++result.variablesSkipped_;
-    }
-};
-
-}  // namespace detail
-
 class Env final {
 public:
     Env();

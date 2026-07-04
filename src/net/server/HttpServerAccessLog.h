@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "../../app/AppAccess.h"
 #include "ruvia/app/App.h"
 #include "ruvia/http/HttpRequest.h"
 

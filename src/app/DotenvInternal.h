@@ -32,6 +32,20 @@ struct EnvAccess final {
     }
 };
 
+struct DotenvResultAccess final {
+    [[nodiscard]] static DotenvResult make(bool loaded) noexcept {
+        return DotenvResult(loaded);
+    }
+
+    static void incrementVariablesSet(DotenvResult& result) noexcept {
+        ++result.variablesSet_;
+    }
+
+    static void incrementVariablesSkipped(DotenvResult& result) noexcept {
+        ++result.variablesSkipped_;
+    }
+};
+
 struct DotenvEntry final {
     std::pmr::string name{appResource()};
     std::pmr::string value{appResource()};
