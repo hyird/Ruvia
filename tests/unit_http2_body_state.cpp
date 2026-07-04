@@ -7,7 +7,7 @@
 
 namespace {
 
-using ruvia::RequestBodyMode;
+using ruvia::detail::RequestBodyMode;
 using ruvia::detail::Http2BodyAccountingResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::http2AccountDataBody;

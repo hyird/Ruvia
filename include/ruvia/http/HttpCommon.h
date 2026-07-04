@@ -35,6 +35,8 @@ inline constexpr HttpMethod Head = HttpMethod::kHead;
 inline constexpr HttpMethod Options = HttpMethod::kOptions;
 inline constexpr HttpMethod Connect = HttpMethod::kConnect;
 
+namespace detail {
+
 enum class RequestBodyMode {
     kBuffered,
     kStream
@@ -46,6 +48,8 @@ enum class ResponseBodyMode {
     kSse,
     kWebSocket
 };
+
+}  // namespace detail
 
 inline constexpr std::size_t kMaxRequestHeaders = 64;
 

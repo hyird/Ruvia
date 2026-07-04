@@ -48,6 +48,12 @@ RUVIA_MODEL(SurfaceJsonResponse,
 );
 
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
+
+using DetailRequestBodyMode = ruvia::detail::RequestBodyMode;
+using DetailResponseBodyMode = ruvia::detail::ResponseBodyMode;
+static_assert(std::is_enum_v<DetailRequestBodyMode>);
+static_assert(std::is_enum_v<DetailResponseBodyMode>);
+
 template <typename T>
 concept HasPlainAddressOf = requires(T& value) {
     &value;

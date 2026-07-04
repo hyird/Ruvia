@@ -90,7 +90,7 @@ private:
         ::ruvia::Get, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_STREAM(path, handler, ...) \
@@ -99,7 +99,7 @@ private:
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::ResponseBodyMode::kStream, \
+        ::ruvia::detail::ResponseBodyMode::kStream, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_SSE(path, handler, ...) \
@@ -108,7 +108,7 @@ private:
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::ResponseBodyMode::kSse, \
+        ::ruvia::detail::ResponseBodyMode::kSse, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS(path, handler, ...) \
@@ -117,7 +117,7 @@ private:
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::ResponseBodyMode::kWebSocket, \
+        ::ruvia::detail::ResponseBodyMode::kWebSocket, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS_OPTIONS(path, handler, options, ...) \
@@ -126,7 +126,7 @@ private:
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::ResponseBodyMode::kWebSocket, \
+        ::ruvia::detail::ResponseBodyMode::kWebSocket, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>(), \
         options)
 
@@ -136,7 +136,7 @@ private:
         ::ruvia::Post, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PUT(path, handler, ...) \
@@ -145,7 +145,7 @@ private:
         ::ruvia::Put, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_DELETE(path, handler, ...) \
@@ -154,7 +154,7 @@ private:
         ::ruvia::Delete, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PATCH(path, handler, ...) \
@@ -163,7 +163,7 @@ private:
         ::ruvia::Patch, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_HEAD(path, handler, ...) \
@@ -172,7 +172,7 @@ private:
         ::ruvia::Head, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_OPTIONS(path, handler, ...) \
@@ -181,7 +181,7 @@ private:
         ::ruvia::Options, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kBuffered, \
+        ::ruvia::detail::RequestBodyMode::kBuffered, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 // Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
@@ -192,7 +192,7 @@ private:
             ruviaRouteMethod, \
             path, \
             bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-            ::ruvia::RequestBodyMode::kBuffered, \
+            ::ruvia::detail::RequestBodyMode::kBuffered, \
             RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 // Hono app.on: registers the handler for an explicit method x path list, e.g.
@@ -205,7 +205,7 @@ private:
                 ruviaRouteMethod, \
                 ruviaRoutePath, \
                 bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-                ::ruvia::RequestBodyMode::kBuffered, \
+                ::ruvia::detail::RequestBodyMode::kBuffered, \
                 RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_POST_STREAM(path, handler, ...) \
@@ -214,7 +214,7 @@ private:
         ::ruvia::Post, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kStream, \
+        ::ruvia::detail::RequestBodyMode::kStream, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PUT_STREAM(path, handler, ...) \
@@ -223,7 +223,7 @@ private:
         ::ruvia::Put, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kStream, \
+        ::ruvia::detail::RequestBodyMode::kStream, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PATCH_STREAM(path, handler, ...) \
@@ -232,7 +232,7 @@ private:
         ::ruvia::Patch, \
         path, \
         bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::RequestBodyMode::kStream, \
+        ::ruvia::detail::RequestBodyMode::kStream, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GROUP_BEGIN(prefix, ...) \
