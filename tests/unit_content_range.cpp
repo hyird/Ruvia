@@ -188,3 +188,61 @@ RUVIA_TEST(static_file_conditional_request_serving) {
 
     fs::remove_all(dir);
 }
+
+RUVIA_TEST(static_file_serves_precompressed_gzip_variant) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_variant_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(100, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    {
+        std::ofstream out(dir / "data.txt.gz", std::ios::binary | std::ios::trunc);
+        const std::string content(20, 'g');  // sidecar bytes; served verbatim
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::string_view acceptEncoding) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        if (!acceptEncoding.empty()) {
+            HttpRequestAccess::addHeader(
+                request,
+                HttpHeaderView{"Accept-Encoding", acceptEncoding},
+                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAcceptEncoding));
+        }
+        auto context = ContextAccess::make(memory, request);
+        const auto response = context.staticFile(root, "data.txt", "text/plain");
+        return std::pair<std::string, std::string>(
+            std::string(response.header("Content-Encoding")),
+            std::string(response.header("Vary")));
+    };
+
+    // Accept-Encoding: gzip with a .gz sidecar present serves the gzip variant,
+    // marked Content-Encoding: gzip and Vary: Accept-Encoding so a cache keys on it.
+    const auto gz = serve("gzip");
+    RUVIA_CHECK_EQ(gz.first, std::string("gzip"));
+    RUVIA_CHECK(gz.second.find("Accept-Encoding") != std::string::npos);
+
+    // Without Accept-Encoding the plain file is served, with no Content-Encoding.
+    const auto plain = serve("");
+    RUVIA_CHECK(plain.first.empty());
+
+    fs::remove_all(dir);
+}
