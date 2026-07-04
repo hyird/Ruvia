@@ -64,3 +64,21 @@ RUVIA_TEST(static_header_unknown_value_or_bit_is_nullopt) {
     // An unhandled known-bit falls through to nullopt.
     RUVIA_CHECK(!builtinStaticResponseHeader(0, "anything").has_value());
 }
+
+RUVIA_TEST(response_known_header_slot_maps_single_bits) {
+    using ruvia::detail::kResponseKnownHeaderCount;
+    using ruvia::detail::responseKnownHeaderSlot;
+    // A single known-header bit maps to its bit position.
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(ruvia::detail::kResponseHeaderContentLength), std::size_t{0});
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(ruvia::detail::kResponseHeaderContentEncoding), std::size_t{1});
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(ruvia::detail::kResponseHeaderContentType), std::size_t{2});
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(ruvia::detail::kResponseHeaderVary), std::size_t{4});
+
+    // Zero, multi-bit, and out-of-range values return the sentinel (count).
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(0), kResponseKnownHeaderCount);
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(
+                       ruvia::detail::kResponseHeaderContentType |
+                       ruvia::detail::kResponseHeaderConnection),
+                   kResponseKnownHeaderCount);
+    RUVIA_CHECK_EQ(responseKnownHeaderSlot(1U << 25), kResponseKnownHeaderCount);
+}
