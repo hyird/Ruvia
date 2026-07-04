@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
@@ -10,6 +11,7 @@
 
 #include <hiredis/hiredis.h>
 
+#include "redis/core/RedisConfigValidation.h"
 #include "redis/core/RedisProtocol.h"
 #include "ruvia/redis/RedisTypes.h"
 
@@ -249,4 +251,25 @@ RUVIA_TEST(resp_command_rejects_empty_argument_list) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(redis_config_validation_checks_every_field) {
+    using ruvia::RedisConfig;
+    using ruvia::detail::validateRedisConfig;
+    using std::chrono::milliseconds;
+
+    // A default config is valid (localhost:6379, pool 4, timeouts 0, depth 64).
+    RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));
+
+    // Host, port, pool size and max array depth each have a required-value guard.
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.host.clear(); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.port = 0; validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.poolSizePerWorker = 0; validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxArrayDepth = 0; validateRedisConfig(c); }));
+
+    // Every one of the three timeouts must be non-negative -- a negative value in
+    // any of them is rejected (verifies the whole fold is wired, not just one).
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.connectTimeout = milliseconds(-1); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(-1); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(-1); validateRedisConfig(c); }));
 }
