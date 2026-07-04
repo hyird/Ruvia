@@ -91,3 +91,21 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     response.header("X-Test", std::nullopt);
     RUVIA_CHECK(response.header("X-Test").empty());
 }
+
+RUVIA_TEST(response_header_append_rejects_body_framing_headers) {
+    auto response = makeResponse();
+
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Content-Length", "5", HttpResponse::HeaderOptions{true});
+    }));
+    RUVIA_CHECK(throwsInvalid([&] {
+        response.header("Transfer-Encoding", "chunked", HttpResponse::HeaderOptions{true});
+    }));
+
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Content-Length", "5");
+    }));
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Set-Cookie", "a=1", HttpResponse::HeaderOptions{true});
+    }));
+}

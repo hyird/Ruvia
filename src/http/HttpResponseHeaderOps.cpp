@@ -188,6 +188,9 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     }
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (options.append) {
+        if (detail::responseHeaderAppendForbidden(knownBit)) {
+            throw std::invalid_argument("HTTP response header cannot be appended");
+        }
         appendHeaderValidated(key, value, knownBit);
     } else {
         setHeaderValidated(key, value, knownBit);
@@ -219,6 +222,9 @@ void HttpResponse::appendHeaderValidated(
     std::string_view key,
     std::string_view value,
     std::uint32_t knownBit) {
+    if (detail::responseHeaderAppendForbidden(knownBit)) {
+        throw std::invalid_argument("HTTP response header cannot be appended");
+    }
     const auto index = headers_.size();
     headers_.add(key, value, knownBit);
     recordKnownHeaderIndex(knownBit, index);
