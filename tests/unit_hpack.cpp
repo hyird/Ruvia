@@ -148,6 +148,13 @@ RUVIA_TEST(hpack_huffman_rejects_bad_padding_and_eos) {
     // Four 0xFF bytes walk 30 one-bits into the EOS symbol, which must be rejected.
     Collector out2;
     RUVIA_CHECK(!decodeBlock(bytes({0x41, 0x84, 0xFF, 0xFF, 0xFF, 0xFF}), out2));
+    // A single 0xFF: eight all-ones bits walk the shared all-ones prefix without
+    // completing any symbol, leaving 8 padding bits. RFC 7541 5.2 forbids padding
+    // longer than 7 bits even when it is all ones -- this exercises the depth>7
+    // guard, distinct from the non-all-ones case (0x00) and the complete-EOS case
+    // (four 0xFF) above.
+    Collector out3;
+    RUVIA_CHECK(!decodeBlock(bytes({0x41, 0x81, 0xFF}), out3));
 }
 
 RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
