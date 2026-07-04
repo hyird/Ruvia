@@ -101,6 +101,14 @@ RUVIA_TEST(semicolon_params_quoted_matches_plain_when_unquoted) {
         std::string_view("bar.txt"));
 }
 
+RUVIA_TEST(semicolon_params_quoted_uses_last_match) {
+    using ruvia::detail::httpFindSemicolonParameterQuoted;
+    const std::string_view v = R"(form-data; name="first"; filename=a.txt; name="second")";
+    RUVIA_CHECK_EQ(
+        httpFindSemicolonParameterQuoted(v, "name").value_or("?"),
+        std::string_view(R"("second")"));
+}
+
 RUVIA_TEST(multipart_part_headers_quoted_name_with_semicolon) {
     HttpMultipartPartHeaders headers;
     const std::string_view block =

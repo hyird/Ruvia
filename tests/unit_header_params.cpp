@@ -6,6 +6,7 @@
 
 namespace {
 
+using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
 using ruvia::detail::httpUpdateExpectContinueFlag;
 
@@ -49,4 +50,18 @@ RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case) {
 
     // Absent parameter -> nullopt.
     RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase("text/html", "charset").has_value());
+}
+
+RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case_uses_last_match) {
+    const auto charset = httpFindSemicolonParameterQuotedIgnoreCase(
+        "text/html; charset=latin1; CHARSET=utf-8", "charset");
+    RUVIA_CHECK(charset.has_value());
+    RUVIA_CHECK_EQ(*charset, std::string_view("utf-8"));
+}
+
+RUVIA_TEST(find_semicolon_parameter_ignore_case_uses_last_match) {
+    const auto value = httpFindSemicolonParameterIgnoreCase(
+        "token=first; TOKEN=second", "token");
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK_EQ(*value, std::string_view("second"));
 }
