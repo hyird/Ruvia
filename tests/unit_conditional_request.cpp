@@ -119,6 +119,9 @@ RUVIA_TEST(http_format_date_round_trips_with_parse) {
 RUVIA_TEST(file_etag_deterministic_and_sensitive) {
     using Ticks = std::filesystem::file_time_type::duration;
     const auto base = fileEtag(100, Ticks{123456});
+    // Exact wire format "<size>-<mtime-ticks>": stable across restarts/versions so
+    // client caches stay valid; a format change would silently invalidate them.
+    RUVIA_CHECK_EQ(base, std::string("\"100-123456\""));
     RUVIA_CHECK_EQ(base, fileEtag(100, Ticks{123456}));       // deterministic
     RUVIA_CHECK(base != fileEtag(101, Ticks{123456}));        // size-sensitive
     RUVIA_CHECK(base != fileEtag(100, Ticks{123457}));        // mtime-sensitive
