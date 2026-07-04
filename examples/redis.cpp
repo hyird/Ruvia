@@ -446,7 +446,8 @@ int main() {
     app
         .useRedis(config)
         .useRedis("cache", std::move(config))
-        .setListenAddress("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))
         .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
         .run();
 }

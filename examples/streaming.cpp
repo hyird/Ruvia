@@ -82,7 +82,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8082)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8082)
         .setThreadNum(2)
         .setMaxBufferedBodyBytes(16 * 1024 * 1024)
         .setMaxStreamBodyBytes(0)

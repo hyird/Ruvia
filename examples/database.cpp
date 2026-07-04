@@ -162,7 +162,8 @@ int main() {
     }
 
     app
-        .setListenAddress("0.0.0.0", 8086)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8086)
         .setThreadNum(2)
         .run();
 }

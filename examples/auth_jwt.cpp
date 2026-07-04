@@ -77,7 +77,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8085)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8085)
         .setThreadNum(2)
         .run();
 }

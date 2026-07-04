@@ -49,7 +49,8 @@ int main() {
     documentRoot.staticOptions.cacheControl = "public, max-age=3600";
 
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8083)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8083)
         .setThreadNum(2)
         .setCompression(ruvia::CompressionConfig{.enabled = true, .minBytes = 128})
         .setDocumentRoot(std::move(documentRoot))
