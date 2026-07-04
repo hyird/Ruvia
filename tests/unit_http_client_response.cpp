@@ -233,8 +233,6 @@ RUVIA_TEST(http_client_duplicate_content_length_same_value_ok) {
     RUVIA_CHECK_EQ(head.contentLength, std::size_t{5});
 }
 
-#endif  // RUVIA_ENABLE_HTTP_CLIENT
-
 // --- Response Content-Encoding: parser vs. decode-path must not drift --------
 // The response content-coding decision is computed in TWO places: the parser
 // fills HttpClientResponseHead::contentCoding, and httpClientResponseContentCoding
@@ -278,3 +276,5 @@ RUVIA_TEST(http_client_response_content_coding_paths_agree) {
         RUVIA_CHECK(head.contentCoding == rederived);  // the two paths agree
     }
 }
+
+#endif  // RUVIA_ENABLE_HTTP_CLIENT
