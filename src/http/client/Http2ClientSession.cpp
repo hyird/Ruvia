@@ -208,15 +208,9 @@ Task<void> Http2ClientSession::doConnect() {
 
         if (config_.tls) {
             tlsStream_ = makePmrObject<TlsStream>(resource_, socket_, *sslContext_);
-            const auto host = std::string_view(config_.host);
-            std::error_code addressEc;
-            asio::ip::make_address(host, addressEc);
-            if (addressEc) {  // not an IP literal → set SNI
-                if (SSL_set_tlsext_host_name(tlsStream_->native_handle(), config_.host.c_str()) != 1) {
-                    throw std::runtime_error("http/2: failed to set TLS SNI host name");
-                }
-            }
-            tlsStream_->set_verify_callback(HttpClientHostNameVerification(host, resource_));
+            // RFC 6066 SNI + RFC 6125 host-name verification, shared with the HTTP/1.1
+            // pool via one owner; ALPN below is HTTP/2-specific.
+            applyClientTlsIdentity(*tlsStream_, config_.host, resource_);
             static constexpr unsigned char kAlpnH2[] = {2, 'h', '2'};
             if (SSL_set_alpn_protos(tlsStream_->native_handle(), kAlpnH2, sizeof(kAlpnH2)) != 0) {
                 throw std::runtime_error("http/2: failed to set ALPN");
