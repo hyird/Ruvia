@@ -85,6 +85,22 @@ RUVIA_TEST(chunk_extension_quoted_value_rejects_control_bytes) {
     RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\x7f\"", 7)) == ChunkSizeLineStatus::kInvalidExtension);
 }
 
+RUVIA_TEST(chunk_size_rejects_trailing_whitespace) {
+    // RFC 9112 7.1: `chunk = chunk-size [ chunk-ext ] CRLF`. BWS is permitted only
+    // before a ";" or "=" inside a chunk-ext, never as trailing space between the
+    // chunk-size (or chunk-ext) and the CRLF. Accepting it is the trailing-edge twin
+    // of the leading-OWS smuggling vector and must be rejected symmetrically.
+    RUVIA_CHECK(chunkStatus("5 ") == ChunkSizeLineStatus::kInvalidExtension);   // SP after size
+    RUVIA_CHECK(chunkStatus("5\t") == ChunkSizeLineStatus::kInvalidExtension);  // HTAB after size
+    RUVIA_CHECK(chunkStatus("5  ") == ChunkSizeLineStatus::kInvalidExtension);  // multiple
+    RUVIA_CHECK(chunkStatus("10;a=b ") == ChunkSizeLineStatus::kInvalidExtension);   // after ext value
+    RUVIA_CHECK(chunkStatus("10;chunked ") == ChunkSizeLineStatus::kInvalidExtension);  // after bare ext
+    RUVIA_CHECK(chunkStatus("10;ext=\"a b\" ") == ChunkSizeLineStatus::kInvalidExtension);  // after quoted value
+    // The valid BWS-around-delimiters forms must still parse (no trailing space).
+    RUVIA_CHECK(chunkStatus("10 ; a = b") == ChunkSizeLineStatus::kOk);
+    RUVIA_CHECK(chunkStatus("10;a=b;c=d") == ChunkSizeLineStatus::kOk);
+}
+
 RUVIA_TEST(chunk_size_overflow_is_rejected) {
     // More hex digits than fit in size_t must report overflow, not wrap.
     RUVIA_CHECK(chunkStatus("ffffffffffffffff0") == ChunkSizeLineStatus::kOverflow);

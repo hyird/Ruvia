@@ -198,7 +198,12 @@ bool isValidHttpChunkExtension(std::string_view value) noexcept {
     while (cursor < value.size()) {
         skipBws();
         if (cursor == value.size()) {
-            return true;
+            // Reached end-of-line after consuming whitespace with no ";": the
+            // chunk-ext grammar (RFC 9112 7.1) permits BWS only before ";"/"=",
+            // never as trailing space before CRLF. Accepting "5 " is a
+            // request-smuggling differential of the same class as the leading-OWS
+            // case that parseHttpChunkSizeLine already rejects.
+            return false;
         }
         if (value[cursor] != ';') {
             return false;
@@ -208,8 +213,14 @@ bool isValidHttpChunkExtension(std::string_view value) noexcept {
         if (!parseToken()) {
             return false;
         }
+        const auto afterName = cursor;
         skipBws();
-        if (cursor == value.size() || value[cursor] == ';') {
+        if (cursor == value.size()) {
+            // Bare ext-name at end-of-line: valid only with no trailing BWS
+            // between the name and the CRLF (RFC 9112 7.1).
+            return cursor == afterName;
+        }
+        if (value[cursor] == ';') {
             continue;
         }
         if (value[cursor] != '=') {
@@ -253,8 +264,15 @@ bool isValidHttpChunkExtension(std::string_view value) noexcept {
         } else if (!parseToken()) {
             return false;
         }
+        const auto beforeTrailingBws = cursor;
         skipBws();
-        if (cursor < value.size() && value[cursor] != ';') {
+        if (cursor == value.size()) {
+            // End-of-line after a chunk-ext value is valid only if it lands
+            // exactly on the value; whitespace between the value and CRLF is
+            // rejected for the same reason as trailing space after the size.
+            return cursor == beforeTrailingBws;
+        }
+        if (value[cursor] != ';') {
             return false;
         }
     }
