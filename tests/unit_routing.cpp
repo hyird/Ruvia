@@ -379,8 +379,27 @@ ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
     co_return context.body("ok");
 }
 
-// Registers GET /x with `handler`, dispatches `method path`, returns the response.
-ruvia::HttpResponse dispatchOne(RouteHandler handler, HttpMethod method, std::string_view p) {
+// The dispatched response's storage lives in the per-request arena, which is
+// destroyed when the helper returns -- so values must be copied out here, while
+// the arena is still alive, rather than returning the HttpResponse itself.
+struct DispatchResult final {
+    std::uint16_t status{0};
+    std::string body;
+    std::string allow;
+};
+
+DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
+    DispatchResult result;
+    result.status = response.status();
+    const auto body = ruvia::detail::responseBodyBytes(response);
+    result.body.assign(body.data(), body.size());
+    const auto allow = response.header("Allow");
+    result.allow.assign(allow.data(), allow.size());
+    return result;
+}
+
+// Registers GET /x with `handler`, dispatches `method path`, returns the result.
+DispatchResult dispatchOne(RouteHandler handler, HttpMethod method, std::string_view p) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
@@ -402,29 +421,29 @@ ruvia::HttpResponse dispatchOne(RouteHandler handler, HttpMethod method, std::st
         ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
         asio::use_future);
     ctx.run();
-    return future.get();
+    return extractDispatchResult(future.get());  // arena still alive here
 }
 
 }  // namespace
 
 RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     // A thrown HttpError surfaces with its own status; any other exception is a 500.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x").status(),
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x").status,
                    std::uint16_t{403});
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x").status(),
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x").status,
                    std::uint16_t{500});
 }
 
 RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     // A path with no route -> 404.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/nope").status(),
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/nope").status,
                    std::uint16_t{404});
     // The path exists but the method does not -> 405 with an Allow header listing GET.
     const auto notAllowed = dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kPost, "/x");
-    RUVIA_CHECK_EQ(notAllowed.status(), std::uint16_t{405});
-    RUVIA_CHECK(notAllowed.header("Allow").find("GET") != std::string_view::npos);
+    RUVIA_CHECK_EQ(notAllowed.status, std::uint16_t{405});
+    RUVIA_CHECK(notAllowed.allow.find("GET") != std::string_view::npos);
     // The registered method still works.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/x").status(),
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/x").status,
                    std::uint16_t{200});
 }
 
@@ -442,7 +461,7 @@ ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorI
     co_return context.body("custom-error", ruvia::Context::ResponseInit{.status = info.status()});
 }
 
-ruvia::HttpResponse dispatchWithHandlers(
+DispatchResult dispatchWithHandlers(
     RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
     HttpMethod method, std::string_view p) {
     ruvia::Router router;
@@ -472,28 +491,58 @@ ruvia::HttpResponse dispatchWithHandlers(
         ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
         asio::use_future);
     ctx.run();
-    return future.get();
-}
-
-std::string bodyOf(const ruvia::HttpResponse& response) {
-    const auto body = ruvia::detail::responseBodyBytes(response);
-    return std::string(body.data(), body.size());
+    return extractDispatchResult(future.get());  // arena still alive here
 }
 
 }  // namespace
 
 RUVIA_TEST(dispatch_uses_custom_not_found_handler) {
     // A registered not-found handler replaces the default 404 response body.
-    const auto response = dispatchWithHandlers(
+    const auto result = dispatchWithHandlers(
         RouteHandler(nullptr, &okHandler), nullptr, &customNotFound, HttpMethod::kGet, "/nope");
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
-    RUVIA_CHECK_EQ(bodyOf(response), std::string("custom-not-found"));
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{404});
+    RUVIA_CHECK_EQ(result.body, std::string("custom-not-found"));
 }
 
 RUVIA_TEST(dispatch_uses_custom_error_handler_with_thrown_status) {
     // A registered error handler renders a thrown HttpError, preserving its status.
-    const auto response = dispatchWithHandlers(
+    const auto result = dispatchWithHandlers(
         RouteHandler(nullptr, &throwsHttpErrorHandler), &customError, nullptr, HttpMethod::kGet, "/x");
-    RUVIA_CHECK_EQ(response.status(), std::uint16_t{403});
-    RUVIA_CHECK_EQ(bodyOf(response), std::string("custom-error"));
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{403});
+    RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
+}
+
+RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
+    // A server-wide OPTIONS * request is answered with 204 and an Allow header
+    // listing every method registered anywhere on the server, not per-route.
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpMethod::kGet, path("/a"), RouteHandler(nullptr, &okHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.registerRoute(HttpMethod::kPost, path("/b"), RouteHandler(nullptr, &okHandler),
+                       RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kOptions);
+    ruvia::detail::HttpRequestAccess::setPath(request, "*");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    const auto response = future.get();
+
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
+    const auto allow = response.header("Allow");
+    RUVIA_CHECK(allow.find("GET") != std::string_view::npos);
+    RUVIA_CHECK(allow.find("POST") != std::string_view::npos);
 }
