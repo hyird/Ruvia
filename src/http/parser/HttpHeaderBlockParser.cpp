@@ -10,6 +10,40 @@
 namespace ruvia::detail {
 namespace {
 
+[[nodiscard]] std::uint32_t singletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
+    switch (kind) {
+        case RequestHeaderKind::kContentType:
+        case RequestHeaderKind::kIfMatch:
+        case RequestHeaderKind::kIfModifiedSince:
+        case RequestHeaderKind::kIfNoneMatch:
+        case RequestHeaderKind::kIfRange:
+        case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kRange:
+            return 1U << static_cast<std::uint32_t>(kind);
+        case RequestHeaderKind::kOther:
+        case RequestHeaderKind::kAccept:
+        case RequestHeaderKind::kAcceptEncoding:
+        case RequestHeaderKind::kAccessControlRequestHeaders:
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kAuthorization:
+        case RequestHeaderKind::kConnection:
+        case RequestHeaderKind::kContentEncoding:
+        case RequestHeaderKind::kContentLength:
+        case RequestHeaderKind::kCookie:
+        case RequestHeaderKind::kExpect:
+        case RequestHeaderKind::kHost:
+        case RequestHeaderKind::kOrigin:
+        case RequestHeaderKind::kSecWebSocketKey:
+        case RequestHeaderKind::kSecWebSocketProtocol:
+        case RequestHeaderKind::kSecWebSocketVersion:
+        case RequestHeaderKind::kTransferEncoding:
+        case RequestHeaderKind::kUpgrade:
+        case RequestHeaderKind::kUserAgent:
+            return 0;
+    }
+    return 0;
+}
+
 [[nodiscard]] bool parseContentLength(std::string_view value, std::size_t& contentLength) noexcept {
     value = httpTrimOws(value);
     if (value.empty()) {
@@ -233,18 +267,6 @@ HttpParseError parseHttpHeaderBlock(
                 }
                 break;
             }
-            case RequestHeaderKind::kContentType:
-                if (block.sawContentType) {
-                    return HttpParseError::kInvalidHeader;
-                }
-                block.sawContentType = true;
-                break;
-            case RequestHeaderKind::kRange:
-                if (block.sawRange) {
-                    return HttpParseError::kInvalidHeader;
-                }
-                block.sawRange = true;
-                break;
             case RequestHeaderKind::kConnection: {
                 auto connectionClose = block.flags.connectionClose;
                 auto connectionKeepAlive = block.flags.connectionKeepAlive;
@@ -286,6 +308,20 @@ HttpParseError parseHttpHeaderBlock(
                 httpUpdateResponseCodingQualities(
                     value, block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
                 break;
+            case RequestHeaderKind::kContentType:
+            case RequestHeaderKind::kIfMatch:
+            case RequestHeaderKind::kIfModifiedSince:
+            case RequestHeaderKind::kIfNoneMatch:
+            case RequestHeaderKind::kIfRange:
+            case RequestHeaderKind::kIfUnmodifiedSince:
+            case RequestHeaderKind::kRange:
+                if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
+                    if ((block.seenHeaderBits & bit) != 0) {
+                        return HttpParseError::kInvalidHeader;
+                    }
+                    block.seenHeaderBits |= bit;
+                }
+                break;
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
             case RequestHeaderKind::kAccessControlRequestHeaders:
@@ -293,11 +329,6 @@ HttpParseError parseHttpHeaderBlock(
             case RequestHeaderKind::kAuthorization:
             case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kIfMatch:
-            case RequestHeaderKind::kIfModifiedSince:
-            case RequestHeaderKind::kIfNoneMatch:
-            case RequestHeaderKind::kIfRange:
-            case RequestHeaderKind::kIfUnmodifiedSince:
             case RequestHeaderKind::kOrigin:
             case RequestHeaderKind::kUpgrade:
             case RequestHeaderKind::kUserAgent:

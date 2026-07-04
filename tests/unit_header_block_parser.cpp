@@ -88,6 +88,16 @@ RUVIA_TEST(header_block_rejects_duplicate_range) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
 }
 
+RUVIA_TEST(header_block_rejects_duplicate_conditional_header) {
+    // Conditional headers drive 304/412 file responses. Repeated fields must
+    // not degrade to known-header cached last-value behavior.
+    const auto result = parse(
+        "GET /file HTTP/1.1\r\nHost: x\r\n"
+        "If-None-Match: \"old\"\r\n"
+        "If-None-Match: \"new\"\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);
