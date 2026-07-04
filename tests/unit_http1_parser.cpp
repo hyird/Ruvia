@@ -71,3 +71,61 @@ RUVIA_TEST(http1_parse_content_length_with_transfer_encoding_rejected) {
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n");
     RUVIA_CHECK(result.status == HttpParseStatus::kError);
 }
+
+RUVIA_TEST(http1_parse_chunked_body) {
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
+    RUVIA_CHECK(result.chunked);
+}
+
+RUVIA_TEST(http1_parse_unsupported_version_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse("GET / HTTP/2.0\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kUnsupportedHttpVersion);
+}
+
+RUVIA_TEST(http1_parse_unsupported_method_rejected) {
+    HttpServerParser parser;
+    const auto result = parser.parse("FOOBAR / HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kUnsupportedMethod);
+}
+
+RUVIA_TEST(http1_parse_transfer_encoding_not_chunked_rejected) {
+    // A non-chunked Transfer-Encoding leaves message framing undetermined.
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
+}
+
+RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
+    // Transfer-Encoding in HTTP/1.0 is faulty framing (RFC 9112 6.1).
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "POST / HTTP/1.0\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
+}
+
+RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
+    // An absolute-form target whose authority disagrees with the Host header is
+    // rejected to prevent routing ambiguity.
+    HttpServerParser parser;
+    const auto result = parser.parse(
+        "GET http://a.example/ HTTP/1.1\r\nHost: b.example\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kError);
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
+}
+
+RUVIA_TEST(http1_parse_http10_without_host_allowed) {
+    // HTTP/1.0 does not require a Host header.
+    HttpServerParser parser;
+    const auto result = parser.parse("GET / HTTP/1.0\r\n\r\n");
+    RUVIA_CHECK(result.status == HttpParseStatus::kComplete);
+    RUVIA_CHECK(result.request.method() == HttpMethod::kGet);
+}
