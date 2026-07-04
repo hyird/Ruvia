@@ -1,18 +1,34 @@
 #include "test_harness.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 
 #include "http/ResponseHeaderIndexCache.h"
+#include "http/HttpResponseHeaderBits.h"
 
 namespace {
 
+using ruvia::HttpResponseHeader;
+using ruvia::detail::findResponseHeaderIndexed;
+using ruvia::detail::kOverflowResponseHeaderIndexSlot;
+using ruvia::detail::makeResponseHeader;
 using ruvia::detail::recordResponseHeaderIndex;
 using ruvia::detail::ResponseHeaderIndexCache;
 using ruvia::detail::responseHeaderIndexSlotHasValue;
 using ruvia::detail::responseHeaderIndexSlotOverflowed;
 using ruvia::detail::responseHeaderIndexSlotValue;
+
+// Three response headers: content-type (known bit), x-custom (no bit), location.
+std::array<HttpResponseHeader, 3> sampleHeaders() {
+    return {
+        makeResponseHeader("content-typetext/html", 12, 9, ruvia::detail::kResponseHeaderContentType, false),
+        makeResponseHeader("x-customval", 8, 3, 0, false),
+        makeResponseHeader("locationhttps://x", 8, 9, ruvia::detail::kResponseHeaderLocation, false),
+    };
+}
 
 }  // namespace
 
@@ -57,4 +73,48 @@ RUVIA_TEST(response_header_index_cache_out_of_range_slot_is_noop) {
     for (const auto slot : cache) {
         RUVIA_CHECK(!responseHeaderIndexSlotHasValue(slot));
     }
+}
+
+RUVIA_TEST(find_response_header_indexed_cache_hit) {
+    const auto headers = sampleHeaders();
+    ResponseHeaderIndexCache<8> cache{};
+    cache[5] = 1;  // slot 5 -> header index 0 (stored as index + 1)
+    // The fast path returns the cached header without scanning (name/bit ignored).
+    const auto* found = findResponseHeaderIndexed(
+        headers.data(), headers.data() + headers.size(), cache, 5, "", 0);
+    RUVIA_CHECK(found == headers.data());
+}
+
+RUVIA_TEST(find_response_header_indexed_cache_miss_is_authoritative) {
+    const auto headers = sampleHeaders();
+    ResponseHeaderIndexCache<8> cache{};  // slot 5 == 0 (missing, not overflow)
+    // A missing (non-overflow) slot means "not recorded": end, no scan, even
+    // though the header is present in the list.
+    const auto* found = findResponseHeaderIndexed(
+        headers.data(), headers.data() + headers.size(), cache, 5, "location",
+        ruvia::detail::kResponseHeaderLocation);
+    RUVIA_CHECK(found == headers.data() + headers.size());
+}
+
+RUVIA_TEST(find_response_header_indexed_overflow_scans_by_bit) {
+    const auto headers = sampleHeaders();
+    ResponseHeaderIndexCache<8> cache{};
+    cache[5] = kOverflowResponseHeaderIndexSlot;  // -1 -> fall back to a linear scan
+    const auto* found = findResponseHeaderIndexed(
+        headers.data(), headers.data() + headers.size(), cache, 5, "",
+        ruvia::detail::kResponseHeaderLocation);
+    RUVIA_CHECK(found == headers.data() + 2);
+}
+
+RUVIA_TEST(find_response_header_indexed_out_of_range_scans_by_name) {
+    const auto headers = sampleHeaders();
+    ResponseHeaderIndexCache<8> cache{};
+    // A slot beyond the cache skips it and scans by case-insensitive name.
+    const auto* found = findResponseHeaderIndexed(
+        headers.data(), headers.data() + headers.size(), cache, 100, "X-Custom", 0);
+    RUVIA_CHECK(found == headers.data() + 1);
+    // An absent name yields end.
+    const auto* absent = findResponseHeaderIndexed(
+        headers.data(), headers.data() + headers.size(), cache, 100, "x-absent", 0);
+    RUVIA_CHECK(absent == headers.data() + headers.size());
 }
