@@ -40,6 +40,24 @@ asio::awaitable<void> cloneParseProtoBody(ruvia::Context& context, bool& safeOk,
     protoDropped = !static_cast<bool>(form.get("__proto__"));
 }
 
+asio::awaitable<void> cloneParseArrayForm(
+    ruvia::Context& context,
+    std::size_t& tagsSize,
+    bool& tagsArray,
+    std::size_t& xSize,
+    std::string& xValue) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    const auto form = clone.parseBody({});
+    const auto tags = form.get("tags[]");
+    tagsSize = tags.size();
+    tagsArray = tags.array();
+    const auto x = form.get("x");
+    xSize = x.size();
+    if (const auto xv = x.value(); xv.has_value()) {
+        xValue.assign(xv->data(), xv->size());
+    }
+}
+
 }  // namespace
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
@@ -190,6 +208,36 @@ RUVIA_TEST(context_clone_parse_body_drops_prototype_pollution_keys) {
 
     RUVIA_CHECK(safeOk);
     RUVIA_CHECK(protoDropped);
+}
+
+RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "tags[]=a&tags[]=b&x=1&x=2");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // With the default (non-.all) options, a "[]" field keeps every value (an
+    // array) while a repeated scalar field is compacted to its last value.
+    asio::io_context io;
+    std::size_t tagsSize = 0;
+    bool tagsArray = false;
+    std::size_t xSize = 0;
+    std::string xValue;
+    asio::co_spawn(io, cloneParseArrayForm(context, tagsSize, tagsArray, xSize, xValue), asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(tagsSize, std::size_t{2});   // both array elements kept
+    RUVIA_CHECK(tagsArray);                      // flagged as an array
+    RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
+    RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
 }
 
 RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
