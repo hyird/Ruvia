@@ -83,6 +83,13 @@ RUVIA_TEST(http_client_chunked_transfer_parameter_is_reusable) {
     RUVIA_CHECK(!head.closeAfterResponse);
 }
 
+RUVIA_TEST(http_client_transfer_encoding_empty_item_is_unsupported) {
+    const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: , chunked");
+    RUVIA_CHECK(head.hasTransferEncoding);
+    RUVIA_CHECK(!head.isChunked);
+    RUVIA_CHECK(head.closeAfterResponse);
+}
+
 // --- Undecodable transfer coding: body delimited by close ----------------
 RUVIA_TEST(http_client_non_chunked_te_closes) {
     const auto head = parseHead("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip");

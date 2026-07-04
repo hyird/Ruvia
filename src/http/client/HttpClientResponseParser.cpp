@@ -45,7 +45,11 @@ namespace {
     bool sawItem = false;
     bool chunked = false;
     bool invalid = false;
-    httpVisitCommaSeparatedQuoted(value, [&](std::string_view item) noexcept {
+    httpVisitCommaSeparatedQuotedItems(value, [&](std::string_view item) noexcept {
+        if (item.empty()) {
+            invalid = true;
+            return false;
+        }
         if (sawItem) {
             chunked = false;
             return false;
