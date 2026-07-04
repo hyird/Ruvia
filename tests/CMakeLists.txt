@@ -107,6 +107,12 @@ add_executable(ruvia_unit_tests
     unit_cors.cpp
 )
 
+# The JWT suite links jwtSign/jwtVerify, which only exist when the optional JWT
+# module is compiled in, so gate it on the same flag.
+if(RUVIA_ENABLE_JWT)
+    target_sources(ruvia_unit_tests PRIVATE unit_jwt.cpp)
+endif()
+
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
 
 # Unit tests reach into internal detail headers under src/ (e.g. core/Base64.h,
