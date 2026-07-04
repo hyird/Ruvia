@@ -268,6 +268,9 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
     }
     const auto knownBit = detail::classifyResponseKnownHeader(name);
     if (options.append) {
+        if (detail::responseHeaderAppendForbidden(knownBit)) {
+            throw std::invalid_argument("HTTP response header cannot be appended");
+        }
         const auto index = responseHeaders_.size();
         auto& header = responseHeaders_.add(name, value, knownBit);
         detail::setResponseHeaderAppend(header, true);
