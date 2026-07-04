@@ -1,8 +1,10 @@
 #pragma once
 
+#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/http/Context.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 
@@ -39,13 +41,27 @@ struct SessionAccess final {
     return true;
 }
 
+inline void appendSessionCookieHeader(
+    HttpResponse& response,
+    std::pmr::memory_resource* resource,
+    std::string_view id,
+    bool secure) {
+    std::pmr::string setCookie(resource);
+    setCookie.append("sid=");
+    setCookie.append(id.data(), id.size());
+    setCookie.append("; Path=/; HttpOnly; SameSite=Lax");
+    if (secure) {
+        setCookie.append("; Secure");
+    }
+    response.header("Set-Cookie", setCookie, {.append = true});
+}
+
 }  // namespace ruvia::detail
 
 #ifdef RUVIA_ENABLE_REDIS
 
 #include <array>
 #include <chrono>
-#include <memory_resource>
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Cookies.h"
@@ -88,14 +104,7 @@ public:
                 // The session id is only known after the handler ran, so the
                 // cookie goes straight onto the already-built response rather
                 // than through the context (whose headers were applied earlier).
-                std::pmr::string setCookie(c.resource());
-                setCookie.append("sid=");
-                setCookie.append(id.data(), id.size());
-                setCookie.append("; Path=/; HttpOnly; SameSite=Lax");
-                if (c.req().raw().isSecure()) {
-                    setCookie.append("; Secure");
-                }
-                response.header("Set-Cookie", setCookie);
+                detail::appendSessionCookieHeader(response, c.resource(), id, c.req().raw().isSecure());
             }
             std::pmr::string key(c.resource());
             key.append("sess:");
