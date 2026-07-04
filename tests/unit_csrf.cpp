@@ -9,6 +9,7 @@
 
 namespace {
 
+using ruvia::detail::csrfTokensEqual;
 using ruvia::detail::generateCsrfToken;
 
 bool isLowerHex(char c) noexcept {
@@ -42,4 +43,19 @@ RUVIA_TEST(csrf_token_is_unpredictable) {
     RUVIA_CHECK_EQ(second.size(), std::size_t{48});
     // 192 bits of CSPRNG entropy: a repeat is astronomically unlikely.
     RUVIA_CHECK(first != second);
+}
+
+RUVIA_TEST(csrf_tokens_equal_is_length_checked_and_exact) {
+    RUVIA_CHECK(csrfTokensEqual("abc123", "abc123"));
+    RUVIA_CHECK(!csrfTokensEqual("abc123", "abc124"));   // last byte differs
+    RUVIA_CHECK(!csrfTokensEqual("Xbc123", "abc123"));   // first byte differs
+    // A length mismatch is never equal (and must not read past the shorter view).
+    RUVIA_CHECK(!csrfTokensEqual("abc", "abc123"));
+    RUVIA_CHECK(!csrfTokensEqual("abc123", "abc"));
+    // Two empty tokens are equal (degenerate), but empty never matches non-empty.
+    RUVIA_CHECK(csrfTokensEqual("", ""));
+    RUVIA_CHECK(!csrfTokensEqual("", "a"));
+    // The compare accumulates all byte diffs (no early-out): a difference in the
+    // middle is still detected regardless of position.
+    RUVIA_CHECK(!csrfTokensEqual("aaaaaaaa", "aaaXaaaa"));
 }
