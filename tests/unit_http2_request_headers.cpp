@@ -103,6 +103,30 @@ RUVIA_TEST(h2_headers_authority_and_host_are_validated) {
     }
 }
 
+RUVIA_TEST(h2_headers_authority_host_match_uses_scheme_default_port) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "https"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:443"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "http"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:80"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":scheme", "https"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:80"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "example.com"));
+    }
+}
+
 RUVIA_TEST(h2_headers_path_rejects_malformed_origin_target) {
     {
         Http2StreamState stream(1, res());

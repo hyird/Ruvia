@@ -343,8 +343,12 @@ public:
         return requestState_.hasScheme();
     }
 
-    void markScheme() noexcept {
-        requestState_.markScheme();
+    void markScheme(std::uint16_t defaultPort) noexcept {
+        requestState_.markScheme(defaultPort);
+    }
+
+    [[nodiscard]] std::uint16_t schemeDefaultPort() const noexcept {
+        return requestState_.schemeDefaultPort();
     }
 
     [[nodiscard]] bool hasAuthority() const noexcept {

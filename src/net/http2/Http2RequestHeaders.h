@@ -93,7 +93,7 @@ struct Http2HeaderDecodeContext final {
             if (stream.hasScheme() || (value != "http" && value != "https")) {
                 return false;
             }
-            stream.markScheme();
+            stream.markScheme(value == "https" ? 443 : 80);
             return true;
         }
         if (name == ":authority") {
@@ -124,7 +124,8 @@ struct Http2HeaderDecodeContext final {
         if (stream.hasHost() || !isValidHostHeader(value)) {
             return false;
         }
-        if (stream.hasAuthority() && !authorityMatchesHost(stream.requestAuthority(), value, 0)) {
+        if (stream.hasAuthority() &&
+            !authorityMatchesHost(stream.requestAuthority(), value, stream.schemeDefaultPort())) {
             return false;
         }
         stream.markHost();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace ruvia::detail {
 
 class Http2StreamRequestState final {
@@ -29,8 +31,13 @@ public:
         return hasScheme_;
     }
 
-    void markScheme() noexcept {
+    void markScheme(std::uint16_t defaultPort) noexcept {
         hasScheme_ = true;
+        schemeDefaultPort_ = defaultPort;
+    }
+
+    [[nodiscard]] std::uint16_t schemeDefaultPort() const noexcept {
+        return schemeDefaultPort_;
     }
 
     [[nodiscard]] bool hasAuthority() const noexcept {
@@ -119,6 +126,7 @@ private:
     bool standardConnect_ : 1 {false};
     bool extendedConnectWebSocket_ : 1 {false};
     bool webSocketTunnel_ : 1 {false};
+    std::uint16_t schemeDefaultPort_{0};
 };
 
 }  // namespace ruvia::detail
