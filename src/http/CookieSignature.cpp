@@ -1,6 +1,7 @@
 #include "CookieSignature.h"
 
 #include "../core/Base64.h"
+#include "ruvia/detail/ConstantTime.h"
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -63,14 +64,7 @@ void writeCookieSignature(
 }
 
 bool cookieSignatureEquals(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    unsigned char diff = 0;
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        diff |= static_cast<unsigned char>(left[i] ^ right[i]);
-    }
-    return diff == 0;
+    return constantTimeBytesEqual(left, right);
 }
 
 }  // namespace ruvia::detail
