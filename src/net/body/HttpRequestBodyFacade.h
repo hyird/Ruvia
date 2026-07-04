@@ -2,6 +2,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Streaming.h"
+#include "../../http/StreamingInternal.h"
 #include "../../http/RequestBodyLoader.h"
 
 #include <optional>
