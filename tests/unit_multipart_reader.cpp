@@ -142,3 +142,36 @@ RUVIA_TEST(multipart_reader_rejects_a_body_without_a_final_boundary) {
     }
     RUVIA_CHECK(threw);
 }
+
+RUVIA_TEST(multipart_reader_rejects_malformed_parts) {
+    const auto throwsOn = [](std::string body) {
+        try {
+            (void)parseMultipart({std::move(body)}, "BOUNDARY");
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    // A part with no "Content-Disposition: form-data" is rejected.
+    RUVIA_CHECK(throwsOn(
+        "--BOUNDARY\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "x\r\n"
+        "--BOUNDARY--\r\n"));
+
+    // A form-data part with no name parameter is rejected.
+    RUVIA_CHECK(throwsOn(
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data\r\n"
+        "\r\n"
+        "x\r\n"
+        "--BOUNDARY--\r\n"));
+
+    // A part whose header block exceeds the 64 KiB cap without ever terminating
+    // (\r\n\r\n) is rejected rather than buffered unbounded -- a memory-DoS defense.
+    std::string bigHeaders = "--BOUNDARY\r\nX-Big: ";
+    bigHeaders.append(70 * 1024, 'a');
+    RUVIA_CHECK(throwsOn(std::move(bigHeaders)));
+}
