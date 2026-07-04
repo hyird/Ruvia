@@ -143,6 +143,20 @@ RUVIA_TEST(parse_http2_upgrade_request) {
         "Upgrade: h2c\r\nHTTP2-Settings: AAQAAQAA\r\nHTTP2-Settings: AAQAAQAA\r\n\r\n");
     RUVIA_CHECK(!parseHttp2UpgradeRequest(duplicate, resource).valid);
 
+    // A duplicate whose first occurrence is empty is still a duplicate (the
+    // second must not be accepted just because the first carried no value).
+    const auto emptyFirstDuplicate = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+        "Upgrade: h2c\r\nHTTP2-Settings: \r\nHTTP2-Settings: AAQAAQAA\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(emptyFirstDuplicate, resource).valid);
+
+    // The Connection token advertises HTTP2-Settings but the header is absent
+    // -> malformed (exactly one HTTP2-Settings header is required).
+    const auto missingHeader = parser.parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
+        "Upgrade: h2c\r\n\r\n");
+    RUVIA_CHECK(!parseHttp2UpgradeRequest(missingHeader, resource).valid);
+
     // Malformed base64url in HTTP2-Settings -> invalid.
     const auto badSettings = parser.parse(
         "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade, HTTP2-Settings\r\n"
