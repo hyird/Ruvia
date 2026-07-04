@@ -70,6 +70,16 @@ RUVIA_TEST(flow_send_window_available_is_min_of_connection_and_stream) {
     RUVIA_CHECK(!http2SendWindowAvailable(0, stream));
 }
 
+RUVIA_TEST(flow_available_send_window_clamps_non_positive) {
+    auto stream = makeStream();
+    stream.setSendWindow(-10);
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(100, stream), std::size_t{0});
+
+    stream.setSendWindow(100);
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(0, stream), std::size_t{0});
+    RUVIA_CHECK_EQ(http2AvailableSendWindow(-10, stream), std::size_t{0});
+}
+
 RUVIA_TEST(flow_consume_send_window_deducts_both) {
     auto stream = makeStream();
     const auto beforeStream = stream.sendWindow();
