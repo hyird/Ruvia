@@ -172,6 +172,19 @@ RUVIA_TEST(jwt_verify_rejects_expired_token) {
     RUVIA_CHECK_EQ(jwtVerify(recentlyExpired, lenient).subject(), std::string_view("user-1"));
 }
 
+RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
+    // jwtDecodeUnverified reads the payload WITHOUT checking the signature -- it
+    // provides no authentication. Pin that contract: it returns the claims even
+    // for a token whose signature has been corrupted, while jwtVerify rejects the
+    // same token. Callers must never treat the unverified payload as trusted.
+    const auto token = sign(signOptions("secret"));
+    RUVIA_CHECK_EQ(ruvia::jwtDecodeUnverified(token).subject(), std::string_view("user-1"));
+
+    std::string forged = token.substr(0, token.rfind('.') + 1) + "corruptedsignature";
+    RUVIA_CHECK_EQ(ruvia::jwtDecodeUnverified(forged).subject(), std::string_view("user-1"));
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(forged, verifyOptions("secret")); }));
+}
+
 RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     const auto verify = verifyOptions("secret");
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify("not-a-jwt", verify); }));
