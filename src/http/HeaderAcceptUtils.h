@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "HeaderTokenUtils.h"
+#include "parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
 
@@ -191,40 +192,74 @@ inline void httpUpdateResponseCodingQualities(
     return httpHeaderTokenBeforeParameters(value);
 }
 
-[[nodiscard]] inline bool httpMediaRangeMatches(std::string_view range, std::string_view offered) noexcept {
-    range = httpMediaTypeOnly(range);
-    offered = httpMediaTypeOnly(offered);
-    const auto offeredSlash = offered.find('/');
-    const auto rangeSlash = range.find('/');
-    if (offeredSlash == std::string_view::npos || rangeSlash == std::string_view::npos) {
+[[nodiscard]] inline bool httpMediaToken(std::string_view token) noexcept {
+    if (token.empty()) {
+        return false;
+    }
+    for (const auto ch : token) {
+        if (!isHttpTokenChar(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct HttpMediaTypeParts final {
+    std::string_view type;
+    std::string_view subtype;
+};
+
+[[nodiscard]] inline bool httpParseMediaTypeParts(
+    std::string_view value,
+    bool allowWildcard,
+    HttpMediaTypeParts& parts) noexcept {
+    value = httpMediaTypeOnly(value);
+    const auto slash = value.find('/');
+    if (slash == std::string_view::npos) {
         return false;
     }
 
-    const auto offeredType = offered.substr(0, offeredSlash);
-    const auto offeredSubtype = offered.substr(offeredSlash + 1);
-    const auto rangeType = range.substr(0, rangeSlash);
-    const auto rangeSubtype = range.substr(rangeSlash + 1);
-    if (rangeType == "*" && rangeSubtype == "*") {
-        return true;
-    }
-    if (!httpAsciiEqualsIgnoreCase(rangeType, offeredType)) {
+    parts.type = value.substr(0, slash);
+    parts.subtype = value.substr(slash + 1);
+    const bool typeWildcard = parts.type == "*";
+    const bool subtypeWildcard = parts.subtype == "*";
+    if ((typeWildcard || subtypeWildcard) && !allowWildcard) {
         return false;
     }
-    return rangeSubtype == "*" || httpAsciiEqualsIgnoreCase(rangeSubtype, offeredSubtype);
+    if (typeWildcard && !subtypeWildcard) {
+        return false;
+    }
+    return (typeWildcard || httpMediaToken(parts.type)) &&
+        (subtypeWildcard || httpMediaToken(parts.subtype));
+}
+
+[[nodiscard]] inline bool httpMediaRangeMatches(std::string_view range, std::string_view offered) noexcept {
+    HttpMediaTypeParts rangeParts;
+    HttpMediaTypeParts offeredParts;
+    if (!httpParseMediaTypeParts(range, true, rangeParts) ||
+        !httpParseMediaTypeParts(offered, false, offeredParts)) {
+        return false;
+    }
+
+    if (rangeParts.type == "*" && rangeParts.subtype == "*") {
+        return true;
+    }
+    if (!httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
+        return false;
+    }
+    return rangeParts.subtype == "*" ||
+        httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {
-    range = httpMediaTypeOnly(range);
-    const auto slash = range.find('/');
-    if (slash == std::string_view::npos) {
+    HttpMediaTypeParts parts;
+    if (!httpParseMediaTypeParts(range, true, parts)) {
         return -1;
     }
-    const auto type = range.substr(0, slash);
-    const auto subtype = range.substr(slash + 1);
-    if (type == "*" && subtype == "*") {
+    if (parts.type == "*" && parts.subtype == "*") {
         return 0;
     }
-    if (subtype == "*") {
+    if (parts.subtype == "*") {
         return 1;
     }
     return 2;
