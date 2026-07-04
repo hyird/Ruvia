@@ -88,6 +88,36 @@ RUVIA_TEST(hpack_encode_decode_round_trip) {
                    std::make_pair(std::string("x-custom-header"), std::string("custom value")));
 }
 
+RUVIA_TEST(hpack_encoder_uses_without_indexing_representation) {
+    // Security-relevant invariant: the response encoder MUST emit "Literal Header
+    // Field without Indexing" (RFC 7541 6.2.2, high nibble 0000) and never "with
+    // Incremental Indexing" (0x40-0x7f). Incremental indexing would add per-response
+    // entries to the dynamic table -- growing memory unboundedly across a connection
+    // and, worse, creating a cross-response HPACK compression side channel
+    // (CRIME-class) whose observable encoded sizes can leak secret header values.
+    // The round-trip test alone cannot catch a regression here because the decoder
+    // accepts both representations; only the wire format distinguishes them.
+
+    // New header name -> "without Indexing, New Name" starts with the octet 0x00.
+    {
+        std::pmr::string out(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(out, "x-secret-token", "s3cr3t");
+        RUVIA_CHECK(!out.empty());
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), 0x00u);
+    }
+    // A header whose NAME is a static-table entry ("content-type", index 31) with a
+    // non-indexed value still uses the without-indexing form (high nibble 0000),
+    // i.e. a name index plus a literal value -- never the 0x40-0x7f incremental range.
+    {
+        std::pmr::string out(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(out, "content-type", "application/x-ruvia-test");
+        RUVIA_CHECK(!out.empty());
+        const auto first = static_cast<unsigned char>(out[0]);
+        RUVIA_CHECK_EQ(first & 0xf0u, 0x00u);   // literal WITHOUT indexing
+        RUVIA_CHECK((first & 0xc0u) != 0x40u);  // specifically not incremental indexing
+    }
+}
+
 RUVIA_TEST(hpack_rejects_truncated_and_bad_index) {
     Collector out;
     // A literal header claiming a 15-byte value but supplying only one byte.
