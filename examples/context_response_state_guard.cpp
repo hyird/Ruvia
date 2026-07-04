@@ -1,4 +1,5 @@
 #include "../src/http/ContextInternal.h"
+#include "../src/http/HttpParserInternal.h"
 
 #include "ruvia/memory/MemoryPool.h"
 
@@ -22,6 +23,12 @@ void check(bool condition) {
         }
     }
     return count;
+}
+
+[[nodiscard]] ruvia::HttpRequest makeRequest() {
+    ruvia::detail::HttpServerParser parser;
+    const auto parsed = parser.parse("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
+    return parsed.request;
 }
 
 // A header appended while a response slot exists is stored in both the slot
@@ -81,7 +88,7 @@ void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const r
 int main() {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = ruvia::detail::HttpRequestAccess::make();
+    auto request = makeRequest();
 
     exerciseAppendHeaderNotDuplicated(memory, request);
     exerciseSetCookieNotDuplicated(memory, request);

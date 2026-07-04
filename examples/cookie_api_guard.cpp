@@ -1,4 +1,5 @@
 #include "../src/http/ContextInternal.h"
+#include "../src/http/HttpParserInternal.h"
 #include "../src/http/HttpResponseBodyAccess.h"
 
 #include "ruvia/http/HttpParser.h"
@@ -20,6 +21,12 @@ void check(bool condition) {
     if (!condition) {
         ++failures;
     }
+}
+
+[[nodiscard]] ruvia::HttpRequest makeRequest() {
+    ruvia::detail::HttpServerParser parser;
+    const auto parsed = parser.parse("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
+    return parsed.request;
 }
 
 template <typename Callable>
@@ -179,7 +186,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
 int main() {
     ruvia::WorkerMemory worker;
     ruvia::RequestMemory memory(worker);
-    auto request = ruvia::detail::HttpRequestAccess::make();
+    auto request = makeRequest();
 
     exerciseGenerateCookieSerialization(memory, request);
     exerciseSetCookieMatchesGenerate(memory, request);
