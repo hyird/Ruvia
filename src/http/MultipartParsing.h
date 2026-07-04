@@ -98,6 +98,7 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpHeaderValueInBlock(
     std::string_view headers,
     std::string_view name) noexcept {
+    std::optional<std::string_view> result;
     while (!headers.empty()) {
         const auto lineEnd = headers.find("\r\n");
         const auto line = lineEnd == std::string_view::npos ? headers : headers.substr(0, lineEnd);
@@ -105,7 +106,7 @@ inline void httpAssignMultipartBoundaryMarkers(
         if (colon != std::string_view::npos) {
             const auto key = httpTrimOws(line.substr(0, colon));
             if (httpAsciiEqualsIgnoreCase(key, name)) {
-                return httpTrimOws(line.substr(colon + 1));
+                result = httpTrimOws(line.substr(colon + 1));
             }
         }
 
@@ -115,7 +116,7 @@ inline void httpAssignMultipartBoundaryMarkers(
         headers.remove_prefix(lineEnd + 2);
     }
 
-    return std::nullopt;
+    return result;
 }
 
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(

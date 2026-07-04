@@ -117,6 +117,16 @@ RUVIA_TEST(multipart_header_value_in_block_lookup) {
     RUVIA_CHECK(httpHeaderValueInBlock("X:   spaced   ", "X") == std::string_view("spaced"));
 }
 
+RUVIA_TEST(multipart_header_value_in_block_uses_last_match) {
+    using ruvia::detail::httpHeaderValueInBlock;
+    const std::string_view block =
+        "Content-Type: text/plain\r\n"
+        "X-Other: value\r\n"
+        "content-type: image/png";
+
+    RUVIA_CHECK(httpHeaderValueInBlock(block, "Content-Type") == std::string_view("image/png"));
+}
+
 RUVIA_TEST(multipart_disposition_parameter_extraction) {
     using ruvia::detail::httpDispositionParameter;
     const std::string_view disposition = "form-data; name=\"field\"; filename=\"a.txt\"";
