@@ -179,6 +179,38 @@ RUVIA_TEST(h2_headers_invalid_regular_header_rejected) {
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "transfer-encoding", "chunked"));
 }
 
+RUVIA_TEST(h2_headers_connection_specific_and_te_rules) {
+    // RFC 7540 8.1.2.2: every connection-specific header is malformed in HTTP/2
+    // (connection and transfer-encoding are checked above; pin the remaining three
+    // so none can be dropped from the ban without a failing test).
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "keep-alive", "timeout=5"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "proxy-connection", "keep-alive"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "upgrade", "websocket"));
+    }
+    // TE is the single exception: permitted only with the exact value "trailers".
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "te", "gzip"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "te", "trailers"));  // the allowed form
+    }
+}
+
 RUVIA_TEST(h2_headers_duplicate_host_rejected) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
