@@ -125,6 +125,21 @@ RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
     RUVIA_CHECK_EQ(*value, std::string_view("second"));
 }
 
+RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kCookie);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "a=1"}, slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Cookie", "b=2"}, slot));
+
+    const auto first = request.cookie("a");
+    RUVIA_CHECK(first.has_value());
+    RUVIA_CHECK_EQ(*first, std::string_view("1"));
+    const auto second = request.cookie("b");
+    RUVIA_CHECK(second.has_value());
+    RUVIA_CHECK_EQ(*second, std::string_view("2"));
+}
+
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
