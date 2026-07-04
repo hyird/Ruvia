@@ -35,9 +35,10 @@ std::string_view HttpRequest::header(std::string_view name) const noexcept {
         return detail::requestKnownHeader(*this, static_cast<detail::RequestKnownHeader>(knownSlot));
     }
 
-    for (std::size_t i = 0; i < headerCount_; ++i) {
-        if (detail::httpAsciiEqualsIgnoreCase(headers_[i].name(), name)) {
-            return headers_[i].value();
+    for (std::size_t i = headerCount_; i > 0; --i) {
+        const auto index = i - 1;
+        if (detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), name)) {
+            return headers_[index].value();
         }
     }
 
