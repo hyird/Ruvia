@@ -126,6 +126,37 @@ RUVIA_TEST(multipart_reader_reassembles_across_chunk_boundaries) {
     RUVIA_CHECK_EQ(parts[1].body, std::string("file content"));
 }
 
+RUVIA_TEST(multipart_reader_emits_an_empty_field_body) {
+    // A form field with no value (name="empty" immediately followed by the next
+    // boundary) has a zero-length body. The reader must still emit exactly one
+    // part for it, carrying partBegin and partEnd on that empty chunk, rather
+    // than swallowing the field. This hits the boundary-at-offset-0 branch that
+    // the non-empty bodies never reach.
+    const std::string body =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"empty\"\r\n"
+        "\r\n"
+        "\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"present\"\r\n"
+        "\r\n"
+        "data\r\n"
+        "--BOUNDARY--\r\n";
+    const auto parts = parseMultipart({body}, "BOUNDARY");
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(parts[0].name, std::string("empty"));
+    RUVIA_CHECK(parts[0].body.empty());
+    RUVIA_CHECK_EQ(parts[1].name, std::string("present"));
+    RUVIA_CHECK_EQ(parts[1].body, std::string("data"));
+
+    // The same holds when the body is fragmented three bytes at a time, so the
+    // empty part is recognized even when the boundary straddles reads.
+    const auto split = parseMultipart(splitChunks(body, 3), "BOUNDARY");
+    RUVIA_CHECK_EQ(split.size(), std::size_t{2});
+    RUVIA_CHECK(split[0].body.empty());
+    RUVIA_CHECK_EQ(split[1].body, std::string("data"));
+}
+
 RUVIA_TEST(multipart_reader_rejects_a_body_without_a_final_boundary) {
     // A body that ends mid-part (no closing --BOUNDARY--) is malformed and must
     // surface as an error rather than silently yielding a truncated part.
