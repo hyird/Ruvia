@@ -308,7 +308,7 @@ target_link_options(ruvia
 )
 
 if(WIN32)
-    target_link_libraries(ruvia PUBLIC Mswsock)
+    target_link_libraries(ruvia PUBLIC Mswsock Ws2_32)
     set_target_properties(ruvia PROPERTIES
         INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
     )

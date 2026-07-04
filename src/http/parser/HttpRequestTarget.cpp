@@ -5,7 +5,14 @@
 
 #include <array>
 #include <charconv>
+#include <cstring>
 #include <system_error>
+
+#ifdef _WIN32
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 namespace ruvia::detail {
 namespace {
@@ -50,24 +57,26 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     return parsePortValue(value, port);
 }
 
+[[nodiscard]] bool isValidIpv6Literal(std::string_view literal) noexcept {
+    if (literal.empty() || literal.size() >= INET6_ADDRSTRLEN) {
+        return false;
+    }
+
+    char text[INET6_ADDRSTRLEN]{};
+    std::memcpy(text, literal.data(), literal.size());
+    std::array<unsigned char, 16> address{};
+    return inet_pton(AF_INET6, text, address.data()) == 1;
+}
+
 [[nodiscard]] bool isValidBracketedHost(std::string_view value) noexcept {
     const auto close = value.find(']');
     if (close == std::string_view::npos || close <= 1) {
         return false;
     }
-    // RFC 3986 section 3.2.2: inside IP-literal brackets only IPv6/IPv4-mapped hex
-    // digits, colons, and dots are valid. Allowing the full reg-name set
-    // (which includes sub-delims like '!', '$', etc.) is too permissive.
-    for (std::size_t i = 1; i < close; ++i) {
-        const auto c = static_cast<unsigned char>(value[i]);
-        if (c == ':' || c == '.') {
-            continue;
-        }
-        if (!isHttpHexDigit(c)) {
-            return false;
-        }
-    }
     if (value.find('[', close + 1) != std::string_view::npos) {
+        return false;
+    }
+    if (!isValidIpv6Literal(value.substr(1, close - 1))) {
         return false;
     }
     if (close + 1 == value.size()) {
