@@ -11,8 +11,23 @@ namespace ruvia::detail {
 // "Sun, 06 Nov 1994 08:49:37 GMT".
 inline constexpr std::size_t kImfFixdateSize = 29;
 
-// Writes the IMF-fixdate for `utc` (a UTC std::tm, as produced by gmtime_r /
-// gmtime_s) into `out`, which must have room for at least kImfFixdateSize bytes.
+// Converts a time_t to a broken-down UTC std::tm, owning the gmtime_r / gmtime_s
+// platform split that every httpWriteImfFixdate caller (the response Date header,
+// Set-Cookie Expires, and Last-Modified) would otherwise repeat inline. A
+// conversion failure leaves the zero-initialized tm, matching the prior sites,
+// which likewise ignored the return value.
+inline std::tm httpUtcTm(std::time_t time) noexcept {
+    std::tm utc{};
+#if defined(_WIN32)
+    gmtime_s(&utc, &time);
+#else
+    gmtime_r(&time, &utc);
+#endif
+    return utc;
+}
+
+// Writes the IMF-fixdate for `utc` (a UTC std::tm, as produced by httpUtcTm /
+// gmtime_r / gmtime_s) into `out`, which must have room for at least kImfFixdateSize bytes.
 // Returns the number of bytes written (always kImfFixdateSize).
 //
 // The day-of-week and month abbreviations are emitted from fixed English tables

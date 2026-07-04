@@ -211,12 +211,7 @@ inline void httpAppendUnsigned(std::pmr::string& output, std::uint64_t value) {
 [[nodiscard]] inline std::pmr::string httpFormatDate(
     std::pmr::memory_resource* resource,
     std::time_t time) {
-    std::tm utc{};
-#if defined(_WIN32)
-    gmtime_s(&utc, &time);
-#else
-    gmtime_r(&time, &utc);
-#endif
+    const auto utc = httpUtcTm(time);
     char buffer[kImfFixdateSize];
     const auto written = httpWriteImfFixdate(buffer, utc);
     std::pmr::string output(resource);

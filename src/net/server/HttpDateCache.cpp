@@ -36,12 +36,7 @@ void refreshCachedDateHeader(std::time_t now) noexcept {
         return;
     }
 
-    std::tm utc{};
-#if defined(_WIN32)
-    gmtime_s(&utc, &now);
-#else
-    gmtime_r(&now, &utc);
-#endif
+    const auto utc = httpUtcTm(now);
     std::memcpy(cache.line.data(), kDateHeaderPrefix.data(), kDateHeaderPrefix.size());
     // "Date: " (6) + IMF-fixdate (29) + CRLF (2) = 37 bytes, well within line[64].
     const auto written = httpWriteImfFixdate(cache.line.data() + kDateHeaderPrefix.size(), utc);
