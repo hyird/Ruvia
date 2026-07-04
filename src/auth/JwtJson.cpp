@@ -125,7 +125,7 @@ std::string_view jwtFindJsonString(
 
 }  // namespace detail
 
-JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
+JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
     auto* resolved = detail::pmrResourceOrDefault(resource);
     JwtPayload payload(resolved);
 
@@ -202,7 +202,7 @@ JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::
                 if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
                     std::pmr::string claimName(resolved);
                     claimName.assign(key.data(), key.size());
-                    payload.claims_.push_back(JwtPayloadAccess::claim(std::move(claimName), std::move(claimValue)));
+                    payload.claims_.push_back(detail::JwtPayloadAccess::claim(std::move(claimName), std::move(claimValue)));
                 }
             }
             return true;

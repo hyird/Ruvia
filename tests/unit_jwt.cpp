@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/auth/Jwt.h"
 #include "auth/JwtInternal.h"
@@ -18,6 +19,8 @@ using ruvia::JwtVerifyOptions;
 using ruvia::jwtBearerToken;
 using ruvia::jwtSign;
 using ruvia::jwtVerify;
+
+static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
