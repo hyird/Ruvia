@@ -117,3 +117,15 @@ RUVIA_TEST(compress_skips_content_range_response) {
     RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
     RUVIA_CHECK(response.header("Content-Encoding").empty());
 }
+
+RUVIA_TEST(compress_skips_incompressible_media_types) {
+    auto png = responseWithBody(kCompressibleBody);
+    png.header("Content-Type", "image/png");
+    RUVIA_CHECK(!tryCompress(png, Compression{true, 16}));
+    RUVIA_CHECK(png.header("Content-Encoding").empty());
+
+    auto svg = responseWithBody(kCompressibleBody);
+    svg.header("Content-Type", "image/svg+xml");
+    RUVIA_CHECK(tryCompress(svg, Compression{true, 16}));
+    RUVIA_CHECK_EQ(svg.header("Content-Encoding"), std::string_view("gzip"));
+}

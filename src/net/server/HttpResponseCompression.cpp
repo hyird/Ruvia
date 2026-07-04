@@ -2,6 +2,7 @@
 
 #include "../../http/HttpResponseBodyAccess.h"
 #include "../../http/HttpResponseFileAccess.h"
+#include "../../http/HeaderTokenUtils.h"
 #include "../../http/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/PmrString.h"
 
@@ -171,6 +172,35 @@ struct CodingCompressor final {
     return {};
 }
 
+[[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
+    return mediaType.size() >= prefix.size() &&
+        httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] bool responseContentTypeSkipsCompression(std::string_view contentType) noexcept {
+    if (contentType.empty()) {
+        return false;
+    }
+    const auto semicolon = contentType.find(';');
+    const auto mediaType = httpTrimOws(
+        semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
+    if (mediaType.empty()) {
+        return false;
+    }
+    if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
+        return false;
+    }
+    return mediaTypeStartsWith(mediaType, "image/") ||
+        mediaTypeStartsWith(mediaType, "video/") ||
+        mediaTypeStartsWith(mediaType, "audio/") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/zip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+}
+
 }  // namespace
 
 bool compressResponseBodyIfAccepted(
@@ -199,6 +229,7 @@ bool compressResponseBodyIfAccepted(
         responseBodySize(response) < options.minBytes ||
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
+        responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
         httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
         return false;
     }
