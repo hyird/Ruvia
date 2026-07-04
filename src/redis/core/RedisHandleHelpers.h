@@ -12,7 +12,13 @@
 
 namespace ruvia::detail {
 
+// Typed reply accessors that enforce the RedisValue kind and, on a mismatch,
+// throw RedisError(kProtocolError) rather than the raw accessors' std::logic_error.
+// A reply's type is chosen by the (untrusted) server, so a wrong type is a
+// protocol condition the caller catches via RedisError, not a program bug.
 [[nodiscard]] std::string_view redisValueString(const RedisValue& value);
+[[nodiscard]] std::int64_t redisValueInteger(const RedisValue& value);
+[[nodiscard]] std::span<const RedisValue> redisValueArray(const RedisValue& value);
 void throwIfRedisError(const RedisValue& value);
 [[nodiscard]] bool redisAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept;
 

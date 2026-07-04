@@ -11,7 +11,30 @@ std::string_view redisValueString(const RedisValue& value) {
     if (value.kind() == RedisValue::Kind::kError) {
         throw RedisError(RedisError::Code::kCommandError, value.string());
     }
+    if (value.kind() != RedisValue::Kind::kString) {
+        throw RedisError(RedisError::Code::kProtocolError, "redis reply is not a string");
+    }
     return value.string();
+}
+
+std::int64_t redisValueInteger(const RedisValue& value) {
+    if (value.kind() == RedisValue::Kind::kError) {
+        throw RedisError(RedisError::Code::kCommandError, value.string());
+    }
+    if (value.kind() != RedisValue::Kind::kInteger) {
+        throw RedisError(RedisError::Code::kProtocolError, "redis reply is not an integer");
+    }
+    return value.integer();
+}
+
+std::span<const RedisValue> redisValueArray(const RedisValue& value) {
+    if (value.kind() == RedisValue::Kind::kError) {
+        throw RedisError(RedisError::Code::kCommandError, value.string());
+    }
+    if (value.kind() != RedisValue::Kind::kArray) {
+        throw RedisError(RedisError::Code::kProtocolError, "redis reply is not an array");
+    }
+    return value.array();
 }
 
 void throwIfRedisError(const RedisValue& value) {
@@ -60,7 +83,7 @@ Task<std::int64_t> redisIntegerCommand(
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    co_return value.integer();
+    co_return redisValueInteger(value);
 }
 
 Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(
@@ -69,7 +92,7 @@ Task<std::pmr::vector<std::pmr::string>> redisStringArrayCommand(
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    const auto items = value.array();
+    const auto items = redisValueArray(value);
     std::pmr::vector<std::pmr::string> output(resource);
     output.reserve(items.size());
     for (const auto& item : items) {
@@ -88,12 +111,12 @@ Task<std::pmr::vector<bool>> redisBoolArrayCommand(
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    const auto items = value.array();
+    const auto items = redisValueArray(value);
     std::pmr::vector<bool> output(resource);
     output.reserve(items.size());
     for (const auto& item : items) {
         throwIfRedisError(item);
-        output.emplace_back(item.integer() != 0);
+        output.emplace_back(redisValueInteger(item) != 0);
     }
     co_return output;
 }
@@ -104,7 +127,7 @@ Task<std::pmr::vector<std::optional<std::pmr::string>>> redisOptionalStringArray
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    const auto items = value.array();
+    const auto items = redisValueArray(value);
     std::pmr::vector<std::optional<std::pmr::string>> output(resource);
     output.reserve(items.size());
     for (const auto& item : items) {
