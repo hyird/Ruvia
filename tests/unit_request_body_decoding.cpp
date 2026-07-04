@@ -8,6 +8,7 @@
 
 #include <brotli/encode.h>
 #include <zlib.h>
+#include <zstd.h>
 
 #include "http/RequestBodyDecoding.h"
 
@@ -52,6 +53,17 @@ std::string brotliCompress(std::string_view data) {
         return {};
     }
     out.resize(outSize);
+    return out;
+}
+
+std::string zstdCompress(std::string_view data) {
+    const std::size_t bound = ZSTD_compressBound(data.size());
+    std::string out(bound, '\0');
+    const std::size_t size = ZSTD_compress(out.data(), bound, data.data(), data.size(), 3);
+    if (ZSTD_isError(size)) {
+        return {};
+    }
+    out.resize(size);
     return out;
 }
 
@@ -114,4 +126,20 @@ RUVIA_TEST(request_body_brotli_bomb_rejected) {
     RUVIA_CHECK(!br.empty());
     std::pmr::string out(std::pmr::get_default_resource());
     RUVIA_CHECK(!decodeRequestContentEncoding(HttpContentCoding::kBrotli, br, out, 1024));
+}
+
+RUVIA_TEST(request_body_zstd_round_trip) {
+    const std::string plain = "zstd request body content, repeated repeated repeated repeated";
+    const std::string zz = zstdCompress(plain);
+    RUVIA_CHECK(!zz.empty());
+    RUVIA_CHECK_EQ(decoded(HttpContentCoding::kZstd, zz, kMaxDecodedRequestBodyBytes), plain);
+}
+
+RUVIA_TEST(request_body_zstd_bomb_rejected) {
+    const std::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny zstd frame
+    const std::string zz = zstdCompress(big);
+    RUVIA_CHECK(!zz.empty());
+    std::pmr::string out(std::pmr::get_default_resource());
+    // A small cap must stop the expansion mid-stream, not decode the whole megabyte.
+    RUVIA_CHECK(!decodeRequestContentEncoding(HttpContentCoding::kZstd, zz, out, 1024));
 }
