@@ -76,3 +76,23 @@ RUVIA_TEST(find_semicolon_parameter_ignore_case_uses_last_match) {
     RUVIA_CHECK(value.has_value());
     RUVIA_CHECK_EQ(*value, std::string_view("second"));
 }
+
+RUVIA_TEST(find_semicolon_parameter_matches_whole_name_not_substring) {
+    // The parameter name is matched as a WHOLE token, never as a substring. A decoy
+    // parameter whose name merely contains the sought name as a prefix or suffix must
+    // NOT match -- otherwise an attacker could smuggle a boundary or charset value
+    // through a differently-named parameter (e.g. a "notboundary=" a substring-based
+    // find() would latch onto), steering multipart framing or content decoding.
+    RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase(
+        "multipart/form-data; notboundary=evil", "boundary").has_value());
+    RUVIA_CHECK(!httpFindSemicolonParameterQuotedIgnoreCase(
+        "multipart/form-data; boundaryx=evil", "boundary").has_value());
+    RUVIA_CHECK(!httpFindSemicolonParameterIgnoreCase(
+        "text/html; xcharset=evil", "charset").has_value());
+
+    // A genuine parameter is still found even when a decoy substring-name precedes it.
+    const auto real = httpFindSemicolonParameterQuotedIgnoreCase(
+        "multipart/form-data; notboundary=evil; boundary=real", "boundary");
+    RUVIA_CHECK(real.has_value());
+    RUVIA_CHECK_EQ(*real, std::string_view("real"));
+}
