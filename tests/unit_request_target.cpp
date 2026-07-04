@@ -112,6 +112,7 @@ RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "", out));
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/pa th", out));       // space
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/path#frag", out));   // '#' fragment
+    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad\\path", out));   // backslash
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, std::string_view("/a\r\nb", 5), out));  // CRLF
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad%zz", out));      // malformed pct-encoded
     RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad%", out));        // truncated pct-encoded

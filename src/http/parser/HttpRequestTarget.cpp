@@ -10,27 +10,6 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] bool isValidRequestTargetBytes(std::string_view target) noexcept {
-    if (target.empty()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < target.size(); ++i) {
-        const auto c = static_cast<unsigned char>(target[i]);
-        if (c <= 0x20 || c == 0x7F || c == '#') {
-            return false;
-        }
-        if (c == '%') {
-            if (i + 2 >= target.size() ||
-                !isHttpHexDigit(static_cast<unsigned char>(target[i + 1])) ||
-                !isHttpHexDigit(static_cast<unsigned char>(target[i + 2]))) {
-                return false;
-            }
-            i += 2;
-        }
-    }
-    return true;
-}
-
 // URI reg-name chars: unreserved / sub-delims (pct-encoded handled by caller).
 inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     std::array<bool, 256> table{};
@@ -250,9 +229,6 @@ bool parseRequestTarget(
     HttpMethod method,
     std::string_view target,
     RequestTargetView& output) noexcept {
-    if (!isValidRequestTargetBytes(target)) {
-        return false;
-    }
     if (target == "*") {
         if (method != HttpMethod::kOptions) {
             return false;
@@ -263,7 +239,13 @@ bool parseRequestTarget(
         output.defaultPort = 0;
         return true;
     }
+    if (target.empty()) {
+        return false;
+    }
     if (target.front() == '/') {
+        if (!isValidOriginFormTarget(target)) {
+            return false;
+        }
         const auto querySeparator = target.find('?');
         output.path = querySeparator == std::string_view::npos
             ? target
@@ -274,6 +256,9 @@ bool parseRequestTarget(
         output.authority = {};
         output.defaultPort = 0;
         return !output.path.empty();
+    }
+    if (!isValidRequestTargetBytes(target)) {
+        return false;
     }
     return parseAbsoluteTarget(target, output);
 }

@@ -5,12 +5,14 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/client/HttpClientRedirect.h"
 #include "http/client/HttpClientResponseParser.h"
 
 namespace {
 
 using ruvia::FetchResponse;
 using ruvia::detail::HttpClientResponseHead;
+using ruvia::detail::isValidHttpClientOriginTarget;
 using ruvia::detail::parseHttpClientResponseHead;
 
 // Parse a header block (as produced by the pool: status line + headers joined by
@@ -32,6 +34,18 @@ bool parseThrows(std::string_view method, std::string_view headerSection) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http_client_origin_target_validation) {
+    RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
+    RUVIA_CHECK(isValidHttpClientOriginTarget("*"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget(""));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("relative"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad#fragment"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad\\path"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%zz"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%"));
+    RUVIA_CHECK(!isValidHttpClientOriginTarget("/bad%2"));
+}
 
 // --- Content-Length framing ----------------------------------------------
 RUVIA_TEST(http_client_content_length_body) {

@@ -22,6 +22,7 @@
 
 #include "../../runtime/AsioAwait.h"
 #include "../HeaderTokenUtils.h"
+#include "../parser/HttpRequestTarget.h"
 #include "FetchStreamSource.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientConfigValidation.h"
@@ -41,25 +42,6 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
-
-[[nodiscard]] bool isValidH2OriginTarget(std::string_view target) noexcept {
-    if (target.empty()) {
-        return false;
-    }
-    if (target == "*") {
-        return true;
-    }
-    if (target.front() != '/') {
-        return false;
-    }
-    for (const auto ch : target) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F || byte == '#' || byte == '\\') {
-            return false;
-        }
-    }
-    return true;
-}
 
 // Connection-specific headers are forbidden in HTTP/2 (RFC 7540 §8.1.2.2), as are any
 // pseudo-header (leading ':') the caller tries to inject and the client-managed framing headers.
@@ -1184,7 +1166,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     if (!isValidHttpHeaderName(method)) {
         throw std::invalid_argument("http/2: invalid request method");
     }
-    if (!isValidH2OriginTarget(target)) {
+    if (!isValidOriginFormTarget(target)) {
         throw std::invalid_argument("http/2: invalid request target");
     }
     if (options.timeout.count() < 0) {

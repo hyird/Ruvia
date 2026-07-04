@@ -7,28 +7,15 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "../HeaderTokenUtils.h"
+#include "../parser/HttpRequestTarget.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool isValidHttpClientOriginTarget(std::string_view target) noexcept {
-    if (target.empty()) {
-        return false;
-    }
-    if (target == "*") {
-        return true;
-    }
-    if (target.front() != '/') {
-        return false;
-    }
-    for (const auto ch : target) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte <= 0x20 || byte == 0x7F || byte == '#' || byte == '\\') {
-            return false;
-        }
-    }
-    return true;
+    return isValidOriginFormTarget(target);
 }
 
 [[nodiscard]] inline bool isHttpClientRedirectStatus(std::uint16_t status) noexcept {

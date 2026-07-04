@@ -52,6 +52,40 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "", "x"));          // empty name
 }
 
+RUVIA_TEST(h2_headers_path_rejects_malformed_origin_target) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "relative"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "/bad#fragment"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "/bad\\path"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "/bad%zz"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":path", "/bad%"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":path", "/ok%2F?q=%7B%7D"));
+        RUVIA_CHECK_EQ(stream.requestPath(), std::string_view("/ok%2F?q=%7B%7D"));
+    }
+}
+
 RUVIA_TEST(h2_headers_pseudo_after_regular_rejected) {
     // Pseudo-headers must precede all regular headers (RFC 7540 8.1.2.1).
     Http2StreamState stream(1, res());
