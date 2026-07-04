@@ -15,7 +15,6 @@
 #include "ruvia/app/RateLimitRule.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/http/StaticFiles.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -256,8 +255,6 @@ public:
     App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
-    template <typename MiddlewareT>
-    App& use();
 #ifdef RUVIA_ENABLE_MARIADB
     App& useDb(DbConfig config);
     App& useDb(std::string_view alias, DbConfig config);
@@ -280,15 +277,8 @@ private:
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    App& useMiddleware(detail::ControllerMiddlewareDescriptor middleware);
-
     std::unique_ptr<detail::AppState, detail::AppStateDeleter> state_;
 };
-
-template <typename MiddlewareT>
-App& App::use() {
-    return useMiddleware(detail::makeMiddlewareDescriptor<MiddlewareT>());
-}
 
 App& app();
 

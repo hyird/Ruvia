@@ -34,8 +34,8 @@ namespace detail {
 // A safe request (GET/HEAD/OPTIONS) without an XSRF-TOKEN cookie is issued a
 // fresh one (readable by JavaScript so a SPA can echo it). An unsafe request
 // must repeat that cookie's value in the X-XSRF-TOKEN header; a missing or
-// mismatched token is rejected with 403. Register with app.use<CsrfProtection>()
-// or on a controller group.
+// mismatched token is rejected with 403. Register on a controller, group, or
+// route that should enforce browser XSRF checks.
 class CsrfProtection final : public Middleware<CsrfProtection> {
 public:
     Task<void> handle(Context& c, Next& next) {

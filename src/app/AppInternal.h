@@ -44,8 +44,6 @@ struct AppState final {
     HttpNotFoundHandler notFoundHandler{nullptr};
     std::pmr::vector<AppHook> onStartHooks{appResource()};
     std::pmr::vector<AppHook> onStopHooks{appResource()};
-    std::pmr::vector<ControllerMiddlewareDescriptor> globalMiddlewares{
-        appResource()};
 #ifdef RUVIA_ENABLE_MARIADB
     std::pmr::vector<DbDefinition> databases{appResource()};
 #endif
@@ -63,7 +61,6 @@ struct AppState final {
 
     mutable std::mutex mutex;
     bool autoControllersLoaded{false};
-    bool routeGraphFinalized{false};
     bool running{false};
 };
 

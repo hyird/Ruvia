@@ -80,7 +80,6 @@ public:
         std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
         std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
         WebSocketRouteOptions webSocketOptions = {});
-    void prependMiddlewares(std::span<const ControllerMiddlewareDescriptor> middlewares);
 
 private:
     class PendingRoute final {

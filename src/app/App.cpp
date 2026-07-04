@@ -88,20 +88,6 @@ const Env& App::env() const noexcept {
     return state_->env;
 }
 
-App& App::useMiddleware(detail::ControllerMiddlewareDescriptor middleware) {
-    auto& state = *state_;
-    std::lock_guard lock(state.mutex);
-    if (state.running) {
-        throw std::logic_error("cannot register middleware while app is running");
-    }
-    if (state.routeGraphFinalized) {
-        throw std::logic_error("cannot register middleware after router finalize");
-    }
-
-    state.globalMiddlewares.push_back(middleware);
-    return *this;
-}
-
 void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
@@ -128,13 +114,7 @@ void App::run() {
         auto& routes = detail::RouterImpl::from(state.router);
         routes.setErrorHandler(state.errorHandler);
         routes.setNotFoundHandler(state.notFoundHandler);
-        if (!state.routeGraphFinalized) {
-            routes.prependMiddlewares(state.globalMiddlewares);
-            routes.finalize();
-            state.routeGraphFinalized = true;
-        } else {
-            routes.finalize();
-        }
+        routes.finalize();
         const auto& routeTable = routes.routeTable();
 
         if (state.documentRootConfig.has_value()) {
