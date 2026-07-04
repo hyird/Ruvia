@@ -223,3 +223,35 @@ RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
 
     RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/health/live"), std::string_view("/:section/:probe"));
 }
+
+RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
+    // A request whose method has no route for an existing path is a 405, and the
+    // Allow set (RFC 7231 6.5.5) must list exactly the methods that DO have a route
+    // for that path -- not methods belonging to other paths, and not the requested
+    // method echoed back. This drives the Allow header and was only tested at the
+    // RouteResolution value level, never through the route-table computation.
+    Router r;
+    addRoute(r.impl, HttpMethod::kGet, "/a");
+    addRoute(r.impl, HttpMethod::kPost, "/a");
+    addRoute(r.impl, HttpMethod::kPut, "/b");
+    r.finalize();
+
+    const auto bit = [](HttpMethod m) { return 1U << static_cast<unsigned>(m); };
+
+    RouteMatch match;
+    const auto res = r.impl.routeTable().resolve(HttpMethod::kDelete, "/a", match);
+    RUVIA_CHECK(!res.found());
+    RUVIA_CHECK(res.methodNotAllowed());                 // /a exists for other methods -> 405, not 404
+    const auto mask = res.allowedMethods();
+    RUVIA_CHECK((mask & bit(HttpMethod::kGet)) != 0);
+    RUVIA_CHECK((mask & bit(HttpMethod::kPost)) != 0);
+    RUVIA_CHECK((mask & bit(HttpMethod::kHead)) != 0);    // auto-registered alongside the GET route
+    RUVIA_CHECK((mask & bit(HttpMethod::kPut)) == 0);     // belongs to /b, not /a
+    RUVIA_CHECK((mask & bit(HttpMethod::kDelete)) == 0);  // the requested method is not echoed back
+
+    // A path with no route at all is a 404 (not found), never a 405.
+    RouteMatch missMatch;
+    const auto missing = r.impl.routeTable().resolve(HttpMethod::kGet, "/nope", missMatch);
+    RUVIA_CHECK(!missing.found());
+    RUVIA_CHECK(!missing.methodNotAllowed());
+}
