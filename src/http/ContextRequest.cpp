@@ -542,6 +542,20 @@ const RequestValueGroupList& Context::requestQueries() const {
     return *requestQueries_;
 }
 
+std::optional<std::string_view> Context::requestCookie(std::string_view name) const {
+    const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
+    std::optional<std::string_view> result;
+    detail::httpVisitSemicolonParameters(
+        input,
+        [name, &result](std::string_view key, std::string_view value) {
+            if (key == name) {
+                result = value;
+            }
+            return true;
+        });
+    return result;
+}
+
 const RequestNameValueList& Context::requestCookies() const {
     if (requestCookies_ == nullptr) {
         const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);

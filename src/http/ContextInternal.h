@@ -120,6 +120,10 @@ struct ContextAccess final {
         return context.routeRateLimitScope_;
     }
 
+    [[nodiscard]] static bool requestCookiesMaterialized(const Context& context) noexcept {
+        return context.requestCookies_ != nullptr;
+    }
+
     static void setResponse(Context& context, HttpResponse&& response) {
         context.storeResponse(std::move(response));
     }
