@@ -78,6 +78,12 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     noTunnel.markExtendedConnectWebSocket();
     RUVIA_CHECK(!http2IsValidWebSocketRequest(noTunnel, request));
 
+    // Without the extended-CONNECT websocket marker (:method CONNECT +
+    // :protocol websocket, RFC 8441) it is not a WebSocket handshake at all.
+    auto noExtendedConnect = makeStream();
+    noExtendedConnect.markWebSocketTunnel();
+    RUVIA_CHECK(!http2IsValidWebSocketRequest(noExtendedConnect, request));
+
     // A Content-Length must not be present on a WebSocket CONNECT.
     auto withContentLength = makeStream();
     withContentLength.markExtendedConnectWebSocket();
