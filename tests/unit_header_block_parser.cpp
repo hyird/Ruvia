@@ -78,6 +78,16 @@ RUVIA_TEST(header_block_rejects_duplicate_content_type) {
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
 }
 
+RUVIA_TEST(header_block_rejects_duplicate_range) {
+    // Ruvia file responses only support a single byte-range set. Repeated Range
+    // fields must not degrade to cached last-value behavior.
+    const auto result = parse(
+        "GET /file HTTP/1.1\r\nHost: x\r\n"
+        "Range: bytes=0-99\r\n"
+        "Range: bytes=200-299\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+}
+
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);

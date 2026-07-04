@@ -80,6 +80,14 @@ public:
         regularHeaderSeen_ = true;
     }
 
+    [[nodiscard]] bool markSingletonHeader(std::uint32_t bit) noexcept {
+        if ((singletonHeaderBits_ & bit) != 0) {
+            return false;
+        }
+        singletonHeaderBits_ |= bit;
+        return true;
+    }
+
     [[nodiscard]] bool headersDecoded() const noexcept {
         return headersDecoded_;
     }
@@ -126,6 +134,7 @@ private:
     bool standardConnect_ : 1 {false};
     bool extendedConnectWebSocket_ : 1 {false};
     bool webSocketTunnel_ : 1 {false};
+    std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
 };
 

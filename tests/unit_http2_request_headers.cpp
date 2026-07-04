@@ -187,6 +187,21 @@ RUVIA_TEST(h2_headers_duplicate_host_rejected) {
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "host", "b.example"));  // duplicate host
 }
 
+RUVIA_TEST(h2_headers_duplicate_singleton_regular_headers_rejected) {
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "content-type", "text/plain"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "content-type", "application/json"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "range", "bytes=0-99"));
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "range", "bytes=200-299"));
+    }
+}
+
 RUVIA_TEST(h2_headers_content_length_and_cookie) {
     Http2StreamState stream(1, res());
     Http2HeaderDecodeContext ctx{stream};
