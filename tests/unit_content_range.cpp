@@ -290,3 +290,55 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
 
     fs::remove_all(dir);
 }
+
+RUVIA_TEST(static_file_directory_root_index_and_403) {
+    namespace fs = std::filesystem;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_dir_index";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "other.txt", std::ios::binary | std::ios::trunc);
+        out << "x";
+    }
+
+    const auto serveRoot = [](StaticRoot& root) -> std::uint16_t {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        auto context = ContextAccess::make(memory, request);
+        try {
+            return context.staticFile(root, "", "text/html").status();
+        } catch (const ruvia::HttpError& error) {
+            return error.info().status();
+        }
+    };
+
+    // A directory root with no configured index is forbidden (never a listing).
+    {
+        StaticRootOptions options;
+        options.allowAll = true;
+        StaticRoot root(dir, std::move(options));
+        RUVIA_CHECK_EQ(serveRoot(root), std::uint16_t{403});
+    }
+
+    // With an index file configured (and present), the directory root serves it.
+    {
+        std::ofstream out(dir / "index.html", std::ios::binary | std::ios::trunc);
+        out << "<h1>i</h1>";
+        out.close();
+        StaticRootOptions options;
+        options.allowAll = true;
+        options.indexFile = "index.html";
+        StaticRoot root(dir, std::move(options));
+        RUVIA_CHECK_EQ(serveRoot(root), std::uint16_t{200});
+    }
+
+    fs::remove_all(dir);
+}
