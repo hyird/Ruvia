@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "../../router/RouteTable.h"
+#include "../../http/StreamingInternal.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/Streaming.h"

@@ -7,6 +7,7 @@
 
 #include "../../http/ContextInternal.h"
 #include "../../http/HttpResponseHeaderState.h"
+#include "../../http/StreamingInternal.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Validation.h"
 

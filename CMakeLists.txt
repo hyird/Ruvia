@@ -106,6 +106,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/RateLimit.cpp
     src/http/SecurityHeaders.cpp
     src/http/StaticFiles.cpp
+    src/http/Streaming.cpp
     src/http/parser/HttpChunkParser.cpp
     src/http/parser/HttpHeaderBlockParser.cpp
     src/http/parser/HttpParser.cpp
