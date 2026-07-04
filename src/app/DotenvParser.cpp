@@ -1,7 +1,6 @@
 #include "DotenvInternal.h"
 
 #include <algorithm>
-#include <cctype>
 #include <fstream>
 #include <ranges>
 #include <stdexcept>
@@ -37,14 +36,20 @@ namespace {
         return false;
     }
 
-    const auto first = static_cast<unsigned char>(key.front());
-    if (!(std::isalpha(first) != 0 || key.front() == '_')) {
+    // Explicit ASCII checks rather than std::isalpha/isalnum: an environment
+    // variable name is ASCII by definition, whereas the <cctype> predicates are
+    // locale-dependent (a non-"C" LC_CTYPE set by the host app could admit high
+    // bytes into a key). This also matches how the rest of the codebase validates
+    // identifiers (isValidSessionId, isValidConfigHost, ...).
+    const auto isAsciiAlpha = [](char value) noexcept {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+    };
+    if (!(isAsciiAlpha(key.front()) || key.front() == '_')) {
         return false;
     }
 
-    return std::ranges::all_of(key.substr(1), [](char value) {
-        const auto c = static_cast<unsigned char>(value);
-        return std::isalnum(c) != 0 || value == '_';
+    return std::ranges::all_of(key.substr(1), [&isAsciiAlpha](char value) {
+        return isAsciiAlpha(value) || (value >= '0' && value <= '9') || value == '_';
     });
 }
 
