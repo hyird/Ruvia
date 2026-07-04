@@ -106,6 +106,14 @@ RUVIA_TEST(websocket_deflate_offer_declined_forms) {
     // An offer pinning a server window is declined: we never shrink our window,
     // so honoring a smaller server_max_window_bits would break the negotiated bound.
     RUVIA_CHECK(!offersDeflate("permessage-deflate; server_max_window_bits=10"));
+    // Extension parameter names are case-insensitive.
+    RUVIA_CHECK(!offersDeflate("permessage-deflate; Server_Max_Window_Bits=10"));
+}
+
+RUVIA_TEST(websocket_deflate_offer_ignores_unrelated_parameters) {
+    // Parameter names must be parsed as tokens; a substring match would reject
+    // this even though it does not constrain our server window.
+    RUVIA_CHECK(offersDeflate("permessage-deflate; xserver_max_window_bits=10"));
 }
 
 RUVIA_TEST(websocket_deflate_offer_picks_first_honorable_offer) {
