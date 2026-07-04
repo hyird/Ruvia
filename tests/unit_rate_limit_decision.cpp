@@ -34,3 +34,43 @@ RUVIA_TEST(rate_limiter_now_ms_is_positive_and_monotonic) {
     RUVIA_CHECK(first > 0);
     RUVIA_CHECK(second >= first);
 }
+
+RUVIA_TEST(rate_limit_rule_normalization_clamps_unsafe_fields) {
+    using ruvia::detail::kMaxRateLimitRequests;
+    using ruvia::detail::normalizeRateLimitRule;
+
+    // A zero or negative window would break the fixed-window math -> clamp to 1ms.
+    {
+        RateLimitRule rule;
+        rule.window = std::chrono::milliseconds::zero();
+        RUVIA_CHECK(normalizeRateLimitRule(rule).window == std::chrono::milliseconds(1));
+    }
+    {
+        RateLimitRule rule;
+        rule.window = std::chrono::milliseconds(-5);
+        RUVIA_CHECK(normalizeRateLimitRule(rule).window == std::chrono::milliseconds(1));
+    }
+    // An empty slot table is unusable -> clamp to at least one slot.
+    {
+        RateLimitRule rule;
+        rule.slotCount = 0;
+        RUVIA_CHECK_EQ(normalizeRateLimitRule(rule).slotCount, std::size_t{1});
+    }
+    // maxRequests must fit the counter width -> clamp to the maximum.
+    {
+        RateLimitRule rule;
+        rule.maxRequests = kMaxRateLimitRequests + 1000;
+        RUVIA_CHECK_EQ(normalizeRateLimitRule(rule).maxRequests, kMaxRateLimitRequests);
+    }
+    // A valid rule passes through unchanged.
+    {
+        RateLimitRule rule;
+        rule.maxRequests = 100;
+        rule.window = std::chrono::seconds(60);
+        rule.slotCount = 1024;
+        const auto normalized = normalizeRateLimitRule(rule);
+        RUVIA_CHECK_EQ(normalized.maxRequests, std::size_t{100});
+        RUVIA_CHECK(normalized.window == std::chrono::milliseconds(60000));
+        RUVIA_CHECK_EQ(normalized.slotCount, std::size_t{1024});
+    }
+}
