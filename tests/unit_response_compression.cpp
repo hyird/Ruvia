@@ -243,3 +243,24 @@ RUVIA_TEST(compress_skips_incompressible_media_types) {
     RUVIA_CHECK(tryCompress(svg, Compression{true, 16}));
     RUVIA_CHECK_EQ(svg.header("Content-Encoding"), std::string_view("gzip"));
 }
+
+RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
+    // Beyond image/*, the full already-compressed set is video/*, audio/*, and the
+    // specific container application types. Compressing these wastes CPU for no size
+    // win, so each family and each exact container type must be left uncompressed.
+    for (const char* type : {"video/mp4", "audio/mpeg", "application/gzip",
+                             "application/x-gzip", "application/zip", "application/zstd",
+                             "application/pdf", "application/octet-stream"}) {
+        auto response = responseWithBody(kCompressibleBody);
+        response.header("Content-Type", type);
+        RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(response.header("Content-Encoding").empty());
+    }
+
+    // A parameterised incompressible type still matches once its parameters are
+    // stripped, so it is not compressed either.
+    auto png = responseWithBody(kCompressibleBody);
+    png.header("Content-Type", "image/png; name=photo");
+    RUVIA_CHECK(!tryCompress(png, Compression{true, 16}));
+    RUVIA_CHECK(png.header("Content-Encoding").empty());
+}
