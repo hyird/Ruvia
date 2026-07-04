@@ -15,6 +15,7 @@ namespace {
 
 using ruvia::detail::httpGuessContentType;
 using ruvia::detail::httpParseByteRange;
+using ruvia::detail::httpParseUnsigned;
 
 std::string_view guess(const char* name) {
     return httpGuessContentType(std::filesystem::path(name));
@@ -36,6 +37,23 @@ RUVIA_TEST(content_type_guessing) {
     // Unknown extension and no extension fall back to a non-executable octet-stream.
     RUVIA_CHECK_EQ(guess("archive.xyz"), std::string_view("application/octet-stream"));
     RUVIA_CHECK_EQ(guess("noext"), std::string_view("application/octet-stream"));
+}
+
+RUVIA_TEST(parse_unsigned_accepts_and_rejects) {
+    RUVIA_CHECK_EQ(httpParseUnsigned("0").value(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(httpParseUnsigned("42").value(), std::uint64_t{42});
+    RUVIA_CHECK_EQ(httpParseUnsigned("007").value(), std::uint64_t{7});  // leading zeros allowed
+    RUVIA_CHECK_EQ(httpParseUnsigned("18446744073709551615").value(),
+                   std::numeric_limits<std::uint64_t>::max());
+
+    // Rejections return nullopt: empty, overflow (not wrapped), a sign, leading
+    // whitespace, and trailing non-digits.
+    RUVIA_CHECK(!httpParseUnsigned("").has_value());
+    RUVIA_CHECK(!httpParseUnsigned("18446744073709551616").has_value());  // > UINT64_MAX
+    RUVIA_CHECK(!httpParseUnsigned("+5").has_value());
+    RUVIA_CHECK(!httpParseUnsigned("-5").has_value());
+    RUVIA_CHECK(!httpParseUnsigned(" 5").has_value());
+    RUVIA_CHECK(!httpParseUnsigned("5x").has_value());
 }
 
 RUVIA_TEST(byte_range_bounded_and_open_ended) {
