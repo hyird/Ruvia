@@ -52,3 +52,19 @@ RUVIA_TEST(chunk_trailers_reject_forbidden_fields) {
     RUVIA_CHECK(validateHttpChunkTrailers("Set-Cookie: a=b\r\n") == HttpChunkScanStatus::kInvalidTrailer);
     RUVIA_CHECK(validateHttpChunkTrailers("Content-Encoding: gzip\r\n") == HttpChunkScanStatus::kInvalidTrailer);
 }
+
+RUVIA_TEST(chunk_trailers_reject_framing_and_routing_fields) {
+    // The classic trailer-smuggling vectors: message-framing and routing/auth
+    // headers injected in the trailer section, which a downstream parser might
+    // honor after the head was already processed. These are rejected through the
+    // classified-header path (distinct from the name-length switch exercised
+    // above), so pin them explicitly -- dropping one reopens trailer smuggling.
+    RUVIA_CHECK(validateHttpChunkTrailers("Content-Length: 10\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Transfer-Encoding: chunked\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Host: evil.example\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Connection: close\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Authorization: Bearer x\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    RUVIA_CHECK(validateHttpChunkTrailers("Cookie: sid=1\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+    // The classification is case-insensitive, so a lowercase spelling is caught too.
+    RUVIA_CHECK(validateHttpChunkTrailers("content-length: 10\r\n") == HttpChunkScanStatus::kInvalidTrailer);
+}
