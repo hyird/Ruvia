@@ -330,12 +330,7 @@ struct SetCookieSerialization final {
     serialization.sameSiteText = detail::cookieSameSiteToken(options.sameSite);
     if (options.expires.has_value()) {
         const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
-        std::tm utc{};
-#if defined(_WIN32)
-        gmtime_s(&utc, &expiresTime);
-#else
-        gmtime_r(&expiresTime, &utc);
-#endif
+        const auto utc = detail::httpUtcTm(expiresTime);
         // Locale-independent IMF-fixdate (RFC 7231 7.1.1.1). std::strftime's
         // %a/%b are locale-dependent and could emit a malformed HTTP date under
         // a non-C locale; the shared formatter uses fixed English day/month
