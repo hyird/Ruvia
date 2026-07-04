@@ -128,7 +128,6 @@ private:
 
 class DbRow final {
 public:
-    explicit DbRow(std::pmr::memory_resource* resource = nullptr);
     DbRow(DbRow&& other) noexcept;
     DbRow& operator=(DbRow&& other) noexcept;
 
@@ -144,6 +143,7 @@ public:
 private:
     friend class detail::MariaDbPool;
 
+    explicit DbRow(std::pmr::memory_resource* resource = nullptr);
     DbRow(const DbField* fields, std::size_t size, std::pmr::memory_resource* resource);
     void refreshView() noexcept;
 
