@@ -12,27 +12,27 @@ namespace {
 
 [[nodiscard]] std::uint32_t singletonRequestHeaderBit(RequestHeaderKind kind) noexcept {
     switch (kind) {
+        case RequestHeaderKind::kAccessControlRequestMethod:
+        case RequestHeaderKind::kAuthorization:
         case RequestHeaderKind::kContentType:
         case RequestHeaderKind::kIfMatch:
         case RequestHeaderKind::kIfModifiedSince:
         case RequestHeaderKind::kIfNoneMatch:
         case RequestHeaderKind::kIfRange:
         case RequestHeaderKind::kIfUnmodifiedSince:
+        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kRange:
             return 1U << static_cast<std::uint32_t>(kind);
         case RequestHeaderKind::kOther:
         case RequestHeaderKind::kAccept:
         case RequestHeaderKind::kAcceptEncoding:
         case RequestHeaderKind::kAccessControlRequestHeaders:
-        case RequestHeaderKind::kAccessControlRequestMethod:
-        case RequestHeaderKind::kAuthorization:
         case RequestHeaderKind::kConnection:
         case RequestHeaderKind::kContentEncoding:
         case RequestHeaderKind::kContentLength:
         case RequestHeaderKind::kCookie:
         case RequestHeaderKind::kExpect:
         case RequestHeaderKind::kHost:
-        case RequestHeaderKind::kOrigin:
         case RequestHeaderKind::kSecWebSocketKey:
         case RequestHeaderKind::kSecWebSocketProtocol:
         case RequestHeaderKind::kSecWebSocketVersion:
@@ -308,12 +308,15 @@ HttpParseError parseHttpHeaderBlock(
                 httpUpdateResponseCodingQualities(
                     value, block.gzipEncoding, block.brotliEncoding, block.zstdEncoding);
                 break;
+            case RequestHeaderKind::kAccessControlRequestMethod:
+            case RequestHeaderKind::kAuthorization:
             case RequestHeaderKind::kContentType:
             case RequestHeaderKind::kIfMatch:
             case RequestHeaderKind::kIfModifiedSince:
             case RequestHeaderKind::kIfNoneMatch:
             case RequestHeaderKind::kIfRange:
             case RequestHeaderKind::kIfUnmodifiedSince:
+            case RequestHeaderKind::kOrigin:
             case RequestHeaderKind::kRange:
                 if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
                     if ((block.seenHeaderBits & bit) != 0) {
@@ -325,11 +328,8 @@ HttpParseError parseHttpHeaderBlock(
             case RequestHeaderKind::kOther:
             case RequestHeaderKind::kAccept:
             case RequestHeaderKind::kAccessControlRequestHeaders:
-            case RequestHeaderKind::kAccessControlRequestMethod:
-            case RequestHeaderKind::kAuthorization:
             case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kOrigin:
             case RequestHeaderKind::kUpgrade:
             case RequestHeaderKind::kUserAgent:
                 break;
