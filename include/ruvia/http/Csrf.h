@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/detail/ConstantTime.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpCommon.h"
@@ -20,18 +21,10 @@ namespace detail {
 // random hex token and returns a view of it, or an empty view on RNG failure.
 [[nodiscard]] std::string_view generateCsrfToken(std::span<char> buffer) noexcept;
 
-// Length-checked constant-time compare of the double-submit CSRF token, matching
-// the project convention of comparing attacker-reproducible tokens without an
-// early-out on the first differing byte.
+// Length-checked constant-time compare of the double-submit CSRF token; see
+// constantTimeBytesEqual for the timing-safety rationale.
 [[nodiscard]] inline bool csrfTokensEqual(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    unsigned char diff = 0;
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        diff |= static_cast<unsigned char>(left[i] ^ right[i]);
-    }
-    return diff == 0;
+    return constantTimeBytesEqual(left, right);
 }
 
 }  // namespace detail

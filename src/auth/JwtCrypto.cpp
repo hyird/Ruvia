@@ -1,5 +1,7 @@
 #include "JwtInternal.h"
 
+#include "ruvia/detail/ConstantTime.h"
+
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
@@ -59,14 +61,7 @@ std::pmr::string jwtHmacSign(
 }
 
 bool jwtConstantTimeEquals(std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    unsigned char diff = 0;
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        diff |= static_cast<unsigned char>(left[i] ^ right[i]);
-    }
-    return diff == 0;
+    return constantTimeBytesEqual(left, right);
 }
 
 }  // namespace ruvia::detail
