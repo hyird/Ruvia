@@ -63,6 +63,22 @@ RUVIA_TEST(stream_table_apply_send_window_delta) {
     RUVIA_CHECK(!table.applySendWindowDelta(1));
 }
 
+RUVIA_TEST(stream_table_apply_send_window_delta_reaches_overflow_streams) {
+    Http2StreamTable table(std::pmr::get_default_resource());
+    // Spill into overflow storage (kInlineCapacity == 16).
+    for (std::uint32_t id = 1; id <= 20; ++id) {
+        RUVIA_CHECK(table.create(id, 1000) != nullptr);
+    }
+    // A SETTINGS_INITIAL_WINDOW_SIZE change must adjust EVERY active stream, including
+    // those held in the overflow vector -- missing them would desync flow control for
+    // exactly the streams opened after the inline slots filled (RFC 7540 6.9.2).
+    RUVIA_CHECK(table.applySendWindowDelta(100));
+    RUVIA_CHECK_EQ(table.find(1)->sendWindow(), std::int32_t{1100});   // first inline
+    RUVIA_CHECK_EQ(table.find(16)->sendWindow(), std::int32_t{1100});  // last inline
+    RUVIA_CHECK_EQ(table.find(17)->sendWindow(), std::int32_t{1100});  // first overflow
+    RUVIA_CHECK_EQ(table.find(20)->sendWindow(), std::int32_t{1100});  // deep in overflow
+}
+
 RUVIA_TEST(http2_idle_stream_detection) {
     using ruvia::detail::http2IsIdleStream;
     // A stream id higher than any seen has never been opened -> idle.
