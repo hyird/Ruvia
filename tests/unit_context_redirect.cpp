@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <exception>
 #include <iterator>
+#include <span>
 #include <string_view>
 
 #include "http/ContextInternal.h"
@@ -105,6 +106,23 @@ RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     const auto response = context.body(nullptr, std::uint16_t{204}, "No Content");
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
     RUVIA_CHECK(responseBodyBytes(response).empty());
+}
+
+RUVIA_TEST(context_body_byte_span_copies_into_response_storage) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    const std::byte bytes[] = {
+        std::byte{0x00},
+        std::byte{0x41},
+        std::byte{0xff},
+    };
+    const auto response = context.body(std::span<const std::byte>(bytes));
+    const auto body = responseBodyBytes(response);
+
+    RUVIA_CHECK_EQ(body.size(), std::size(bytes));
+    RUVIA_CHECK_EQ(body[0], '\0');
+    RUVIA_CHECK_EQ(body[1], 'A');
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(body[2]), 0xff);
+    RUVIA_CHECK(body.data() != reinterpret_cast<const char*>(bytes));
 }
 
 RUVIA_TEST(context_text_sets_plain_content_type) {
