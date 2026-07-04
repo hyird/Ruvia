@@ -119,6 +119,36 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
         std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
 }
 
+RUVIA_TEST(sse_writer_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
+    // EventSource splits lines on CR, LF, or CRLF, so a bare CR in data must be
+    // treated as a line break too -- otherwise it would survive into a "data:"
+    // line and the client would reinterpret it, injecting fields or (via a blank
+    // line from "\r\r") a whole new event.
+    const auto render = [](std::string_view data) {
+        CaptureStreamSink sink;
+        auto writer = makeWriter(sink);
+        auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
+        asio::io_context ctx(1);
+        auto future = asio::co_spawn(
+            ctx,
+            ruvia::detail::taskAsAwaitable(writeOneSse(sse, ruvia::SseMessage{.data = data})),
+            asio::use_future);
+        ctx.run();
+        future.get();
+        return sink.writes.empty() ? std::string{} : sink.writes[0];
+    };
+
+    // Bare CR, LF, and CRLF all split into separate data lines; identical output.
+    RUVIA_CHECK_EQ(render("a\rb"), std::string("data: a\ndata: b\n\n"));
+    RUVIA_CHECK_EQ(render("a\nb"), std::string("data: a\ndata: b\n\n"));
+    RUVIA_CHECK_EQ(render("a\r\nb"), std::string("data: a\ndata: b\n\n"));
+    // "\r\r" would be a blank line (event dispatch) to the client -> must become
+    // two splits (an empty data line between), with no raw CR anywhere.
+    RUVIA_CHECK_EQ(render("a\r\rb"), std::string("data: a\ndata: \ndata: b\n\n"));
+    // No raw CR byte may appear in any rendered frame.
+    RUVIA_CHECK(render("x\ry\r\rz").find('\r') == std::string::npos);
+}
+
 RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {
     CaptureStreamSink sink;
     auto writer = makeWriter(sink);
