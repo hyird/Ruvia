@@ -172,8 +172,7 @@ class RequestNameValueList final {
 
 public:
     using value_type = RequestNameValueView;
-    using iterator = std::pmr::vector<RequestNameValueView>::iterator;
-    using const_iterator = std::pmr::vector<RequestNameValueView>::const_iterator;
+    using const_iterator = const RequestNameValueView*;
 
     explicit RequestNameValueList(Token, std::pmr::memory_resource* resource = nullptr)
         : items_(detail::pmrResourceOrDefault(resource)) {}
@@ -184,19 +183,19 @@ public:
     RequestNameValueList& operator=(RequestNameValueList&&) noexcept = default;
 
     [[nodiscard]] const_iterator begin() const noexcept {
-        return items_.begin();
+        return items_.data();
     }
 
     [[nodiscard]] const_iterator cbegin() const noexcept {
-        return items_.cbegin();
+        return begin();
     }
 
     [[nodiscard]] const_iterator end() const noexcept {
-        return items_.end();
+        return items_.data() + items_.size();
     }
 
     [[nodiscard]] const_iterator cend() const noexcept {
-        return items_.cend();
+        return end();
     }
 
     [[nodiscard]] std::size_t size() const noexcept {
@@ -306,8 +305,7 @@ class RequestValueGroupList final {
 
 public:
     using value_type = RequestValueGroup;
-    using iterator = std::pmr::vector<RequestValueGroup>::iterator;
-    using const_iterator = std::pmr::vector<RequestValueGroup>::const_iterator;
+    using const_iterator = const RequestValueGroup*;
 
     explicit RequestValueGroupList(Token, std::pmr::memory_resource* resource = nullptr)
         : groups_(detail::pmrResourceOrDefault(resource)) {}
@@ -318,19 +316,19 @@ public:
     RequestValueGroupList& operator=(RequestValueGroupList&&) noexcept = default;
 
     [[nodiscard]] const_iterator begin() const noexcept {
-        return groups_.begin();
+        return groups_.data();
     }
 
     [[nodiscard]] const_iterator cbegin() const noexcept {
-        return groups_.cbegin();
+        return begin();
     }
 
     [[nodiscard]] const_iterator end() const noexcept {
-        return groups_.end();
+        return groups_.data() + groups_.size();
     }
 
     [[nodiscard]] const_iterator cend() const noexcept {
-        return groups_.cend();
+        return end();
     }
 
     [[nodiscard]] std::size_t size() const noexcept {
