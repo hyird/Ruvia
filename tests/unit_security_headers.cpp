@@ -3,17 +3,33 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "http/ContextInternal.h"
+#include "http/HttpRequestInternal.h"
+#include "ruvia/http/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/SecurityHeaders.h"
+#include "ruvia/memory/MemoryPool.h"
 
 namespace {
 
+using ruvia::Context;
 using ruvia::HttpResponse;
+using ruvia::RequestMemory;
 using ruvia::SecurityHeadersOptions;
+using ruvia::WorkerMemory;
 using ruvia::applySecurityHeaders;
+using ruvia::detail::ContextAccess;
+using ruvia::detail::HttpRequestAccess;
 
 HttpResponse makeResponse() {
     return HttpResponse(std::pmr::new_delete_resource());
+}
+
+Context makeContext(WorkerMemory& worker, RequestMemory& requestMemory) {
+    auto request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    return ContextAccess::make(requestMemory, request);
 }
 
 }  // namespace
@@ -102,4 +118,21 @@ RUVIA_TEST(security_headers_respect_overwrite_existing_flag) {
     overwrite.overwriteExisting = true;
     applySecurityHeaders(replace, overwrite);
     RUVIA_CHECK_EQ(replace.header("X-Frame-Options"), std::string_view("DENY"));
+}
+
+RUVIA_TEST(security_headers_context_respects_overwrite_existing_flag) {
+    WorkerMemory worker;
+    RequestMemory keepMemory(worker);
+    auto keep = makeContext(worker, keepMemory);
+    keep.header("X-Frame-Options", "SAMEORIGIN");
+    applySecurityHeaders(keep, SecurityHeadersOptions{});
+    RUVIA_CHECK_EQ(keep.res().header("X-Frame-Options"), std::string_view("SAMEORIGIN"));
+
+    RequestMemory replaceMemory(worker);
+    auto replace = makeContext(worker, replaceMemory);
+    replace.header("X-Frame-Options", "SAMEORIGIN");
+    SecurityHeadersOptions overwrite;
+    overwrite.overwriteExisting = true;
+    applySecurityHeaders(replace, overwrite);
+    RUVIA_CHECK_EQ(replace.res().header("X-Frame-Options"), std::string_view("DENY"));
 }
