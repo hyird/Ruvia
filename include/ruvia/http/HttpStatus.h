@@ -18,6 +18,7 @@ struct HttpStatusEntry final {
         case 202: { static constexpr HttpStatusEntry entry{202, "Accepted", "HTTP/1.1 202 Accepted\r\n"}; return &entry; }
         case 203: { static constexpr HttpStatusEntry entry{203, "Non-Authoritative Information", "HTTP/1.1 203 Non-Authoritative Information\r\n"}; return &entry; }
         case 204: { static constexpr HttpStatusEntry entry{204, "No Content", "HTTP/1.1 204 No Content\r\n"}; return &entry; }
+        case 205: { static constexpr HttpStatusEntry entry{205, "Reset Content", "HTTP/1.1 205 Reset Content\r\n"}; return &entry; }
         case 206: { static constexpr HttpStatusEntry entry{206, "Partial Content", "HTTP/1.1 206 Partial Content\r\n"}; return &entry; }
         case 301: { static constexpr HttpStatusEntry entry{301, "Moved Permanently", "HTTP/1.1 301 Moved Permanently\r\n"}; return &entry; }
         case 302: { static constexpr HttpStatusEntry entry{302, "Found", "HTTP/1.1 302 Found\r\n"}; return &entry; }
@@ -41,7 +42,9 @@ struct HttpStatusEntry final {
         case 431: { static constexpr HttpStatusEntry entry{431, "Request Header Fields Too Large", "HTTP/1.1 431 Request Header Fields Too Large\r\n"}; return &entry; }
         case 500: { static constexpr HttpStatusEntry entry{500, "Internal Server Error", "HTTP/1.1 500 Internal Server Error\r\n"}; return &entry; }
         case 501: { static constexpr HttpStatusEntry entry{501, "Not Implemented", "HTTP/1.1 501 Not Implemented\r\n"}; return &entry; }
+        case 502: { static constexpr HttpStatusEntry entry{502, "Bad Gateway", "HTTP/1.1 502 Bad Gateway\r\n"}; return &entry; }
         case 503: { static constexpr HttpStatusEntry entry{503, "Service Unavailable", "HTTP/1.1 503 Service Unavailable\r\n"}; return &entry; }
+        case 504: { static constexpr HttpStatusEntry entry{504, "Gateway Timeout", "HTTP/1.1 504 Gateway Timeout\r\n"}; return &entry; }
         case 505: { static constexpr HttpStatusEntry entry{505, "HTTP Version Not Supported", "HTTP/1.1 505 HTTP Version Not Supported\r\n"}; return &entry; }
         default:
             return nullptr;

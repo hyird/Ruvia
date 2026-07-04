@@ -25,6 +25,24 @@ RUVIA_TEST(default_status_text_known_and_fallback) {
     RUVIA_CHECK_EQ(defaultStatusText(499), std::string_view("Bad Request"));
 }
 
+RUVIA_TEST(default_status_text_covers_reset_content_and_gateway_statuses) {
+    using ruvia::detail::httpCachedStatusLine;
+    // 205 Reset Content is a real bodyless status the response-head policy already
+    // recognizes, so it must carry its own reason phrase rather than the <500
+    // "Bad Request" fallback (an internal inconsistency before this entry existed).
+    // 502/504 are the common gateway statuses a proxy deployment emits.
+    RUVIA_CHECK_EQ(defaultStatusText(205), std::string_view("Reset Content"));
+    RUVIA_CHECK_EQ(defaultStatusText(502), std::string_view("Bad Gateway"));
+    RUVIA_CHECK_EQ(defaultStatusText(504), std::string_view("Gateway Timeout"));
+    // Each also gets a pre-baked status line, used when the reason phrase matches.
+    RUVIA_CHECK_EQ(httpCachedStatusLine(205, "Reset Content"),
+                   std::string_view("HTTP/1.1 205 Reset Content\r\n"));
+    RUVIA_CHECK_EQ(httpCachedStatusLine(502, "Bad Gateway"),
+                   std::string_view("HTTP/1.1 502 Bad Gateway\r\n"));
+    RUVIA_CHECK_EQ(httpCachedStatusLine(504, "Gateway Timeout"),
+                   std::string_view("HTTP/1.1 504 Gateway Timeout\r\n"));
+}
+
 RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(defaultErrorCode(400), std::string_view("bad_request"));
     RUVIA_CHECK_EQ(defaultErrorCode(404), std::string_view("not_found"));
