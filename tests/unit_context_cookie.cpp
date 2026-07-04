@@ -4,6 +4,7 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
+#include <chrono>
 #include <string>
 #include <string_view>
 
@@ -154,4 +155,52 @@ RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
     io.run();
 
     RUVIA_CHECK_EQ(header, std::string("second"));
+}
+
+RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // The Set-Cookie serialization is a two-pass design: prepareSetCookie computes
+    // an exact byte count, then writeSetCookie fills precisely that many bytes.
+    // A maximal cookie exercises every branch of BOTH passes at once, so any
+    // divergence between the size computed and the bytes written (an over- or
+    // under-allocation, or a dropped attribute in one pass only) surfaces as a
+    // wrong output string. Case A: __Host- prefix with all string/flag attributes
+    // and a Max-Age (no Domain/Expires -- __Host- forbids Domain).
+    ruvia::CookieOptions host;
+    host.prefix = ruvia::CookiePrefix::kHost;
+    host.secure = true;
+    host.path = "/";
+    host.httpOnly = true;
+    host.sameSite = "Strict";
+    host.maxAge = 3600;
+    host.priority = "High";
+    host.partitioned = true;
+    const auto hostCookie = context.generateCookie("id", "abc", host);
+    RUVIA_CHECK_EQ(
+        std::string_view(hostCookie.data(), hostCookie.size()),
+        std::string_view("__Host-id=abc; Path=/; Max-Age=3600; HttpOnly; Secure; "
+                         "SameSite=Strict; Priority=High; Partitioned"));
+
+    // Case B: __Secure- prefix carrying Domain and a fixed Expires (the well-known
+    // instant 1234567890 = Fri 13 Feb 2009 23:31:30 UTC, formatted as a
+    // locale-independent IMF-fixdate) plus SameSite=None. Covers the Domain and
+    // Expires branches Case A omits.
+    ruvia::CookieOptions secure;
+    secure.prefix = ruvia::CookiePrefix::kSecure;
+    secure.secure = true;
+    secure.path = "/app";
+    secure.domain = "example.com";
+    secure.sameSite = "None";
+    secure.expires = std::chrono::system_clock::time_point(std::chrono::seconds(1234567890));
+    const auto secureCookie = context.generateCookie("sess", "xyz", secure);
+    RUVIA_CHECK_EQ(
+        std::string_view(secureCookie.data(), secureCookie.size()),
+        std::string_view("__Secure-sess=xyz; Path=/app; Domain=example.com; "
+                         "Expires=Fri, 13 Feb 2009 23:31:30 GMT; Secure; SameSite=None"));
 }
