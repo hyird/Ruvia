@@ -81,6 +81,35 @@ RUVIA_TEST(validator_range_upper_bound_inclusive_and_absent_skips) {
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{1});
 }
 
+RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
+    Validator v;
+    // oneOf on an absent optional is skipped -- the one rule whose absent-skip branch
+    // the other tests don't exercise (required/minLength/range already cover theirs).
+    std::optional<std::string> absent;
+    v.oneOf(absent, "a", {"x", "y"});
+    RUVIA_CHECK(v.ok());
+
+    // range validates floating-point values, not just integers (a distinct template
+    // instantiation and comparison path from the int cases above).
+    std::optional<double> inRange = 0.5;
+    v.range(inRange, "d", 0.0, 1.0);   // 0.0 <= 0.5 <= 1.0, ok
+    RUVIA_CHECK(v.ok());
+    std::optional<double> low = -0.1;
+    v.range(low, "d", 0.0, 1.0);       // -0.1 < 0.0 -> range
+    std::optional<double> high = 1.1;
+    v.range(high, "d", 0.0, 1.0);      // 1.1 > 1.0 -> range
+    RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(v.issues()[0].code(), std::string_view("range"));
+    RUVIA_CHECK_EQ(v.issues()[1].code(), std::string_view("range"));
+
+    // Both floating bounds are inclusive: a value exactly at min or max is accepted.
+    std::optional<double> atMin = 0.0;
+    std::optional<double> atMax = 1.0;
+    v.range(atMin, "d", 0.0, 1.0);
+    v.range(atMax, "d", 0.0, 1.0);
+    RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});  // unchanged
+}
+
 RUVIA_TEST(validation_error_serializes_issues_to_json) {
     Validator v;
     std::optional<std::string> absent;
