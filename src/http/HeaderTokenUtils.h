@@ -185,7 +185,6 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
         if (key == name) {
             result = parameterValue;
-            return false;
         }
         return true;
     });
@@ -199,7 +198,6 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
         if (httpAsciiEqualsIgnoreCase(key, name)) {
             result = parameterValue;
-            return false;
         }
         return true;
     });
@@ -213,7 +211,6 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
         if (httpAsciiEqualsIgnoreCase(key, name)) {
             result = parameterValue;
-            return false;
         }
         return true;
     });
