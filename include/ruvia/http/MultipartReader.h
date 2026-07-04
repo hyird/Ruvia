@@ -65,22 +65,6 @@ private:
     bool partEnd_{false};
 };
 
-namespace detail {
-
-struct MultipartStreamPartAccess final {
-    [[nodiscard]] static constexpr MultipartStreamPart make(
-        std::string_view name,
-        std::string_view filename,
-        std::string_view contentType,
-        std::string_view body,
-        bool partBegin,
-        bool partEnd) noexcept {
-        return MultipartStreamPart(name, filename, contentType, body, partBegin, partEnd);
-    }
-};
-
-}  // namespace detail
-
 class MultipartReader final {
 public:
     MultipartReader(BodyReader& bodyReader, std::string_view boundary, std::pmr::memory_resource* resource);

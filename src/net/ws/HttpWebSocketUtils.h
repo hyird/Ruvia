@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "../../http/HttpRequestFlags.h"
+#include "HttpWebSocketMessageAccess.h"
 #include "ruvia/http/WebSocket.h"
 
 namespace ruvia {
