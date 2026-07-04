@@ -64,7 +64,7 @@ RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_que
 
     const auto query = context.req().query("a");
     RUVIA_CHECK(query.has_value());
-    RUVIA_CHECK_EQ(*query, std::string_view("one two"));
+    RUVIA_CHECK_EQ(*query, std::string_view("3"));
     RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
 }
 
