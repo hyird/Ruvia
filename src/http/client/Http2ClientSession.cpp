@@ -101,9 +101,7 @@ Http2ClientSession::Http2ClientSession(
       sendWindowWaiters_(resource_) {
     decoder_.setMaxDynamicTableSize(4096);
     if (config_.tls) {
-        sslContext_.emplace(asio::ssl::context::tls_client);
-        sslContext_->set_default_verify_paths();
-        sslContext_->set_verify_mode(asio::ssl::verify_peer);
+        configureClientTlsContext(sslContext_);
     }
     tlsStream_ = std::unique_ptr<TlsStream, TlsStreamDeleter>(nullptr, TlsStreamDeleter{resource_});
 }
