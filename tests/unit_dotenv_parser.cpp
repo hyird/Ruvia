@@ -91,3 +91,24 @@ RUVIA_TEST(dotenv_single_quote_is_literal) {
     // Single quotes are literal: a backslash-n is not an escape sequence.
     RUVIA_CHECK_EQ(std::string_view(entries[0].value), std::string_view("a\\nb"));
 }
+
+RUVIA_TEST(dotenv_rejects_invalid_key) {
+    // A key starting with a digit, or containing a non-[A-Za-z0-9_] byte, is invalid.
+    for (const std::string_view content : {"1KEY=x\n", "KE-Y=x\n", "K Y=x\n"}) {
+        const auto path = writeTempEnv("ruvia_dotenv_badkey.env", content);
+        bool threw = false;
+        try {
+            (void)readDotenvEntries(path);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        std::filesystem::remove(path);
+        RUVIA_CHECK(threw);
+    }
+    // A leading underscore, digits, and underscores in the tail are all valid.
+    const auto ok = writeTempEnv("ruvia_dotenv_okkey.env", "_MY_KEY2=x\n");
+    const auto entries = readDotenvEntries(ok);
+    std::filesystem::remove(ok);
+    RUVIA_CHECK_EQ(entries.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(std::string_view(entries[0].name), std::string_view("_MY_KEY2"));
+}
