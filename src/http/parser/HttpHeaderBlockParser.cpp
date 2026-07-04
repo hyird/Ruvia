@@ -38,50 +38,57 @@ enum class TransferEncodingParse {
     std::string_view value,
     ParsedRequestHeaderBlock& block) noexcept {
     value = httpTrimOws(value);
-    for (;;) {
-        const auto comma = value.find(',');
-        auto token = httpTrimOws(comma == std::string_view::npos ? value : value.substr(0, comma));
+    if (value.empty()) {
+        return TransferEncodingParse::kMalformed;
+    }
+
+    auto result = TransferEncodingParse::kOk;
+    httpVisitCommaSeparatedQuotedItems(value, [&block, &result](std::string_view token) noexcept {
         if (const auto semicolon = token.find(';'); semicolon != std::string_view::npos) {
             if (!isValidHttpChunkExtension(token.substr(semicolon))) {
-                return TransferEncodingParse::kMalformed;
+                result = TransferEncodingParse::kMalformed;
+                return false;
             }
             token = httpTrimOws(token.substr(0, semicolon));
         }
         if (token.empty()) {
-            return TransferEncodingParse::kMalformed;
+            result = TransferEncodingParse::kMalformed;
+            return false;
         }
 
         if (block.sawChunked) {
-            return TransferEncodingParse::kMalformed;
+            result = TransferEncodingParse::kMalformed;
+            return false;
         }
 
         if (httpAsciiEqualsIgnoreCase(token, "chunked")) {
             block.sawChunked = true;
             block.sawTransferEncoding = true;
-            if (comma != std::string_view::npos) {
-                return TransferEncodingParse::kMalformed;
-            }
         } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
                    httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
             if (block.transferCodings.count == kMaxTransferCodings) {
-                return TransferEncodingParse::kUnsupported;
+                result = TransferEncodingParse::kUnsupported;
+                return false;
             }
             block.sawTransferEncoding = true;
             block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kGzip;
         } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
             if (block.transferCodings.count == kMaxTransferCodings) {
-                return TransferEncodingParse::kUnsupported;
+                result = TransferEncodingParse::kUnsupported;
+                return false;
             }
             block.sawTransferEncoding = true;
             block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kDeflate;
         } else {
-            return TransferEncodingParse::kUnsupported;
+            result = TransferEncodingParse::kUnsupported;
+            return false;
         }
-        if (comma == std::string_view::npos) {
-            return TransferEncodingParse::kOk;
-        }
-        value.remove_prefix(comma + 1);
+        return true;
+    });
+    if (block.sawChunked && block.transferCodings.count > 0) {
+        return TransferEncodingParse::kUnsupported;
     }
+    return result;
 }
 
 [[nodiscard]] HttpHeaderSlice makeSlice(std::size_t offset, std::size_t length) noexcept {

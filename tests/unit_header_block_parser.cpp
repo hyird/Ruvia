@@ -79,6 +79,13 @@ RUVIA_TEST(header_block_accepts_transfer_encoding_chunked) {
     RUVIA_CHECK(result.sawChunked);
 }
 
+RUVIA_TEST(header_block_accepts_transfer_encoding_quoted_comma_parameter) {
+    const auto result = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked;note=\"a,b\"\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(result.sawChunked);
+}
+
 RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
     // "chunked" must be the final coding.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked, gzip\r\n\r\n").error ==
@@ -94,6 +101,9 @@ RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
     // More than one non-chunked coding exceeds the single-coding limit.
     RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, deflate, chunked\r\n\r\n").error ==
                 HttpParseError::kUnsupportedTransferEncoding);
+    // Empty transfer-coding list items are malformed in this framing-sensitive header.
+    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ,chunked\r\n\r\n").error ==
+                HttpParseError::kInvalidTransferEncoding);
 }
 
 RUVIA_TEST(header_block_content_length_edge_cases) {

@@ -66,12 +66,11 @@ template <typename Predicate>
     return {};
 }
 
-// Iterate a comma-delimited HTTP list whose items may contain quoted-string
-// parameters. A comma inside "..." is data, not a list separator. Use for
-// Accept-style negotiation fields; simpler token-only lists can keep the faster
-// token scanner above.
+// Iterate every item in a comma-delimited HTTP list whose items may contain
+// quoted-string parameters. A comma inside "..." is data, not a list separator.
+// Empty items are still reported; framing-sensitive callers can reject them.
 template <typename Visitor>
-inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visitor) {
+inline void httpVisitCommaSeparatedQuotedItems(std::string_view value, Visitor&& visitor) {
     std::size_t start = 0;
     while (start <= value.size()) {
         std::size_t end = value.size();
@@ -93,7 +92,7 @@ inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visi
         }
 
         const auto item = httpTrimOws(value.substr(start, end - start));
-        if (!item.empty() && !visitor(item)) {
+        if (!visitor(item)) {
             return;
         }
         if (end >= value.size()) {
@@ -101,6 +100,15 @@ inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visi
         }
         start = end + 1;
     }
+}
+
+// Accept-style negotiation fields can skip empty list items; stricter headers
+// should use httpVisitCommaSeparatedQuotedItems directly.
+template <typename Visitor>
+inline void httpVisitCommaSeparatedQuoted(std::string_view value, Visitor&& visitor) {
+    httpVisitCommaSeparatedQuotedItems(value, [&visitor](std::string_view item) {
+        return item.empty() || visitor(item);
+    });
 }
 
 // Iterate the `key=value` parameters of a `;`-delimited list (cookie pairs,
