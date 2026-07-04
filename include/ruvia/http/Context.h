@@ -329,18 +329,10 @@ public:
             kLast
         };
 
+        class Object;
+
         class Entry final {
         public:
-            Entry(
-                std::pmr::memory_resource* resource,
-                std::string_view name,
-                bool array,
-                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
-                : name_(name),
-                  fields_(resource),
-                  singleValueSelection_(singleValueSelection),
-                  array_(array) {}
-
             [[nodiscard]] std::string_view name() const noexcept {
                 return name_;
             }
@@ -384,6 +376,25 @@ public:
 
         private:
             friend class RequestFormData;
+            friend class Object;
+
+            [[nodiscard]] static Entry make(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                bool array,
+                SingleValueSelection singleValueSelection) {
+                return Entry(resource, name, array, singleValueSelection);
+            }
+
+            Entry(
+                std::pmr::memory_resource* resource,
+                std::string_view name,
+                bool array,
+                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
+                : name_(name),
+                  fields_(resource),
+                  singleValueSelection_(singleValueSelection),
+                  array_(array) {}
 
             void add(const RequestFormField& field) {
                 fields_.push_back(&field);
@@ -398,9 +409,6 @@ public:
 
         class Value final {
         public:
-            explicit Value(const Entry* entry) noexcept
-                : entry_(entry) {}
-
             [[nodiscard]] explicit operator bool() const noexcept {
                 return field() != nullptr;
             }
@@ -442,25 +450,16 @@ public:
             }
 
         private:
+            friend class RequestFormData;
+
+            explicit Value(const Entry* entry) noexcept
+                : entry_(entry) {}
+
             const Entry* entry_{nullptr};
         };
 
         class PathValue final {
         public:
-            explicit PathValue(const Entry* entry) noexcept
-                : entry_(entry),
-                  fields_(std::pmr::null_memory_resource()) {}
-
-            explicit PathValue(
-                std::pmr::vector<const RequestFormField*>&& fields,
-                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
-                : fields_(std::move(fields)),
-                  singleValueSelection_(singleValueSelection) {
-                for (const auto* field : fields_) {
-                    array_ = array_ || (field != nullptr && field->array());
-                }
-            }
-
             [[nodiscard]] explicit operator bool() const noexcept {
                 return field() != nullptr;
             }
@@ -529,6 +528,23 @@ public:
             }
 
         private:
+            friend class RequestFormData;
+            friend class Object;
+
+            explicit PathValue(const Entry* entry) noexcept
+                : entry_(entry),
+                  fields_(std::pmr::null_memory_resource()) {}
+
+            explicit PathValue(
+                std::pmr::vector<const RequestFormField*>&& fields,
+                SingleValueSelection singleValueSelection = SingleValueSelection::kLast)
+                : fields_(std::move(fields)),
+                  singleValueSelection_(singleValueSelection) {
+                for (const auto* field : fields_) {
+                    array_ = array_ || (field != nullptr && field->array());
+                }
+            }
+
             const Entry* entry_{nullptr};
             std::pmr::vector<const RequestFormField*> fields_;
             SingleValueSelection singleValueSelection_{SingleValueSelection::kLast};
@@ -680,11 +696,12 @@ public:
 
                 entries_.reserve(builds.size());
                 for (const auto& build : builds) {
-                    auto& formEntry = entries_.emplace_back(
+                    entries_.push_back(Entry::make(
                         currentResource,
                         directChildName(form_->fields_[build.firstIndex], path()),
                         false,
-                        singleValueSelection());
+                        singleValueSelection()));
+                    auto& formEntry = entries_.back();
                     for (std::size_t i = build.begin; i < build.end; ++i) {
                         formEntry.add(form_->fields_[order[i]]);
                     }
@@ -909,11 +926,12 @@ public:
 
             entries_.reserve(builds.size());
             for (const auto& build : builds) {
-                auto& entry = entries_.emplace_back(
+                entries_.push_back(Entry::make(
                     resource,
                     entryName(fields_[build.firstIndex]),
                     false,
-                    singleValueSelection_);
+                    singleValueSelection_));
+                auto& entry = entries_.back();
                 for (std::size_t i = build.begin; i < build.end; ++i) {
                     entry.add(fields_[order[i]]);
                 }
@@ -975,11 +993,12 @@ public:
 
             pathEntries_.reserve(builds.size());
             for (const auto& build : builds) {
-                auto& entry = pathEntries_.emplace_back(
+                pathEntries_.push_back(Entry::make(
                     resource,
                     pathEntryName(fields_[build.firstIndex]),
                     false,
-                    singleValueSelection_);
+                    singleValueSelection_));
+                auto& entry = pathEntries_.back();
                 for (std::size_t i = build.begin; i < build.end; ++i) {
                     entry.add(fields_[order[i]]);
                 }
