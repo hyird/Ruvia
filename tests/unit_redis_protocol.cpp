@@ -18,9 +18,23 @@ namespace {
 using ruvia::RedisValue;
 using ruvia::detail::appendRespCommand;
 using ruvia::detail::hiredisReplyToValue;
+using ruvia::detail::parseRedisBlockingPopReply;
 using ruvia::detail::parseRedisKeyValueArray;
+using ruvia::detail::parseRedisScanResult;
 using ruvia::detail::parseRedisScoredArray;
 using ruvia::detail::respCommandSerializedSize;
+
+// Build a nil hiredis reply (e.g. a BLPOP timeout).
+redisReply nilReply() {
+    redisReply reply{};
+    reply.type = REDIS_REPLY_NIL;
+    return reply;
+}
+
+RedisValue toNilValue() {
+    const auto reply = nilReply();
+    return hiredisReplyToValue(reply, 0, 32, std::pmr::get_default_resource());
+}
 
 // Build a bulk-string hiredis reply pointing at `text` (borrowed, must outlive use).
 redisReply stringReply(std::string_view text) {
@@ -141,6 +155,56 @@ RUVIA_TEST(redis_parse_scored_array_parses_scores_and_rejects_odd_length) {
     redisReply badScore = stringReply("notanumber");
     redisReply* bad[] = {&m1, &badScore};
     RUVIA_CHECK(throwsOn([&] { (void)parseRedisScoredArray(toValue(bad, 2), resource); }));
+}
+
+RUVIA_TEST(redis_parse_scan_result_reads_cursor_and_values) {
+    auto* resource = std::pmr::get_default_resource();
+    redisReply key1 = stringReply("key1");
+    redisReply key2 = stringReply("key2");
+    redisReply* innerElems[] = {&key1, &key2};
+    redisReply inner = arrayReply(innerElems, 2);
+
+    // A SCAN reply is a 2-element array: [cursor-string, [elements...]].
+    redisReply cursor = stringReply("10");
+    redisReply* root[] = {&cursor, &inner};
+    const auto reply = arrayReply(root, 2);
+    const auto scan = parseRedisScanResult(
+        hiredisReplyToValue(reply, 0, 32, resource), resource);
+    RUVIA_CHECK_EQ(scan.cursor(), std::uint64_t{10});
+    RUVIA_CHECK_EQ(scan.values().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(scan.values()[0], std::string_view("key1"));
+    RUVIA_CHECK_EQ(scan.values()[1], std::string_view("key2"));
+
+    // A non-numeric cursor is a protocol error (guards parseRedisCursor).
+    redisReply badCursor = stringReply("notacursor");
+    redisReply* badRoot[] = {&badCursor, &inner};
+    const auto badReply = arrayReply(badRoot, 2);
+    RUVIA_CHECK(throwsOn([&] {
+        (void)parseRedisScanResult(hiredisReplyToValue(badReply, 0, 32, resource), resource);
+    }));
+
+    // A root array that is not exactly two elements is rejected.
+    redisReply* shortRoot[] = {&cursor};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisScanResult(toValue(shortRoot, 1), resource); }));
+}
+
+RUVIA_TEST(redis_parse_blocking_pop_reply_handles_timeout_and_pair) {
+    auto* resource = std::pmr::get_default_resource();
+    // A nil reply is a BLPOP/BRPOP timeout -> nullopt, not an error.
+    RUVIA_CHECK(!parseRedisBlockingPopReply(toNilValue(), resource).has_value());
+
+    // A [list-key, popped-value] pair yields the key/value.
+    redisReply key = stringReply("mylist");
+    redisReply item = stringReply("item");
+    redisReply* pair[] = {&key, &item};
+    const auto popped = parseRedisBlockingPopReply(toValue(pair, 2), resource);
+    RUVIA_CHECK(popped.has_value());
+    RUVIA_CHECK_EQ(popped->key(), std::string_view("mylist"));
+    RUVIA_CHECK_EQ(popped->value(), std::string_view("item"));
+
+    // A non-nil reply that is not a 2-element array is malformed.
+    redisReply* single[] = {&key};
+    RUVIA_CHECK(throwsOn([&] { (void)parseRedisBlockingPopReply(toValue(single, 1), resource); }));
 }
 
 RUVIA_TEST(resp_command_rejects_empty_argument_list) {
