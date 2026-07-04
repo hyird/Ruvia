@@ -61,18 +61,6 @@ private:
     return RouteRateLimitOptions{.rule = normalizeRateLimitRule(rule)};
 }
 
-inline void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
-    char buffer[24];
-    const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-    if (ec == std::errc{}) {
-        response.header(name, std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
-    }
-}
-
-[[nodiscard]] inline std::uint64_t retryAfterSeconds(std::int64_t resetAfterMs) noexcept {
-    return static_cast<std::uint64_t>((resetAfterMs <= 0 ? 1 : resetAfterMs + 999) / 1000);
-}
-
 }  // namespace detail
 
 template <typename Derived>
@@ -89,10 +77,10 @@ public:
         const auto check = detail::checkRouteRateLimit(context, routeRateLimitOptions());
         if (!check.allowed()) {
             auto response = context.error(429, "too_many_requests", "rate limit exceeded");
-            detail::setUnsignedHeader(response, "Retry-After", detail::retryAfterSeconds(check.resetAfter().count()));
-            detail::setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
-            detail::setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
-            detail::setUnsignedHeader(response, "X-RateLimit-Reset", detail::retryAfterSeconds(check.resetAfter().count()));
+            setUnsignedHeader(response, "Retry-After", retryAfterSeconds(check.resetAfter().count()));
+            setUnsignedHeader(response, "X-RateLimit-Limit", Derived::ruviaRateLimitMaxRequests);
+            setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
+            setUnsignedHeader(response, "X-RateLimit-Reset", retryAfterSeconds(check.resetAfter().count()));
             context.res(std::move(response));
             co_return;
         }
@@ -101,6 +89,18 @@ public:
     }
 
 private:
+    static void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint64_t value) {
+        char buffer[24];
+        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
+        if (ec == std::errc{}) {
+            response.header(name, std::string_view(buffer, static_cast<std::size_t>(ptr - buffer)));
+        }
+    }
+
+    [[nodiscard]] static std::uint64_t retryAfterSeconds(std::int64_t resetAfterMs) noexcept {
+        return static_cast<std::uint64_t>((resetAfterMs <= 0 ? 1 : resetAfterMs + 999) / 1000);
+    }
+
     [[nodiscard]] static const detail::RouteRateLimitOptions& routeRateLimitOptions() noexcept {
         static constexpr auto options = detail::routeRateLimitOptions(
             Derived::ruviaRateLimitMaxRequests,
