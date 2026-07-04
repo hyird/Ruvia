@@ -3,7 +3,10 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <limits>
+#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "http/FileResponseHelpers.h"
@@ -154,4 +157,31 @@ RUVIA_TEST(http_trim_weak_etag_prefix) {
     RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("\"abc\""), std::string_view("\"abc\""));  // strong etag unchanged
     RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W/"), std::string_view(""));
     RUVIA_CHECK_EQ(httpTrimWeakEtagPrefix("W"), std::string_view("W"));  // needs both prefix chars
+}
+
+RUVIA_TEST(http_extension_equals_is_case_insensitive) {
+    using ruvia::detail::httpExtensionEquals;
+    RUVIA_CHECK(httpExtensionEquals(std::string_view("html"), "html"));
+    RUVIA_CHECK(httpExtensionEquals(std::string_view("HTML"), "html"));  // extension case-folded
+    RUVIA_CHECK(httpExtensionEquals(std::string_view("Json"), "json"));
+    RUVIA_CHECK(httpExtensionEquals(std::string_view(""), ""));
+    RUVIA_CHECK(!httpExtensionEquals(std::string_view("htm"), "html"));   // length differs
+    RUVIA_CHECK(!httpExtensionEquals(std::string_view("jpeg"), "json"));  // content differs
+}
+
+RUVIA_TEST(http_append_unsigned_decimal) {
+    using ruvia::detail::httpAppendUnsigned;
+    std::pmr::string output(std::pmr::get_default_resource());
+    httpAppendUnsigned(output, 0);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("0"));
+    output.clear();
+    httpAppendUnsigned(output, 12345);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("12345"));
+    // Appends onto existing content rather than replacing it.
+    httpAppendUnsigned(output, 67);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("1234567"));
+    // The 64-bit maximum.
+    output.clear();
+    httpAppendUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("18446744073709551615"));
 }
