@@ -156,7 +156,6 @@ template <typename Visitor>
     (void)visitUrlEncodedPairs(input, [&](std::string_view name, std::string_view value) {
         if (urlComponentEquals(name, decodedName, mode)) {
             result = value;
-            return false;
         }
         return true;
     });
