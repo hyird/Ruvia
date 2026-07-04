@@ -118,20 +118,6 @@ private:
     std::string_view body_;
 };
 
-namespace detail {
-
-struct MultipartPartAccess final {
-    [[nodiscard]] static constexpr MultipartPart make(
-        std::string_view name,
-        std::string_view filename,
-        std::string_view contentType,
-        std::string_view body) noexcept {
-        return MultipartPart(name, filename, contentType, body);
-    }
-};
-
-}  // namespace detail
-
 class RequestNameValueView final {
 public:
     [[nodiscard]] std::string_view name() const noexcept {
@@ -152,18 +138,6 @@ private:
     std::string_view name_;
     std::string_view value_;
 };
-
-namespace detail {
-
-struct RequestNameValueViewAccess final {
-    [[nodiscard]] static constexpr RequestNameValueView make(
-        std::string_view name,
-        std::string_view value) noexcept {
-        return RequestNameValueView(name, value);
-    }
-};
-
-}  // namespace detail
 
 class RequestNameValueList final {
     struct Token final {

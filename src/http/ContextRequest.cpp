@@ -3,6 +3,7 @@
 #include "CookieSignature.h"
 #include "HeaderTokenUtils.h"
 #include "HeaderAcceptUtils.h"
+#include "HttpCommonInternal.h"
 #include "HttpRequestInternal.h"
 #include "MultipartParsing.h"
 #include "RequestBodyDecoding.h"
