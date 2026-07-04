@@ -144,23 +144,26 @@ asio::awaitable<void> mockH2Server(tcp::socket sock, std::pmr::memory_resource* 
             body = ctx.path;
         }
 
-        if (ctx.path == "/early-hints" || ctx.path == "/switching-protocols") {
-            std::pmr::string early(resource);
-            if (ctx.path == "/switching-protocols") {
-                HpackEncoder::encodeStatus(early, 101);
-            } else {
-                HpackEncoder::encodeStatus(early, 103);
-                HpackEncoder::encodeHeader(early, "link", "</style.css>; rel=preload");
-            }
-            char earlyHeaders[kHttp2FrameHeaderBytes];
-            http2WriteFrameHeader(
-                earlyHeaders, static_cast<std::uint32_t>(early.size()),
-                Http2FrameType::kHeaders, kHttp2FlagEndHeaders, header.streamId);
-            if (!co_await writeAll(std::string_view(earlyHeaders, sizeof(earlyHeaders)))) {
-                break;
-            }
-            if (!co_await writeAll(std::string_view(early.data(), early.size()))) {
-                break;
+        if (ctx.path == "/early-hints" || ctx.path == "/many-early-hints" || ctx.path == "/switching-protocols") {
+            const int count = ctx.path == "/many-early-hints" ? 9 : 1;
+            for (int i = 0; i < count; ++i) {
+                std::pmr::string early(resource);
+                if (ctx.path == "/switching-protocols") {
+                    HpackEncoder::encodeStatus(early, 101);
+                } else {
+                    HpackEncoder::encodeStatus(early, 103);
+                    HpackEncoder::encodeHeader(early, "link", "</style.css>; rel=preload");
+                }
+                char earlyHeaders[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(
+                    earlyHeaders, static_cast<std::uint32_t>(early.size()),
+                    Http2FrameType::kHeaders, kHttp2FlagEndHeaders, header.streamId);
+                if (!co_await writeAll(std::string_view(earlyHeaders, sizeof(earlyHeaders)))) {
+                    break;
+                }
+                if (!co_await writeAll(std::string_view(early.data(), early.size()))) {
+                    break;
+                }
             }
         }
 
@@ -2007,6 +2010,13 @@ RUVIA_TEST(http2_informational_headers_do_not_complete_response) {
     RUVIA_CHECK(results[0].ok);
     RUVIA_CHECK_EQ(results[0].status, 200);
     RUVIA_CHECK_EQ(results[0].body, std::string("/early-hints"));
+}
+
+RUVIA_TEST(http2_too_many_informational_headers_is_rejected) {
+    const auto results = runH2Fetches({"/many-early-hints"});
+    RUVIA_CHECK_EQ(results.size(), std::size_t{1});
+    RUVIA_CHECK(!results[0].ok);
+    RUVIA_CHECK(!results[0].error.empty());
 }
 
 RUVIA_TEST(http2_status_101_switching_protocols_is_rejected) {

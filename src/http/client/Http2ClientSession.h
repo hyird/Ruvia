@@ -84,6 +84,7 @@ private:
         std::int32_t flowDebt{0};       // received bytes awaiting a WINDOW_UPDATE on consume (streaming)
         std::chrono::steady_clock::time_point deadline{};
         std::uint32_t id{0};
+        std::size_t informationalResponses{0};
         bool streaming{false};          // deliver DATA incrementally with flow-control backpressure
         bool responseBodyAllowed{true};
         bool responseHasContentLength{false};
