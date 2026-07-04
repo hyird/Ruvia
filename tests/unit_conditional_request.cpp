@@ -99,6 +99,13 @@ RUVIA_TEST(http_format_date_known_vectors) {
     RUVIA_CHECK_EQ(formatDate(0), std::string("Thu, 01 Jan 1970 00:00:00 GMT"));
     RUVIA_CHECK_EQ(formatDate(86400), std::string("Fri, 02 Jan 1970 00:00:00 GMT"));
     RUVIA_CHECK_EQ(formatDate(784111777), std::string("Sun, 06 Nov 1994 08:49:37 GMT"));
+    // The parser ignores the weekday token, so only a known-vector check catches a
+    // wrong entry in the writer's weekday table. Epoch 0 is a Thursday; the days
+    // that follow cover the remaining weekday names (Sat/Mon/Tue/Wed).
+    RUVIA_CHECK_EQ(formatDate(172800), std::string("Sat, 03 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(345600), std::string("Mon, 05 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(432000), std::string("Tue, 06 Jan 1970 00:00:00 GMT"));
+    RUVIA_CHECK_EQ(formatDate(518400), std::string("Wed, 07 Jan 1970 00:00:00 GMT"));
 }
 
 RUVIA_TEST(http_format_date_round_trips_with_parse) {
