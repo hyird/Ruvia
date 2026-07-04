@@ -209,7 +209,7 @@ Task<FetchResponse> HttpClientPool::fetch(
         if (!canReplayHttpClientRedirectRequest(currentOptions, response.status())) {
             co_return response;
         }
-        const auto location = findHttpClientResponseHeader(response, "Location");
+        const auto location = findUniqueHttpClientResponseHeader(response, "Location");
         if (location.empty() ||
             !resolveHttpClientSameOriginRedirect(config_, location, redirectTarget)) {
             // No Location, or a cross-origin/unparseable one: hand the 3xx back to the caller.

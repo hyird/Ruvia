@@ -22,15 +22,21 @@ namespace ruvia::detail {
     return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
-[[nodiscard]] inline std::string_view findHttpClientResponseHeader(
+[[nodiscard]] inline std::string_view findUniqueHttpClientResponseHeader(
     const FetchResponse& response,
     std::string_view name) noexcept {
+    std::string_view found;
+    bool seen = false;
     for (const auto& header : response.headers()) {
         if (httpAsciiEqualsIgnoreCase(header.name(), name)) {
-            return header.value();
+            if (seen) {
+                return {};
+            }
+            seen = true;
+            found = header.value();
         }
     }
-    return {};
+    return found;
 }
 
 inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t status) {

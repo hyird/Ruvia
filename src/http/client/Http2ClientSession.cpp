@@ -1278,7 +1278,7 @@ Task<FetchResponse> Http2ClientSession::fetch(
         if (!canReplayHttpClientRedirectRequest(currentOptions, response.status())) {
             co_return response;
         }
-        const auto location = findHttpClientResponseHeader(response, "location");
+        const auto location = findUniqueHttpClientResponseHeader(response, "location");
         if (location.empty() ||
             !resolveHttpClientSameOriginRedirect(config_, location, redirectTarget)) {
             co_return response;
