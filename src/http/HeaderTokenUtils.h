@@ -51,6 +51,30 @@ template <typename Predicate>
     return {};
 }
 
+// Index of the next `delimiter` in `value` at/after `start` that is not inside an
+// RFC quoted-string (honoring quoted-pairs, so a `\"` does not end the string), or
+// value.size() if there is none. Sole owner of the quote-aware delimiter scan
+// shared by the comma-list and semicolon-parameter quoted visitors below.
+[[nodiscard]] inline std::size_t httpFindUnquotedDelimiter(
+    std::string_view value, std::size_t start, char delimiter) noexcept {
+    bool inQuotes = false;
+    for (std::size_t i = start; i < value.size(); ++i) {
+        const char c = value[i];
+        if (inQuotes) {
+            if (c == '\\' && i + 1 < value.size()) {
+                ++i;
+            } else if (c == '"') {
+                inQuotes = false;
+            }
+        } else if (c == '"') {
+            inQuotes = true;
+        } else if (c == delimiter) {
+            return i;
+        }
+    }
+    return value.size();
+}
+
 // Iterate every item in a comma-delimited HTTP list whose items may contain
 // quoted-string parameters. A comma inside "..." is data, not a list separator.
 // Empty items are still reported; framing-sensitive callers can reject them.
@@ -58,24 +82,7 @@ template <typename Visitor>
 inline void httpVisitCommaSeparatedQuotedItems(std::string_view value, Visitor&& visitor) {
     std::size_t start = 0;
     while (start <= value.size()) {
-        std::size_t end = value.size();
-        bool inQuotes = false;
-        for (std::size_t i = start; i < value.size(); ++i) {
-            const char c = value[i];
-            if (inQuotes) {
-                if (c == '\\' && i + 1 < value.size()) {
-                    ++i;
-                } else if (c == '"') {
-                    inQuotes = false;
-                }
-            } else if (c == '"') {
-                inQuotes = true;
-            } else if (c == ',') {
-                end = i;
-                break;
-            }
-        }
-
+        const auto end = httpFindUnquotedDelimiter(value, start, ',');
         const auto item = httpTrimOws(value.substr(start, end - start));
         if (!visitor(item)) {
             return;
@@ -140,23 +147,7 @@ template <typename Visitor>
 inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&& visitor) {
     std::size_t start = 0;
     while (start <= value.size()) {
-        std::size_t end = value.size();
-        bool inQuotes = false;
-        for (std::size_t i = start; i < value.size(); ++i) {
-            const char c = value[i];
-            if (inQuotes) {
-                if (c == '\\' && i + 1 < value.size()) {
-                    ++i;  // skip the escaped character (quoted-pair)
-                } else if (c == '"') {
-                    inQuotes = false;
-                }
-            } else if (c == '"') {
-                inQuotes = true;
-            } else if (c == ';') {
-                end = i;
-                break;
-            }
-        }
+        const auto end = httpFindUnquotedDelimiter(value, start, ';');
         const auto part = httpTrimOws(value.substr(start, end - start));
         if (!httpEmitSemicolonParameter(part, visitor)) {
             return;
