@@ -20,23 +20,6 @@ namespace ruvia::detail::model {
     }
 }
 
-constexpr void matchPatternClassEscape(char escape, char value, bool& matched) noexcept {
-    switch (escape) {
-    case 'd':
-        matched = isPatternDigit(value);
-        return;
-    case 'w':
-        matched = isPatternWord(value);
-        return;
-    case 's':
-        matched = isPatternSpace(value);
-        return;
-    default:
-        matched = value == escape;
-        return;
-    }
-}
-
 // Matches `value` against the class body in [begin, end). Negation is NOT handled
 // here: a leading '[^' is stripped by the compiler, which records it on the atom's
 // negateClass flag (applied once in matchPatternAtom). Treating a leading '^' as
@@ -54,9 +37,9 @@ constexpr void matchPatternClassEscape(char escape, char value, bool& matched) n
             if (i >= end) {
                 return false;
             }
-            bool escapedMatched = false;
-            matchPatternClassEscape(pattern[i++], value, escapedMatched);
-            matched = matched || escapedMatched;
+            // The class-member escape shares the atom escape semantics
+            // (\d, \w, \s, or a literal) -- one owner, matchPatternEscape.
+            matched = matched || matchPatternEscape(pattern[i++], value);
             continue;
         }
 
