@@ -437,7 +437,7 @@ const RequestNameValueList& Context::requestHeaders() const {
     if (requestHeaders_ == nullptr) {
         const auto rawHeaders = request_.headers();
         auto& names = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& headers = memory_.emplace<RequestNameValueList>(resource());
+        auto& headers = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
         names.reserve(rawHeaders.size());
         headers.reserve(rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
@@ -509,8 +509,8 @@ void Context::ensureRequestQuery() const {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto& query = memory_.emplace<RequestNameValueList>(resource());
-    auto& groups = memory_.emplace<RequestValueGroupList>(resource());
+    auto& query = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
+    auto& groups = memory_.emplace<RequestValueGroupList>(RequestValueGroupList::Token{}, resource());
     query.reserve(builds.size());
     groups.reserve(builds.size());
     for (const auto& build : builds) {
@@ -518,11 +518,12 @@ void Context::ensureRequestQuery() const {
             storedStringView(storage[build.firstIndex * 2]),
             storedStringView(storage[build.firstIndex * 2 + 1])));
 
-        auto& group = groups.emplace_back(resource(), pairNameAt(storage, build.firstIndex));
+        auto group = RequestValueGroup(RequestValueGroup::Token{}, resource(), pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];
             group.add(storedStringView(storage[pairIndex * 2 + 1]));
         }
+        groups.push_back(std::move(group));
     }
 
     requestQueryStorage_ = &storage;
@@ -544,7 +545,7 @@ const RequestValueGroupList& Context::requestQueries() const {
 const RequestNameValueList& Context::requestCookies() const {
     if (requestCookies_ == nullptr) {
         const auto input = detail::requestKnownHeader(request_, detail::RequestKnownHeader::kCookie);
-        auto& cookies = memory_.emplace<RequestNameValueList>(resource());
+        auto& cookies = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
         cookies.reserve(delimitedFieldCount(input, ';'));
         detail::httpVisitSemicolonParameters(
             input,
@@ -582,7 +583,7 @@ const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRou
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& params = memory_.emplace<RequestNameValueList>(resource());
+        auto& params = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
         storage.reserve(paramCount_ * 2);
         params.reserve(paramCount_);
         for (std::size_t i = 0; i < paramCount_; ++i) {
