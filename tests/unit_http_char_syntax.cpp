@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <cstddef>
 #include <cstdint>
 
 #include "http/parser/HttpParserSyntax.h"
@@ -58,4 +59,17 @@ RUVIA_TEST(http_hex_digit_and_value) {
     RUVIA_CHECK_EQ(httpHexValue('F'), std::uint8_t{15});
     RUVIA_CHECK_EQ(httpHexValue('a'), std::uint8_t{10});
     RUVIA_CHECK_EQ(httpHexValue('f'), std::uint8_t{15});
+}
+
+RUVIA_TEST(request_header_kind_known_slot) {
+    using ruvia::detail::kRequestHeaderKindCount;
+    using ruvia::detail::RequestHeaderKind;
+    using ruvia::detail::requestHeaderKindKnownSlot;
+    // kOther has no cache slot -> the sentinel count; every real kind maps to
+    // (enum index - 1).
+    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kOther), kRequestHeaderKindCount);
+    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAccept), std::size_t{0});
+    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kAcceptEncoding), std::size_t{1});
+    RUVIA_CHECK_EQ(requestHeaderKindKnownSlot(RequestHeaderKind::kUserAgent),
+                   kRequestHeaderKindCount - 2);
 }
