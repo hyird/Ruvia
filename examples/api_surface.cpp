@@ -1181,6 +1181,16 @@ concept HasJwtClaimPublicFields = requires(T& claim) {
 };
 
 template <typename T>
+concept HasJwtClaimStringViewConstructor = requires {
+    T(std::string_view{}, std::string_view{});
+};
+
+template <typename T>
+concept HasJwtClaimResourceConstructor = requires(std::pmr::memory_resource* resource) {
+    T(std::string_view{}, std::string_view{}, resource);
+};
+
+template <typename T>
 concept HasJwtClaimCanonicalReadAccessors = requires(const T& claim) {
     { claim.name() } -> std::same_as<std::string_view>;
     { claim.value() } -> std::same_as<std::string_view>;
@@ -1800,7 +1810,8 @@ static_assert(!std::is_default_constructible_v<ruvia::DbMigrationReport>);
 static_assert(!std::is_constructible_v<ruvia::DbMigrationReport, std::pmr::memory_resource*>);
 static_assert(HasDbMigrationReportCanonicalReadAccessors<ruvia::DbMigrationReport>);
 static_assert(!std::is_default_constructible_v<ruvia::JwtClaim>);
-static_assert(std::is_constructible_v<ruvia::JwtClaim, std::string_view, std::string_view, std::pmr::memory_resource*>);
+static_assert(HasJwtClaimStringViewConstructor<ruvia::JwtClaim>);
+static_assert(!HasJwtClaimResourceConstructor<ruvia::JwtClaim>);
 #ifndef _MSC_VER
 static_assert(!HasJwtClaimPublicFields<ruvia::JwtClaim>);
 #endif
