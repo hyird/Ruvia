@@ -362,3 +362,68 @@ RUVIA_TEST(middleware_chain_short_circuits_without_next) {
     const std::vector<int> expected{9};
     RUVIA_CHECK(g_chainOrder == expected);
 }
+
+namespace {
+
+ruvia::Task<ruvia::HttpResponse> throwsHttpErrorHandler(void*, ruvia::Context&) {
+    throw ruvia::HttpError(403, "forbidden", "nope");
+    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+}
+
+ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
+    throw std::runtime_error("boom");
+    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+}
+
+ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
+    co_return context.body("ok");
+}
+
+// Registers GET /x with `handler`, dispatches `method path`, returns the response.
+ruvia::HttpResponse dispatchOne(RouteHandler handler, HttpMethod method, std::string_view p) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerRoute(HttpMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
+                       std::span<const ControllerMiddlewareDescriptor>{},
+                       std::span<const ControllerMiddlewareDescriptor>{});
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, method);
+    ruvia::detail::HttpRequestAccess::setPath(request, p);
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(table.dispatch(request, memory, {})),
+        asio::use_future);
+    ctx.run();
+    return future.get();
+}
+
+}  // namespace
+
+RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
+    // A thrown HttpError surfaces with its own status; any other exception is a 500.
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x").status(),
+                   std::uint16_t{403});
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x").status(),
+                   std::uint16_t{500});
+}
+
+RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
+    // A path with no route -> 404.
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/nope").status(),
+                   std::uint16_t{404});
+    // The path exists but the method does not -> 405 with an Allow header listing GET.
+    const auto notAllowed = dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kPost, "/x");
+    RUVIA_CHECK_EQ(notAllowed.status(), std::uint16_t{405});
+    RUVIA_CHECK(notAllowed.header("Allow").find("GET") != std::string_view::npos);
+    // The registered method still works.
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/x").status(),
+                   std::uint16_t{200});
+}
