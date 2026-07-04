@@ -63,6 +63,21 @@ RUVIA_TEST(static_path_rejects_absolute_and_backslash_forms) {
     RUVIA_CHECK_EQ(normalize("a\\b\\c"), std::string("a/b/c"));
 }
 
+RUVIA_TEST(static_path_only_exact_dot_segments_are_special) {
+    // Only a segment equal to exactly "." or ".." is treated specially. A segment
+    // that merely contains dots -- or is three-or-more dots -- is an ordinary
+    // filename and must be preserved verbatim. This guards against a regression to
+    // substring-based ".." detection, which a "...."-style payload could exploit to
+    // either smuggle traversal or wrongly 403 a legitimate file.
+    RUVIA_CHECK_EQ(normalize("..."), std::string("..."));         // three dots: a literal name
+    RUVIA_CHECK_EQ(normalize("...."), std::string("...."));       // four dots
+    RUVIA_CHECK_EQ(normalize("..a"), std::string("..a"));         // leading dots, not ".."
+    RUVIA_CHECK_EQ(normalize("a.."), std::string("a.."));         // trailing dots, not ".."
+    RUVIA_CHECK_EQ(normalize("a/.../b"), std::string("a/.../b")); // "..." between real segments
+    // A real ".." still traverses even when separators are mixed around it.
+    RUVIA_CHECK_EQ(normalize("a\\b/../c"), std::string("a/c"));
+}
+
 RUVIA_TEST(static_path_windows_drive_predicate) {
     RUVIA_CHECK(isWindowsDrivePath("C:"));
     RUVIA_CHECK(isWindowsDrivePath("z:/x"));
