@@ -22,16 +22,9 @@ class JwtClaim final {
 public:
     JwtClaim(
         std::string_view name,
-        std::string_view value,
-        std::pmr::memory_resource* resource = nullptr)
-        : name_(name, detail::pmrResourceOrDefault(resource)),
+        std::string_view value)
+        : name_(name, detail::pmrResourceOrDefault(nullptr)),
           value_(value, name_.get_allocator().resource()) {}
-
-    JwtClaim(
-        std::pmr::string name,
-        std::pmr::string value) noexcept
-        : name_(std::move(name)),
-          value_(std::move(value)) {}
 
     [[nodiscard]] std::string_view name() const noexcept {
         return name_;
@@ -42,6 +35,17 @@ public:
     }
 
 private:
+    friend struct JwtPayloadAccess;
+
+    struct OwnedTag final {};
+
+    JwtClaim(
+        OwnedTag,
+        std::pmr::string name,
+        std::pmr::string value) noexcept
+        : name_(std::move(name)),
+          value_(std::move(value)) {}
+
     std::pmr::string name_;
     std::pmr::string value_;
 };

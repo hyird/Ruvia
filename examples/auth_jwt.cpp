@@ -15,9 +15,7 @@ ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.expiresIn = std::chrono::minutes(30);
-    options.claims.emplace_back(
-        std::pmr::string("scope", c.resource()),
-        std::pmr::string("example", c.resource()));
+    options.claims.emplace_back("scope", "example");
     return options;
 }
 

@@ -53,6 +53,10 @@ struct JwtTokenParts final {
 namespace ruvia {
 
 struct JwtPayloadAccess final {
+    [[nodiscard]] static JwtClaim claim(std::pmr::string name, std::pmr::string value) {
+        return JwtClaim(JwtClaim::OwnedTag{}, std::move(name), std::move(value));
+    }
+
     static JwtPayload decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource);
 };
 

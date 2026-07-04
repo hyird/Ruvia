@@ -202,7 +202,7 @@ JwtPayload JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::
                 if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
                     std::pmr::string claimName(resolved);
                     claimName.assign(key.data(), key.size());
-                    payload.claims_.push_back(JwtClaim{std::move(claimName), std::move(claimValue)});
+                    payload.claims_.push_back(JwtPayloadAccess::claim(std::move(claimName), std::move(claimValue)));
                 }
             }
             return true;
