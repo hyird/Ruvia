@@ -63,6 +63,7 @@ add_executable(ruvia_unit_tests
     unit_route_resolution.cpp
     unit_http2_session_results.cpp
     unit_connection_read_buffer.cpp
+    unit_http2_stream_routing.cpp
     unit_http_client_response.cpp
     unit_http_client_fetch.cpp
     unit_http2_client.cpp
