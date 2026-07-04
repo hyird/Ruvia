@@ -86,6 +86,7 @@ add_executable(ruvia_unit_tests
     unit_http_response.cpp
     unit_parser_validation.cpp
     unit_http2_flow_control.cpp
+    unit_http2_server_flow_control.cpp
     unit_http_server_request_state.cpp
     unit_http2_classify.cpp
     unit_http_char_syntax.cpp

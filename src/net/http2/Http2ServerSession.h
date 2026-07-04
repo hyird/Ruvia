@@ -144,6 +144,14 @@ private:
 
     Task<void> sendDataWindowUpdates(std::uint32_t streamId, std::uint32_t increment);
 
+    Task<void> sendConnectionWindowUpdate(std::uint32_t increment);
+
+    // Drop an incoming DATA frame while keeping the connection alive, returning its
+    // connection-level flow-control credit to the peer (RFC 9113 6.9.1). `flowBytes`
+    // is the frame payload length; `windowConsumed` says whether the connection
+    // receive window was already debited for it (so it must be restored too).
+    Task<Http2SessionFlow> dropDataFrameKeepConnection(std::size_t flowBytes, bool windowConsumed);
+
     Task<Http2SessionFlow> processFrame(const Http2FrameHeader& header, std::string_view payload);
 
     Task<Http2SessionFlow> processSettings(const Http2FrameHeader& header, std::string_view payload);
