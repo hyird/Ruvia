@@ -119,7 +119,8 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        co_return c.text(owned, 201, {{"X-Echo", "true"}});
+        constexpr ruvia::HttpHeaderView headers[] = {{"X-Echo", "true"}};
+        co_return c.text(owned, 201, headers);
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {

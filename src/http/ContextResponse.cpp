@@ -588,16 +588,6 @@ HttpResponse Context::body(
     return response;
 }
 
-HttpResponse Context::body(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
-}
-
 HttpResponse Context::body(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
     response.setBodyView(body);
@@ -621,16 +611,6 @@ HttpResponse Context::body(
     HttpResponse response(resource());
     applyResponseState(response, statusCode, {}, headers);
     return response;
-}
-
-HttpResponse Context::body(
-    std::nullptr_t,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(
-        nullptr,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::body(std::nullptr_t, ResponseInit init) const {
@@ -657,16 +637,6 @@ HttpResponse Context::body(
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
-}
-
-HttpResponse Context::body(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
@@ -696,16 +666,6 @@ HttpResponse Context::body(
     return response;
 }
 
-HttpResponse Context::body(
-    std::span<const std::byte> body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
-}
-
 HttpResponse Context::body(std::span<const std::byte> body, ResponseInit init) const {
     HttpResponse response(resource());
     response.setBodyCopy(byteBodyView(body));
@@ -727,13 +687,6 @@ HttpResponse Context::newResponse(
     return this->body(body, statusCode, headers);
 }
 
-HttpResponse Context::newResponse(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
 HttpResponse Context::newResponse(std::string_view body, ResponseInit init) const {
     return this->body(body, init);
 }
@@ -749,13 +702,6 @@ HttpResponse Context::newResponse(
     std::nullptr_t,
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
-    return this->body(nullptr, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(
-    std::nullptr_t,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
     return this->body(nullptr, statusCode, headers);
 }
 
@@ -777,13 +723,6 @@ HttpResponse Context::newResponse(
     return this->body(body, statusCode, headers);
 }
 
-HttpResponse Context::newResponse(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
 HttpResponse Context::newResponse(std::pmr::string& body, ResponseInit init) const {
     return this->body(body, init);
 }
@@ -799,13 +738,6 @@ HttpResponse Context::newResponse(
     std::span<const std::byte> body,
     std::uint16_t statusCode,
     std::span<const HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(
-    std::span<const std::byte> body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
     return this->body(body, statusCode, headers);
 }
 
@@ -833,16 +765,6 @@ HttpResponse Context::text(
     response.setBodyView(body);
     applyResponseState(response, statusCode, {}, headers);
     return response;
-}
-
-HttpResponse Context::text(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return text(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::text(std::string_view body, ResponseInit init) const {
@@ -873,16 +795,6 @@ HttpResponse Context::text(
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
-}
-
-HttpResponse Context::text(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return text(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
@@ -937,16 +849,6 @@ HttpResponse Context::html(
     return response;
 }
 
-HttpResponse Context::html(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return html(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
-}
-
 HttpResponse Context::html(std::string_view body, ResponseInit init) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
@@ -975,16 +877,6 @@ HttpResponse Context::html(
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode, {}, headers);
     return response;
-}
-
-HttpResponse Context::html(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::initializer_list<HttpHeaderView> headers) const {
-    return html(
-        body,
-        statusCode,
-        std::span<const HttpHeaderView>(headers.begin(), headers.size()));
 }
 
 HttpResponse Context::html(std::pmr::string& body, ResponseInit init) const {

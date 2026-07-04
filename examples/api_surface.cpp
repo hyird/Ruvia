@@ -574,6 +574,15 @@ concept HasResponseHeaderInitInitializerListConstructor = requires {
 };
 
 template <typename T>
+concept HasContextDirectHeaderInitializerList = requires(const T& context) {
+    context.body(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
+    context.newResponse(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
+    context.text(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
+    context.html(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
+    context.json(std::uint32_t{1}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
+};
+
+template <typename T>
 concept HasResponseHeadersEraseAlias = requires(T& response) {
     response.headers().erase(std::string_view{});
 };
@@ -1534,6 +1543,7 @@ static_assert(!HasResponseRemoveHeaderAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHasHeaderAlias<ruvia::HttpResponse>);
 static_assert(HasResponseHeaderOptionsSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseHeaderInitInitializerListConstructor<ruvia::Context::ResponseHeaderInit>);
+static_assert(!HasContextDirectHeaderInitializerList<ruvia::Context>);
 static_assert(HasResponseHeaderRemoveSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersEraseAlias<ruvia::HttpResponse>);
 static_assert(!HasResponseHeadersGetAlias<ruvia::HttpResponse>);
@@ -1907,10 +1917,11 @@ ruvia::Task<ruvia::HttpResponse> surfaceRenderer(
 }
 
 ruvia::Task<ruvia::HttpResponse> surfaceNotFound(ruvia::Context& c) {
+    constexpr ruvia::HttpHeaderView headers[] = {{"X-Surface-Not-Found", "true"}};
     co_return c.text(
         "surface not found\n",
         404,
-        {{"X-Surface-Not-Found", "true"}});
+        headers);
 }
 
 class SurfaceContextMiddleware final : public ruvia::Middleware<SurfaceContextMiddleware> {
@@ -2128,10 +2139,11 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> nullBody(ruvia::Context& c) {
+        constexpr ruvia::HttpHeaderView headers[] = {{"X-Null-Body", "true"}};
         co_return c.newResponse(
             nullptr,
             202,
-            {{"X-Null-Body", "true"}});
+            headers);
     }
 
     ruvia::Task<ruvia::HttpResponse> binaryBody(ruvia::Context& c) {
@@ -2139,10 +2151,11 @@ private:
             std::byte{0x00},
             std::byte{0x41},
             std::byte{0xff}};
+        constexpr ruvia::HttpHeaderView headers[] = {{"X-Binary-Body", "true"}};
         co_return c.newResponse(
             std::span<const std::byte>(bytes),
             206,
-            {{"X-Binary-Body", "true"}});
+            headers);
     }
 
     ruvia::Task<ruvia::HttpResponse> renderBody(ruvia::Context& c) {

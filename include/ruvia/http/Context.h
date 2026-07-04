@@ -1408,7 +1408,7 @@ public:
     [[nodiscard]] HttpResponse body(
         std::string_view body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse body(std::string_view body, ResponseInit init) const;
 
@@ -1425,7 +1425,7 @@ public:
     [[nodiscard]] HttpResponse body(
         std::nullptr_t,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse body(std::nullptr_t, ResponseInit init) const;
 
@@ -1442,7 +1442,7 @@ public:
     [[nodiscard]] HttpResponse body(
         std::pmr::string& body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse body(std::pmr::string& body, ResponseInit init) const;
 
@@ -1459,7 +1459,7 @@ public:
     [[nodiscard]] HttpResponse body(
         std::span<const std::byte> body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse body(std::span<const std::byte> body, ResponseInit init) const;
 
@@ -1476,7 +1476,7 @@ public:
     [[nodiscard]] HttpResponse newResponse(
         std::string_view body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse newResponse(std::string_view body, ResponseInit init) const;
 
@@ -1493,7 +1493,7 @@ public:
     [[nodiscard]] HttpResponse newResponse(
         std::nullptr_t,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse newResponse(std::nullptr_t, ResponseInit init) const;
 
@@ -1510,7 +1510,7 @@ public:
     [[nodiscard]] HttpResponse newResponse(
         std::pmr::string& body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse newResponse(std::pmr::string& body, ResponseInit init) const;
 
@@ -1527,7 +1527,7 @@ public:
     [[nodiscard]] HttpResponse newResponse(
         std::span<const std::byte> body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse newResponse(std::span<const std::byte> body, ResponseInit init) const;
 
@@ -1547,7 +1547,7 @@ public:
     [[nodiscard]] HttpResponse newResponse(
         const char (&body)[N],
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse newResponse(const char (&body)[N], ResponseInit init) const;
@@ -1618,7 +1618,7 @@ public:
     [[nodiscard]] HttpResponse body(
         const char (&body)[N],
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse body(const char (&body)[N], ResponseInit init) const;
@@ -1636,7 +1636,7 @@ public:
     [[nodiscard]] HttpResponse text(
         std::string_view body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse text(std::string_view body, ResponseInit init) const;
 
@@ -1653,7 +1653,7 @@ public:
     [[nodiscard]] HttpResponse text(
         std::pmr::string& body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse text(std::pmr::string& body, ResponseInit init) const;
 
@@ -1698,7 +1698,7 @@ public:
     [[nodiscard]] HttpResponse text(
         const char (&body)[N],
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse text(const char (&body)[N], ResponseInit init) const;
@@ -1719,7 +1719,7 @@ public:
     [[nodiscard]] HttpResponse json(
         const T& value,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     template <typename T>
     [[nodiscard]] HttpResponse json(const T& value, ResponseInit init) const;
@@ -1737,7 +1737,7 @@ public:
     [[nodiscard]] HttpResponse html(
         std::string_view body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse html(std::string_view body, ResponseInit init) const;
 
@@ -1754,7 +1754,7 @@ public:
     [[nodiscard]] HttpResponse html(
         std::pmr::string& body,
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     [[nodiscard]] HttpResponse html(std::pmr::string& body, ResponseInit init) const;
 
@@ -1799,7 +1799,7 @@ public:
     [[nodiscard]] HttpResponse html(
         const char (&body)[N],
         std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const;
+        std::initializer_list<HttpHeaderView> headers) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(const char (&body)[N], ResponseInit init) const;
