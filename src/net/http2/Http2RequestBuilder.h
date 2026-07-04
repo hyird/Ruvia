@@ -6,6 +6,7 @@
 
 #include "../../http/HttpRequestInternal.h"
 #include "Http2StreamState.h"
+#include "../../http/parser/HttpRequestTarget.h"
 #include "../../http/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -43,7 +44,16 @@ public:
         if (target.empty()) {
             return false;
         }
-        const auto targetParts = splitRequestTarget(target);
+        RequestTargetParts targetParts;
+        if (stream.standardConnect()) {
+            targetParts = splitRequestTarget(target);
+        } else {
+            RequestTargetView targetView;
+            if (!parseRequestTarget(method, target, targetView)) {
+                return false;
+            }
+            targetParts = RequestTargetParts{.path = targetView.path, .queryString = targetView.query};
+        }
 
         HttpRequestAccess::setMethod(request, method);
         HttpRequestAccess::setHttpVersion(request, "HTTP/2");
