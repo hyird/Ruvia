@@ -854,7 +854,8 @@ bool h2OnDecodedTrailerHeader(void* target, std::string_view name, std::string_v
         ctx->malformed = true;
         return false;
     }
-    if (!http2IsValidRegularHeader(name, value)) {
+    if (!http2IsValidRegularHeader(name, value) ||
+        http2IsForbiddenTrailerHeader(name)) {
         ctx->malformed = true;
         return false;
     }
