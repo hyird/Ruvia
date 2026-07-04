@@ -48,6 +48,28 @@ RUVIA_TEST(chunk_size_rejects_invalid) {
     RUVIA_CHECK(chunkStatus(" 1") == ChunkSizeLineStatus::kInvalidSize);
 }
 
+RUVIA_TEST(chunk_extension_grammar_accepts_valid_forms) {
+    // chunk-ext = *( BWS ";" BWS ext-name [ BWS "=" BWS ext-val ] ), where the
+    // value is a token or a quoted-string. Exercise a bare name, multiple exts,
+    // and a quoted value carrying spaces and an escaped quote.
+    RUVIA_CHECK(chunkStatus("10;chunked") == ChunkSizeLineStatus::kOk);
+    RUVIA_CHECK(chunkStatus("10;a=b;c=d") == ChunkSizeLineStatus::kOk);
+    RUVIA_CHECK(chunkStatus("10 ; a = b") == ChunkSizeLineStatus::kOk);  // BWS around delimiters
+    RUVIA_CHECK(chunkStatus("10;ext=\"a b\"") == ChunkSizeLineStatus::kOk);
+    RUVIA_CHECK(chunkStatus("10;ext=\"a\\\"b\"") == ChunkSizeLineStatus::kOk);  // escaped quote
+}
+
+RUVIA_TEST(chunk_extension_grammar_rejects_malformed) {
+    // A ';' with no ext-name, a missing name before '=', non-extension junk after
+    // the size, an unterminated quoted-string, and a control byte in a value are
+    // all rejected (the chunk-ext line is a request-smuggling-adjacent surface).
+    RUVIA_CHECK(chunkStatus("10;") == ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus("10;=v") == ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus("10xyz") == ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus("10;a=\"unterminated") == ChunkSizeLineStatus::kInvalidExtension);
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=b\x01", 7)) == ChunkSizeLineStatus::kInvalidExtension);
+}
+
 RUVIA_TEST(chunk_size_overflow_is_rejected) {
     // More hex digits than fit in size_t must report overflow, not wrap.
     RUVIA_CHECK(chunkStatus("ffffffffffffffff0") == ChunkSizeLineStatus::kOverflow);

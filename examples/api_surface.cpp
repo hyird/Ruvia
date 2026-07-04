@@ -1485,6 +1485,7 @@ static_assert(!HasMultipartStreamPartPublicFields<ruvia::MultipartStreamPart>);
 static_assert(HasMultipartStreamPartCanonicalReadAccessors<ruvia::MultipartStreamPart>);
 static_assert(!HasWebSocketMessagePublicFields<ruvia::WebSocketMessage>);
 static_assert(HasWebSocketMessageCanonicalReadAccessors<ruvia::WebSocketMessage>);
+static_assert(!std::is_default_constructible_v<ruvia::WebSocketMessage>);
 static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocketOpcode, std::string_view>);
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
 static_assert(!HasContextVarIfAlias<ruvia::Context>);
