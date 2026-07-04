@@ -89,7 +89,7 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
         throw std::runtime_error("JWT algorithm mismatch");
     }
     const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);
-    auto payload = JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
+    auto payload = detail::JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
     const auto now = std::chrono::system_clock::now();
     if (options.requireExpiration && !payload.expiresAt()) {
         throw std::runtime_error("JWT token is missing exp claim");
@@ -116,7 +116,7 @@ JwtPayload jwtDecodeUnverified(std::string_view token, std::pmr::memory_resource
     auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto parts = detail::jwtSplitToken(token);
     const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);
-    return JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
+    return detail::JwtPayloadAccess::decodePayloadJson(payloadJson, resolved);
 }
 
 std::optional<std::string_view> jwtBearerToken(std::string_view authorization) noexcept {

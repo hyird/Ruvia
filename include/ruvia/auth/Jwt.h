@@ -12,6 +12,10 @@
 
 namespace ruvia {
 
+namespace detail {
+struct JwtPayloadAccess;
+}  // namespace detail
+
 enum class JwtAlgorithm {
     kHs256,
     kHs384,
@@ -35,7 +39,7 @@ public:
     }
 
 private:
-    friend struct JwtPayloadAccess;
+    friend struct detail::JwtPayloadAccess;
 
     struct OwnedTag final {};
 
@@ -85,7 +89,7 @@ public:
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const noexcept;
 
 private:
-    friend struct JwtPayloadAccess;
+    friend struct detail::JwtPayloadAccess;
     friend JwtPayload jwtDecodeUnverified(std::string_view, std::pmr::memory_resource*);
     friend JwtPayload jwtVerify(std::string_view, const JwtVerifyOptions&, std::pmr::memory_resource*);
 
