@@ -70,6 +70,21 @@ RUVIA_TEST(chunk_extension_grammar_rejects_malformed) {
     RUVIA_CHECK(chunkStatus(std::string_view("10;a=b\x01", 7)) == ChunkSizeLineStatus::kInvalidExtension);
 }
 
+RUVIA_TEST(chunk_extension_quoted_value_rejects_control_bytes) {
+    // A quoted-string ext-value takes a distinct code path from a bare token, so
+    // the control-byte guard must hold inside the quotes too. A raw CR/LF (or any
+    // control byte) in a quoted chunk-ext value would otherwise let an attacker
+    // smuggle line-structure bytes past the validator -- both unescaped and
+    // backslash-escaped forms must be rejected.
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\x01\"", 8)) == ChunkSizeLineStatus::kInvalidExtension);
+    // A bare CR/LF inside the quotes is the smuggling-relevant case.
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"b\r\n\"", 9)) == ChunkSizeLineStatus::kInvalidExtension);
+    // An escaped control byte ('\' followed by a control char) is rejected too.
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\\\x01\"", 8)) == ChunkSizeLineStatus::kInvalidExtension);
+    // DEL (0x7F) is a control byte for this purpose and is rejected in quotes.
+    RUVIA_CHECK(chunkStatus(std::string_view("10;a=\"\x7f\"", 7)) == ChunkSizeLineStatus::kInvalidExtension);
+}
+
 RUVIA_TEST(chunk_size_overflow_is_rejected) {
     // More hex digits than fit in size_t must report overflow, not wrap.
     RUVIA_CHECK(chunkStatus("ffffffffffffffff0") == ChunkSizeLineStatus::kOverflow);
