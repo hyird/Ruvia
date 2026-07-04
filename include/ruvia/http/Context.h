@@ -1888,6 +1888,7 @@ private:
     void ensureRequestQuery() const;
     [[nodiscard]] const RequestNameValueList& requestQuery() const;
     [[nodiscard]] const RequestValueGroupList& requestQueries() const;
+    [[nodiscard]] std::optional<std::string_view> requestCookie(std::string_view name) const;
     [[nodiscard]] const RequestNameValueList& requestCookies() const;
     [[nodiscard]] const std::pmr::vector<ContextRequest::MatchedRoute>& requestMatchedRoutes() const;
 
@@ -2081,7 +2082,7 @@ inline std::optional<std::span<const std::string_view>> ContextRequest::queries(
 }
 
 inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const {
-    return context_->requestCookies().get(name);
+    return context_->requestCookie(name);
 }
 
 namespace detail {
