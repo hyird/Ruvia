@@ -43,18 +43,23 @@ Task<void> SseWriter::writeSSE(const SseMessage& message) {
 
 void SseWriter::appendData(std::pmr::string& frame, std::string_view data) {
     while (true) {
-        const auto next = data.find('\n');
-        auto line = next == std::string_view::npos ? data : data.substr(0, next);
-        if (!line.empty() && line.back() == '\r') {
-            line.remove_suffix(1);
-        }
+        const auto next = data.find_first_of("\r\n");
+        const auto line = next == std::string_view::npos ? data : data.substr(0, next);
         frame.append("data: ");
         frame.append(line.data(), line.size());
         frame.push_back('\n');
         if (next == std::string_view::npos) {
             return;
         }
-        data.remove_prefix(next + 1);
+        // An EventSource line break is CR, LF, or CRLF, so a bare CR is a line
+        // separator too. Split on any of them and consume a CRLF pair together, so
+        // no raw CR survives into a "data:" line where the client would reinterpret
+        // it as an extra line break (injecting fields or, via a blank line, events).
+        auto advance = next + 1;
+        if (data[next] == '\r' && next + 1 < data.size() && data[next + 1] == '\n') {
+            advance = next + 2;
+        }
+        data.remove_prefix(advance);
     }
 }
 
