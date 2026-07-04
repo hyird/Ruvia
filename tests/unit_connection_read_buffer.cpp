@@ -125,6 +125,21 @@ RUVIA_TEST(trim_read_buffer_reclaims_overgrown_capacity) {
     RUVIA_CHECK(readBuffer[0] == 'A' && readBuffer[1] == 'B' && readBuffer[2] == 'C');
 }
 
+RUVIA_TEST(trim_read_buffer_normalizes_moderately_grown_buffer_in_place) {
+    // The common case: a buffer that doubled to 16K (capacity still under the 64K
+    // shrink threshold) and is now mostly drained is resized back to the initial
+    // size IN PLACE -- the normalize branch, distinct from the fresh-allocation
+    // reclaim path for buffers that overgrew past the header limit. The live prefix
+    // (within the initial size) must survive the in-place shrink.
+    auto readBuffer = sizedBuffer(16 * 1024);
+    readBuffer[0] = 'X';
+    readBuffer[7000] = 'Y';
+    trimReadBufferStorage(readBuffer, /*usedBytes=*/7001);
+    RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{8 * 1024});  // normalized to initial
+    RUVIA_CHECK(readBuffer[0] == 'X');
+    RUVIA_CHECK(readBuffer[7000] == 'Y');                      // live bytes preserved
+}
+
 RUVIA_TEST(trim_read_buffer_keeps_buffer_when_still_heavily_used) {
     auto readBuffer = sizedBuffer(70 * 1024);
     trimReadBufferStorage(readBuffer, /*usedBytes=*/9000);  // > initial -> keep as-is
