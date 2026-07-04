@@ -2,14 +2,30 @@
 
 #include <cstddef>
 #include <string_view>
+#include <utility>
 
 #include "HeaderAcceptUtils.h"
 #include "HttpRequestFlags.h"
 #include "HttpTransferCoding.h"
 #include "ruvia/http/HttpParseTypes.h"
+#include "ruvia/http/HttpParser.h"
 #include "HttpRequestInternal.h"
 
 namespace ruvia::detail {
+
+struct HttpParseResultAccess final {
+    [[nodiscard]] static HttpParseResult make(
+        HttpParseStatus status,
+        HttpParseError error,
+        HttpRequest request,
+        std::size_t consumedBytes) noexcept {
+        return HttpParseResult(status, error, std::move(request), consumedBytes);
+    }
+
+    [[nodiscard]] static HttpRequest& request(HttpParseResult& result) noexcept {
+        return result.request_;
+    }
+};
 
 struct HttpServerParseResult {
     HttpParseStatus status{HttpParseStatus::kIncomplete};

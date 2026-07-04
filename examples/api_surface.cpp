@@ -1508,6 +1508,7 @@ static_assert(HasFetchResponseHeaderValueGetter<ruvia::FetchResponseHeader>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseHeaderAccess>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseAccess>);
 static_assert(!HasCompleteType<ruvia::detail::FetchResponseStreamAccess>);
+static_assert(!HasCompleteType<ruvia::detail::HttpParseResultAccess>);
 static_assert(!HasHttpHeaderViewPublicFields<ruvia::HttpHeaderView>);
 static_assert(HasHttpHeaderViewCanonicalReadAccessors<ruvia::HttpHeaderView>);
 static_assert(std::is_constructible_v<ruvia::HttpHeaderView, std::string_view, std::string_view>);
