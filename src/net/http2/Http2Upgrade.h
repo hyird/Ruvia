@@ -9,6 +9,7 @@
 #include "../../http/HttpRequestInternal.h"
 #include "../../http/HttpParserInternal.h"
 #include "../../http/HeaderTokenUtils.h"
+#include "ruvia/detail/Base64Url.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -64,25 +65,6 @@ struct Http2UpgradeRequest final {
     return version.size() < 5 || version.substr(0, 5) != "HTTP/";
 }
 
-[[nodiscard]] inline int http2Base64UrlValue(char ch) noexcept {
-    if (ch >= 'A' && ch <= 'Z') {
-        return ch - 'A';
-    }
-    if (ch >= 'a' && ch <= 'z') {
-        return ch - 'a' + 26;
-    }
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0' + 52;
-    }
-    if (ch == '-') {
-        return 62;
-    }
-    if (ch == '_') {
-        return 63;
-    }
-    return -1;
-}
-
 [[nodiscard]] inline bool http2DecodeBase64Url(
     std::string_view input,
     std::pmr::string& output) {
@@ -106,7 +88,7 @@ struct Http2UpgradeRequest final {
         if (padding) {
             return false;
         }
-        const auto value = http2Base64UrlValue(ch);
+        const auto value = decodeBase64UrlChar(ch);
         if (value < 0) {
             return false;
         }
