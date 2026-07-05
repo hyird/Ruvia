@@ -227,7 +227,12 @@ template <typename ApplyResponseState>
             }
 
             const auto parsedRange = detail::httpParseByteRange(conditional.range, size);
-            if (!parsedRange) {
+            if (parsedRange.outcome == detail::HttpRangeOutcome::kIgnore) {
+                // Unknown unit or malformed range: RFC 9110 §14.2 -- ignore it and
+                // serve the full representation rather than a spurious 416.
+                return makeFullFileResponse(0);
+            }
+            if (parsedRange.outcome == detail::HttpRangeOutcome::kUnsatisfiable) {
                 HttpResponse response(context.resource());
                 detail::setResponseContentRangeUnsatisfied(response, size);
                 addFileHeaders(response);
@@ -235,7 +240,7 @@ template <typename ApplyResponseState>
                 return response;
             }
 
-            const auto [offset, length] = *parsedRange;
+            const auto [offset, length] = parsedRange.range;
             HttpResponse response(context.resource());
             addFileHeaders(response);
             detail::setResponseContentRange(response, offset, length, size);

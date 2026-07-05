@@ -115,6 +115,23 @@ struct HttpByteRange final {
     std::uint64_t length{0};
 };
 
+// Three-way classification of a Range header, per RFC 9110 §14. These are not
+// interchangeable: an unknown range unit or a syntactically malformed range MUST
+// be ignored (served as a normal 200), whereas a well-formed range that falls
+// outside the representation is answered with 416. Collapsing both into "no
+// range" would wrongly 416 a client that merely sent a typo or an unsupported
+// unit; collapsing both into "ignore" would drop the required 416 signal.
+enum class HttpRangeOutcome : std::uint8_t {
+    kSatisfiable,    // a valid single range within the representation -> 206
+    kUnsatisfiable,  // valid syntax but outside the representation -> 416
+    kIgnore,         // unknown unit / malformed / multi-range -> serve full 200
+};
+
+struct HttpByteRangeResult final {
+    HttpRangeOutcome outcome{HttpRangeOutcome::kIgnore};
+    HttpByteRange range{};
+};
+
 [[nodiscard]] inline std::optional<std::uint64_t> httpParseUnsigned(std::string_view value) noexcept {
     if (value.empty()) {
         return std::nullopt;
@@ -127,50 +144,69 @@ struct HttpByteRange final {
     return parsed;
 }
 
-[[nodiscard]] inline std::optional<HttpByteRange> httpParseByteRange(
+[[nodiscard]] inline HttpByteRangeResult httpParseByteRange(
     std::string_view header,
     std::uint64_t size) noexcept {
     constexpr std::string_view prefix = "bytes=";
+    // Unknown range unit (or none): RFC 9110 §14.2 -- a recipient MUST ignore a
+    // Range using a unit it does not understand. An empty byte-range-set ("bytes=")
+    // is likewise malformed, so ignore it too.
     if (header.size() <= prefix.size() || header.substr(0, prefix.size()) != prefix) {
-        return std::nullopt;
+        return {HttpRangeOutcome::kIgnore, {}};
     }
 
-    auto spec = header.substr(prefix.size());
-    if (spec.find(',') != std::string_view::npos || size == 0) {
-        return std::nullopt;
+    const auto spec = header.substr(prefix.size());
+    // A multi-range set is not a single satisfiable range; the caller serves it as
+    // a full 200, so classify it as ignore rather than 416.
+    if (spec.find(',') != std::string_view::npos) {
+        return {HttpRangeOutcome::kIgnore, {}};
     }
 
     const auto dash = spec.find('-');
     if (dash == std::string_view::npos) {
-        return std::nullopt;
+        return {HttpRangeOutcome::kIgnore, {}};  // malformed: a range-spec needs '-'
     }
 
     const auto first = spec.substr(0, dash);
     const auto last = spec.substr(dash + 1);
     if (first.empty()) {
+        // suffix-byte-range-spec: "-" suffix-length
         const auto suffix = httpParseUnsigned(last);
-        if (!suffix || *suffix == 0) {
-            return std::nullopt;
+        if (!suffix) {
+            return {HttpRangeOutcome::kIgnore, {}};  // malformed suffix-length
+        }
+        // Valid syntax but nothing to return: a zero suffix-length, or any range
+        // against an empty representation, is unsatisfiable (416), not ignorable.
+        if (*suffix == 0 || size == 0) {
+            return {HttpRangeOutcome::kUnsatisfiable, {}};
         }
         const auto length = std::min(*suffix, size);
-        return HttpByteRange{size - length, length};
+        return {HttpRangeOutcome::kSatisfiable, HttpByteRange{size - length, length}};
     }
 
     const auto start = httpParseUnsigned(first);
-    if (!start || *start >= size) {
-        return std::nullopt;
+    if (!start) {
+        return {HttpRangeOutcome::kIgnore, {}};  // malformed first-pos
     }
-
-    std::uint64_t end = size - 1;
+    std::uint64_t end = 0;
     if (!last.empty()) {
         const auto parsedEnd = httpParseUnsigned(last);
-        if (!parsedEnd || *parsedEnd < *start) {
-            return std::nullopt;
+        if (!parsedEnd) {
+            return {HttpRangeOutcome::kIgnore, {}};  // malformed last-pos
         }
-        end = std::min(*parsedEnd, size - 1);
+        if (*parsedEnd < *start) {
+            // last-byte-pos < first-byte-pos: an invalid range-spec (§14.1.2), ignore.
+            return {HttpRangeOutcome::kIgnore, {}};
+        }
+        end = *parsedEnd;
     }
 
-    return HttpByteRange{*start, end - *start + 1};
+    // Well-formed range. Satisfiable iff first-byte-pos is within the extent.
+    if (*start >= size) {
+        return {HttpRangeOutcome::kUnsatisfiable, {}};
+    }
+    const auto clampedEnd = last.empty() ? size - 1 : std::min(end, size - 1);
+    return {HttpRangeOutcome::kSatisfiable, HttpByteRange{*start, clampedEnd - *start + 1}};
 }
 
 [[nodiscard]] inline bool httpByteRangeSetHasMultiple(std::string_view header) noexcept {
