@@ -49,6 +49,13 @@ public:
     }
 
     void ensureBodyAllowed() const {
+        // A body chunk after end() would land after the terminal 0\r\n\r\n (HTTP/1.1)
+        // or after END_STREAM (HTTP/2), desyncing framing on the connection. Reject
+        // it, mirroring the trailer guard (ensureTrailerOpen) so both post-end write
+        // paths fail identically.
+        if (ended_) {
+            throw std::logic_error("response stream is already ended");
+        }
         if (bodyForbidden_) {
             throw std::logic_error("response status does not allow a stream body");
         }
