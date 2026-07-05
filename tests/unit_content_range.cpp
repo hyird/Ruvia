@@ -209,6 +209,79 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     fs::remove_all(dir);
 }
 
+RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_precedence_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(100, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    struct Header {
+        RequestKnownHeader slot;
+        std::string_view name;
+        std::string_view value;
+    };
+    const auto serve = [&root](std::initializer_list<Header> headers) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        for (const auto& header : headers) {
+            HttpRequestAccess::addHeader(
+                request, HttpHeaderView{header.name, header.value},
+                HttpRequestAccess::knownHeaderSlot(header.slot));
+        }
+        auto context = ContextAccess::make(memory, request);
+        std::uint16_t status = 0;
+        std::string etag;
+        try {
+            const auto response = context.staticFile(root, "data.txt", "text/plain");
+            status = response.status();
+            etag.assign(response.header("ETag"));
+        } catch (const ruvia::HttpError& error) {
+            status = error.info().status();
+        }
+        return std::pair<std::uint16_t, std::string>(status, std::move(etag));
+    };
+
+    // Discover the current strong ETag with a bare request.
+    const auto base = serve({});
+    RUVIA_CHECK_EQ(base.first, std::uint16_t{200});
+    const std::string etag = base.second;
+    RUVIA_CHECK(!etag.empty());
+    // A date well before the file's mtime -> If-Unmodified-Since fails on its own.
+    constexpr std::string_view kOldDate = "Thu, 01 Jan 1970 00:00:00 GMT";
+
+    // If-Unmodified-Since alone (stale date) is a 412 precondition failure.
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
+        std::uint16_t{412});
+
+    // With a matching If-Match present, RFC 9110 §13.2.2 requires If-Unmodified-Since
+    // to be ignored -- the strong validator matched, so serve 200 rather than 412.
+    RUVIA_CHECK_EQ(
+        serve({{RequestKnownHeader::kIfMatch, "If-Match", etag},
+               {RequestKnownHeader::kIfUnmodifiedSince, "If-Unmodified-Since", kOldDate}}).first,
+        std::uint16_t{200});
+
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_conditional_request_serving) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;
