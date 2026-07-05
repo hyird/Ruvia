@@ -144,8 +144,17 @@ private:
             std::error_code ec;
             const auto n = co_await readMore(ec);
             if (n == 0) {
-                // A peer close (EOF / TLS truncation) is the normal end of a close-delimited body.
                 finish(false);
+                // Only a clean peer close (TCP EOF / TLS truncation) is the normal
+                // end of a close-delimited body. readMore also returns 0 on an idle
+                // timeout (ec == timed_out) or any other transport error, which
+                // truncated the body -- surface that instead of reporting a short
+                // body as complete, matching the buffered reader
+                // (HttpClientPool::readCloseDelimitedResponseBody) and the sibling
+                // Content-Length/chunked framings here, which all throw on a short read.
+                if (ec && ec != asio::error::eof && ec != asio::ssl::error::stream_truncated) {
+                    throw std::runtime_error("http client: truncated response body");
+                }
                 co_return empty();
             }
         }
