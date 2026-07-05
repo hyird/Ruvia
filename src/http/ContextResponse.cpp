@@ -156,8 +156,25 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
     std::pmr::memory_resource* resource) {
     std::pmr::string encoded(resource);
     encoded.reserve(location.size());
-    for (const auto raw : location) {
-        const auto ch = static_cast<unsigned char>(raw);
+    for (std::size_t i = 0; i < location.size(); ++i) {
+        const auto ch = static_cast<unsigned char>(location[i]);
+        // Pass an already well-formed percent-escape (%HH) through verbatim. This
+        // pass only runs when the location carries a non-ASCII byte, but it then
+        // rewrites the whole string -- so without this, a location that is already
+        // percent-encoded elsewhere (e.g. "%20") would have its '%' re-encoded to
+        // "%25", double-encoding it to "%2520" and corrupting the redirect target.
+        // RFC 3986 2.4 forbids encoding the same string more than once; the caller
+        // means a valid target, not a literal percent. A lone or malformed '%' is
+        // not a valid escape and is percent-encoded like any other octet below.
+        if (ch == '%' && i + 2 < location.size() &&
+            detail::decodeHexNibble(location[i + 1]) >= 0 &&
+            detail::decodeHexNibble(location[i + 2]) >= 0) {
+            encoded.push_back('%');
+            encoded.push_back(location[i + 1]);
+            encoded.push_back(location[i + 2]);
+            i += 2;
+            continue;
+        }
         if (encodeUriKeepsByte(ch)) {
             encoded.push_back(static_cast<char>(ch));
             continue;
