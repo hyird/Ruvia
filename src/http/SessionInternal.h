@@ -23,6 +23,10 @@ struct SessionAccess final {
         return context.sessionDirty_;
     }
 
+    [[nodiscard]] static bool regenerateRequested(const Context& context) noexcept {
+        return context.sessionRegenerate_;
+    }
+
     [[nodiscard]] static std::string_view id(const Context& context) noexcept {
         return context.sessionId();
     }
@@ -31,6 +35,18 @@ struct SessionAccess final {
         return context.session();
     }
 };
+
+// Decide whether the session middleware must mint a fresh server-chosen id when
+// persisting. A brand-new session (no id yet) and a client id that was NOT found
+// in the store both get a fresh id -- adopting an unrecognized client id would be
+// session fixation. A recognized session normally keeps its id, EXCEPT when the
+// handler called regenerateSession() (a privilege change), which forces a new id
+// so an attacker who planted a known-but-recognized id cannot ride the victim's
+// authenticated session. Pure so the security decision is unit-testable.
+[[nodiscard]] inline bool sessionShouldMintNewId(
+    bool idEmpty, bool recognized, bool regenerateRequested) noexcept {
+    return idEmpty || !recognized || regenerateRequested;
+}
 
 [[nodiscard]] inline bool isValidSessionId(std::string_view id) noexcept {
     if (id.empty() || id.size() > 128) {

@@ -42,7 +42,19 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         // attacker plants a known `sid`, then the victim authenticates and their
         // session is stored under the attacker-known id. A session that simply
         // expired out of the store is likewise renewed under a fresh id here.
-        if (id.empty() || !recognized) {
+        // regenerateSession() forces a fresh id even for a recognized session, so
+        // an attacker who planted a known *recognized* id (their own live session)
+        // cannot ride the victim's authenticated session after a privilege change.
+        if (detail::sessionShouldMintNewId(
+                id.empty(), recognized, detail::SessionAccess::regenerateRequested(c))) {
+            // Regenerating a recognized session: drop the blob under the old id
+            // first so the previous (possibly attacker-known) id no longer resolves.
+            if (recognized && !id.empty()) {
+                std::pmr::string oldKey(c.resource());
+                oldKey.append("sess:");
+                oldKey.append(id.data(), id.size());
+                co_await c.redis("default").del(oldKey);
+            }
             detail::SessionAccess::setId(c, detail::generateCsrfToken(idBuffer));
             id = detail::SessionAccess::id(c);
             // The session id is only known after the handler ran, so the

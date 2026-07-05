@@ -48,6 +48,21 @@ RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; SameSite=Lax; Secure"));
 }
 
+RUVIA_TEST(session_mint_decision_defends_fixation) {
+    using ruvia::detail::sessionShouldMintNewId;
+
+    // A brand-new session (no id yet) always gets a server-chosen id.
+    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/true, /*recognized=*/false, /*regen=*/false));
+    // An id the client presented that was NOT found in the store is never adopted
+    // (unrecognized-id fixation) -- a fresh id is minted.
+    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/false, /*regen=*/false));
+    // A recognized session normally keeps its id (stable across requests).
+    RUVIA_CHECK(!sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/true, /*regen=*/false));
+    // ...but regenerateSession() forces a fresh id even for a recognized session:
+    // this is the defense against an attacker-owned *recognized* planted id.
+    RUVIA_CHECK(sessionShouldMintNewId(/*idEmpty=*/false, /*recognized=*/true, /*regen=*/true));
+}
+
 RUVIA_TEST(session_id_validation_accepts_only_lowercase_hex) {
     using ruvia::detail::isValidSessionId;
 
