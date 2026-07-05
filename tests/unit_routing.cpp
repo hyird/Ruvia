@@ -1,18 +1,25 @@
 #include "test_harness.h"
 
+#include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
+#include <chrono>
 #include <exception>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "http/ContextInternal.h"
 #include "http/HttpRequestInternal.h"
 #include "http/HttpResponseBodyAccess.h"
+#include "http/StreamingInternal.h"
+#include "ruvia/http/Streaming.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/MiddlewareRuntime.h"
@@ -427,6 +434,44 @@ std::string dispatchChain(
     return std::string(body.data(), body.size());
 }
 
+// A capture sink whose committed flag flips true on the first write, mirroring the
+// real streaming sink (which commits the head before the first body chunk).
+struct StreamCaptureSink final {
+    std::pmr::string scratch{std::pmr::get_default_resource()};
+    bool committedFlag = false;
+    std::vector<std::string> writes;
+};
+
+ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
+    auto* sink = static_cast<StreamCaptureSink*>(target);
+    sink->committedFlag = true;
+    sink->writes.emplace_back(chunk);
+    co_return;
+}
+ruvia::Task<void> scEnd(void*) { co_return; }
+ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
+void scBind(void*, ruvia::Context*) noexcept {}
+std::pmr::string& scScratch(void* target) noexcept {
+    return static_cast<StreamCaptureSink*>(target)->scratch;
+}
+void scTrailer(void*, std::string_view, std::string_view) {}
+bool scCommitted(void* target) noexcept {
+    return static_cast<StreamCaptureSink*>(target)->committedFlag;
+}
+bool scAborted(void*) noexcept { return false; }
+
+ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
+    return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
+        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scScratch, &scTrailer,
+        &scCommitted, &scAborted);
+}
+
+// Writes a chunk (committing the stream) then throws mid-body.
+ruvia::Task<void> streamCommitThenThrow(void*, ruvia::Context& context) {
+    co_await context.stream().write("partial");
+    throw std::runtime_error("mid-stream handler failure");
+}
+
 }  // namespace
 
 RUVIA_TEST(middleware_chain_runs_in_onion_order) {
@@ -474,6 +519,65 @@ RUVIA_TEST(middleware_chain_rejects_calling_next_twice) {
     RUVIA_CHECK_EQ(handlerRuns, std::size_t{1});
     // The response is the "next called multiple times" error, not the handler body.
     RUVIA_CHECK(body != std::string("ok"));
+}
+
+RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middleware) {
+    // A stream handler on a route WITH middleware that commits the stream (writes a
+    // chunk) then throws must surface the failure, exactly as the no-middleware path
+    // does. Otherwise the middleware chain converts the throw into a buffered error
+    // response, dispatch returns it for an already-committed stream, and the driver
+    // finalizes the stream with a clean terminator -- framing a truncated body as a
+    // complete one. dispatchResponseStream must therefore rethrow so the transport
+    // aborts (connection close / RST_STREAM).
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    const ControllerMiddlewareDescriptor mws[] = {
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
+    };
+    impl.registerStreamRoute(
+        HttpMethod::kGet, path("/s"),
+        ruvia::detail::RouteStreamHandler(nullptr, &streamCommitThenThrow),
+        ruvia::detail::ResponseBodyMode::kStream,
+        std::span<const ControllerMiddlewareDescriptor>{},
+        std::span<const ControllerMiddlewareDescriptor>(mws, 1));
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kGet);
+    ruvia::detail::HttpRequestAccess::setPath(request, "/s");
+    ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+
+    RouteMatch match;
+    const auto resolution = table.resolve(HttpMethod::kGet, "/s", match);
+    RUVIA_CHECK(resolution.found());
+
+    StreamCaptureSink sink;
+    auto writer = scMakeWriter(sink);
+
+    // StreamDispatchResult is not default-constructible, so co_await it inside a
+    // detached coroutine and capture whether it threw rather than using use_future.
+    bool threw = false;
+    asio::io_context ctx(1);
+    asio::co_spawn(
+        ctx,
+        [&]() -> asio::awaitable<void> {
+            try {
+                (void)co_await ruvia::detail::taskAsAwaitable(
+                    table.dispatchResponseStream(request, resolution, memory, writer, {}));
+            } catch (const std::exception&) {
+                threw = true;
+            }
+        },
+        asio::detached);
+    ctx.run();
+    // The handler committed (wrote a chunk) before failing, and the failure was
+    // surfaced (not masked as a clean complete stream).
+    RUVIA_CHECK(sink.committedFlag);
+    RUVIA_CHECK(threw);
 }
 
 RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {

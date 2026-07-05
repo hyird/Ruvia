@@ -220,6 +220,21 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             RouteStreamDispatchOutcome::kBufferedResponse);
     }
 
+    // The middleware chain converts a handler exception into a buffered error
+    // response and records it via context.error() (storeMiddlewareExceptionResponse
+    // -> handleException -> setError), so a mid-request failure does not surface as
+    // a local exception above. When the stream is already committed (or this is a
+    // WebSocket route), that buffered response can no longer be sent, and finalizing
+    // the stream with a clean terminator would frame a truncated body as complete.
+    // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
+    // no-middleware path does through the committed check above.
+    if (services.webSocket() != nullptr ||
+        (responseStream != nullptr && detail::StreamingAccess::committed(*responseStream))) {
+        if (auto contextException = context.error()) {
+            std::rethrow_exception(contextException);
+        }
+    }
+
     auto response = detail::ContextAccess::hasResponse(context)
         ? detail::ContextAccess::takeResponse(context)
         : HttpResponse(context.resource());
