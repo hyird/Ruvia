@@ -51,6 +51,24 @@ inline void markConnectionCloseIfNeeded(HttpResponse& response, bool keepAlive) 
     }
 }
 
+// RFC 9112 §9.3: an HTTP/1.0 recipient defaults to closing the connection, so a
+// server that keeps it open MUST advertise the keep-alive connection option;
+// otherwise the client closes and reopens despite the server holding the socket.
+// HTTP/1.1 is persistent by default and needs no such header. `needsKeepAliveSignal`
+// is true only for a kept-alive non-1.1 request.
+inline void markConnectionKeepAliveIfNeeded(HttpResponse& response, bool keepAlive, bool needsKeepAliveSignal) {
+    if (keepAlive && needsKeepAliveSignal &&
+        !responseHasKnownHeader(response, kResponseHeaderConnection)) {
+        setResponseHeaderStableView(response, "Connection", "keep-alive");
+    }
+}
+
+// Whether a kept-alive response to `httpVersion` must advertise Connection:
+// keep-alive. HTTP/1.1 is persistent by default; only earlier versions need it.
+[[nodiscard]] inline bool requestNeedsKeepAliveSignal(std::string_view httpVersion) noexcept {
+    return httpVersion != "HTTP/1.1";
+}
+
 inline void recordCompletedRequest(
     bool& keepAlive,
     std::size_t& requestCount,
@@ -63,12 +81,14 @@ inline void finalizeBufferedRouteResponse(
     HttpResponse& response,
     bool& keepAlive,
     std::size_t& requestCount,
-    std::size_t maxRequests) {
+    std::size_t maxRequests,
+    bool needsKeepAliveSignal) {
     if (responseWantsClose(response)) {
         keepAlive = false;
     }
     recordCompletedRequest(keepAlive, requestCount, maxRequests);
     markConnectionCloseIfNeeded(response, keepAlive);
+    markConnectionKeepAliveIfNeeded(response, keepAlive, needsKeepAliveSignal);
 }
 
 inline void finalizeBodyRouteResponse(
@@ -76,7 +96,8 @@ inline void finalizeBodyRouteResponse(
     bool& keepAlive,
     std::size_t& requestCount,
     std::size_t maxRequests,
-    bool requestBodyComplete) {
+    bool requestBodyComplete,
+    bool needsKeepAliveSignal) {
     if (responseWantsClose(response) || !requestBodyComplete) {
         keepAlive = false;
     }
@@ -84,6 +105,7 @@ inline void finalizeBodyRouteResponse(
     // Fix borrowed response views before callers restore pipeline bytes.
     materializeResponseBody(response);
     markConnectionCloseIfNeeded(response, keepAlive);
+    markConnectionKeepAliveIfNeeded(response, keepAlive, needsKeepAliveSignal);
 }
 
 }  // namespace ruvia::detail

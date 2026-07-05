@@ -125,6 +125,7 @@ inline void completeSuccessfulHttpBodyRoute(
     std::size_t& requestCount,
     std::size_t maxRequestsPerConnection,
     bool requestBodyComplete,
+    bool needsKeepAliveSignal,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     std::size_t& consumedBytes,
@@ -135,7 +136,8 @@ inline void completeSuccessfulHttpBodyRoute(
         keepAlive,
         requestCount,
         maxRequestsPerConnection,
-        requestBodyComplete);
+        requestBodyComplete,
+        needsKeepAliveSignal);
     if (keepAlive) {
         restorePipeline(readBuffer, usedBytes);
         consumedBytes = 0;

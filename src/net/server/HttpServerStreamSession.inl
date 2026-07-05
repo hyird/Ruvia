@@ -197,7 +197,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             response,
                             keepAlive,
                             requestCount,
-                            options_.maxRequestsPerConnection);
+                            options_.maxRequestsPerConnection,
+                            requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
                         scannerEntry.touch();
                         break;
                     }
