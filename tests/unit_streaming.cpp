@@ -178,6 +178,44 @@ RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {
     RUVIA_CHECK(sink.writes.empty());
 }
 
+RUVIA_TEST(sse_writer_rejects_nul_in_id) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+    auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
+
+    const auto throwsFor = [&](ruvia::SseMessage message) {
+        asio::io_context ctx(1);
+        auto future = asio::co_spawn(
+            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+        ctx.run();
+        try {
+            future.get();
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    // A U+0000 NUL in the id makes a compliant EventSource client ignore the id
+    // (WHATWG HTML 9.2.6), silently breaking Last-Event-ID resumption, so it is
+    // rejected -- mirroring the CR/LF guard. The NUL sits mid-value to prove the
+    // whole field is scanned, not just a prefix.
+    RUVIA_CHECK(throwsFor(ruvia::SseMessage{.id = std::string_view("a\0b", 3)}));
+    // event and data carry no such rule, so a NUL there is accepted and emitted.
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(
+            writeOneSse(sse, ruvia::SseMessage{.data = std::string_view("d\0e", 3),
+                                               .event = std::string_view("v\0w", 3)})),
+        asio::use_future);
+    ctx.run();
+    future.get();
+    RUVIA_CHECK(!sink.writes.empty());
+    // The rejected-id message emitted nothing; only the accepted message wrote.
+    RUVIA_CHECK_EQ(sink.writes.size(), static_cast<std::size_t>(1));
+}
+
 RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
     using ruvia::detail::ResponseStreamState;
     // A committed stream that allows a body accepts a chunk before end()...

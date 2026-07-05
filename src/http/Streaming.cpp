@@ -18,6 +18,16 @@ Task<void> SseWriter::writeSSE(const SseMessage& message) {
         message.id.find_first_of("\r\n") != std::string_view::npos) {
         throw std::invalid_argument("SSE event and id must not contain CR or LF");
     }
+    // The EventSource "id" field is silently dropped by a compliant client when
+    // it contains U+0000 NULL: WHATWG HTML 9.2.6 updates the last-event-ID buffer
+    // only when the field value has no NUL, otherwise it ignores the field. An id
+    // carrying a NUL would thus disable Last-Event-ID reconnection without any
+    // error, and the client would resume from a stale id on the next connect.
+    // Reject it here -- like CR/LF -- so the caller learns the id is unusable
+    // rather than silently losing resumption. (event/data have no such rule.)
+    if (message.id.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("SSE id must not contain a NUL character");
+    }
 
     auto& frame = detail::StreamingAccess::scratch(writer_);
     frame.clear();
