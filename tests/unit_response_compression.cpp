@@ -239,6 +239,54 @@ RUVIA_TEST(compress_skips_already_encoded_body) {
     RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
 }
 
+RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
+    const auto varies = [](HttpResponse& r) {
+        return r.header("Vary").find("Accept-Encoding") != std::string_view::npos;
+    };
+
+    // A compressible representation is selected by Accept-Encoding, so it must carry
+    // Vary even when THIS response is left identity: below the size threshold, or the
+    // client accepted no coding we support. Otherwise a shared cache serves this
+    // identity body to a client that would get the compressed one (RFC 9110 12.5.5).
+    {
+        auto r = responseWithBody("small");
+        RUVIA_CHECK(!tryCompress(r, Compression{true, 4096}));  // below minBytes
+        RUVIA_CHECK(varies(r));
+    }
+    {
+        auto r = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}, HttpContentCoding::kNone));
+        RUVIA_CHECK(varies(r));
+    }
+
+    // Responses that never vary by Accept-Encoding must NOT over-declare Vary
+    // (RFC 9110 12.5.5 SHOULD NOT): incompressible media type, no-transform,
+    // an already-chosen encoding, and (compression disabled) no negotiation at all.
+    {
+        auto r = responseWithBody(kCompressibleBody);
+        r.header("Content-Type", "image/png");
+        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
+        RUVIA_CHECK(!varies(r));
+    }
+    {
+        auto r = responseWithBody(kCompressibleBody);
+        r.header("Cache-Control", "no-transform");
+        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
+        RUVIA_CHECK(!varies(r));
+    }
+    {
+        auto r = responseWithBody(kCompressibleBody);
+        r.header("Content-Encoding", "gzip");
+        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
+        RUVIA_CHECK(!varies(r));
+    }
+    {
+        auto r = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(!tryCompress(r, Compression{false, 16}));  // disabled
+        RUVIA_CHECK(!varies(r));
+    }
+}
+
 RUVIA_TEST(compress_skips_when_result_would_not_be_smaller) {
     // High-entropy data cannot be shrunk; the response must be left uncompressed
     // rather than emitting a larger body and wasting CPU (as with images, video,
