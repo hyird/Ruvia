@@ -6,24 +6,51 @@ Task<void> Http2ServerSession<Stream>::writeHeaders(
     if (stream.isReset()) {
         co_return;
     }
+    const auto maxFrame = static_cast<std::size_t>(peerSettings_.maxFrameSize());
+    if (headerBlock.size() <= maxFrame) {
+        // Fits in a single HEADERS frame: no CONTINUATION follows, so there is nothing
+        // to keep contiguous, and writeFramePayload stays zero-copy for this common path.
+        const auto flags = static_cast<std::uint8_t>(
+            kHttp2FlagEndHeaders | (endStream ? kHttp2FlagEndStream : 0));
+        co_await writeFramePayload(Http2FrameType::kHeaders, flags, stream.id(), headerBlock);
+        co_return;
+    }
+
+    // A header block larger than the peer's max frame size is split into a HEADERS frame
+    // followed by CONTINUATION frames. RFC 9113 6.10 requires those frames to be
+    // contiguous on the wire -- no frame for any other stream may appear between them.
+    // writeSerialized serializes only a *single* frame, so emitting the pieces in a loop
+    // would release the write turn between them and let a concurrently-queued writer
+    // interleave its frame -- a 6.10 violation the peer treats as a connection error.
+    // Assemble the whole HEADERS+CONTINUATION sequence into one buffer and emit it with a
+    // single serialized write so the sequence is atomic. The scratch is a local (not a
+    // session member) so two streams writing headers concurrently cannot clobber each
+    // other's in-flight buffer. Multi-frame response headers are rare, so the extra copy
+    // is off the common path.
+    std::pmr::string block(memory_.resource());
+    const auto frameCount = (headerBlock.size() + maxFrame - 1) / maxFrame;
+    block.reserve(headerBlock.size() + frameCount * kHttp2FrameHeaderBytes);
     std::size_t offset = 0;
     bool first = true;
-    while (offset < headerBlock.size() || first) {
-        const auto remaining = headerBlock.size() - offset;
-        const auto chunk = static_cast<std::uint32_t>(
-            std::min<std::size_t>(remaining, peerSettings_.maxFrameSize()));
+    while (offset < headerBlock.size()) {
+        const auto chunk = std::min<std::size_t>(headerBlock.size() - offset, maxFrame);
         const bool last = offset + chunk == headerBlock.size();
         const auto flags = static_cast<std::uint8_t>(
             (last ? kHttp2FlagEndHeaders : 0) |
             (endStream && last ? kHttp2FlagEndStream : 0));
-        co_await writeFramePayload(
+        std::array<char, kHttp2FrameHeaderBytes> frameHeader;
+        http2EncodeFrameHeader(
+            frameHeader.data(),
+            static_cast<std::uint32_t>(chunk),
             first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
             flags,
-            stream.id(),
-            headerBlock.substr(offset, chunk));
+            stream.id());
+        block.append(frameHeader.data(), frameHeader.size());
+        block.append(headerBlock.data() + offset, chunk);
         offset += chunk;
         first = false;
     }
+    co_await writeRaw(block);
 }
 
 template <typename Stream>
