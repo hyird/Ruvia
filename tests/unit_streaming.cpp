@@ -6,11 +6,13 @@
 
 #include <chrono>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "http/StreamingInternal.h"
+#include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Streaming.h"
@@ -174,4 +176,42 @@ RUVIA_TEST(sse_writer_rejects_newline_in_event_or_id) {
     RUVIA_CHECK(throwsFor(ruvia::SseMessage{.id = "1\n2"}));
     // A rejected message emits nothing.
     RUVIA_CHECK(sink.writes.empty());
+}
+
+RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
+    using ruvia::detail::ResponseStreamState;
+    // A committed stream that allows a body accepts a chunk before end()...
+    ResponseStreamState open;
+    open.markCommitted(false);
+    open.ensureBodyAllowed();  // no throw
+
+    // ...but after end() a further body chunk would land past the terminal
+    // 0\r\n\r\n (HTTP/1.1) or END_STREAM (HTTP/2) and desync the connection, so
+    // it must be rejected -- the same way a post-end trailer already is.
+    open.markEnded();
+    bool bodyAfterEnd = false;
+    try {
+        open.ensureBodyAllowed();
+    } catch (const std::logic_error&) {
+        bodyAfterEnd = true;
+    }
+    RUVIA_CHECK(bodyAfterEnd);
+    bool trailerAfterEnd = false;
+    try {
+        open.ensureTrailerAllowed("X-Trailer", "v");
+    } catch (const std::logic_error&) {
+        trailerAfterEnd = true;
+    }
+    RUVIA_CHECK(trailerAfterEnd);
+
+    // A body-forbidden status (e.g. 204/304) still rejects a body chunk.
+    ResponseStreamState forbidden;
+    forbidden.markCommitted(true);
+    bool bodyForbidden = false;
+    try {
+        forbidden.ensureBodyAllowed();
+    } catch (const std::logic_error&) {
+        bodyForbidden = true;
+    }
+    RUVIA_CHECK(bodyForbidden);
 }
