@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/detail/Hex.h"
+
 namespace ruvia::detail {
 
 enum class RequestHeaderKind {
@@ -120,20 +122,6 @@ inline constexpr std::array<bool, 256> kHttpFieldValueCharTable = [] {
 
 [[nodiscard]] inline bool isHttpFieldValueChar(unsigned char c) noexcept {
     return kHttpFieldValueCharTable[c];
-}
-
-[[nodiscard]] inline bool isHttpHexDigit(unsigned char c) noexcept {
-    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f');
-}
-
-[[nodiscard]] inline std::uint8_t httpHexValue(unsigned char c) noexcept {
-    if (c <= '9') {
-        return static_cast<std::uint8_t>(c - '0');
-    }
-    if (c <= 'F') {
-        return static_cast<std::uint8_t>(c - 'A' + 10);
-    }
-    return static_cast<std::uint8_t>(c - 'a' + 10);
 }
 
 [[nodiscard]] RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept;

@@ -286,11 +286,15 @@ ChunkSizeLineStatus parseHttpChunkSizeLine(std::string_view value, std::size_t& 
     std::size_t cursor = 0;
     std::size_t parsed = 0;
     constexpr auto maxBeforeShift = std::numeric_limits<std::size_t>::max() >> 4U;
-    while (cursor < value.size() && isHttpHexDigit(static_cast<unsigned char>(value[cursor]))) {
+    while (cursor < value.size()) {
+        const int nibble = decodeHexNibble(value[cursor]);
+        if (nibble < 0) {
+            break;
+        }
         if (parsed > maxBeforeShift) {
             return ChunkSizeLineStatus::kOverflow;
         }
-        parsed = (parsed << 4U) | httpHexValue(static_cast<unsigned char>(value[cursor]));
+        parsed = (parsed << 4U) | static_cast<std::size_t>(nibble);
         ++cursor;
     }
     if (cursor == 0) {
