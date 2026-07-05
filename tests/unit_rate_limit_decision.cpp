@@ -9,6 +9,7 @@
 #include "http/ContextServices.h"
 #include "http/HttpRequestInternal.h"
 #include "net/server/RateLimitDecision.h"
+#include "net/server/RateLimitKey.h"
 #include "ruvia/app/RateLimitRule.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/RateLimit.h"
@@ -200,4 +201,31 @@ RUVIA_TEST(route_rate_limit_429_carries_retry_after_and_ratelimit_headers) {
     const int retry = std::stoi(second.retryAfter);
     RUVIA_CHECK(retry >= 1 && retry <= 60);
     RUVIA_CHECK_EQ(second.reset, second.retryAfter);
+}
+
+namespace {
+std::string rateLimitKey(std::string_view remoteAddress) {
+    char buffer[ruvia::detail::kRateLimitKeyBufferBytes];
+    const auto key = ruvia::detail::rateLimitKeyFor(remoteAddress, buffer);
+    return std::string(key);
+}
+}  // namespace
+
+RUVIA_TEST(rate_limit_key_groups_ipv6_by_64_prefix) {
+    // A client typically controls an entire IPv6 /64 (or larger). Keying on the full
+    // address would let it rotate addresses to bypass the per-IP limit and exhaust
+    // the shared slot table, so genuine IPv6 is grouped by its /64 network prefix.
+    // Two addresses sharing a /64 must yield the same key...
+    RUVIA_CHECK_EQ(rateLimitKey("2001:db8:1:2::1"), rateLimitKey("2001:db8:1:2::dead:beef"));
+    RUVIA_CHECK_EQ(rateLimitKey("2001:db8:1:2:ffff:ffff:ffff:ffff"), rateLimitKey("2001:db8:1:2::1"));
+    // ...and different /64s must yield different keys (no over-grouping).
+    RUVIA_CHECK(rateLimitKey("2001:db8:1:2::1") != rateLimitKey("2001:db8:1:3::1"));
+    RUVIA_CHECK(rateLimitKey("2001:db8:1:2::1") != rateLimitKey("2001:db8:2:2::1"));
+
+    // IPv4 passes through unchanged (each host is already its own key).
+    RUVIA_CHECK_EQ(rateLimitKey("203.0.113.7"), std::string("203.0.113.7"));
+    RUVIA_CHECK(rateLimitKey("203.0.113.7") != rateLimitKey("203.0.113.8"));
+
+    // IPv4-mapped IPv6 must NOT collapse to one /64 -- each mapped host stays distinct.
+    RUVIA_CHECK(rateLimitKey("::ffff:203.0.113.7") != rateLimitKey("::ffff:203.0.113.8"));
 }
