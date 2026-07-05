@@ -248,7 +248,16 @@ template <typename ApplyResponseState>
                 return makeFullFileResponse(0);
             }
 
-            if (enableValidators && !ifRangeAllows(conditional.ifRange, etag, modifiedSeconds)) {
+            // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
+            // the current representation. When validators are disabled this root
+            // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
+            // -- the condition MUST be treated as not matching and the full
+            // representation served, rather than a 206 stitched from bytes the
+            // client cannot verify it still holds. Gating on enableValidators (as
+            // before) skipped the check entirely and returned a 206. A range with
+            // no If-Range is still honored without validators.
+            if (!conditional.ifRange.empty() &&
+                (!enableValidators || !ifRangeAllows(conditional.ifRange, etag, modifiedSeconds))) {
                 return makeFullFileResponse(0);
             }
 
