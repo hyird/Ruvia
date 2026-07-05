@@ -135,9 +135,10 @@ struct WebSocketDeflateNegotiation final {
 // server_max_window_bits is honored only when it permits 15: a smaller bound would
 // require shrinking our compressor, so those offers are skipped (fall back to the
 // next offer / no compression). RFC 7692 §7.1.2.1.
-[[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
-    const HttpRequest& request) noexcept {
-    std::string_view offers = request.header("Sec-WebSocket-Extensions");
+// Scan one Sec-WebSocket-Extensions field-line value (a comma list of offers) and
+// return the first honorable permessage-deflate offer, or a disabled negotiation
+// if the line carries none we can accept.
+[[nodiscard]] inline WebSocketDeflateNegotiation webSocketScanDeflateOffers(std::string_view offers) noexcept {
     while (!offers.empty()) {
         const auto comma = offers.find(',');
         const auto offer = httpTrimOws(comma == std::string_view::npos ? offers : offers.substr(0, comma));
@@ -157,6 +158,26 @@ struct WebSocketDeflateNegotiation final {
             break;
         }
         offers.remove_prefix(comma + 1);
+    }
+    return {};
+}
+
+[[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
+    const HttpRequest& request) noexcept {
+    // RFC 6455 §9.1: extension declarations may be split across multiple
+    // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
+    // one comma-joined list. request.header() returns only the last line, so scan
+    // every line in order and honor the first acceptable offer. Offers are resolved
+    // independently (first honorable wins), so first-honorable-across-lines is the
+    // same result as scanning the joined list.
+    for (const auto& header : request.headers()) {
+        if (!asciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
+            continue;
+        }
+        const auto negotiation = webSocketScanDeflateOffers(header.value());
+        if (negotiation.enabled) {
+            return negotiation;
+        }
     }
     return {};
 }

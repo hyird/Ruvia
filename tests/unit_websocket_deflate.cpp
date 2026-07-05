@@ -156,6 +156,35 @@ RUVIA_TEST(websocket_deflate_offer_picks_first_honorable_offer) {
         "permessage-deflate; server_max_window_bits=8, permessage-deflate; server_max_window_bits=10"));
 }
 
+RUVIA_TEST(websocket_deflate_offer_spans_multiple_extension_lines) {
+    // RFC 6455 §9.1 / RFC 9110 §5.3: an offer may be split across several
+    // Sec-WebSocket-Extensions field lines, which are one comma-joined list.
+    // Reading only the last line missed permessage-deflate offered earlier.
+    const auto negotiateLines = [](std::initializer_list<std::string_view> lines) {
+        std::string raw = "GET /ws HTTP/1.1\r\nHost: x\r\n";
+        for (const auto line : lines) {
+            raw += "Sec-WebSocket-Extensions: ";
+            raw.append(line.data(), line.size());
+            raw += "\r\n";
+        }
+        raw += "\r\n";
+        HttpServerParser parser;
+        const auto result = parser.parse(raw);
+        return webSocketNegotiatePermessageDeflate(result.request);
+    };
+
+    // permessage-deflate on the FIRST line, an unrelated extension on the second:
+    // previously the last line was the only one read, so this was missed.
+    RUVIA_CHECK(negotiateLines({"permessage-deflate", "x-unknown; a=1"}).enabled);
+    // On the second line it still works (the old last-line behavior is preserved).
+    RUVIA_CHECK(negotiateLines({"x-unknown", "permessage-deflate"}).enabled);
+    // A per-line server_max_window_bits=15 is honored wherever the line sits.
+    RUVIA_CHECK(
+        negotiateLines({"x-unknown", "permessage-deflate; server_max_window_bits=15"}).echoServerMaxWindowBits);
+    // No permessage-deflate on any line -> not enabled.
+    RUVIA_CHECK(!negotiateLines({"x-unknown", "y-unknown"}).enabled);
+}
+
 RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
     WebSocketDeflate codec;
     std::pmr::string restored(std::pmr::get_default_resource());
