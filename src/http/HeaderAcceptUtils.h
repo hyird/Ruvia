@@ -265,13 +265,18 @@ struct HttpMediaTypeParts final {
     return 2;
 }
 
-[[nodiscard]] inline bool httpAcceptsMediaType(std::string_view accept, std::string_view offered) noexcept {
-    if (accept.empty()) {
-        return true;
-    }
-
-    int bestSpecificity = -1;
-    int bestQuality = 0;
+// Fold the media-ranges of one Accept field value into a running best-match
+// accumulator (most specific range wins; ties break on higher q). Kept separate
+// from httpAcceptsMediaType so a caller with an Accept field split across several
+// field lines (RFC 9110 5.3: equivalent to one comma-joined value) can feed every
+// line into the SAME accumulator -- yielding the comma-joined result, including a
+// q=0 exclusion whose range is more specific than an accepting range on another
+// line -- without allocating to concatenate them.
+inline void httpAccumulateMediaTypeAcceptance(
+    std::string_view accept,
+    std::string_view offered,
+    int& bestSpecificity,
+    int& bestQuality) noexcept {
     httpVisitCommaSeparatedQuoted(accept, [offered, &bestSpecificity, &bestQuality](std::string_view item) noexcept {
         if (httpMediaRangeMatches(item, offered)) {
             const auto specificity = httpMediaRangeSpecificity(item);
@@ -283,7 +288,16 @@ struct HttpMediaTypeParts final {
         }
         return true;
     });
+}
 
+[[nodiscard]] inline bool httpAcceptsMediaType(std::string_view accept, std::string_view offered) noexcept {
+    if (accept.empty()) {
+        return true;
+    }
+
+    int bestSpecificity = -1;
+    int bestQuality = 0;
+    httpAccumulateMediaTypeAcceptance(accept, offered, bestSpecificity, bestQuality);
     return bestSpecificity >= 0 && bestQuality > 0;
 }
 
