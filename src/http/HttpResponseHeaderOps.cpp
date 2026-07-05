@@ -226,7 +226,14 @@ void HttpResponse::appendHeaderValidated(
         throw std::invalid_argument("HTTP response header cannot be appended");
     }
     const auto index = headers_.size();
-    headers_.add(key, value, knownBit);
+    auto& header = headers_.add(key, value, knownBit);
+    // Mark the append flag so a later merge of this response (e.g. a Context
+    // response slot folded into a factory response via mergeResponseSlotHeaders)
+    // keeps every appended value instead of treating the field as single-valued
+    // and dropping all but the first. Context::header(...,{append:true}) sets this
+    // on its own list; the slot-mirrored copy went through here without it, so a
+    // multi-valued header (Link, Vary, WWW-Authenticate, ...) collapsed on merge.
+    detail::setResponseHeaderAppend(header, true);
     recordKnownHeaderIndex(knownBit, index);
 }
 
