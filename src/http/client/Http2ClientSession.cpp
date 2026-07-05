@@ -662,7 +662,6 @@ bool Http2ClientSession::onSettings(const Http2FrameHeader& header, std::string_
     if (!http2SettingsPayloadSizeValid(payload)) {
         return false;
     }
-    std::int64_t initialWindowDelta = 0;
     bool windowChanged = false;
     for (std::size_t offset = 0; offset + 6 <= payload.size(); offset += 6) {
         const auto entry = http2ReadSettingEntry(payload, offset);
@@ -670,15 +669,17 @@ bool Http2ClientSession::onSettings(const Http2FrameHeader& header, std::string_
         if (result.status != Http2PeerSettingsStatus::kOk) {
             return false;
         }
+        // Apply each SETTINGS_INITIAL_WINDOW_SIZE change to live streams in order,
+        // as the server session does: a single SETTINGS frame may legally carry the
+        // identifier more than once (RFC 9113 6.5.3), and every stream's send window
+        // must move by the sum of the per-entry deltas, i.e. (final - original).
+        // Keeping only the last delta would misaccount the window (RFC 9113 6.9.2).
         if (result.initialWindowChanged) {
-            initialWindowDelta = result.initialWindowDelta;
             windowChanged = true;
-        }
-    }
-    if (windowChanged) {
-        for (auto& [id, stream] : streams_) {
-            if (!stream->flow.addSendWindow(initialWindowDelta)) {
-                return false;  // stream flow-control window overflow
+            for (auto& [id, stream] : streams_) {
+                if (!stream->flow.addSendWindow(result.initialWindowDelta)) {
+                    return false;  // stream flow-control window overflow
+                }
             }
         }
     }
