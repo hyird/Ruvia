@@ -655,9 +655,27 @@ std::optional<std::string_view> Context::routeParam(std::string_view name) const
 }
 
 bool Context::requestAccepts(std::string_view mediaType) const noexcept {
-    return detail::httpAcceptsMediaType(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kAccept),
-        mediaType);
+    // RFC 9110 5.3: multiple Accept field lines are equivalent to a single value
+    // comma-joining them. requestKnownHeader returns only one stored slot, so a
+    // client that sent Accept across several lines had all but one ignored. Fold
+    // every Accept line into one best-match accumulator (equivalent to the joined
+    // value, and correct for a q=0 exclusion spread across lines) without
+    // allocating to concatenate.
+    int bestSpecificity = -1;
+    int bestQuality = 0;
+    bool sawAccept = false;
+    for (const auto& header : request_.headers()) {
+        if (!detail::asciiEqualsIgnoreCase(header.name(), "Accept") || header.value().empty()) {
+            continue;
+        }
+        sawAccept = true;
+        detail::httpAccumulateMediaTypeAcceptance(header.value(), mediaType, bestSpecificity, bestQuality);
+    }
+    // No (non-empty) Accept header means the client accepts any media type.
+    if (!sawAccept) {
+        return true;
+    }
+    return bestSpecificity >= 0 && bestQuality > 0;
 }
 
 Task<std::string_view> Context::requestBody() const {
