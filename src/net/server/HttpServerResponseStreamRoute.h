@@ -102,7 +102,8 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             response,
             keepAlive,
             requestCount,
-            options.maxRequestsPerConnection);
+            options.maxRequestsPerConnection,
+            requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }

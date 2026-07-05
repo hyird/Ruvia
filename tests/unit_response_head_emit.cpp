@@ -9,6 +9,7 @@
 #include "net/server/HttpResponseHead.h"
 #include "net/server/HttpResponseHeadBuffer.h"
 #include "net/server/HttpResponseHeadPolicy.h"
+#include "net/server/HttpServerResponseState.h"
 
 namespace {
 
@@ -36,6 +37,33 @@ std::size_t countOccurrences(std::string_view haystack, std::string_view needle)
 }
 
 }  // namespace
+
+RUVIA_TEST(finalize_buffered_response_signals_keep_alive_only_for_http10) {
+    using ruvia::detail::finalizeBufferedRouteResponse;
+    using ruvia::detail::requestNeedsKeepAliveSignal;
+
+    RUVIA_CHECK(requestNeedsKeepAliveSignal("HTTP/1.0"));
+    RUVIA_CHECK(!requestNeedsKeepAliveSignal("HTTP/1.1"));
+
+    const auto finalize = [](std::string_view version, bool keepAlive) {
+        HttpResponse response(std::pmr::new_delete_resource());
+        response.status(200);
+        std::size_t count = 0;
+        finalizeBufferedRouteResponse(
+            response, keepAlive, count, /*maxRequests=*/0,
+            requestNeedsKeepAliveSignal(version));
+        return std::string(response.header("Connection"));
+    };
+
+    // RFC 9112 §9.3: a kept-alive HTTP/1.0 response MUST advertise keep-alive,
+    // otherwise the client (which defaults to close) never reuses the connection.
+    RUVIA_CHECK_EQ(finalize("HTTP/1.0", true), std::string("keep-alive"));
+    // HTTP/1.1 is persistent by default -> no Connection header needed.
+    RUVIA_CHECK_EQ(finalize("HTTP/1.1", true), std::string(""));
+    // A non-kept-alive response is closed regardless of version.
+    RUVIA_CHECK_EQ(finalize("HTTP/1.0", false), std::string("close"));
+    RUVIA_CHECK_EQ(finalize("HTTP/1.1", false), std::string("close"));
+}
 
 RUVIA_TEST(response_head_emits_well_formed_normal) {
     HttpResponse response(std::pmr::new_delete_resource());
