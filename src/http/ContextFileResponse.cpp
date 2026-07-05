@@ -133,6 +133,7 @@ template <typename ApplyResponseState>
     std::string_view precomputedEtag,
     std::string_view precomputedLastModified,
     std::string_view contentEncoding,
+    bool negotiatesEncoding,
     ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.resource());
     std::pmr::string lastModifiedStorage(context.resource());
@@ -163,9 +164,18 @@ template <typename ApplyResponseState>
             response.header("Cache-Control", cacheControl);
         }
         // A precompressed variant carries the original Content-Type with the
-        // encoding declared here; Vary lets caches key on Accept-Encoding.
+        // encoding declared here.
         if (!contentEncoding.empty()) {
             detail::setResponseHeaderStableView(response, "Content-Encoding", contentEncoding);
+        }
+        // Declare Vary: Accept-Encoding on every response from an endpoint that
+        // negotiates the representation by Accept-Encoding -- even when the
+        // identity variant was served. Gating it on a chosen compressed variant
+        // left the identity 200/206/304 with no Vary, so a shared cache keyed only
+        // on the URL would serve that identity body to an encoding-capable client
+        // (RFC 9110 12.5.5 / RFC 9111 4.1). Context::file does no negotiation and
+        // stays Vary-free.
+        if (negotiatesEncoding) {
             detail::setResponseHeaderStableView(response, "Vary", "Accept-Encoding");
         }
         if (enableRanges) {
@@ -304,6 +314,7 @@ HttpResponse Context::file(
         {},
         {},
         {},
+        false,  // Context::file serves one path with no Accept-Encoding negotiation
         applyState);
 }
 
@@ -423,6 +434,7 @@ HttpResponse Context::staticFile(
         served.etag,
         served.lastModified,
         contentEncoding,
+        true,  // staticFile negotiates the representation by Accept-Encoding
         applyState);
 }
 
