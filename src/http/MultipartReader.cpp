@@ -135,9 +135,14 @@ Task<void> MultipartReader::processBoundary() {
             state_ = State::kHeaders;
             co_return;
         }
-        if (!(co_await appendMore())) {
-            throw std::invalid_argument("invalid multipart body");
-        }
+        // The while above guaranteed the two bytes after the boundary line are
+        // present, and appendMore only grows the buffer tail (consuming nothing), so
+        // these fixed bytes can never become "--" or "\r\n". A boundary followed by
+        // anything else is definitively malformed: reject it now rather than buffer
+        // the entire remaining body -- unbounded, unlike the preamble/header phases --
+        // waiting for a delimiter that can never arrive. The buffered parser
+        // (parseBody) rejects the same input immediately, so the two paths agree.
+        throw std::invalid_argument("invalid multipart body");
     }
 }
 

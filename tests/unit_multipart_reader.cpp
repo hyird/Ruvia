@@ -274,6 +274,40 @@ RUVIA_TEST(multipart_reader_rejects_an_unbounded_preamble_without_a_boundary) {
     RUVIA_CHECK(threw);
 }
 
+RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_buffering_body) {
+    // A boundary line followed by a malformed terminator (here a bare CR, which the
+    // boundary finder accepts but the terminator check does not) must be rejected
+    // immediately, NOT by buffering the entire remaining body while waiting for a
+    // "\r\n"/"--" that can never appear -- the boundary-terminator phase previously
+    // lacked the memory cap the preamble and per-part header phases have.
+    ChunkSource source;
+    source.chunks.push_back("--BOUNDARY\rXX");             // boundary + bare-CR terminator (invalid)
+    source.chunks.push_back(std::string(80 * 1024, 'A'));  // large trailing payload the bug would buffer
+    source.chunks.push_back(std::string(80 * 1024, 'B'));
+
+    std::optional<BodyReader> bodyReader;
+    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
+    MultipartReader reader(*bodyReader, "BOUNDARY", std::pmr::get_default_resource());
+
+    std::vector<CollectedPart> parts;
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx, ruvia::detail::taskAsAwaitable(collectParts(reader, parts)), asio::use_future);
+    ctx.run();
+
+    bool threw = false;
+    try {
+        future.get();
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    // Rejected without pulling the large trailing payload chunks. Without the fix the
+    // reader loops appendMore() over the whole body, consuming every chunk before it
+    // finally throws at end-of-body.
+    RUVIA_CHECK(source.index < source.chunks.size());
+}
+
 RUVIA_TEST(multipart_reader_decodes_quoted_pairs_in_name_and_filename) {
     // RFC 7230 §3.2.6: a quoted-pair "\X" in a Content-Disposition parameter decodes
     // to X. The streaming reader must unescape name/filename (matching the buffered
