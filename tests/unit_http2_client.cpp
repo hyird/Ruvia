@@ -2410,4 +2410,137 @@ RUVIA_TEST(http2_stream_large_body) {
     RUVIA_CHECK_EQ(body, std::string(40000, 'y'));
 }
 
+// A streaming stream whose buffered-but-undrained DATA is aborted by RST_STREAM must
+// return the DATA's withheld connection-level flow-control credit as a stream-0
+// WINDOW_UPDATE (== the DATA size), so the multiplexed connection's receive window
+// is not permanently leaked. Without the fix failStream never repays that credit.
+RUVIA_TEST(http2_client_credits_connection_window_when_streamed_data_is_reset) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    constexpr std::uint32_t kDataSize = 13;  // distinctive; not the initial-window increment
+    bool clientThrew = false;
+    bool sawConnectionCreditForData = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            auto readExact = [&sock](void* d, std::size_t n) -> asio::awaitable<bool> {
+                auto [ec, got] = co_await asio::async_read(
+                    sock, asio::buffer(d, n), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && got == n;
+            };
+            auto writeAll = [&sock](std::string_view b) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(b.data(), b.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+
+            char preface[24];
+            if (!co_await readExact(preface, sizeof(preface))) co_return;
+            char settings[kHttp2FrameHeaderBytes];
+            http2WriteFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+            if (!co_await writeAll(std::string_view(settings, sizeof(settings)))) co_return;
+
+            std::uint32_t requestStream = 0;
+            while (requestStream == 0) {
+                char hb[kHttp2FrameHeaderBytes];
+                if (!co_await readExact(hb, sizeof(hb))) co_return;
+                const auto h = http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                std::string payload(h.length, '\0');
+                if (h.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                const auto type = static_cast<Http2FrameType>(h.type);
+                if (type == Http2FrameType::kSettings && (h.flags & kHttp2FlagAck) == 0) {
+                    char ack[kHttp2FrameHeaderBytes];
+                    http2WriteFrameHeader(ack, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
+                    if (!co_await writeAll(std::string_view(ack, sizeof(ack)))) co_return;
+                } else if (type == Http2FrameType::kHeaders) {
+                    requestStream = h.streamId;
+                }
+            }
+
+            // Response HEADERS (200, no END_STREAM), a DATA frame (no END_STREAM, so the
+            // client buffers it and defers the connection credit), then RST_STREAM.
+            std::pmr::string block(resource);
+            HpackEncoder::encodeStatus(block, 200);
+            char rh[kHttp2FrameHeaderBytes];
+            http2WriteFrameHeader(
+                rh, static_cast<std::uint32_t>(block.size()),
+                Http2FrameType::kHeaders, kHttp2FlagEndHeaders, requestStream);
+            if (!co_await writeAll(std::string_view(rh, sizeof(rh)))) co_return;
+            if (!co_await writeAll(std::string_view(block.data(), block.size()))) co_return;
+            char dh[kHttp2FrameHeaderBytes];
+            http2WriteFrameHeader(dh, kDataSize, Http2FrameType::kData, 0, requestStream);
+            if (!co_await writeAll(std::string_view(dh, sizeof(dh)))) co_return;
+            if (!co_await writeAll(std::string(kDataSize, 'x'))) co_return;
+            char rst[kHttp2FrameHeaderBytes + 4];
+            char* rp = http2WriteFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, requestStream);
+            rp[0] = 0; rp[1] = 0; rp[2] = 0; rp[3] = 2;  // INTERNAL_ERROR
+            if (!co_await writeAll(std::string_view(rst, sizeof(rst)))) co_return;
+
+            // Capture the client's post-reset connection-level (stream 0) WINDOW_UPDATE.
+            for (;;) {
+                char hb[kHttp2FrameHeaderBytes];
+                if (!co_await readExact(hb, sizeof(hb))) co_return;
+                const auto h = http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                std::string payload(h.length, '\0');
+                if (h.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                if (static_cast<Http2FrameType>(h.type) == Http2FrameType::kWindowUpdate &&
+                    h.streamId == 0 && payload.size() == 4) {
+                    const auto incr =
+                        (static_cast<std::uint32_t>(static_cast<unsigned char>(payload[0])) & 0x7FU) << 24 |
+                        static_cast<std::uint32_t>(static_cast<unsigned char>(payload[1])) << 16 |
+                        static_cast<std::uint32_t>(static_cast<unsigned char>(payload[2])) << 8 |
+                        static_cast<std::uint32_t>(static_cast<unsigned char>(payload[3]));
+                    if (incr == kDataSize) sawConnectionCreditForData = true;
+                }
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto stream = co_await taskAsAwaitable(session->fetchStream("/", options, resource));
+                // Delay before reading so the reset (and failStream's credit) is processed
+                // first: the failure path -- not readChunk's drain -- must repay the credit.
+                asio::steady_timer settle(io, std::chrono::milliseconds(60));
+                co_await settle.async_wait(asio::as_tuple(asio::use_awaitable));
+                for (;;) {
+                    auto chunk = co_await taskAsAwaitable(stream.readChunk());
+                    if (chunk.empty()) break;
+                }
+            } catch (const std::exception&) {
+                clientThrew = true;
+            }
+            // Deliberately no closeNow(): keep the session alive so its flusher sends the
+            // WINDOW_UPDATE the server is waiting to read.
+        },
+        asio::detached);
+
+    // Watchdog: end the test whether or not the credit arrives (without the fix it never
+    // does and the server's capture loop would otherwise block).
+    asio::steady_timer watchdog(io, std::chrono::milliseconds(500));
+    watchdog.async_wait([&io](const std::error_code& ec) {
+        if (!ec) io.stop();
+    });
+
+    io.run();
+    RUVIA_CHECK(clientThrew);
+    RUVIA_CHECK(sawConnectionCreditForData);
+}
+
 #endif  // RUVIA_ENABLE_HTTP_CLIENT
