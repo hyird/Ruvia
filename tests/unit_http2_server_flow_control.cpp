@@ -248,6 +248,107 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
     return rstError;
 }
 
+// A not-found handler whose response carries a header value large enough that the
+// HPACK-encoded response header block exceeds the default 16384-byte max frame size,
+// forcing the server onto its HEADERS + CONTINUATION path.
+ruvia::Task<ruvia::HttpResponse> largeHeaderNotFoundHandler(ruvia::Context& context) {
+    (void)context;
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(404);
+    static const std::string bigValue(40000, 'a');
+    response.header("x-large", bigValue);
+    co_return response;
+}
+
+struct EmittedFrame {
+    std::uint8_t type;
+    std::uint32_t streamId;
+    std::uint8_t flags;
+};
+
+// Two requests (streams 1 and 3) arrive together; both 404 into the large-header
+// handler, so both produce a multi-frame (HEADERS + CONTINUATION) response header
+// block and their writes contend for the single write turn. Returns every frame the
+// server emits, so the test can assert RFC 9113 6.10: a stream's HEADERS + CONTINUATION
+// frames must be contiguous on the wire, never interleaved with another stream's frame.
+std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
+    asio::io_context io;
+    std::vector<EmittedFrame> frames;
+
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::detail::RouteTable routes(worker.resource());
+            routes.setNotFoundHandler(&largeHeaderNotFoundHandler);
+            ruvia::HttpServerOptions options;
+            ruvia::detail::ConnectionScanner::Entry scannerEntry;
+            ruvia::detail::Http2ServerSession<tcp::socket> session(
+                sock, sock, worker, routes, nullptr, nullptr, nullptr, options, scannerEntry,
+                "127.0.0.1", nullptr);
+            co_await ruvia::detail::taskAsAwaitable(session.run());
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            const auto reqView = std::string_view(headerBlock.data(), headerBlock.size());
+
+            // Both requests in a single write, so the server dispatches them together.
+            std::string both;
+            both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 1, reqView);
+            both += frame(0x1 /*HEADERS*/, kHttp2FlagEndStream | kHttp2FlagEndHeaders, 3, reqView);
+            if (!co_await writeAll(both)) co_return;
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_send, ignore);
+
+            for (;;) {
+                char headerBytes[kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                frames.push_back(EmittedFrame{
+                    static_cast<std::uint8_t>(header.type), header.streamId, header.flags});
+            }
+        },
+        asio::detached);
+
+    io.run();
+    return frames;
+}
+
 }  // namespace
 
 RUVIA_TEST(http2_bodyless_headers_with_content_length_is_rejected) {
@@ -274,4 +375,39 @@ RUVIA_TEST(http2_dropped_data_credits_connection_flow_window) {
         }
     }
     RUVIA_CHECK(credited);
+}
+
+RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
+    const auto frames = framesForConcurrentLargeHeaderResponses();
+
+    // The oversized response headers must have exercised the multi-frame path.
+    bool sawContinuation = false;
+    for (const auto& f : frames) {
+        if (f.type == 0x9 /*CONTINUATION*/) {
+            sawContinuation = true;
+        }
+    }
+    RUVIA_CHECK(sawContinuation);
+
+    // RFC 9113 6.10: once a HEADERS frame without END_HEADERS opens a header block,
+    // every frame until END_HEADERS must be a CONTINUATION on the SAME stream -- no
+    // other stream's frame may interleave.
+    std::uint32_t openStream = 0;
+    bool interleaved = false;
+    for (const auto& f : frames) {
+        if (openStream != 0) {
+            if (f.type != 0x9 /*CONTINUATION*/ || f.streamId != openStream) {
+                interleaved = true;
+                break;
+            }
+            if ((f.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0) {
+                openStream = 0;
+            }
+        } else if (f.type == 0x1 /*HEADERS*/ &&
+                   (f.flags & ruvia::detail::kHttp2FlagEndHeaders) == 0) {
+            openStream = f.streamId;
+        }
+    }
+    RUVIA_CHECK(!interleaved);
+    RUVIA_CHECK_EQ(openStream, std::uint32_t{0});
 }
