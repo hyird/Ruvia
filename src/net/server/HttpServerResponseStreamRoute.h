@@ -74,6 +74,16 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     const auto framing = isHttp11
         ? ResponseStreamFraming::kHttp1Chunked
         : ResponseStreamFraming::kHttp1CloseDelimited;
+    // The streamed head is written before recordCompletedRequest finalizes the
+    // connection lifetime below, so decide it now and let the head announce
+    // Connection: close for a response that will be the connection's last. This
+    // matches the post-dispatch verdict exactly: the connection closes iff it is
+    // not kept alive, is an HTTP/1.0 (close-delimited) stream, or the per-connection
+    // request limit is reached by this request (recordCompletedRequest increments
+    // requestCount then applies the same requestLimitReached check).
+    const bool connectionWillClose =
+        !keepAlive || !isHttp11 ||
+        requestLimitReached(requestCount + 1, options.maxRequestsPerConnection);
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = routeResolution.route();
     ResponseSink responseSink(
@@ -82,7 +92,8 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         responseHead,
         scannerEntry,
         route.responseMode(),
-        framing);
+        framing,
+        connectionWillClose);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(

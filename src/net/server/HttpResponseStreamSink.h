@@ -35,14 +35,16 @@ public:
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
         ResponseBodyMode mode,
-        ResponseStreamFraming framing) noexcept
+        ResponseStreamFraming framing,
+        bool connectionWillClose) noexcept
         : stream_(stream),
           head_(head),
           scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
           mode_(mode),
-          framing_(framing) {}
+          framing_(framing),
+          connectionWillClose_(connectionWillClose) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -79,7 +81,8 @@ private:
         auto streamHead = prepareResponseStreamHead(
             state_.requireContextBeforeCommit(),
             mode_,
-            framing_);
+            framing_,
+            connectionWillClose_);
 
         head_.reset();
         appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
@@ -205,6 +208,7 @@ private:
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
     ResponseStreamFraming framing_;
+    bool connectionWillClose_;
     ResponseStreamState state_;
     bool aborted_{false};
 };
