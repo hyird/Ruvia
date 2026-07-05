@@ -72,7 +72,7 @@ public:
 private:
     void configureAcceptor();
     void configureTlsContext();
-    void stopOnContext() noexcept;
+    void stopOnContext(bool honorGracePeriod = true) noexcept;
     void forceCloseAll() noexcept;
     void resetStartupState();
     void completeStartup(std::exception_ptr exception = nullptr) noexcept;

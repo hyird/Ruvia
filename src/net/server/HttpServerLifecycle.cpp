@@ -231,7 +231,7 @@ void HttpServer::start() {
         if (workerThread_.joinable()) {
             workerThread_.join();
         } else {
-            stopOnContext();
+            stopOnContext(/*honorGracePeriod=*/false);
         }
         throw;
     }
@@ -351,7 +351,7 @@ void HttpServer::configureTlsContext() {
     }
 }
 
-void HttpServer::stopOnContext() noexcept {
+void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
@@ -359,8 +359,11 @@ void HttpServer::stopOnContext() noexcept {
 
     // started_ is already false, so sessions self-close after their current
     // request. With a grace period, hold the force-close for that long so
-    // in-flight requests can finish; otherwise close immediately.
-    if (options_.shutdownGracePeriod.count() > 0) {
+    // in-flight requests can finish; otherwise close immediately. A teardown
+    // triggered by a startup failure or a worker crash (honorGracePeriod=false)
+    // has no in-flight requests to drain -- honoring the grace period there would
+    // only stall the failure report (and the worker join) for the full period.
+    if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0) {
         drainTimer_.expires_after(options_.shutdownGracePeriod);
         drainTimer_.async_wait([this](const std::error_code& ec) {
             if (ec != asio::error::operation_aborted) {
@@ -411,7 +414,7 @@ void HttpServer::runIoContext() noexcept {
         ioContext_.run();
     } catch (...) {
         started_.store(false, std::memory_order_relaxed);
-        stopOnContext();
+        stopOnContext(/*honorGracePeriod=*/false);
         completeStartup(std::current_exception());
         return;
     }
@@ -435,7 +438,7 @@ Task<void> HttpServer::runWorker() {
         co_await acceptLoop();
     } catch (...) {
         started_.store(false, std::memory_order_relaxed);
-        stopOnContext();
+        stopOnContext(/*honorGracePeriod=*/false);
         completeStartup(std::current_exception());
     }
 }
