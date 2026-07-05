@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "ruvia/detail/AsciiCase.h"
+#include "ruvia/http/detail/HttpOws.h"
 
 namespace ruvia::detail {
 
@@ -22,16 +23,6 @@ inline void httpAppendDecodedQuotedPairs(std::pmr::string& out, std::string_view
         }
         out.push_back(value[i]);
     }
-}
-
-[[nodiscard]] inline std::string_view httpTrimOws(std::string_view value) noexcept {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
-        value.remove_suffix(1);
-    }
-    return value;
 }
 
 [[nodiscard]] inline std::string_view httpTrimQuotes(std::string_view value) noexcept {
