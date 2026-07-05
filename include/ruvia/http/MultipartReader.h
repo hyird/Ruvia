@@ -103,6 +103,7 @@ private:
     std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
     bool partBegin_{false};
+    bool firstBoundary_{true};
 };
 
 }  // namespace ruvia
