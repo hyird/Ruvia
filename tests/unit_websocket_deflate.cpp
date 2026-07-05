@@ -12,12 +12,13 @@ namespace {
 using ruvia::detail::HttpServerParser;
 using ruvia::detail::WebSocketDeflate;
 using ruvia::detail::WebSocketInflateResult;
-using ruvia::detail::webSocketOffersPermessageDeflate;
+using ruvia::detail::webSocketNegotiatePermessageDeflate;
+using ruvia::detail::WebSocketDeflateNegotiation;
 
 // Parses a WebSocket upgrade carrying `extensions` as its Sec-WebSocket-Extensions
-// value and reports whether the server would enable permessage-deflate for it.
+// value and reports how the server would negotiate permessage-deflate for it.
 // (parser/raw stay alive across the call: request headers view into raw.)
-bool offersDeflate(std::string_view extensions) {
+WebSocketDeflateNegotiation negotiateDeflate(std::string_view extensions) {
     std::string raw = "GET /ws HTTP/1.1\r\nHost: x\r\n";
     if (!extensions.empty()) {
         raw += "Sec-WebSocket-Extensions: ";
@@ -27,7 +28,11 @@ bool offersDeflate(std::string_view extensions) {
     raw += "\r\n";
     HttpServerParser parser;
     const auto result = parser.parse(raw);
-    return webSocketOffersPermessageDeflate(result.request);
+    return webSocketNegotiatePermessageDeflate(result.request);
+}
+
+bool offersDeflate(std::string_view extensions) {
+    return negotiateDeflate(extensions).enabled;
 }
 
 // Compress then decompress on the same codec (separate deflate/inflate streams,
@@ -108,6 +113,30 @@ RUVIA_TEST(websocket_deflate_offer_declined_forms) {
     RUVIA_CHECK(!offersDeflate("permessage-deflate; server_max_window_bits=10"));
     // Extension parameter names are case-insensitive.
     RUVIA_CHECK(!offersDeflate("permessage-deflate; Server_Max_Window_Bits=10"));
+}
+
+RUVIA_TEST(websocket_deflate_offer_accepts_server_max_window_bits_15) {
+    // server_max_window_bits=15 pins exactly our fixed 32 KiB window, so we can
+    // honor it. RFC 7692 §7.1.2.1 then requires echoing the accepted value, which
+    // the handshake signals via echoServerMaxWindowBits.
+    const auto pinned = negotiateDeflate("permessage-deflate; server_max_window_bits=15");
+    RUVIA_CHECK(pinned.enabled);
+    RUVIA_CHECK(pinned.echoServerMaxWindowBits);
+    // A quoted value is equivalent to the bare token.
+    const auto quoted = negotiateDeflate("permessage-deflate; server_max_window_bits=\"15\"");
+    RUVIA_CHECK(quoted.enabled);
+    RUVIA_CHECK(quoted.echoServerMaxWindowBits);
+    // A bare/browser offer is accepted without echoing server_max_window_bits.
+    const auto bare = negotiateDeflate("permessage-deflate; client_max_window_bits");
+    RUVIA_CHECK(bare.enabled);
+    RUVIA_CHECK(!bare.echoServerMaxWindowBits);
+    // A smaller pinned window cannot be honored (we never shrink our compressor).
+    RUVIA_CHECK(!negotiateDeflate("permessage-deflate; server_max_window_bits=14").enabled);
+    // A later offer that permits 15 wins over an earlier too-small one.
+    const auto second = negotiateDeflate(
+        "permessage-deflate; server_max_window_bits=10, permessage-deflate; server_max_window_bits=15");
+    RUVIA_CHECK(second.enabled);
+    RUVIA_CHECK(second.echoServerMaxWindowBits);
 }
 
 RUVIA_TEST(websocket_deflate_offer_ignores_unrelated_parameters) {

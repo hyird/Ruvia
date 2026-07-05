@@ -120,11 +120,23 @@ private:
     bool inflateOk_{false};
 };
 
-// True if the client offered permessage-deflate in a form we can honor. We use a
-// 32 KiB server window with no context takeover, so we decline (fall back to no
-// compression) only when the offer pins a smaller server window we would have to
-// obey; client_max_window_bits and the no-context-takeover hints are fine.
-[[nodiscard]] inline bool webSocketOffersPermessageDeflate(const HttpRequest& request) noexcept {
+struct WebSocketDeflateNegotiation final {
+    bool enabled = false;
+    // The client pinned server_max_window_bits=15, i.e. exactly our fixed window.
+    // RFC 7692 §7.1.2.1 requires a server that accepts an offer carrying this
+    // parameter to echo server_max_window_bits in the response, so record it.
+    bool echoServerMaxWindowBits = false;
+};
+
+// Decide whether the client offered permessage-deflate in a form we can honor. We
+// run a fixed 32 KiB (15-bit) server window with no context takeover, so a bare
+// offer, client_max_window_bits (our 15-bit inflate handles any smaller client
+// window), and the no-context-takeover hints are all fine. An offer that pins
+// server_max_window_bits is honored only when it permits 15: a smaller bound would
+// require shrinking our compressor, so those offers are skipped (fall back to the
+// next offer / no compression). RFC 7692 §7.1.2.1.
+[[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
+    const HttpRequest& request) noexcept {
     std::string_view offers = request.header("Sec-WebSocket-Extensions");
     while (!offers.empty()) {
         const auto comma = offers.find(',');
@@ -133,8 +145,12 @@ private:
         const auto name = httpTrimOws(semicolon == std::string_view::npos ? offer : offer.substr(0, semicolon));
         if (asciiEqualsIgnoreCase(name, "permessage-deflate")) {
             const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
-            if (!httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits").has_value()) {
-                return true;
+            const auto serverWindow = httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits");
+            if (!serverWindow.has_value()) {
+                return {.enabled = true, .echoServerMaxWindowBits = false};
+            }
+            if (httpTrimQuotes(*serverWindow) == "15") {
+                return {.enabled = true, .echoServerMaxWindowBits = true};
             }
         }
         if (comma == std::string_view::npos) {
@@ -142,7 +158,7 @@ private:
         }
         offers.remove_prefix(comma + 1);
     }
-    return false;
+    return {};
 }
 
 }  // namespace ruvia::detail
