@@ -1,8 +1,11 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 
+#include "http/HttpCommonInternal.h"
 #include "http/MultipartParsing.h"
 
 // A boundary delimiter ends with CRLF (next part) or "--" (close). A lone '-'
@@ -167,4 +170,17 @@ RUVIA_TEST(multipart_is_form_data_disposition) {
     RUVIA_CHECK(!httpIsFormDataDisposition("attachment; name=\"x\""));
     RUVIA_CHECK(!httpIsFormDataDisposition("form-data-extra"));    // whole type compared
     RUVIA_CHECK(!httpIsFormDataDisposition(""));
+}
+
+RUVIA_TEST(multipart_part_access_decodes_quoted_pairs) {
+    // The buffered parser builds parts via MultipartPartAccess::make, which must
+    // decode RFC 7230 §3.2.6 quoted-pairs in name/filename (they are part-owned so
+    // they may differ from the raw request bytes); contentType/body stay verbatim.
+    auto* resource = std::pmr::get_default_resource();
+    const auto part = ruvia::detail::MultipartPartAccess::make(
+        "a\\\"b", "x\\\\y.txt", "text/plain", "the body", resource);
+    RUVIA_CHECK_EQ(std::string(part.name()), std::string("a\"b"));
+    RUVIA_CHECK_EQ(std::string(part.filename()), std::string("x\\y.txt"));
+    RUVIA_CHECK_EQ(std::string(part.contentType()), std::string("text/plain"));
+    RUVIA_CHECK_EQ(std::string(part.body()), std::string("the body"));
 }

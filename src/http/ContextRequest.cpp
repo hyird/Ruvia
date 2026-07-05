@@ -281,7 +281,8 @@ void compactParsedBodyFields(
             partHeaders.name,
             partHeaders.filename,
             partHeaders.contentType,
-            requestBody.substr(cursor, nextDelimiterPrefix - cursor)));
+            requestBody.substr(cursor, nextDelimiterPrefix - cursor),
+            resource));
 
         cursor = nextDelimiterPrefix + detail::httpMultipartBoundaryPrefixSize(boundaryValue);
     }

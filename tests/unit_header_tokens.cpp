@@ -50,3 +50,20 @@ RUVIA_TEST(header_trim_quotes) {
     RUVIA_CHECK_EQ(httpTrimQuotes("\""), std::string_view("\""));         // one quote is too short
     RUVIA_CHECK_EQ(httpTrimQuotes("\"abc"), std::string_view("\"abc"));   // only a leading quote
 }
+
+RUVIA_TEST(header_decode_quoted_pairs) {
+    // RFC 7230 §3.2.6: inside a quoted-string, "\X" represents the octet X. The
+    // input is already quote-trimmed; a valid unquoted token has no backslash, so
+    // every '\' is an escape (a trailing lone '\' from malformed input is kept).
+    auto* resource = std::pmr::get_default_resource();
+    const auto decode = [resource](std::string_view value) {
+        std::pmr::string out(resource);
+        ruvia::detail::httpAppendDecodedQuotedPairs(out, value);
+        return std::string(out.data(), out.size());
+    };
+    RUVIA_CHECK_EQ(decode("plain"), std::string("plain"));      // no escapes -> unchanged
+    RUVIA_CHECK_EQ(decode("a\\\"b"), std::string("a\"b"));      // \" -> "
+    RUVIA_CHECK_EQ(decode("x\\\\y"), std::string("x\\y"));      // \\ -> \
+    RUVIA_CHECK_EQ(decode("\\a\\b\\c"), std::string("abc"));    // each pair unescaped
+    RUVIA_CHECK_EQ(decode("end\\"), std::string("end\\"));      // trailing lone '\' kept verbatim
+}
