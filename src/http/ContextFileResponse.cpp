@@ -210,7 +210,14 @@ template <typename ApplyResponseState>
         if (enableValidators && !ifMatchAllows(conditional.ifMatch, etag)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
-        if (enableValidators && !conditional.ifUnmodifiedSince.empty() &&
+        // RFC 9110 §13.2.2 step 2: If-Unmodified-Since is evaluated only when If-Match
+        // is absent -- a present If-Match takes precedence and the (weaker) date
+        // condition MUST be ignored, exactly as If-Modified-Since is ignored below
+        // when If-None-Match is present. Without the ifMatch.empty() guard, a request
+        // whose strong validator matched (If-Match ok) but whose date is older than
+        // Last-Modified would draw a spurious 412.
+        if (enableValidators && conditional.ifMatch.empty() &&
+            !conditional.ifUnmodifiedSince.empty() &&
             !httpDateUnmodified(conditional.ifUnmodifiedSince, modifiedSeconds)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
         }
