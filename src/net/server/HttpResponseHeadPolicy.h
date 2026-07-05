@@ -57,12 +57,18 @@ private:
     if (statusCode >= 100 && statusCode < 200) {
         return ResponseWritePolicy::bodyForbidden();
     }
-    if (statusCode == 204 || statusCode == 205) {
+    if (statusCode == 204) {
         return ResponseWritePolicy::bodyForbidden();
     }
     if (statusCode == 304) {
         return ResponseWritePolicy::notModified();
     }
+    // 205 (Reset Content) deliberately falls through to the normal policy: unlike
+    // 1xx/204/304, RFC 9112 §6.3 does NOT list 205 among the responses terminated
+    // by the empty line regardless of headers, so a 205 without a Content-Length or
+    // Transfer-Encoding is read until connection close (rule 8) -- a framing
+    // ambiguity on a persistent connection. Emitting an auto Content-Length: 0 for
+    // its empty body is exactly what RFC 9110 §15.3.6 recommends.
     return ResponseWritePolicy::normal();
 }
 

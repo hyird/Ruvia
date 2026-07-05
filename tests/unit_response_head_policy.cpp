@@ -25,16 +25,27 @@ RUVIA_TEST(response_policy_normal_status_allows_everything) {
 }
 
 RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
-    // 1xx informational and 204/205 carry no body and no framing headers.
+    // 1xx informational and 204 are terminated by the empty line regardless of
+    // headers (RFC 9112 §6.3 rule 1), so they carry no body and no framing headers.
     for (std::uint16_t status : {std::uint16_t{100}, std::uint16_t{101},
-                                 std::uint16_t{199}, std::uint16_t{204},
-                                 std::uint16_t{205}}) {
+                                 std::uint16_t{199}, std::uint16_t{204}}) {
         const auto policy = responseWritePolicy(status);
         RUVIA_CHECK(!policy.bodyAllowed());
         RUVIA_CHECK(!policy.autoContentLengthAllowed());
         RUVIA_CHECK(!policy.explicitContentLengthAllowed());
         RUVIA_CHECK(!policy.transferEncodingAllowed());
     }
+}
+
+RUVIA_TEST(response_policy_reset_content_carries_framing) {
+    // 205 (Reset Content) is NOT in RFC 9112 §6.3 rule 1, so it must declare its
+    // (empty) body length: it uses the normal policy and receives an auto
+    // Content-Length: 0 rather than being read until connection close.
+    const auto policy = responseWritePolicy(205);
+    RUVIA_CHECK(policy.bodyAllowed());
+    RUVIA_CHECK(policy.autoContentLengthAllowed());
+    RUVIA_CHECK(policy.explicitContentLengthAllowed());
+    RUVIA_CHECK(policy.transferEncodingAllowed());
 }
 
 RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
