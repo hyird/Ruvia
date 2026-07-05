@@ -595,6 +595,158 @@ std::string runH2EarlyResponseUpload() {
     return responseBody;
 }
 
+// A single SETTINGS frame may carry SETTINGS_INITIAL_WINDOW_SIZE more than once
+// (RFC 9113 6.5.3, processed in order). The server advertises a 2-byte stream
+// window, the client sends 2 body bytes and blocks, then the server sends one
+// SETTINGS frame with two INITIAL_WINDOW_SIZE entries (5 then 10). Each live
+// stream's send window must move by the sum of the per-entry deltas
+// ((5-2)+(10-5)=8), not just the last delta (10-5=5). With the sum applied the
+// client unblocks and uploads the full 10-byte body; keeping only the last delta
+// leaves the window 3 bytes short so END_STREAM never arrives (RFC 9113 6.9.2).
+// Returns the full body the server received, or "" on the flow-control deadlock.
+std::string runH2InitialWindowMultiEntryUpload() {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    std::string uploaded;
+    bool sawEndStream = false;
+    const std::string_view fullBody("0123456789");  // 10 bytes
+    TestBodyProducer producer({fullBody});
+
+    asio::steady_timer watchdog(io);
+    watchdog.expires_after(std::chrono::seconds(3));
+    watchdog.async_wait([&io](const std::error_code& ec) {
+        if (!ec) {
+            io.stop();  // break the flow-control deadlock the buggy path would hang on
+        }
+    });
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+
+            char preface[24];
+            if (!co_await readExact(preface, sizeof(preface))) {
+                co_return;
+            }
+            // Initial SETTINGS advertising INITIAL_WINDOW_SIZE = 2.
+            std::array<char, kHttp2FrameHeaderBytes + 6> settings;
+            char* out = http2WriteFrameHeader(settings.data(), 6, Http2FrameType::kSettings, 0, 0);
+            http2WriteSettingsEntry(out, Http2SettingId::kInitialWindowSize, 2);
+            if (!co_await writeAll(std::string_view(settings.data(), settings.size()))) {
+                co_return;
+            }
+
+            std::uint32_t requestStream = 0;
+            bool secondSettingsSent = false;
+            HpackDecoder decoder(resource);
+            while (!sawEndStream) {
+                char headerBytes[kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                    co_return;
+                }
+                const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                    co_return;
+                }
+                const auto type = static_cast<Http2FrameType>(header.type);
+                if (type == Http2FrameType::kSettings) {
+                    if ((header.flags & kHttp2FlagAck) == 0) {
+                        char ack[kHttp2FrameHeaderBytes];
+                        http2WriteFrameHeader(ack, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
+                        if (!co_await writeAll(std::string_view(ack, sizeof(ack)))) {
+                            co_return;
+                        }
+                    }
+                    continue;
+                }
+                if (type == Http2FrameType::kWindowUpdate) {
+                    continue;
+                }
+                if (type == Http2FrameType::kHeaders) {
+                    requestStream = header.streamId;
+                    std::string_view fragment;
+                    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
+                        co_return;
+                    }
+                    struct DecodeCtx {} ctx;
+                    (void)decoder.decode(fragment, &ctx,
+                        [](void*, std::string_view, std::string_view) { return true; });
+                    sawEndStream = (header.flags & kHttp2FlagEndStream) != 0;
+                    continue;
+                }
+                if (type == Http2FrameType::kData && header.streamId == requestStream) {
+                    uploaded.append(payload.data(), payload.size());
+                    sawEndStream = (header.flags & kHttp2FlagEndStream) != 0;
+                    // Once the client has spent the tiny initial window, enlarge it
+                    // with a single SETTINGS frame carrying two INITIAL_WINDOW_SIZE
+                    // entries (5 then 10) so the delta accounting is exercised.
+                    if (!secondSettingsSent && uploaded.size() >= 2 && !sawEndStream) {
+                        secondSettingsSent = true;
+                        std::array<char, kHttp2FrameHeaderBytes + 12> grow;
+                        char* growOut =
+                            http2WriteFrameHeader(grow.data(), 12, Http2FrameType::kSettings, 0, 0);
+                        growOut = http2WriteSettingsEntry(growOut, Http2SettingId::kInitialWindowSize, 5);
+                        http2WriteSettingsEntry(growOut, Http2SettingId::kInitialWindowSize, 10);
+                        if (!co_await writeAll(std::string_view(grow.data(), grow.size()))) {
+                            co_return;
+                        }
+                    }
+                }
+            }
+
+            std::pmr::string block(resource);
+            HpackEncoder::encodeStatus(block, 200);
+            char responseHeaders[kHttp2FrameHeaderBytes];
+            http2WriteFrameHeader(
+                responseHeaders, static_cast<std::uint32_t>(block.size()),
+                Http2FrameType::kHeaders, kHttp2FlagEndHeaders | kHttp2FlagEndStream, requestStream);
+            (void)co_await writeAll(std::string_view(responseHeaders, sizeof(responseHeaders)));
+            (void)co_await writeAll(std::string_view(block.data(), block.size()));
+            watchdog.cancel();
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                options.method = "POST";
+                options.bodyStream = ruvia::RequestBodyStream(&producer, &TestBodyProducer::nextChunk);
+                (void)co_await taskAsAwaitable(session->fetch("/upload", options, resource));
+            } catch (const std::exception&) {
+            }
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return sawEndStream ? uploaded : std::string{};
+}
+
 // Run `count` concurrent GETs to the given paths against the mock server on one h2 session.
 std::vector<H2Result> runH2Fetches(
     std::vector<std::string> paths,
@@ -1920,6 +2072,13 @@ RUVIA_TEST(http2_streamed_request_body) {
 RUVIA_TEST(http2_streamed_request_body_early_response) {
     const auto body = runH2EarlyResponseUpload();
     RUVIA_CHECK_EQ(body, std::string("done"));
+}
+
+// A single SETTINGS frame with two INITIAL_WINDOW_SIZE entries must move each live
+// stream's send window by the sum of the per-entry deltas, not just the last one.
+RUVIA_TEST(http2_initial_window_multiple_entries_apply_cumulative_delta) {
+    const auto body = runH2InitialWindowMultiEntryUpload();
+    RUVIA_CHECK_EQ(body, std::string("0123456789"));
 }
 
 RUVIA_TEST(http2_redirect_root_relative) {
