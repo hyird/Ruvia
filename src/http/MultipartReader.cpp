@@ -147,11 +147,14 @@ Task<void> MultipartReader::processHeaders() {
                 throw std::invalid_argument("invalid multipart field name");
         }
 
-        currentName_.assign(partHeaders.name.data(), partHeaders.name.size());
+        // Decode Content-Disposition quoted-pairs so name/filename match the buffered
+        // parser (which does the same in MultipartPartAccess::make).
+        currentName_.clear();
+        detail::httpAppendDecodedQuotedPairs(currentName_, partHeaders.name);
         currentFilename_.clear();
         currentContentType_.clear();
         if (!partHeaders.filename.empty()) {
-            currentFilename_.assign(partHeaders.filename.data(), partHeaders.filename.size());
+            detail::httpAppendDecodedQuotedPairs(currentFilename_, partHeaders.filename);
         }
         if (!partHeaders.contentType.empty()) {
             currentContentType_.assign(partHeaders.contentType.data(), partHeaders.contentType.size());

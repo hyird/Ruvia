@@ -1,12 +1,28 @@
 #pragma once
 
 #include <cstddef>
+#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "ruvia/detail/AsciiCase.h"
 
 namespace ruvia::detail {
+
+// Append `value` to `out`, decoding RFC 7230 §3.2.6 quoted-pairs ("\X" -> "X").
+// `value` must be a quote-trimmed parameter value: a valid unquoted token cannot
+// contain a backslash, so any '\' present came from a quoted-string and is an
+// escape. (A trailing lone '\' -- only possible from malformed input -- is emitted
+// verbatim.) Used to unescape multipart Content-Disposition name/filename.
+inline void httpAppendDecodedQuotedPairs(std::pmr::string& out, std::string_view value) {
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '\\' && i + 1 < value.size()) {
+            ++i;
+        }
+        out.push_back(value[i]);
+    }
+}
 
 // Thin HTTP-layer aliases over the shared ASCII case owner (ruvia/detail/AsciiCase.h).
 [[nodiscard]] inline unsigned char httpLowerAscii(unsigned char c) noexcept {

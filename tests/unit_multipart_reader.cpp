@@ -227,3 +227,20 @@ RUVIA_TEST(multipart_reader_boundary_prefix_in_content_is_not_a_delimiter) {
         RUVIA_CHECK_EQ(parts[0].body, std::string("before\r\n--BOUNDARYx after"));
     }
 }
+
+RUVIA_TEST(multipart_reader_decodes_quoted_pairs_in_name_and_filename) {
+    // RFC 7230 §3.2.6: a quoted-pair "\X" in a Content-Disposition parameter decodes
+    // to X. The streaming reader must unescape name/filename (matching the buffered
+    // parser) rather than surface the raw backslashes.
+    const std::string body =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"a\\\"b\"; filename=\"x\\\\y.txt\"\r\n"
+        "\r\n"
+        "content"
+        "\r\n--BOUNDARY--\r\n";
+    const auto parts = parseMultipart(splitChunks(body, 64), "BOUNDARY");
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parts[0].name, std::string("a\"b"));         // name="a\"b" -> a"b
+    RUVIA_CHECK_EQ(parts[0].filename, std::string("x\\y.txt")); // filename="x\\y.txt" -> x\y.txt
+    RUVIA_CHECK_EQ(parts[0].body, std::string("content"));
+}
