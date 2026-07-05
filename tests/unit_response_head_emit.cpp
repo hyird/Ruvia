@@ -83,6 +83,18 @@ RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));
 }
 
+RUVIA_TEST(response_head_reset_content_declares_zero_length) {
+    // 205 is not auto-terminated by the empty line (RFC 9112 §6.3), so it MUST
+    // declare its empty body length; otherwise a persistent connection reads until
+    // close. It carries an explicit Content-Length: 0 (RFC 9110 §15.3.6).
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.status(205);
+    const auto head = emitHead(response, responseWritePolicy(205));
+    RUVIA_CHECK(head.starts_with("HTTP/1.1 205 Reset Content\r\n"));
+    RUVIA_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
+    RUVIA_CHECK(head.ends_with("\r\n\r\n"));
+}
+
 RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     // Force the emitted head well past the 512-byte stack buffer so the heap
     // (reserveAdditional) emit path runs. Every header must survive intact and
