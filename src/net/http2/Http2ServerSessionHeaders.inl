@@ -94,7 +94,7 @@ Task<Http2SessionFlow> Http2ServerSession<Stream>::processHeaders(
             closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
             refusedHeaderStream_.reset();
         } else {
-            queueInitialStreamIfReady(*stream);
+            co_await admitDecodedInitialStream(*stream);
         }
     } else {
         headerContinuation_.start(stream->id(), false);
@@ -186,7 +186,7 @@ Task<Http2SessionFlow> Http2ServerSession<Stream>::processContinuation(
                 closedStreams_.remember(stream->id(), Http2StreamCloseSource::kLocal);
                 refusedHeaderStream_.reset();
             } else {
-                queueInitialStreamIfReady(*stream);
+                co_await admitDecodedInitialStream(*stream);
             }
         }
     }

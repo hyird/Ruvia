@@ -119,6 +119,22 @@ void Http2ServerSession<Stream>::queueInitialStreamIfReady(Http2StreamState& str
 }
 
 template <typename Stream>
+Task<void> Http2ServerSession<Stream>::admitDecodedInitialStream(Http2StreamState& stream) {
+    // RFC 9113 §8.1.1: a content-length header MUST equal the sum of the DATA frame
+    // payload lengths. When the peer sets END_STREAM on the HEADERS frame there will
+    // be no DATA, so a nonzero declared content-length can never be satisfied -- the
+    // DATA path enforces this at its own END_STREAM, but a body-less HEADERS reaches
+    // dispatch without ever entering that path. Reject the malformed request here so
+    // the two END_STREAM routes stay consistent.
+    if (stream.peerEndStream() && !http2BodyLengthComplete(stream)) {
+        co_await sendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+        stream.markReset();
+        co_return;
+    }
+    queueInitialStreamIfReady(stream);
+}
+
+template <typename Stream>
 void Http2ServerSession<Stream>::resolveStreamRoute(Http2StreamState& stream) noexcept {
     const auto method = Http2RequestBuilder::requestMethod(stream);
     const auto path = Http2RequestBuilder::requestPath(stream);

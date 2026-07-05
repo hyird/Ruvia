@@ -187,6 +187,8 @@ private:
 
     void queueInitialStreamIfReady(Http2StreamState& stream);
 
+    Task<void> admitDecodedInitialStream(Http2StreamState& stream);
+
     void resolveStreamRoute(Http2StreamState& stream) noexcept;
 
     [[nodiscard]] bool seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body);
