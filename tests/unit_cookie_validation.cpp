@@ -175,6 +175,44 @@ RUVIA_TEST(cookie_host_prefix_requires_secure_root_path_no_domain) {
     RUVIA_CHECK(rejects(withDomain));  // Domain must be absent
 }
 
+RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
+    const auto rejectsWithName = [](std::string_view name, const ruvia::CookieOptions& options) {
+        try {
+            ruvia::detail::validateCookie(name, "value", options);
+            return false;
+        } catch (const std::exception&) {
+            return true;
+        }
+    };
+
+    // RFC 6265bis §4.1.3: the prefix rules apply to the cookie's actual wire name,
+    // so a hand-typed "__Host-"/"__Secure-" name (CookiePrefix enum = kNone) must be
+    // enforced like the enum, case-insensitively -- not silently shipped for the
+    // browser to drop. Keying only on the enum let these through.
+    ruvia::CookieOptions insecure;  // secure defaults to false
+    RUVIA_CHECK(rejectsWithName("__Secure-tok", insecure));    // __Secure- requires Secure
+    RUVIA_CHECK(rejectsWithName("__secure-tok", insecure));    // matched case-insensitively
+
+    ruvia::CookieOptions hostBadDomain;
+    hostBadDomain.secure = true;
+    hostBadDomain.domain = "example.com";  // __Host- forbids Domain
+    RUVIA_CHECK(rejectsWithName("__Host-sid", hostBadDomain));
+    RUVIA_CHECK(rejectsWithName("__HOST-sid", hostBadDomain));  // case-insensitive
+
+    // A literal-prefixed name that meets the constraints is accepted.
+    ruvia::CookieOptions okSecure;
+    okSecure.secure = true;
+    RUVIA_CHECK(!rejectsWithName("__Secure-tok", okSecure));
+    ruvia::CookieOptions okHost;
+    okHost.secure = true;  // path defaults to "/", domain empty
+    RUVIA_CHECK(!rejectsWithName("__Host-sid", okHost));
+
+    // A name that only resembles a prefix (missing the trailing '-') is unaffected.
+    ruvia::CookieOptions plain;
+    RUVIA_CHECK(!rejectsWithName("__Secured", plain));
+    RUVIA_CHECK(!rejectsWithName("__Hostname", plain));
+}
+
 RUVIA_TEST(cookie_max_age_capped_at_400_days) {
     ruvia::CookieOptions atCap;
     atCap.maxAge = 34560000;  // exactly 400 days is allowed
