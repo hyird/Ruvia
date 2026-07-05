@@ -10,19 +10,30 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] HttpErrorInfo normalizeError(HttpErrorInfo error) noexcept {
+    // makeErrorResponse must never throw: the transport layer calls it outside its
+    // try-guard and only closes the socket if an exception escapes (dropping the
+    // connection with no response). A handler that throws HttpError with an
+    // out-of-range status -- a typo like 4004, or a code copied from an upstream
+    // response -- or a status text carrying CR/LF would otherwise make
+    // HttpResponse::status throw. Coerce both to safe values so an error response
+    // is always produced.
+    auto status = error.status();
+    if (status < 100 || status > 999) {
+        status = 500;
+    }
     auto statusText = error.statusText();
+    if (statusText.empty() || !isValidHttpStatusText(statusText)) {
+        statusText = defaultStatusText(status);
+    }
     auto code = error.code();
-    auto message = error.message();
-    if (statusText.empty()) {
-        statusText = defaultStatusText(error.status());
-    }
     if (code.empty()) {
-        code = defaultErrorCode(error.status());
+        code = defaultErrorCode(status);
     }
+    auto message = error.message();
     if (message.empty()) {
         message = statusText;
     }
-    return HttpErrorInfo(error.status(), code, message, statusText, error.detailsJson());
+    return HttpErrorInfo(status, code, message, statusText, error.detailsJson());
 }
 
 void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {

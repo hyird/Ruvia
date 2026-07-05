@@ -49,3 +49,30 @@ RUVIA_TEST(make_error_response_close_connection_sets_header) {
     const auto response = makeErrorResponse(resource, error, /*closeConnection=*/true);
     RUVIA_CHECK_EQ(response.header("Connection"), std::string_view("close"));
 }
+
+RUVIA_TEST(make_error_response_coerces_invalid_status_and_status_text) {
+    auto* resource = std::pmr::new_delete_resource();
+
+    // An out-of-range status (a typo like 4004, or a code copied from an upstream
+    // response) must NOT throw on the never-throws error path: HttpResponse::status
+    // rejects it, and makeErrorResponse is called outside the transport try-guard,
+    // so the throw would drop the connection with no body. It is coerced to 500.
+    {
+        const auto response = makeErrorResponse(resource, HttpErrorInfo(4004, "x", "y"));
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
+    }
+    // A status text carrying CR/LF (which HttpResponse::status also rejects) is
+    // replaced with the default reason phrase rather than throwing.
+    {
+        HttpErrorInfo error(400, "bad", "msg", std::string_view("Bad\r\nRequest", 12));
+        const auto response = makeErrorResponse(resource, error);
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
+        RUVIA_CHECK(response.statusText().find('\r') == std::string_view::npos);
+        RUVIA_CHECK(response.statusText().find('\n') == std::string_view::npos);
+    }
+    // A valid in-range status is preserved unchanged.
+    {
+        const auto response = makeErrorResponse(resource, HttpErrorInfo(404, "not_found", "nope"));
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
+    }
+}
