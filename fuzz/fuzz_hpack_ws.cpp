@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -28,12 +29,13 @@ int main(int argc, char** argv) {
     // A shared decoder exercises dynamic-table state across inputs; a fresh one
     // per iteration exercises the size-update / eviction paths from a clean table.
     d::HpackDecoder shared(std::pmr::get_default_resource());
-    std::string buf;
     for (long i = 0; i < iterations; ++i) {
         const auto len = static_cast<std::size_t>(next() % 80);
-        buf.resize(len);
+        // Exact-size allocation (no NUL / spare capacity) so a sanitizer redzone
+        // catches any read one past the end.
+        auto buf = std::make_unique<char[]>(len);
         for (std::size_t j = 0; j < len; ++j) buf[j] = static_cast<char>(next() & 0xFF);
-        const std::string_view s(buf.data(), buf.size());
+        const std::string_view s(buf.get(), len);
 
         d::HpackDecoder fresh(std::pmr::get_default_resource());
         fresh.setMaxDynamicTableSize(256);

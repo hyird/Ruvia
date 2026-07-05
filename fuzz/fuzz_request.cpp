@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -43,7 +45,11 @@ int main(int argc, char** argv) {
                 "chunked0123456789abcdef%\\?#/@[]-_.\x00\x7f\x80\xff";
             buf.push_back(pool[next() % (sizeof(pool) - 1)]);
         }
-        const auto result = parser.parse(std::string_view(buf.data(), buf.size()));
+        // Parse from an exact-size copy (no NUL / spare capacity) so a sanitizer
+        // redzone catches any read past the request buffer's end.
+        auto tight = std::make_unique<char[]>(buf.size());
+        if (!buf.empty()) std::memcpy(tight.get(), buf.data(), buf.size());
+        const auto result = parser.parse(std::string_view(tight.get(), buf.size()));
         sink += result.consumedBytes + result.request.headers().size();
     }
     std::printf("fuzz_request ok: %ld iterations\n", iterations);

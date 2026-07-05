@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -77,20 +78,20 @@ void exercise(std::string_view s, std::string_view boundary) {
 
 int main(int argc, char** argv) {
     const long iterations = argc > 1 ? std::strtol(argv[1], nullptr, 10) : 200000;
-    std::string buf, boundary;
     static constexpr char pool[] =
         "%\\\"\\u0123456789abcdefABCDEF.-+eE&=/,;:{}[]@ \t\r\n"
         "Content-Disposition:form-data;name=\"filename\"boundary=multipart/"
         "\x00\x7f\x80\xff";
+    // Each input lives in an exact-size heap allocation (no NUL terminator, no
+    // spare capacity) so a sanitizer's redzone catches any read one past the end.
     for (long i = 0; i < iterations; ++i) {
         const auto len = static_cast<std::size_t>(next() % 128);
-        buf.resize(len);
+        auto buf = std::make_unique<char[]>(len);
         for (std::size_t j = 0; j < len; ++j) buf[j] = pool[next() % (sizeof(pool) - 1)];
         const auto blen = static_cast<std::size_t>(1 + next() % 6);
-        boundary.resize(blen);
+        auto boundary = std::make_unique<char[]>(blen);
         for (std::size_t j = 0; j < blen; ++j) boundary[j] = pool[next() % (sizeof(pool) - 1)];
-        exercise(std::string_view(buf.data(), buf.size()),
-                 std::string_view(boundary.data(), boundary.size()));
+        exercise(std::string_view(buf.get(), len), std::string_view(boundary.get(), blen));
     }
     std::printf("fuzz_parsers ok: %ld iterations\n", iterations);
     return 0;
