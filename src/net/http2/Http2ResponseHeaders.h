@@ -133,7 +133,17 @@ inline void appendHttp2ResponseHeaders(
 
     const auto policy = responseWritePolicy(response.status());
     const auto knownBits = responseKnownHeaderBits(response);
-    const bool explicitContentLengthAllowed = policy.explicitContentLengthAllowed();
+    // Mirror the HTTP/1.1 framing decision (appendResponseHead): when the writer
+    // owns the auto Content-Length -- a buffered body whose status permits it --
+    // a user-set Content-Length must be filtered and replaced with the real body
+    // size. Otherwise a handler that sets a wrong Content-Length yields a response
+    // whose header disagrees with the DATA payload length, which RFC 9113 8.1.1
+    // makes malformed (a conformant peer resets the stream). HTTP/2 forbids
+    // Transfer-Encoding (filtered above), so there is no transfer-encoding term.
+    const bool autoContentLengthOwnedByWriter =
+        emitAutoContentLength && policy.autoContentLengthAllowed();
+    const bool explicitContentLengthAllowed =
+        policy.explicitContentLengthAllowed() && !autoContentLengthOwnedByWriter;
     bool contentLengthWritten = false;
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
@@ -141,10 +151,13 @@ inline void appendHttp2ResponseHeaders(
             continue;
         }
         if (knownBit == kResponseHeaderContentLength) {
-            contentLengthWritten = true;
             if (responseBodyFramingHeaderForbidden(knownBit, explicitContentLengthAllowed, true)) {
+                // Writer owns the length: drop the user's value and leave
+                // contentLengthWritten false so the correct auto Content-Length
+                // (the real body size) is emitted below.
                 continue;
             }
+            contentLengthWritten = true;
         }
         const auto known = http2KnownHeaderEncoding(knownBit);
         if (known.hpackNameIndex != 0) {
@@ -171,7 +184,7 @@ inline void appendHttp2ResponseHeaders(
             HpackStaticIndex::kDate,
             cachedDateValue());
     }
-    if (emitAutoContentLength && !contentLengthWritten && policy.autoContentLengthAllowed()) {
+    if (autoContentLengthOwnedByWriter && !contentLengthWritten) {
         std::array<char, 20> buffer{};
         const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), autoContentLength);
         if (ec == std::errc{}) {

@@ -91,6 +91,23 @@ RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
     RUVIA_CHECK(!hasHeaderName(headers, "content-length"));
 }
 
+RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
+    // RFC 9113 8.1.1: a content-length that disagrees with the DATA payload length
+    // is malformed and a conformant peer resets the stream. For a buffered 2xx the
+    // writer owns the length, so a handler's wrong Content-Length must be dropped
+    // and replaced with the real body size -- matching the HTTP/1.1 path -- rather
+    // than HPACK-encoded verbatim.
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    response.header("Content-Length", "1000");  // wrong: the real body is 5 bytes
+
+    Collector headers;
+    RUVIA_CHECK(decodeResponseHeaders(response, 5, headers));  // autoContentLength = real body size
+    RUVIA_CHECK(hasHeader(headers, ":status", "200"));
+    RUVIA_CHECK(hasHeader(headers, "content-length", "5"));     // corrected to the body size
+    RUVIA_CHECK(!hasHeader(headers, "content-length", "1000")); // the wrong user value is gone
+}
+
 RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
     // RFC 7541 §7.1.3: Set-Cookie carries session credentials and must be emitted
     // as a never-indexed literal (0x10 prefix) so an intermediary never places it
