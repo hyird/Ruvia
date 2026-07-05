@@ -276,7 +276,7 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
     using ruvia::detail::ResponseBodyMode;
     using ruvia::detail::ResponseStreamFraming;
 
-    const auto head = [](ResponseStreamFraming framing) {
+    const auto head = [](ResponseStreamFraming framing, bool connectionWillClose) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
@@ -284,22 +284,32 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
         HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
-        auto streamHead =
-            prepareResponseStreamHead(context, ResponseBodyMode::kStream, framing);
+        auto streamHead = prepareResponseStreamHead(
+            context, ResponseBodyMode::kStream, framing, connectionWillClose);
         return std::pair<std::string, std::string>(
             std::string(streamHead.response().header("Transfer-Encoding")),
             std::string(streamHead.response().header("Connection")));
     };
 
-    // HTTP/1.1 stream: chunked framing, no forced Connection: close.
-    const auto chunked = head(ResponseStreamFraming::kHttp1Chunked);
-    RUVIA_CHECK_EQ(chunked.first, std::string("chunked"));
-    RUVIA_CHECK(chunked.second.empty());
+    // HTTP/1.1 kept-alive stream: chunked framing, no Connection: close (persistent
+    // by default).
+    const auto chunkedKeepAlive = head(ResponseStreamFraming::kHttp1Chunked, false);
+    RUVIA_CHECK_EQ(chunkedKeepAlive.first, std::string("chunked"));
+    RUVIA_CHECK(chunkedKeepAlive.second.empty());
+
+    // HTTP/1.1 stream that will close (e.g. the per-connection request limit is
+    // reached): still chunked, but the head must announce Connection: close so the
+    // client does not reuse the socket the session is about to shut -- matching the
+    // buffered path. The head is committed before that verdict is finalized, so it
+    // is passed in.
+    const auto chunkedClosing = head(ResponseStreamFraming::kHttp1Chunked, true);
+    RUVIA_CHECK_EQ(chunkedClosing.first, std::string("chunked"));
+    RUVIA_CHECK_EQ(chunkedClosing.second, std::string("close"));
 
     // HTTP/1.0 stream: RFC 9112 6.1 forbids Transfer-Encoding to a non-HTTP/1.1
     // client, so the head carries no chunked framing; the body is delimited by the
-    // connection close, announced with Connection: close.
-    const auto closeDelimited = head(ResponseStreamFraming::kHttp1CloseDelimited);
+    // connection close, always announced with Connection: close.
+    const auto closeDelimited = head(ResponseStreamFraming::kHttp1CloseDelimited, false);
     RUVIA_CHECK(closeDelimited.first.empty());
     RUVIA_CHECK_EQ(closeDelimited.second, std::string("close"));
 }

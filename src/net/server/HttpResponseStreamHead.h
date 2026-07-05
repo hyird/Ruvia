@@ -50,7 +50,8 @@ private:
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
     Context& context,
     ResponseBodyMode mode,
-    ResponseStreamFraming framing) {
+    ResponseStreamFraming framing,
+    bool connectionWillClose = false) {
     auto response = ContextAccess::streamingHead(context);
     const auto policy = responseWritePolicy(response.status());
     const bool needsSseContentType =
@@ -64,12 +65,18 @@ private:
         mode == ResponseBodyMode::kSse &&
         (framing == ResponseStreamFraming::kHttp2DataFrames || policy.transferEncodingAllowed()) &&
         !responseHasKnownHeader(response, kResponseHeaderCacheControl);
-    // A close-delimited HTTP/1.0 stream has no chunk framing and no Content-Length,
-    // so the connection close is the message boundary: advertise Connection: close
-    // (also overriding an HTTP/1.0 "Connection: keep-alive" request) unless the
-    // handler already set a Connection header.
+    // The stream head is written before the session finalizes the connection
+    // lifetime, so the caller passes its keep-alive verdict (connectionWillClose,
+    // which already folds in the request-limit flip recordCompletedRequest applies
+    // afterward). Announce Connection: close whenever this H1 response will be the
+    // connection's last -- mirroring the buffered path's markConnectionCloseIfNeeded
+    // -- so a client never reuses a socket the session is about to shut. A close-
+    // delimited stream always closes (that close IS its framing). HTTP/2 must never
+    // carry a connection-specific header (RFC 9113 8.2.2). The handler's own
+    // Connection header, if any, wins.
     const bool needsConnectionClose =
-        framing == ResponseStreamFraming::kHttp1CloseDelimited &&
+        framing != ResponseStreamFraming::kHttp2DataFrames &&
+        (framing == ResponseStreamFraming::kHttp1CloseDelimited || connectionWillClose) &&
         !responseHasKnownHeader(response, kResponseHeaderConnection);
 
     const auto additionalHeaders =
