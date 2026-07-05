@@ -153,6 +153,20 @@ struct ContextAccess final {
         std::string_view contentType = {}) {
         return context.streamingHead(contentType);
     }
+
+    // True if a Set-Cookie whose value begins with `valuePrefix` (e.g. a cookie
+    // name plus '=') is already queued on the context's pending response headers.
+    // Lets a test observe a cookie set by middleware before any response is built.
+    [[nodiscard]] static bool hasPendingSetCookie(
+        const Context& context,
+        std::string_view valuePrefix) noexcept {
+        for (const auto& header : context.responseHeaders_) {
+            if (header.name() == "Set-Cookie" && header.value().starts_with(valuePrefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 }  // namespace ruvia::detail

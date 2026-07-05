@@ -44,7 +44,14 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
             c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
             co_return;
         }
-    } else if (!cookie) {
+    } else if (!cookie || cookie->empty()) {
+        // Reseed on an absent OR empty cookie. The unsafe path above already
+        // rejects an empty cookie as invalid, so if the safe path only reissued
+        // when the cookie was fully absent, a present-but-empty "XSRF-TOKEN="
+        // would never be repaired: every safe request would leave it empty and
+        // every unsafe request would 403 on it -- a permanent wedge. Treating
+        // absent and empty identically here keeps the issue and validation sides
+        // of the double-submit symmetric.
         std::array<char, 64> buffer;
         const auto token = detail::generateCsrfToken(buffer);
         CookieOptions options;

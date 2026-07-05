@@ -44,6 +44,7 @@ bool isLowerHex(char c) noexcept {
 struct CsrfOutcome final {
     bool nextInvoked{false};
     bool hasResponse{false};
+    bool reseeded{false};
     std::uint16_t status{0};
 };
 
@@ -89,6 +90,7 @@ CsrfOutcome runCsrf(HttpMethod method, bool withCookie, std::string_view cookieT
 
     CsrfOutcome out;
     out.nextInvoked = control.invoked;
+    out.reseeded = ContextAccess::hasPendingSetCookie(context, "XSRF-TOKEN=");
     out.hasResponse = ContextAccess::hasResponse(context);
     if (out.hasResponse) {
         out.status = ContextAccess::takeResponse(context).status();
@@ -183,4 +185,26 @@ RUVIA_TEST(csrf_safe_method_skips_validation) {
     // Even a mismatch is irrelevant for a safe method.
     const auto head = runCsrf(HttpMethod::kHead, true, "one", true, "two");
     RUVIA_CHECK(head.nextInvoked);
+}
+
+RUVIA_TEST(csrf_safe_method_reseeds_absent_or_empty_cookie) {
+    // A safe method with NO cookie issues a fresh token so the client can later
+    // send the double-submit pair.
+    const auto absent = runCsrf(HttpMethod::kGet, false, {}, false, {});
+    RUVIA_CHECK(absent.nextInvoked);
+    RUVIA_CHECK(absent.reseeded);
+
+    // A safe method with a present-but-EMPTY cookie must also reseed. Otherwise
+    // the empty "XSRF-TOKEN=" is never repaired: the unsafe path rejects an empty
+    // cookie with 403, so without this the client is permanently wedged. Issue
+    // and validation must treat an empty cookie identically.
+    const auto empty = runCsrf(HttpMethod::kGet, true, "", false, {});
+    RUVIA_CHECK(empty.nextInvoked);
+    RUVIA_CHECK(empty.reseeded);
+
+    // A valid existing token must NOT be overwritten -- reseeding would rotate a
+    // token the client is mid-flight with.
+    const auto present = runCsrf(HttpMethod::kGet, true, "abcdef123456", false, {});
+    RUVIA_CHECK(present.nextInvoked);
+    RUVIA_CHECK(!present.reseeded);
 }
