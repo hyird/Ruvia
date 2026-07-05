@@ -11,6 +11,7 @@ on:
       - "src/**"
       - "examples/**"
       - "tests/**"
+      - "fuzz/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
   pull_request:
@@ -22,6 +23,7 @@ on:
       - "src/**"
       - "examples/**"
       - "tests/**"
+      - "fuzz/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
 
@@ -96,6 +98,70 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build-test --output-on-failure --build-config "$BUILD_TYPE"
+
+  ubuntu_ubsan:
+    name: Ubuntu UBSan + fuzz
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-13
+      CXX: g++-13
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      BUILD_TYPE: Debug
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/build-ubsan/vcpkg_installed
+          key: vcpkg-ubsan-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-ubsan-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
+        run: |
+          set -euo pipefail
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$VCPKG_ROOT" reset --hard origin/master
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+
+      # UBSan over the core + HTTP-client surface (the security-critical protocol
+      # parsers), plus the parser fuzz smoke runs. Feature backends (mariadb/redis/
+      # jwt) stay on the plain Debug job above; -fno-sanitize-recover aborts on the
+      # first violation so any UB fails the run.
+      - name: Configure
+        run: |
+          cmake -S . -B build-ubsan -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DRUVIA_ENABLE_HTTP_CLIENT=ON \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_FUZZERS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build-ubsan --config "$BUILD_TYPE"
+
+      - name: Test (unit + fuzz smoke, UBSan)
+        run: ctest --test-dir build-ubsan --output-on-failure --build-config "$BUILD_TYPE"
 
   windows_build:
     name: Windows build
