@@ -125,6 +125,76 @@ std::string_view jwtFindJsonString(
 
 }  // namespace detail
 
+namespace {
+
+// Decode the JWT "aud" claim (RFC 7519 §4.1.3): either a single JSON string or a
+// JSON array of strings. Each decoded audience is appended to `out`. On any
+// malformed structure (non-string element, unterminated array, trailing junk)
+// `out` is cleared, so the verifier sees an empty audience set and fails closed
+// rather than acting on a half-parsed list.
+void jwtDecodeAudiences(
+    std::pmr::vector<std::pmr::string>& out,
+    std::string_view value,
+    std::pmr::memory_resource* resource) {
+    detail::skipJsonWhitespace(value);
+    if (value.empty()) {
+        return;
+    }
+    if (value.front() != '[') {
+        std::pmr::string single(resource);
+        if (detail::jwtDecodeJsonStringValue(single, value)) {
+            out.push_back(std::move(single));
+        }
+        return;
+    }
+
+    value.remove_prefix(1);  // consume '['
+    detail::skipJsonWhitespace(value);
+    if (!value.empty() && value.front() == ']') {
+        return;  // an empty array carries no audience
+    }
+    for (;;) {
+        std::string_view raw;
+        bool escaped = false;
+        if (!detail::parseJsonStringRaw(value, raw, escaped)) {
+            out.clear();  // a non-string array element is not a valid audience
+            return;
+        }
+        std::pmr::string decoded(resource);
+        if (escaped) {
+            if (!detail::decodeJsonString(raw, decoded)) {
+                out.clear();
+                return;
+            }
+        } else {
+            decoded.assign(raw.data(), raw.size());
+        }
+        out.push_back(std::move(decoded));
+
+        detail::skipJsonWhitespace(value);
+        if (value.empty()) {
+            out.clear();  // unterminated array
+            return;
+        }
+        if (value.front() == ',') {
+            value.remove_prefix(1);
+            continue;
+        }
+        if (value.front() == ']') {
+            value.remove_prefix(1);
+            detail::skipJsonWhitespace(value);
+            if (!value.empty()) {
+                out.clear();  // trailing junk after the array
+            }
+            return;
+        }
+        out.clear();  // malformed element separator
+        return;
+    }
+}
+
+}  // namespace
+
 JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, std::pmr::memory_resource* resource) {
     auto* resolved = detail::pmrResourceOrDefault(resource);
     JwtPayload payload(resolved);
@@ -159,7 +229,7 @@ JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, st
             if (key == "aud") {
                 if (!audienceSeen) {
                     audienceSeen = true;
-                    (void)detail::jwtDecodeJsonStringValue(payload.audience_, value);
+                    jwtDecodeAudiences(payload.audiences_, value, resolved);
                 }
                 return true;
             }

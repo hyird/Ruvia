@@ -155,6 +155,80 @@ RUVIA_TEST(jwt_verify_enforces_registered_claims) {
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(token, badAudience); }));
 }
 
+RUVIA_TEST(jwt_verify_supports_audience_array) {
+    // RFC 7519 §4.1.3: aud may be a single string OR an array of strings. A
+    // configured audience must be accepted iff it is one of the token's values.
+    const auto multi = signedTokenWithPayload(
+        "secret", R"({"sub":"u","exp":4102444800,"aud":["api","web"]})");
+
+    auto forApi = verifyOptions("secret");
+    forApi.audience.assign("api");
+    RUVIA_CHECK_EQ(jwtVerify(multi, forApi).subject(), std::string_view("u"));
+    auto forWeb = verifyOptions("secret");
+    forWeb.audience.assign("web");
+    RUVIA_CHECK(jwtVerify(multi, forWeb).hasAudience("web"));
+
+    // The critical negative: an audience NOT in the array must be rejected --
+    // array support must not become a fail-open path.
+    auto forMobile = verifyOptions("secret");
+    forMobile.audience.assign("mobile");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(multi, forMobile); }));
+
+    // Accessors: audience() reports the first entry; hasAudience covers the set.
+    const auto decoded = ruvia::jwtDecodeUnverified(multi);
+    RUVIA_CHECK_EQ(decoded.audience(), std::string_view("api"));
+    RUVIA_CHECK(decoded.hasAudience("api"));
+    RUVIA_CHECK(decoded.hasAudience("web"));
+    RUVIA_CHECK(!decoded.hasAudience("mobile"));
+
+    // An escaped array element is decoded before matching.
+    const auto escaped = signedTokenWithPayload(
+        "secret", R"({"sub":"u","exp":4102444800,"aud":["a\"b"]})");
+    auto forEscaped = verifyOptions("secret");
+    forEscaped.audience.assign("a\"b");
+    RUVIA_CHECK(jwtVerify(escaped, forEscaped).hasAudience("a\"b"));
+
+    // Malformed / non-string members yield an empty set -> fail closed.
+    for (const auto* payload : {
+             R"({"sub":"u","exp":4102444800,"aud":[]})",
+             R"({"sub":"u","exp":4102444800,"aud":[1]})",
+             R"({"sub":"u","exp":4102444800,"aud":["api",2]})"}) {
+        const auto bad = signedTokenWithPayload("secret", payload);
+        auto wantApi = verifyOptions("secret");
+        wantApi.audience.assign("api");
+        RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(bad, wantApi); }));
+    }
+
+    // The single-string form is unchanged (regression guard).
+    const auto single = signedTokenWithPayload(
+        "secret", R"({"sub":"u","exp":4102444800,"aud":"api"})");
+    auto wantApiSingle = verifyOptions("secret");
+    wantApiSingle.audience.assign("api");
+    RUVIA_CHECK_EQ(jwtVerify(single, wantApiSingle).audience(), std::string_view("api"));
+    auto wantOtherSingle = verifyOptions("secret");
+    wantOtherSingle.audience.assign("other");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(single, wantOtherSingle); }));
+}
+
+RUVIA_TEST(jwt_epoch_seconds_saturates_instead_of_overflowing) {
+    // exp/nbf beyond the clock's representable range (~year 2262) would overflow
+    // int64 nanoseconds when converted to a time_point (UB on attacker-controlled
+    // claims); jwtFromEpochSeconds must saturate instead. A huge exp then reads as
+    // far-future (not expired) and a huge nbf as far-future (not yet valid).
+    const auto farExp = signedTokenWithPayload("secret", R"({"sub":"u","exp":99999999999})");
+    RUVIA_CHECK_EQ(jwtVerify(farExp, verifyOptions("secret")).subject(), std::string_view("u"));
+
+    // int64 max must not overflow the saturating conversion either.
+    const auto maxExp = signedTokenWithPayload(
+        "secret", R"({"sub":"u","exp":9223372036854775807})");
+    RUVIA_CHECK_EQ(jwtVerify(maxExp, verifyOptions("secret")).subject(), std::string_view("u"));
+
+    auto allowNoExp = verifyOptions("secret");
+    allowNoExp.requireExpiration = false;
+    const auto farNbf = signedTokenWithPayload("secret", R"({"sub":"u","nbf":99999999999})");
+    RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(farNbf, allowNoExp); }));
+}
+
 RUVIA_TEST(jwt_verify_rejects_expired_token) {
     // exp is a Unix timestamp; 1 (1970) is far in the past, so this token is
     // expired regardless of the current clock and must be rejected -- the core

@@ -9,13 +9,23 @@ namespace ruvia {
 JwtPayload::JwtPayload(std::pmr::memory_resource* resource)
     : issuer_(detail::pmrResourceOrDefault(resource)),
       subject_(issuer_.get_allocator().resource()),
-      audience_(issuer_.get_allocator().resource()),
+      audiences_(issuer_.get_allocator().resource()),
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
 
 std::string_view JwtPayload::issuer() const noexcept { return issuer_; }
 std::string_view JwtPayload::subject() const noexcept { return subject_; }
-std::string_view JwtPayload::audience() const noexcept { return audience_; }
+std::string_view JwtPayload::audience() const noexcept {
+    return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
+}
+bool JwtPayload::hasAudience(std::string_view audience) const noexcept {
+    for (const auto& value : audiences_) {
+        if (std::string_view(value) == audience) {
+            return true;
+        }
+    }
+    return false;
+}
 std::string_view JwtPayload::id() const noexcept { return id_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::expiresAt() const noexcept { return expiresAt_; }
 std::optional<std::chrono::system_clock::time_point> JwtPayload::notBefore() const noexcept { return notBefore_; }
@@ -106,7 +116,7 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
     if (!options.subject.empty() && payload.subject() != options.subject) {
         throw std::runtime_error("JWT subject mismatch");
     }
-    if (!options.audience.empty() && payload.audience() != options.audience) {
+    if (!options.audience.empty() && !payload.hasAudience(options.audience)) {
         throw std::runtime_error("JWT audience mismatch");
     }
     return payload;
