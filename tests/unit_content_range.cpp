@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "http/ContextInternal.h"
+#include "http/FileResponseHelpers.h"
 #include "http/HttpRequestInternal.h"
 #include "http/HttpResponseHeaderState.h"
 #include "ruvia/http/Context.h"
@@ -134,6 +135,76 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     // A syntactically malformed byte range is likewise ignored -> full 200.
     const auto malformed = serve("bytes=abc");
     RUVIA_CHECK_EQ(malformed.first, std::uint16_t{200});
+
+    fs::remove_all(dir);
+}
+
+RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_if_range_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(100, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    // Serve with a Range plus an optional If-Range; returns (status, Last-Modified).
+    const auto serve = [&root](std::string_view ifRange) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        HttpRequestAccess::addHeader(
+            request, HttpHeaderView{"Range", "bytes=0-4"},
+            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        if (!ifRange.empty()) {
+            HttpRequestAccess::addHeader(
+                request, HttpHeaderView{"If-Range", ifRange},
+                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+        }
+        auto ctx = ContextAccess::make(memory, request);
+        const auto response = ctx.staticFile(root, "data.txt", "text/plain");
+        return std::pair<std::uint16_t, std::string>(
+            response.status(), std::string(response.header("Last-Modified")));
+    };
+
+    // Discover the representation's current Last-Modified via a bare range request.
+    const auto base = serve("");
+    RUVIA_CHECK_EQ(base.first, std::uint16_t{206});
+    RUVIA_CHECK(!base.second.empty());
+    const auto lastModified = ruvia::detail::httpParseHttpDate(base.second);
+    RUVIA_CHECK(lastModified.has_value());
+    const std::time_t modified = lastModified.value_or(0);
+
+    const auto fmt = [](std::time_t t) {
+        const auto out = ruvia::detail::httpFormatDate(std::pmr::get_default_resource(), t);
+        return std::string(out.data(), out.size());
+    };
+
+    // Exact match -> the representation is unchanged, so the range is honored (206).
+    RUVIA_CHECK_EQ(serve(fmt(modified)).first, std::uint16_t{206});
+
+    // If-Range date NEWER than Last-Modified: the file's mtime is older, so it is a
+    // DIFFERENT representation than the client holds. RFC 9110 §13.1.5 requires an
+    // exact match, so the range MUST be refused and the full 200 served. (The old
+    // "<=" comparison wrongly returned 206 here -- the corruption path.)
+    RUVIA_CHECK_EQ(serve(fmt(modified + 86400)).first, std::uint16_t{200});
+
+    // If-Range date OLDER than Last-Modified: representation has since changed -> 200.
+    RUVIA_CHECK_EQ(serve(fmt(modified - 86400)).first, std::uint16_t{200});
 
     fs::remove_all(dir);
 }

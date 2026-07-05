@@ -92,7 +92,15 @@ struct FileConditionalHeaders final {
     if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
         return detail::httpStrongEtagEquals(value, etag);
     }
-    return httpDateNotModified(value, modifiedSeconds);
+    // An If-Range date requires an EXACT match against Last-Modified (RFC 9110
+    // §13.1.5 / RFC 7233 §3.2: "the comparison ... uses an exact match"), NOT the
+    // "<=" not-modified-since comparison. If-Range's job is to confirm the client
+    // still holds the byte-identical representation before a range is stitched in;
+    // a representation whose Last-Modified is merely older (a rollback or a restore
+    // that moves mtime backwards) is a DIFFERENT entity, and serving a 206 from it
+    // would corrupt the client's reassembled copy. Only equality means "unchanged".
+    const auto date = detail::httpParseHttpDate(value);
+    return date.has_value() && modifiedSeconds == *date;
 }
 
 [[nodiscard]] FileConditionalHeaders fileConditionalHeaders(const HttpRequest& request) noexcept {
