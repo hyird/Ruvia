@@ -34,13 +34,15 @@ public:
         WorkerMemory& memory,
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
-        ResponseBodyMode mode) noexcept
+        ResponseBodyMode mode,
+        ResponseStreamFraming framing) noexcept
         : stream_(stream),
           head_(head),
           scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
-          mode_(mode) {}
+          mode_(mode),
+          framing_(framing) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -77,7 +79,7 @@ private:
         auto streamHead = prepareResponseStreamHead(
             state_.requireContextBeforeCommit(),
             mode_,
-            ResponseStreamFraming::kHttp1Chunked);
+            framing_);
 
         head_.reset();
         appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
@@ -111,6 +113,20 @@ private:
         }
         co_await commit();
         state_.ensureBodyAllowed();
+
+        if (framing_ == ResponseStreamFraming::kHttp1CloseDelimited) {
+            // No chunk framing: write the raw body bytes. The connection close
+            // (forced once the stream ends) is what delimits the message.
+            const auto rawEc = co_await asyncError([this, chunk](auto handler) mutable {
+                asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
+            });
+            if (rawEc) {
+                aborted_ = true;
+                throw std::system_error(rawEc);
+            }
+            scannerEntry_.touch();
+            co_return;
+        }
 
         std::array<char, 32> sizeBuffer;
         const auto [ptr, ec] = std::to_chars(sizeBuffer.data(), sizeBuffer.data() + sizeBuffer.size(), chunk.size(), 16);
@@ -154,6 +170,14 @@ private:
             state_.markEnded();
             co_return;
         }
+        if (framing_ == ResponseStreamFraming::kHttp1CloseDelimited) {
+            // No last-chunk terminator: the connection close delimits the body.
+            // Trailers require chunked framing (RFC 9110 6.5), which a close-
+            // delimited HTTP/1.0 response cannot carry, so any queued trailer is
+            // undeliverable and dropped here.
+            state_.markEnded();
+            co_return;
+        }
 
         // Last-chunk, then the (possibly empty) trailer section, then the
         // closing CRLF. With no trailers this is exactly "0\r\n\r\n".
@@ -180,6 +204,7 @@ private:
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
+    ResponseStreamFraming framing_;
     ResponseStreamState state_;
     bool aborted_{false};
 };

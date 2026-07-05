@@ -67,6 +67,13 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     bool& keepAlive,
     std::size_t& requestCount) {
     keepAlive = shouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
+    // RFC 9112 6.1: only an HTTP/1.1 client may be sent chunked framing. An HTTP/1.0
+    // stream is delimited by the connection close instead -- no Transfer-Encoding and
+    // no chunk framing -- which then forces the connection shut once the body ends.
+    const bool isHttp11 = parsed.request.httpVersion() == "HTTP/1.1";
+    const auto framing = isHttp11
+        ? ResponseStreamFraming::kHttp1Chunked
+        : ResponseStreamFraming::kHttp1CloseDelimited;
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = routeResolution.route();
     ResponseSink responseSink(
@@ -74,7 +81,8 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         memory,
         responseHead,
         scannerEntry,
-        route.responseMode());
+        route.responseMode(),
+        framing);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(
@@ -108,6 +116,11 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
+    // A close-delimited (HTTP/1.0) stream is terminated by the connection close, so
+    // it can never be kept alive -- the head already announced Connection: close.
+    if (!isHttp11) {
+        keepAlive = false;
+    }
     recordCompletedRequest(
         keepAlive,
         requestCount,
