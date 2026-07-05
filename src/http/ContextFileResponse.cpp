@@ -8,6 +8,7 @@
 #include "StaticPathNormalization.h"
 #include "HeaderAcceptUtils.h"
 #include "HeaderTokenUtils.h"
+#include "ruvia/http/UrlEncoding.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -363,7 +364,24 @@ HttpResponse Context::staticFile(
     const StaticRoot& root,
     std::string_view relativePath,
     std::string_view contentType) const {
-    auto relative = detail::normalizeStaticRelativePath(relativePath, allocator<char>());
+    // Percent-decode the request path before matching it against the static index,
+    // whose keys are the real (decoded) on-disk names -- so a file whose name holds
+    // an encoded octet (a space "%20", UTF-8, parentheses, ...) resolves instead of
+    // 404ing, per RFC 3986 2.1 / 6.2.2.2 percent-encoding equivalence. Decoding is
+    // safe here: normalizeStaticRelativePath still clamps ".." at the root and
+    // rejects absolute paths, and the lookup is a byte-exact index compare that
+    // never joins the client path onto the filesystem, so the worst case is a miss
+    // (404). A "%00" would inject a NUL that cannot occur in a filename, so reject
+    // it; a malformed escape falls back to the raw bytes (which simply miss).
+    std::pmr::string decodedPath(allocator<char>());
+    const std::string_view lookupPath =
+        detail::decodeUrlComponent(relativePath, decodedPath, detail::UrlDecodeMode::kPercent)
+            ? std::string_view(decodedPath)
+            : relativePath;
+    if (lookupPath.find('\0') != std::string_view::npos) {
+        throw HttpError(403, "forbidden", "invalid static file path");
+    }
+    auto relative = detail::normalizeStaticRelativePath(lookupPath, allocator<char>());
 
     if (relative.empty() && !detail::StaticRootAccess::hasDirectoryIndex(root)) {
         throw HttpError(403, "forbidden", "invalid static file path");

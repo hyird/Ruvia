@@ -139,6 +139,58 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     fs::remove_all(dir);
 }
 
+RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
+    namespace fs = std::filesystem;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_pct_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "my report.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(20, 'z');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::string_view path) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        auto context = ContextAccess::make(memory, request);
+        std::uint16_t status = 0;
+        try {
+            status = context.staticFile(root, path, "text/plain").status();
+        } catch (const ruvia::HttpError& error) {
+            status = error.info().status();
+        }
+        return status;
+    };
+
+    // "%20" resolves to the space in the real on-disk name (RFC 3986 percent
+    // equivalence). Before decoding this 404'd: the raw bytes "my%20report.txt"
+    // were compared against the decoded index key "my report.txt".
+    RUVIA_CHECK_EQ(serve("my%20report.txt"), std::uint16_t{200});
+
+    // Decoding must not open a traversal hole: "%2e%2e%2f" -> "../" is still
+    // clamped at the root (403), and encoded separators plus dot-segments cannot
+    // ascend past it either.
+    RUVIA_CHECK_EQ(serve("%2e%2e%2fetc%2fpasswd"), std::uint16_t{403});
+    RUVIA_CHECK_EQ(serve("sub%2f%2e%2e%2f%2e%2e%2fetc"), std::uint16_t{403});
+
+    // A decoded NUL ("%00") cannot occur in a filename and is rejected outright.
+    RUVIA_CHECK_EQ(serve("my%00report.txt"), std::uint16_t{403});
+
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;
