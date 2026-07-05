@@ -333,6 +333,94 @@ FetchOutcome runStreamFetch(std::string cannedResponse, WriteMode writeMode) {
     return out;
 }
 
+// A close-delimited body ends at connection CLOSE. If the peer stalls mid-body and the
+// per-read idle timeout fires, the streaming reader must surface a truncation error --
+// not report the short body as a complete stream. The buffered fetch() and the sibling
+// Content-Length/chunked stream framings already throw on a short read; only the
+// streaming close-delimited path used to end silently.
+RUVIA_TEST(http_client_stream_close_delimited_timeout_is_truncation_not_clean_end) {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    // Server: send a close-delimited head (no Content-Length, no Transfer-Encoding)
+    // plus a partial body, then hold the connection open so the client's idle timeout
+    // fires mid-body instead of a clean peer close.
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::streambuf request;
+                co_await asio::async_read_until(
+                    sock, request, std::string("\r\n\r\n"), asio::use_awaitable);
+                const std::string headAndPartial =
+                    "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\npartial-body";
+                co_await asio::async_write(sock, asio::buffer(headAndPartial), asio::use_awaitable);
+                asio::steady_timer stall(io, std::chrono::seconds(5));
+                co_await stall.async_wait(asio::use_awaitable);
+            } catch (...) {
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+    config.requestTimeout = std::chrono::milliseconds(300);  // per-read idle timeout
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    bool threwTruncation = false;
+    bool endedCleanly = false;
+
+    // Emulate the ConnectionScanner: enforce per-connection deadlines periodically.
+    // Without this the idle deadline (a recorded time, not an armed timer) never fires.
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                for (;;) {
+                    asio::steady_timer tick(io, std::chrono::milliseconds(20));
+                    co_await tick.async_wait(asio::use_awaitable);
+                    pool->scanDeadlines(std::chrono::steady_clock::now());
+                }
+            } catch (...) {
+            }
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto stream = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetchStream("/", options, std::pmr::get_default_resource()));
+                for (;;) {
+                    auto chunk = co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
+                    if (chunk.empty()) {
+                        endedCleanly = true;  // pre-fix path: truncation reported as a clean end
+                        break;
+                    }
+                }
+            } catch (const std::exception& e) {
+                threwTruncation = std::string(e.what()).find("truncat") != std::string::npos;
+            }
+            pool->closeNow();
+            io.stop();  // abandon the server's stall so io.run() returns promptly
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(threwTruncation);
+    RUVIA_CHECK(!endedCleanly);
+}
+
 // Drive two sequential fetches over a single pooled connection (poolSize == 1) against
 // a server that keeps the connection open, exercising the keep-alive reuse path where
 // the second request skips connectOne.
