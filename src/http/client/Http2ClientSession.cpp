@@ -550,6 +550,20 @@ void Http2ClientSession::failStream(Stream& stream, Http2ErrorCode error) noexce
         return;
     }
     stream.failed = true;
+    // A failed stream is never read (readChunk) nor app-closed (streamClose), so the
+    // connection-level flow-control credit it withheld for buffered-but-unread
+    // streaming DATA -- deferred by onData as flowDebt -- would otherwise leak, and
+    // every failed streaming stream would permanently shrink the connection receive
+    // window until it stalls. Return that credit now, connection-scoped like
+    // streamClose (a stream-scoped WINDOW_UPDATE on a dead stream can trip a strict
+    // peer), unless the connection itself is already gone.
+    if (stream.flowDebt > 0) {
+        if (state_ != State::kClosed) {
+            queueWindowUpdate(0, static_cast<std::uint32_t>(stream.flowDebt), false);
+            wakeFlusher();
+        }
+        stream.flowDebt = 0;
+    }
     releaseSlot(stream);
     signalWaiter(stream);
     wakeReader(stream);
@@ -1342,9 +1356,16 @@ void Http2ClientSession::streamClose(std::uint32_t streamId) noexcept {
     if (stream == nullptr) {
         return;
     }
-    if (!stream->remoteEnded && !stream->failed && state_ != State::kClosed) {
-        // Tell the peer to stop and return any withheld flow-control credit to the connection.
-        sendRstStream(streamId, Http2ErrorCode::kCancel);
+    if (!stream->failed && state_ != State::kClosed) {
+        // Tell a still-open peer to stop; a fully-received (remoteEnded) stream is
+        // already closed and must not be RST.
+        if (!stream->remoteEnded) {
+            sendRstStream(streamId, Http2ErrorCode::kCancel);
+        }
+        // Return any withheld connection-level flow-control credit for buffered-but-
+        // undrained DATA. This also covers a fully-received response the consumer
+        // abandons without reading (remoteEnded): its buffered bytes' connection
+        // credit was previously leaked because the crediting was gated on !remoteEnded.
         if (stream->flowDebt > 0) {
             queueWindowUpdate(0, static_cast<std::uint32_t>(stream->flowDebt), false);
             stream->flowDebt = 0;
