@@ -51,7 +51,7 @@ template <typename Stream>
 Task<Http2InputReadResult> Http2ServerSession<Stream>::readFrame(
     Http2FrameHeader& header,
     std::string_view& payload) {
-    scannerEntry_.setPhase(ConnectionScanner::Phase::kReadingHeader);
+    scannerEntry_.setPhase(http2ReadFramePhase(headerContinuation_.active()));
     if (auto inputResult = co_await ensureInput(kHttp2FrameHeaderBytes); inputResult.shouldStop()) {
         co_return inputResult;
     }
