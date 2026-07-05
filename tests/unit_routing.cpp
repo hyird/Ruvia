@@ -267,6 +267,44 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     RUVIA_CHECK(!missing.methodNotAllowed());
 }
 
+RUVIA_TEST(routing_options_only_resource_is_405_not_404) {
+    // A path whose only registered method is OPTIONS must answer 405 (method known
+    // but unsupported, RFC 9110 15.5.6), listing OPTIONS in Allow -- not 404, since
+    // the resource exists. allowedMethods used to clear the OPTIONS bit and so
+    // returned an empty set, making resolve() report not-found.
+    Router r;
+    addRoute(r.impl, HttpMethod::kOptions, "/preflight");
+    r.finalize();
+    const auto bit = [](HttpMethod m) { return 1U << static_cast<unsigned>(m); };
+
+    RouteMatch match;
+    const auto res = r.impl.routeTable().resolve(HttpMethod::kGet, "/preflight", match);
+    RUVIA_CHECK(!res.found());
+    RUVIA_CHECK(res.methodNotAllowed());  // 405, not 404
+    RUVIA_CHECK((res.allowedMethods() & bit(HttpMethod::kOptions)) != 0);
+
+    // The explicit OPTIONS route still handles an OPTIONS request to that path.
+    RouteMatch optMatch;
+    RUVIA_CHECK(r.impl.routeTable().resolve(HttpMethod::kOptions, "/preflight", optMatch).found());
+}
+
+RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
+    // RFC 9110 7.1 / 9.3.7: "OPTIONS *" is a server-wide request, not a resource one.
+    // A catch-all OPTIONS route must NOT capture it (the wildcard node otherwise
+    // would), so it stays unresolved and dispatch emits the server-wide response.
+    Router r;
+    addRoute(r.impl, HttpMethod::kOptions, "/*");
+    addRoute(r.impl, HttpMethod::kGet, "/*");
+    r.finalize();
+
+    RouteMatch match;
+    RUVIA_CHECK(!r.impl.routeTable().resolve(HttpMethod::kOptions, "*", match).found());
+
+    // A normal path still matches the catch-all: the short-circuit is only for "*".
+    RouteMatch pathMatch;
+    RUVIA_CHECK(r.impl.routeTable().resolve(HttpMethod::kOptions, "/anything", pathMatch).found());
+}
+
 RUVIA_TEST(routing_rejects_duplicate_route_registration) {
     Router r;
     addRoute(r.impl, HttpMethod::kGet, "/x");
