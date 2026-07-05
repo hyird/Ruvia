@@ -73,11 +73,25 @@ namespace ruvia::detail {
     switch (name.size()) {
         case 2:
             return asciiEqualsIgnoreCase(name, "TE");
+        case 3:
+            // Response control data (RFC 9110 §7.4).
+            return asciiEqualsIgnoreCase(name, "Age");
+        case 4:
+            return asciiEqualsIgnoreCase(name, "Date") ||
+                asciiEqualsIgnoreCase(name, "Vary");
+        case 6:
+            return asciiEqualsIgnoreCase(name, "Pragma");
         case 7:
-            return asciiEqualsIgnoreCase(name, "Trailer");
+            return asciiEqualsIgnoreCase(name, "Trailer") ||
+                asciiEqualsIgnoreCase(name, "Expires") ||
+                asciiEqualsIgnoreCase(name, "Warning");
+        case 8:
+            return asciiEqualsIgnoreCase(name, "Location");
         case 10:
             return asciiEqualsIgnoreCase(name, "Keep-Alive") ||
                 asciiEqualsIgnoreCase(name, "Set-Cookie");
+        case 11:
+            return asciiEqualsIgnoreCase(name, "Retry-After");
         case 12:
             return asciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
