@@ -80,7 +80,10 @@ class JwtPayload final {
 public:
     [[nodiscard]] std::string_view issuer() const noexcept;
     [[nodiscard]] std::string_view subject() const noexcept;
+    // The first "aud" value, or empty if none. A JWT may carry multiple audiences
+    // (RFC 7519 §4.1.3); use hasAudience to test membership across all of them.
     [[nodiscard]] std::string_view audience() const noexcept;
+    [[nodiscard]] bool hasAudience(std::string_view audience) const noexcept;
     [[nodiscard]] std::string_view id() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> expiresAt() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> notBefore() const noexcept;
@@ -97,7 +100,7 @@ private:
 
     std::pmr::string issuer_;
     std::pmr::string subject_;
-    std::pmr::string audience_;
+    std::pmr::vector<std::pmr::string> audiences_;
     std::pmr::string id_;
     std::optional<std::chrono::system_clock::time_point> expiresAt_;
     std::optional<std::chrono::system_clock::time_point> notBefore_;
