@@ -236,12 +236,9 @@ bool compressResponseBodyIfAccepted(
     const HttpServerOptions::Compression& options,
     std::pmr::string& compressionScratch,
     bool skipBody) {
-    if (skipBody ||
-        !options.enabled ||
-        coding == HttpContentCoding::kNone) {
+    if (skipBody || !options.enabled) {
         return false;
     }
-    const auto compressor = codingCompressor(coding);
 
     const auto statusCode = response.status();
     if (statusCode < 200 ||
@@ -252,14 +249,32 @@ bool compressResponseBodyIfAccepted(
         return false;
     }
 
+    // These responses never vary by Accept-Encoding, so they are served identity
+    // with no Vary (RFC 9110 12.5.5 SHOULD NOT list a field that does not affect
+    // the representation): a file body (framed and Vary'd by the static-file path),
+    // an already-chosen Content-Encoding, a Content-Range, an incompressible media
+    // type, or an explicit no-transform.
     if (responseHasFileBody(response) ||
-        responseBodySize(response) < options.minBytes ||
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
         httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
         return false;
     }
+
+    // A compressible representation IS selected by Accept-Encoding, so it varies by
+    // it even when this particular response is left identity -- because the client
+    // accepted no coding we support, or the body is below the size threshold. Set
+    // Vary regardless of the outcome so a shared cache never serves this identity
+    // body to a client that would receive the compressed one (RFC 9110 12.5.5); it
+    // previously lived only on the compress-success path.
+    addVaryToken(response, "Accept-Encoding");
+
+    if (coding == HttpContentCoding::kNone ||
+        responseBodySize(response) < options.minBytes) {
+        return false;
+    }
+    const auto compressor = codingCompressor(coding);
 
     const auto body = responseBodyBytes(response);
     compressionScratch.clear();
@@ -272,7 +287,6 @@ bool compressResponseBodyIfAccepted(
     }
 
     setResponseHeaderStableView(response, "Content-Encoding", compressor.token);
-    addVaryToken(response, "Accept-Encoding");
     weakenStrongResponseEtag(response);
     setCompressedContentLength(response, compressionScratch.size());
     response.setBodyView(compressionScratch);
