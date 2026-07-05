@@ -339,6 +339,59 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     fs::remove_all(dir);
 }
 
+RUVIA_TEST(static_file_ignores_range_with_if_range_when_validators_disabled) {
+    namespace fs = std::filesystem;
+    using ruvia::HttpHeaderView;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::RequestKnownHeader;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_ifrange_novalidator_dir";
+    fs::create_directories(dir);
+    {
+        std::ofstream out(dir / "data.txt", std::ios::binary | std::ios::trunc);
+        const std::string content(100, 'a');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    options.enableRanges = true;
+    options.enableValidators = false;  // no ETag / Last-Modified on responses
+    StaticRoot root(dir, std::move(options));
+
+    const auto serve = [&root](std::string_view ifRange) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        HttpRequestAccess::addHeader(
+            request, HttpHeaderView{"Range", "bytes=0-4"},
+            HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
+        if (!ifRange.empty()) {
+            HttpRequestAccess::addHeader(
+                request, HttpHeaderView{"If-Range", ifRange},
+                HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kIfRange));
+        }
+        auto ctx = ContextAccess::make(memory, request);
+        return ctx.staticFile(root, "data.txt", "text/plain").status();
+    };
+
+    // A plain range with no If-Range is still honored without validators -> 206.
+    RUVIA_CHECK_EQ(serve(""), std::uint16_t{206});
+    // A range WITH If-Range but no server validator cannot be confirmed, so the
+    // Range MUST be ignored and the full representation served (RFC 9110 13.1.5) --
+    // not a 206 stitched from bytes the client cannot verify it still holds.
+    // (Gating the If-Range check on enableValidators skipped it and returned 206.)
+    RUVIA_CHECK_EQ(serve("\"stale-etag\""), std::uint16_t{200});
+    RUVIA_CHECK_EQ(serve("Wed, 21 Oct 2015 07:28:00 GMT"), std::uint16_t{200});
+
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;
