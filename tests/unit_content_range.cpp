@@ -191,6 +191,52 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
     fs::remove_all(dir);
 }
 
+RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) {
+    namespace fs = std::filesystem;
+    using ruvia::StaticRoot;
+    using ruvia::StaticRootOptions;
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+
+    const auto dir = fs::temp_directory_path() / "ruvia_static_vary_dir";
+    fs::create_directories(dir);
+    const auto filePath = dir / "app.js";
+    {
+        std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
+        const std::string content(50, 'x');
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    }
+    StaticRootOptions options;
+    options.allowAll = true;
+    StaticRoot root(dir, std::move(options));
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+    HttpRequestAccess::setResource(request, memory.resource());
+    auto context = ContextAccess::make(memory, request);
+
+    // No sidecar and no Accept-Encoding -> the identity file is served, but it must
+    // STILL declare Vary: Accept-Encoding: the same URL would serve a compressed
+    // variant to a capable client, so a shared cache keyed only on the URL must not
+    // reuse this identity body for everyone (RFC 9110 12.5.5 / RFC 9111 4.1). The
+    // identity body carries no Content-Encoding.
+    const auto served = context.staticFile(root, "app.js", "text/javascript");
+    RUVIA_CHECK_EQ(served.status(), std::uint16_t{200});
+    RUVIA_CHECK(served.header("Vary").find("Accept-Encoding") != std::string_view::npos);
+    RUVIA_CHECK(served.header("Content-Encoding").empty());
+
+    // Context::file serves a single path with no encoding negotiation, so it must
+    // NOT declare Vary: Accept-Encoding (which would needlessly fragment caches).
+    const auto direct = context.file(filePath, "text/javascript");
+    RUVIA_CHECK_EQ(direct.status(), std::uint16_t{200});
+    RUVIA_CHECK(direct.header("Vary").empty());
+
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
     namespace fs = std::filesystem;
     using ruvia::HttpHeaderView;
