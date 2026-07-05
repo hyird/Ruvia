@@ -89,8 +89,31 @@ Task<bool> MultipartReader::appendMore() {
 }
 
 Task<void> MultipartReader::processBoundary() {
+    // RFC 2046 §5.1.1: the first boundary may be preceded by a preamble that "is to
+    // be ignored". Skip it once, reusing the buffered parser's boundary finder so
+    // the streaming and buffered (parseBody) paths accept exactly the same bodies
+    // instead of the streaming path rejecting a preamble the buffered path skips.
+    // The discarded preamble is bounded like the per-part header block so a body
+    // that never presents a boundary cannot buffer without limit. Inter-part
+    // boundaries stay strict (must immediately follow the previous part) so a
+    // corrupt inter-part gap cannot be silently skipped.
+    constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
     for (;;) {
-        if (bufferView().starts_with("\r\n")) {
+        if (firstBoundary_) {
+            const auto boundary = std::string_view(boundaryLine_).substr(2);
+            const auto pos = detail::httpFindMultipartBoundaryLine(bufferView(), boundary);
+            if (pos == std::string_view::npos) {
+                if (bufferView().size() > kMaxMultipartPreambleBytes) {
+                    throw std::invalid_argument("multipart preamble exceeds limit");
+                }
+                if (!(co_await appendMore())) {
+                    throw std::invalid_argument("invalid multipart body");
+                }
+                continue;
+            }
+            consume(pos);
+            firstBoundary_ = false;
+        } else if (bufferView().starts_with("\r\n")) {
             consume(2);
         }
         while (bufferView().size() < boundaryLine_.size() + 2) {

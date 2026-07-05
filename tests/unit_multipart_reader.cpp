@@ -228,6 +228,52 @@ RUVIA_TEST(multipart_reader_boundary_prefix_in_content_is_not_a_delimiter) {
     }
 }
 
+RUVIA_TEST(multipart_reader_skips_a_preamble_before_the_first_boundary) {
+    // RFC 2046 §5.1.1: a preamble before the first boundary is ignored. The buffered
+    // parser already skips it; the streaming reader must agree rather than reject the
+    // body. Exercised across chunk sizes so the preamble/boundary split lands both
+    // mid-buffer and across read edges.
+    const std::string body =
+        "This is a preamble a client or proxy may prepend.\r\n"
+        "It can span several lines.\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value"
+        "\r\n--BOUNDARY--\r\n";
+    for (const std::size_t chunkSize :
+         {std::size_t{1}, std::size_t{7}, std::size_t{64}, std::size_t{4096}}) {
+        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(parts[0].name, std::string("field"));
+        RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
+    }
+
+    // A bare leading CRLF (a minimal/empty preamble) is likewise skipped.
+    const std::string emptyPreamble =
+        "\r\n--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"f\"\r\n"
+        "\r\n"
+        "v"
+        "\r\n--BOUNDARY--\r\n";
+    const auto parts = parseMultipart({emptyPreamble}, "BOUNDARY");
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parts[0].body, std::string("v"));
+}
+
+RUVIA_TEST(multipart_reader_rejects_an_unbounded_preamble_without_a_boundary) {
+    // A preamble that never presents a boundary must be bounded, not buffered
+    // without limit -- the same memory-DoS defense as the per-part header cap.
+    std::string noBoundary(70 * 1024, 'x');  // 70 KiB, never a --BOUNDARY line
+    bool threw = false;
+    try {
+        (void)parseMultipart({std::move(noBoundary)}, "BOUNDARY");
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+}
+
 RUVIA_TEST(multipart_reader_decodes_quoted_pairs_in_name_and_filename) {
     // RFC 7230 §3.2.6: a quoted-pair "\X" in a Content-Disposition parameter decodes
     // to X. The streaming reader must unescape name/filename (matching the buffered
