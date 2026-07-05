@@ -194,6 +194,10 @@ public:
         return bodyQueue_.hasQueuedChunk();
     }
 
+    [[nodiscard]] std::size_t queuedBodyBytes() const noexcept {
+        return bodyQueue_.queuedBytes();
+    }
+
     void compactBodyChunks() {
         bodyQueue_.compact();
     }

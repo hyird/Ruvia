@@ -27,6 +27,41 @@ RUVIA_TEST(body_queue_fifo_order) {
     RUVIA_CHECK(queue.pop().empty());  // popping an empty queue yields an empty view
 }
 
+RUVIA_TEST(body_queue_tracks_queued_bytes) {
+    Http2StreamBodyQueue queue(std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
+
+    // Fast slot then overflow: the counter sums the un-popped backlog.
+    queue.enqueue("first");   // 5, fast slot
+    queue.enqueue("second");  // 6, overflow
+    queue.enqueue("third");   // 5, overflow
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{16});
+
+    // Empty chunks do not move the counter.
+    queue.enqueue("");
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{16});
+
+    // Popping drains the counter chunk by chunk (fast slot then overflow tail); the
+    // active chunk the reader now holds is not counted.
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("first"));
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{11});
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("second"));
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{5});
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("third"));
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
+
+    // Popping an empty queue leaves the counter at zero (no underflow).
+    RUVIA_CHECK(queue.pop().empty());
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
+
+    // enqueueOwned accounts the moved body too.
+    std::pmr::string owned("owned-body", std::pmr::get_default_resource());  // 10
+    queue.enqueueOwned(owned);
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{10});
+    RUVIA_CHECK_EQ(queue.pop(), std::string_view("owned-body"));
+    RUVIA_CHECK_EQ(queue.queuedBytes(), std::size_t{0});
+}
+
 RUVIA_TEST(body_queue_ignores_empty_chunks) {
     Http2StreamBodyQueue queue(std::pmr::get_default_resource());
     queue.enqueue("");

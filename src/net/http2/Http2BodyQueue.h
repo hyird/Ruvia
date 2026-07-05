@@ -24,6 +24,7 @@ inline void Http2StreamBodyQueue::enqueue(std::string_view data) {
     if (data.empty()) {
         return;
     }
+    queuedBytes_ += data.size();
     if (!hasQueuedChunk_ && !hasOverflowQueuedChunk()) {
         queuedChunk_.assign(data.data(), data.size());
         hasQueuedChunk_ = true;
@@ -37,6 +38,7 @@ inline void Http2StreamBodyQueue::enqueueOwned(std::pmr::string& body) {
     if (body.empty()) {
         return;
     }
+    queuedBytes_ += body.size();
     if (!hasQueuedChunk_ && !hasOverflowQueuedChunk()) {
         queuedChunk_ = std::move(body);
         hasQueuedChunk_ = true;
@@ -69,6 +71,7 @@ inline std::string_view Http2StreamBodyQueue::pop() {
     clearPmrStringRetainingSmall(activeChunk_);
     if (hasQueuedChunk_) {
         activeChunk_.swap(queuedChunk_);
+        queuedBytes_ -= activeChunk_.size();
         clearPmrStringRetainingSmall(queuedChunk_);
         hasQueuedChunk_ = false;
         return std::string_view(activeChunk_);
@@ -77,8 +80,13 @@ inline std::string_view Http2StreamBodyQueue::pop() {
         return {};
     }
     activeChunk_ = std::move(overflowChunks_[overflowChunkOffset_++]);
+    queuedBytes_ -= activeChunk_.size();
     compact();
     return std::string_view(activeChunk_);
+}
+
+inline std::size_t Http2StreamBodyQueue::queuedBytes() const noexcept {
+    return queuedBytes_;
 }
 
 inline void Http2StreamBodyQueue::setWaiter(std::coroutine_handle<> continuation) noexcept {
