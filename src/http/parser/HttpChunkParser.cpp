@@ -57,7 +57,15 @@ namespace {
                 asciiEqualsIgnoreCase(name, "Accept-Ranges") ||
                 asciiEqualsIgnoreCase(name, "Content-Range");
         case 16:
-            return asciiEqualsIgnoreCase(name, "Content-Encoding");
+            // Proxy-Connection completes the connection-specific set that must not
+            // arrive late in a trailer (Connection / Keep-Alive / Transfer-Encoding
+            // / Upgrade are all rejected above): a non-standard but widely honored
+            // hop-by-hop control. Over HTTP/1 the trailer check is the only guard,
+            // exactly as for Upgrade; the HTTP/2 path already bans it as a
+            // connection-specific header. Content-Encoding is also caught by the
+            // classified path above and is repeated here only defensively.
+            return asciiEqualsIgnoreCase(name, "Content-Encoding") ||
+                asciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
             return asciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
