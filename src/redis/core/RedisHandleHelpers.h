@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../RedisInternal.h"
+#include "ruvia/detail/AsciiCase.h"
 
 #include <chrono>
 #include <initializer_list>
@@ -20,7 +21,6 @@ namespace ruvia::detail {
 [[nodiscard]] std::int64_t redisValueInteger(const RedisValue& value);
 [[nodiscard]] std::span<const RedisValue> redisValueArray(const RedisValue& value);
 void throwIfRedisError(const RedisValue& value);
-[[nodiscard]] bool redisAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept;
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> ownRedisArgs(
     std::span<const std::string_view> args,

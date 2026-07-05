@@ -72,22 +72,22 @@ namespace ruvia::detail {
 
     switch (name.size()) {
         case 2:
-            return httpAsciiEqualsIgnoreCase(name, "TE");
+            return asciiEqualsIgnoreCase(name, "TE");
         case 7:
-            return httpAsciiEqualsIgnoreCase(name, "Trailer");
+            return asciiEqualsIgnoreCase(name, "Trailer");
         case 10:
-            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
+            return asciiEqualsIgnoreCase(name, "Keep-Alive") ||
+                asciiEqualsIgnoreCase(name, "Set-Cookie");
         case 12:
-            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
+            return asciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
-            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
-                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
-                httpAsciiEqualsIgnoreCase(name, "Content-Range");
+            return asciiEqualsIgnoreCase(name, "Cache-Control") ||
+                asciiEqualsIgnoreCase(name, "Accept-Ranges") ||
+                asciiEqualsIgnoreCase(name, "Content-Range");
         case 18:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return asciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
-            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return asciiEqualsIgnoreCase(name, "Proxy-Authorization");
         default:
             return false;
     }

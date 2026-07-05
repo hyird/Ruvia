@@ -13,7 +13,7 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool webSocketHeaderEquals(std::string_view value, std::string_view expected) noexcept {
-    return detail::httpAsciiEqualsIgnoreCase(detail::httpTrimOws(value), expected);
+    return detail::asciiEqualsIgnoreCase(detail::httpTrimOws(value), expected);
 }
 
 [[nodiscard]] std::optional<std::uint8_t> base64Value(char c) noexcept {

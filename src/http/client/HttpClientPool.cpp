@@ -31,15 +31,15 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
-    return httpAsciiEqualsIgnoreCase(name, "Host") ||
-        httpAsciiEqualsIgnoreCase(name, "Connection") ||
-        httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
-        httpAsciiEqualsIgnoreCase(name, "Proxy-Connection") ||
-        httpAsciiEqualsIgnoreCase(name, "TE") ||
-        httpAsciiEqualsIgnoreCase(name, "Trailer") ||
-        httpAsciiEqualsIgnoreCase(name, "Content-Length") ||
-        httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
-        httpAsciiEqualsIgnoreCase(name, "Upgrade");
+    return asciiEqualsIgnoreCase(name, "Host") ||
+        asciiEqualsIgnoreCase(name, "Connection") ||
+        asciiEqualsIgnoreCase(name, "Keep-Alive") ||
+        asciiEqualsIgnoreCase(name, "Proxy-Connection") ||
+        asciiEqualsIgnoreCase(name, "TE") ||
+        asciiEqualsIgnoreCase(name, "Trailer") ||
+        asciiEqualsIgnoreCase(name, "Content-Length") ||
+        asciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
+        asciiEqualsIgnoreCase(name, "Upgrade");
 }
 
 void validateHttpClientRequestHead(

@@ -7,24 +7,24 @@
 namespace {
 
 using ruvia::detail::contentTypeMatches;
-using ruvia::detail::modelAsciiEqualsIgnoreCase;
+using ruvia::detail::asciiEqualsIgnoreCase;
 
 }  // namespace
 
 RUVIA_TEST(model_ascii_equals_ignore_case_folds_only_letters) {
-    RUVIA_CHECK(modelAsciiEqualsIgnoreCase("Text/HTML", "text/html"));
-    RUVIA_CHECK(modelAsciiEqualsIgnoreCase("", ""));
-    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("abc", "abcd"));  // length mismatch
-    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("abc", "abd"));
+    RUVIA_CHECK(asciiEqualsIgnoreCase("Text/HTML", "text/html"));
+    RUVIA_CHECK(asciiEqualsIgnoreCase("", ""));
+    RUVIA_CHECK(!asciiEqualsIgnoreCase("abc", "abcd"));  // length mismatch
+    RUVIA_CHECK(!asciiEqualsIgnoreCase("abc", "abd"));
 
     // Only A-Z fold. A naive `| 0x20` fold would wrongly equate the punctuation
     // adjacent to the letter ranges ('[' 0x5B with '{' 0x7B, '@' 0x40 with '`').
-    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("[", "{"));
-    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase("@", "`"));
+    RUVIA_CHECK(!asciiEqualsIgnoreCase("[", "{"));
+    RUVIA_CHECK(!asciiEqualsIgnoreCase("@", "`"));
 
     // High (non-ASCII) bytes are compared exactly, never folded.
-    RUVIA_CHECK(modelAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
-    RUVIA_CHECK(!modelAsciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
+    RUVIA_CHECK(asciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\xA9", 2)));
+    RUVIA_CHECK(!asciiEqualsIgnoreCase(std::string_view("\xC3\xA9", 2), std::string_view("\xC3\x89", 2)));
 }
 
 RUVIA_TEST(content_type_matches_ignoring_parameters) {

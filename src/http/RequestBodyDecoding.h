@@ -150,13 +150,13 @@ inline bool zstdInflateRequestBody(std::string_view input, std::pmr::string& out
     if (token.empty() || token.find(',') != std::string_view::npos) {
         return HttpContentCoding::kNone;
     }
-    if (httpAsciiEqualsIgnoreCase(token, "gzip") || httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
+    if (asciiEqualsIgnoreCase(token, "gzip") || asciiEqualsIgnoreCase(token, "x-gzip")) {
         return HttpContentCoding::kGzip;
     }
-    if (httpAsciiEqualsIgnoreCase(token, "br")) {
+    if (asciiEqualsIgnoreCase(token, "br")) {
         return HttpContentCoding::kBrotli;
     }
-    if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
+    if (asciiEqualsIgnoreCase(token, "zstd")) {
         return HttpContentCoding::kZstd;
     }
     return HttpContentCoding::kNone;
@@ -166,7 +166,7 @@ inline bool zstdInflateRequestBody(std::string_view input, std::pmr::string& out
     bool seen = false;
     std::string_view value;
     for (const auto& header : request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
+        if (!asciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
             continue;
         }
         if (seen) {

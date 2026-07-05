@@ -23,12 +23,12 @@ struct Http2UpgradeRequest final {
 
 [[nodiscard]] inline bool isHttp2UpgradeAttempt(const HttpServerParseResult& parsed) noexcept {
     return parsed.flags.upgrade &&
-        httpAsciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
+        asciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
 }
 
 [[nodiscard]] inline bool http2UpgradeConnectionHasSettingsToken(const HttpRequest& request) noexcept {
     for (const auto& header : request.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), "Connection") &&
+        if (asciiEqualsIgnoreCase(header.name(), "Connection") &&
             httpHasToken(header.value(), "HTTP2-Settings")) {
             return true;
         }
@@ -140,7 +140,7 @@ struct Http2UpgradeRequest final {
     std::string_view encodedSettings;
     bool seenSettings = false;
     for (const auto& header : parsed.request.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
+        if (!asciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
             continue;
         }
         // RFC 7540 3.2.1: a request with more than one HTTP2-Settings header

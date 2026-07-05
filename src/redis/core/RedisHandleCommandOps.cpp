@@ -9,7 +9,7 @@ Task<void> executeRedisPing(
     std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource) {
     auto reply = co_await redisStatusCommand(pool, std::move(args), resource);
-    if (!redisAsciiEqualsIgnoreCase(reply, "PONG")) {
+    if (!asciiEqualsIgnoreCase(reply, "PONG")) {
         throw RedisError(RedisError::Code::kCommandError, "unexpected redis ping reply");
     }
 }
@@ -26,7 +26,7 @@ Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(
     }
     const auto text = redisValueString(reply);
     if (!get) {
-        if (!redisAsciiEqualsIgnoreCase(text, "OK")) {
+        if (!asciiEqualsIgnoreCase(text, "OK")) {
             throw RedisError(RedisError::Code::kCommandError, "unexpected redis set reply");
         }
         co_return std::nullopt;
@@ -43,7 +43,7 @@ Task<bool> executeRedisSetNx(
     if (reply.null()) {
         co_return false;
     }
-    co_return redisAsciiEqualsIgnoreCase(redisValueString(reply), "OK");
+    co_return asciiEqualsIgnoreCase(redisValueString(reply), "OK");
 }
 
 Task<bool> executeRedisIntegerBool(
