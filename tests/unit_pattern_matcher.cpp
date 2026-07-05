@@ -160,3 +160,24 @@ RUVIA_TEST(pattern_match_bounds_catastrophic_backtracking) {
     // A genuinely matching value under the same pattern still matches (budget is huge).
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a*a*a*a*a*a*a*b$"}>("aaab"));
 }
+
+RUVIA_TEST(pattern_match_bounds_greedy_rescan_of_fixed_atom) {
+    // A variable quantifier followed by a fixed atom it also matches -- "^a*a$",
+    // "^\d*\d$" -- previously scanned the full matching run and then discarded all
+    // but the one character the fixed atom keeps, repeating that O(L) scan at every
+    // backtrack position: O(n^2) work the per-recursion step budget never charges
+    // for, hanging on large input. The scan is now capped at what the quantifier can
+    // consume, so a hostile input fails fast. 100k chars would take tens of seconds
+    // under the old O(n^2) path; here it must return promptly.
+    const std::string manyA(100000, 'a');
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a$"}>(manyA + "b"));
+    const std::string manyDigits(100000, '5');
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^\\d*\\d$"}>(manyDigits + "x"));
+
+    // Matching semantics for legitimate inputs are unchanged.
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a$"}>("a"));
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a$"}>("aaa"));
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a$"}>("b"));
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*\\d$"}>("5"));
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^\\d*\\d$"}>("123"));
+}
