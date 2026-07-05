@@ -154,6 +154,13 @@ struct ContextAccess final {
         return context.streamingHead(contentType);
     }
 
+    // Sets a pending response header on the context, as a handler would before
+    // streaming. Lets a test seed e.g. a caller-provided Cache-Control that the
+    // stream-head builder must then honor.
+    static void setResponseHeader(Context& context, std::string_view name, std::string_view value) {
+        context.setStableResponseHeader(name, value);
+    }
+
     // True if a Set-Cookie whose value begins with `valuePrefix` (e.g. a cookie
     // name plus '=') is already queued on the context's pending response headers.
     // Lets a test observe a cookie set by middleware before any response is built.
