@@ -5,6 +5,7 @@
 
 #include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/ModelTypes.h"
+#include "ruvia/http/detail/HttpOws.h"
 #include "ruvia/http/detail/model/JsonParser.h"
 #include "ruvia/http/detail/model/FormParser.h"
 
@@ -12,22 +13,12 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline std::string_view modelTrimOws(std::string_view value) noexcept {
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
-        value.remove_prefix(1);
-    }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
-        value.remove_suffix(1);
-    }
-    return value;
-}
-
 [[nodiscard]] inline bool contentTypeMatches(std::string_view contentType, std::string_view expected) noexcept {
     if (contentType.empty()) {
         return false;
     }
     const auto semicolon = contentType.find(';');
-    const auto mediaType = modelTrimOws(
+    const auto mediaType = httpTrimOws(
         semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
     return asciiEqualsIgnoreCase(mediaType, expected);
 }
