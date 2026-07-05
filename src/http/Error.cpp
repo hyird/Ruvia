@@ -209,10 +209,13 @@ Task<HttpResponse> makeErrorResponse(
             co_return response;
         } catch (const HttpError& nested) {
             co_return makeErrorResponse(context.resource(), nested.info(), closeConnection);
-        } catch (const std::exception& nested) {
+        } catch (const std::exception&) {
+            // The error handler itself threw; do not echo its exception detail to
+            // the client (same reasoning as the dispatch 500 path). The generic
+            // "error_handler_failed" code already signals what happened.
             co_return makeErrorResponse(
                 context.resource(),
-                HttpErrorInfo(500, "error_handler_failed", nested.what()),
+                HttpErrorInfo(500, "error_handler_failed", "error handler failed"),
                 closeConnection);
         } catch (...) {
             co_return makeErrorResponse(

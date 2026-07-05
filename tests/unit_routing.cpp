@@ -540,8 +540,12 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     // A thrown HttpError surfaces with its own status; any other exception is a 500.
     RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x").status,
                    std::uint16_t{403});
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x").status,
-                   std::uint16_t{500});
+    const auto generic = dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x");
+    RUVIA_CHECK_EQ(generic.status, std::uint16_t{500});
+    // The unexpected exception's message must NOT leak into the response body: a
+    // library error (SQL text, paths) could otherwise be disclosed to the client.
+    RUVIA_CHECK(generic.body.find("boom") == std::string::npos);
+    RUVIA_CHECK(generic.body.find("Internal Server Error") != std::string::npos);
 }
 
 RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {

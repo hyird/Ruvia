@@ -112,11 +112,19 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const std::invalid_argument& error) {
+        // invalid_argument is the framework's own request-validation signal (bad
+        // cookie/json/form); its message describes the request, so it is safe to
+        // surface to the client as a 400.
         errorInfo.assign(HttpErrorInfo(400, {}, error.what()));
-    } catch (const std::exception& error) {
-        errorInfo.assign(HttpErrorInfo(500, {}, error.what()));
+    } catch (const std::exception&) {
+        // An unexpected exception (e.g. a database/library error) may carry
+        // internal detail -- table names, query fragments, file paths. Do NOT echo
+        // what() to the client: normalizeError renders a generic "Internal Server
+        // Error" body. The exception_ptr is still set on the Context, so an onError
+        // handler can log or inspect the full detail server-side.
+        errorInfo.assign(HttpErrorInfo(500, {}, {}));
     } catch (...) {
-        errorInfo.assign(HttpErrorInfo(500, {}, "unhandled exception"));
+        errorInfo.assign(HttpErrorInfo(500, {}, {}));
     }
 }
 
