@@ -121,6 +121,35 @@ RUVIA_TEST(sse_writer_formats_event_id_retry_and_multiline_data) {
         std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
 }
 
+RUVIA_TEST(sse_writer_omits_data_line_for_empty_data_no_phantom_event) {
+    // WHATWG HTML 9.2.6: a block whose data buffer is empty must NOT dispatch. An
+    // unconditional "data:" line makes the client's data buffer "\n" (non-empty),
+    // so it would strip the trailing LF and fire a phantom empty message event.
+    // An empty-data block must therefore emit no data field at all.
+    const auto render = [](ruvia::SseMessage message) {
+        CaptureStreamSink sink;
+        auto writer = makeWriter(sink);
+        auto sse = ruvia::detail::StreamingAccess::makeSseWriter(writer);
+        asio::io_context ctx(1);
+        auto future = asio::co_spawn(
+            ctx, ruvia::detail::taskAsAwaitable(writeOneSse(sse, message)), asio::use_future);
+        ctx.run();
+        future.get();
+        return sink.writes.empty() ? std::string{} : sink.writes[0];
+    };
+
+    // A retry-only block bumps the reconnection time and dispatches nothing.
+    RUVIA_CHECK_EQ(render(ruvia::SseMessage{.retry = 3000}), std::string("retry: 3000\n\n"));
+    // An event-only block likewise emits no data field (empty data never dispatches).
+    RUVIA_CHECK_EQ(render(ruvia::SseMessage{.event = "ping"}), std::string("event: ping\n\n"));
+    // A bare block is a no-op keepalive: just the terminating blank line.
+    RUVIA_CHECK_EQ(render(ruvia::SseMessage{}), std::string("\n"));
+    // Data present is unaffected: data lines are still emitted.
+    RUVIA_CHECK_EQ(render(ruvia::SseMessage{.data = "hi"}), std::string("data: hi\n\n"));
+    // No empty-data frame ever carries a "data:" line.
+    RUVIA_CHECK(render(ruvia::SseMessage{.retry = 1}).find("data:") == std::string::npos);
+}
+
 RUVIA_TEST(sse_writer_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
     // EventSource splits lines on CR, LF, or CRLF, so a bare CR in data must be
     // treated as a line break too -- otherwise it would survive into a "data:"

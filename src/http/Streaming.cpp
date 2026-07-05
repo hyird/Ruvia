@@ -46,7 +46,15 @@ Task<void> SseWriter::writeSSE(const SseMessage& message) {
         appendUnsigned(frame, *message.retry);
         frame.push_back('\n');
     }
-    appendData(frame, message.data);
+    // Only emit "data:" lines when there is data. Per WHATWG HTML 9.2.6 an empty
+    // data buffer must NOT dispatch, but appendData always writes at least one
+    // "data:" line -- which makes the client's data buffer non-empty ("\n") and
+    // fires a phantom empty `message` event for a retry-only or event-only block.
+    // Skipping it lets a retry-only block just set the reconnection time and a
+    // bare writeSSE({}) be a no-op keepalive (a blank line), matching the spec.
+    if (!message.data.empty()) {
+        appendData(frame, message.data);
+    }
     frame.push_back('\n');
     co_await writer_.write(frame);
 }
