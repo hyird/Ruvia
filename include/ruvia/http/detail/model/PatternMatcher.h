@@ -109,15 +109,26 @@ template <std::size_t Capacity>
     const auto& atom = plan.atoms[atomIndex];
     const std::size_t minCount =
         atom.quantifier == PatternQuantifier::kOne || atom.quantifier == PatternQuantifier::kOneOrMore ? 1 : 0;
+    // Bound the greedy scan at the most this quantifier can consume. kOne/kZeroOrOne
+    // take at most one character, so scanning the whole matching run and discarding
+    // all but one is wasted O(L) work -- and it is repeated at every backtrack
+    // position, an O(n^2) ReDoS on shapes like "^a*a$" that the per-recursion step
+    // budget never charges for (each full rescan is a single call). Capping the scan
+    // makes each fixed atom O(1), so per-call scan cost stays within the
+    // budget-charged recursion; the variable quantifiers already spawn ~L recursions
+    // for an L-char scan and so remain bounded.
+    const std::size_t scanLimit =
+        atom.quantifier == PatternQuantifier::kOne ||
+                atom.quantifier == PatternQuantifier::kZeroOrOne
+            ? std::size_t{1}
+            : value.size();
     std::size_t maxCount = 0;
-    while (valueIndex + maxCount < value.size() &&
+    while (maxCount < scanLimit &&
+           valueIndex + maxCount < value.size() &&
            matchPatternAtom(pattern, atom, value[valueIndex + maxCount])) {
         ++maxCount;
     }
 
-    if (atom.quantifier == PatternQuantifier::kOne || atom.quantifier == PatternQuantifier::kZeroOrOne) {
-        maxCount = maxCount > 1 ? 1 : maxCount;
-    }
     if (maxCount < minCount) {
         return false;
     }
