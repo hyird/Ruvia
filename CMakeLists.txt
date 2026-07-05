@@ -330,6 +330,13 @@ if(RUVIA_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+option(RUVIA_BUILD_FUZZERS "Build Ruvia parser fuzz targets" OFF)
+
+if(RUVIA_BUILD_FUZZERS)
+    enable_testing()
+    add_subdirectory(fuzz)
+endif()
+
 install(
     TARGETS
         ruvia
