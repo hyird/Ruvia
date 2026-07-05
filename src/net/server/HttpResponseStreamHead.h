@@ -74,8 +74,13 @@ private:
     if (framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed()) {
         setResponseHeaderStableView(response, "Transfer-Encoding", "chunked");
     }
-    if (mode == ResponseBodyMode::kSse &&
-        (framing == ResponseStreamFraming::kHttp2DataFrames || policy.transferEncodingAllowed())) {
+    if (needsSseCacheControl) {
+        // Gate on the guard that was already computed for the reserve count above,
+        // which includes !responseHasKnownHeader(...Cache-Control). Re-inlining only
+        // the mode/framing condition here (as before) dropped that guard and
+        // overwrote a handler's own Cache-Control -- e.g. the recommended SSE
+        // "no-cache" -- with "no-store". This mirrors the Content-Type path, which
+        // uses needsSseContentType, so a caller-provided value is honored.
         setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 

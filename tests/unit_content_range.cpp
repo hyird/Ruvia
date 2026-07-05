@@ -12,6 +12,7 @@
 #include "http/FileResponseHelpers.h"
 #include "http/HttpRequestInternal.h"
 #include "http/HttpResponseHeaderState.h"
+#include "net/server/HttpResponseStreamHead.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpCommon.h"
@@ -235,6 +236,37 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     RUVIA_CHECK(direct.header("Vary").empty());
 
     fs::remove_all(dir);
+}
+
+RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
+    using ruvia::detail::ContextAccess;
+    using ruvia::detail::HttpRequestAccess;
+    using ruvia::detail::prepareResponseStreamHead;
+    using ruvia::detail::ResponseBodyMode;
+    using ruvia::detail::ResponseStreamFraming;
+
+    const auto head = [](bool presetNoCache) {
+        ruvia::WorkerMemory worker;
+        ruvia::RequestMemory memory(worker);
+        ruvia::HttpRequest request = HttpRequestAccess::make();
+        HttpRequestAccess::reset(request);
+        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setResource(request, memory.resource());
+        auto context = ContextAccess::make(memory, request);
+        if (presetNoCache) {
+            ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
+        }
+        auto streamHead = prepareResponseStreamHead(
+            context, ResponseBodyMode::kSse, ResponseStreamFraming::kHttp1Chunked);
+        return std::string(streamHead.response().header("Cache-Control"));
+    };
+
+    // With no caller value, an SSE stream defaults to no-store so the event stream
+    // is never cached.
+    RUVIA_CHECK_EQ(head(false), std::string("no-store"));
+    // A handler that set its own Cache-Control -- e.g. the recommended SSE
+    // "no-cache" -- must have it preserved, not clobbered with no-store.
+    RUVIA_CHECK_EQ(head(true), std::string("no-cache"));
 }
 
 RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
