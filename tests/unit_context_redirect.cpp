@@ -56,6 +56,25 @@ RUVIA_TEST(context_redirect_percent_encodes_non_ascii_location) {
                    std::string_view("https://example.com/caf%C3%A9"));
 }
 
+RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+    // The location mixes already-encoded escapes ("%20", "%2F") with a raw UTF-8
+    // 'é' (0xC3 0xA9) that triggers the whole-string encoding pass. The 'é' must
+    // become %C3%A9, but the existing escapes must survive intact -- not be
+    // double-encoded to "%2520"/"%252F", which would corrupt the target.
+    const auto response = context.redirect(
+        std::string_view("https://example.com/a%20b/caf\xC3\xA9?x=%2F"), 302, "Found");
+    RUVIA_CHECK_EQ(response.header("Location"),
+                   std::string_view("https://example.com/a%20b/caf%C3%A9?x=%2F"));
+
+    // A lone or malformed '%' (not followed by two hex digits) is not a valid
+    // escape, so it IS percent-encoded to %25 -- the trailing 'é' forces the pass.
+    const auto malformed = context.redirect(
+        std::string_view("https://example.com/100%off/caf\xC3\xA9"), 302, "Found");
+    RUVIA_CHECK_EQ(malformed.header("Location"),
+                   std::string_view("https://example.com/100%25off/caf%C3%A9"));
+}
+
 RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     // A CRLF in the location must not split the response: header-value
