@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "RateLimitKey.h"
 #include "RateLimiter.h"
 
 namespace ruvia::detail {
@@ -12,7 +13,8 @@ namespace ruvia::detail {
     if (limiter == nullptr || !limiter->enabled()) {
         return RateLimitCheck{};
     }
-    return limiter->allowGlobal(remoteAddress);
+    char keyBuffer[kRateLimitKeyBufferBytes];
+    return limiter->allowGlobal(rateLimitKeyFor(remoteAddress, keyBuffer));
 }
 
 }  // namespace ruvia::detail

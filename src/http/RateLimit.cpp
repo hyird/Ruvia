@@ -1,6 +1,7 @@
 #include "ruvia/http/RateLimit.h"
 
 #include "ContextInternal.h"
+#include "../net/server/RateLimitKey.h"
 #include "../net/server/RateLimiter.h"
 
 #include <charconv>
@@ -42,9 +43,10 @@ private:
         return RouteRateLimitCheck{};
     }
 
+    char keyBuffer[kRateLimitKeyBufferBytes];
     const auto check = limiter->allowRoute(
         ContextAccess::routeRateLimitScope(context),
-        context.req().raw().remoteAddress(),
+        rateLimitKeyFor(context.req().raw().remoteAddress(), keyBuffer),
         options.rule);
     return RouteRateLimitCheck(check.allowed, check.resetAfterMs);
 }
