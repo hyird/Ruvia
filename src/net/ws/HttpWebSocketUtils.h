@@ -109,6 +109,20 @@ struct WebSocketFrameStart final {
     return webSocketMessageExceedsLimit(static_cast<std::size_t>(payloadSize), maxMessageBytes);
 }
 
+// A control frame (Close/Ping/Pong) is capped at 125 bytes by RFC 6455 §5.5 and
+// is explicitly NOT subject to the per-message size limit, so only data frames
+// (Text/Binary/Continuation) are measured against maxMessageBytes. Applying the
+// limit to control frames would reject a legal Ping/Pong, or a Close carrying a
+// reason phrase, once maxMessageBytes drops below 125 -- silently breaking the
+// close handshake and keepalive on a small-message configuration.
+[[nodiscard]] inline bool webSocketFrameExceedsMessageLimit(
+    WebSocketOpcode opcode,
+    std::uint64_t payloadSize,
+    std::size_t maxMessageBytes) noexcept {
+    return !isWebSocketControlOpcode(opcode) &&
+        webSocketFrameLengthExceedsLimit(payloadSize, maxMessageBytes);
+}
+
 [[nodiscard]] inline bool webSocketMaskedFrameReadSizeOverflows(
     std::uint64_t payloadSize,
     std::size_t headerSize) noexcept {
@@ -408,7 +422,7 @@ template <typename Ensure>
     if (isInvalidWebSocketControlFrame(frameStart, length)) {
         throw WebSocketProtocolError(1002, "invalid websocket control frame");
     }
-    if (webSocketFrameLengthExceedsLimit(length, maxMessageBytes)) {
+    if (webSocketFrameExceedsMessageLimit(frameStart.opcode, length, maxMessageBytes)) {
         throw WebSocketProtocolError(1009, "websocket message is too large");
     }
     if (webSocketMaskedFrameReadSizeOverflows(length, headerSize)) {

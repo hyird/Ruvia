@@ -43,6 +43,23 @@ RUVIA_TEST(websocket_control_opcode_classification) {
     RUVIA_CHECK(isWebSocketControlOpcode(WebSocketOpcode::kPong));
 }
 
+RUVIA_TEST(websocket_frame_message_limit_exempts_control_frames) {
+    using ruvia::detail::webSocketFrameExceedsMessageLimit;
+    // Data frames are measured against the per-message size limit.
+    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketOpcode::kText, 100, 64));
+    RUVIA_CHECK(webSocketFrameExceedsMessageLimit(WebSocketOpcode::kBinary, 100, 64));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kText, 50, 64));
+
+    // Control frames (Close/Ping/Pong) are capped at 125 by RFC 6455 5.5 and are
+    // NOT subject to the message-size limit: a 100-byte Ping, or a Close carrying a
+    // reason phrase, must pass even when maxMessageBytes is 64.
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kPing, 100, 64));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kPong, 100, 64));
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kClose, 100, 64));
+    // A zero limit is unlimited, so no data frame trips it either.
+    RUVIA_CHECK(!webSocketFrameExceedsMessageLimit(WebSocketOpcode::kText, 1'000'000, 0));
+}
+
 RUVIA_TEST(websocket_message_size_limits) {
     using ruvia::detail::webSocketAppendExceedsLimit;
     using ruvia::detail::webSocketMessageExceedsLimit;
