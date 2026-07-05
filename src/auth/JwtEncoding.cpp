@@ -1,23 +1,11 @@
 #include "JwtInternal.h"
 
+#include "ruvia/detail/Base64Url.h"
+
 #include <cstdint>
 #include <stdexcept>
 
 namespace ruvia::detail {
-namespace {
-
-constexpr std::string_view kBase64Url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-[[nodiscard]] int decodeBase64UrlChar(char ch) noexcept {
-    if (ch >= 'A' && ch <= 'Z') { return ch - 'A'; }
-    if (ch >= 'a' && ch <= 'z') { return ch - 'a' + 26; }
-    if (ch >= '0' && ch <= '9') { return ch - '0' + 52; }
-    if (ch == '-') { return 62; }
-    if (ch == '_') { return 63; }
-    return -1;
-}
-
-}  // namespace
 
 std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string out(pmrResourceOrDefault(resource));
@@ -29,11 +17,11 @@ std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_res
         bits += 8;
         while (bits >= 6) {
             bits -= 6;
-            out.push_back(kBase64Url[(buffer >> bits) & 0x3F]);
+            out.push_back(kBase64UrlAlphabet[(buffer >> bits) & 0x3F]);
         }
     }
     if (bits > 0) {
-        out.push_back(kBase64Url[(buffer << (6 - bits)) & 0x3F]);
+        out.push_back(kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F]);
     }
     return out;
 }
