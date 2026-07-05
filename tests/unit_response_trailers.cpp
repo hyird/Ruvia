@@ -51,12 +51,28 @@ RUVIA_TEST(response_trailer_forbidden_names) {
     RUVIA_CHECK(isForbiddenResponseTrailerName("Set-Cookie"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Cache-Control"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("Proxy-Authenticate"));
+    // Response control data (RFC 9110 §6.5.1) must be processed before the content
+    // and thus cannot be trailered: a recipient may discard trailers, silently
+    // dropping the redirect/cache/auth-timing control.
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Age"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Date"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Vary"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Pragma"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Expires"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Warning"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Location"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("Retry-After"));
     // The check is case-insensitive.
     RUVIA_CHECK(isForbiddenResponseTrailerName("transfer-encoding"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("content-length"));
     RUVIA_CHECK(isForbiddenResponseTrailerName("content-type"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("location"));
+    RUVIA_CHECK(isForbiddenResponseTrailerName("retry-after"));
     // An ordinary field is allowed.
     RUVIA_CHECK(!isForbiddenResponseTrailerName("X-Trace-Id"));
+    // Fields that are legitimately computed after the body stay allowed.
+    RUVIA_CHECK(!isForbiddenResponseTrailerName("ETag"));
+    RUVIA_CHECK(!isForbiddenResponseTrailerName("Server-Timing"));
 }
 
 RUVIA_TEST(response_trailer_field_combined_rule) {
