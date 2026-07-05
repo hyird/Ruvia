@@ -230,6 +230,36 @@ RUVIA_TEST(hpack_dynamic_table_add_then_reference) {
     RUVIA_CHECK_EQ(out.headers[1], expected);  // resolved via the dynamic table
 }
 
+RUVIA_TEST(hpack_indexed_name_referencing_the_evicted_entry_is_safe) {
+    // RFC 7541 4.4: a new entry may reference (by indexed name) an existing entry
+    // that the same insertion evicts. Here the referenced name is heap-allocated
+    // (20 bytes, past any small-string buffer) and the insertion fully evicts it,
+    // so addDynamic must copy the name BEFORE eviction frees that heap buffer --
+    // otherwise the copy reads freed memory (a remotely reachable heap
+    // use-after-free during HPACK decode). Under AddressSanitizer this block
+    // aborts without the fix; it also pins the functional invariant that the
+    // newly inserted entry resolves to the correct (uncorrupted) name.
+    const std::string name(20, 'a');
+    std::string block;
+    block += bytes({0x3f, 0x16});          // dynamic table size update -> 53 (fits exactly one entry)
+    block += bytes({0x40, 0x14});          // literal, incremental indexing, new name, name length 20
+    block += name;                          // 20-byte name -> heap allocation
+    block += bytes({0x01, 0x76});          // value length 1, "v"
+    // Literal, incremental indexing, indexed name = 62 (the entry just added).
+    // Its size (20 + 1 + 32 = 53) forces evicting that very entry before insert.
+    block += bytes({0x7e, 0x01, 0x77});    // indexed name 62, value length 1, "w"
+    block += bytes({0xbe});                 // indexed field, index 62 (the new entry)
+
+    Collector out;
+    RUVIA_CHECK(decodeBlock(block, out));
+    RUVIA_CHECK_EQ(out.headers.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(out.headers[0], std::make_pair(name, std::string("v")));
+    RUVIA_CHECK_EQ(out.headers[1], std::make_pair(name, std::string("w")));
+    // The reference reads the STORED dynamic entry -- the byte the use-after-free
+    // would corrupt. It must still be the full 20-byte name.
+    RUVIA_CHECK_EQ(out.headers[2], std::make_pair(name, std::string("w")));
+}
+
 RUVIA_TEST(hpack_size_update_after_header_is_rejected) {
     // A dynamic-table size update must precede any header field (RFC 7541 4.2):
     // 0x82 (:method GET) then 0x20 (size update) is a decoding error.
