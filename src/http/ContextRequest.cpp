@@ -493,9 +493,18 @@ void Context::ensureRequestQuery() const {
     query.reserve(builds.size());
     groups.reserve(builds.size());
     for (const auto& build : builds) {
+        // A duplicated query name resolves to its LAST value, matching every other
+        // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
+        // the parsed-form scalar compaction, and the raw cookie lookup all take the
+        // last occurrence (commit 5523295). This flattened list was the lone holdout
+        // keeping the first, so requestQuery("a") and iterating requestQuery()
+        // disagreed on ?a=1&a=2. The group is name-sorted with stable ties, so
+        // order[build.end - 1] is the last occurrence. requestQueries() below still
+        // lists every value in order.
+        const auto lastIndex = order[build.end - 1];
         query.push_back(detail::RequestNameValueViewAccess::make(
-            storedStringView(storage[build.firstIndex * 2]),
-            storedStringView(storage[build.firstIndex * 2 + 1])));
+            storedStringView(storage[lastIndex * 2]),
+            storedStringView(storage[lastIndex * 2 + 1])));
 
         auto group = RequestValueGroup(RequestValueGroup::Token{}, resource(), pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {

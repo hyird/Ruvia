@@ -165,6 +165,38 @@ RUVIA_TEST(context_request_query_single_lookup_decodes_without_materializing_que
     RUVIA_CHECK(!ContextAccess::requestQueryMaterialized(context));
 }
 
+RUVIA_TEST(context_request_query_list_uses_last_duplicate_like_single_lookup) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setQueryString(request, "a=1&b=2&a=3");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    // Single-value lookup resolves a duplicate name to its LAST value.
+    RUVIA_CHECK_EQ(*context.req().query("a"), std::string_view("3"));
+
+    // The flattened query field list (used by controller field binding) must
+    // agree. It previously kept the first occurrence ("1"), so a caller binding
+    // fields from the list and one calling query("a") saw different values for
+    // ?a=1&a=3 -- the inconsistency this pins.
+    const auto& list = ruvia::detail::requestQueryFields(context.req());
+    RUVIA_CHECK_EQ(list.size(), std::size_t{2});  // deduped to unique names a, b
+    const auto viaList = list.get("a");
+    RUVIA_CHECK(viaList.has_value());
+    RUVIA_CHECK_EQ(*viaList, std::string_view("3"));
+    RUVIA_CHECK_EQ(*list.get("b"), std::string_view("2"));
+
+    // queries() still exposes every value in order (getAll semantics).
+    const auto all = context.req().queries("a");
+    RUVIA_CHECK(all.has_value());
+    RUVIA_CHECK_EQ(all->size(), std::size_t{2});
+    RUVIA_CHECK_EQ((*all)[0], std::string_view("1"));
+    RUVIA_CHECK_EQ((*all)[1], std::string_view("3"));
+}
+
 RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_param_table) {
     WorkerMemory worker;
     HttpRequest request = HttpRequestAccess::make();
