@@ -19,6 +19,13 @@ detail::RouteResolution detail::RouteTable::resolve(
     HttpMethod method,
     std::string_view path,
     RouteMatch& match) const noexcept {
+    // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
+    // server as a whole, not any resource, so it must not bind to a route -- a
+    // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the
+    // wildcard node. Leave it unresolved so dispatch emits the server-wide response.
+    if (method == HttpMethod::kOptions && path == "*") {
+        return RouteResolution{};
+    }
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
         return RouteResolution::foundStatic(route);
     }
@@ -142,7 +149,11 @@ const detail::RouteEntry* detail::RouteTable::findRadix(HttpMethod method, std::
 std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept {
     std::uint32_t mask = 0;
     auto candidateMask = staticMethodMask_ | dynamicMethodMask_;
-    candidateMask &= ~(1U << methodIndex(HttpMethod::kOptions));
+    // Keep OPTIONS in the candidate mask: a path whose only registered method is
+    // OPTIONS must yield a non-zero Allow set so resolve() answers 405 (method known
+    // but unsupported, RFC 9110 15.5.6) instead of 404. Clearing it here made such a
+    // path resolve to not-found. resolve() still ORs OPTIONS into any non-zero mask,
+    // so GET-only paths keep advertising OPTIONS.
     if (isRoutableMethod(requestedMethod)) {
         candidateMask &= ~(1U << methodIndex(requestedMethod));
     }
@@ -153,8 +164,8 @@ std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMeth
         const auto methodBit = 1U << i;
         candidateMask &= ~methodBit;
 
-        // resolve() already proved requestedMethod has no route for this path.
-        // OPTIONS is added by resolve() itself.
+        // resolve() already proved requestedMethod has no route for this path, so it
+        // was cleared from the candidate mask above.
         const bool hasStaticRoutes = (staticMethodMask_ & methodBit) != 0;
         const auto* const staticRoute = hasStaticRoutes ? findStaticRoute(method, path) : nullptr;
         const auto* const dynamicRoute = (dynamicMethodMask_ & methodBit) != 0
