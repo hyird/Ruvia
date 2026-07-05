@@ -65,4 +65,10 @@ RUVIA_TEST(http2_base64url_decode_rejects_bad_input) {
     // A '=' pad in the middle (non-trailing) is invalid.
     (void)decode("AA=QAAAA", ok);
     RUVIA_CHECK(!ok);
+    // RFC 7540 3.2.1: HTTP2-Settings is UNPADDED base64url, so ANY '=' is invalid --
+    // including trailing padding. "A===" is length 4 (so it clears the %4==1 guard)
+    // but its only significant character is a 1-char final group, which is malformed;
+    // it must be rejected rather than decode to an empty settings payload.
+    (void)decode("A===", ok);
+    RUVIA_CHECK(!ok);
 }
