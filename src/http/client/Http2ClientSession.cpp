@@ -70,10 +70,6 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     return !asciiEqualsIgnoreCase(name, "te") || value == "trailers";
 }
 
-[[nodiscard]] char asciiLower(char ch) noexcept {
-    return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
-}
-
 [[nodiscard]] bool http2ResponseStatusMayHaveBody(std::uint16_t status) noexcept {
     return status >= 200 && status != 204 && status != 205 && status != 304;
 }
@@ -1191,7 +1187,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         lowerName.clear();
         lowerName.reserve(name.size());
         for (const auto ch : name) {
-            lowerName.push_back(asciiLower(ch));
+            lowerName.push_back(static_cast<char>(asciiToLower(static_cast<unsigned char>(ch))));
         }
         HpackEncoder::encodeHeader(encodeScratch_, lowerName, value);
     }
