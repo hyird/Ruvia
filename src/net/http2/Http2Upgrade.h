@@ -79,15 +79,12 @@ struct Http2UpgradeRequest final {
 
     std::uint32_t buffer = 0;
     std::uint8_t bits = 0;
-    bool padding = false;
     for (const auto ch : input) {
-        if (ch == '=') {
-            padding = true;
-            continue;
-        }
-        if (padding) {
-            return false;
-        }
+        // RFC 7540 §3.2.1 requires HTTP2-Settings to be UNPADDED base64url. '=' is
+        // not in the base64url alphabet, so decodeBase64UrlChar rejects it. This
+        // also rejects a padded final group whose significant length is 1 -- e.g.
+        // "A===" -- which the raw-length `% 4 == 1` guard above misses because the
+        // trailing padding makes the total length a multiple of 4.
         const auto value = decodeBase64UrlChar(ch);
         if (value < 0) {
             return false;
