@@ -7,9 +7,8 @@
 
 namespace {
 
-using ruvia::detail::httpHexValue;
+using ruvia::detail::decodeHexNibble;
 using ruvia::detail::isHttpFieldValueChar;
-using ruvia::detail::isHttpHexDigit;
 using ruvia::detail::isHttpTokenChar;
 
 bool token(char c) noexcept { return isHttpTokenChar(static_cast<unsigned char>(c)); }
@@ -46,19 +45,20 @@ RUVIA_TEST(http_field_value_char_table) {
 }
 
 RUVIA_TEST(http_hex_digit_and_value) {
-    for (const char c : {'0', '9', 'A', 'F', 'a', 'f'}) {
-        RUVIA_CHECK(isHttpHexDigit(static_cast<unsigned char>(c)));
-    }
+    // The chunk-size and %XX parsers classify+decode a hex nibble in one call via
+    // decodeHexNibble (the single owner in Hex.h): value 0-15 on a hex digit, -1
+    // otherwise. Non-hex and high bytes must report -1, never a wrapped value.
+    RUVIA_CHECK_EQ(decodeHexNibble('0'), 0);
+    RUVIA_CHECK_EQ(decodeHexNibble('9'), 9);
+    RUVIA_CHECK_EQ(decodeHexNibble('A'), 10);
+    RUVIA_CHECK_EQ(decodeHexNibble('F'), 15);
+    RUVIA_CHECK_EQ(decodeHexNibble('a'), 10);
+    RUVIA_CHECK_EQ(decodeHexNibble('f'), 15);
     for (const char c : {'g', 'G', '/', ':', ' ', 'z'}) {
-        RUVIA_CHECK(!isHttpHexDigit(static_cast<unsigned char>(c)));
+        RUVIA_CHECK(decodeHexNibble(c) < 0);
     }
-
-    RUVIA_CHECK_EQ(httpHexValue('0'), std::uint8_t{0});
-    RUVIA_CHECK_EQ(httpHexValue('9'), std::uint8_t{9});
-    RUVIA_CHECK_EQ(httpHexValue('A'), std::uint8_t{10});
-    RUVIA_CHECK_EQ(httpHexValue('F'), std::uint8_t{15});
-    RUVIA_CHECK_EQ(httpHexValue('a'), std::uint8_t{10});
-    RUVIA_CHECK_EQ(httpHexValue('f'), std::uint8_t{15});
+    RUVIA_CHECK(decodeHexNibble(static_cast<char>(0x80)) < 0);
+    RUVIA_CHECK(decodeHexNibble(static_cast<char>(0xff)) < 0);
 }
 
 RUVIA_TEST(request_header_kind_known_slot) {

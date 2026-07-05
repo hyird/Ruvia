@@ -205,8 +205,8 @@ bool isValidHostHeader(std::string_view value) noexcept {
         }
         if (c == '%') {
             if (i + 2 >= value.size() ||
-                !isHttpHexDigit(static_cast<unsigned char>(value[i + 1])) ||
-                !isHttpHexDigit(static_cast<unsigned char>(value[i + 2]))) {
+                decodeHexNibble(value[i + 1]) < 0 ||
+                decodeHexNibble(value[i + 2]) < 0) {
                 return false;
             }
             i += 2;

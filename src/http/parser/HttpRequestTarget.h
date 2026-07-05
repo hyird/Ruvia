@@ -27,8 +27,8 @@ struct RequestTargetView {
         }
         if (c == '%') {
             if (i + 2 >= target.size() ||
-                !isHttpHexDigit(static_cast<unsigned char>(target[i + 1])) ||
-                !isHttpHexDigit(static_cast<unsigned char>(target[i + 2]))) {
+                decodeHexNibble(target[i + 1]) < 0 ||
+                decodeHexNibble(target[i + 2]) < 0) {
                 return false;
             }
             i += 2;
