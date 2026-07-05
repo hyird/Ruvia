@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
+#include "http/HttpResponseHeaderAccess.h"
 
 namespace {
 
@@ -90,6 +91,34 @@ RUVIA_TEST(response_header_replace_append_and_remove) {
     // Passing nullopt removes the header entirely.
     response.header("X-Test", std::nullopt);
     RUVIA_CHECK(response.header("X-Test").empty());
+}
+
+RUVIA_TEST(response_appended_header_carries_append_flag) {
+    auto response = makeResponse();
+
+    // Appending a non-Set-Cookie multi-valued field (here Link) must mark every
+    // entry with the append flag. The flag is what a later merge of this response
+    // -- a Context response slot folded into a factory response via
+    // mergeResponseSlotHeaders -- consults to keep all values; without it the merge
+    // sees append=false, treats the field as single-valued, and drops every line
+    // but the first. appendHeaderValidated previously left the flag unset (only the
+    // Context header list marked it), so a slot-carried Link/Vary/WWW-Authenticate
+    // collapsed on merge.
+    response.header("Link", "</a>; rel=preload", HttpResponse::HeaderOptions{true});
+    response.header("Link", "</b>; rel=preload", HttpResponse::HeaderOptions{true});
+
+    std::size_t linkCount = 0;
+    std::size_t appendMarked = 0;
+    for (const auto& header : response.headers()) {
+        if (header.name() == std::string_view("Link")) {
+            ++linkCount;
+            if (ruvia::detail::responseHeaderAppend(header)) {
+                ++appendMarked;
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(linkCount, std::size_t{2});
+    RUVIA_CHECK_EQ(appendMarked, std::size_t{2});
 }
 
 RUVIA_TEST(response_header_remove_known_header_rebuilds_index) {
