@@ -111,7 +111,7 @@ private:
         lowerName_.clear();
         lowerName_.reserve(name.size());
         for (const char ch : name) {
-            lowerName_.push_back(static_cast<char>(httpLowerAscii(static_cast<unsigned char>(ch))));
+            lowerName_.push_back(static_cast<char>(asciiToLower(static_cast<unsigned char>(ch))));
         }
         HpackEncoder::encodeHeader(trailers_, lowerName_, value);
     }

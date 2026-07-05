@@ -54,7 +54,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
         "connection", "keep-alive", "proxy-connection", "transfer-encoding",
         "upgrade", "host", "content-length", "trailer"};
     for (const auto forbidden : kForbidden) {
-        if (httpAsciiEqualsIgnoreCase(name, forbidden)) {
+        if (asciiEqualsIgnoreCase(name, forbidden)) {
             return true;
         }
     }
@@ -67,7 +67,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     if (isForbiddenH2RequestHeader(name)) {
         return false;
     }
-    return !httpAsciiEqualsIgnoreCase(name, "te") || value == "trailers";
+    return !asciiEqualsIgnoreCase(name, "te") || value == "trailers";
 }
 
 [[nodiscard]] char asciiLower(char ch) noexcept {
@@ -1203,7 +1203,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     Stream* stream = constructPmrObject<Stream>(resource_, requestResource);
     stream->id = id;
     stream->streaming = streaming;
-    stream->responseBodyAllowed = !httpAsciiEqualsIgnoreCase(method, "HEAD");
+    stream->responseBodyAllowed = !asciiEqualsIgnoreCase(method, "HEAD");
     stream->requestResource = requestResource;
     stream->maxBodyBytes = streaming ? 0 : config_.maxResponseBodyBytes;
     stream->flow.setSendWindow(peerSettings_.initialWindowSize());

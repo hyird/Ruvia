@@ -82,7 +82,7 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     std::pmr::string& scratch) {
     const auto writeLower = [](std::string_view source, char* target) noexcept {
         for (std::size_t i = 0; i < source.size(); ++i) {
-            target[i] = static_cast<char>(httpLowerAscii(static_cast<unsigned char>(source[i])));
+            target[i] = static_cast<char>(asciiToLower(static_cast<unsigned char>(source[i])));
         }
     };
 
@@ -112,12 +112,12 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     if (knownBit != 0) {
         return false;
     }
-    return httpAsciiEqualsIgnoreCase(name, "connection") ||
-        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
-        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
-        httpAsciiEqualsIgnoreCase(name, "te") ||
-        httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
-        httpAsciiEqualsIgnoreCase(name, "upgrade");
+    return asciiEqualsIgnoreCase(name, "connection") ||
+        asciiEqualsIgnoreCase(name, "keep-alive") ||
+        asciiEqualsIgnoreCase(name, "proxy-connection") ||
+        asciiEqualsIgnoreCase(name, "te") ||
+        asciiEqualsIgnoreCase(name, "transfer-encoding") ||
+        asciiEqualsIgnoreCase(name, "upgrade");
 }
 
 inline void appendHttp2ResponseHeaders(

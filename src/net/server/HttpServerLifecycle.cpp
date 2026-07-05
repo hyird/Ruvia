@@ -66,7 +66,7 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     }
     const auto& lookup = *static_cast<const SniContextLookup*>(arg);
     for (const auto& [host, context] : lookup) {
-        if (httpAsciiEqualsIgnoreCase(host, name)) {
+        if (asciiEqualsIgnoreCase(host, name)) {
             SSL_set_SSL_CTX(ssl, context->native_handle());
             break;
         }

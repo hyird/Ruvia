@@ -26,7 +26,7 @@ inline bool varyTokenRepeatedInBatch(
     const std::string_view* tokens,
     std::size_t current) noexcept {
     for (std::size_t i = 0; i < current; ++i) {
-        if (httpAsciiEqualsIgnoreCase(tokens[i], tokens[current])) {
+        if (asciiEqualsIgnoreCase(tokens[i], tokens[current])) {
             return true;
         }
     }

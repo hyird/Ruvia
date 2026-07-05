@@ -58,7 +58,7 @@ enum class HttpContentCoding : std::uint8_t {
     int quality = 1000;
     httpVisitSemicolonParametersQuoted(
         value, [&quality](std::string_view name, std::string_view parameter) noexcept {
-            if (httpAsciiEqualsIgnoreCase(name, "q")) {
+            if (asciiEqualsIgnoreCase(name, "q")) {
                 const auto parsed = httpParseQualityValue(parameter);
                 quality = parsed < 0 ? 0 : parsed;
                 return false;  // first q wins; later parameters are accept-ext
@@ -82,7 +82,7 @@ inline void httpUpdateAcceptedEncodingQuality(
         acceptEncoding,
         [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
-            if (httpAsciiEqualsIgnoreCase(token, coding)) {
+            if (asciiEqualsIgnoreCase(token, coding)) {
                 explicitQuality = httpQualityParameter(item);
             } else if (token == "*") {
                 wildcardQuality = httpQualityParameter(item);
@@ -164,11 +164,11 @@ inline void httpUpdateResponseCodingQualities(
         acceptEncoding,
         [&gzip, &brotli, &zstd](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
-            if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
+            if (asciiEqualsIgnoreCase(token, "gzip")) {
                 gzip.explicitQuality = httpQualityParameter(item);
-            } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
+            } else if (asciiEqualsIgnoreCase(token, "br")) {
                 brotli.explicitQuality = httpQualityParameter(item);
-            } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
+            } else if (asciiEqualsIgnoreCase(token, "zstd")) {
                 zstd.explicitQuality = httpQualityParameter(item);
             } else if (token == "*") {
                 const auto wildcard = httpQualityParameter(item);
@@ -244,11 +244,11 @@ struct HttpMediaTypeParts final {
     if (rangeParts.type == "*" && rangeParts.subtype == "*") {
         return true;
     }
-    if (!httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
+    if (!asciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
         return false;
     }
     return rangeParts.subtype == "*" ||
-        httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
+        asciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {

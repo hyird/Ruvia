@@ -240,7 +240,7 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
         const bool matches = knownBit != 0
             ? headerKnownBit == knownBit
-            : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
+            : detail::asciiEqualsIgnoreCase(read->name(), key);
         if (matches) {
             headers_.releaseHeader(*read);
             removed = true;

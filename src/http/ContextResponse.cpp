@@ -36,7 +36,7 @@ namespace {
     std::string_view name,
     std::string_view value) noexcept {
     for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) &&
+        if (detail::asciiEqualsIgnoreCase(header.name(), name) &&
             header.value() == value) {
             return true;
         }
@@ -48,7 +48,7 @@ namespace {
     const HttpResponse& response,
     std::string_view name) noexcept {
     for (const auto& header : response.headers()) {
-        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
+        if (detail::asciiEqualsIgnoreCase(header.name(), name)) {
             return true;
         }
     }
@@ -231,7 +231,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
         const bool matches = knownBit != 0
             ? headerKnownBit == knownBit
-            : detail::httpAsciiEqualsIgnoreCase(read->name(), name);
+            : detail::asciiEqualsIgnoreCase(read->name(), name);
         if (matches) {
             responseHeaders_.releaseHeader(*read);
             removed = true;

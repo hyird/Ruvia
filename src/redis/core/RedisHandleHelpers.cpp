@@ -44,10 +44,6 @@ void throwIfRedisError(const RedisValue& value) {
     }
 }
 
-bool redisAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept {
-    return asciiEqualsIgnoreCase(left, right);
-}
-
 Task<RedisValue> executeOwnedRedisCommand(
     RedisPool& pool,
     std::pmr::vector<std::pmr::string> args,
@@ -140,7 +136,7 @@ Task<void> redisOkCommand(
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    if (!redisAsciiEqualsIgnoreCase(redisValueString(value), "OK")) {
+    if (!asciiEqualsIgnoreCase(redisValueString(value), "OK")) {
         throw RedisError(RedisError::Code::kCommandError, "unexpected redis status reply");
     }
     co_return;

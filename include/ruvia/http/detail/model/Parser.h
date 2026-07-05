@@ -12,12 +12,6 @@
 
 namespace ruvia::detail {
 
-// Thin alias over the shared ASCII case owner (ruvia/detail/AsciiCase.h). Kept as
-// a public-header-safe name so it does not reach into the internal src/ helpers.
-[[nodiscard]] inline bool modelAsciiEqualsIgnoreCase(std::string_view left, std::string_view right) noexcept {
-    return asciiEqualsIgnoreCase(left, right);
-}
-
 [[nodiscard]] inline std::string_view modelTrimOws(std::string_view value) noexcept {
     while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
         value.remove_prefix(1);
@@ -35,7 +29,7 @@ namespace ruvia::detail {
     const auto semicolon = contentType.find(';');
     const auto mediaType = modelTrimOws(
         semicolon == std::string_view::npos ? contentType : contentType.substr(0, semicolon));
-    return modelAsciiEqualsIgnoreCase(mediaType, expected);
+    return asciiEqualsIgnoreCase(mediaType, expected);
 }
 
 }  // namespace ruvia::detail

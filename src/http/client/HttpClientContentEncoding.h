@@ -20,7 +20,7 @@ namespace ruvia::detail {
     bool seen = false;
     HttpContentCoding coding = HttpContentCoding::kNone;
     for (const auto& header : response.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "content-encoding")) {
+        if (!asciiEqualsIgnoreCase(header.name(), "content-encoding")) {
             continue;
         }
         if (seen) {

@@ -28,7 +28,7 @@ namespace ruvia::detail {
     std::string_view found;
     bool seen = false;
     for (const auto& header : response.headers()) {
-        if (httpAsciiEqualsIgnoreCase(header.name(), name)) {
+        if (asciiEqualsIgnoreCase(header.name(), name)) {
             if (seen) {
                 return {};
             }
@@ -41,7 +41,7 @@ namespace ruvia::detail {
 
 inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t status) {
     if (status == 303) {
-        if (!httpAsciiEqualsIgnoreCase(options.method, "HEAD")) {
+        if (!asciiEqualsIgnoreCase(options.method, "HEAD")) {
             options.method = "GET";
         }
         options.body = {};
@@ -49,8 +49,8 @@ inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t s
         return;
     }
     if (status == 301 || status == 302) {
-        if (!httpAsciiEqualsIgnoreCase(options.method, "GET") &&
-            !httpAsciiEqualsIgnoreCase(options.method, "HEAD")) {
+        if (!asciiEqualsIgnoreCase(options.method, "GET") &&
+            !asciiEqualsIgnoreCase(options.method, "HEAD")) {
             options.method = "GET";
             options.body = {};
             options.bodyStream = {};
@@ -68,8 +68,8 @@ inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t s
         return true;
     }
     if (status == 301 || status == 302) {
-        return !httpAsciiEqualsIgnoreCase(options.method, "GET") &&
-            !httpAsciiEqualsIgnoreCase(options.method, "HEAD");
+        return !asciiEqualsIgnoreCase(options.method, "GET") &&
+            !asciiEqualsIgnoreCase(options.method, "HEAD");
     }
     return false;
 }
@@ -119,7 +119,7 @@ inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t s
         port = static_cast<std::uint16_t>(parsed);
     }
 
-    return port == config.port && httpAsciiEqualsIgnoreCase(host, std::string_view(config.host));
+    return port == config.port && asciiEqualsIgnoreCase(host, std::string_view(config.host));
 }
 
 [[nodiscard]] inline bool resolveHttpClientSameOriginRedirect(
@@ -144,8 +144,8 @@ inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t s
                 return false;
             }
             const auto scheme = location.substr(0, schemeEnd);
-            const bool wantsTls = httpAsciiEqualsIgnoreCase(scheme, "https");
-            if (!wantsTls && !httpAsciiEqualsIgnoreCase(scheme, "http")) {
+            const bool wantsTls = asciiEqualsIgnoreCase(scheme, "https");
+            if (!wantsTls && !asciiEqualsIgnoreCase(scheme, "http")) {
                 return false;
             }
             if (wantsTls != config.tls) {

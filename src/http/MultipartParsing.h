@@ -105,7 +105,7 @@ inline void httpAssignMultipartBoundaryMarkers(
         const auto colon = line.find(':');
         if (colon != std::string_view::npos) {
             const auto key = httpTrimOws(line.substr(0, colon));
-            if (httpAsciiEqualsIgnoreCase(key, name)) {
+            if (asciiEqualsIgnoreCase(key, name)) {
                 result = httpTrimOws(line.substr(colon + 1));
             }
         }
@@ -130,7 +130,7 @@ inline void httpAssignMultipartBoundaryMarkers(
     const auto value = httpTrimOws(disposition);
     const auto semicolon = value.find(';');
     const auto type = httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-    return httpAsciiEqualsIgnoreCase(type, "form-data");
+    return asciiEqualsIgnoreCase(type, "form-data");
 }
 
 struct HttpMultipartPartHeaders final {
@@ -158,7 +158,7 @@ enum class HttpMultipartBoundaryStatus {
     const auto mediaEnd = contentType.find(';');
     const auto mediaType = httpTrimOws(
         mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
-    if (!httpAsciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
+    if (!asciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
         return HttpMultipartBoundaryStatus::kInvalidContentType;
     }
     if (mediaEnd == std::string_view::npos) {

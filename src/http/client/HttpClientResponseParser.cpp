@@ -66,7 +66,7 @@ namespace {
             }
             item = httpTrimOws(item.substr(0, semicolon));
         }
-        chunked = httpAsciiEqualsIgnoreCase(item, "chunked");
+        chunked = asciiEqualsIgnoreCase(item, "chunked");
         return true;
     });
     return sawItem && chunked && !invalid;
@@ -89,7 +89,7 @@ HttpClientResponseHead parseHttpClientResponseHead(
     HttpClientResponseHead parsed{
         .bodyOffset = headerSection.size() + 4,
         .responseMayHaveBody =
-            !httpAsciiEqualsIgnoreCase(method, "HEAD") &&
+            !asciiEqualsIgnoreCase(method, "HEAD") &&
             statusCode >= 200 &&
             statusCode != 204 &&
             statusCode != 205 &&
@@ -118,7 +118,7 @@ HttpClientResponseHead parseHttpClientResponseHead(
             throw std::runtime_error("http client: too many response headers");
         }
         ++headerCount;
-        if (httpAsciiEqualsIgnoreCase(name, "Content-Length")) {
+        if (asciiEqualsIgnoreCase(name, "Content-Length")) {
             std::size_t contentLength = 0;
             const auto [ptr, ec] = std::from_chars(
                 value.data(),
@@ -132,9 +132,9 @@ HttpClientResponseHead parseHttpClientResponseHead(
             }
             parsed.contentLength = contentLength;
             parsed.hasContentLength = true;
-        } else if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
+        } else if (asciiEqualsIgnoreCase(name, "Connection")) {
             parsed.closeAfterResponse = parsed.closeAfterResponse || httpHasToken(value, "close");
-        } else if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
+        } else if (asciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
             if (parsed.hasTransferEncoding) {
                 throw std::runtime_error("http client: repeated Transfer-Encoding header");
             }
@@ -142,7 +142,7 @@ HttpClientResponseHead parseHttpClientResponseHead(
             // Only a sole "chunked" coding is self-delimiting and decodable here; any
             // other coding (gzip, or "gzip, chunked", ...) is treated as unsupported.
             parsed.isChunked = isSoleChunkedTransferCoding(value);
-        } else if (httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
+        } else if (asciiEqualsIgnoreCase(name, "Content-Encoding")) {
             if (parsed.hasContentEncoding) {
                 // A second Content-Encoding header is a coding list we do not decode.
                 parsed.contentCoding = HttpContentCoding::kNone;

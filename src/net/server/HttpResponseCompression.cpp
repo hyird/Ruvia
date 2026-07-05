@@ -174,7 +174,7 @@ struct CodingCompressor final {
 
 [[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
     return mediaType.size() >= prefix.size() &&
-        httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+        asciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool responseContentTypeSkipsCompression(std::string_view contentType) noexcept {
@@ -187,18 +187,18 @@ struct CodingCompressor final {
     if (mediaType.empty()) {
         return false;
     }
-    if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
+    if (asciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
         return false;
     }
     return mediaTypeStartsWith(mediaType, "image/") ||
         mediaTypeStartsWith(mediaType, "video/") ||
         mediaTypeStartsWith(mediaType, "audio/") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/zip") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
-        httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+        asciiEqualsIgnoreCase(mediaType, "application/gzip") ||
+        asciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
+        asciiEqualsIgnoreCase(mediaType, "application/zip") ||
+        asciiEqualsIgnoreCase(mediaType, "application/zstd") ||
+        asciiEqualsIgnoreCase(mediaType, "application/pdf") ||
+        asciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
 }  // namespace
