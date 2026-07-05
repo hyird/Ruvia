@@ -34,6 +34,15 @@ RUVIA_TEST(response_trailer_value_rejects_splitting_bytes) {
     RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\nb", 3)));
     RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\r\nb", 4)));
     RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\0b", 3)));
+    // HTAB and SP are field-value bytes and stay allowed.
+    RUVIA_CHECK(isValidResponseTrailerValue(std::string_view("a\tb c", 5)));
+    // The other control bytes are not field-vchar either (RFC 9110 §5.5), so a
+    // non-splitting control like 0x01, VT (0x0B), FF (0x0C), or DEL (0x7F) must
+    // also be rejected -- matching the request-trailer and header-value checks.
+    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x01" "b", 3)));
+    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x0b" "b", 3)));
+    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x0c" "b", 3)));
+    RUVIA_CHECK(!isValidResponseTrailerValue(std::string_view("a\x7f" "b", 3)));
 }
 
 RUVIA_TEST(response_trailer_forbidden_names) {

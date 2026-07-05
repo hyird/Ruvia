@@ -22,13 +22,15 @@ namespace ruvia::detail {
     return true;
 }
 
-// A trailer value may carry any field-vchar / obs-text byte but never CR, LF, or
-// NUL — forbidding those is what stops header/response splitting on the HTTP/1.1
-// chunked-trailer path, where the value is written verbatim onto the wire.
+// A trailer value must be a valid HTTP field value (RFC 9110 §5.5): field-vchar
+// (VCHAR / obs-text) plus HTAB, and nothing else. Rejecting NUL/CR/LF alone left
+// the other control bytes (0x01-0x08, VT, FF, 0x0E-0x1F, DEL) able to reach the
+// wire verbatim on the HTTP/1.1 chunked-trailer path, emitting a non-conformant
+// field-value. Enforce the shared field-value rule so this matches the request
+// trailer path and every other header-value check (isHttpFieldValueChar).
 [[nodiscard]] inline bool isValidResponseTrailerValue(std::string_view value) noexcept {
     for (const char ch : value) {
-        const auto c = static_cast<unsigned char>(ch);
-        if (c == '\0' || c == '\r' || c == '\n') {
+        if (!isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
             return false;
         }
     }
