@@ -50,7 +50,13 @@ template <typename T>
         return false;
     }
     for (const char c : value) {
-        if (c <= 0x20 || c == 0x7F) {
+        // Compare as unsigned: `char` is signed on most targets, so a UTF-8 byte
+        // (>= 0x80) is negative and would satisfy `c <= 0x20`, wrongly rejecting an
+        // internationalized address (RFC 6531) as if it held a control byte. The
+        // guard only means to reject controls, SP, and DEL -- match the codebase's
+        // other byte checks (e.g. isValidCookieValue) by using an unsigned byte.
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte <= 0x20 || byte == 0x7F) {
             return false;
         }
     }
