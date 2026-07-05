@@ -122,7 +122,11 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
-    const auto value = httpFindSemicolonParameterQuoted(disposition, name);
+    // Content-Disposition parameter names are case-insensitive (RFC 6266 §4.1 /
+    // RFC 2183), matching how httpParseMultipartBoundary treats the Content-Type
+    // "boundary" parameter. Match "name"/"filename" the same way so a part using
+    // e.g. `Name=` or `FileName=` is not spuriously rejected.
+    const auto value = httpFindSemicolonParameterQuotedIgnoreCase(disposition, name);
     return value ? std::optional<std::string_view>(httpTrimQuotes(*value)) : std::nullopt;
 }
 

@@ -160,6 +160,11 @@ RUVIA_TEST(multipart_disposition_parameter_extraction) {
     RUVIA_CHECK(httpDispositionParameter("form-data; name=plain", "name") == std::string_view("plain"));
     // An absent parameter is nullopt.
     RUVIA_CHECK(!httpDispositionParameter(disposition, "charset").has_value());
+    // Parameter names are case-insensitive (RFC 6266 §4.1), like the Content-Type
+    // boundary parameter -- `Name`/`FileName` must resolve, not be rejected.
+    const std::string_view mixedCase = "form-data; Name=\"field\"; FileName=\"a.txt\"";
+    RUVIA_CHECK(httpDispositionParameter(mixedCase, "name") == std::string_view("field"));
+    RUVIA_CHECK(httpDispositionParameter(mixedCase, "filename") == std::string_view("a.txt"));
 }
 
 RUVIA_TEST(multipart_is_form_data_disposition) {
