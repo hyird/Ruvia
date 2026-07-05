@@ -25,11 +25,18 @@ public:
     void setWaiter(std::coroutine_handle<> continuation) noexcept;
     [[nodiscard]] std::coroutine_handle<> takeWaiter() noexcept;
 
+    // Total bytes buffered but not yet handed to the reader (queuedChunk_ plus the
+    // un-popped overflow tail; excludes activeChunk_, which the reader already holds).
+    // Used to bound the streaming request-body backlog when the handler drains slower
+    // than the peer sends -- see http2AccountDataBody.
+    [[nodiscard]] std::size_t queuedBytes() const noexcept;
+
 private:
     std::pmr::string queuedChunk_;
     std::pmr::string activeChunk_;
     std::pmr::vector<std::pmr::string> overflowChunks_;
     std::size_t overflowChunkOffset_{0};
+    std::size_t queuedBytes_{0};
     bool hasQueuedChunk_ : 1 {false};
     std::coroutine_handle<> waiter_{};
 };
