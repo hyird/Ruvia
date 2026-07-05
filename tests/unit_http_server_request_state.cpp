@@ -55,6 +55,11 @@ RUVIA_TEST(request_state_wants_continue) {
     RUVIA_CHECK(wantsContinue(parser.parse(
         "POST / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n")));
     RUVIA_CHECK(!wantsContinue(parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n")));
+    // A 100-continue expectation from an HTTP/1.0 client MUST be ignored: RFC 9110
+    // §15.2 forbids sending any 1xx response to an HTTP/1.0 client, which would
+    // misread the interim 100 as the final response.
+    RUVIA_CHECK(!wantsContinue(parser.parse(
+        "POST / HTTP/1.0\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n")));
 }
 
 RUVIA_TEST(auto_https_host_without_explicit_port_strips_port_bracket_aware) {
