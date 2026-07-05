@@ -155,6 +155,51 @@ RUVIA_TEST(json_string_raw_rejects_control_and_unterminated) {
     }
 }
 
+RUVIA_TEST(json_string_validates_utf8_content) {
+    bool ok = false;
+    // Valid raw UTF-8 in string content passes through unchanged (2/3/4-byte).
+    RUVIA_CHECK_EQ(decodeJson(std::string_view("caf\xC3\xA9", 5), ok), std::string("caf\xC3\xA9"));  // é
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xE2\x82\xAC", 3), ok), std::string("\xE2\x82\xAC"));  // €
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xF0\x9F\x98\x80", 4), ok), std::string("\xF0\x9F\x98\x80"));  // U+1F600
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xF4\x8F\xBF\xBF", 4), ok), std::string("\xF4\x8F\xBF\xBF"));  // U+10FFFF
+    RUVIA_CHECK(ok);
+
+    // Ill-formed UTF-8 is rejected (RFC 8259 §8.1 / Unicode Table 3-7).
+    const std::string_view bad[] = {
+        std::string_view("\x80", 1),              // bare continuation byte
+        std::string_view("\xC1\x80", 2),          // overlong 2-byte lead (C0/C1)
+        std::string_view("\xE0\x80\x80", 3),      // overlong 3-byte (E0 80..9F)
+        std::string_view("\xED\xA0\x80", 3),      // UTF-16 surrogate U+D800
+        std::string_view("\xF0\x80\x80\x80", 4),  // overlong 4-byte (F0 80..8F)
+        std::string_view("\xF4\x90\x80\x80", 4),  // above U+10FFFF
+        std::string_view("\xF5\x80\x80\x80", 4),  // invalid lead >= F5
+        std::string_view("\xE2\x82", 2),          // truncated 3-byte
+        std::string_view("\xC3", 1),              // truncated 2-byte
+    };
+    for (const auto b : bad) {
+        (void)decodeJson(b, ok);
+        RUVIA_CHECK(!ok);
+    }
+
+    // The validation scan (parseJsonStringRaw) applies the same rule.
+    {
+        std::string_view in = std::string_view("\"\xFF\"", 3);  // invalid lead byte
+        std::string_view value;
+        bool escaped = false;
+        RUVIA_CHECK(!ruvia::detail::parseJsonStringRaw(in, value, escaped));
+    }
+    {
+        std::string_view in = std::string_view("\"caf\xC3\xA9\"", 7);  // valid é passes
+        std::string_view value;
+        bool escaped = false;
+        RUVIA_CHECK(ruvia::detail::parseJsonStringRaw(in, value, escaped));
+        RUVIA_CHECK_EQ(std::string(value), std::string("caf\xC3\xA9"));
+    }
+}
+
 // --- String decoding (escape expansion) ----------------------------------
 RUVIA_TEST(json_decode_simple_escapes) {
     bool ok = false;

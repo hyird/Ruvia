@@ -27,6 +27,52 @@ namespace ruvia::detail {
     return true;
 }
 
+// Length (1-4) of the well-formed UTF-8 sequence beginning at input[i] (whose
+// lead byte is >= 0x80), or 0 if the bytes there are not valid UTF-8. Enforces the
+// Unicode 3.9 Table 3-7 constraints: no overlong forms (C0/C1, E0 80-9F, F0 80-8F),
+// no UTF-16 surrogate code points (ED A0-BF), nothing above U+10FFFF (F4 90-.., F5+),
+// and no stray/truncated continuation bytes. RFC 8259 §8.1 requires JSON to be UTF-8,
+// so a string carrying anything else is rejected rather than passed through verbatim.
+[[nodiscard]] inline std::size_t jsonUtf8SequenceLength(std::string_view input, std::size_t i) noexcept {
+    const auto isCont = [](unsigned char b) noexcept { return (b & 0xC0U) == 0x80U; };
+    const auto b0 = static_cast<unsigned char>(input[i]);
+    if (b0 >= 0xC2 && b0 <= 0xDF) {
+        return (i + 1 < input.size() && isCont(static_cast<unsigned char>(input[i + 1]))) ? 2 : 0;
+    }
+    if (b0 >= 0xE0 && b0 <= 0xEF) {
+        if (i + 2 >= input.size()) {
+            return 0;
+        }
+        const auto b1 = static_cast<unsigned char>(input[i + 1]);
+        const auto b2 = static_cast<unsigned char>(input[i + 2]);
+        if (!isCont(b2)) {
+            return 0;
+        }
+        if (b0 == 0xE0 ? (b1 < 0xA0 || b1 > 0xBF)
+                       : b0 == 0xED ? (b1 < 0x80 || b1 > 0x9F) : !isCont(b1)) {
+            return 0;
+        }
+        return 3;
+    }
+    if (b0 >= 0xF0 && b0 <= 0xF4) {
+        if (i + 3 >= input.size()) {
+            return 0;
+        }
+        const auto b1 = static_cast<unsigned char>(input[i + 1]);
+        const auto b2 = static_cast<unsigned char>(input[i + 2]);
+        const auto b3 = static_cast<unsigned char>(input[i + 3]);
+        if (!isCont(b2) || !isCont(b3)) {
+            return 0;
+        }
+        if (b0 == 0xF0 ? (b1 < 0x90 || b1 > 0xBF)
+                       : b0 == 0xF4 ? (b1 < 0x80 || b1 > 0x8F) : !isCont(b1)) {
+            return 0;
+        }
+        return 4;
+    }
+    return 0;  // 0x80-0xC1 (bare continuation / overlong lead) or 0xF5-0xFF
+}
+
 [[nodiscard]] inline bool parseJsonStringRaw(
     std::string_view& input,
     std::string_view& value,
@@ -62,13 +108,21 @@ namespace ruvia::detail {
             }
             return false;
         }
-        if (static_cast<unsigned char>(c) < 0x20) {
+        const auto uc = static_cast<unsigned char>(c);
+        if (uc < 0x20) {
             return false;
         }
         if (c == '"') {
             value = std::string_view(begin, i);
             input.remove_prefix(i + 1);
             return true;
+        }
+        if (uc >= 0x80) {
+            const auto length = jsonUtf8SequenceLength(input, i);
+            if (length == 0) {
+                return false;
+            }
+            i += length - 1;  // the loop's ++i steps past the final byte
         }
     }
 
@@ -109,8 +163,20 @@ template <typename OutputT>
     for (std::size_t i = 0; i < input.size(); ++i) {
         const char c = input[i];
         if (c != '\\') {
-            if (static_cast<unsigned char>(c) < 0x20) {
+            const auto uc = static_cast<unsigned char>(c);
+            if (uc < 0x20) {
                 return false;
+            }
+            if (uc >= 0x80) {
+                const auto length = jsonUtf8SequenceLength(input, i);
+                if (length == 0) {
+                    return false;
+                }
+                for (std::size_t k = 0; k < length; ++k) {
+                    output.push_back(input[i + k]);
+                }
+                i += length - 1;  // the loop's ++i steps past the final byte
+                continue;
             }
             output.push_back(c);
             continue;
