@@ -9,6 +9,8 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/json/JsonString.h"
 #include "ruvia/http/detail/json/JsonNumber.h"
+#include "ruvia/http/detail/json/JsonSkip.h"
+#include "ruvia/http/detail/json/JsonObjectFields.h"
 #include "ruvia/detail/Base64Url.h"
 #include "http/FileResponseHelpers.h"
 #include "http/MultipartParsing.h"
@@ -50,6 +52,16 @@ void exercise(std::string_view s, std::string_view boundary) {
         long long v = 0;
         (void)d::parseJsonNumberValue(rest, v);
     }
+    // Full structural JSON parse: a run of '[' / '{' exceeding kMaxJsonDepth (64)
+    // must hit the depth guard, not overflow the stack -- exercise the recursive
+    // skipper and the object-field visitor on adversarial nesting.
+    {
+        std::string_view rest = s;
+        (void)d::skipJsonValue(rest);
+    }
+    (void)d::visitJsonObjectFields(
+        s, std::pmr::get_default_resource(),
+        [](std::string_view, std::string_view) { return true; });
     for (const char c : s) {
         (void)d::decodeBase64UrlChar(c);
     }
