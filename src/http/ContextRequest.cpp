@@ -75,6 +75,20 @@ namespace {
     return count;
 }
 
+// Cap on the up-front reservation for a parsed name/value vector. delimitedFieldCount
+// counts every delimiter, including the empty segments that the parser then skips
+// (visitUrlEncodedPairs / httpVisitSemicolonParameters), so an untrusted input of
+// only delimiters -- e.g. a 16 MiB body of '&' at the buffered-body limit -- would
+// reserve millions of heavy field objects while producing none, amplifying a small
+// body into a huge allocation. Bound the reservation: growth past it is amortized
+// O(1), so a legitimate large input is unaffected while the attacker-controlled
+// over-reservation is capped.
+inline constexpr std::size_t kMaxParsedFieldReserve = 4096;
+
+[[nodiscard]] std::size_t boundedFieldReserve(std::size_t count) noexcept {
+    return count < kMaxParsedFieldReserve ? count : kMaxParsedFieldReserve;
+}
+
 void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     for (const char ch : input) {
         output.push_back(static_cast<char>(detail::asciiToLower(static_cast<unsigned char>(ch))));
@@ -296,7 +310,7 @@ void compactParsedBodyFields(
     ContextRequest::ParseBodyOptions options,
     ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) {
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
-    fields.reserve(delimitedFieldCount(requestBody, '&'));
+    fields.reserve(boundedFieldReserve(delimitedFieldCount(requestBody, '&')));
     bool valid = true;
     const bool ok = detail::visitUrlEncodedPairs(
         requestBody,
@@ -452,7 +466,7 @@ void Context::ensureRequestQuery() const {
 
     const auto pairCount = delimitedFieldCount(request_.queryString(), '&');
     auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-    storage.reserve(pairCount * 2);
+    storage.reserve(boundedFieldReserve(pairCount * 2));
     (void)detail::visitUrlEncodedPairs(
         request_.queryString(),
         [this, &storage](std::string_view key, std::string_view value) {
@@ -575,7 +589,7 @@ const RequestNameValueList& Context::requestCookies() const {
         }
 
         auto& cookies = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
-        cookies.reserve(cookieCount);
+        cookies.reserve(boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::asciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 continue;

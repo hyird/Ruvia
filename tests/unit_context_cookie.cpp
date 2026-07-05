@@ -85,6 +85,24 @@ asio::awaitable<void> cloneParseBodyDiscard(ruvia::Context& context) {
     (void)clone.parseBody({});
 }
 
+asio::awaitable<void> cloneParseScalarPair(
+    ruvia::Context& context,
+    std::string& aValue,
+    bool& aPresent,
+    std::string& bValue,
+    bool& bPresent) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
+    const auto form = clone.parseBody({});
+    if (const auto v = form.get("a").value(); v.has_value()) {
+        aValue.assign(v->data(), v->size());
+        aPresent = true;
+    }
+    if (const auto v = form.get("b").value(); v.has_value()) {
+        bValue.assign(v->data(), v->size());
+        bPresent = true;
+    }
+}
+
 }  // namespace
 
 RUVIA_TEST(context_request_cookie_single_lookup_does_not_materialize_cookie_list) {
@@ -363,6 +381,40 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    // Leading/trailing/consecutive '&' are empty segments the parser skips, yielding
+    // no field. Because the field-vector reservation is sized from the delimiter
+    // count, an all-'&' body would otherwise over-reserve massively; the reservation
+    // is now bounded, and this pins that empty segments still parse to nothing while
+    // the real fields are unaffected.
+    HttpRequestAccess::setBody(request, "&&a=1&&&b=2&&");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    std::string aValue;
+    std::string bValue;
+    bool aPresent = false;
+    bool bPresent = false;
+    asio::io_context io;
+    auto future = asio::co_spawn(
+        io, cloneParseScalarPair(context, aValue, aPresent, bValue, bPresent), asio::use_future);
+    io.run();
+    future.get();
+    RUVIA_CHECK(aPresent);
+    RUVIA_CHECK_EQ(aValue, std::string("1"));
+    RUVIA_CHECK(bPresent);
+    RUVIA_CHECK_EQ(bValue, std::string("2"));
 }
 
 RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
