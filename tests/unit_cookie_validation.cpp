@@ -96,6 +96,17 @@ RUVIA_TEST(cookie_attribute_char_validation) {
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\rb", 3)));  // CR (header injection)
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\nb", 3)));  // LF
     RUVIA_CHECK(!isValidCookieAttribute(std::string_view("a\0b", 3)));  // NUL
+    // Non-CR/LF control bytes are also forbidden HTTP field-value octets (RFC 9110
+    // 5.5) and previously slipped through into the raw Set-Cookie value.
+    RUVIA_CHECK(!isValidCookieAttribute("a\x0b" "b"));  // vertical tab
+    RUVIA_CHECK(!isValidCookieAttribute("a\x0c" "b"));  // form feed
+    RUVIA_CHECK(!isValidCookieAttribute("a\x01" "b"));  // SOH
+    RUVIA_CHECK(!isValidCookieAttribute("a\x7f" "b"));  // DEL
+    // But the legitimate field-value octets a path/domain may need stay allowed:
+    // SP, HTAB, and obs-text (0x80-0xFF) are valid HTTP field-value bytes.
+    RUVIA_CHECK(isValidCookieAttribute("/a path"));         // SP
+    RUVIA_CHECK(isValidCookieAttribute("a\tb"));            // HTAB
+    RUVIA_CHECK(isValidCookieAttribute("caf\xc3\xa9.com"));  // UTF-8 obs-text
 }
 
 RUVIA_TEST(cookie_priority_token_canonicalizes) {

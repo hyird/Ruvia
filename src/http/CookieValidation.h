@@ -1,5 +1,6 @@
 #pragma once
 
+#include "parser/HttpParserSyntax.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -26,8 +27,15 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 }
 
 [[nodiscard]] inline bool isValidCookieAttribute(std::string_view value) noexcept {
+    // A cookie attribute (Path/Domain) is emitted verbatim inside the Set-Cookie
+    // field value, which setCookie writes raw -- so it must satisfy the same HTTP
+    // field-value rule as every other header value (RFC 9110 5.5: no CTLs except
+    // HTAB, no DEL). Rejecting only CR/LF/NUL, as before, blocked response splitting
+    // but still let other control bytes (VT, FF, DEL, ...) reach the wire. ';' is a
+    // valid field-value octet but delimits attributes, so it stays forbidden inside
+    // one attribute to prevent a spurious attribute being injected.
     for (const auto c : value) {
-        if (c == '\r' || c == '\n' || c == '\0' || c == ';') {
+        if (!isHttpFieldValueChar(static_cast<unsigned char>(c)) || c == ';') {
             return false;
         }
     }
