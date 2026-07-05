@@ -91,6 +91,47 @@ RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
     RUVIA_CHECK(!hasHeaderName(headers, "content-length"));
 }
 
+RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
+    // RFC 7541 §7.1.3: Set-Cookie carries session credentials and must be emitted
+    // as a never-indexed literal (0x10 prefix) so an intermediary never places it
+    // in a shared HPACK dynamic table.
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    response.header("Set-Cookie", "sid=secret; HttpOnly");
+
+    Http2StreamState stream(1, std::pmr::get_default_resource());
+    appendHttp2ResponseHeaders(stream, response, 0);
+    const auto& block = stream.responseHeaderBlock();
+
+    // Byte 0 is the indexed :status 200 (0x88); Set-Cookie is the next field and
+    // its representation prefix must be the never-indexed literal nibble (0x10).
+    RUVIA_CHECK(block.size() >= 2);
+    RUVIA_CHECK(static_cast<unsigned char>(block[0]) == 0x88);
+    RUVIA_CHECK((static_cast<unsigned char>(block[1]) & 0xF0U) == 0x10U);
+
+    // The never-indexed hint must not corrupt the round-trip value.
+    Collector headers;
+    RUVIA_CHECK(decodeResponseHeaders(response, 0, headers));
+    RUVIA_CHECK(hasHeader(headers, "set-cookie", "sid=secret; HttpOnly"));
+}
+
+RUVIA_TEST(http2_response_headers_non_sensitive_uses_without_indexing) {
+    // A non-credential field (content-type) must stay a plain without-indexing
+    // literal (0x00 nibble) -- confirms the never-indexed choice discriminates by
+    // header name rather than marking everything.
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    response.header("Content-Type", "text/plain");
+
+    Http2StreamState stream(1, std::pmr::get_default_resource());
+    appendHttp2ResponseHeaders(stream, response, 0);
+    const auto& block = stream.responseHeaderBlock();
+
+    RUVIA_CHECK(block.size() >= 2);
+    RUVIA_CHECK(static_cast<unsigned char>(block[0]) == 0x88);
+    RUVIA_CHECK((static_cast<unsigned char>(block[1]) & 0xF0U) == 0x00U);
+}
+
 RUVIA_TEST(http2_response_headers_omit_hop_by_hop_fields) {
     HttpResponse response(std::pmr::get_default_resource());
     response.header("Connection", "close");

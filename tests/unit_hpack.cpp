@@ -118,6 +118,29 @@ RUVIA_TEST(hpack_encoder_uses_without_indexing_representation) {
     }
 }
 
+RUVIA_TEST(hpack_encoder_marks_credentials_never_indexed) {
+    // RFC 7541 7.1.3: credential-bearing fields SHOULD use the never-indexed literal
+    // (high nibble 0001) so that an intermediary along the path never commits them to
+    // a shared dynamic table (compression side-channel hardening). This covers both
+    // encode branches: static name-index ("authorization"/"cookie") and a literal new
+    // name that happens to be sensitive. The decoder accepts both 0x00 and 0x10, so
+    // only the wire nibble distinguishes the hardened form -- a round-trip cannot.
+    for (const auto* name : {"authorization", "cookie", "set-cookie", "proxy-authorization"}) {
+        std::pmr::string out(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(out, name, "token-value");
+        RUVIA_CHECK(!out.empty());
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]) & 0xf0u, 0x10u);  // never indexed
+    }
+    // A non-credential field with an identical value must stay without-indexing, so
+    // the choice discriminates by field name rather than blanket-marking everything.
+    {
+        std::pmr::string out(std::pmr::get_default_resource());
+        HpackEncoder::encodeHeader(out, "x-trace-id", "token-value");
+        RUVIA_CHECK(!out.empty());
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]) & 0xf0u, 0x00u);  // without indexing
+    }
+}
+
 RUVIA_TEST(hpack_rejects_truncated_and_bad_index) {
     Collector out;
     // A literal header claiming a 15-byte value but supplying only one byte.

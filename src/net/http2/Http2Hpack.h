@@ -58,6 +58,20 @@ struct HpackHuffmanNode final {
     std::int16_t symbol{-1};
 };
 
+// HPACK literal representation prefixes (RFC 7541 §6.2).
+inline constexpr std::uint8_t kHpackLiteralWithoutIndexing = 0x00;  // §6.2.2
+inline constexpr std::uint8_t kHpackLiteralNeverIndexed = 0x10;     // §6.2.3
+
+// Single source of truth for which header fields must never be committed to an
+// HPACK dynamic table. RFC 7541 §7.1.3: credential-bearing fields SHOULD use the
+// never-indexed literal so that an intermediary along the path never places them
+// in a shared dynamic table (a compression side-channel, cf. CRIME). Names must
+// already be lowercased (both encode call sites lowercase before dispatch).
+[[nodiscard]] inline bool hpackHeaderNameIsSensitive(std::string_view name) noexcept {
+    return name == "authorization" || name == "proxy-authorization" ||
+        name == "cookie" || name == "set-cookie";
+}
+
 class HpackDecoder final {
 public:
     using HeaderCallback = bool (*)(void*, std::string_view, std::string_view);
@@ -128,7 +142,8 @@ public:
     static void encodeHeaderWithNameIndex(
         std::pmr::string& out,
         std::uint32_t nameIndex,
-        std::string_view value);
+        std::string_view value,
+        bool neverIndexed = false);
     static void encodeStatus(std::pmr::string& out, std::uint16_t status);
 
 private:

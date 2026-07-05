@@ -38,16 +38,20 @@ void HpackEncoder::encodeIndexed(std::pmr::string& out, std::uint32_t index) {
 void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, std::string_view value) {
     const auto match = hpackFindStaticHeaderMatch(name, value);
     if (match.exactIndex != 0) {
+        // A fully indexed static-table entry carries no field value on the wire, so
+        // there is nothing for an intermediary to index; the never-indexed hint does
+        // not apply.
         encodeIndexed(out, match.exactIndex);
         return;
     }
 
+    const bool neverIndexed = hpackHeaderNameIsSensitive(name);
     const auto nameIndex = match.nameIndex;
     if (nameIndex != 0) {
-        encodeHeaderWithNameIndex(out, nameIndex, value);
+        encodeHeaderWithNameIndex(out, nameIndex, value, neverIndexed);
         return;
     }
-    encodeInteger(out, 0x00, 4, nameIndex);
+    encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, 0);
     encodeString(out, name);
     encodeString(out, value);
 }
@@ -55,8 +59,9 @@ void HpackEncoder::encodeHeader(std::pmr::string& out, std::string_view name, st
 void HpackEncoder::encodeHeaderWithNameIndex(
     std::pmr::string& out,
     std::uint32_t nameIndex,
-    std::string_view value) {
-    encodeInteger(out, 0x00, 4, nameIndex);
+    std::string_view value,
+    bool neverIndexed) {
+    encodeInteger(out, neverIndexed ? kHpackLiteralNeverIndexed : kHpackLiteralWithoutIndexing, 4, nameIndex);
     encodeString(out, value);
 }
 

@@ -151,7 +151,8 @@ inline void appendHttp2ResponseHeaders(
             HpackEncoder::encodeHeaderWithNameIndex(
                 headerBlock,
                 known.hpackNameIndex,
-                header.value());
+                header.value(),
+                hpackHeaderNameIsSensitive(known.name));
             continue;
         }
         HpackEncoder::encodeHeader(
