@@ -15,6 +15,8 @@
 #include "http/FileResponseHelpers.h"
 #include "http/MultipartParsing.h"
 #include "http/HeaderAcceptUtils.h"
+#include "http/HeaderTokenUtils.h"
+#include "http/parser/HttpRequestTarget.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -85,6 +87,14 @@ void exercise(std::string_view s, std::string_view boundary) {
     (void)d::httpDispositionParameter(s, "filename");
     (void)d::httpAcceptsMediaType(s, "text/plain");
     (void)d::httpSelectResponseCoding(s);
+
+    // Untrusted date strings from If-Modified-Since / If-Unmodified-Since / If-Range:
+    // the composite tries IMF-fixdate, then the two obsolete offset-based formats.
+    (void)d::httpParseHttpDate(s);
+    // Host header validation (reg-name / IPv4 / bracketed IPv6 via inet_pton) and the
+    // ';'-delimited parameter scanner shared by cookie and content-type parsing.
+    (void)d::isValidHostHeader(s);
+    (void)d::httpVisitSemicolonParameters(s, [](std::string_view, std::string_view) { return true; });
 }
 }  // namespace
 
