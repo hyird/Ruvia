@@ -21,7 +21,12 @@ inline bool shouldKeepAlive(const HttpServerParseResult& parsed) noexcept {
 }
 
 inline bool wantsContinue(const HttpServerParseResult& parsed) noexcept {
-    return parsed.flags.expectContinue;
+    // Only HTTP/1.1 clients understand an interim 1xx response. RFC 9110 §15.2 (and
+    // RFC 7231 §6.2): a server MUST NOT send a 1xx response to an HTTP/1.0 client --
+    // it has no notion of interim responses and would read the "100 Continue" as the
+    // final response. So an Expect: 100-continue from HTTP/1.0 is ignored, not
+    // honored with a 100.
+    return parsed.flags.expectContinue && parsed.request.httpVersion() == "HTTP/1.1";
 }
 
 }  // namespace ruvia::detail
