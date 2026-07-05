@@ -201,6 +201,33 @@ struct CodingCompressor final {
         asciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
+// The handler's ETag validates its (identity) representation. Once the body is
+// replaced with a content-coding, that is a different representation -- RFC 9110
+// 8.8.1: "A strong validator ... changes ... whenever a change occurs to the
+// representation data", and Content-Encoding is part of the representation. So a
+// STRONG ETag must not remain attached byte-for-byte to the compressed body:
+// otherwise a client holding the identity validator could issue a ranged
+// If-Range and have the server splice compressed bytes into an identity copy, or
+// a shared cache could treat the two encodings as interchangeable under strong
+// comparison. Weaken it to a "W/"-prefixed weak validator -- the gzip and
+// identity bodies are semantically equivalent, so If-None-Match revalidation
+// still works, but strong (byte-exact) comparison is now forbidden. A tag that
+// is already weak ("W/..."), malformed, or absent is left untouched.
+void weakenStrongResponseEtag(HttpResponse& response) {
+    if (!responseHasKnownHeader(response, kResponseHeaderEtag)) {
+        return;
+    }
+    const auto etag = responseKnownHeader(response, kResponseHeaderEtag);
+    if (etag.empty() || etag.front() != '"') {
+        return;
+    }
+    std::pmr::string weak(responseResource(response));
+    weak.reserve(etag.size() + 2);
+    weak.append("W/");
+    weak.append(etag.data(), etag.size());
+    setResponseHeaderValidated(response, "ETag", weak, kResponseHeaderEtag);
+}
+
 }  // namespace
 
 bool compressResponseBodyIfAccepted(
@@ -246,6 +273,7 @@ bool compressResponseBodyIfAccepted(
 
     setResponseHeaderStableView(response, "Content-Encoding", compressor.token);
     addVaryToken(response, "Accept-Encoding");
+    weakenStrongResponseEtag(response);
     setCompressedContentLength(response, compressionScratch.size());
     response.setBodyView(compressionScratch);
     return true;

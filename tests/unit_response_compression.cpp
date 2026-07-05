@@ -145,6 +145,42 @@ RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
 }
 
+RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
+    // A strong ETag identifies the identity representation byte-for-byte. After
+    // compression the body is a different representation (RFC 9110 8.8.1), so the
+    // strong validator must be weakened to "W/..." -- otherwise a client could
+    // strong-compare it (e.g. If-Range) against the compressed bytes.
+    {
+        auto response = responseWithBody(kCompressibleBody);
+        response.header("ETag", "\"v1\"");
+        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+        RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"v1\""));
+    }
+    // An already-weak ETag is a semantic (not byte-exact) validator, so it stays
+    // valid across encodings and must not be double-weakened to W/W/"...".
+    {
+        auto response = responseWithBody(kCompressibleBody);
+        response.header("ETag", "W/\"v1\"");
+        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"v1\""));
+    }
+    // No ETag stays no ETag -- weakening never fabricates a validator.
+    {
+        auto response = responseWithBody(kCompressibleBody);
+        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(response.header("ETag").empty());
+    }
+    // When nothing is compressed (body below minBytes), the strong ETag is left
+    // intact -- the response still is the identity representation.
+    {
+        auto response = responseWithBody("tiny");
+        response.header("ETag", "\"v1\"");
+        RUVIA_CHECK(!tryCompress(response, Compression{true, 4096}));
+        RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("\"v1\""));
+    }
+}
+
 RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
     // The gzip path is covered above; brotli and zstd are equally supported
     // codings and must set their own Content-Encoding token after compressing.
