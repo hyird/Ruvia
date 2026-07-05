@@ -127,6 +127,14 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     RUVIA_CHECK_EQ(bad.first, std::uint16_t{416});
     RUVIA_CHECK_EQ(bad.second, std::string("bytes */100"));
 
+    // An unknown range unit MUST be ignored (RFC 9110 §14.2) -> full 200, not 416.
+    const auto unknownUnit = serve("items=0-9");
+    RUVIA_CHECK_EQ(unknownUnit.first, std::uint16_t{200});
+
+    // A syntactically malformed byte range is likewise ignored -> full 200.
+    const auto malformed = serve("bytes=abc");
+    RUVIA_CHECK_EQ(malformed.first, std::uint16_t{200});
+
     fs::remove_all(dir);
 }
 

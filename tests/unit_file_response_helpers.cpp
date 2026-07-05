@@ -14,6 +14,7 @@
 namespace {
 
 using ruvia::detail::httpGuessContentType;
+using ruvia::detail::HttpRangeOutcome;
 using ruvia::detail::httpParseByteRange;
 using ruvia::detail::httpParseUnsigned;
 
@@ -70,48 +71,77 @@ RUVIA_TEST(parse_unsigned_accepts_and_rejects) {
 RUVIA_TEST(byte_range_bounded_and_open_ended) {
     // bytes=first-last within a 1000-byte resource.
     const auto bounded = httpParseByteRange("bytes=100-199", 1000);
-    RUVIA_CHECK(bounded.has_value());
-    RUVIA_CHECK_EQ(bounded->offset, std::uint64_t{100});
-    RUVIA_CHECK_EQ(bounded->length, std::uint64_t{100});
+    RUVIA_CHECK(bounded.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(bounded.range.offset, std::uint64_t{100});
+    RUVIA_CHECK_EQ(bounded.range.length, std::uint64_t{100});
     // Open-ended: from an offset to the end.
     const auto open = httpParseByteRange("bytes=500-", 1000);
-    RUVIA_CHECK(open.has_value());
-    RUVIA_CHECK_EQ(open->offset, std::uint64_t{500});
-    RUVIA_CHECK_EQ(open->length, std::uint64_t{500});
+    RUVIA_CHECK(open.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(open.range.offset, std::uint64_t{500});
+    RUVIA_CHECK_EQ(open.range.length, std::uint64_t{500});
     // Last byte only.
     const auto lastByte = httpParseByteRange("bytes=999-999", 1000);
-    RUVIA_CHECK(lastByte.has_value());
-    RUVIA_CHECK_EQ(lastByte->offset, std::uint64_t{999});
-    RUVIA_CHECK_EQ(lastByte->length, std::uint64_t{1});
+    RUVIA_CHECK(lastByte.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(lastByte.range.offset, std::uint64_t{999});
+    RUVIA_CHECK_EQ(lastByte.range.length, std::uint64_t{1});
     // An end past the resource is clamped to the last byte.
     const auto clampedEnd = httpParseByteRange("bytes=0-2000", 1000);
-    RUVIA_CHECK(clampedEnd.has_value());
-    RUVIA_CHECK_EQ(clampedEnd->offset, std::uint64_t{0});
-    RUVIA_CHECK_EQ(clampedEnd->length, std::uint64_t{1000});
+    RUVIA_CHECK(clampedEnd.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(clampedEnd.range.offset, std::uint64_t{0});
+    RUVIA_CHECK_EQ(clampedEnd.range.length, std::uint64_t{1000});
 }
 
 RUVIA_TEST(byte_range_suffix) {
     // bytes=-N is the last N bytes.
     const auto suffix = httpParseByteRange("bytes=-100", 1000);
-    RUVIA_CHECK(suffix.has_value());
-    RUVIA_CHECK_EQ(suffix->offset, std::uint64_t{900});
-    RUVIA_CHECK_EQ(suffix->length, std::uint64_t{100});
+    RUVIA_CHECK(suffix.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(suffix.range.offset, std::uint64_t{900});
+    RUVIA_CHECK_EQ(suffix.range.length, std::uint64_t{100});
     // A suffix larger than the resource clamps to the whole resource.
     const auto whole = httpParseByteRange("bytes=-2000", 1000);
-    RUVIA_CHECK(whole.has_value());
-    RUVIA_CHECK_EQ(whole->offset, std::uint64_t{0});
-    RUVIA_CHECK_EQ(whole->length, std::uint64_t{1000});
+    RUVIA_CHECK(whole.outcome == HttpRangeOutcome::kSatisfiable);
+    RUVIA_CHECK_EQ(whole.range.offset, std::uint64_t{0});
+    RUVIA_CHECK_EQ(whole.range.length, std::uint64_t{1000});
 }
 
-RUVIA_TEST(byte_range_rejects_invalid) {
-    RUVIA_CHECK(!httpParseByteRange("bytes=1000-", 1000).has_value());        // start at/after end
-    RUVIA_CHECK(!httpParseByteRange("bytes=500-100", 1000).has_value());      // last < first
-    RUVIA_CHECK(!httpParseByteRange("bytes=-0", 1000).has_value());           // zero-length suffix
-    RUVIA_CHECK(!httpParseByteRange("bytes=0-99,200-299", 1000).has_value()); // multiple ranges
-    RUVIA_CHECK(!httpParseByteRange("0-99", 1000).has_value());               // missing "bytes=" unit
-    RUVIA_CHECK(!httpParseByteRange("bytes=abc", 1000).has_value());          // no '-'
-    RUVIA_CHECK(!httpParseByteRange("bytes=", 1000).has_value());             // empty spec
-    RUVIA_CHECK(!httpParseByteRange("bytes=0-99", 0).has_value());            // empty resource
+RUVIA_TEST(byte_range_unsatisfiable_yields_416) {
+    // Well-formed ranges that fall outside the representation -> 416 (RFC 9110
+    // §15.5.17): a Content-Range: bytes */size must be sent, so these are distinct
+    // from an ignored range.
+    RUVIA_CHECK(httpParseByteRange("bytes=1000-", 1000).outcome ==
+                HttpRangeOutcome::kUnsatisfiable);  // start at/after end
+    RUVIA_CHECK(httpParseByteRange("bytes=1500-1600", 1000).outcome ==
+                HttpRangeOutcome::kUnsatisfiable);  // whole range past end
+    RUVIA_CHECK(httpParseByteRange("bytes=-0", 1000).outcome ==
+                HttpRangeOutcome::kUnsatisfiable);  // zero-length suffix
+    RUVIA_CHECK(httpParseByteRange("bytes=0-99", 0).outcome ==
+                HttpRangeOutcome::kUnsatisfiable);  // any range against an empty resource
+}
+
+RUVIA_TEST(byte_range_malformed_or_unknown_unit_is_ignored) {
+    // RFC 9110 §14.2: an unknown range unit MUST be ignored (served as a full 200),
+    // and a syntactically invalid byte range is likewise ignored rather than 416'd
+    // -- otherwise a client's typo or unsupported unit would deny it the resource.
+    RUVIA_CHECK(httpParseByteRange("items=0-99", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // unknown range unit (MUST ignore)
+    RUVIA_CHECK(httpParseByteRange("0-99", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // missing "bytes=" unit
+    RUVIA_CHECK(httpParseByteRange("bytes=500-100", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // last < first (invalid range-spec)
+    RUVIA_CHECK(httpParseByteRange("bytes=abc", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // no '-'
+    RUVIA_CHECK(httpParseByteRange("bytes=x-9", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // non-digit first-pos
+    RUVIA_CHECK(httpParseByteRange("bytes=0-x", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // non-digit last-pos
+    RUVIA_CHECK(httpParseByteRange("bytes=-x", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // non-digit suffix-length
+    RUVIA_CHECK(httpParseByteRange("bytes=-", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // empty suffix-length
+    RUVIA_CHECK(httpParseByteRange("bytes=", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // empty spec
+    RUVIA_CHECK(httpParseByteRange("bytes=0-99,200-299", 1000).outcome ==
+                HttpRangeOutcome::kIgnore);  // multiple ranges -> served as full 200
 }
 
 RUVIA_TEST(byte_range_set_multiple_detection) {
