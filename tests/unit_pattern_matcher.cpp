@@ -148,3 +148,15 @@ RUVIA_TEST(pattern_match_escaped_literals_are_not_meta) {
     RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^[\\]]$"}>("]"));
     RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^[\\]]$"}>("a"));
 }
+
+RUVIA_TEST(pattern_match_bounds_catastrophic_backtracking) {
+    // Adjacent unanchored quantifiers backtrack combinatorially (~C(n+k, k)) when the
+    // tail fails: distributing n input chars among k "*" atoms. The step budget caps
+    // this so hostile input cannot hang the matcher (ReDoS defence). The match fails
+    // fast rather than exploring the space; without the budget this call would not
+    // return promptly.
+    const std::string hostile(50, 'a');  // 50 'a's then no 'b' -> full backtrack
+    RUVIA_CHECK(!matchPatternPlan<ruvia::FixedString{"^a*a*a*a*a*a*a*a*b$"}>(hostile));
+    // A genuinely matching value under the same pattern still matches (budget is huge).
+    RUVIA_CHECK(matchPatternPlan<ruvia::FixedString{"^a*a*a*a*a*a*a*a*b$"}>("aaab"));
+}

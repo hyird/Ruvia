@@ -7,6 +7,14 @@
 
 namespace ruvia::detail::model {
 
+// Upper bound on backtracking steps for a single pattern match. The matcher is a
+// greedy backtracking engine, so a pattern with adjacent unanchored quantifiers
+// (e.g. "[0-9]*[0-9]*...") could backtrack combinatorially over hostile input.
+// Patterns are compile-time constants and the input is validated per request, so
+// this caps the worst case as a ReDoS defence-in-depth: exceeding it fails the
+// match (the field is rejected). A generous bound no real match approaches.
+inline constexpr std::size_t kMaxPatternMatchSteps = 1'000'000;
+
 [[nodiscard]] constexpr bool matchPatternEscape(char escape, char value) noexcept {
     switch (escape) {
     case 'd':
@@ -88,7 +96,12 @@ template <std::size_t Capacity>
     std::string_view pattern,
     std::string_view value,
     std::size_t atomIndex,
-    std::size_t valueIndex) noexcept {
+    std::size_t valueIndex,
+    std::size_t& budget) noexcept {
+    if (budget == 0) {
+        return false;  // step budget exhausted -> bound catastrophic backtracking
+    }
+    --budget;
     if (atomIndex == plan.count) {
         return valueIndex == value.size();
     }
@@ -110,7 +123,7 @@ template <std::size_t Capacity>
     }
 
     for (std::size_t count = maxCount + 1; count-- > minCount;) {
-        if (matchPatternPlanFrom(plan, pattern, value, atomIndex + 1, valueIndex + count)) {
+        if (matchPatternPlanFrom(plan, pattern, value, atomIndex + 1, valueIndex + count, budget)) {
             return true;
         }
         if (count == 0) {
@@ -123,7 +136,8 @@ template <std::size_t Capacity>
 template <FixedString Pattern>
 [[nodiscard]] constexpr bool matchPatternPlan(std::string_view value) noexcept {
     constexpr auto plan = CompiledPatternPlan<Pattern>::value;
-    return matchPatternPlanFrom(plan, Pattern.view(), value, 0, 0);
+    std::size_t budget = kMaxPatternMatchSteps;
+    return matchPatternPlanFrom(plan, Pattern.view(), value, 0, 0, budget);
 }
 
 }  // namespace ruvia::detail::model
