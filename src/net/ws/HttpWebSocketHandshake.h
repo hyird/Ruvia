@@ -25,7 +25,8 @@ Task<bool> writeWebSocketHandshake(
     std::string_view supportedSubprotocols,
     bool& permessageDeflate) {
     const auto subprotocol = chooseWebSocketSubprotocol(request, flags, supportedSubprotocols);
-    permessageDeflate = webSocketOffersPermessageDeflate(request);
+    const auto deflate = webSocketNegotiatePermessageDeflate(request);
+    permessageDeflate = deflate.enabled;
     static constexpr std::string_view kPrefix =
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
@@ -34,6 +35,11 @@ Task<bool> writeWebSocketHandshake(
     static constexpr std::string_view kSubprotocolPrefix = "Sec-WebSocket-Protocol: ";
     static constexpr std::string_view kExtensionsHeader =
         "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n";
+    // Same offer, but the client pinned server_max_window_bits=15; RFC 7692
+    // §7.1.2.1 requires echoing the accepted value in the response.
+    static constexpr std::string_view kExtensionsHeaderMaxWindow =
+        "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; "
+        "client_no_context_takeover; server_max_window_bits=15\r\n";
     static constexpr std::string_view kCrlf = "\r\n";
 
     WebSocketAcceptKey accept;
@@ -52,7 +58,8 @@ Task<bool> writeWebSocketHandshake(
         buffers[count++] = asio::buffer(kCrlf);
     }
     if (permessageDeflate) {
-        buffers[count++] = asio::buffer(kExtensionsHeader);
+        buffers[count++] = asio::buffer(
+            deflate.echoServerMaxWindowBits ? kExtensionsHeaderMaxWindow : kExtensionsHeader);
     }
     buffers[count++] = asio::buffer(kCrlf);
     (void)count;
