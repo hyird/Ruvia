@@ -42,10 +42,18 @@ void HpackDecoder::addDynamic(std::string_view name, std::string_view value) {
         return;
     }
 
-    evictDynamicToFit(size);
+    // Copy name and value into owned storage BEFORE evicting. For a "Literal
+    // Header Field with Incremental Indexing -- Indexed Name" whose name indexes a
+    // dynamic entry (RFC 7541 6.2.1), `name` aliases that entry's heap buffer --
+    // and RFC 7541 4.4 explicitly allows a new entry to reference the name of an
+    // entry the same insertion evicts. evictDynamicToFit() -> compactDynamic()
+    // move-assigns survivors over the evicted front slots (or clears the vector on
+    // full eviction), freeing the referenced buffer; copying `name` afterwards
+    // would then read freed memory. Materializing first makes the insert safe.
     Entry entry{
         std::pmr::string(name, resource_),
         std::pmr::string(value, resource_)};
+    evictDynamicToFit(size);
     dynamic_.push_back(std::move(entry));
     dynamicSize_ += size;
 }
