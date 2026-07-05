@@ -1257,6 +1257,15 @@ public:
         }
         sessionDirty_ = true;
     }
+    // Force a fresh session id when the middleware persists on the way out, and
+    // drop the blob under the old id. Call this on any privilege change (e.g. after
+    // authenticating a user) to defeat session fixation: even a session whose id
+    // was recognized in the store gets a new, server-chosen id the client could not
+    // have planted. Mirrors PHP session_regenerate_id(true) / express regenerate.
+    void regenerateSession() {
+        sessionRegenerate_ = true;
+        sessionDirty_ = true;
+    }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return memory_.resource();
@@ -1961,6 +1970,7 @@ private:
     std::exception_ptr error_;
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
+    bool sessionRegenerate_ : 1 {false};
     bool responseFinalized_ : 1 {false};
     std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
