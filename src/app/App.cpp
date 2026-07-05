@@ -195,6 +195,7 @@ void App::run() {
         }
 
         state.runtime = std::move(runtime);
+        state.stopRequested = false;
         state.running = true;
     }
 
@@ -215,8 +216,33 @@ void App::run() {
         signalThread = std::jthread([&signalContext] { signalContext.run(); });
 
         for (const auto& worker : state.runtime->workers) {
+            {
+                std::lock_guard lock(state.mutex);
+                if (state.stopRequested) {
+                    break;
+                }
+            }
             worker->start();
             startedWorkers.push_back(worker.get());
+        }
+
+        // A shutdown (signal handler or a direct stop() call) can land while this
+        // loop is still starting workers. stop() snapshots the full worker vector
+        // and calls stop() on each, but stop() is a no-op on a worker this loop
+        // has not started yet -- that worker would then start and run forever, so
+        // the join() below would hang. Reconcile against a shutdown observed at any
+        // point during startup by stopping everything we actually started; the
+        // early break above only shrinks the window, it cannot close it, because
+        // start() runs after the lock is released. HttpServer::stop() is idempotent.
+        bool shutdownRequestedDuringStartup = false;
+        {
+            std::lock_guard lock(state.mutex);
+            shutdownRequestedDuringStartup = state.stopRequested;
+        }
+        if (shutdownRequestedDuringStartup) {
+            for (auto* worker : startedWorkers) {
+                worker->stop();
+            }
         }
 
         for (auto& hook : state.onStartHooks) {
@@ -256,6 +282,10 @@ void App::stop() {
         if (!state.running) {
             return;
         }
+        // Record the request durably so run()'s startup loop tears down any worker
+        // it starts after this snapshot -- stop() below is a no-op on a worker that
+        // is not started yet.
+        state.stopRequested = true;
 
         if (!state.runtime) {
             return;
