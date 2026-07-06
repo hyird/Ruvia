@@ -32,12 +32,21 @@
 
 #include <zlib.h>
 
+#include "http/ContextInternal.h"
+#include "http/HttpRequestInternal.h"
 #include "http/client/HttpClientInternal.h"
 #include "http/client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/HttpClient.h"
+#include "ruvia/memory/MemoryPool.h"
 
 namespace {
+
+// A trivial background task that flips a flag when run, used to observe Context::defer scheduling.
+ruvia::Task<void> setFlagTask(bool* flag) {
+    *flag = true;
+    co_return;
+}
 
 // gzip-compress `input` (RFC 1952, windowBits 15+16) so tests can build encoded bodies.
 std::string gzipCompress(std::string_view input) {
@@ -1948,6 +1957,51 @@ RUVIA_TEST(http_client_fetch_rejects_cl_and_te) {
         WriteMode::kWhole);
     RUVIA_CHECK(!out.ok);
     RUVIA_CHECK(!out.error.empty());
+}
+
+// --- Context::defer spawns a detached background task on the worker executor -------------
+RUVIA_TEST(context_defer_runs_background_task_on_worker_executor) {
+    using ruvia::detail::HttpClientRegistry;
+    using ruvia::detail::HttpClientDefinition;
+
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    std::pmr::vector<HttpClientDefinition> definitions(resource);
+    HttpClientRegistry registry(io, resource, definitions);
+
+    ruvia::WorkerMemory worker;
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::RequestMemory requestMemory(worker);
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    ruvia::detail::ContextServices services(nullptr, nullptr, &registry, nullptr);
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request, services);
+
+    bool ran = false;
+    context.defer(setFlagTask(&ran));
+    RUVIA_CHECK(!ran);  // deferred: runs only once the executor is pumped
+    io.run();
+    RUVIA_CHECK(ran);
+}
+
+// --- Context::defer without an http client subsystem throws -----------------------------
+RUVIA_TEST(context_defer_without_client_subsystem_throws) {
+    ruvia::WorkerMemory worker;
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::RequestMemory requestMemory(worker);
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+
+    bool dummy = false;
+    bool threw = false;
+    try {
+        context.defer(setFlagTask(&dummy));
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    RUVIA_CHECK(!dummy);  // never scheduled
 }
 
 #endif  // RUVIA_ENABLE_HTTP_CLIENT

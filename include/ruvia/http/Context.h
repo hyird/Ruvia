@@ -1332,6 +1332,13 @@ public:
         const HttpClientConfig& config,
         std::string_view target,
         ProxyOptions options = {});
+
+    // Fire-and-forget a background task on this worker's executor. The task runs detached after the
+    // current handler returns; exceptions escaping it are swallowed. Intended for stale-while-
+    // revalidate style refreshes: return the cached (stale) response now, revalidate in the
+    // background. The task must own everything it touches (the Context is gone once the handler
+    // returns). Requires an http client subsystem (the executor is the client registry's).
+    void defer(Task<void> task);
 #endif
 
     [[nodiscard]] WebSocket& webSocket() const;

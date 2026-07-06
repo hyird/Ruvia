@@ -67,6 +67,10 @@ public:
     [[nodiscard]] HttpClientBackend* get(std::string_view alias = kDefaultHttpClientAlias) const;
     void scanDeadlines() noexcept;
 
+    // The worker io_context this registry runs on; used to spawn detached background work
+    // (Context::defer) on the same single-threaded executor as request handling.
+    [[nodiscard]] asio::io_context& ioContext() const noexcept { return ioContext_; }
+
     // Runtime add/remove. MUST be called on this registry's io_context thread (the App posts them
     // there). addClient replaces any existing client of the same alias. removeClient closeNow()s
     // the backend and defers its destruction until it is quiescent (reaped by scanDeadlines).
