@@ -376,20 +376,36 @@ ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& contex
     co_return response;
 }
 
-// Drives a real server whose response is a file body that truncates mid-stream (the
-// file is much shorter than the advertised content-length). Returns the RST_STREAM
-// error code the server sends for stream 1, or std::nullopt if it emitted no RST.
-std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
+// The on-disk path (guaranteed absent) the missing-file-body handler points at.
+std::string& missingFileBodyPath() {
+    static std::string path;
+    return path;
+}
+
+// A handler whose file-body response references a file that does not exist on disk,
+// so openResponseFileInput fails after the response headers (with content-length) have
+// already been sent -- the file-removed-before-serve case.
+ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context) {
+    (void)context;
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    constexpr std::uint64_t declaredLength = 40000;
+    ruvia::detail::setResponseFileBody(
+        response, std::filesystem::path(missingFileBodyPath()), declaredLength, 0, declaredLength);
+    co_return response;
+}
+
+// Drives a real Http2ServerSession over loopback whose not-found handler returns a
+// file-body response that cannot be delivered (truncated on disk, or the file is
+// missing). Returns the RST_STREAM error code the server sends for stream 1, or
+// std::nullopt if it emitted no RST. The connection is deliberately left open (no
+// shutdown_send) so the server must abort the stream while the connection is still
+// live; a watchdog closes the socket if the RST never arrives, so the neutered-fix
+// (mutation) case fails fast instead of blocking on the read forever.
+std::optional<std::uint32_t> rstErrorForFileBodyHandler(
+    ruvia::Task<ruvia::HttpResponse> (*handler)(ruvia::Context&)) {
     asio::io_context io;
     std::optional<std::uint32_t> rstError;
-
-    const auto filePath =
-        std::filesystem::temp_directory_path() / "ruvia_h2_truncated_body_test.bin";
-    {
-        std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
-        out << "short";  // 5 bytes on disk vs 40000 advertised
-    }
-    truncatedFileBodyPath() = filePath.string();
 
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
@@ -400,7 +416,7 @@ std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            routes.setNotFoundHandler(&truncatedFileBodyHandler);
+            routes.setNotFoundHandler(handler);
             ruvia::HttpServerOptions options;
             ruvia::detail::ConnectionScanner::Entry scannerEntry;
             ruvia::detail::Http2ServerSession<tcp::socket> session(
@@ -444,10 +460,6 @@ std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
                 co_return;
             }
 
-            // The connection is deliberately left open (no shutdown_send): the server
-            // must RST_STREAM the truncated stream while the connection is still live.
-            // A watchdog closes the socket if the RST never arrives, so the neutered-fix
-            // (mutation) case fails fast instead of blocking on the read forever.
             asio::steady_timer watchdog(io);
             watchdog.expires_after(std::chrono::seconds(5));
             watchdog.async_wait([&sock](const asio::error_code& ec) {
@@ -480,9 +492,32 @@ std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
         asio::detached);
 
     io.run();
+    return rstError;
+}
+
+// Mid-body truncation: the served file is much shorter than the advertised length.
+std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
+    const auto filePath =
+        std::filesystem::temp_directory_path() / "ruvia_h2_truncated_body_test.bin";
+    {
+        std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
+        out << "short";  // 5 bytes on disk vs 40000 advertised
+    }
+    truncatedFileBodyPath() = filePath.string();
+    const auto rstError = rstErrorForFileBodyHandler(&truncatedFileBodyHandler);
     std::error_code removeError;
     std::filesystem::remove(filePath, removeError);
     return rstError;
+}
+
+// File-open failure: the referenced file does not exist when the body is served.
+std::optional<std::uint32_t> rstErrorForMissingFileBody() {
+    const auto filePath =
+        std::filesystem::temp_directory_path() / "ruvia_h2_missing_body_test.bin";
+    std::error_code removeError;
+    std::filesystem::remove(filePath, removeError);  // ensure absent
+    missingFileBodyPath() = filePath.string();
+    return rstErrorForFileBodyHandler(&missingFileBodyHandler);
 }
 
 }  // namespace
@@ -556,6 +591,19 @@ RUVIA_TEST(http2_truncated_file_body_aborts_stream_with_rst) {
     // returned, leaving the stream open with no END_STREAM and no RST_STREAM, so the
     // peer hung until its own timeout. Expect RST_STREAM(INTERNAL_ERROR = 0x2).
     const auto rstError = rstErrorForTruncatedFileBody();
+    RUVIA_CHECK(rstError.has_value());
+    RUVIA_CHECK_EQ(rstError.value_or(0), std::uint32_t{0x2});
+}
+
+RUVIA_TEST(http2_missing_file_body_aborts_stream_with_rst) {
+    // The response advertises content-length 40000 but the file is gone by the time the
+    // body is served, so openResponseFileInput fails after the headers are already on
+    // the wire. Sending DATA(0, END_STREAM) would be a content-length mismatch (RFC 9113
+    // §8.1.1) that a lenient peer accepts as a valid empty body -- silently turning a
+    // failed serve into a 200 with no content. Before the fix writeFileBody did exactly
+    // that; now it aborts the stream so the peer learns the response failed. Expect
+    // RST_STREAM(INTERNAL_ERROR = 0x2), matching the mid-body truncation path.
+    const auto rstError = rstErrorForMissingFileBody();
     RUVIA_CHECK(rstError.has_value());
     RUVIA_CHECK_EQ(rstError.value_or(0), std::uint32_t{0x2});
 }

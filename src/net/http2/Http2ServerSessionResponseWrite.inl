@@ -134,12 +134,28 @@ Task<void> Http2ServerSession<Stream>::writeFileBody(
     }
     auto input = openResponseFileInput(fileBody);
     if (!input) {
-        co_await writeData(stream, {}, {}, true);
+        // The file could not be opened (removed, or permissions changed, since its
+        // size was measured for the content-length already sent in the response
+        // headers). Emitting DATA(END_STREAM) with zero bytes would be a
+        // content-length mismatch -- a malformed response (RFC 9113 8.1.1) that a
+        // lenient peer may accept as a valid, complete, empty body, silently
+        // presenting a failed serve as success. Abort the stream instead, matching
+        // the mid-body read-failure path below. A peer RST may have arrived during
+        // the writeHeaders suspension above, so guard on isReset as writeData did.
+        if (!stream.isReset()) {
+            co_await sendRstStream(stream.id(), Http2ErrorCode::kInternalError);
+            stream.markReset();
+        }
         co_return;
     }
     input.seekg(static_cast<std::streamoff>(fileBody.offset), std::ios::beg);
     if (!input) {
-        co_await writeData(stream, {}, {}, true);
+        // Seeking to the requested range failed (the file shrank below offset), so
+        // the advertised content-length can no longer be honoured. Abort as above.
+        if (!stream.isReset()) {
+            co_await sendRstStream(stream.id(), Http2ErrorCode::kInternalError);
+            stream.markReset();
+        }
         co_return;
     }
     std::pmr::string fileChunk(memory_.allocator<char>());
