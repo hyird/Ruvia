@@ -1476,6 +1476,21 @@ public:
         std::uint16_t statusCode,
         std::initializer_list<HttpHeaderView> headers) const = delete;
 
+    // Streaming body: the response body is pulled from a caller-supplied HttpBodyStream (a cache
+    // store, an async generator, a proxied upstream, ...) and streamed to the client -- HTTP/1.1
+    // chunked, HTTP/2 DATA -- from a normal route. The stream is moved in and owned by the response.
+    [[nodiscard]] HttpResponse body(
+        HttpBodyStream stream,
+        std::uint16_t statusCode = 200,
+        std::string_view statusText = {}) const;
+
+    [[nodiscard]] HttpResponse body(
+        HttpBodyStream stream,
+        std::uint16_t statusCode,
+        std::span<const HttpHeaderView> headers) const;
+
+    [[nodiscard]] HttpResponse body(HttpBodyStream stream, ResponseInit init) const;
+
     [[nodiscard]] HttpResponse body(std::span<const std::byte> body, ResponseInit init) const;
 
     [[nodiscard]] HttpResponse newResponse(
