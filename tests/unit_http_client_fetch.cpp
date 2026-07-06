@@ -737,6 +737,7 @@ struct ReuseOutcome {
 struct StreamCloseOutcome {
     bool beforeClose = false;
     bool afterClose = true;
+    bool afterCloseReadEmpty = false;
     std::string error;
 };
 
@@ -850,6 +851,10 @@ StreamCloseOutcome runStreamCloseFetch() {
                 out.beforeClose = static_cast<bool>(stream);
                 stream.close();
                 out.afterClose = static_cast<bool>(stream);
+                // Reading after close() must safely yield EOF, not call a null producer pointer.
+                const auto afterCloseChunk =
+                    co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
+                out.afterCloseReadEmpty = afterCloseChunk.empty();
             } catch (const std::exception& e) {
                 out.error += std::string("client:") + e.what();
             }
@@ -1832,6 +1837,7 @@ RUVIA_TEST(http_client_stream_close_releases_source) {
     RUVIA_CHECK(out.error.empty());
     RUVIA_CHECK(out.beforeClose);
     RUVIA_CHECK(!out.afterClose);
+    RUVIA_CHECK(out.afterCloseReadEmpty);  // read-after-close is safe (no null producer call)
 }
 
 RUVIA_TEST(http_client_stream_cl0_with_extra_bytes_discards_connection) {

@@ -81,6 +81,18 @@ RUVIA_TEST(http_client_config_validation_checks_every_field) {
         c.acquireTimeout = milliseconds(-1);
         validateHttpClientConfig(c);
     }));
+    // A hostHeader override is spliced into the Host: line, so a CR/LF in it (header injection)
+    // must be rejected.
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.hostHeader = std::pmr::string("evil\r\nX-Injected: 1");
+        validateHttpClientConfig(c);
+    }));
+    RUVIA_CHECK(!throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.hostHeader = std::pmr::string("api.internal:8443");  // a clean override is accepted
+        validateHttpClientConfig(c);
+    }));
 }
 
 RUVIA_TEST(http_client_host_header_brackets_ipv6_and_omits_default_port) {

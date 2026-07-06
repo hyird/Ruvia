@@ -26,6 +26,13 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
         "http client host is invalid",
         kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "http client port must not be zero");
+    // The hostHeader override is spliced verbatim into the HTTP/1 Host: line (and the HTTP/2
+    // :authority), so it must be a valid header value -- reject CR/LF/NUL/control to close a
+    // header-injection vector.
+    if (!config.hostHeader.empty() &&
+        !isValidHttpHeaderValue(std::string_view(config.hostHeader))) {
+        throw std::invalid_argument("http client hostHeader must be a valid Host header value");
+    }
     ensurePositiveSize(config.poolSizePerWorker, "http client pool size must be greater than zero");
     ensureNonNegativeDurations(
         "http client timeouts must not be negative",
