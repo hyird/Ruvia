@@ -217,7 +217,6 @@ if(RUVIA_ENABLE_HTTP_CLIENT)
         src/http/client/HttpClientRegistry.cpp
         src/http/client/Http2ClientSession.cpp
         src/http/client/Http1StreamSource.cpp
-        src/http/HttpClientStream.cpp
         src/http/HttpClientContext.cpp)
 endif()
 

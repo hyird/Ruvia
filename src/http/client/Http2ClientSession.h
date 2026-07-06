@@ -61,7 +61,8 @@ public:
 
     void destroy() noexcept override { destroyPmrObject(this, resource_); }
 
-    // Called by Http2StreamSource (the streaming pimpl) to pull the body and release the stream.
+    // Called by Http2StreamSource (the streaming HttpBodyStream source) to pull the body and
+    // release the stream.
     [[nodiscard]] Task<std::pmr::string> streamReadChunk(std::uint32_t streamId);
     void streamClose(std::uint32_t streamId) noexcept;
 
