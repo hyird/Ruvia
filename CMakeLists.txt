@@ -95,6 +95,7 @@ set(RUVIA_HTTP_SOURCES
     src/http/Error.cpp
     src/http/Health.cpp
     src/http/HttpBasics.cpp
+    src/http/HttpCache.cpp
     src/http/HttpCors.cpp
     src/http/HttpRequest.cpp
     src/http/HttpResponse.cpp
