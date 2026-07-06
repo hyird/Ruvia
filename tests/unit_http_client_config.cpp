@@ -59,16 +59,21 @@ RUVIA_TEST(http_client_config_validation_checks_every_field) {
         validateHttpClientConfig(c);
     }));
 
-    // Every one of the three timeouts must be non-negative -- a negative value in
+    // Every one of the timeouts must be non-negative -- a negative value in
     // any of them is rejected (verifies the whole fold is wired, not just one).
     RUVIA_CHECK(throwsOn([] {
         auto c = configWithHost("example.com", 80);
-        c.connectTimeout = milliseconds(-1);
+        c.proxyConnectTimeout = milliseconds(-1);
         validateHttpClientConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {
         auto c = configWithHost("example.com", 80);
-        c.requestTimeout = milliseconds(-1);
+        c.proxyReadTimeout = milliseconds(-1);
+        validateHttpClientConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.proxySendTimeout = milliseconds(-1);
         validateHttpClientConfig(c);
     }));
     RUVIA_CHECK(throwsOn([] {

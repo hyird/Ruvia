@@ -98,7 +98,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         throw std::logic_error("http client: invalid port");
     }
     const auto port = std::string_view(portBuffer.data(), static_cast<std::size_t>(portEnd - portBuffer.data()));
-    setDeadline(conn, config_.connectTimeout, Connection::DeadlineKind::kResolve);
+    setDeadline(conn, config_.proxyConnectTimeout, Connection::DeadlineKind::kResolve);
     auto [resolveEc, endpoints] = co_await asyncResult<asio::ip::tcp::resolver::results_type>(
         [this, port, &conn](auto handler) {
             conn.resolver.async_resolve(
@@ -115,7 +115,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
             "http client: resolve failed");
     }
 
-    setDeadline(conn, config_.connectTimeout, Connection::DeadlineKind::kSocket);
+    setDeadline(conn, config_.proxyConnectTimeout, Connection::DeadlineKind::kSocket);
     auto [connectEc, ep] = co_await asyncResult<asio::ip::tcp::endpoint>(
         [&](auto handler) {
             asio::async_connect(conn.rawSocket, endpoints, std::move(handler));
@@ -143,7 +143,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         // RFC 6066 SNI + RFC 6125 host-name verification (verify_peer only checks the
         // chain), shared with the HTTP/2 path via one owner.
         applyClientTlsIdentity(*conn.tlsStream, config_.host, conn.resource);
-        setDeadline(conn, config_.connectTimeout, Connection::DeadlineKind::kSocket);
+        setDeadline(conn, config_.proxyConnectTimeout, Connection::DeadlineKind::kSocket);
         const auto handshakeEc = co_await asyncError([&](auto handler) {
             conn.tlsStream->async_handshake(
                 asio::ssl::stream_base::client, std::move(handler));
@@ -215,7 +215,7 @@ Task<void> HttpClientPool::readChunkedResponseBody(
     Connection& conn,
     FetchResponse& response,
     std::size_t bodyOffset,
-    std::optional<std::chrono::steady_clock::time_point> requestDeadline) {
+    std::chrono::milliseconds readTimeout) {
     // Bound a single chunk-size / trailer line and the whole trailer section so a hostile
     // peer cannot force unbounded buffering.
     constexpr std::size_t kMaxChunkLineBytes = 1024;
@@ -253,7 +253,7 @@ Task<void> HttpClientPool::readChunkedResponseBody(
         constexpr std::size_t kReadChunk = 4096;
         const auto oldSize = buf.size();
         resizePmrStringForOverwrite(buf, oldSize + kReadChunk);
-        armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+        setDeadline(conn, readTimeout, Connection::DeadlineKind::kSocket);
         auto [ec, n] = co_await readSome(asio::buffer(buf.data() + oldSize, kReadChunk));
         if (finishDeadline(conn)) {
             closeConnection(conn);
@@ -343,7 +343,7 @@ Task<void> HttpClientPool::readChunkedResponseBody(
             pos += copied;
         }
         if (copied < chunkSize) {
-            armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+            setDeadline(conn, readTimeout, Connection::DeadlineKind::kSocket);
             auto [dataEc, dataN] = co_await readExact(asio::buffer(
                 body.data() + writeAt + copied, chunkSize - copied));
             (void)dataN;
@@ -370,7 +370,7 @@ Task<void> HttpClientPool::readCloseDelimitedResponseBody(
     Connection& conn,
     FetchResponse& response,
     std::size_t bodyOffset,
-    std::optional<std::chrono::steady_clock::time_point> requestDeadline) {
+    std::chrono::milliseconds readTimeout) {
     // RFC 7230 §3.3.3 rule 7: with neither Transfer-Encoding nor Content-Length, the body
     // runs until the peer closes the connection. The caller marks the connection unreusable.
     const auto maxBody = config_.maxResponseBodyBytes;
@@ -401,7 +401,7 @@ Task<void> HttpClientPool::readCloseDelimitedResponseBody(
     for (;;) {
         const auto oldSize = body.size();
         resizePmrStringForOverwrite(body, oldSize + kReadChunk);
-        armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+        setDeadline(conn, readTimeout, Connection::DeadlineKind::kSocket);
         auto [ec, n] = co_await readSome(asio::buffer(body.data() + oldSize, kReadChunk));
         if (finishDeadline(conn)) {
             body.resize(oldSize);
@@ -465,7 +465,7 @@ Task<std::pair<std::error_code, std::size_t>> HttpClientPool::connRead(
 }
 
 Task<void> HttpClientPool::writeChunkedRequestBody(
-    Connection& conn, const RequestBodyStream& bodyStream, std::chrono::milliseconds requestTimeout) {
+    Connection& conn, const RequestBodyStream& bodyStream, std::chrono::milliseconds sendTimeout) {
     for (;;) {
         const std::string_view chunk = co_await bodyStream.nextChunk();
         if (chunk.empty()) {
@@ -484,7 +484,7 @@ Task<void> HttpClientPool::writeChunkedRequestBody(
             asio::buffer(sizeLine.data(), static_cast<std::size_t>(ptr - sizeLine.data())),
             asio::buffer(chunk.data(), chunk.size()),
             asio::buffer(kCrlf, sizeof(kCrlf))};
-        setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
+        setDeadline(conn, sendTimeout, Connection::DeadlineKind::kSocket);
         const auto writeEc = co_await asyncError([&conn, buffers](auto handler) mutable {
             if (conn.tlsStream) {
                 asio::async_write(*conn.tlsStream, buffers, std::move(handler));
@@ -504,7 +504,7 @@ Task<void> HttpClientPool::writeChunkedRequestBody(
     static constexpr char kTerminator[] = {'0', '\r', '\n', '\r', '\n'};
     const std::array<asio::const_buffer, 2> terminator{
         asio::buffer(kTerminator, sizeof(kTerminator)), asio::buffer(kTerminator, 0)};
-    setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
+    setDeadline(conn, sendTimeout, Connection::DeadlineKind::kSocket);
     const auto writeEc = co_await connWrite(conn, terminator);
     if (finishDeadline(conn)) {
         closeConnection(conn);
@@ -520,8 +520,8 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     Connection& conn,
     std::string_view path,
     const FetchOptions& options,
-    std::chrono::milliseconds requestTimeout,
-    std::optional<std::chrono::steady_clock::time_point> requestDeadline,
+    std::chrono::milliseconds readTimeout,
+    std::chrono::milliseconds sendTimeout,
     FetchResponse& response,
     std::pmr::memory_resource* requestResource) {
     // Build request
@@ -545,14 +545,13 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     }
     const bool wantContinue = options.expectContinue && hasBody;
     const bool addExpectHeader = wantContinue && !userSetExpect;
-    // Streamed request bodies use per-operation idle timeouts (the total time is unbounded by a
-    // possibly-slow producer); buffered requests keep the single absolute request deadline.
-    auto armRequest = [&]() {
-        if (streamingBody) {
-            setDeadline(conn, requestTimeout, Connection::DeadlineKind::kSocket);
-        } else {
-            armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
-        }
+    // nginx-style inactivity: each write resets sendTimeout (proxy_send_timeout), each read resets
+    // readTimeout (proxy_read_timeout). The timer is relative and re-armed per I/O.
+    auto armRead = [&]() {
+        setDeadline(conn, readTimeout, Connection::DeadlineKind::kSocket);
+    };
+    auto armWrite = [&]() {
+        setDeadline(conn, sendTimeout, Connection::DeadlineKind::kSocket);
     };
 
     std::array<char, 24> lenBuf;
@@ -633,7 +632,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
         asio::const_buffer(requestBuf.data(), requestBuf.size()),
         wantContinue ? asio::const_buffer(options.body.data(), 0)
                      : asio::const_buffer(options.body.data(), options.body.size())};
-    armRequest();
+    armWrite();
     const auto writeEc = co_await connWrite(conn, requestBuffers);
     if (finishDeadline(conn)) {
         throw std::system_error(asio::error::timed_out, "http client: write timed out");
@@ -647,9 +646,9 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     // buffered non-Expect path above, which already wrote the body inline with the head.
     auto sendRequestBody = [&]() -> Task<void> {
         if (streamingBody) {
-            co_await writeChunkedRequestBody(conn, options.bodyStream, requestTimeout);
+            co_await writeChunkedRequestBody(conn, options.bodyStream, sendTimeout);
         } else if (!options.body.empty()) {
-            armRequest();
+            armWrite();
             const std::array<asio::const_buffer, 2> bodyBuffers{
                 asio::buffer(options.body.data(), options.body.size()),
                 asio::buffer(options.body.data(), 0)};
@@ -683,11 +682,13 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     // without sending the body. If the server stays silent, send the body anyway once the bounded
     // window elapses so a server that ignores the expectation cannot deadlock us (RFC 7231 §5.1.1).
     if (wantContinue) {
+        // Bound the wait for a 100 by a short window (capped at the read timeout) so a server that
+        // ignores the expectation cannot deadlock us -- with per-read inactivity, a silent server
+        // simply times out this read and we send the body.
         constexpr auto kExpectContinueTimeout = std::chrono::milliseconds(1000);
-        const auto continueTimeout = requestTimeout.count() > 0
-            ? std::min<std::chrono::milliseconds>(requestTimeout, kExpectContinueTimeout)
+        const auto continueTimeout = readTimeout.count() > 0
+            ? std::min<std::chrono::milliseconds>(readTimeout, kExpectContinueTimeout)
             : kExpectContinueTimeout;
-        const auto continueDeadline = std::chrono::steady_clock::now() + continueTimeout;
         bool sendNow = false;
         for (;;) {
             auto headerEnd = readBuf.find("\r\n\r\n");
@@ -699,7 +700,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
                 const auto oldSize = readBuf.size();
                 const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
                 resizePmrStringForOverwrite(readBuf, oldSize + writable);
-                armDeadline(conn, continueDeadline, Connection::DeadlineKind::kSocket);
+                setDeadline(conn, continueTimeout, Connection::DeadlineKind::kSocket);
                 auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
                 if (finishDeadline(conn)) {
                     readBuf.resize(oldSize);  // drop the unfilled tail; keep any partial header
@@ -747,12 +748,6 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
             head.closeAfterResponse = true;
             co_return head;
         }
-        // The continue wait may have consumed much of the request budget; give the body write and
-        // final-response read a fresh absolute deadline (executeRequest does the same for its
-        // response-body phase via the expectContinue check).
-        if (requestTimeout.count() > 0) {
-            requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
-        }
         co_await sendRequestBody();
     }
 
@@ -767,7 +762,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
             const auto oldSize = readBuf.size();
             const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
             resizePmrStringForOverwrite(readBuf, oldSize + writable);
-            armRequest();
+            armRead();
             auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
             if (finishDeadline(conn)) {
                 closeConnection(conn);
@@ -815,22 +810,14 @@ Task<FetchResponse> HttpClientPool::executeRequest(
     if (options.timeout.count() < 0) {
         throw std::invalid_argument("http client request timeout must not be negative");
     }
-    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
-    // One absolute deadline for the whole request phase (write + all reads), so a slow drip
-    // that re-enters a read loop cannot keep renewing a per-read timer and pin the connection.
-    std::optional<std::chrono::steady_clock::time_point> requestDeadline =
-        requestTimeout.count() > 0
-            ? std::optional(std::chrono::steady_clock::now() + requestTimeout)
-            : std::nullopt;
+    // nginx-style inactivity timeouts (proxy_read_timeout / proxy_send_timeout), each reset per
+    // I/O; FetchOptions::timeout overrides both for this request.
+    const auto readTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxyReadTimeout;
+    const auto sendTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxySendTimeout;
 
     FetchResponse response = FetchResponseAccess::make(requestResource);
     auto responseHead = co_await writeRequestAndReadHead(
-        conn, path, options, requestTimeout, requestDeadline, response, requestResource);
-    // A streamed request body (or an Expect: 100-continue wait) may have taken arbitrarily long;
-    // give the response body phase a fresh absolute budget rather than one anchored at request start.
-    if ((options.bodyStream || options.expectContinue) && requestTimeout.count() > 0) {
-        requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
-    }
+        conn, path, options, readTimeout, sendTimeout, response, requestResource);
     auto& readBuf = conn.responseReadBuffer;
 
     // Collect body per RFC 7230 §3.3.3: chunked, then Content-Length, else close-delimited.
@@ -840,7 +827,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
                 closeConnection(conn);
                 throw std::runtime_error("http client: unsupported response Transfer-Encoding");
             }
-            co_await readChunkedResponseBody(conn, response, responseHead.bodyOffset, requestDeadline);
+            co_await readChunkedResponseBody(conn, response, responseHead.bodyOffset, readTimeout);
         } else if (responseHead.hasContentLength) {
             if (config_.maxResponseBodyBytes != 0 &&
                 responseHead.contentLength > config_.maxResponseBodyBytes) {
@@ -861,7 +848,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
                     std::copy_n(readBuf.data() + responseHead.bodyOffset, toCopy, body.data());
                 }
                 if (toCopy < responseHead.contentLength) {
-                    armDeadline(conn, requestDeadline, Connection::DeadlineKind::kSocket);
+                    setDeadline(conn, readTimeout, Connection::DeadlineKind::kSocket);
                     auto [bodyEc, bodyN] = co_await connRead(conn, asio::buffer(
                         body.data() + toCopy,
                         responseHead.contentLength - toCopy));
@@ -880,7 +867,7 @@ Task<FetchResponse> HttpClientPool::executeRequest(
             }
         } else {
             co_await readCloseDelimitedResponseBody(
-                conn, response, responseHead.bodyOffset, requestDeadline);
+                conn, response, responseHead.bodyOffset, readTimeout);
             // A close-delimited body consumes the connection; it cannot be reused.
             responseHead.closeAfterResponse = true;
         }

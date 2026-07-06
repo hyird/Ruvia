@@ -27,12 +27,8 @@ void ConnectionScanner::Entry::setPhase(Phase nextPhase) noexcept {
     if (nowMs_ == nullptr) {
         return;
     }
-    const auto now = *nowMs_;
-    lastActiveMs_ = now;
-    if (phase_ != nextPhase) {
-        phase_ = nextPhase;
-        phaseStartedMs_ = now;
-    }
+    lastActiveMs_ = *nowMs_;
+    phase_ = nextPhase;
 }
 
 std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
@@ -106,7 +102,6 @@ void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socke
     entry.socket_ = &socket;
     entry.nowMs_ = &cachedNowMs_;
     entry.touch();
-    entry.phaseStartedMs_ = entry.lastActiveMs_;
     entry.phase_ = Phase::kIdle;
     entry.next_ = sentinel_.next_;
     entry.prev_ = &sentinel_;
@@ -141,10 +136,10 @@ void ConnectionScanner::closeAll() noexcept {
 }
 
 bool ConnectionScanner::hasAnyTimeout() const noexcept {
-    return options_.idleTimeoutMs > 0 ||
-        options_.headerTimeoutMs > 0 ||
-        options_.bodyTimeoutMs > 0 ||
-        options_.writeTimeoutMs > 0;
+    return options_.keepaliveTimeoutMs > 0 ||
+        options_.clientHeaderTimeoutMs > 0 ||
+        options_.clientBodyTimeoutMs > 0 ||
+        options_.sendTimeoutMs > 0;
 }
 
 void ConnectionScanner::schedule() {
@@ -181,22 +176,23 @@ void ConnectionScanner::scan() noexcept {
 }
 
 bool ConnectionScanner::isTimedOut(const Entry& entry, std::int64_t now) const noexcept {
-    if (options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs) {
-        return true;
-    }
-
+    // nginx-style inactivity timeouts: every phase measures time since the connection was last
+    // active (touch() is called on each successful read/write), so a timer resets on I/O and
+    // fires only after a gap. Each phase maps to its nginx directive:
+    //   kReadingHeader -> client_header_timeout   kReadingBody -> client_body_timeout
+    //   kWriting       -> send_timeout            kIdle/kWebSocket -> keepalive_timeout
+    const auto inactiveMs = now - entry.lastActiveMs_;
     switch (entry.phase_) {
         case Phase::kReadingHeader:
-            return options_.headerTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.headerTimeoutMs;
+            return options_.clientHeaderTimeoutMs > 0 && inactiveMs >= options_.clientHeaderTimeoutMs;
         case Phase::kReadingBody:
-            return options_.bodyTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.bodyTimeoutMs;
-        case Phase::kWebSocket:
-            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs;
+            return options_.clientBodyTimeoutMs > 0 && inactiveMs >= options_.clientBodyTimeoutMs;
         case Phase::kWriting:
-            return options_.writeTimeoutMs > 0 && now - entry.phaseStartedMs_ >= options_.writeTimeoutMs;
+            return options_.sendTimeoutMs > 0 && inactiveMs >= options_.sendTimeoutMs;
+        case Phase::kWebSocket:
         case Phase::kIdle:
         default:
-            return options_.idleTimeoutMs > 0 && now - entry.lastActiveMs_ >= options_.idleTimeoutMs;
+            return options_.keepaliveTimeoutMs > 0 && inactiveMs >= options_.keepaliveTimeoutMs;
     }
 }
 

@@ -297,7 +297,9 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         throw std::invalid_argument("http client request timeout must not be negative");
     }
     auto* const requestResource = resource == nullptr ? resource_ : resource;
-    const auto idleTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
+    // nginx-style inactivity timeouts; FetchOptions::timeout overrides them for this request.
+    const auto readTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxyReadTimeout;
+    const auto sendTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxySendTimeout;
 
     const auto index = co_await acquire();
     ConnectionGuard guard(*this, index);
@@ -308,14 +310,8 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         if (!conn.connected) {
             co_await connectOne(conn);
         }
-        // Bound only the header phase with an absolute deadline; body reads use a per-read idle
-        // timeout (streaming bodies are long-lived).
-        const std::optional<std::chrono::steady_clock::time_point> headerDeadline =
-            idleTimeout.count() > 0
-                ? std::optional(std::chrono::steady_clock::now() + idleTimeout)
-                : std::nullopt;
         head = co_await writeRequestAndReadHead(
-            conn, path, options, idleTimeout, headerDeadline, response, requestResource);
+            conn, path, options, readTimeout, sendTimeout, response, requestResource);
     } catch (...) {
         guard.discard();
         throw;
@@ -347,7 +343,7 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
     auto* source = constructPmrObject<Http1StreamSource>(
         requestResource, this, std::move(guard), response.status(),
         std::move(FetchResponseAccess::headers(response)), framing, contentLength, head.closeAfterResponse,
-        std::move(leftover), idleTimeout, requestResource);
+        std::move(leftover), readTimeout, requestResource);
     std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> stream(source);
     stream = maybeWrapDecodingStreamSource(
         std::move(stream), source->headers(), options.decodeStream, requestResource);

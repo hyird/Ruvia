@@ -43,9 +43,18 @@ struct HttpClientConfig {
     bool http2{false};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
-    // Set to 0 to disable the corresponding timeout.
-    std::chrono::milliseconds connectTimeout{0};
-    std::chrono::milliseconds requestTimeout{0};
+    // nginx-aligned upstream timeouts (names + inactivity semantics + defaults). Set 0 to disable.
+    //   proxyConnectTimeout == nginx proxy_connect_timeout (establishing the connection: DNS
+    //                          resolve + TCP connect + TLS handshake)
+    //   proxyReadTimeout    == nginx proxy_read_timeout    (inactivity gap between two successive
+    //                          reads of the response; resets on each read)
+    //   proxySendTimeout    == nginx proxy_send_timeout    (inactivity gap between two successive
+    //                          writes of the request; resets on each write)
+    // FetchOptions::timeout, when set, overrides proxyReadTimeout/proxySendTimeout for one request.
+    std::chrono::milliseconds proxyConnectTimeout{std::chrono::seconds(60)};
+    std::chrono::milliseconds proxyReadTimeout{std::chrono::seconds(60)};
+    std::chrono::milliseconds proxySendTimeout{std::chrono::seconds(60)};
+    // Max time to wait for a free pooled connection (no nginx equivalent). 0 disables.
     std::chrono::milliseconds acquireTimeout{0};
     // Set to 0 to disable the response body limit.
     std::size_t maxResponseBodyBytes{kDefaultMaxBufferedBodyBytes};

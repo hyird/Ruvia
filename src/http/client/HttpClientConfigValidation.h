@@ -29,8 +29,9 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     ensurePositiveSize(config.poolSizePerWorker, "http client pool size must be greater than zero");
     ensureNonNegativeDurations(
         "http client timeouts must not be negative",
-        config.connectTimeout,
-        config.requestTimeout,
+        config.proxyConnectTimeout,
+        config.proxyReadTimeout,
+        config.proxySendTimeout,
         config.acquireTimeout);
 }
 

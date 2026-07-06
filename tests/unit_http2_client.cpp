@@ -2306,7 +2306,7 @@ RUVIA_TEST(http2_request_timeout) {
     config.port = port;
     config.tls = false;
     config.http2 = true;
-    config.requestTimeout = std::chrono::milliseconds(100);
+    config.proxyReadTimeout = std::chrono::milliseconds(100);
 
     auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
 
@@ -2343,6 +2343,69 @@ RUVIA_TEST(http2_request_timeout) {
     io.run();
     RUVIA_CHECK(timedOut);
     RUVIA_CHECK(!succeeded);
+}
+
+// A STREAMING response whose server sends the headers then stalls (no DATA/END_STREAM) must be
+// bounded by the per-stream inactivity timeout (proxy_read_timeout) -- readChunk() must throw,
+// not hang. Before the inactivity change, streaming streams had no deadline and hung forever.
+RUVIA_TEST(http2_stream_read_inactivity_timeout) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            co_await mockH2Server(std::move(sock), resource);
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+    config.proxyReadTimeout = std::chrono::milliseconds(100);
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+
+    auto scanTimer = std::make_shared<asio::steady_timer>(io);
+    std::function<void()> armScan = [&]() {
+        scanTimer->expires_after(std::chrono::milliseconds(10));
+        scanTimer->async_wait([&](const std::error_code& ec) {
+            if (ec) {
+                return;
+            }
+            session->scanDeadlines(std::chrono::steady_clock::now());
+            armScan();
+        });
+    };
+    armScan();
+
+    bool readThrew = false;
+    bool gotHeaders = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                // "/timeout": server sends 200 headers then never any DATA or END_STREAM.
+                auto stream = co_await taskAsAwaitable(session->fetchStream("/timeout", options, resource));
+                gotHeaders = stream.status() == 200;
+                (void)co_await taskAsAwaitable(stream.readChunk());  // must time out, not hang
+            } catch (...) {
+                readThrew = true;
+            }
+            scanTimer->cancel();
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(gotHeaders);
+    RUVIA_CHECK(readThrew);
 }
 
 // A peer that advertises SETTINGS_MAX_CONCURRENT_STREAMS = 0 must not hang a fetch forever: the
@@ -2392,7 +2455,7 @@ RUVIA_TEST(http2_slot_wait_timeout) {
     config.port = port;
     config.tls = false;
     config.http2 = true;
-    config.requestTimeout = std::chrono::milliseconds(100);
+    config.proxyReadTimeout = std::chrono::milliseconds(100);
 
     auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
 

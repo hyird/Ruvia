@@ -84,7 +84,7 @@ Task<void> dispatchHttpStreamBodyRoute(
         response,
         keepAlive,
         requestCount,
-        options.maxRequestsPerConnection,
+        options.keepaliveRequests,
         streamReader->finished(),
         requestNeedsKeepAliveSignal(parsed.request.httpVersion()),
         readBuffer,

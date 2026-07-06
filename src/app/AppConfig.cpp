@@ -77,14 +77,14 @@ App& App::setThreadNum(std::size_t threadNum) {
         });
 }
 
-App& App::setIdleTimeout(std::chrono::milliseconds timeout) {
+App& App::setKeepaliveTimeout(std::chrono::milliseconds timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change idle timeout while app is running",
+        "cannot change keepalive timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "idle timeout must not be negative");
-            state.options.idleTimeout = timeout;
+            detail::ensureNonNegativeDuration(timeout, "keepalive timeout must not be negative");
+            state.options.keepaliveTimeout = timeout;
         });
 }
 
@@ -110,36 +110,36 @@ App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
         });
 }
 
-App& App::setHeaderTimeout(std::chrono::milliseconds timeout) {
+App& App::setClientHeaderTimeout(std::chrono::milliseconds timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change header timeout while app is running",
+        "cannot change client header timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "header timeout must not be negative");
-            state.options.headerTimeout = timeout;
+            detail::ensureNonNegativeDuration(timeout, "client header timeout must not be negative");
+            state.options.clientHeaderTimeout = timeout;
         });
 }
 
-App& App::setBodyTimeout(std::chrono::milliseconds timeout) {
+App& App::setClientBodyTimeout(std::chrono::milliseconds timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change body timeout while app is running",
+        "cannot change client body timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "body timeout must not be negative");
-            state.options.bodyTimeout = timeout;
+            detail::ensureNonNegativeDuration(timeout, "client body timeout must not be negative");
+            state.options.clientBodyTimeout = timeout;
         });
 }
 
-App& App::setWriteTimeout(std::chrono::milliseconds timeout) {
+App& App::setSendTimeout(std::chrono::milliseconds timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change write timeout while app is running",
+        "cannot change send timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "write timeout must not be negative");
-            state.options.writeTimeout = timeout;
+            detail::ensureNonNegativeDuration(timeout, "send timeout must not be negative");
+            state.options.sendTimeout = timeout;
         });
 }
 
@@ -153,13 +153,13 @@ App& App::setMaxConnectionsPerWorker(std::size_t maxConnections) {
         });
 }
 
-App& App::setMaxRequestsPerConnection(std::size_t maxRequests) {
+App& App::setKeepaliveRequests(std::size_t maxRequests) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
-        "cannot change keep-alive request limit while app is running",
+        "cannot change keepalive request limit while app is running",
         [maxRequests](detail::AppState& state) {
-            state.options.maxRequestsPerConnection = maxRequests;
+            state.options.keepaliveRequests = maxRequests;
         });
 }
 
