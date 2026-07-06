@@ -150,6 +150,18 @@ Task<void> Http2ServerSession<Stream>::writeFileBody(
         input.read(fileChunk.data(), static_cast<std::streamsize>(next));
         const auto read = input.gcount();
         if (read <= 0) {
+            // The file was truncated or hit a read error mid-body, so the
+            // content-length already advertised in the response headers can no
+            // longer be honoured. A truncated DATA(END_STREAM) would look like a
+            // complete-but-short body, and a bare return leaves the peer waiting
+            // for bytes that never arrive. Abort the stream with
+            // RST_STREAM(INTERNAL_ERROR) -- the same signal the response-stream
+            // path emits when a committed response cannot finish (RFC 9113 8.1).
+            // The loop guard just held with no intervening suspension, so the
+            // stream is neither closing nor reset here; markReset() then
+            // suppresses any further writes to it.
+            co_await sendRstStream(stream.id(), Http2ErrorCode::kInternalError);
+            stream.markReset();
             co_return;
         }
         remaining -= static_cast<std::uint64_t>(read);

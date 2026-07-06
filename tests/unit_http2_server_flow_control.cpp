@@ -7,10 +7,14 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -25,6 +29,7 @@
 // by non-dependent name — so those must be visible first. Mirror the exact include
 // order of the production instantiation TU (HttpServerAccept.cpp): HttpResponseWriter.h
 // then the HttpServerSessionUtils.h umbrella (which pulls in the session header).
+#include "http/HttpResponseFileAccess.h"
 #include "net/server/HttpResponseWriter.h"
 #include "net/server/HttpServerSessionUtils.h"
 #include "net/server/ConnectionScanner.h"
@@ -349,6 +354,137 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
     return frames;
 }
 
+// The on-disk path of the short file the truncated-file-body handler serves. Set by
+// rstErrorForTruncatedFileBody() before the server runs; the single-threaded io_context
+// makes this static safe.
+std::string& truncatedFileBodyPath() {
+    static std::string path;
+    return path;
+}
+
+// A handler whose file-body response advertises a length far larger than the bytes
+// actually on disk. writeFileBody streams the real (short) file, then hits EOF while
+// it still owes body bytes -- the file-truncated/removed-mid-serve case -- so it can
+// no longer honour the content-length it already sent.
+ruvia::Task<ruvia::HttpResponse> truncatedFileBodyHandler(ruvia::Context& context) {
+    (void)context;
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    constexpr std::uint64_t declaredLength = 40000;
+    ruvia::detail::setResponseFileBody(
+        response, std::filesystem::path(truncatedFileBodyPath()), declaredLength, 0, declaredLength);
+    co_return response;
+}
+
+// Drives a real server whose response is a file body that truncates mid-stream (the
+// file is much shorter than the advertised content-length). Returns the RST_STREAM
+// error code the server sends for stream 1, or std::nullopt if it emitted no RST.
+std::optional<std::uint32_t> rstErrorForTruncatedFileBody() {
+    asio::io_context io;
+    std::optional<std::uint32_t> rstError;
+
+    const auto filePath =
+        std::filesystem::temp_directory_path() / "ruvia_h2_truncated_body_test.bin";
+    {
+        std::ofstream out(filePath, std::ios::binary | std::ios::trunc);
+        out << "short";  // 5 bytes on disk vs 40000 advertised
+    }
+    truncatedFileBodyPath() = filePath.string();
+
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::detail::RouteTable routes(worker.resource());
+            routes.setNotFoundHandler(&truncatedFileBodyHandler);
+            ruvia::HttpServerOptions options;
+            ruvia::detail::ConnectionScanner::Entry scannerEntry;
+            ruvia::detail::Http2ServerSession<tcp::socket> session(
+                sock, sock, worker, routes, nullptr, nullptr, nullptr, options, scannerEntry,
+                "127.0.0.1", nullptr);
+            co_await ruvia::detail::taskAsAwaitable(session.run());
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1 /*HEADERS*/,
+                    kHttp2FlagEndStream | kHttp2FlagEndHeaders,
+                    1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            // The connection is deliberately left open (no shutdown_send): the server
+            // must RST_STREAM the truncated stream while the connection is still live.
+            // A watchdog closes the socket if the RST never arrives, so the neutered-fix
+            // (mutation) case fails fast instead of blocking on the read forever.
+            asio::steady_timer watchdog(io);
+            watchdog.expires_after(std::chrono::seconds(5));
+            watchdog.async_wait([&sock](const asio::error_code& ec) {
+                if (!ec) {
+                    asio::error_code ignore;
+                    sock.close(ignore);
+                }
+            });
+
+            for (;;) {
+                char headerBytes[kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == 0x3 /*RST_STREAM*/ && header.streamId == 1 && payload.size() == 4) {
+                    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.data());
+                    rstError = (static_cast<std::uint32_t>(bytes[0]) << 24) |
+                        (static_cast<std::uint32_t>(bytes[1]) << 16) |
+                        (static_cast<std::uint32_t>(bytes[2]) << 8) |
+                        static_cast<std::uint32_t>(bytes[3]);
+                    break;
+                }
+            }
+            watchdog.cancel();
+            asio::error_code ignore;
+            sock.close(ignore);
+        },
+        asio::detached);
+
+    io.run();
+    std::error_code removeError;
+    std::filesystem::remove(filePath, removeError);
+    return rstError;
+}
+
 }  // namespace
 
 RUVIA_TEST(http2_bodyless_headers_with_content_length_is_rejected) {
@@ -410,4 +546,16 @@ RUVIA_TEST(http2_headers_and_continuation_not_interleaved_across_streams) {
     }
     RUVIA_CHECK(!interleaved);
     RUVIA_CHECK_EQ(openStream, std::uint32_t{0});
+}
+
+RUVIA_TEST(http2_truncated_file_body_aborts_stream_with_rst) {
+    // The response advertises content-length 40000 but the file on disk is 5 bytes, so
+    // writeFileBody hits a short read (read<=0) with body bytes still outstanding and
+    // can no longer honour the advertised length. RFC 9113 §8.1: a committed response
+    // that cannot finish must terminate the stream. Before the fix writeFileBody just
+    // returned, leaving the stream open with no END_STREAM and no RST_STREAM, so the
+    // peer hung until its own timeout. Expect RST_STREAM(INTERNAL_ERROR = 0x2).
+    const auto rstError = rstErrorForTruncatedFileBody();
+    RUVIA_CHECK(rstError.has_value());
+    RUVIA_CHECK_EQ(rstError.value_or(0), std::uint32_t{0x2});
 }
