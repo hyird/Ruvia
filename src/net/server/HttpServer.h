@@ -69,6 +69,13 @@ public:
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+    // Post a runtime HTTP-client add/replace or remove onto this worker's io_context (safe to call
+    // from any thread; the registry is mutated on the worker thread).
+    void addHttpClient(std::string_view alias, HttpClientConfig config);
+    void removeHttpClient(std::string_view alias);
+#endif
+
 private:
     void configureAcceptor();
     void configureTlsContext();

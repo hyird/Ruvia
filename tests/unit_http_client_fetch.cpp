@@ -32,6 +32,7 @@
 
 #include <zlib.h>
 
+#include "http/client/HttpClientInternal.h"
 #include "http/client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/HttpClient.h"
@@ -1852,6 +1853,56 @@ RUVIA_TEST(http_client_stream_connection_close_discards_connection) {
     RUVIA_CHECK(out.error.empty());
     RUVIA_CHECK(out.ok);
     RUVIA_CHECK_EQ(out.body, std::string("FRESH"));
+}
+
+// --- Runtime add / replace / remove of registered HTTP clients (CDN edge) -
+RUVIA_TEST(http_client_registry_runtime_add_replace_remove) {
+    using ruvia::detail::HttpClientRegistry;
+    using ruvia::detail::HttpClientDefinition;
+
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    std::pmr::vector<HttpClientDefinition> definitions(resource);  // start empty
+    HttpClientRegistry registry(io, resource, definitions);
+
+    RUVIA_CHECK(registry.empty());
+    RUVIA_CHECK(registry.get("api") == nullptr);
+
+    auto makeConfig = [&](std::uint16_t port) {
+        ruvia::HttpClientConfig config;
+        config.host = std::pmr::string("127.0.0.1", resource);
+        config.port = port;
+        return config;
+    };
+
+    registry.addClient("api", makeConfig(8080));
+    RUVIA_CHECK(!registry.empty());
+    auto* first = registry.get("api");
+    RUVIA_CHECK(first != nullptr);
+
+    // Replacing the same alias installs a new backend and retires the old one.
+    registry.addClient("api", makeConfig(9090));
+    auto* second = registry.get("api");
+    RUVIA_CHECK(second != nullptr);
+    RUVIA_CHECK(second != first);
+
+    // A second alias coexists.
+    registry.addClient("static", makeConfig(8081));
+    RUVIA_CHECK(registry.get("static") != nullptr);
+
+    RUVIA_CHECK(registry.removeClient("api"));
+    RUVIA_CHECK(registry.get("api") == nullptr);
+    RUVIA_CHECK(registry.get("static") != nullptr);
+    RUVIA_CHECK(!registry.removeClient("api"));  // already gone
+
+    // scanDeadlines reaps retired backends once quiescent (an unused pool is quiescent right after
+    // closeNow); this must not crash and should drain the retired list.
+    registry.scanDeadlines();
+    registry.scanDeadlines();
+
+    RUVIA_CHECK(registry.removeClient("static"));
+    RUVIA_CHECK(registry.empty());
+    registry.scanDeadlines();
 }
 
 // --- Both Content-Length and Transfer-Encoding: rejected (smuggling) ------

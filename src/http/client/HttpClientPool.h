@@ -44,6 +44,7 @@ public:
 
     Task<void> connect() override;
     void closeNow() noexcept override;
+    [[nodiscard]] bool isQuiescent() const noexcept override;
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept override;
     [[nodiscard]] bool hasAnyTimeout() const noexcept override;
 

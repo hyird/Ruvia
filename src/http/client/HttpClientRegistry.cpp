@@ -33,22 +33,17 @@ HttpClientRegistry::HttpClientRegistry(
     asio::io_context& ioContext,
     std::pmr::memory_resource* resource,
     std::span<const HttpClientDefinition> clients)
-    : resource_(pmrResourceOrDefault(resource)),
-      pools_(resource_) {
+    : ioContext_(ioContext),
+      resource_(pmrResourceOrDefault(resource)),
+      pools_(resource_),
+      retired_(resource_) {
     pools_.reserve(clients.size());
     for (const auto& def : clients) {
-        auto backend = makeHttpClientBackend(ioContext, def.config, resource_);
-        auto* backendRaw = backend.get();
         pools_.push_back(Entry{
             std::pmr::string(def.alias, resource_),
-            std::move(backend)});
-        if (std::string_view(def.alias) == kDefaultHttpClientAlias && defaultBackend_ == nullptr) {
-            defaultBackend_ = backendRaw;
-        }
+            makeHttpClientBackend(ioContext, def.config, resource_)});
     }
-    if (defaultBackend_ == nullptr && !pools_.empty()) {
-        defaultBackend_ = pools_.front().backend.get();
-    }
+    rebuildDefaultBackend();
 }
 
 HttpClientRegistry::~HttpClientRegistry() = default;
@@ -81,6 +76,7 @@ void HttpClientRegistry::scanDeadlines() noexcept {
     for (auto& entry : pools_) {
         entry.backend->scanDeadlines(now);
     }
+    reapRetired();
 }
 
 HttpClientBackend* HttpClientRegistry::get(std::string_view alias) const {
@@ -93,6 +89,64 @@ HttpClientBackend* HttpClientRegistry::get(std::string_view alias) const {
         }
     }
     return nullptr;
+}
+
+void HttpClientRegistry::addClient(std::string_view alias, const HttpClientConfig& config) {
+    auto backend = makeHttpClientBackend(ioContext_, config, resource_);
+    for (auto& entry : pools_) {
+        if (std::string_view(entry.alias) == alias) {
+            // Replace an existing alias: retire the old backend, swap in the new one.
+            entry.backend->closeNow();
+            retired_.push_back(std::move(entry.backend));
+            entry.backend = std::move(backend);
+            rebuildDefaultBackend();
+            return;
+        }
+    }
+    pools_.push_back(Entry{std::pmr::string(alias, resource_), std::move(backend)});
+    rebuildDefaultBackend();
+}
+
+bool HttpClientRegistry::removeClient(std::string_view alias) {
+    for (auto it = pools_.begin(); it != pools_.end(); ++it) {
+        if (std::string_view(it->alias) == alias) {
+            it->backend->closeNow();
+            retired_.push_back(std::move(it->backend));
+            pools_.erase(it);
+            rebuildDefaultBackend();
+            return true;
+        }
+    }
+    return false;
+}
+
+void HttpClientRegistry::rebuildDefaultBackend() noexcept {
+    defaultBackend_ = nullptr;
+    for (auto& entry : pools_) {
+        if (std::string_view(entry.alias) == kDefaultHttpClientAlias) {
+            defaultBackend_ = entry.backend.get();
+            return;
+        }
+    }
+    if (!pools_.empty()) {
+        defaultBackend_ = pools_.front().backend.get();
+    }
+}
+
+void HttpClientRegistry::reapRetired() noexcept {
+    // Destroy retired backends that have gone quiescent (closed + no in-flight / loops exited);
+    // keep the rest for a later tick. Compact in place.
+    std::size_t writeIdx = 0;
+    for (std::size_t readIdx = 0; readIdx < retired_.size(); ++readIdx) {
+        if (retired_[readIdx]->isQuiescent()) {
+            retired_[readIdx].reset();  // HttpClientBackendDeleter -> backend->destroy()
+        } else if (writeIdx != readIdx) {
+            retired_[writeIdx++] = std::move(retired_[readIdx]);
+        } else {
+            ++writeIdx;
+        }
+    }
+    retired_.resize(writeIdx);
 }
 
 }  // namespace ruvia::detail

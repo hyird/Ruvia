@@ -9,6 +9,11 @@
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <vector>
+
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+#include "../http/client/HttpClientConfigValidation.h"
+#endif
 
 #include "ruvia/http/ControllerTypes.h"
 #include "AppConfigGuards.h"
@@ -272,6 +277,51 @@ void App::run() {
     state.runtime.reset();
     state.running = false;
 }
+
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+App& App::addHttpClient(std::string_view alias, HttpClientConfig config) {
+    if (alias.empty()) {
+        throw std::invalid_argument("http client alias must not be empty");
+    }
+    detail::validateHttpClientConfig(config);
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    // Keep the stored definitions in sync so a (re)start includes this client.
+    bool replaced = false;
+    for (auto& definition : state.httpClients) {
+        if (std::string_view(definition.alias) == alias) {
+            definition.config = config;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        state.httpClients.push_back(detail::HttpClientDefinition{
+            std::pmr::string(alias, detail::appResource()), config});
+    }
+    // Live workers: post the add to each worker's io_context (mutated on the worker thread).
+    if (state.runtime) {
+        for (auto& worker : state.runtime->workers) {
+            worker->addHttpClient(alias, config);
+        }
+    }
+    return *this;
+}
+
+App& App::removeHttpClient(std::string_view alias) {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    std::erase_if(state.httpClients, [alias](const detail::HttpClientDefinition& definition) {
+        return std::string_view(definition.alias) == alias;
+    });
+    if (state.runtime) {
+        for (auto& worker : state.runtime->workers) {
+            worker->removeHttpClient(alias);
+        }
+    }
+    return *this;
+}
+#endif  // RUVIA_ENABLE_HTTP_CLIENT
 
 void App::stop() {
     auto& state = *state_;

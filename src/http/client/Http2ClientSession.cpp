@@ -250,6 +250,8 @@ Task<void> Http2ClientSession::doConnect() {
         throw;
     }
 
+    // Two detached loops hold `this`; count them so isQuiescent() knows when both have exited.
+    runningLoops_ += 2;
     asyncStartTask(readLoop(), asio::detached);
     asyncStartTask(flushLoop(), asio::detached);
 
@@ -262,6 +264,7 @@ Task<void> Http2ClientSession::doConnect() {
 // --- Background loops ----------------------------------------------------
 
 Task<void> Http2ClientSession::readLoop() {
+    struct LoopExit { std::size_t& n; ~LoopExit() { --n; } } loopExit{runningLoops_};
     for (;;) {
         if (!co_await ensureInput(kHttp2FrameHeaderBytes)) {
             break;
@@ -291,6 +294,7 @@ Task<void> Http2ClientSession::readLoop() {
 }
 
 Task<void> Http2ClientSession::flushLoop() {
+    struct LoopExit { std::size_t& n; ~LoopExit() { --n; } } loopExit{runningLoops_};
     for (;;) {
         co_await FlushAwaiter{this};
         if (outBuffer_.empty()) {
@@ -1446,6 +1450,12 @@ void Http2ClientSession::closeNow() noexcept {
     for (auto handle : waiters) {
         resume(handle);
     }
+}
+
+bool Http2ClientSession::isQuiescent() const noexcept {
+    // Closed and both detached loops have exited (they hold `this`), so the session -- and the
+    // stream coroutines it drives -- are done and it is safe to destroy.
+    return state_ == State::kClosed && runningLoops_ == 0;
 }
 
 bool Http2ClientSession::hasAnyTimeout() const noexcept {

@@ -254,8 +254,16 @@ public:
     App& useRedis(std::string_view alias, RedisConfig config);
 #endif
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
+    // Register an upstream HTTP client before the app starts. Requires the app to be stopped.
     App& useHttpClient(HttpClientConfig config);
     App& useHttpClient(std::string_view alias, HttpClientConfig config);
+    // Register (or replace) / unregister an upstream HTTP client at RUNTIME, while the app is
+    // running -- for a reverse proxy / CDN edge whose origins change dynamically. Thread-safe: the
+    // change is posted to every worker's io_context. An existing alias is replaced; the old client
+    // is closed and destroyed once its in-flight requests drain. Also updates the stored config so
+    // a restart includes the change. Callable while stopped too (behaves like useHttpClient).
+    App& addHttpClient(std::string_view alias, HttpClientConfig config);
+    App& removeHttpClient(std::string_view alias);
 #endif
 
     void run();

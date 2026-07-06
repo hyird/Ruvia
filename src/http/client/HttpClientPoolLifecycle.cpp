@@ -89,6 +89,13 @@ void HttpClientPool::closeNow() noexcept {
     waiters_.closeAll(connections_.size());
 }
 
+bool HttpClientPool::isQuiescent() const noexcept {
+    // Closed and every connection returned to the free list -- no in-flight request holds a
+    // ConnectionGuard back into this pool, so it is safe to destroy. (The pool has no persistent
+    // self-referencing coroutine; requests are driven by their caller.)
+    return closing_ && free_.size() == connections_.size();
+}
+
 void HttpClientPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
     if (config_.acquireTimeout.count() > 0) {
         waiters_.expireDeadlines(now);
