@@ -2,6 +2,7 @@
 
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
+#include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/buffers_iterator.hpp>
 #include <asio/co_spawn.hpp>
@@ -257,6 +258,168 @@ FetchOutcome runFetchWithRequestHeader(ruvia::HttpHeaderView header) {
     return out;
 }
 
+// --- Expect: 100-continue ------------------------------------------------
+enum class ContinueScenario { kSend100, kRejectFinal, kSilent };
+
+struct ContinueOutcome {
+    bool ok = false;
+    int status = 0;
+    std::string body;        // client-visible response body
+    std::string serverBody;  // request-body bytes the server actually received
+    bool serverGotExpect = false;
+    std::string error;
+};
+
+// Drive a POST with options.expectContinue against a mock server that either sends 100 (then
+// reads the body), rejects with a final status before the body, or stays silent (never sends
+// 100). `requestBody` is fixed; the harness reports what the server received so a skipped body
+// is observable.
+ContinueOutcome runExpectContinueFetch(
+    ContinueScenario scenario, std::chrono::milliseconds requestTimeout) {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    ContinueOutcome out;
+    static const std::string requestBody = "hello-expect-body";  // 17 bytes
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+                std::string buf;
+                auto readMore = [&]() -> asio::awaitable<bool> {
+                    char tmp[512];
+                    auto [ec, n] = co_await sock.async_read_some(
+                        asio::buffer(tmp), asio::as_tuple(asio::use_awaitable));
+                    if (ec || n == 0) {
+                        co_return false;
+                    }
+                    buf.append(tmp, n);
+                    co_return true;
+                };
+                std::size_t headEnd = std::string::npos;
+                for (;;) {
+                    headEnd = buf.find("\r\n\r\n");
+                    if (headEnd != std::string::npos) {
+                        break;
+                    }
+                    if (!co_await readMore()) {
+                        co_return;
+                    }
+                }
+                headEnd += 4;
+                const std::string head = buf.substr(0, headEnd);
+                out.serverGotExpect = head.find("Expect: 100-continue") != std::string::npos;
+                std::size_t contentLength = 0;
+                auto clPos = head.find("Content-Length:");
+                if (clPos != std::string::npos) {
+                    clPos = head.find(':', clPos) + 1;
+                    while (clPos < head.size() && head[clPos] == ' ') {
+                        ++clPos;
+                    }
+                    while (clPos < head.size() && head[clPos] >= '0' && head[clPos] <= '9') {
+                        contentLength = contentLength * 10 + static_cast<std::size_t>(head[clPos] - '0');
+                        ++clPos;
+                    }
+                }
+                auto writeAll = [&](std::string_view bytes) -> asio::awaitable<void> {
+                    co_await asio::async_write(
+                        sock, asio::buffer(bytes.data(), bytes.size()), asio::use_awaitable);
+                };
+                auto readBody = [&]() -> asio::awaitable<void> {
+                    std::string body = buf.substr(headEnd);
+                    while (body.size() < contentLength) {
+                        if (!co_await readMore()) {
+                            break;
+                        }
+                        body = buf.substr(headEnd);
+                    }
+                    out.serverBody = body.substr(0, std::min(body.size(), contentLength));
+                };
+
+                if (scenario == ContinueScenario::kRejectFinal) {
+                    // Reject up front WITHOUT reading the body.
+                    co_await writeAll(
+                        "HTTP/1.1 417 Expectation Failed\r\nContent-Length: 8\r\n\r\ntoo-big!");
+                } else {
+                    if (scenario == ContinueScenario::kSend100) {
+                        co_await writeAll("HTTP/1.1 100 Continue\r\n\r\n");
+                    }
+                    co_await readBody();  // kSilent: no 100 sent; just wait for the body
+                    co_await writeAll(
+                        "HTTP/1.1 200 OK\r\nContent-Length: " +
+                        std::to_string(out.serverBody.size()) + "\r\n\r\n" + out.serverBody);
+                }
+                std::error_code ignored;
+                sock.shutdown(tcp::socket::shutdown_both, ignored);
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+    config.requestTimeout = requestTimeout;
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    asio::steady_timer watchdog(io, std::chrono::seconds(3));
+    watchdog.async_wait([&](const std::error_code& ec) {
+        if (!ec) {
+            out.error += "watchdog:timeout";
+            io.stop();
+        }
+    });
+
+    // Standalone tests have no ConnectionScanner, so drive scanDeadlines manually -- this is what
+    // fires the bounded continue-wait timeout when the server stays silent.
+    auto scanTimer = std::make_shared<asio::steady_timer>(io);
+    std::function<void()> armScan = [&]() {
+        scanTimer->expires_after(std::chrono::milliseconds(10));
+        scanTimer->async_wait([&](const std::error_code& ec) {
+            if (ec) {
+                return;
+            }
+            pool->scanDeadlines(std::chrono::steady_clock::now());
+            armScan();
+        });
+    };
+    armScan();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                options.method = "POST";
+                options.body = requestBody;
+                options.expectContinue = true;
+                auto response = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetch("/", options, std::pmr::get_default_resource()));
+                out.ok = true;
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
+            } catch (const std::exception& e) {
+                out.error += std::string("client:") + e.what();
+            }
+            watchdog.cancel();
+            scanTimer->cancel();
+            pool->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
 // Drive a streaming fetch: pull the body chunk-by-chunk and concatenate it.
 FetchOutcome runStreamFetch(std::string cannedResponse, WriteMode writeMode) {
     using asio::ip::tcp;
@@ -331,6 +494,146 @@ FetchOutcome runStreamFetch(std::string cannedResponse, WriteMode writeMode) {
 
     io.run();
     return out;
+}
+
+// Drive a streaming fetch with options.decodeStream set, pulling the (decoded) body chunk by
+// chunk. `writeMode == kByteWise` fragments the encoded response across reads so the incremental
+// decoder is exercised on tiny input slices.
+FetchOutcome runStreamFetchDecoded(std::string cannedResponse, WriteMode writeMode) {
+    using asio::ip::tcp;
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    FetchOutcome out;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+                asio::streambuf request;
+                co_await asio::async_read_until(
+                    sock, request, std::string("\r\n\r\n"), asio::use_awaitable);
+                if (writeMode == WriteMode::kByteWise) {
+                    for (std::size_t i = 0; i < cannedResponse.size(); ++i) {
+                        co_await asio::async_write(
+                            sock, asio::buffer(cannedResponse.data() + i, 1), asio::use_awaitable);
+                    }
+                } else {
+                    co_await asio::async_write(
+                        sock, asio::buffer(cannedResponse), asio::use_awaitable);
+                }
+                std::error_code ignored;
+                sock.shutdown(tcp::socket::shutdown_both, ignored);
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", std::pmr::get_default_resource());
+    config.port = port;
+    config.tls = false;
+    config.poolSizePerWorker = 1;
+
+    auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
+        io, std::move(config), std::pmr::get_default_resource());
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                options.decodeStream = true;
+                auto stream = co_await ruvia::detail::taskAsAwaitable(
+                    pool->fetchStream("/", options, std::pmr::get_default_resource()));
+                out.status = stream.status();
+                for (;;) {
+                    auto chunk = co_await ruvia::detail::taskAsAwaitable(stream.readChunk());
+                    if (chunk.empty()) {
+                        break;
+                    }
+                    out.body.append(chunk.data(), chunk.size());
+                }
+                out.ok = true;
+            } catch (const std::exception& e) {
+                out.error += std::string("client:") + e.what();
+            }
+            pool->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
+RUVIA_TEST(http_client_stream_gzip_decoded_whole) {
+    const auto gz = gzipCompress("streamed-and-compressed-payload");
+    std::string response =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + lengthOf(gz) +
+        "\r\n\r\n" + gz;
+    const auto out = runStreamFetchDecoded(std::move(response), WriteMode::kWhole);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.status, 200);
+    RUVIA_CHECK_EQ(out.body, std::string("streamed-and-compressed-payload"));
+}
+
+RUVIA_TEST(http_client_stream_gzip_decoded_bytewise) {
+    // Fragment the gzip stream one byte per write so the incremental decoder must span reads.
+    const auto gz = gzipCompress("streamed-and-compressed-payload");
+    std::string response =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + lengthOf(gz) +
+        "\r\n\r\n" + gz;
+    const auto out = runStreamFetchDecoded(std::move(response), WriteMode::kByteWise);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.body, std::string("streamed-and-compressed-payload"));
+}
+
+RUVIA_TEST(http_client_stream_gzip_decoded_large_multichunk) {
+    // A payload larger than the decoder's per-call output cap and the transport chunking, sent
+    // chunked, must reassemble losslessly across many readChunk() calls.
+    std::string plain;
+    for (int i = 0; i < 40000; ++i) {
+        plain.push_back(static_cast<char>('A' + (i % 26)));
+    }
+    const auto gz = gzipCompress(plain);
+    std::string response =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + lengthOf(gz) +
+        "\r\n\r\n" + gz;
+    const auto out = runStreamFetchDecoded(std::move(response), WriteMode::kWhole);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.body.size(), std::size_t{40000});
+    RUVIA_CHECK_EQ(out.body, plain);
+}
+
+RUVIA_TEST(http_client_stream_gzip_truncated_is_error) {
+    // A gzip stream cut short (last 5 bytes dropped) must surface a truncation error, not a
+    // silently-short clean end.
+    auto gz = gzipCompress("streamed-and-compressed-payload");
+    gz.resize(gz.size() - 5);
+    std::string response =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + lengthOf(gz) +
+        "\r\n\r\n" + gz;
+    const auto out = runStreamFetchDecoded(std::move(response), WriteMode::kWhole);
+    RUVIA_CHECK(!out.ok);
+    RUVIA_CHECK(out.error.find("truncated compressed response") != std::string::npos);
+}
+
+RUVIA_TEST(http_client_stream_undecoded_without_flag_is_raw) {
+    // Without decodeStream the encoded bytes are delivered as received (opt-in behavior).
+    const auto gz = gzipCompress("raw-bytes-please");
+    std::string response =
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " + lengthOf(gz) +
+        "\r\n\r\n" + gz;
+    const auto out = runStreamFetch(std::move(response), WriteMode::kWhole);
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.body, gz);  // raw compressed bytes, not decoded
 }
 
 // A close-delimited body ends at connection CLOSE. If the peer stalls mid-body and the
@@ -1019,6 +1322,37 @@ RUVIA_TEST(http_client_fetch_skips_100_continue) {
     RUVIA_CHECK(out.ok);
     RUVIA_CHECK_EQ(out.status, 200);
     RUVIA_CHECK_EQ(out.body, std::string("final"));
+}
+
+RUVIA_TEST(http_client_expect_continue_sends_body_after_100) {
+    const auto out = runExpectContinueFetch(ContinueScenario::kSend100, std::chrono::milliseconds(0));
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK(out.serverGotExpect);
+    RUVIA_CHECK_EQ(out.status, 200);
+    RUVIA_CHECK_EQ(out.serverBody, std::string("hello-expect-body"));  // body was sent
+    RUVIA_CHECK_EQ(out.body, std::string("hello-expect-body"));
+}
+
+RUVIA_TEST(http_client_expect_continue_final_status_skips_body) {
+    // The server rejects before the body; the client must NOT send it and returns the 417.
+    const auto out = runExpectContinueFetch(ContinueScenario::kRejectFinal, std::chrono::milliseconds(0));
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK(out.serverGotExpect);
+    RUVIA_CHECK_EQ(out.status, 417);
+    RUVIA_CHECK_EQ(out.body, std::string("too-big!"));
+    RUVIA_CHECK(out.serverBody.empty());  // body was withheld
+}
+
+RUVIA_TEST(http_client_expect_continue_silent_server_sends_body_after_timeout) {
+    // A server that never sends 100 must not deadlock the request: after the bounded wait the
+    // client sends the body anyway (RFC 7231 §5.1.1).
+    const auto out = runExpectContinueFetch(ContinueScenario::kSilent, std::chrono::milliseconds(150));
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(out.ok);
+    RUVIA_CHECK_EQ(out.status, 200);
+    RUVIA_CHECK_EQ(out.serverBody, std::string("hello-expect-body"));
 }
 
 RUVIA_TEST(http_client_fetch_rejects_too_many_interim_responses) {

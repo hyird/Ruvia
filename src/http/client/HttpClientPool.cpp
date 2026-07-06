@@ -533,6 +533,18 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     if (streamingBody && !options.body.empty()) {
         throw std::invalid_argument("http client: set either body or bodyStream, not both");
     }
+    const bool hasBody = streamingBody || !options.body.empty();
+    // Expect: 100-continue is only meaningful with a body; if the caller already put an Expect
+    // header in, don't duplicate it (we still run the wait dance for their header).
+    bool userSetExpect = false;
+    for (const auto& hdr : options.headers) {
+        if (asciiEqualsIgnoreCase(hdr.name(), "Expect")) {
+            userSetExpect = true;
+            break;
+        }
+    }
+    const bool wantContinue = options.expectContinue && hasBody;
+    const bool addExpectHeader = wantContinue && !userSetExpect;
     // Streamed request bodies use per-operation idle timeouts (the total time is unbounded by a
     // possibly-slow producer); buffered requests keep the single absolute request deadline.
     auto armRequest = [&]() {
@@ -577,6 +589,10 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     if (streamingBody) {
         addHttpClientRequestHeadBytes(requestHeadBytes, kChunkedHeader.size());
     }
+    constexpr std::string_view kExpectHeader = "Expect: 100-continue\r\n";
+    if (addExpectHeader) {
+        addHttpClientRequestHeadBytes(requestHeadBytes, kExpectHeader.size());
+    }
     addHttpClientRequestHeadBytes(requestHeadBytes, 2);
 
     auto& requestBuf = conn.requestBuffer;
@@ -606,12 +622,17 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     if (streamingBody) {
         requestBuf.append(kChunkedHeader.data(), kChunkedHeader.size());
     }
+    if (addExpectHeader) {
+        requestBuf.append(kExpectHeader.data(), kExpectHeader.size());
+    }
     requestBuf.append("\r\n");
 
-    // Write request head (+ the buffered body, if any)
+    // Write the request head. Without Expect: 100-continue, the buffered body rides along in the
+    // same write; with it, only the head goes now and the body is held until the server is ready.
     const std::array<asio::const_buffer, 2> requestBuffers{
-        asio::buffer(requestBuf.data(), requestBuf.size()),
-        asio::buffer(options.body.data(), options.body.size())};
+        asio::const_buffer(requestBuf.data(), requestBuf.size()),
+        wantContinue ? asio::const_buffer(options.body.data(), 0)
+                     : asio::const_buffer(options.body.data(), options.body.size())};
     armRequest();
     const auto writeEc = co_await connWrite(conn, requestBuffers);
     if (finishDeadline(conn)) {
@@ -622,9 +643,32 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
         throw std::system_error(writeEc, "http client: write failed");
     }
 
-    // Stream the request body as HTTP chunks, if a producer was supplied.
-    if (streamingBody) {
-        co_await writeChunkedRequestBody(conn, options.bodyStream, requestTimeout);
+    // Sends the request body (streamed as chunks, or the buffered bytes). Not used for the
+    // buffered non-Expect path above, which already wrote the body inline with the head.
+    auto sendRequestBody = [&]() -> Task<void> {
+        if (streamingBody) {
+            co_await writeChunkedRequestBody(conn, options.bodyStream, requestTimeout);
+        } else if (!options.body.empty()) {
+            armRequest();
+            const std::array<asio::const_buffer, 2> bodyBuffers{
+                asio::buffer(options.body.data(), options.body.size()),
+                asio::buffer(options.body.data(), 0)};
+            const auto ec = co_await connWrite(conn, bodyBuffers);
+            if (finishDeadline(conn)) {
+                closeConnection(conn);
+                throw std::system_error(asio::error::timed_out, "http client: body write timed out");
+            }
+            if (ec) {
+                conn.connected = false;
+                throw std::system_error(ec, "http client: body write failed");
+            }
+        }
+        co_return;
+    };
+
+    // A streamed body without Expect goes now (a buffered non-Expect body rode with the head).
+    if (!wantContinue && streamingBody) {
+        co_await sendRequestBody();
     }
 
     // Read response headers
@@ -633,6 +677,85 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     readBuf.reserve(4096);
 
     std::size_t interimResponses = 0;
+
+    // Expect: 100-continue -- wait (bounded) for the server's interim 100 before sending the
+    // body. A final status (>= 200) arriving first means the server rejected up front: return it
+    // without sending the body. If the server stays silent, send the body anyway once the bounded
+    // window elapses so a server that ignores the expectation cannot deadlock us (RFC 7231 §5.1.1).
+    if (wantContinue) {
+        constexpr auto kExpectContinueTimeout = std::chrono::milliseconds(1000);
+        const auto continueTimeout = requestTimeout.count() > 0
+            ? std::min<std::chrono::milliseconds>(requestTimeout, kExpectContinueTimeout)
+            : kExpectContinueTimeout;
+        const auto continueDeadline = std::chrono::steady_clock::now() + continueTimeout;
+        bool sendNow = false;
+        for (;;) {
+            auto headerEnd = readBuf.find("\r\n\r\n");
+            while (headerEnd == std::pmr::string::npos) {
+                if (readBuf.size() >= kMaxHttpHeaderBytes) {
+                    closeConnection(conn);
+                    throw std::runtime_error("http client: response headers too large");
+                }
+                const auto oldSize = readBuf.size();
+                const auto writable = std::min<std::size_t>(4096, kMaxHttpHeaderBytes - oldSize);
+                resizePmrStringForOverwrite(readBuf, oldSize + writable);
+                armDeadline(conn, continueDeadline, Connection::DeadlineKind::kSocket);
+                auto [readEc, n] = co_await connReadSome(conn, asio::buffer(readBuf.data() + oldSize, writable));
+                if (finishDeadline(conn)) {
+                    readBuf.resize(oldSize);  // drop the unfilled tail; keep any partial header
+                    sendNow = true;
+                    break;
+                }
+                if (readEc) {
+                    conn.connected = false;
+                    throw std::system_error(readEc, "http client: read failed");
+                }
+                if (n == 0) {
+                    closeConnection(conn);
+                    throw std::runtime_error("http client: empty response read");
+                }
+                readBuf.resize(oldSize + n);
+                const auto searchOffset = oldSize > 3 ? oldSize - 3 : 0;
+                headerEnd = readBuf.find("\r\n\r\n", searchOffset);
+            }
+            if (sendNow) {
+                break;
+            }
+            auto head = parseHttpClientResponseHead(
+                method, std::string_view(readBuf.data(), headerEnd), response, requestResource);
+            const auto status = response.status();
+            if (status >= 100 && status < 200 && status != 101) {
+                // 100 means "send the body"; any other interim (e.g. 103) we skip and keep waiting.
+                const bool isContinue = status == 100;
+                if (!isContinue && ++interimResponses > kMaxHttpClientInterimResponses) {
+                    closeConnection(conn);
+                    throw std::runtime_error("http client: too many interim responses");
+                }
+                readBuf.erase(0, headerEnd + 4);
+                FetchResponseAccess::setStatus(response, 0);
+                FetchResponseAccess::headers(response).clear();
+                FetchResponseAccess::body(response).clear();
+                if (isContinue) {
+                    sendNow = true;
+                    break;
+                }
+                continue;
+            }
+            // A final response (>= 200) or 101 arrived before the body: the server answered up
+            // front. Don't send the body; discard the connection (we advertised a body/length we
+            // won't transmit, so it isn't safe to reuse) and return this head to the caller.
+            head.closeAfterResponse = true;
+            co_return head;
+        }
+        // The continue wait may have consumed much of the request budget; give the body write and
+        // final-response read a fresh absolute deadline (executeRequest does the same for its
+        // response-body phase via the expectContinue check).
+        if (requestTimeout.count() > 0) {
+            requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
+        }
+        co_await sendRequestBody();
+    }
+
     for (;;) {
         auto headerEnd = readBuf.find("\r\n\r\n");
         while (headerEnd == std::pmr::string::npos) {
@@ -703,9 +826,9 @@ Task<FetchResponse> HttpClientPool::executeRequest(
     FetchResponse response = FetchResponseAccess::make(requestResource);
     auto responseHead = co_await writeRequestAndReadHead(
         conn, path, options, requestTimeout, requestDeadline, response, requestResource);
-    // A streamed request body may have taken arbitrarily long; give the response body phase a
-    // fresh absolute budget rather than one anchored at request start.
-    if (options.bodyStream && requestTimeout.count() > 0) {
+    // A streamed request body (or an Expect: 100-continue wait) may have taken arbitrarily long;
+    // give the response body phase a fresh absolute budget rather than one anchored at request start.
+    if ((options.bodyStream || options.expectContinue) && requestTimeout.count() > 0) {
         requestDeadline = std::chrono::steady_clock::now() + requestTimeout;
     }
     auto& readBuf = conn.responseReadBuffer;

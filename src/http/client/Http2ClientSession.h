@@ -100,6 +100,18 @@ private:
         std::coroutine_handle<> reader{};  // streaming readChunk awaiting the next body slice
     };
 
+    // A fetch parked at MAX_CONCURRENT_STREAMS has no Stream yet, so the per-stream deadline
+    // scan can't see it. This carries the parked fetch's own deadline so scanDeadlines can time
+    // it out -- otherwise a peer that advertises MAX_CONCURRENT_STREAMS=0 (or never frees a
+    // slot) would hang the fetch forever. Lives on the beginRequest coroutine frame; a pointer
+    // is registered in streamSlotWaiters_ while parked and removed before the frame is resumed.
+    struct SlotWaiter final {
+        std::coroutine_handle<> handle{};
+        std::chrono::steady_clock::time_point deadline{};
+        bool hasDeadline{false};
+        bool timedOut{false};
+    };
+
     // fetch()/fetchStream() suspends here until the read loop signals the stream (buffered: whole
     // response ready; streaming: response headers ready) or fails it.
     struct StreamAwaiter final {
@@ -246,7 +258,7 @@ private:
 
     std::pmr::unordered_map<std::uint32_t, Stream*> streams_;
     std::pmr::vector<std::coroutine_handle<>> readyWaiters_;
-    std::pmr::vector<std::coroutine_handle<>> streamSlotWaiters_;  // fetches parked at MAX_CONCURRENT_STREAMS
+    std::pmr::vector<SlotWaiter*> streamSlotWaiters_;  // fetches parked at MAX_CONCURRENT_STREAMS
     std::pmr::vector<std::coroutine_handle<>> sendWindowWaiters_;  // request-body sends parked on flow control
     std::coroutine_handle<> flushWaiter_{};
 
@@ -267,12 +279,14 @@ private:
     // SETTINGS_MAX_CONCURRENT_STREAMS limit.
     struct StreamSlotAwaiter final {
         Http2ClientSession* session;
+        SlotWaiter* waiter;
         [[nodiscard]] bool await_ready() const noexcept {
             return session->state_ != State::kReady ||
                    session->openStreamCount() < session->peerSettings_.maxConcurrentStreams();
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
-            session->streamSlotWaiters_.push_back(handle);
+            waiter->handle = handle;
+            session->streamSlotWaiters_.push_back(waiter);
         }
         void await_resume() const noexcept {}
     };

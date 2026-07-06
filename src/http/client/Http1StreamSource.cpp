@@ -16,6 +16,7 @@
 
 #include "FetchStreamSource.h"
 #include "HttpClientAccess.h"
+#include "HttpClientDecodingStreamSource.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
@@ -347,8 +348,10 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         requestResource, this, std::move(guard), response.status(),
         std::move(FetchResponseAccess::headers(response)), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), idleTimeout, requestResource);
-    co_return FetchResponseStreamAccess::make(
-        std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
+    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> stream(source);
+    stream = maybeWrapDecodingStreamSource(
+        std::move(stream), source->headers(), options.decodeStream, requestResource);
+    co_return FetchResponseStreamAccess::make(std::move(stream));
 }
 
 }  // namespace ruvia::detail
