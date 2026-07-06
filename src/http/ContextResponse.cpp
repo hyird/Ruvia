@@ -685,6 +685,33 @@ HttpResponse Context::body(std::span<const std::byte> body, ResponseInit init) c
     return response;
 }
 
+HttpResponse Context::body(
+    HttpBodyStream stream,
+    std::uint16_t statusCode,
+    std::string_view statusText) const {
+    HttpResponse response(resource());
+    detail::setResponseStreamBody(response, std::move(stream));
+    applyResponseState(response, statusCode, statusText);
+    return response;
+}
+
+HttpResponse Context::body(
+    HttpBodyStream stream,
+    std::uint16_t statusCode,
+    std::span<const HttpHeaderView> headers) const {
+    HttpResponse response(resource());
+    detail::setResponseStreamBody(response, std::move(stream));
+    applyResponseState(response, statusCode, {}, headers);
+    return response;
+}
+
+HttpResponse Context::body(HttpBodyStream stream, ResponseInit init) const {
+    HttpResponse response(resource());
+    detail::setResponseStreamBody(response, std::move(stream));
+    applyResponseState(response, init.status, init.statusText, init.headers);
+    return response;
+}
+
 HttpResponse Context::newResponse(
     std::string_view body,
     std::uint16_t statusCode,

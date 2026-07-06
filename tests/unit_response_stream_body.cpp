@@ -8,6 +8,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/use_awaitable.hpp>
 
+#include <array>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -15,10 +16,13 @@
 #include <system_error>
 #include <vector>
 
+#include "http/ContextInternal.h"
+#include "http/HttpRequestInternal.h"
 #include "net/server/ConnectionScanner.h"
 #include "net/server/HttpResponseHeadBuffer.h"
 #include "net/server/HttpResponseWriter.h"
 #include "runtime/AsioAwait.h"
+#include "ruvia/http/Context.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -109,4 +113,26 @@ RUVIA_TEST(response_stream_body_writes_chunked) {
     RUVIA_CHECK(received.find("6\r\nworld!\r\n") != std::string::npos);
     // Last-chunk terminator.
     RUVIA_CHECK(received.find("0\r\n\r\n") != std::string::npos);
+}
+
+// The public Context::body(HttpBodyStream, ...) lets a normal handler return a response backed by
+// a caller-supplied streaming source (e.g. a cache store) -- the primitive a CDN-edge library needs.
+RUVIA_TEST(context_body_from_httpbodystream_sets_stream_body) {
+    ruvia::WorkerMemory worker;
+    auto request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::RequestMemory requestMemory(worker);
+    ruvia::detail::HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ruvia::detail::ContextAccess::make(requestMemory, request);
+
+    TestProducer producer{.chunks = {"cached-bytes"}};
+    const std::array<ruvia::HttpHeaderView, 1> headers{ruvia::HttpHeaderView{"X-Cache", "HIT"}};
+    auto response = context.body(
+        ruvia::HttpBodyStream(&producer, &TestProducer::next, &TestProducer::destroy),
+        200,
+        std::span<const ruvia::HttpHeaderView>(headers));
+
+    RUVIA_CHECK(ruvia::detail::responseHasStreamBody(response));
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(std::string(response.header("X-Cache")), std::string("HIT"));
 }
