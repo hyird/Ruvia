@@ -123,7 +123,7 @@ inline void completeSuccessfulHttpBodyRoute(
     HttpResponse& response,
     bool& keepAlive,
     std::size_t& requestCount,
-    std::size_t maxRequestsPerConnection,
+    std::size_t keepaliveRequests,
     bool requestBodyComplete,
     bool needsKeepAliveSignal,
     std::pmr::string& readBuffer,
@@ -135,7 +135,7 @@ inline void completeSuccessfulHttpBodyRoute(
         response,
         keepAlive,
         requestCount,
-        maxRequestsPerConnection,
+        keepaliveRequests,
         requestBodyComplete,
         needsKeepAliveSignal);
     if (keepAlive) {

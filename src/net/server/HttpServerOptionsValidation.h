@@ -11,10 +11,10 @@ namespace ruvia::detail {
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensureNonNegativeDurations(
         "server timeouts must not be negative",
-        options.idleTimeout,
-        options.headerTimeout,
-        options.bodyTimeout,
-        options.writeTimeout);
+        options.keepaliveTimeout,
+        options.clientHeaderTimeout,
+        options.clientBodyTimeout,
+        options.sendTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");

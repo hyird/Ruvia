@@ -139,17 +139,26 @@ struct HttpServerOptions final {
         void* user{nullptr};
     };
 
-    std::chrono::milliseconds idleTimeout{std::chrono::seconds(60)};
+    // nginx-aligned timeouts (names + inactivity semantics + defaults). All are inactivity
+    // timeouts: the timer resets on each successful read/write and fires only after a gap of the
+    // given duration. Set any to 0 to disable it.
+    //   keepaliveTimeout   == nginx keepalive_timeout   (idle keep-alive between requests)
+    //   clientHeaderTimeout== nginx client_header_timeout(gap while reading the request head; also
+    //                         bounds the TLS handshake)
+    //   clientBodyTimeout  == nginx client_body_timeout (gap while reading the request body)
+    //   sendTimeout        == nginx send_timeout        (gap while writing the response)
+    //   keepaliveRequests  == nginx keepalive_requests  (max requests per kept-alive connection)
+    std::chrono::milliseconds keepaliveTimeout{std::chrono::seconds(75)};
     // On stop, how long to let in-flight requests finish before force-closing
     // connections. 0 keeps the previous behavior (close immediately).
     std::chrono::milliseconds shutdownGracePeriod{0};
     // Scanner cadence; must be greater than 0.
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
-    std::chrono::milliseconds headerTimeout{std::chrono::seconds(15)};
-    std::chrono::milliseconds bodyTimeout{std::chrono::seconds(30)};
-    std::chrono::milliseconds writeTimeout{std::chrono::seconds(30)};
+    std::chrono::milliseconds clientHeaderTimeout{std::chrono::seconds(60)};
+    std::chrono::milliseconds clientBodyTimeout{std::chrono::seconds(60)};
+    std::chrono::milliseconds sendTimeout{std::chrono::seconds(60)};
     std::size_t maxConnections{0};
-    std::size_t maxRequestsPerConnection{0};
+    std::size_t keepaliveRequests{1000};
     // Buffered routes materialize body data; this limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     // Stream routes are explicit; 0 disables the stream body limit.
@@ -213,14 +222,14 @@ public:
     App& setHttpsListenPort(std::uint16_t port);
     App& setAutoHttps(bool enabled = true);
     App& setThreadNum(std::size_t threadNum);
-    App& setIdleTimeout(std::chrono::milliseconds timeout);
+    App& setKeepaliveTimeout(std::chrono::milliseconds timeout);
     App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
-    App& setHeaderTimeout(std::chrono::milliseconds timeout);
-    App& setBodyTimeout(std::chrono::milliseconds timeout);
-    App& setWriteTimeout(std::chrono::milliseconds timeout);
+    App& setClientHeaderTimeout(std::chrono::milliseconds timeout);
+    App& setClientBodyTimeout(std::chrono::milliseconds timeout);
+    App& setSendTimeout(std::chrono::milliseconds timeout);
     App& setMaxConnectionsPerWorker(std::size_t maxConnections);
-    App& setMaxRequestsPerConnection(std::size_t maxRequests);
+    App& setKeepaliveRequests(std::size_t maxRequests);
     App& setMaxBufferedBodyBytes(std::size_t bytes);
     App& setMaxStreamBodyBytes(std::size_t bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);

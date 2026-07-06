@@ -114,13 +114,8 @@ private:
 
     Task<std::size_t> acquire();
     void release(std::size_t index) noexcept;
+    // Arm a relative inactivity timeout (nginx-style: reset per I/O). 0 disables.
     void setDeadline(Connection& conn, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept;
-    // Arm an absolute deadline (or none). Unlike setDeadline's relative timeout, re-arming to
-    // the same time_point across a read loop bounds the total request duration, not each read.
-    void armDeadline(
-        Connection& conn,
-        std::optional<std::chrono::steady_clock::time_point> deadline,
-        Connection::DeadlineKind kind) noexcept;
     void clearDeadline(Connection& conn) noexcept;
     [[nodiscard]] bool finishDeadline(Connection& conn) noexcept;
     void closeConnection(Connection& conn) noexcept;
@@ -130,12 +125,12 @@ private:
         Connection& conn,
         FetchResponse& response,
         std::size_t bodyOffset,
-        std::optional<std::chrono::steady_clock::time_point> requestDeadline);
+        std::chrono::milliseconds readTimeout);
     Task<void> readCloseDelimitedResponseBody(
         Connection& conn,
         FetchResponse& response,
         std::size_t bodyOffset,
-        std::optional<std::chrono::steady_clock::time_point> requestDeadline);
+        std::chrono::milliseconds readTimeout);
 
     // Connection I/O primitives (branch on TLS vs raw), shared by the buffered and streaming paths.
     Task<std::error_code> connWrite(Connection& conn, std::array<asio::const_buffer, 2> buffers);
@@ -144,21 +139,21 @@ private:
 
     // Build + send the request and read/parse the response head, leaving any buffered body bytes
     // past head.bodyOffset in conn.responseReadBuffer. Shared by executeRequest (buffered) and
-    // fetchStream (incremental). A streamed request body (options.bodyStream) is sent chunked
-    // and uses per-operation idle timeouts; a buffered request uses the absolute requestDeadline.
+    // fetchStream (incremental). All I/O uses nginx-style inactivity timeouts: each write resets
+    // sendTimeout (proxy_send_timeout), each read resets readTimeout (proxy_read_timeout).
     // Throws on write/read/parse failure.
     Task<HttpClientResponseHead> writeRequestAndReadHead(
         Connection& conn,
         std::string_view path,
         const FetchOptions& options,
-        std::chrono::milliseconds requestTimeout,
-        std::optional<std::chrono::steady_clock::time_point> requestDeadline,
+        std::chrono::milliseconds readTimeout,
+        std::chrono::milliseconds sendTimeout,
         FetchResponse& response,
         std::pmr::memory_resource* requestResource);
     Task<void> writeChunkedRequestBody(
         Connection& conn,
         const RequestBodyStream& bodyStream,
-        std::chrono::milliseconds requestTimeout);
+        std::chrono::milliseconds sendTimeout);
     Task<FetchResponse> executeRequest(
         Connection& conn,
         std::string_view path,

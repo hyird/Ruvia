@@ -105,11 +105,11 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     remoteAddress,
                     clientCertificate,
                     !std::is_same_v<Stream, TcpSocket>);
-                // Reset phase so headerTimeout stops counting against dispatch
+                // Reset phase so clientHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingBody on their own; the
                 // streaming/websocket paths set their own phases below; the
                 // buffered write path sets kWriting before responding. Until
-                // one of those transitions, idleTimeout governs as the
+                // one of those transitions, keepaliveTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
                 if (options_.autoHttps.enabled) {
@@ -197,7 +197,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             response,
                             keepAlive,
                             requestCount,
-                            options_.maxRequestsPerConnection,
+                            options_.keepaliveRequests,
                             requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
                         scannerEntry.touch();
                         break;

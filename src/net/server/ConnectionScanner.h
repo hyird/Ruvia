@@ -12,10 +12,12 @@ namespace ruvia::detail {
 
 struct ConnectionScannerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
-    std::int64_t idleTimeoutMs{0};
-    std::int64_t headerTimeoutMs{0};
-    std::int64_t bodyTimeoutMs{0};
-    std::int64_t writeTimeoutMs{0};
+    // All four are nginx-style inactivity timeouts (reset on each successful I/O), measured from
+    // the connection's last-active timestamp -- not absolute per-phase deadlines.
+    std::int64_t keepaliveTimeoutMs{0};
+    std::int64_t clientHeaderTimeoutMs{0};
+    std::int64_t clientBodyTimeoutMs{0};
+    std::int64_t sendTimeoutMs{0};
 };
 
 class ConnectionScanner final {
@@ -51,7 +53,6 @@ public:
         // tick so per-request touch()/setPhase() never hit the system clock.
         const std::int64_t* nowMs_{nullptr};
         std::int64_t lastActiveMs_{0};
-        std::int64_t phaseStartedMs_{0};
         Phase phase_{Phase::kIdle};
         void* webSocketTarget_{nullptr};
         WebSocketTick webSocketTick_{nullptr};

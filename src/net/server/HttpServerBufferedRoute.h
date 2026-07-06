@@ -82,7 +82,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
         response,
         keepAlive,
         requestCount,
-        options.maxRequestsPerConnection,
+        options.keepaliveRequests,
         bodyState.consumed(),
         requestNeedsKeepAliveSignal(parsed.request.httpVersion()),
         readBuffer,

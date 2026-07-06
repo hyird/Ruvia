@@ -83,7 +83,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     // requestCount then applies the same requestLimitReached check).
     const bool connectionWillClose =
         !keepAlive || !isHttp11 ||
-        requestLimitReached(requestCount + 1, options.maxRequestsPerConnection);
+        requestLimitReached(requestCount + 1, options.keepaliveRequests);
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = routeResolution.route();
     ResponseSink responseSink(
@@ -121,7 +121,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             response,
             keepAlive,
             requestCount,
-            options.maxRequestsPerConnection,
+            options.keepaliveRequests,
             requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
@@ -135,7 +135,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     recordCompletedRequest(
         keepAlive,
         requestCount,
-        options.maxRequestsPerConnection);
+        options.keepaliveRequests);
     if (!keepAlive) {
         co_return HttpResponseStreamRouteResult::sessionFinished();
     }

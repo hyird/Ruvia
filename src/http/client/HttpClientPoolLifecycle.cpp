@@ -69,8 +69,9 @@ HttpClientPool::~HttpClientPool() {
 }
 
 bool HttpClientPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.count() > 0 ||
-           config_.requestTimeout.count() > 0 ||
+    return config_.proxyConnectTimeout.count() > 0 ||
+           config_.proxyReadTimeout.count() > 0 ||
+           config_.proxySendTimeout.count() > 0 ||
            config_.acquireTimeout.count() > 0;
 }
 
@@ -122,20 +123,6 @@ void HttpClientPool::setDeadline(
         return;
     }
     conn.deadline = std::chrono::steady_clock::now() + timeout;
-    conn.deadlineActive = true;
-}
-
-void HttpClientPool::armDeadline(
-    Connection& conn,
-    std::optional<std::chrono::steady_clock::time_point> deadline,
-    Connection::DeadlineKind kind) noexcept {
-    conn.deadlineKind = kind;
-    conn.timedOut = false;
-    if (!deadline) {
-        conn.deadlineActive = false;
-        return;
-    }
-    conn.deadline = *deadline;
     conn.deadlineActive = true;
 }
 

@@ -167,8 +167,8 @@ Task<void> Http2ClientSession::connect() {
 }
 
 Task<void> Http2ClientSession::doConnect() {
-    if (config_.connectTimeout.count() > 0) {
-        connectDeadline_ = std::chrono::steady_clock::now() + config_.connectTimeout;
+    if (config_.proxyConnectTimeout.count() > 0) {
+        connectDeadline_ = std::chrono::steady_clock::now() + config_.proxyConnectTimeout;
         hasConnectDeadline_ = true;
     }
     try {
@@ -502,6 +502,17 @@ void Http2ClientSession::destroyStream(std::uint32_t id) noexcept {
     Stream* stream = it->second;
     streams_.erase(it);
     destroyPmrObject(stream, resource_);
+}
+
+void Http2ClientSession::touchStreamDeadline(Stream& stream) noexcept {
+    if (!stream.hasDeadline) {
+        return;
+    }
+    // Sending the request body -> proxy_send_timeout; reading the response -> proxy_read_timeout.
+    const auto timeout = stream.localEndSent ? stream.readTimeout : stream.sendTimeout;
+    if (timeout.count() > 0) {
+        stream.deadline = std::chrono::steady_clock::now() + timeout;
+    }
 }
 
 void Http2ClientSession::signalWaiter(Stream& stream) noexcept {
@@ -908,6 +919,9 @@ bool Http2ClientSession::finalizeHeaderBlock(Stream* stream, bool apply, bool en
     if (!ok) {
         return false;
     }
+    if (stream != nullptr) {
+        touchStreamDeadline(*stream);  // HEADERS/trailers received: reset the inactivity timer
+    }
     // For a streaming request, deliver the response headers to fetchStream as soon as they arrive.
     if (apply && stream != nullptr && stream->headersComplete && stream->streaming) {
         signalWaiter(*stream);
@@ -990,6 +1004,7 @@ bool Http2ClientSession::onData(const Http2FrameHeader& header, std::string_view
         }
         stream->responseBodyBytes += data.size();
     }
+    touchStreamDeadline(*stream);  // valid DATA received: reset the inactivity timer
     if (stream->streaming) {
         // Backpressure: buffer the data and defer the WINDOW_UPDATE until readChunk consumes it,
         // so a slow reader stalls the peer instead of growing memory without bound.
@@ -1055,6 +1070,7 @@ bool Http2ClientSession::onWindowUpdate(const Http2FrameHeader& header, std::str
         failStream(*stream, Http2ErrorCode::kFlowControlError);
         return true;
     }
+    touchStreamDeadline(*stream);  // send-window granted: upload is progressing, reset the timer
     sendPendingData(*stream);
     wakeSendWindow();
     return true;
@@ -1155,14 +1171,16 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     if (options.timeout.count() < 0) {
         throw std::invalid_argument("http/2 request timeout must not be negative");
     }
-    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
+    // nginx-style inactivity timeouts; FetchOptions::timeout overrides both for this request.
+    const auto readTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxyReadTimeout;
+    const auto sendTimeout = options.timeout.count() > 0 ? options.timeout : config_.proxySendTimeout;
     // Honor the peer's SETTINGS_MAX_CONCURRENT_STREAMS: park until an open slot frees rather
-    // than letting the server RST_STREAM the excess. Bound the wait by the request timeout so a
+    // than letting the server RST_STREAM the excess. Bound the wait by the read timeout so a
     // peer that advertises MAX_CONCURRENT_STREAMS=0 (or never frees a slot) can't hang the fetch
     // forever -- scanDeadlines resumes a past-deadline SlotWaiter with timedOut set.
     SlotWaiter slotWaiter;
-    if (requestTimeout.count() > 0) {
-        slotWaiter.deadline = std::chrono::steady_clock::now() + requestTimeout;
+    if (readTimeout.count() > 0) {
+        slotWaiter.deadline = std::chrono::steady_clock::now() + readTimeout;
         slotWaiter.hasDeadline = true;
     }
     while (state_ == State::kReady &&
@@ -1231,9 +1249,17 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     stream->maxBodyBytes = streaming ? 0 : config_.maxResponseBodyBytes;
     stream->flow.setSendWindow(peerSettings_.initialWindowSize());
     stream->pendingBody = options.body;  // empty when streaming from bodyStream
-    // A streamed request/response is inherently long-lived; only fully-buffered fetches get a deadline.
-    if (!streaming && !streamedBody && requestTimeout.count() > 0) {
-        stream->deadline = std::chrono::steady_clock::now() + requestTimeout;
+    // Every stream (buffered AND streaming) gets an inactivity deadline refreshed on each frame
+    // (touchStreamDeadline): proxy_send_timeout while the body is still going out, then
+    // proxy_read_timeout for the response. Matches h1 and nginx; bounds stalls in either direction.
+    stream->readTimeout = readTimeout;
+    stream->sendTimeout = sendTimeout;
+    // The initial phase is "sending" when there is a body to send, else "reading".
+    const auto initialTimeout = hasBody ? sendTimeout : readTimeout;
+    if (readTimeout.count() > 0 || sendTimeout.count() > 0) {
+        const auto armWith = initialTimeout.count() > 0 ? initialTimeout
+                                                        : std::max(readTimeout, sendTimeout);
+        stream->deadline = std::chrono::steady_clock::now() + armWith;
         stream->hasDeadline = true;
     }
     try {
@@ -1420,7 +1446,9 @@ void Http2ClientSession::closeNow() noexcept {
 }
 
 bool Http2ClientSession::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.count() > 0 || config_.requestTimeout.count() > 0;
+    return config_.proxyConnectTimeout.count() > 0 ||
+           config_.proxyReadTimeout.count() > 0 ||
+           config_.proxySendTimeout.count() > 0;
 }
 
 void Http2ClientSession::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
@@ -1451,9 +1479,12 @@ void Http2ClientSession::scanDeadlines(std::chrono::steady_clock::time_point now
             resume(waiter->handle);
         }
     }
-    // Reset any stream whose per-request deadline has elapsed; failStream resumes its fetch.
+    // Reset any stream idle past its inactivity deadline; failStream wakes its fetch/reader and
+    // any parked request-body send. Guard on !remoteEnded && !failed rather than !completed: for a
+    // STREAMING stream `completed` only means the headers were delivered (the body is still
+    // arriving), so it must remain eligible; for a buffered stream completed <=> remoteEnded||failed.
     for (auto& [id, stream] : streams_) {
-        if (stream->hasDeadline && !stream->completed && now > stream->deadline) {
+        if (stream->hasDeadline && !stream->remoteEnded && !stream->failed && now > stream->deadline) {
             sendRstStream(stream->id, Http2ErrorCode::kCancel);
             failStream(*stream, Http2ErrorCode::kCancel);
         }

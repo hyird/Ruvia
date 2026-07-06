@@ -366,7 +366,7 @@ ContinueOutcome runExpectContinueFetch(
     config.port = port;
     config.tls = false;
     config.poolSizePerWorker = 1;
-    config.requestTimeout = requestTimeout;
+    config.proxyReadTimeout = requestTimeout;
 
     auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
         io, std::move(config), std::pmr::get_default_resource());
@@ -673,7 +673,7 @@ RUVIA_TEST(http_client_stream_close_delimited_timeout_is_truncation_not_clean_en
     config.port = port;
     config.tls = false;
     config.poolSizePerWorker = 1;
-    config.requestTimeout = std::chrono::milliseconds(300);  // per-read idle timeout
+    config.proxyReadTimeout = std::chrono::milliseconds(300);  // per-read idle timeout
 
     auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
         io, std::move(config), std::pmr::get_default_resource());
@@ -1565,7 +1565,7 @@ RUVIA_TEST(http_client_fetch_request_timeout) {
     config.port = port;
     config.tls = false;
     config.poolSizePerWorker = 1;
-    config.requestTimeout = std::chrono::milliseconds(100);
+    config.proxyReadTimeout = std::chrono::milliseconds(100);
 
     auto pool = std::make_unique<ruvia::detail::HttpClientPool>(
         io, std::move(config), std::pmr::get_default_resource());

@@ -83,6 +83,12 @@ private:
         std::size_t responseContentLength{0};
         std::size_t responseBodyBytes{0};
         std::int32_t flowDebt{0};       // received bytes awaiting a WINDOW_UPDATE on consume (streaming)
+        // nginx-style inactivity deadline, refreshed on every frame for this stream (scanDeadlines
+        // RSTs it, waking both the reader and any parked request-body send). While the request body
+        // is still being sent (!localEndSent) the gap is bounded by sendTimeout (proxy_send_timeout);
+        // once fully sent, by readTimeout (proxy_read_timeout). Applies to buffered + streaming.
+        std::chrono::milliseconds readTimeout{0};
+        std::chrono::milliseconds sendTimeout{0};
         std::chrono::steady_clock::time_point deadline{};
         std::uint32_t id{0};
         std::size_t informationalResponses{0};
@@ -188,6 +194,7 @@ private:
 
     [[nodiscard]] Stream* findStream(std::uint32_t id) noexcept;
     void destroyStream(std::uint32_t id) noexcept;
+    void touchStreamDeadline(Stream& stream) noexcept;  // push the inactivity deadline forward
     void signalWaiter(Stream& stream) noexcept;   // resume the fetch/fetchStream waiter (once)
     void wakeReader(Stream& stream) noexcept;      // resume a streaming readChunk awaiter
     void releaseSlot(Stream& stream) noexcept;     // free the concurrency slot (once)
