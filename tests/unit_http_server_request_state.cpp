@@ -86,3 +86,21 @@ RUVIA_TEST(auto_https_append_port_omits_default) {
     RUVIA_CHECK_EQ(withHttpsPort("https://example.com", 8443), std::string("https://example.com:8443"));
     RUVIA_CHECK_EQ(withHttpsPort("https://example.com", 80), std::string("https://example.com:80"));
 }
+
+RUVIA_TEST(auto_https_redirect_response_is_private_and_well_formed) {
+    HttpServerParser parser;
+    // Host carries the cleartext port, which must be dropped and replaced by the
+    // (default, so omitted) HTTPS port; the path and query are preserved.
+    const std::string request = "GET /a/b?x=1 HTTP/1.1\r\nHost: example.com:80\r\n\r\n";
+    const auto parsed = parser.parse(request);
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    const auto response = ruvia::detail::makeAutoHttpsRedirectResponse(parsed.request, memory, 443);
+
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{308});
+    RUVIA_CHECK_EQ(std::string(response.header("Location")), std::string("https://example.com/a/b?x=1"));
+    // The Location is Host-derived, so the redirect must be private: a shared cache
+    // must not store one Host's redirect and replay it for another.
+    RUVIA_CHECK_EQ(std::string(response.header("Cache-Control")), std::string("private"));
+    RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
+}
