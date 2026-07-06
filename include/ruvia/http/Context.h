@@ -1319,6 +1319,19 @@ public:
     [[nodiscard]] Task<HttpResponse> proxy(std::string_view target, ProxyOptions options = {}) {
         return proxy(detail::kDefaultHttpClientAlias, target, std::move(options));
     }
+
+    // Ad-hoc upstream (an arbitrary origin computed per request, not pre-registered): the client is
+    // created on first use and pooled/reused for that origin, LRU-bounded per worker. For a CDN
+    // edge whose origins are dynamic. fetchStream(config,...) is the streaming fetch primitive;
+    // proxy(config,...) is the Hono-style reverse proxy over it.
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        const HttpClientConfig& config,
+        std::string_view target,
+        FetchOptions options = {});
+    [[nodiscard]] Task<HttpResponse> proxy(
+        const HttpClientConfig& config,
+        std::string_view target,
+        ProxyOptions options = {});
 #endif
 
     [[nodiscard]] WebSocket& webSocket() const;
