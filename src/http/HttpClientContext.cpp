@@ -4,7 +4,11 @@
 #include <string_view>
 #include <vector>
 
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+
 #include "ruvia/http/Context.h"
+#include "../runtime/AsioAwait.h"
 #include "HeaderTokenUtils.h"
 #include "HttpResponseBodyAccess.h"
 #include "client/HttpClientInternal.h"
@@ -157,6 +161,19 @@ Task<HttpResponse> Context::proxy(
     }
     auto upstream = co_await fetchStream(config, target, fetchOptions);
     co_return buildProxyResponse(resource(), upstream);
+}
+
+void Context::defer(Task<void> task) {
+    if (httpClients_ == nullptr) {
+        throw std::logic_error(
+            "Context::defer requires an http client subsystem; call App::useHttpClient before run()");
+    }
+    // Spawn detached on the worker's single-threaded executor. asio::detached swallows any exception
+    // that escapes the task, which is the intended fire-and-forget semantics.
+    asio::co_spawn(
+        httpClients_->ioContext().get_executor(),
+        detail::taskAsAwaitable(std::move(task)),
+        asio::detached);
 }
 
 }  // namespace ruvia
