@@ -48,6 +48,7 @@ public:
 
     Task<void> connect() override;
     void closeNow() noexcept override;
+    [[nodiscard]] bool isQuiescent() const noexcept override;
     [[nodiscard]] bool hasAnyTimeout() const noexcept override;
     void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept override;
     [[nodiscard]] Task<FetchResponse> fetch(
@@ -280,6 +281,7 @@ private:
     bool hasConnectDeadline_{false};
 
     State state_{State::kIdle};
+    std::size_t runningLoops_{0};  // detached read/flush loops still holding `this`
     bool settingsReceived_{false};
     bool goawayReceived_{false};
 

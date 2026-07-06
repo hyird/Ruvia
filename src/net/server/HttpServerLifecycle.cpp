@@ -257,6 +257,22 @@ TcpEndpoint HttpServer::localEndpoint() const {
     return endpoint_;
 }
 
+#ifdef RUVIA_ENABLE_HTTP_CLIENT
+void HttpServer::addHttpClient(std::string_view alias, HttpClientConfig config) {
+    asio::post(
+        ioContext_,
+        [this, alias = std::string(alias), config = std::move(config)]() mutable {
+            httpClients_.addClient(alias, config);
+        });
+}
+
+void HttpServer::removeHttpClient(std::string_view alias) {
+    asio::post(ioContext_, [this, alias = std::string(alias)]() {
+        httpClients_.removeClient(alias);
+    });
+}
+#endif  // RUVIA_ENABLE_HTTP_CLIENT
+
 void HttpServer::configureAcceptor() {
     std::error_code ec;
 

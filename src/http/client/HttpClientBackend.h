@@ -23,6 +23,10 @@ public:
     // Establish the connection(s) up front (optional warm-up before the first request).
     virtual Task<void> connect() = 0;
     virtual void closeNow() noexcept = 0;
+    // True once closeNow() has run AND no in-flight request or self-referencing background
+    // coroutine remains, so the backend can be safely destroyed. Used to defer destruction of a
+    // client removed at runtime until its io_context has drained (removeHttpClient).
+    [[nodiscard]] virtual bool isQuiescent() const noexcept = 0;
     [[nodiscard]] virtual bool hasAnyTimeout() const noexcept = 0;
     virtual void scanDeadlines(std::chrono::steady_clock::time_point now) noexcept = 0;
     [[nodiscard]] virtual Task<FetchResponse> fetch(

@@ -67,14 +67,25 @@ public:
     [[nodiscard]] HttpClientBackend* get(std::string_view alias = kDefaultHttpClientAlias) const;
     void scanDeadlines() noexcept;
 
+    // Runtime add/remove. MUST be called on this registry's io_context thread (the App posts them
+    // there). addClient replaces any existing client of the same alias. removeClient closeNow()s
+    // the backend and defers its destruction until it is quiescent (reaped by scanDeadlines).
+    void addClient(std::string_view alias, const HttpClientConfig& config);
+    bool removeClient(std::string_view alias);
+
 private:
     struct Entry final {
         std::pmr::string alias;
         HttpClientBackendPtr backend;
     };
 
+    void rebuildDefaultBackend() noexcept;
+    void reapRetired() noexcept;
+
+    asio::io_context& ioContext_;
     std::pmr::memory_resource* resource_;
     std::pmr::vector<Entry> pools_;
+    std::pmr::vector<HttpClientBackendPtr> retired_;  // removed, awaiting quiescent destruction
     HttpClientBackend* defaultBackend_{nullptr};
 };
 
