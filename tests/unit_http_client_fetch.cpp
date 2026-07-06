@@ -1905,6 +1905,41 @@ RUVIA_TEST(http_client_registry_runtime_add_replace_remove) {
     registry.scanDeadlines();
 }
 
+RUVIA_TEST(http_client_registry_get_or_create_ad_hoc_pools_by_origin) {
+    using ruvia::detail::HttpClientRegistry;
+    using ruvia::detail::HttpClientDefinition;
+
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    std::pmr::vector<HttpClientDefinition> definitions(resource);
+    HttpClientRegistry registry(io, resource, definitions);
+
+    auto makeConfig = [&](std::uint16_t port, bool http2) {
+        ruvia::HttpClientConfig config;
+        config.host = std::pmr::string("127.0.0.1", resource);
+        config.port = port;
+        config.http2 = http2;
+        return config;
+    };
+
+    // Same origin config -> same pooled backend (reused across requests).
+    auto* a1 = registry.getOrCreate(makeConfig(1111, false));
+    auto* a2 = registry.getOrCreate(makeConfig(1111, false));
+    RUVIA_CHECK(a1 != nullptr);
+    RUVIA_CHECK(a1 == a2);
+
+    // A different port is a distinct origin.
+    auto* b = registry.getOrCreate(makeConfig(2222, false));
+    RUVIA_CHECK(b != a1);
+
+    // A different transport (http2) on the same host:port is also distinct (the key includes it).
+    auto* a1h2 = registry.getOrCreate(makeConfig(1111, true));
+    RUVIA_CHECK(a1h2 != a1);
+
+    registry.closeNow();
+    registry.scanDeadlines();  // must not crash reaping ad-hoc backends
+}
+
 // --- Both Content-Length and Transfer-Encoding: rejected (smuggling) ------
 RUVIA_TEST(http_client_fetch_rejects_cl_and_te) {
     const auto out = runOneFetch(

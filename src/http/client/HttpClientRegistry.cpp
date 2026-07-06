@@ -5,7 +5,10 @@
 #include "Http2ClientSession.h"
 #include "ruvia/memory/PmrResource.h"
 
+#include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <cstdint>
 #include <utility>
 
 namespace ruvia::detail {
@@ -36,6 +39,7 @@ HttpClientRegistry::HttpClientRegistry(
     : ioContext_(ioContext),
       resource_(pmrResourceOrDefault(resource)),
       pools_(resource_),
+      adHoc_(resource_),
       retired_(resource_) {
     pools_.reserve(clients.size());
     for (const auto& def : clients) {
@@ -58,6 +62,9 @@ void HttpClientRegistry::closeNow() noexcept {
     for (auto& entry : pools_) {
         entry.backend->closeNow();
     }
+    for (auto& entry : adHoc_) {
+        entry.backend->closeNow();
+    }
 }
 
 bool HttpClientRegistry::empty() const noexcept {
@@ -74,6 +81,9 @@ bool HttpClientRegistry::hasAnyTimeout() const noexcept {
 void HttpClientRegistry::scanDeadlines() noexcept {
     const auto now = std::chrono::steady_clock::now();
     for (auto& entry : pools_) {
+        entry.backend->scanDeadlines(now);
+    }
+    for (auto& entry : adHoc_) {
         entry.backend->scanDeadlines(now);
     }
     reapRetired();
@@ -131,6 +141,58 @@ void HttpClientRegistry::rebuildDefaultBackend() noexcept {
     if (!pools_.empty()) {
         defaultBackend_ = pools_.front().backend.get();
     }
+}
+
+namespace {
+
+// A canonical identity for an origin config: two configs sharing this key would open identical
+// connections, so their ad-hoc client can be reused. Includes every connection-affecting field.
+void appendKeyField(std::pmr::string& key, std::string_view value) {
+    key.append(value.data(), value.size());
+    key.push_back('\x1f');  // unit separator: unambiguous field boundary
+}
+
+[[nodiscard]] std::pmr::string makeAdHocKey(
+    const HttpClientConfig& config, std::pmr::memory_resource* resource) {
+    std::pmr::string key(resource);
+    char portBuffer[6];
+    const auto [ptr, ec] = std::to_chars(portBuffer, portBuffer + sizeof(portBuffer), config.port);
+    appendKeyField(key, std::string_view(config.host));
+    appendKeyField(key, ec == std::errc{} ? std::string_view(portBuffer, static_cast<std::size_t>(ptr - portBuffer)) : std::string_view());
+    appendKeyField(key, config.tls ? "s" : "-");
+    appendKeyField(key, config.http2 ? "2" : "1");
+    appendKeyField(key, std::string_view(config.hostHeader));
+    appendKeyField(key, std::string_view(config.tlsOptions.sniHost));
+    appendKeyField(key, std::string_view(config.tlsOptions.caFile));
+    appendKeyField(key, config.tlsOptions.insecureSkipVerify ? "i" : "-");
+    appendKeyField(key, std::string_view(config.tlsOptions.certificateChainFile));
+    appendKeyField(key, std::string_view(config.tlsOptions.privateKeyFile));
+    return key;
+}
+
+}  // namespace
+
+HttpClientBackend* HttpClientRegistry::getOrCreate(const HttpClientConfig& config) {
+    auto key = makeAdHocKey(config, resource_);
+    for (auto& entry : adHoc_) {
+        if (entry.key == key) {
+            entry.lastUsed = ++adHocClock_;
+            return entry.backend.get();
+        }
+    }
+    // At capacity: retire the least-recently-used ad-hoc client (deferred destroy).
+    if (adHoc_.size() >= kAdHocClientCap) {
+        auto lru = std::min_element(
+            adHoc_.begin(), adHoc_.end(),
+            [](const AdHocEntry& a, const AdHocEntry& b) { return a.lastUsed < b.lastUsed; });
+        lru->backend->closeNow();
+        retired_.push_back(std::move(lru->backend));
+        adHoc_.erase(lru);
+    }
+    auto backend = makeHttpClientBackend(ioContext_, config, resource_);
+    auto* backendRaw = backend.get();
+    adHoc_.push_back(AdHocEntry{std::move(key), ++adHocClock_, std::move(backend)});
+    return backendRaw;
 }
 
 void HttpClientRegistry::reapRetired() noexcept {

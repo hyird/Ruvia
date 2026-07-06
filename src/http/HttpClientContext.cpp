@@ -74,20 +74,32 @@ Task<FetchResponseStream> Context::fetchStream(
     co_return co_await pool->fetchStream(path, options, resource());
 }
 
-Task<HttpResponse> Context::proxy(
-    std::string_view alias,
+Task<FetchResponseStream> Context::fetchStream(
+    const HttpClientConfig& config,
     std::string_view target,
-    ProxyOptions options) {
-    FetchOptions fetchOptions;
-    fetchOptions.method = req().method();
+    FetchOptions options) {
+    if (httpClients_ == nullptr) {
+        throw std::logic_error("no http client subsystem; run() must have started an http client");
+    }
+    // Get-or-create a pooled client for this origin (LRU-bounded, reused across requests).
+    auto* backend = httpClients_->getOrCreate(config);
+    co_return co_await backend->fetchStream(target, options, resource());
+}
+
+namespace {
+
+// Fill the outbound fetch options' method + timeouts + forwarded request headers (minus
+// hop-by-hop). `forwarded` backs the borrowed header span, so it must outlive the fetch.
+void fillProxyRequest(
+    Context& context,
+    std::pmr::vector<HttpHeaderView>& forwarded,
+    FetchOptions& fetchOptions,
+    const ProxyOptions& options) {
+    fetchOptions.method = context.req().method();
     fetchOptions.maxRedirects = options.maxRedirects;
     fetchOptions.timeout = options.timeout;
-
-    // Forward the incoming request headers (minus hop-by-hop / client-managed). The vector backs
-    // the borrowed span and the views point into the request buffer, both stable across the fetch.
-    std::pmr::vector<HttpHeaderView> forwarded(allocator<HttpHeaderView>());
     if (options.forwardRequestHeaders) {
-        for (const auto& header : req().raw().headers()) {
+        for (const auto& header : context.req().raw().headers()) {
             if (isProxyStrippedRequestHeader(header.name())) {
                 continue;
             }
@@ -95,17 +107,13 @@ Task<HttpResponse> Context::proxy(
         }
         fetchOptions.headers = std::span<const HttpHeaderView>(forwarded.data(), forwarded.size());
     }
+}
 
-    // Forward the (buffered) request body if any.
-    const auto bodyBytes = co_await req().bytes();
-    if (!bodyBytes.empty()) {
-        fetchOptions.body = std::string_view(
-            reinterpret_cast<const char*>(bodyBytes.data()), bodyBytes.size());
-    }
-
-    auto upstream = co_await fetchStream(alias, target, fetchOptions);
-
-    HttpResponse response(resource());
+// Build the streaming HttpResponse from the upstream stream: status + headers (minus hop-by-hop /
+// framing) passed through, body streamed as received.
+[[nodiscard]] HttpResponse buildProxyResponse(
+    std::pmr::memory_resource* resource, FetchResponseStream& upstream) {
+    HttpResponse response(resource);
     response.status(upstream.status());
     for (const auto& header : upstream.headers()) {
         if (isProxyStrippedResponseHeader(header.name())) {
@@ -113,9 +121,42 @@ Task<HttpResponse> Context::proxy(
         }
         response.header(header.name(), header.value(), HttpResponse::HeaderOptions{.append = true});
     }
-    // Stream the upstream body straight through: the framework writes it (chunked / h2 DATA).
     detail::setResponseStreamBody(response, upstream.takeBody());
-    co_return response;
+    return response;
+}
+
+}  // namespace
+
+Task<HttpResponse> Context::proxy(
+    std::string_view alias,
+    std::string_view target,
+    ProxyOptions options) {
+    FetchOptions fetchOptions;
+    std::pmr::vector<HttpHeaderView> forwarded(allocator<HttpHeaderView>());
+    fillProxyRequest(*this, forwarded, fetchOptions, options);
+    const auto bodyBytes = co_await req().bytes();
+    if (!bodyBytes.empty()) {
+        fetchOptions.body = std::string_view(
+            reinterpret_cast<const char*>(bodyBytes.data()), bodyBytes.size());
+    }
+    auto upstream = co_await fetchStream(alias, target, fetchOptions);
+    co_return buildProxyResponse(resource(), upstream);
+}
+
+Task<HttpResponse> Context::proxy(
+    const HttpClientConfig& config,
+    std::string_view target,
+    ProxyOptions options) {
+    FetchOptions fetchOptions;
+    std::pmr::vector<HttpHeaderView> forwarded(allocator<HttpHeaderView>());
+    fillProxyRequest(*this, forwarded, fetchOptions, options);
+    const auto bodyBytes = co_await req().bytes();
+    if (!bodyBytes.empty()) {
+        fetchOptions.body = std::string_view(
+            reinterpret_cast<const char*>(bodyBytes.data()), bodyBytes.size());
+    }
+    auto upstream = co_await fetchStream(config, target, fetchOptions);
+    co_return buildProxyResponse(resource(), upstream);
 }
 
 }  // namespace ruvia
