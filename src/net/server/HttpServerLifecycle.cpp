@@ -39,6 +39,8 @@ int selectAlpnProtocol(
     const unsigned char* in,
     unsigned int inLength,
     void*) noexcept {
+    // Only h2 and http/1.1 are offered. HTTP/3 / QUIC is explicitly not supported (no "h3"
+    // token, no UDP/QUIC listener); a peer offering only h3 falls back to http/1.1 or fails ALPN.
     static constexpr unsigned char protocols[] = {
         2, 'h', '2',
         8, 'h', 't', 't', 'p', '/', '1', '.', '1'};

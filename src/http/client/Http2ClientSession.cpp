@@ -26,6 +26,7 @@
 #include "FetchStreamSource.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientConfigValidation.h"
+#include "HttpClientDecodingStreamSource.h"
 #include "HttpClientRedirect.h"
 #include "HttpClientResponseLimits.h"
 #include "HttpClientTlsVerification.h"
@@ -595,10 +596,10 @@ void Http2ClientSession::wakeStreamSlot() noexcept {
     if (streamSlotWaiters_.empty()) {
         return;
     }
-    std::pmr::vector<std::coroutine_handle<>> waiters(resource_);
+    std::pmr::vector<SlotWaiter*> waiters(resource_);
     waiters.swap(streamSlotWaiters_);
-    for (auto handle : waiters) {
-        resume(handle);
+    for (auto* waiter : waiters) {
+        resume(waiter->handle);
     }
 }
 
@@ -1151,11 +1152,25 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     std::pmr::memory_resource* requestResource,
     bool streaming) {
     co_await connect();
+    if (options.timeout.count() < 0) {
+        throw std::invalid_argument("http/2 request timeout must not be negative");
+    }
+    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
     // Honor the peer's SETTINGS_MAX_CONCURRENT_STREAMS: park until an open slot frees rather
-    // than letting the server RST_STREAM the excess.
+    // than letting the server RST_STREAM the excess. Bound the wait by the request timeout so a
+    // peer that advertises MAX_CONCURRENT_STREAMS=0 (or never frees a slot) can't hang the fetch
+    // forever -- scanDeadlines resumes a past-deadline SlotWaiter with timedOut set.
+    SlotWaiter slotWaiter;
+    if (requestTimeout.count() > 0) {
+        slotWaiter.deadline = std::chrono::steady_clock::now() + requestTimeout;
+        slotWaiter.hasDeadline = true;
+    }
     while (state_ == State::kReady &&
            openStreamCount() >= peerSettings_.maxConcurrentStreams()) {
-        co_await StreamSlotAwaiter{this};
+        co_await StreamSlotAwaiter{this, &slotWaiter};
+        if (slotWaiter.timedOut) {
+            throw std::runtime_error("http/2: timed out waiting for a concurrency slot");
+        }
     }
     if (state_ != State::kReady) {
         throw std::runtime_error("http/2 session is not ready");
@@ -1174,9 +1189,6 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     }
     if (!isValidOriginFormTarget(target)) {
         throw std::invalid_argument("http/2: invalid request target");
-    }
-    if (options.timeout.count() < 0) {
-        throw std::invalid_argument("http/2 request timeout must not be negative");
     }
     if (options.bodyStream && !options.body.empty()) {
         throw std::invalid_argument("http/2: set either body or bodyStream, not both");
@@ -1220,7 +1232,6 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     stream->flow.setSendWindow(peerSettings_.initialWindowSize());
     stream->pendingBody = options.body;  // empty when streaming from bodyStream
     // A streamed request/response is inherently long-lived; only fully-buffered fetches get a deadline.
-    const auto requestTimeout = options.timeout.count() > 0 ? options.timeout : config_.requestTimeout;
     if (!streaming && !streamedBody && requestTimeout.count() > 0) {
         stream->deadline = std::chrono::steady_clock::now() + requestTimeout;
         stream->hasDeadline = true;
@@ -1311,8 +1322,10 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
     auto* source = constructPmrObject<Http2StreamSource>(
         requestResource, this, id, stream->response.status(),
         std::move(FetchResponseAccess::headers(stream->response)), requestResource);
-    co_return FetchResponseStreamAccess::make(
-        std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(source));
+    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> responseStream(source);
+    responseStream = maybeWrapDecodingStreamSource(
+        std::move(responseStream), source->headers(), options.decodeStream, requestResource);
+    co_return FetchResponseStreamAccess::make(std::move(responseStream));
 }
 
 Task<std::pmr::string> Http2ClientSession::streamReadChunk(std::uint32_t streamId) {
@@ -1418,6 +1431,25 @@ void Http2ClientSession::scanDeadlines(std::chrono::steady_clock::time_point now
     }
     if (state_ != State::kReady) {
         return;
+    }
+    // Time out any fetch parked waiting for a concurrency slot (peer at/over
+    // MAX_CONCURRENT_STREAMS, e.g. a pathological advertise of 0). It has no Stream yet, so the
+    // per-stream scan below can't see it; resume it with timedOut set so beginRequest throws.
+    if (!streamSlotWaiters_.empty()) {
+        std::pmr::vector<SlotWaiter*> stillWaiting(resource_);
+        std::pmr::vector<SlotWaiter*> expired(resource_);
+        for (auto* waiter : streamSlotWaiters_) {
+            if (waiter->hasDeadline && now > waiter->deadline) {
+                waiter->timedOut = true;
+                expired.push_back(waiter);
+            } else {
+                stillWaiting.push_back(waiter);
+            }
+        }
+        streamSlotWaiters_.swap(stillWaiting);
+        for (auto* waiter : expired) {
+            resume(waiter->handle);
+        }
     }
     // Reset any stream whose per-request deadline has elapsed; failStream resumes its fetch.
     for (auto& [id, stream] : streams_) {

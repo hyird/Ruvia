@@ -36,6 +36,10 @@ struct HttpClientConfig {
     // Speak HTTP/2 instead of HTTP/1.1. Over TLS this negotiates ALPN "h2" (and fails the
     // handshake if the peer will not); in cleartext it uses HTTP/2 prior knowledge (RFC 7540
     // §3.4). A single multiplexed connection is used instead of the HTTP/1.1 connection pool.
+    //
+    // Only HTTP/1.1 and HTTP/2 are supported. HTTP/3 / QUIC is explicitly NOT supported: there
+    // is no h3/QUIC transport, ALPN never offers "h3", and no Alt-Svc "h3" advertisement is
+    // acted upon — a request is always sent over TCP (h1.1 or, with http2=true, h2).
     bool http2{false};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
@@ -180,6 +184,20 @@ struct FetchOptions {
     // scheme, host, and port) are followed; a cross-origin or unparseable Location is returned
     // to the caller as the 3xx response. Set to 0 to disable following entirely.
     std::uint32_t maxRedirects{5};
+    // Send "Expect: 100-continue" and wait for the server's interim 100 (Continue) before
+    // transmitting the request body -- useful for large bodies a server might reject up front
+    // (e.g. 401/413/415). Honored for HTTP/1.1 only (ignored over HTTP/2, whose flow control
+    // already provides send backpressure) and only when a body/bodyStream is present. If the
+    // server answers with a final status (>= 200) first, the body is not sent and that response
+    // is returned; if it stays silent, the body is sent anyway after a short bounded wait so a
+    // server that ignores the expectation cannot deadlock the request (RFC 7231 §5.1.1).
+    bool expectContinue{false};
+    // Streaming responses only (Context::fetchStream / FetchResponseStream): decode a single
+    // gzip/br/zstd Content-Encoding on the fly so readChunk() yields decoded bytes. Off by
+    // default, so a streamed body is delivered as received unless requested. A buffered fetch()
+    // always decodes regardless of this flag. Ignored (no-op) for a multi-coding or unknown
+    // Content-Encoding, which is passed through as received.
+    bool decodeStream{false};
 };
 
 class FetchResponse final {
@@ -243,8 +261,9 @@ struct FetchStreamSourceDeleter final {
 // came from is torn down — do not retain one past the request that produced it. It is also single-
 // consumer: readChunk()/close() must be driven from one coroutine, not concurrently.
 //
-// Note: unlike fetch(), a streamed body is delivered as received — a Content-Encoding is NOT
-// transparently decoded (the caller sees the encoded bytes and any Content-Encoding header).
+// Note: unlike fetch(), a streamed body is by default delivered as received — a Content-Encoding
+// is NOT transparently decoded (the caller sees the encoded bytes). Set FetchOptions::decodeStream
+// to decode a single gzip/br/zstd coding on the fly; the Content-Encoding header is still present.
 class FetchResponseStream final {
 public:
     FetchResponseStream(const FetchResponseStream&) = delete;

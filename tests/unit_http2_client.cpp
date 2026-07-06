@@ -2345,6 +2345,92 @@ RUVIA_TEST(http2_request_timeout) {
     RUVIA_CHECK(!succeeded);
 }
 
+// A peer that advertises SETTINGS_MAX_CONCURRENT_STREAMS = 0 must not hang a fetch forever: the
+// slot wait in beginRequest (which happens BEFORE a stream exists, so the per-stream deadline
+// scan can't see it) is bounded by the request timeout via scanDeadlines.
+RUVIA_TEST(http2_slot_wait_timeout) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            char preface[24];
+            auto [ecP, nP] = co_await asio::async_read(
+                sock, asio::buffer(preface, sizeof(preface)), asio::as_tuple(asio::use_awaitable));
+            if (ecP) {
+                co_return;
+            }
+            // Initial SETTINGS advertising MAX_CONCURRENT_STREAMS = 0 (one 6-byte entry).
+            char frame[kHttp2FrameHeaderBytes + 6];
+            http2WriteFrameHeader(frame, 6, Http2FrameType::kSettings, 0, 0);
+            frame[kHttp2FrameHeaderBytes + 0] = 0x00;  // id high
+            frame[kHttp2FrameHeaderBytes + 1] = 0x03;  // SETTINGS_MAX_CONCURRENT_STREAMS
+            frame[kHttp2FrameHeaderBytes + 2] = 0x00;
+            frame[kHttp2FrameHeaderBytes + 3] = 0x00;
+            frame[kHttp2FrameHeaderBytes + 4] = 0x00;
+            frame[kHttp2FrameHeaderBytes + 5] = 0x00;  // value = 0
+            co_await asio::async_write(
+                sock, asio::buffer(frame, sizeof(frame)), asio::as_tuple(asio::use_awaitable));
+            // Never open a slot: just drain whatever the client sends until it hangs up.
+            char buf[256];
+            for (;;) {
+                auto [ec, n] = co_await sock.async_read_some(
+                    asio::buffer(buf), asio::as_tuple(asio::use_awaitable));
+                if (ec) {
+                    co_return;
+                }
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+    config.requestTimeout = std::chrono::milliseconds(100);
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+
+    auto scanTimer = std::make_shared<asio::steady_timer>(io);
+    std::function<void()> armScan = [&]() {
+        scanTimer->expires_after(std::chrono::milliseconds(10));
+        scanTimer->async_wait([&](const std::error_code& ec) {
+            if (ec) {
+                return;
+            }
+            session->scanDeadlines(std::chrono::steady_clock::now());
+            armScan();
+        });
+    };
+    armScan();
+
+    bool timedOut = false;
+    bool succeeded = false;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                (void)co_await taskAsAwaitable(session->fetch("/", options, resource));
+                succeeded = true;
+            } catch (...) {
+                timedOut = true;
+            }
+            scanTimer->cancel();
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(timedOut);
+    RUVIA_CHECK(!succeeded);
+}
+
 // --- Multi-frame response body reassembly (> one DATA frame) -------------
 RUVIA_TEST(http2_large_response_body) {
     // "/large" makes the server emit a 40000-byte body across multiple DATA frames.
@@ -2408,6 +2494,60 @@ RUVIA_TEST(http2_stream_large_body) {
     RUVIA_CHECK_EQ(status, 200);
     RUVIA_CHECK_EQ(body.size(), std::size_t{40000});
     RUVIA_CHECK_EQ(body, std::string(40000, 'y'));
+}
+
+// --- Streaming with on-the-fly gzip decode over HTTP/2 -------------------
+// "/gzip" returns a gzip-encoded body with Content-Encoding: gzip. With options.decodeStream the
+// streamed body must be decoded on the fly; without it, the raw compressed bytes come through.
+RUVIA_TEST(http2_stream_gzip_decoded) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            co_await mockH2Server(std::move(sock), resource);
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+
+    bool ok = false;
+    std::string body;
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                options.decodeStream = true;
+                auto stream = co_await taskAsAwaitable(
+                    session->fetchStream("/gzip", options, resource));
+                for (;;) {
+                    auto chunk = co_await taskAsAwaitable(stream.readChunk());
+                    if (chunk.empty()) {
+                        break;
+                    }
+                    body.append(chunk.data(), chunk.size());
+                }
+                ok = true;
+            } catch (...) {
+            }
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(ok);
+    RUVIA_CHECK_EQ(body, std::string("compressed h2"));
 }
 
 // A streaming stream whose buffered-but-undrained DATA is aborted by RST_STREAM must

@@ -15,11 +15,14 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline HttpContentCoding httpClientResponseContentCoding(
-    const FetchResponse& response) noexcept {
+// A single decodable Content-Encoding, or kNone if absent, unknown, identity, or listed more
+// than once (a multi-coding stack is delivered as received). Shared by the buffered decode and
+// the streaming decoder.
+template <typename Headers>
+[[nodiscard]] inline HttpContentCoding httpClientContentCodingOf(const Headers& headers) noexcept {
     bool seen = false;
     HttpContentCoding coding = HttpContentCoding::kNone;
-    for (const auto& header : response.headers()) {
+    for (const auto& header : headers) {
         if (!asciiEqualsIgnoreCase(header.name(), "content-encoding")) {
             continue;
         }
@@ -30,6 +33,11 @@ namespace ruvia::detail {
         coding = requestContentCoding(header.value());
     }
     return coding;
+}
+
+[[nodiscard]] inline HttpContentCoding httpClientResponseContentCoding(
+    const FetchResponse& response) noexcept {
+    return httpClientContentCodingOf(response.headers());
 }
 
 inline void decodeHttpClientResponseContentEncoding(
