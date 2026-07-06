@@ -200,6 +200,45 @@ Task<void> Http2ServerSession<Stream>::writeResponse(
     }
     const bool bodyAllowed = policy.bodyAllowed();
     const bool sendBody = bodyAllowed && !skipBody;
+    if (responseHasStreamBody(response)) {
+        // A normal route returned a streaming body (e.g. Context::proxy): HEADERS without a
+        // content-length, then DATA frames pulled from the source, ending with END_STREAM. Mirrors
+        // Http2ResponseStreamSink; a mid-body failure aborts the stream with RST_STREAM.
+        appendHttp2ResponseHeaders(stream, response, 0, false);
+        co_await writeHeaders(stream, stream.responseHeaderBlock(), !sendBody);
+        http2ReleaseResponseHeaderBlock(stream);
+        if (!sendBody) {
+            co_return;
+        }
+        const auto& body = HttpResponseBodyAccess::stream(response);
+        for (;;) {
+            if (stream.isReset()) {
+                co_return;
+            }
+            std::string_view chunk;
+            bool failed = false;
+            try {
+                chunk = co_await body.nextChunk();
+            } catch (...) {
+                failed = true;
+            }
+            if (failed) {
+                if (!stream.isReset()) {
+                    co_await sendRstStream(stream.id(), Http2ErrorCode::kInternalError);
+                    stream.markReset();
+                }
+                co_return;
+            }
+            if (chunk.empty()) {
+                break;
+            }
+            co_await writeData(stream, chunk, {}, false);
+        }
+        if (!stream.isReset()) {
+            co_await writeData(stream, {}, {}, true);
+        }
+        co_return;
+    }
     std::uint64_t contentLength = 0;
     if (bodyAllowed) {
         contentLength = responseHasFileBody(response) ? responseFileBody(response).length : responseBodySize(response);

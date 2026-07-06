@@ -1,57 +1,8 @@
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
-#include <span>
-#include <utility>
-
-#include "ruvia/http/HttpClient.h"
-#include "client/FetchStreamSource.h"
-
-namespace ruvia {
-
-namespace detail {
-
-void FetchStreamSourceDeleter::operator()(FetchStreamSource* source) const noexcept {
-    if (source != nullptr) {
-        source->destroy();
-    }
-}
-
-}  // namespace detail
-
-FetchResponseStream::FetchResponseStream(
-    std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source) noexcept
-    : source_(std::move(source)) {}
-
-FetchResponseStream::FetchResponseStream(FetchResponseStream&&) noexcept = default;
-FetchResponseStream& FetchResponseStream::operator=(FetchResponseStream&&) noexcept = default;
-FetchResponseStream::~FetchResponseStream() = default;
-
-std::uint16_t FetchResponseStream::status() const noexcept {
-    return source_ ? source_->status() : 0;
-}
-
-std::span<const FetchResponseHeader> FetchResponseStream::headers() const noexcept {
-    if (!source_) {
-        return {};
-    }
-    const auto& headerList = source_->headers();
-    return std::span<const FetchResponseHeader>(headerList.data(), headerList.size());
-}
-
-Task<std::pmr::string> FetchResponseStream::readChunk() {
-    if (!source_) {
-        co_return std::pmr::string{};
-    }
-    co_return co_await source_->readChunk();
-}
-
-void FetchResponseStream::close() noexcept {
-    if (source_) {
-        source_->close();
-        source_.reset();
-    }
-}
-
-}  // namespace ruvia
+// FetchResponseStream is now header-only: it holds status + headers + a unified HttpBodyStream
+// (ruvia/http/HttpBodyStream.h) and all its members are inline. The former out-of-line pimpl
+// implementation and the FetchStreamSource virtual interface were removed by the streaming
+// unification, so this translation unit is intentionally empty.
 
 #endif  // RUVIA_ENABLE_HTTP_CLIENT

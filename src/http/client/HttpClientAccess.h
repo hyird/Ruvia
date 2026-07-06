@@ -49,8 +49,10 @@ struct FetchResponseAccess final {
 
 struct FetchResponseStreamAccess final {
     [[nodiscard]] static FetchResponseStream make(
-        std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> source) noexcept {
-        return FetchResponseStream(std::move(source));
+        std::uint16_t status,
+        std::pmr::vector<FetchResponseHeader> headers,
+        HttpBodyStream body) noexcept {
+        return FetchResponseStream(status, std::move(headers), std::move(body));
     }
 };
 

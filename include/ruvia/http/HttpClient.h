@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/memory/PmrResource.h"
@@ -41,6 +42,25 @@ struct HttpClientConfig {
     // is no h3/QUIC transport, ALPN never offers "h3", and no Alt-Svc "h3" advertisement is
     // acted upon — a request is always sent over TCP (h1.1 or, with http2=true, h2).
     bool http2{false};
+    // Override the Host header sent to the upstream (default: host[:port]). Lets a reverse proxy
+    // connect to one address (host) while presenting a different Host to the upstream vhost.
+    std::pmr::string hostHeader;
+    // Upstream TLS options (used only when tls == true).
+    struct Tls {
+        // Verify the upstream certificate chain against this CA bundle (PEM) instead of the system
+        // trust store. Empty = use the system default verify paths.
+        std::pmr::string caFile;
+        // DANGEROUS: skip all upstream certificate + host-name verification. Only for a trusted
+        // network or testing against a self-signed upstream; never against an untrusted network.
+        bool insecureSkipVerify{false};
+        // Client certificate for mutual TLS. Both must be set together (empty = no client cert).
+        std::pmr::string certificateChainFile;
+        std::pmr::string privateKeyFile;
+        std::pmr::string privateKeyPassword;
+        // Override the SNI server name AND the certificate host-name that is verified (default:
+        // host). Lets you connect to an IP / internal name but present + verify a public name.
+        std::pmr::string sniHost;
+    } tlsOptions;
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
     // nginx-aligned upstream timeouts (names + inactivity semantics + defaults). Set 0 to disable.
@@ -209,6 +229,21 @@ struct FetchOptions {
     bool decodeStream{false};
 };
 
+// Options for Context::proxy (Hono-style reverse proxy). Mirrors hono/proxy: the incoming request
+// is forwarded to the upstream and the upstream's response is streamed straight back.
+struct ProxyOptions {
+    // Forward the incoming request headers to the upstream (default true). Hop-by-hop and
+    // client-managed headers (Host, Connection, Content-Length, TE, Transfer-Encoding, ...) are
+    // always dropped -- the client sets them itself.
+    bool forwardRequestHeaders{true};
+    // Maximum 3xx redirects to follow on the upstream. 0 (default) passes a 3xx straight back to
+    // the downstream client rather than following it.
+    std::uint32_t maxRedirects{0};
+    // Overrides the client's proxy_read_timeout / proxy_send_timeout for this request. 0 = use the
+    // client config's values.
+    std::chrono::milliseconds timeout{0};
+};
+
 class FetchResponse final {
 public:
     FetchResponse(const FetchResponse&) = delete;
@@ -250,14 +285,6 @@ struct HttpClientDefinition final {
     HttpClientConfig config;
 };
 
-class FetchStreamSource;
-
-// Deleter for the pimpl: defers to the source's PMR-aware destroy() (declared here, defined in
-// the .cpp where FetchStreamSource is complete).
-struct FetchStreamSourceDeleter final {
-    void operator()(FetchStreamSource* source) const noexcept;
-};
-
 }  // namespace detail
 
 // A streamed response body. Obtained from Context::fetchStream. The status line and headers are
@@ -277,28 +304,40 @@ class FetchResponseStream final {
 public:
     FetchResponseStream(const FetchResponseStream&) = delete;
     FetchResponseStream& operator=(const FetchResponseStream&) = delete;
-    FetchResponseStream(FetchResponseStream&&) noexcept;
-    FetchResponseStream& operator=(FetchResponseStream&&) noexcept;
-    ~FetchResponseStream();
+    FetchResponseStream(FetchResponseStream&&) noexcept = default;
+    FetchResponseStream& operator=(FetchResponseStream&&) noexcept = default;
+    ~FetchResponseStream() = default;
 
-    [[nodiscard]] std::uint16_t status() const noexcept;
-    [[nodiscard]] std::span<const FetchResponseHeader> headers() const noexcept;
-    // Next slice of the body; an empty string signals end of stream. Throws on transport error.
-    [[nodiscard]] Task<std::pmr::string> readChunk();
+    [[nodiscard]] std::uint16_t status() const noexcept { return status_; }
+    [[nodiscard]] std::span<const FetchResponseHeader> headers() const noexcept {
+        return std::span<const FetchResponseHeader>(headers_.data(), headers_.size());
+    }
+    // Next slice of the body; an empty view signals end of stream (the view is valid until the next
+    // readChunk()/close()). Throws on transport error.
+    [[nodiscard]] Task<std::string_view> readChunk() { return body_.nextChunk(); }
     // Release the connection/stream before the body is fully consumed.
-    void close() noexcept;
+    void close() noexcept { body_ = HttpBodyStream{}; }
 
-    [[nodiscard]] explicit operator bool() const noexcept { return source_ != nullptr; }
+    [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(body_); }
+
+    // Hand off the underlying pull stream (e.g. so a reverse proxy can attach it to an
+    // HttpResponse as its streaming body). Leaves this stream empty.
+    [[nodiscard]] HttpBodyStream takeBody() noexcept { return std::move(body_); }
 
 private:
     friend struct detail::FetchResponseStreamAccess;
 
     FetchResponseStream() noexcept = default;
 
-    explicit FetchResponseStream(
-        std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source) noexcept;
+    FetchResponseStream(
+        std::uint16_t status,
+        std::pmr::vector<FetchResponseHeader> headers,
+        HttpBodyStream body) noexcept
+        : status_(status), headers_(std::move(headers)), body_(std::move(body)) {}
 
-    std::unique_ptr<detail::FetchStreamSource, detail::FetchStreamSourceDeleter> source_;
+    std::uint16_t status_{0};
+    std::pmr::vector<FetchResponseHeader> headers_;
+    HttpBodyStream body_;
 };
 
 namespace detail {

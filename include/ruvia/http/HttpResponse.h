@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ruvia/app/Task.h"
 #include "ruvia/detail/NativePath.h"
+#include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/memory/PmrResource.h"
 
@@ -176,8 +178,13 @@ private:
         kBorrowed,
         kStaticBorrowed,
         kOwned,
-        kFile
+        kFile,
+        kStream
     };
+    // A streaming response body is the framework-wide HttpBodyStream (pull-based, owning). A normal
+    // route can return a response carrying one and the server streams it (h1 chunked / h2 DATA),
+    // which is how Context::proxy pipes an upstream response straight through.
+    using StreamBody = HttpBodyStream;
     class FileBody final {
     public:
         using NativePathChar = detail::NativePathChar;
@@ -253,6 +260,10 @@ private:
     [[nodiscard]] std::size_t bodySize() const noexcept;
     [[nodiscard]] bool hasFileBody() const noexcept;
     [[nodiscard]] const FileBody& fileBody() const;
+    void setStreamBody(StreamBody body) noexcept;
+    [[nodiscard]] bool hasStreamBody() const noexcept;
+    [[nodiscard]] StreamBody& streamBody() noexcept;
+    [[nodiscard]] const StreamBody& streamBody() const noexcept;
     [[nodiscard]] std::string_view knownHeaderValue(std::uint32_t bit) const noexcept;
     [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept;
     [[nodiscard]] const HttpResponseHeader* findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept;
@@ -268,6 +279,7 @@ private:
     std::string_view bodyView_;
     BodyKind bodyKind_{BodyKind::kEmpty};
     std::optional<FileBody> fileBody_;
+    std::optional<StreamBody> streamBody_;
 };
 
 inline const HttpResponseHeaders& HttpResponse::headers() noexcept {

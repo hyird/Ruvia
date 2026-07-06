@@ -23,7 +23,6 @@
 #include "../../runtime/AsioAwait.h"
 #include "../HeaderTokenUtils.h"
 #include "../parser/HttpRequestTarget.h"
-#include "FetchStreamSource.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientConfigValidation.h"
 #include "HttpClientDecodingStreamSource.h"
@@ -98,7 +97,7 @@ Http2ClientSession::Http2ClientSession(
       sendWindowWaiters_(resource_) {
     decoder_.setMaxDynamicTableSize(4096);
     if (config_.tls) {
-        configureClientTlsContext(sslContext_);
+        configureClientTlsContext(sslContext_, config_.tlsOptions);
     }
     tlsStream_ = std::unique_ptr<TlsStream, TlsStreamDeleter>(nullptr, TlsStreamDeleter{resource_});
 }
@@ -205,7 +204,11 @@ Task<void> Http2ClientSession::doConnect() {
             tlsStream_ = makePmrObject<TlsStream>(resource_, socket_, *sslContext_);
             // RFC 6066 SNI + RFC 6125 host-name verification, shared with the HTTP/1.1
             // pool via one owner; ALPN below is HTTP/2-specific.
-            applyClientTlsIdentity(*tlsStream_, config_.host, resource_);
+            applyClientTlsIdentity(
+                *tlsStream_,
+                config_.tlsOptions.sniHost.empty() ? config_.host : config_.tlsOptions.sniHost,
+                config_.tlsOptions.insecureSkipVerify,
+                resource_);
             static constexpr unsigned char kAlpnH2[] = {2, 'h', '2'};
             if (SSL_set_alpn_protos(tlsStream_->native_handle(), kAlpnH2, sizeof(kAlpnH2)) != 0) {
                 throw std::runtime_error("http/2: failed to set ALPN");
@@ -1119,44 +1122,44 @@ void Http2ClientSession::onGoaway(std::string_view payload) noexcept {
 
 namespace {
 
-// The streaming pimpl: a thin handle forwarding to the owning session by stream id.
-class Http2StreamSource final : public FetchStreamSource {
+// The streaming pull source: a thin handle forwarding to the owning session by stream id, exposed
+// as an HttpBodyStream. streamNextChunk holds the pulled slice in currentChunk_ (view valid until
+// the next call); streamDestroy closes the stream and frees the handle.
+class Http2StreamSource final {
 public:
     Http2StreamSource(
         Http2ClientSession* session,
         std::uint32_t streamId,
-        std::uint16_t status,
-        std::pmr::vector<FetchResponseHeader> headers,
         std::pmr::memory_resource* resource) noexcept
         : session_(session),
-          headers_(std::move(headers)),
+          currentChunk_(resource),
           resource_(resource),
-          streamId_(streamId),
-          status_(status) {}
+          streamId_(streamId) {}
 
-    ~Http2StreamSource() override { close(); }
+    ~Http2StreamSource() { close(); }
 
-    [[nodiscard]] std::uint16_t status() const noexcept override { return status_; }
-    [[nodiscard]] const std::pmr::vector<FetchResponseHeader>& headers() const noexcept override {
-        return headers_;
+    static Task<std::string_view> streamNextChunk(void* self) {
+        auto* source = static_cast<Http2StreamSource*>(self);
+        source->currentChunk_ = co_await source->session_->streamReadChunk(source->streamId_);
+        co_return std::string_view(source->currentChunk_.data(), source->currentChunk_.size());
     }
-    [[nodiscard]] Task<std::pmr::string> readChunk() override {
-        return session_->streamReadChunk(streamId_);
+    static void streamDestroy(void* self) noexcept {
+        auto* source = static_cast<Http2StreamSource*>(self);
+        destroyPmrObject(source, source->resource_);
     }
-    void close() noexcept override {
+
+private:
+    void close() noexcept {
         if (!closed_) {
             closed_ = true;
             session_->streamClose(streamId_);
         }
     }
-    void destroy() noexcept override { destroyPmrObject(this, resource_); }
 
-private:
     Http2ClientSession* session_;
-    std::pmr::vector<FetchResponseHeader> headers_;
+    std::pmr::string currentChunk_;  // backing store for the view streamNextChunk hands out
     std::pmr::memory_resource* resource_;
     std::uint32_t streamId_;
-    std::uint16_t status_;
     bool closed_{false};
 };
 
@@ -1344,14 +1347,14 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
         throw std::runtime_error("http/2 request failed");
     }
 
-    // Hand the status + headers to the source; the stream keeps buffering DATA for readChunk().
-    auto* source = constructPmrObject<Http2StreamSource>(
-        requestResource, this, id, stream->response.status(),
-        std::move(FetchResponseAccess::headers(stream->response)), requestResource);
-    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> responseStream(source);
-    responseStream = maybeWrapDecodingStreamSource(
-        std::move(responseStream), source->headers(), options.decodeStream, requestResource);
-    co_return FetchResponseStreamAccess::make(std::move(responseStream));
+    // The source pulls DATA by stream id; status + headers go to the FetchResponseStream directly.
+    auto* source = constructPmrObject<Http2StreamSource>(requestResource, this, id, requestResource);
+    HttpBodyStream body(source, &Http2StreamSource::streamNextChunk, &Http2StreamSource::streamDestroy);
+    auto& responseHeaders = FetchResponseAccess::headers(stream->response);
+    body = maybeWrapDecodingStreamSource(
+        std::move(body), responseHeaders, options.decodeStream, requestResource);
+    co_return FetchResponseStreamAccess::make(
+        stream->response.status(), std::move(responseHeaders), std::move(body));
 }
 
 Task<std::pmr::string> Http2ClientSession::streamReadChunk(std::uint32_t streamId) {

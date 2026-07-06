@@ -68,6 +68,27 @@ const HttpResponse::FileBody& HttpResponse::fileBody() const {
     return *fileBody_;
 }
 
+void HttpResponse::setStreamBody(StreamBody body) noexcept {
+    // A streaming body supersedes any buffered/file body already set.
+    body_.clear();
+    bodyView_ = {};
+    fileBody_.reset();
+    streamBody_ = std::move(body);
+    bodyKind_ = BodyKind::kStream;
+}
+
+bool HttpResponse::hasStreamBody() const noexcept {
+    return bodyKind_ == BodyKind::kStream && streamBody_.has_value();
+}
+
+HttpResponse::StreamBody& HttpResponse::streamBody() noexcept {
+    return *streamBody_;
+}
+
+const HttpResponse::StreamBody& HttpResponse::streamBody() const noexcept {
+    return *streamBody_;
+}
+
 void HttpResponse::status(std::uint16_t statusCode, std::string_view statusText) {
     if (statusCode < 100 || statusCode > 999) {
         throw std::invalid_argument("invalid HTTP status code");
