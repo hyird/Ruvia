@@ -3,48 +3,53 @@
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
 #include <cstddef>
-#include <memory>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/app/Task.h"
+#include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
-#include "FetchStreamSource.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpStreamingDecoder.h"
 
 namespace ruvia::detail {
 
-// FetchStreamSource decorator that decodes a Content-Encoding on the fly. It owns an inner source
-// (h1 or h2) and pulls its raw transfer bytes through a StreamingContentDecoder, so readChunk()
-// yields decoded slices. Per-call output is bounded (kMaxStreamDecodeChunk) so a small compressed
-// chunk cannot expand without limit under readChunk backpressure. status()/headers()/close()
-// delegate to the inner source (the Content-Encoding header is left in place, matching the
-// buffered fetch, which also decodes the body but does not strip the header).
-class DecodingStreamSource final : public FetchStreamSource {
+// Decodes a Content-Encoding on the fly by wrapping an inner HttpBodyStream: it pulls the inner
+// stream's raw transfer bytes through a StreamingContentDecoder so each nextChunk() yields decoded
+// bytes. Per-call output is bounded (kMaxStreamDecodeChunk) so a small compressed chunk cannot
+// expand without limit under readChunk backpressure. Exposed itself as an HttpBodyStream.
+class DecodingStreamSource final {
 public:
-    // Output cap per readChunk(): a small compressed chunk can decode to at most this before the
-    // caller must consume it and pull again (real backpressure over a decompression bomb).
+    // Output cap per chunk: a small compressed chunk decodes to at most this before the caller must
+    // consume it and pull again (real backpressure over a decompression bomb).
     static constexpr std::size_t kMaxStreamDecodeChunk = 256 * 1024;
 
     DecodingStreamSource(
-        std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> inner,
+        HttpBodyStream inner,
         HttpContentCoding coding,
         std::pmr::memory_resource* resource) noexcept
         : inner_(std::move(inner)),
           decoder_(coding),
           pendingInput_(resource),
+          currentChunk_(resource),
           resource_(resource) {}
 
-    [[nodiscard]] std::uint16_t status() const noexcept override { return inner_->status(); }
-    [[nodiscard]] const std::pmr::vector<FetchResponseHeader>& headers() const noexcept override {
-        return inner_->headers();
+    static Task<std::string_view> streamNextChunk(void* self) {
+        auto* source = static_cast<DecodingStreamSource*>(self);
+        source->currentChunk_ = co_await source->readChunk();
+        co_return std::string_view(source->currentChunk_.data(), source->currentChunk_.size());
+    }
+    static void streamDestroy(void* self) noexcept {
+        auto* source = static_cast<DecodingStreamSource*>(self);
+        destroyPmrObject(source, source->resource_);
     }
 
-    [[nodiscard]] Task<std::pmr::string> readChunk() override {
+private:
+    Task<std::pmr::string> readChunk() {
         for (;;) {
             // Produce decoded output from whatever raw input is buffered (and, at EOF, flush).
             if (!pendingInput_.empty() || innerEof_) {
@@ -65,30 +70,25 @@ public:
                     co_return std::pmr::string(resource_);  // clean end of stream
                 }
                 if (innerEof_) {
-                    // EOF, no output, decoder can't advance on the remaining bytes: truncated.
                     throw std::runtime_error("http client: truncated compressed response");
                 }
-                // Buffered input exhausted (or the decoder needs more): pull another raw chunk.
             }
 
-            std::pmr::string chunk = co_await inner_->readChunk();
+            const std::string_view chunk = co_await inner_.nextChunk();
             if (chunk.empty()) {
                 innerEof_ = true;
             } else if (pendingInput_.empty()) {
-                pendingInput_ = std::move(chunk);
+                pendingInput_.assign(chunk.data(), chunk.size());
             } else {
                 pendingInput_.append(chunk.data(), chunk.size());
             }
         }
     }
 
-    void close() noexcept override { inner_->close(); }
-    void destroy() noexcept override { destroyPmrObject(this, resource_); }
-
-private:
-    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> inner_;
+    HttpBodyStream inner_;
     StreamingContentDecoder decoder_;
     std::pmr::string pendingInput_;
+    std::pmr::string currentChunk_;  // backing store for the view streamNextChunk hands out
     std::pmr::memory_resource* resource_;
     bool innerEof_{false};
 };
@@ -96,9 +96,8 @@ private:
 // Wrap `inner` in a decoding decorator when the caller asked for it and the response carries a
 // single decodable Content-Encoding; otherwise return `inner` unchanged (raw transfer bytes).
 template <typename Headers>
-[[nodiscard]] inline std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>
-maybeWrapDecodingStreamSource(
-    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> inner,
+[[nodiscard]] inline HttpBodyStream maybeWrapDecodingStreamSource(
+    HttpBodyStream inner,
     const Headers& headers,
     bool decodeStream,
     std::pmr::memory_resource* resource) {
@@ -111,7 +110,8 @@ maybeWrapDecodingStreamSource(
     }
     auto* wrapped = constructPmrObject<DecodingStreamSource>(
         resource, std::move(inner), coding, resource);
-    return std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter>(wrapped);
+    return HttpBodyStream(
+        wrapped, &DecodingStreamSource::streamNextChunk, &DecodingStreamSource::streamDestroy);
 }
 
 }  // namespace ruvia::detail

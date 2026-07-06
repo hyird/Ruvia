@@ -20,14 +20,36 @@
 
 namespace ruvia::detail {
 
-// Build the shared client TLS context: a tls_client context trusting the system
-// store and verifying the peer chain (verify_peer). The per-connection host-name
-// match is layered on separately via applyClientTlsIdentity. Sole owner shared by
-// the HTTP/1.1 pool and the HTTP/2 session.
-inline void configureClientTlsContext(std::optional<asio::ssl::context>& context) {
+// Build the shared client TLS context from the config's Tls options: trust the system store (or a
+// custom CA bundle), verify the peer chain (unless insecureSkipVerify), and present a client
+// certificate for mutual TLS if configured. The per-connection host-name match is layered on
+// separately via applyClientTlsIdentity. Sole owner shared by the HTTP/1.1 pool and HTTP/2 session.
+inline void configureClientTlsContext(
+    std::optional<asio::ssl::context>& context, const HttpClientConfig::Tls& tls) {
     context.emplace(asio::ssl::context::tls_client);
-    context->set_default_verify_paths();
-    context->set_verify_mode(asio::ssl::verify_peer);
+    if (tls.insecureSkipVerify) {
+        context->set_verify_mode(asio::ssl::verify_none);
+    } else {
+        if (tls.caFile.empty()) {
+            context->set_default_verify_paths();
+        } else {
+            context->load_verify_file(std::string(tls.caFile));
+        }
+        context->set_verify_mode(asio::ssl::verify_peer);
+    }
+    if (!tls.certificateChainFile.empty() || !tls.privateKeyFile.empty()) {
+        if (tls.certificateChainFile.empty() || tls.privateKeyFile.empty()) {
+            throw std::invalid_argument(
+                "http client mTLS requires both certificateChainFile and privateKeyFile");
+        }
+        if (!tls.privateKeyPassword.empty()) {
+            const std::string password(tls.privateKeyPassword);
+            context->set_password_callback(
+                [password](std::size_t, asio::ssl::context::password_purpose) { return password; });
+        }
+        context->use_certificate_chain_file(std::string(tls.certificateChainFile));
+        context->use_private_key_file(std::string(tls.privateKeyFile), asio::ssl::context::pem);
+    }
 }
 
 // Asio's host_name_verification owns a std::string. Keep the same OpenSSL/RFC 6125
@@ -81,20 +103,27 @@ private:
 // Sole owner shared by the HTTP/1.1 pool and the HTTP/2 session so the two cannot
 // silently diverge on a security-critical step (e.g. one omitting the callback,
 // which would leave verify_peer checking only the chain and not the host).
+// `verifyHost` is the name advertised via SNI and matched against the certificate (config.host, or
+// tlsOptions.sniHost when set to decouple it from the connect address). When insecureSkipVerify is
+// set the context already uses verify_none, so no host-name callback is installed.
 template <typename TlsStream>
 inline void applyClientTlsIdentity(
     TlsStream& tlsStream,
-    const std::pmr::string& host,
+    const std::pmr::string& verifyHost,
+    bool insecureSkipVerify,
     std::pmr::memory_resource* resource) {
     std::error_code addressEc;
-    asio::ip::make_address(std::string_view(host), addressEc);
+    asio::ip::make_address(std::string_view(verifyHost), addressEc);
     if (addressEc) {  // not an IP literal -> advertise SNI
         // OpenSSL needs a NUL-terminated string; the pmr::string is one.
-        if (SSL_set_tlsext_host_name(tlsStream.native_handle(), host.c_str()) != 1) {
+        if (SSL_set_tlsext_host_name(tlsStream.native_handle(), verifyHost.c_str()) != 1) {
             throw std::runtime_error("http client: failed to set TLS SNI host name");
         }
     }
-    tlsStream.set_verify_callback(HttpClientHostNameVerification(std::string_view(host), resource));
+    if (!insecureSkipVerify) {
+        tlsStream.set_verify_callback(
+            HttpClientHostNameVerification(std::string_view(verifyHost), resource));
+    }
 }
 
 }  // namespace ruvia::detail

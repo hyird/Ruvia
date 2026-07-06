@@ -367,22 +367,34 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
         if (!responseStreamDispatched) {
             std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            const auto responsePreparation = prepareBufferedHttpResponse(
-                parsed.request,
-                parsed.responseCoding,
-                response,
-                options_,
-                compressionScratch);
-            co_await writeResponse(
-                stream,
-                memory_,
-                &responseHead,
-                &fileChunk,
-                response,
-                responsePreparation.skipBody,
-                ec);
-            if (responsePreparation.bodyBorrowsCompressionScratch) {
-                clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
+            if (responseHasStreamBody(response)) {
+                // A normal route returned a streaming body (e.g. Context::proxy): stream it here
+                // instead of buffering. HTTP/1.0 is close-delimited, so it cannot be kept alive.
+                const bool http11 = parsed.request.httpVersion() == "HTTP/1.1";
+                if (!http11) {
+                    keepAlive = false;
+                }
+                const bool skipBody = parsed.request.method() == HttpMethod::kHead;
+                co_await writeStreamingResponse(
+                    stream, responseHead, scannerEntry, response, http11, skipBody, ec);
+            } else {
+                const auto responsePreparation = prepareBufferedHttpResponse(
+                    parsed.request,
+                    parsed.responseCoding,
+                    response,
+                    options_,
+                    compressionScratch);
+                co_await writeResponse(
+                    stream,
+                    memory_,
+                    &responseHead,
+                    &fileChunk,
+                    response,
+                    responsePreparation.skipBody,
+                    ec);
+                if (responsePreparation.bodyBorrowsCompressionScratch) {
+                    clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
+                }
             }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(

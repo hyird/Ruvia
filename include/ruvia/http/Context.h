@@ -1307,6 +1307,18 @@ public:
         std::string_view alias,
         std::string_view path,
         FetchOptions options = {});
+
+    // Hono-style reverse proxy: forward this request to the named upstream client and return the
+    // upstream response as a streaming HttpResponse (status + headers passed through, hop-by-hop
+    // and framing headers stripped, body streamed as received). Use from a normal route:
+    //   RUVIA_ALL("/*", h);  Task<HttpResponse> h(Context& c){ co_return co_await c.proxy("up", c.request().raw().target()); }
+    [[nodiscard]] Task<HttpResponse> proxy(
+        std::string_view alias,
+        std::string_view target,
+        ProxyOptions options = {});
+    [[nodiscard]] Task<HttpResponse> proxy(std::string_view target, ProxyOptions options = {}) {
+        return proxy(detail::kDefaultHttpClientAlias, target, std::move(options));
+    }
 #endif
 
     [[nodiscard]] WebSocket& webSocket() const;

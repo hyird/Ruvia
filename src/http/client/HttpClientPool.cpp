@@ -142,7 +142,11 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
         // RFC 6066 SNI + RFC 6125 host-name verification (verify_peer only checks the
         // chain), shared with the HTTP/2 path via one owner.
-        applyClientTlsIdentity(*conn.tlsStream, config_.host, conn.resource);
+        applyClientTlsIdentity(
+            *conn.tlsStream,
+            config_.tlsOptions.sniHost.empty() ? config_.host : config_.tlsOptions.sniHost,
+            config_.tlsOptions.insecureSkipVerify,
+            conn.resource);
         setDeadline(conn, config_.proxyConnectTimeout, Connection::DeadlineKind::kSocket);
         const auto handshakeEc = co_await asyncError([&](auto handler) {
             conn.tlsStream->async_handshake(

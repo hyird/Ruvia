@@ -41,6 +41,11 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     validateHttpClientConfig(config);
 
     auto* const targetResource = pmrResourceOrDefault(resource);
+    // An explicit Host override (e.g. a reverse proxy fronting a vhost behind an IP) is used
+    // verbatim; otherwise the Host is derived from the connect host + non-default port.
+    if (!config.hostHeader.empty()) {
+        return std::pmr::string(config.hostHeader.data(), config.hostHeader.size(), targetResource);
+    }
     const auto host = std::string_view(config.host);
     const bool needsBrackets = host.find(':') != std::string_view::npos;
     const bool includePort = !httpClientUsesDefaultPort(config);

@@ -36,7 +36,7 @@ HttpClientPool::HttpClientPool(
       connections_(resource_),
       free_(resource_) {
     if (config_.tls) {
-        configureClientTlsContext(sslContext_);
+        configureClientTlsContext(sslContext_, config_.tlsOptions);
     }
     const auto n = config_.poolSizePerWorker;
     connections_.reserve(n);

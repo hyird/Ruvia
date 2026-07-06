@@ -14,7 +14,6 @@
 #include <system_error>
 #include <utility>
 
-#include "FetchStreamSource.h"
 #include "HttpClientAccess.h"
 #include "HttpClientDecodingStreamSource.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -32,15 +31,13 @@ constexpr std::size_t kMaxTrailerBytes = kMaxHttpHeaderBytes;
 // ConnectionGuard) for the stream's lifetime and decodes the body per its framing on each
 // readChunk(). A cleanly finished body releases the connection for reuse; anything else discards
 // it. Content-Encoding is NOT decoded here (the caller receives the raw transfer bytes).
-class Http1StreamSource final : public FetchStreamSource {
+class Http1StreamSource final {
 public:
     enum class Framing : std::uint8_t { kContentLength, kChunked, kClose };
 
     Http1StreamSource(
         HttpClientPool* pool,
         HttpClientPool::ConnectionGuard guard,
-        std::uint16_t status,
-        std::pmr::vector<FetchResponseHeader> headers,
         Framing framing,
         std::size_t contentLength,
         bool closeAfterResponse,
@@ -49,22 +46,30 @@ public:
         std::pmr::memory_resource* resource)
         : pool_(pool),
           guard_(std::move(guard)),
-          headers_(std::move(headers)),
           buffer_(std::move(leftover)),
+          currentChunk_(resource),
           resource_(resource),
           idleTimeout_(idleTimeout),
           clRemaining_(contentLength),
           framing_(framing),
-          status_(status),
           closeAfterResponse_(closeAfterResponse) {}
 
-    ~Http1StreamSource() override { finish(false); }
+    ~Http1StreamSource() { finish(false); }
 
-    [[nodiscard]] std::uint16_t status() const noexcept override { return status_; }
-    [[nodiscard]] const std::pmr::vector<FetchResponseHeader>& headers() const noexcept override {
-        return headers_;
+    // HttpBodyStream thunks: nextChunk holds the pulled slice in currentChunk_ and returns a view
+    // valid until the next call; destroy releases the source (and its pooled connection).
+    static Task<std::string_view> streamNextChunk(void* self) {
+        auto* source = static_cast<Http1StreamSource*>(self);
+        source->currentChunk_ = co_await source->readChunk();
+        co_return std::string_view(source->currentChunk_.data(), source->currentChunk_.size());
     }
-    [[nodiscard]] Task<std::pmr::string> readChunk() override {
+    static void streamDestroy(void* self) noexcept {
+        auto* source = static_cast<Http1StreamSource*>(self);
+        destroyPmrObject(source, source->resource_);
+    }
+
+private:
+    [[nodiscard]] Task<std::pmr::string> readChunk() {
         switch (framing_) {
             case Framing::kContentLength:
                 return readContentLength();
@@ -75,10 +80,7 @@ public:
         }
         return readContentLength();
     }
-    void close() noexcept override { finish(false); }
-    void destroy() noexcept override { destroyPmrObject(this, resource_); }
 
-private:
     [[nodiscard]] std::pmr::string empty() const { return std::pmr::string(resource_); }
 
     // Release the connection exactly once: reusable → back to the pool; otherwise discarded.
@@ -272,14 +274,13 @@ private:
 
     HttpClientPool* pool_;
     std::optional<HttpClientPool::ConnectionGuard> guard_;
-    std::pmr::vector<FetchResponseHeader> headers_;
     std::pmr::string buffer_;   // unconsumed raw transfer bytes (leftover from headers + reads)
+    std::pmr::string currentChunk_;  // backing store for the view streamNextChunk hands out
     std::pmr::memory_resource* resource_;
     std::chrono::milliseconds idleTimeout_;
     std::size_t clRemaining_{0};
     std::size_t chunkRemaining_{0};
     Framing framing_;
-    std::uint16_t status_;
     bool finished_{false};
     bool closeAfterResponse_{false};
     bool chunkDone_{false};
@@ -341,13 +342,15 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
     }
 
     auto* source = constructPmrObject<Http1StreamSource>(
-        requestResource, this, std::move(guard), response.status(),
-        std::move(FetchResponseAccess::headers(response)), framing, contentLength, head.closeAfterResponse,
+        requestResource, this, std::move(guard), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), readTimeout, requestResource);
-    std::unique_ptr<FetchStreamSource, FetchStreamSourceDeleter> stream(source);
-    stream = maybeWrapDecodingStreamSource(
-        std::move(stream), source->headers(), options.decodeStream, requestResource);
-    co_return FetchResponseStreamAccess::make(std::move(stream));
+    HttpBodyStream body(source, &Http1StreamSource::streamNextChunk, &Http1StreamSource::streamDestroy);
+    // Decode a single Content-Encoding on the fly if requested (reads the headers first).
+    auto& responseHeaders = FetchResponseAccess::headers(response);
+    body = maybeWrapDecodingStreamSource(
+        std::move(body), responseHeaders, options.decodeStream, requestResource);
+    co_return FetchResponseStreamAccess::make(
+        response.status(), std::move(responseHeaders), std::move(body));
 }
 
 }  // namespace ruvia::detail
