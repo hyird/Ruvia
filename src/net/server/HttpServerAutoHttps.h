@@ -79,6 +79,11 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     }
 
     response.header("Location", location);
+    // The Location is derived from the request's Host header, so this redirect
+    // varies by Host. Mark it private so a shared cache never stores one Host's
+    // redirect and serves it for another (a Host-header cache-poisoning open
+    // redirect); a browser still caches it per-origin, keeping the HTTPS memory.
+    setResponseHeaderStableView(response, "Cache-Control", "private");
     markConnectionClose(response);
     return response;
 }
