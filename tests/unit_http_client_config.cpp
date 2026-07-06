@@ -81,16 +81,43 @@ RUVIA_TEST(http_client_config_validation_checks_every_field) {
         c.acquireTimeout = milliseconds(-1);
         validateHttpClientConfig(c);
     }));
-    // A hostHeader override is spliced into the Host: line, so a CR/LF in it (header injection)
-    // must be rejected.
+    // The hostHeader override is spliced into the Host: line, so it must be a valid Host header:
+    // CR/LF (injection) AND non-host junk like a space are rejected; a clean host[:port] is fine.
     RUVIA_CHECK(throwsOn([] {
         auto c = configWithHost("example.com", 80);
         c.hostHeader = std::pmr::string("evil\r\nX-Injected: 1");
         validateHttpClientConfig(c);
     }));
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.hostHeader = std::pmr::string("has a space");
+        validateHttpClientConfig(c);
+    }));
     RUVIA_CHECK(!throwsOn([] {
         auto c = configWithHost("example.com", 80);
         c.hostHeader = std::pmr::string("api.internal:8443");  // a clean override is accepted
+        validateHttpClientConfig(c);
+    }));
+    // sniHost is used as SNI + the verified certificate name, so it must be a bare host: reject a
+    // port, a slash, whitespace, and an embedded NUL; a plain host name is accepted.
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.tlsOptions.sniHost = std::pmr::string("api.internal:8443");
+        validateHttpClientConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.tlsOptions.sniHost = std::pmr::string("api.internal/x");
+        validateHttpClientConfig(c);
+    }));
+    RUVIA_CHECK(throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.tlsOptions.sniHost = std::pmr::string(std::string_view("api\0.internal", 13));
+        validateHttpClientConfig(c);
+    }));
+    RUVIA_CHECK(!throwsOn([] {
+        auto c = configWithHost("example.com", 80);
+        c.tlsOptions.sniHost = std::pmr::string("api.internal");
         validateHttpClientConfig(c);
     }));
 }

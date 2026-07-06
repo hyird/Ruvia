@@ -12,6 +12,7 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrResource.h"
 #include "../../core/ConfigValidation.h"
+#include "../parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 
@@ -27,11 +28,21 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
         kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "http client port must not be zero");
     // The hostHeader override is spliced verbatim into the HTTP/1 Host: line (and the HTTP/2
-    // :authority), so it must be a valid header value -- reject CR/LF/NUL/control to close a
-    // header-injection vector.
+    // :authority), so validate it as a Host header (reg-name / [IPv6] with an optional port) --
+    // this rejects CR/LF/NUL/control (header injection) AND non-host junk like spaces.
     if (!config.hostHeader.empty() &&
-        !isValidHttpHeaderValue(std::string_view(config.hostHeader))) {
-        throw std::invalid_argument("http client hostHeader must be a valid Host header value");
+        !isValidHostHeader(std::string_view(config.hostHeader))) {
+        throw std::invalid_argument("http client hostHeader is not a valid Host header value");
+    }
+    // The SNI host is advertised via SNI and matched against the certificate, so it must be a bare
+    // host name / IP literal (no port, no brackets, no control/whitespace/NUL). An embedded NUL in
+    // particular would desync the NUL-terminated OpenSSL SNI from the length-aware verifier.
+    if (!config.tlsOptions.sniHost.empty()) {
+        ensureConfigHost(
+            config.tlsOptions.sniHost,
+            "http client tlsOptions.sniHost must not be empty",
+            "http client tlsOptions.sniHost is not a valid host name",
+            kSeparatedPortHostRules);
     }
     ensurePositiveSize(config.poolSizePerWorker, "http client pool size must be greater than zero");
     ensureNonNegativeDurations(
