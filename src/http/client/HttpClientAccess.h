@@ -3,7 +3,6 @@
 #ifdef RUVIA_ENABLE_HTTP_CLIENT
 
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
