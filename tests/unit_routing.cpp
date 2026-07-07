@@ -16,9 +16,9 @@
 #include <vector>
 
 #include "http/ContextInternal.h"
-#include "http/HttpRequestInternal.h"
-#include "http/HttpResponseBodyAccess.h"
-#include "http/StreamingInternal.h"
+#include "HttpRequestInternal.h"
+#include "HttpResponseBodyAccess.h"
+#include "StreamingInternal.h"
 #include "ruvia/http/Streaming.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/Context.h"

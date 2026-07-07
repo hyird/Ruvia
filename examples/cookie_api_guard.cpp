@@ -1,6 +1,6 @@
-#include "../src/http/ContextInternal.h"
-#include "../src/http/HttpParserInternal.h"
-#include "../src/http/HttpResponseBodyAccess.h"
+#include "http/ContextInternal.h"
+#include "HttpParserInternal.h"
+#include "HttpResponseBodyAccess.h"
 
 #include "ruvia/http/HttpParser.h"
 #include "ruvia/memory/MemoryPool.h"

@@ -7,8 +7,8 @@
 #include <string>
 #include <string_view>
 
-#include "http/FileResponseHelpers.h"
-#include "http/HttpImfFixdate.h"
+#include "FileResponseHelpers.h"
+#include "HttpImfFixdate.h"
 #include "net/server/HttpDateCache.h"
 
 namespace {

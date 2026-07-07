@@ -7,7 +7,7 @@
 #include "net/http2/Http2HeaderContinuation.h"
 #include "net/http2/Http2HeaderDecode.h"
 #include "net/http2/Http2Upgrade.h"
-#include "http/HttpParserInternal.h"
+#include "HttpParserInternal.h"
 #include "ruvia/http/HttpParseTypes.h"
 
 namespace {

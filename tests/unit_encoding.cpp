@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#include "core/Base64.h"
+#include "Base64.h"
 #include "ruvia/detail/NumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/Hex.h"

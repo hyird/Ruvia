@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "http/ContextInternal.h"
-#include "http/HttpRequestInternal.h"
+#include "HttpRequestInternal.h"
 #include "net/server/ConnectionScanner.h"
 #include "net/server/HttpResponseHeadBuffer.h"
 #include "net/server/HttpResponseWriter.h"
@@ -26,7 +26,7 @@
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
-#include "../src/http/HttpResponseBodyAccess.h"
+#include "HttpResponseBodyAccess.h"
 
 namespace {
 

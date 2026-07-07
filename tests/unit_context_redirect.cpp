@@ -7,8 +7,8 @@
 #include <string_view>
 
 #include "http/ContextInternal.h"
-#include "http/HttpRequestInternal.h"
-#include "http/HttpResponseBodyAccess.h"
+#include "HttpRequestInternal.h"
+#include "HttpResponseBodyAccess.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/ContextModel.h"
 #include "ruvia/http/HttpCommon.h"

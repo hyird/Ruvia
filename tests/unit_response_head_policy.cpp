@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #include "net/server/HttpResponseHeadPolicy.h"
-#include "http/HttpResponseHeaderBits.h"
+#include "HttpResponseHeaderBits.h"
 
 namespace {
 

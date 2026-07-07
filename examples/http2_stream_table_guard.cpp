@@ -1,4 +1,4 @@
-#include "../src/net/http2/Http2StreamTable.h"
+#include "net/http2/Http2StreamTable.h"
 
 #include <cstdint>
 #include <memory_resource>

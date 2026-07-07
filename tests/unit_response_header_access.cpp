@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <string_view>
 
-#include "http/HttpResponseHeaderAccess.h"
-#include "http/HttpResponseHeaderBits.h"
+#include "HttpResponseHeaderAccess.h"
+#include "HttpResponseHeaderBits.h"
 
 namespace {
 

@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include "http/CookieSignature.h"
+#include "CookieSignature.h"
 
 namespace {
 

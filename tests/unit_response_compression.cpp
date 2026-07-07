@@ -12,8 +12,8 @@
 
 #include "ruvia/http/HttpResponse.h"
 #include "net/server/HttpResponseCompression.h"
-#include "http/HeaderAcceptUtils.h"
-#include "http/HttpResponseBodyAccess.h"
+#include "HeaderAcceptUtils.h"
+#include "HttpResponseBodyAccess.h"
 
 namespace {
 

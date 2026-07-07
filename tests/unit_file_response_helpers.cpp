@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include "http/FileResponseHelpers.h"
+#include "FileResponseHelpers.h"
 
 namespace {
 

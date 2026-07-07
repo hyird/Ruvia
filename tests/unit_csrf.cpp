@@ -11,9 +11,9 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "../src/http/CsrfInternal.h"
+#include "CsrfInternal.h"
 #include "http/ContextInternal.h"
-#include "http/HttpRequestInternal.h"
+#include "HttpRequestInternal.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/Context.h"

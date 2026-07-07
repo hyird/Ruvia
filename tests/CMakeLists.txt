@@ -144,14 +144,34 @@ if(RUVIA_ENABLE_MARIADB)
     )
 endif()
 
-target_link_libraries(ruvia_unit_tests PRIVATE ruvia::ruvia)
+target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
 
-# Unit tests reach into internal detail headers under src/ (e.g. core/Base64.h,
-# http/CookieSignature.h) in addition to the public include/ surface.
+add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
+target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
+add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
+
+add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
+target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
+add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
+
+if(TARGET ruvia::edge)
+    add_executable(ruvia_smoke_edge_target smoke_edge_target.cpp)
+    target_link_libraries(ruvia_smoke_edge_target PRIVATE ruvia::edge)
+    add_test(NAME ruvia_smoke_edge_target COMMAND ruvia_smoke_edge_target)
+endif()
+
+# Unit tests reach into target-owned internal detail headers in addition to
+# public include surfaces.
 target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/ruvia-core/src
+    ${CMAKE_SOURCE_DIR}/ruvia-core/include
+    ${CMAKE_SOURCE_DIR}/ruvia-http/src
+    ${CMAKE_SOURCE_DIR}/ruvia-http/src/net
+    ${CMAKE_SOURCE_DIR}/ruvia-http/include
+    ${CMAKE_SOURCE_DIR}/ruvia-web/src
+    ${CMAKE_SOURCE_DIR}/ruvia-web/src/http
+    ${CMAKE_SOURCE_DIR}/ruvia-web/include
 )
 
 if(MSVC)
