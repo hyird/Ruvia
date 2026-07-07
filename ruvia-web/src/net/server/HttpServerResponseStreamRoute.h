@@ -1,0 +1,145 @@
+#pragma once
+
+#include "ConnectionScanner.h"
+#include "HttpResponseStreamDispatch.h"
+#include "HttpResponseStreamSink.h"
+#include "HttpServerRequestState.h"
+#include "HttpServerResponseState.h"
+#include "HttpParserInternal.h"
+#include "router/RouteTable.h"
+#include "ruvia/app/Task.h"
+#include "ruvia/http/HttpTypes.h"
+#include "ruvia/memory/MemoryPool.h"
+
+#include <cstddef>
+#include <utility>
+
+namespace ruvia::detail {
+
+class HttpResponseStreamRouteResult final {
+public:
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult writeBufferedResponse() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kWriteBufferedResponse);
+    }
+
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult streamDispatched() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kStreamDispatched);
+    }
+
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult sessionFinished() noexcept {
+        return HttpResponseStreamRouteResult(Outcome::kSessionFinished);
+    }
+
+    [[nodiscard]] constexpr bool didDispatchStream() const noexcept {
+        return outcome_ == Outcome::kStreamDispatched;
+    }
+
+    [[nodiscard]] constexpr bool finishedSession() const noexcept {
+        return outcome_ == Outcome::kSessionFinished;
+    }
+
+private:
+    enum class Outcome {
+        kWriteBufferedResponse,
+        kStreamDispatched,
+        kSessionFinished
+    };
+
+    explicit constexpr HttpResponseStreamRouteResult(Outcome outcome) noexcept
+        : outcome_(outcome) {}
+
+    Outcome outcome_;
+};
+
+template <typename Stream>
+Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
+    Stream& stream,
+    WorkerMemory& memory,
+    ResponseHeadBuffer& responseHead,
+    ConnectionScanner::Entry& scannerEntry,
+    const HttpServerParseResult& parsed,
+    const RouteResolution& routeResolution,
+    const RouteTable& routes,
+    RequestMemory& requestMemory,
+    ContextServices baseRouteServices,
+    const HttpServerOptions& options,
+    HttpResponse& response,
+    bool& keepAlive,
+    std::size_t& requestCount) {
+    keepAlive = shouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
+    // RFC 9112 6.1: only an HTTP/1.1 client may be sent chunked framing. An HTTP/1.0
+    // stream is delimited by the connection close instead -- no Transfer-Encoding and
+    // no chunk framing -- which then forces the connection shut once the body ends.
+    const bool isHttp11 = parsed.request.httpVersion() == "HTTP/1.1";
+    const auto framing = isHttp11
+        ? ResponseStreamFraming::kHttp1Chunked
+        : ResponseStreamFraming::kHttp1CloseDelimited;
+    // The streamed head is written before recordCompletedRequest finalizes the
+    // connection lifetime below, so decide it now and let the head announce
+    // Connection: close for a response that will be the connection's last. This
+    // matches the post-dispatch verdict exactly: the connection closes iff it is
+    // not kept alive, is an HTTP/1.0 (close-delimited) stream, or the per-connection
+    // request limit is reached by this request (recordCompletedRequest increments
+    // requestCount then applies the same requestLimitReached check).
+    const bool connectionWillClose =
+        !keepAlive || !isHttp11 ||
+        requestLimitReached(requestCount + 1, options.keepaliveRequests);
+    using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
+    const auto& route = routeResolution.route();
+    ResponseSink responseSink(
+        stream,
+        memory,
+        responseHead,
+        scannerEntry,
+        route.responseMode(),
+        framing,
+        connectionWillClose);
+
+    scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
+    auto result = co_await dispatchResponseStreamWith(
+        responseSink,
+        routes,
+        parsed.request,
+        routeResolution,
+        requestMemory,
+        baseRouteServices,
+        /*closeConnectionOnError=*/true,
+        /*peerAborted=*/[]() noexcept { return false; });
+
+    if (result.aborted()) {
+        co_return HttpResponseStreamRouteResult::sessionFinished();
+    }
+    if (result.failedBeforeCommit()) {
+        response = result.takeResponse();
+        keepAlive = false;
+        scannerEntry.touch();
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+    }
+    if (result.buffered()) {
+        response = result.takeResponse();
+        finalizeBufferedRouteResponse(
+            response,
+            keepAlive,
+            requestCount,
+            options.keepaliveRequests,
+            requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
+        scannerEntry.touch();
+        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+    }
+
+    // A close-delimited (HTTP/1.0) stream is terminated by the connection close, so
+    // it can never be kept alive -- the head already announced Connection: close.
+    if (!isHttp11) {
+        keepAlive = false;
+    }
+    recordCompletedRequest(
+        keepAlive,
+        requestCount,
+        options.keepaliveRequests);
+    if (!keepAlive) {
+        co_return HttpResponseStreamRouteResult::sessionFinished();
+    }
+    co_return HttpResponseStreamRouteResult::streamDispatched();
+}
+
+}  // namespace ruvia::detail

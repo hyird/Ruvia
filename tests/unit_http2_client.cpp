@@ -1,7 +1,5 @@
 #include "test_harness.h"
 
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
@@ -24,7 +22,7 @@
 
 #include <zlib.h>
 
-#include "http/client/Http2ClientSession.h"
+#include "client/Http2ClientSession.h"
 #include "net/http2/Http2FrameCodec.h"
 #include "net/http2/Http2FramePayload.h"
 #include "net/http2/Http2FrameTypes.h"
@@ -2745,5 +2743,3 @@ RUVIA_TEST(http2_client_credits_connection_window_when_streamed_data_is_reset) {
     RUVIA_CHECK(clientThrew);
     RUVIA_CHECK(sawConnectionCreditForData);
 }
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

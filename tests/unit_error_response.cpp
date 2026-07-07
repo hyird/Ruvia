@@ -6,7 +6,7 @@
 
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpResponse.h"
-#include "http/HttpResponseBodyAccess.h"
+#include "HttpResponseBodyAccess.h"
 
 namespace {
 

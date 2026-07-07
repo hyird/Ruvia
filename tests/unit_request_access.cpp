@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <string_view>
 
-#include "http/HttpRequestInternal.h"
-#include "http/RequestBodyDecoding.h"
+#include "HttpRequestInternal.h"
+#include "RequestBodyDecoding.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpRequest.h"
 

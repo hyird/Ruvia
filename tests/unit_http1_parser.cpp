@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include "http/HttpParserInternal.h"
+#include "HttpParserInternal.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpParseTypes.h"
 #include "ruvia/http/HttpRequest.h"

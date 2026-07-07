@@ -11,7 +11,7 @@
 #include <string_view>
 #include <vector>
 
-#include "http/StreamingInternal.h"
+#include "StreamingInternal.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"

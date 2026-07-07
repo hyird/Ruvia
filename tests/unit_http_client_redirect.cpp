@@ -1,13 +1,11 @@
 #include "test_harness.h"
 
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-
 #include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "http/client/HttpClientRedirect.h"
+#include "client/HttpClientRedirect.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace {
@@ -140,5 +138,3 @@ RUVIA_TEST(http_client_same_origin_redirect_resolution) {
     (void)resolvePath(config, "", ok);
     RUVIA_CHECK(!ok);
 }
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

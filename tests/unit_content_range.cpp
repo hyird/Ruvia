@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "http/ContextInternal.h"
-#include "http/FileResponseHelpers.h"
-#include "http/HttpRequestInternal.h"
-#include "http/HttpResponseHeaderState.h"
+#include "FileResponseHelpers.h"
+#include "HttpRequestInternal.h"
+#include "HttpResponseHeaderState.h"
 #include "net/server/HttpResponseStreamHead.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Error.h"

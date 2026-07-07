@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "net/server/HttpDateCache.h"
-#include "http/FileResponseHelpers.h"
+#include "FileResponseHelpers.h"
 
 namespace {
 

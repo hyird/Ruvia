@@ -1,8 +1,39 @@
+# Build outputs
 /build/
-/build-*/
-/build-release/
+
+# Dependency/build tool caches
 /vcpkg_installed/
-/.vscode/
 /.slim/
 /.codegraph/
 /.omo/
+/.codex/
+/.claude/
+/.agents/
+
+# IDE/editor state
+/.vscode/
+/.vs/
+/.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Compiler and package artifacts
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.log
+*.tmp
+*.zip
+*.tar
+*.tar.gz
+*.tgz

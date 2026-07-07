@@ -3,7 +3,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "http/HttpRequestInternal.h"
+#include "HttpRequestInternal.h"
 #include "net/http2/Http2RequestBuilder.h"
 
 namespace {

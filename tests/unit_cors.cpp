@@ -7,7 +7,7 @@
 
 #include "http/HttpCors.h"
 #include "http/HttpCorsConfigValidation.h"
-#include "http/HttpParserInternal.h"
+#include "HttpParserInternal.h"
 #include "ruvia/app/App.h"
 #include "ruvia/http/HttpResponse.h"
 
