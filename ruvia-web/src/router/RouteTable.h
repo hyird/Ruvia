@@ -15,7 +15,7 @@
 #include "http/ContextServices.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/detail/CallableRef.h"
-#include "RouteResolution.h"
+#include "router/RouteResolution.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Next.h"
 #include "ruvia/http/WebSocket.h"
