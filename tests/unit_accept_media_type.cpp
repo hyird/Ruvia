@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "http/ContextInternal.h"
-#include "http/HeaderAcceptUtils.h"
-#include "http/HttpRequestInternal.h"
+#include "HeaderAcceptUtils.h"
+#include "HttpRequestInternal.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/memory/MemoryPool.h"
 

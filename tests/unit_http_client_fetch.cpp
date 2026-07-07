@@ -1,7 +1,5 @@
 #include "test_harness.h"
 
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
 #include <asio/buffers_iterator.hpp>
@@ -33,9 +31,9 @@
 #include <zlib.h>
 
 #include "http/ContextInternal.h"
-#include "http/HttpRequestInternal.h"
-#include "http/client/HttpClientInternal.h"
-#include "http/client/HttpClientPool.h"
+#include "HttpRequestInternal.h"
+#include "client/HttpClientInternal.h"
+#include "client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -2003,5 +2001,3 @@ RUVIA_TEST(context_defer_without_client_subsystem_throws) {
     RUVIA_CHECK(threw);
     RUVIA_CHECK(!dummy);  // never scheduled
 }
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

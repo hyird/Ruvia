@@ -1,6 +1,6 @@
 function(ruvia_add_example name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE ruvia::ruvia)
+    target_link_libraries(${name} PRIVATE ruvia::web)
     target_compile_definitions(${name}
         PRIVATE
             RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

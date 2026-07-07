@@ -1,5 +1,5 @@
-#include "../src/http/ContextInternal.h"
-#include "../src/http/HttpParserInternal.h"
+#include "http/ContextInternal.h"
+#include "HttpParserInternal.h"
 
 #include "ruvia/memory/MemoryPool.h"
 

@@ -29,7 +29,7 @@
 // by non-dependent name — so those must be visible first. Mirror the exact include
 // order of the production instantiation TU (HttpServerAccept.cpp): HttpResponseWriter.h
 // then the HttpServerSessionUtils.h umbrella (which pulls in the session header).
-#include "http/HttpResponseFileAccess.h"
+#include "HttpResponseFileAccess.h"
 #include "net/server/HttpResponseWriter.h"
 #include "net/server/HttpServerSessionUtils.h"
 #include "net/server/ConnectionScanner.h"

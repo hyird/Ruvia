@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpParseTypes.h"
-#include "http/parser/HttpChunkParser.h"
+#include "parser/HttpChunkParser.h"
 
 namespace {
 

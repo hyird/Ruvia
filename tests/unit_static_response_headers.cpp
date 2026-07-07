@@ -4,8 +4,8 @@
 #include <optional>
 #include <string_view>
 
-#include "http/HttpResponseStaticHeaders.h"
-#include "http/HttpResponseHeaderBits.h"
+#include "HttpResponseStaticHeaders.h"
+#include "HttpResponseHeaderBits.h"
 
 namespace {
 

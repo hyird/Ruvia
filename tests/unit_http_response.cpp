@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "http/HttpResponseHeaderAccess.h"
+#include "HttpResponseHeaderAccess.h"
 
 namespace {
 

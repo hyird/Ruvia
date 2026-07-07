@@ -6,8 +6,8 @@
 #include <limits>
 #include <string_view>
 
-#include "http/ResponseHeaderIndexCache.h"
-#include "http/HttpResponseHeaderBits.h"
+#include "ResponseHeaderIndexCache.h"
+#include "HttpResponseHeaderBits.h"
 
 namespace {
 

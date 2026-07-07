@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "core/ConfigValidation.h"
+#include "ConfigValidation.h"
 
 namespace {
 

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "http/parser/HttpParserSyntax.h"
+#include "parser/HttpParserSyntax.h"
 
 namespace {
 
