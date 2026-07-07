@@ -11,7 +11,7 @@
 
 #include <asio.hpp>
 
-#include "../server/ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpWebSocketPermessageDeflate.h"
 #include "HttpWebSocketUtils.h"
 #include "runtime/AsioAwait.h"

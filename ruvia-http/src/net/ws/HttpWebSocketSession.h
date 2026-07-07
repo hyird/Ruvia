@@ -3,7 +3,7 @@
 #include <exception>
 
 #include "HttpWebSocketConnection.h"
-#include "../server/ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "router/RouteTable.h"
 #include "WebSocketInternal.h"
 #include "ruvia/app/Task.h"

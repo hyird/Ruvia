@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "../server/ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpTransferCodingDecoder.h"
 #include "HttpBodyFramer.h"
 #include "ruvia/app/Task.h"
