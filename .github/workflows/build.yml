@@ -7,11 +7,12 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
-      - "include/**"
-      - "src/**"
+      - "ruvia-core/**"
+      - "ruvia-http/**"
+      - "ruvia-web/**"
+      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
-      - "fuzz/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
   pull_request:
@@ -19,11 +20,12 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
-      - "include/**"
-      - "src/**"
+      - "ruvia-core/**"
+      - "ruvia-http/**"
+      - "ruvia-web/**"
+      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
-      - "fuzz/**"
       - "benchmarks/**"
       - ".github/workflows/build.yml"
 
@@ -65,7 +67,7 @@ jobs:
           path: |
             ${{ env.VCPKG_ROOT }}
             ~/.cache/vcpkg/archives
-            ${{ github.workspace }}/build-test/vcpkg_installed
+            ${{ github.workspace }}/build/test/vcpkg_installed
           key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-build-${{ runner.os }}-
@@ -83,24 +85,25 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build-test -G Ninja \
+          cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
+            -DRUVIA_BUILD_EDGE=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        run: cmake --build build-test --config "$BUILD_TYPE"
+        run: cmake --build build/test --config "$BUILD_TYPE"
 
       - name: Test
-        run: ctest --test-dir build-test --output-on-failure --build-config "$BUILD_TYPE"
+        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
 
   ubuntu_ubsan:
-    name: Ubuntu UBSan + fuzz
+    name: Ubuntu UBSan
     runs-on: ubuntu-24.04
     env:
       CC: gcc-13
@@ -127,7 +130,7 @@ jobs:
           path: |
             ${{ env.VCPKG_ROOT }}
             ~/.cache/vcpkg/archives
-            ${{ github.workspace }}/build-ubsan/vcpkg_installed
+            ${{ github.workspace }}/build/ubsan/vcpkg_installed
           key: vcpkg-ubsan-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-ubsan-${{ runner.os }}-
@@ -143,25 +146,23 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # UBSan over the core + HTTP-client surface (the security-critical protocol
-      # parsers), plus the parser fuzz smoke runs. Feature backends (mariadb/redis/
-      # jwt) stay on the plain Debug job above; -fno-sanitize-recover aborts on the
-      # first violation so any UB fails the run.
+      # UBSan over the core + HTTP surface (the security-critical protocol parsers).
+      # Feature backends (mariadb/redis/jwt) stay on the plain Debug job above;
+      # -fno-sanitize-recover aborts on the first violation so any UB fails the run.
       - name: Configure
         run: |
-          cmake -S . -B build-ubsan -G Ninja \
+          cmake -S . -B build/ubsan -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
-            -DRUVIA_ENABLE_HTTP_CLIENT=ON \
+            -DRUVIA_BUILD_EDGE=ON \
             -DRUVIA_BUILD_TESTS=ON \
-            -DRUVIA_BUILD_FUZZERS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        run: cmake --build build-ubsan --config "$BUILD_TYPE"
+        run: cmake --build build/ubsan --config "$BUILD_TYPE"
 
-      - name: Test (unit + fuzz smoke, UBSan)
-        run: ctest --test-dir build-ubsan --output-on-failure --build-config "$BUILD_TYPE"
+      - name: Test (unit, UBSan)
+        run: ctest --test-dir build/ubsan --output-on-failure --build-config "$BUILD_TYPE"
 
   windows_build:
     name: Windows build
@@ -184,7 +185,7 @@ jobs:
         with:
           path: |
             ${{ env.VCPKG_ROOT }}
-            ${{ github.workspace }}\build-test\vcpkg_installed
+            ${{ github.workspace }}\build\test\vcpkg_installed
           key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-build-${{ runner.os }}-
@@ -203,11 +204,12 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build-test `
+          cmake -S . -B build/test `
             -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
             -DRUVIA_ENABLE_MARIADB=ON `
             -DRUVIA_ENABLE_REDIS=ON `
             -DRUVIA_ENABLE_JWT=ON `
+            -DRUVIA_BUILD_EDGE=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
             -DRUVIA_BUILD_TESTS=ON `
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
@@ -215,8 +217,8 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: cmake --build build-test --config "$env:BUILD_TYPE"
+        run: cmake --build build/test --config "$env:BUILD_TYPE"
 
       - name: Test
         shell: pwsh
-        run: ctest --test-dir build-test --output-on-failure --build-config "$env:BUILD_TYPE"
+        run: ctest --test-dir build/test --output-on-failure --build-config "$env:BUILD_TYPE"
