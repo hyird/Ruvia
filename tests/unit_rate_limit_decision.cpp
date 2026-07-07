@@ -7,7 +7,7 @@
 
 #include "http/ContextInternal.h"
 #include "http/ContextServices.h"
-#include "http/HttpRequestInternal.h"
+#include "HttpRequestInternal.h"
 #include "net/server/RateLimitDecision.h"
 #include "net/server/RateLimitKey.h"
 #include "ruvia/app/RateLimitRule.h"

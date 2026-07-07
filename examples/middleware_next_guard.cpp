@@ -1,5 +1,5 @@
-#include "../src/router/RouteTable.h"
-#include "../src/runtime/AsioAwait.h"
+#include "router/RouteTable.h"
+#include "runtime/AsioAwait.h"
 
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>

@@ -1,14 +1,12 @@
 #include "test_harness.h"
 
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-
 #include <memory_resource>
 #include <string_view>
 
-#include "http/client/HttpClientContentEncoding.h"
-#include "http/client/HttpClientRedirect.h"
-#include "http/client/HttpClientAccess.h"
-#include "http/client/HttpClientResponseParser.h"
+#include "client/HttpClientContentEncoding.h"
+#include "client/HttpClientRedirect.h"
+#include "client/HttpClientAccess.h"
+#include "client/HttpClientResponseParser.h"
 
 namespace {
 
@@ -276,5 +274,3 @@ RUVIA_TEST(http_client_response_content_coding_paths_agree) {
         RUVIA_CHECK(head.contentCoding == rederived);  // the two paths agree
     }
 }
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

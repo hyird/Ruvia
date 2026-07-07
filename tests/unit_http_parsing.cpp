@@ -9,11 +9,11 @@
 
 #include <zstd.h>
 
-#include "http/HeaderAcceptUtils.h"
-#include "http/HeaderTokenUtils.h"
-#include "http/parser/HttpChunkParser.h"
-#include "http/MultipartParsing.h"
-#include "http/RequestBodyDecoding.h"
+#include "HeaderAcceptUtils.h"
+#include "HeaderTokenUtils.h"
+#include "parser/HttpChunkParser.h"
+#include "MultipartParsing.h"
+#include "RequestBodyDecoding.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/Model.h"
 

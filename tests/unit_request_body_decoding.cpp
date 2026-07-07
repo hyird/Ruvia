@@ -10,7 +10,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include "http/RequestBodyDecoding.h"
+#include "RequestBodyDecoding.h"
 #include "net/body/HttpTransferCodingDecoder.h"
 
 namespace {

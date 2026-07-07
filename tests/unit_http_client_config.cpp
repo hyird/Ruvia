@@ -1,7 +1,5 @@
 #include "test_harness.h"
 
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
-
 #include <chrono>
 #include <cstdint>
 #include <exception>
@@ -9,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "http/client/HttpClientConfigValidation.h"
+#include "client/HttpClientConfigValidation.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace {
@@ -141,5 +139,3 @@ RUVIA_TEST(http_client_host_header_brackets_ipv6_and_omits_default_port) {
     RUVIA_CHECK_EQ(hostHeader(configWithHost("::1", 8080, false)), std::string("[::1]:8080"));
     RUVIA_CHECK_EQ(hostHeader(configWithHost("2001:db8::1", 443, true)), std::string("[2001:db8::1]"));
 }
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

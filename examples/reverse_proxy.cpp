@@ -5,7 +5,7 @@
 // method that simply returns c.proxy(...) -- the framework streams the response body (HTTP/1.1
 // chunked or HTTP/2 DATA), so nothing is buffered.
 //
-// Build with -DRUVIA_ENABLE_HTTP_CLIENT=ON.
+// HTTP client support is part of ruvia-http.
 
 #include <chrono>
 #include <utility>
@@ -13,8 +13,6 @@
 #include "ruvia/app/App.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Controller.h"
-
-#ifdef RUVIA_ENABLE_HTTP_CLIENT
 
 class ReverseProxyController final : public ruvia::Controller<ReverseProxyController> {
 public:
@@ -57,11 +55,3 @@ int main() {
         .useHttpClient("upstream", std::move(upstream))
         .run();
 }
-
-#else
-
-int main() {
-    return 0;  // built without the HTTP client; nothing to proxy.
-}
-
-#endif  // RUVIA_ENABLE_HTTP_CLIENT

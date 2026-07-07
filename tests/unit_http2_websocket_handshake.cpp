@@ -3,7 +3,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "http/HttpParserInternal.h"
+#include "HttpParserInternal.h"
 #include "net/http2/Http2WebSocketHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 
