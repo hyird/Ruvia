@@ -1,6 +1,10 @@
 #include "Http2Connection.h"
 
+#include <array>
 #include <utility>
+
+#include "Http2FrameCodec.h"
+#include "Http2WindowUpdate.h"
 
 namespace ruvia::detail {
 
@@ -91,7 +95,17 @@ void Http2Connection::beginGoaway(std::uint32_t /*errorCode*/) {
 }
 
 void Http2Connection::queueLocalSettings() {
-    // TODO: port sendLocalSettings -> outBuffer_.
+    // 1:1 port of Http2ServerSession::sendLocalSettings, with the socket write
+    // replaced by an append to the outbound buffer. The frame encoders are pure.
+    std::array<char, kHttp2LocalSettingsFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
+    auto* out = http2WriteLocalSettingsFrame(buffer.data());
+    if constexpr (kHttp2LocalInitialWindowSize > kHttp2DefaultInitialWindowSize) {
+        out = http2WriteWindowUpdate(
+            out,
+            0,
+            kHttp2LocalInitialWindowSize - static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
+    }
+    outBuffer_.append(buffer.data(), static_cast<std::size_t>(out - buffer.data()));
 }
 
 }  // namespace ruvia::detail
