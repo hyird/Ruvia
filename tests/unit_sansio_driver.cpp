@@ -22,6 +22,7 @@
 #include "net/http2/Http2FrameCodec.h"
 #include "net/http2/Http2Hpack.h"
 #include "net/http2/Http2RequestBuilder.h"
+#include "net/server/Http2SansIoSession.h"
 #include "router/RouteResolution.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
@@ -167,46 +168,11 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
         io,
         [&]() -> asio::awaitable<void> {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
-            std::pmr::monotonic_buffer_resource resource;
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());  // empty -> 404
-            Http2Connection conn(&resource);
-            conn.expectClientPreface();
-            conn.queueLocalSettings();
-
-            auto onReadable = [&worker, &routes](Http2Connection& c) -> ruvia::Task<void> {
-                for (;;) {
-                    const auto event = c.nextEvent();
-                    if (event.kind == Http2Event::Kind::kNone) {
-                        break;
-                    }
-                    if (event.kind != Http2Event::Kind::kRequestEnd) {
-                        continue;
-                    }
-                    auto* stream = c.stream(event.streamId);
-                    if (stream == nullptr) {
-                        continue;
-                    }
-                    ruvia::RequestMemory requestMemory(worker);
-                    auto request = ruvia::detail::HttpRequestAccess::make();
-                    if (!ruvia::detail::Http2RequestBuilder::build(
-                            *stream, request, requestMemory.resource())) {
-                        continue;
-                    }
-                    ruvia::detail::HttpRequestAccess::setTransport(
-                        request, "127.0.0.1", std::string_view{}, false);
-                    ruvia::detail::RouteMatch match;
-                    const auto resolution = routes.resolve(request, match);
-                    ruvia::HttpResponse response = co_await routes.dispatchBuffered(
-                        request, resolution, requestMemory, false, ruvia::detail::ContextServices{});
-                    c.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
-                    c.submitData(
-                        event.streamId, ruvia::detail::responseBodyBytes(response), /*endStream=*/true);
-                }
-                co_return;
-            };
+            // Drive the packaged, reusable buffered session helper.
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::pumpSansIoConnection(conn, sock, onReadable));
+                ruvia::detail::runHttp2SansIoBufferedSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
