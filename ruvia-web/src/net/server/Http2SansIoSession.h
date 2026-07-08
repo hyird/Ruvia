@@ -32,7 +32,7 @@ namespace ruvia::detail {
 
 template <typename Stream>
 Task<void> runHttp2SansIoBufferedSession(
-    Stream& stream, RouteTable& routes, WorkerMemory& worker, std::string_view remoteAddress) {
+    Stream& stream, const RouteTable& routes, WorkerMemory& worker, std::string_view remoteAddress) {
     Http2Connection connection(worker.resource());
     connection.expectClientPreface();
     connection.queueLocalSettings();
