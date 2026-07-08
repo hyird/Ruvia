@@ -273,3 +273,83 @@ RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
     auto* s = conn.stream(1);
     RUVIA_CHECK(s != nullptr && s->requestMethod() == ruvia::HttpMethod::kGet);
 }
+
+// Build a POST request head (no END_STREAM) with optional content-length; body follows.
+std::pmr::string postHeadFrame(
+    std::pmr::memory_resource* resource, std::string_view contentLength) {
+    std::pmr::string block(resource);
+    HpackEncoder::encodeHeader(block, ":method", "POST");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    if (!contentLength.empty()) {
+        HpackEncoder::encodeHeader(block, "content-length", contentLength);
+    }
+    return headersFrame(
+        resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(block.data(), block.size()));
+}
+
+// Frame a DATA payload on `streamId` with the given flags.
+std::pmr::string dataFrame(
+    std::pmr::memory_resource* resource, std::uint32_t streamId, std::uint8_t flags,
+    std::string_view body) {
+    std::pmr::string frame(resource);
+    char hdr[9];
+    ruvia::detail::http2EncodeFrameHeader(
+        hdr, static_cast<std::uint32_t>(body.size()), Http2FrameType::kData, flags, streamId);
+    frame.append(hdr, 9);
+    frame.append(body.data(), body.size());
+    return frame;
+}
+
+// A DATA frame after the head yields a kRequestBodyChunk carrying the bytes, then
+// (on END_STREAM) kRequestEnd; the core also credits the peer back with WINDOW_UPDATE.
+RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto h = postHeadFrame(&resource, "");
+    conn.feed(std::string_view(h.data(), h.size()));
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
+
+    const char body[5] = {'h', 'e', 'l', 'l', 'o'};
+    const auto d = dataFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndStream, std::string_view(body, 5));
+    conn.feed(std::string_view(d.data(), d.size()));
+
+    const auto chunk = conn.nextEvent();
+    RUVIA_CHECK(chunk.kind == Http2Event::Kind::kRequestBodyChunk);
+    RUVIA_CHECK_EQ(chunk.streamId, static_cast<std::uint32_t>(1));
+    RUVIA_CHECK(chunk.bytes == std::string_view(body, 5));
+    const auto end = conn.nextEvent();
+    RUVIA_CHECK(end.kind == Http2Event::Kind::kRequestEnd);
+    RUVIA_CHECK_EQ(end.streamId, static_cast<std::uint32_t>(1));
+
+    const auto wu = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK_EQ(wu.type, static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+}
+
+// A DATA/END_STREAM that falls short of a declared content-length is a protocol error:
+// the core RST_STREAMs the stream and does NOT emit kRequestEnd.
+RUVIA_TEST(http2_connection_feed_data_short_of_content_length_resets) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto h = postHeadFrame(&resource, "10");  // promises 10 bytes
+    conn.feed(std::string_view(h.data(), h.size()));
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
+
+    const char body[5] = {'s', 'h', 'o', 'r', 't'};  // only 5, with END_STREAM
+    const auto d = dataFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndStream, std::string_view(body, 5));
+    conn.feed(std::string_view(d.data(), d.size()));
+
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestBodyChunk);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);  // no kRequestEnd
+    auto* s = conn.stream(1);
+    RUVIA_CHECK(s != nullptr && s->isReset());
+}
