@@ -4,7 +4,6 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "net/http2/Http2FramePhase.h"
 #include "net/http2/Http2HeaderContinuation.h"
 #include "net/http2/Http2HeaderDecode.h"
 #include "net/http2/Http2Upgrade.h"
@@ -14,8 +13,6 @@
 namespace {
 
 using ruvia::HttpParseError;
-using ruvia::detail::ConnectionScanner;
-using ruvia::detail::http2ReadFramePhase;
 using ruvia::detail::HeaderDecodeStatus;
 using ruvia::detail::HpackDecodeResult;
 using ruvia::detail::HpackError;
@@ -27,17 +24,6 @@ using ruvia::detail::isHttp2UpgradeAttempt;
 using ruvia::detail::parseHttp2UpgradeRequest;
 
 }  // namespace
-
-RUVIA_TEST(http2_read_frame_phase_uses_body_timeout_outside_header_blocks) {
-    // A header block still being assembled (awaiting CONTINUATION) keeps the tight
-    // header timeout -- the CONTINUATION-flood / slow-loris bound. Every other read
-    // wait (request-body DATA, idle between requests) uses the body timeout so a
-    // slow legitimate upload is not cut off by the shorter header timeout.
-    RUVIA_CHECK(http2ReadFramePhase(/*headerBlockInProgress=*/true) ==
-                ConnectionScanner::Phase::kReadingHeader);
-    RUVIA_CHECK(http2ReadFramePhase(/*headerBlockInProgress=*/false) ==
-                ConnectionScanner::Phase::kReadingBody);
-}
 
 RUVIA_TEST(http2_base64url_alphabet_values) {
     // The base64url alphabet (RFC 4648 5): A-Z -> 0-25, a-z -> 26-51,

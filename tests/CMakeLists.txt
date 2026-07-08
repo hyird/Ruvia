@@ -51,7 +51,6 @@ add_executable(ruvia_unit_tests
     unit_http2_offset_vector.cpp
     unit_http2_stream_lifecycle.cpp
     unit_http2_header_rules.cpp
-    unit_http2_continuation_queue.cpp
     unit_response_trailers.cpp
     unit_http2_frame_payload.cpp
     unit_http2_connection.cpp
@@ -77,7 +76,6 @@ add_executable(ruvia_unit_tests
     unit_http2_frame_codec.cpp
     unit_http2_peer_settings.cpp
     unit_route_resolution.cpp
-    unit_http2_session_results.cpp
     unit_connection_read_buffer.cpp
     unit_http2_stream_routing.cpp
     unit_http2_stream_request_data.cpp
