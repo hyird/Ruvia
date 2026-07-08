@@ -134,6 +134,19 @@ public:
     void queueLocalSettings();
 
 private:
+    // Outbound frame emission: encode a 9-byte header + payload into outBuffer_.
+    // Replaces the coroutine writeFramePayload; the encoders are pure.
+    void appendFrame(
+        Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
+        std::string_view first, std::string_view second = {});
+    void appendGoaway(Http2ErrorCode error, std::string_view debug = {});
+
+    // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
+    // on a fatal protocol error, having appended GOAWAY and set closing_).
+    [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool applySettingsPayload(std::string_view payload);
+
     std::pmr::memory_resource* resource_;
     Http2CoreConfig config_;
 

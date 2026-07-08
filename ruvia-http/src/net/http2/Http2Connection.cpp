@@ -60,11 +60,132 @@ std::span<const std::uint32_t> Http2Connection::takeUnblockedStreams() noexcept 
 // outBuffer_, (b) coroutine resume -> event / unblockedStreams_ marking.
 // =============================================================================
 
-Http2FeedResult Http2Connection::feed(std::string_view /*in*/) {
-    // TODO: port readFrame + processFrame here (frame codec + HPACK + stream state
-    // are already pure; append control-frame output to outBuffer_, push kRequest*
-    // events, and mark unblocked streams instead of resuming coroutines).
-    return {0, Http2FeedStatus::kNeedMore};
+void Http2Connection::appendFrame(
+    Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
+    std::string_view first, std::string_view second) {
+    std::array<char, kHttp2FrameHeaderBytes> header;
+    http2EncodeFrameHeader(
+        header.data(),
+        static_cast<std::uint32_t>(first.size() + second.size()),
+        type, flags, streamId);
+    outBuffer_.append(header.data(), kHttp2FrameHeaderBytes);
+    outBuffer_.append(first.data(), first.size());
+    if (!second.empty()) {
+        outBuffer_.append(second.data(), second.size());
+    }
+}
+
+void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
+    std::array<char, 8> payload;
+    auto* out = http2WriteGoawayPayload(payload.data(), lastStreamId_, error);
+    closing_ = true;
+    appendFrame(
+        Http2FrameType::kGoaway, 0, 0,
+        std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())), debug);
+}
+
+bool Http2Connection::applySettingsPayload(std::string_view payload) {
+    if (!http2SettingsPayloadSizeValid(payload)) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid SETTINGS size");
+        return false;
+    }
+    for (std::size_t offset = 0; offset < payload.size(); offset += 6) {
+        const auto entry = http2ReadSettingEntry(payload, offset);
+        const auto result = peerSettings_.apply(entry.id, entry.value);
+        if (result.status != Http2PeerSettingsStatus::kOk) {
+            appendGoaway(http2PeerSettingsErrorCode(result.status), http2PeerSettingsErrorMessage(result.status));
+            return false;
+        }
+        if (result.initialWindowChanged &&
+            !http2ApplyStreamSendWindowDelta(streams_, result.initialWindowDelta)) {
+            appendGoaway(Http2ErrorCode::kFlowControlError, "stream window overflow");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Http2Connection::processSettings(const Http2FrameHeader& header, std::string_view payload) {
+    if (header.streamId != 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "SETTINGS stream id must be zero");
+        return false;
+    }
+    if ((header.flags & kHttp2FlagAck) != 0) {
+        if (!payload.empty()) {
+            appendGoaway(Http2ErrorCode::kFrameSizeError, "SETTINGS ack payload");
+            return false;
+        }
+        receivedFirstSettings_ = true;
+        return true;
+    }
+    if (!applySettingsPayload(payload)) {
+        return false;
+    }
+    receivedFirstSettings_ = true;
+    appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
+    // TODO(next): flow-control window may have opened -> mark unblocked streams.
+    return true;
+}
+
+bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
+    if (!receivedFirstSettings_ &&
+        header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
+        return false;
+    }
+    if (!headerContinuation_.expectsFrameType(header.type)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "expected CONTINUATION");
+        return false;
+    }
+    switch (static_cast<Http2FrameType>(header.type)) {
+        case Http2FrameType::kSettings:
+            return processSettings(header, payload);
+        case Http2FrameType::kGoaway:
+            closing_ = true;
+            return true;
+        // TODO(sans-io): kData/kHeaders/kPriority/kRstStream/kPing/kWindowUpdate/
+        // kContinuation are ported next (each 1:1 from processData/processHeaders/...
+        // with async_write -> appendFrame and coroutine-resume -> events/unblocked).
+        default:
+            appendGoaway(Http2ErrorCode::kInternalError, "frame type not yet ported");
+            return false;
+    }
+}
+
+Http2FeedResult Http2Connection::feed(std::string_view in) {
+    // Buffer all fed bytes (nghttp2_session_mem_recv semantics: the caller may drop
+    // its buffer after feed). Then consume as many complete frames as are available.
+    input_.append(in.data(), in.size());
+    for (;;) {
+        const std::size_t available = input_.size() - inputOffset_;
+        if (available < kHttp2FrameHeaderBytes) {
+            break;
+        }
+        const auto header = http2ParseFrameHeader(
+            std::string_view(input_.data() + inputOffset_, kHttp2FrameHeaderBytes));
+        if (header.length > kHttp2MaxFrameSizeLimit || header.length > localMaxFrameSize_) {
+            appendGoaway(Http2ErrorCode::kFrameSizeError, "frame too large");
+            return {in.size(), Http2FeedStatus::kError};
+        }
+        if (available < kHttp2FrameHeaderBytes + header.length) {
+            break;  // partial frame; wait for the next feed
+        }
+        const auto payload = std::string_view(
+            input_.data() + inputOffset_ + kHttp2FrameHeaderBytes, header.length);
+        if (!processFrame(header, payload)) {
+            return {in.size(), Http2FeedStatus::kError};
+        }
+        inputOffset_ += kHttp2FrameHeaderBytes + header.length;
+        if (closing_) {
+            break;
+        }
+    }
+    // Reclaim the consumed prefix so input_ does not grow unbounded.
+    if (inputOffset_ > 0) {
+        input_.erase(0, inputOffset_);
+        inputOffset_ = 0;
+    }
+    return {in.size(), Http2FeedStatus::kOk};
 }
 
 Http2StreamState* Http2Connection::stream(std::uint32_t /*streamId*/) noexcept {
