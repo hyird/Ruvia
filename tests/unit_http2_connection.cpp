@@ -380,9 +380,11 @@ RUVIA_TEST(http2_connection_feed_data_short_of_content_length_resets) {
     conn.feed(std::string_view(d.data(), d.size()));
 
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestBodyChunk);
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);  // no kRequestEnd
-    auto* s = conn.stream(1);
-    RUVIA_CHECK(s != nullptr && s->isReset());
+    // The length mismatch aborts the stream: kStreamClosed (never kRequestEnd), and
+    // the (unpinned) stream is removed from the table.
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kStreamClosed);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
+    RUVIA_CHECK(conn.stream(1) == nullptr);
 }
 
 // submitResponseHead emits a HEADERS block (END_HEADERS, no END_STREAM when a body

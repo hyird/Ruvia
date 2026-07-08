@@ -23,17 +23,18 @@
 #include "ruvia/memory/PmrObject.h"
 #include "HttpClientAccess.h"
 #include "HttpClientBackend.h"
-#include "net/http2/Http2ClosedStreams.h"
-#include "net/http2/Http2Hpack.h"
-#include "net/http2/Http2FrameTypes.h"
-#include "net/http2/Http2PeerSettings.h"
-#include "net/http2/Http2StreamFlowControl.h"
+#include "net/http2/Http2Connection.h"
 
 namespace ruvia::detail {
 
-// A single multiplexed HTTP/2 connection to one origin. A background read loop parses frames
-// and drives per-stream state; a background flush loop serializes all outbound writes. Each
-// fetch() opens one client (odd) stream and suspends until the stream completes.
+// A single multiplexed HTTP/2 connection to one origin, driven over the sans-I/O
+// Http2Connection core in client role (the SAME state machine the server runs). A
+// background read loop feeds raw bytes to the core and reacts to its events; a
+// background flush loop drains the core's outbound buffer. Each fetch() opens one
+// client (odd) stream and suspends until the stream completes. Everything protocol
+// (framing, HPACK, flow control, response validation, GOAWAY) lives in the core;
+// this class holds only client policy: sockets/TLS, deadlines, concurrency slots,
+// response accumulation, redirects, and the streaming source.
 class Http2ClientSession final : public HttpClientBackend {
 public:
     Http2ClientSession(
@@ -72,33 +73,29 @@ private:
 
     enum class State : std::uint8_t { kIdle, kConnecting, kReady, kClosed };
 
+    // Client policy for one in-flight request; all protocol state (windows, decode,
+    // content-length accounting) lives in the core's Http2StreamState, kept alive by
+    // pinStream until destroyStream unpins it.
     struct Stream final {
         explicit Stream(std::pmr::memory_resource* requestResource)
             : response(FetchResponseAccess::make(requestResource)) {}
 
-        Http2StreamFlowControl flow;
         FetchResponse response;         // status/headers accumulate here; body too (buffered mode)
-        std::string_view pendingBody{}; // request body bytes still to send (borrowed)
         std::pmr::memory_resource* requestResource{nullptr};
         std::size_t maxBodyBytes{0};
-        std::size_t responseContentLength{0};
-        std::size_t responseBodyBytes{0};
-        std::int32_t flowDebt{0};       // received bytes awaiting a WINDOW_UPDATE on consume (streaming)
         // nginx-style inactivity deadline, refreshed on every frame for this stream (scanDeadlines
         // RSTs it, waking both the reader and any parked request-body send). While the request body
-        // is still being sent (!localEndSent) the gap is bounded by sendTimeout (proxy_send_timeout);
-        // once fully sent, by readTimeout (proxy_read_timeout). Applies to buffered + streaming.
+        // is still going out the gap is bounded by sendTimeout (proxy_send_timeout); once fully
+        // sent, by readTimeout (proxy_read_timeout). Applies to buffered + streaming.
         std::chrono::milliseconds readTimeout{0};
         std::chrono::milliseconds sendTimeout{0};
         std::chrono::steady_clock::time_point deadline{};
         std::uint32_t id{0};
-        std::size_t informationalResponses{0};
         bool streaming{false};          // deliver DATA incrementally with flow-control backpressure
         bool responseBodyAllowed{true};
-        bool responseHasContentLength{false};
         bool hasDeadline{false};
         bool headersComplete{false};
-        bool localEndSent{false};       // we sent END_STREAM for the request
+        bool localEndSent{false};       // we sent (or queued) END_STREAM for the request
         bool remoteEnded{false};        // server sent END_STREAM
         bool remoteEndFromHeaders{false};
         bool failed{false};
@@ -164,18 +161,19 @@ private:
         void await_resume() const noexcept {}
     };
 
-    // The flush loop parks here until bytes are queued or the session closes.
+    // The flush loop parks here until the core has bytes to write or the session closes.
     struct FlushAwaiter final {
         Http2ClientSession* session;
         [[nodiscard]] bool await_ready() const noexcept {
-            return !session->outBuffer_.empty() || session->state_ == State::kClosed;
+            return session->conn_.wantsWrite() || session->state_ == State::kClosed;
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept { session->flushWaiter_ = handle; }
         void await_resume() const noexcept {}
     };
 
-    // A streamed request-body send parks here until the connection + stream send windows both
-    // reopen (WINDOW_UPDATE), the stream fails, or the session closes.
+    // A streamed request-body send parks here until the core drained this stream's
+    // window-blocked remainder (WINDOW_UPDATE/SETTINGS), the stream fails/ends, or the
+    // session closes.
     struct SendWindowAwaiter final {
         Http2ClientSession* session;
         std::uint32_t streamId;
@@ -187,7 +185,7 @@ private:
             if (it == session->streams_.end() || it->second->failed || it->second->remoteEnded) {
                 return true;  // gone/reset, or the server already sent a full response
             }
-            return session->connectionSendWindow_ > 0 && it->second->flow.sendWindow() > 0;
+            return !session->conn_.hasBlockedSend(streamId);
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
             session->sendWindowWaiters_.push_back(handle);
@@ -200,9 +198,7 @@ private:
     Task<void> flushLoop();
     Task<std::pair<std::error_code, std::size_t>> readSome(asio::mutable_buffer buffer);
     Task<std::error_code> writeBytes(std::string_view bytes);
-    Task<bool> ensureInput(std::size_t needed);
 
-    void queueBytes(std::string_view bytes);
     void wakeFlusher() noexcept;
     void resume(std::coroutine_handle<> handle) noexcept;
 
@@ -216,47 +212,30 @@ private:
     void failStream(Stream& stream, Http2ErrorCode error) noexcept;
     void failAllStreams() noexcept;
 
-    // Frame handlers are synchronous: they mutate state and queue bytes, never await.
-    // Return false on a fatal protocol error that must tear down the connection.
-    [[nodiscard]] bool onFrame(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onSettings(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onHeaders(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onContinuation(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onData(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onPing(const Http2FrameHeader& header, std::string_view payload);
-    [[nodiscard]] bool onRstStream(const Http2FrameHeader& header, std::string_view payload);
-    void onGoaway(std::string_view payload) noexcept;
-    // Decode the fully-assembled header block. HPACK is stateful and connection-global, so this
-    // ALWAYS decodes (keeping the dynamic table synced) even when the target stream is missing
-    // (closed) or the block is trailers to be discarded; `applyStream` non-null means apply the
-    // decoded response headers, null means decode-and-discard.
-    [[nodiscard]] bool finalizeHeaderBlock(Stream* stream, bool apply, bool endStream);
-    [[nodiscard]] bool beginHeaderBlock(
-        std::uint32_t streamId, Stream* stream, bool discard, bool endStream, bool endHeaders,
-        std::string_view fragment);
+    // Core event pump: called after every feed; reacts to response heads/chunks/ends,
+    // stream resets, GOAWAY, and send-window drain reports.
+    void drainCoreEvents();
+    void onResponseHead(std::uint32_t streamId);
+    void onResponseChunk(std::uint32_t streamId, std::string_view data);
+    void handlePeerGoaway(std::uint32_t lastStreamId) noexcept;
+    void resetStream(std::uint32_t streamId, Http2ErrorCode error) noexcept;
 
-    // Connect (if needed), respect MAX_CONCURRENT_STREAMS, encode + send the request headers/body,
-    // and register the new stream. Shared by fetch() (buffered) and fetchStream() (streaming).
+    // Connect (if needed), respect MAX_CONCURRENT_STREAMS, encode + submit the request
+    // headers/body through the core, and register the new stream. Shared by fetch()
+    // (buffered) and fetchStream() (streaming).
     [[nodiscard]] Task<Stream*> beginRequest(
         std::string_view path,
         const FetchOptions& options,
         std::pmr::memory_resource* requestResource,
         bool streaming);
 
-    void sendPendingData(Stream& stream);
-    // Pull a streamed request body and send it as flow-controlled DATA frames ending in
-    // END_STREAM. Runs inline in beginRequest (the read loop concurrently supplies WINDOW_UPDATE),
-    // so the borrowed body stream outlives the send.
+    // Pull a streamed request body and submit it as flow-controlled DATA ending in
+    // END_STREAM; waits for the core to drain a window-blocked remainder before pulling
+    // the next chunk (the read loop concurrently supplies WINDOW_UPDATE).
     Task<void> streamRequestBody(std::uint32_t streamId, const RequestBodyStream& bodyStream);
     void wakeSendWindow() noexcept;
     void wakeStreamSlot() noexcept;
     [[nodiscard]] std::size_t openStreamCount() const noexcept;
-    void appendFrame(Http2FrameType type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload);
-    void queueHeaders(std::uint32_t streamId, std::string_view block, bool endStream);
-    void queueSettingsAck();
-    void queueWindowUpdate(std::uint32_t streamId, std::uint32_t increment, bool includeStream);
-    void sendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
     asio::io_context& ioContext_;
     HttpClientConfig config_;
@@ -266,29 +245,16 @@ private:
     std::optional<asio::ssl::context> sslContext_;
     std::unique_ptr<TlsStream, TlsStreamDeleter> tlsStream_;
 
-    HpackDecoder decoder_;
-    Http2PeerSettings peerSettings_;
+    Http2Connection conn_;         // the sans-I/O h2 core, client role
     std::pmr::string authority_;   // host[:port] for the :authority pseudo-header
     std::string_view scheme_;      // "https" or "http"
-
-    std::pmr::string input_;
-    std::size_t inputOffset_{0};
-    std::pmr::string outBuffer_;
-    std::pmr::string encodeScratch_;   // reused HPACK request-header block
-    std::pmr::string headerAssembly_;  // HEADERS + CONTINUATION reassembly (connection-global)
+    std::pmr::string readBuffer_;  // scratch for socket reads fed into the core
 
     std::pmr::unordered_map<std::uint32_t, Stream*> streams_;
-    Http2ClosedStreamHistory closedStreams_;
     std::pmr::vector<std::coroutine_handle<>> readyWaiters_;
     std::pmr::vector<SlotWaiter*> streamSlotWaiters_;  // fetches parked at MAX_CONCURRENT_STREAMS
     std::pmr::vector<std::coroutine_handle<>> sendWindowWaiters_;  // request-body sends parked on flow control
     std::coroutine_handle<> flushWaiter_{};
-
-    std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
-    std::uint32_t nextStreamId_{1};
-    std::uint32_t continuationStream_{0};
-    bool continuationEndStream_{false};
-    bool continuationDiscard_{false};
 
     std::chrono::steady_clock::time_point connectDeadline_{};
     bool hasConnectDeadline_{false};
@@ -296,7 +262,6 @@ private:
     State state_{State::kIdle};
     std::size_t runningLoops_{0};  // detached read/flush loops still holding `this`
     bool settingsReceived_{false};
-    bool goawayReceived_{false};
 
     // fetch() parks here (returns not-ready) until an open-stream slot frees below the peer's
     // SETTINGS_MAX_CONCURRENT_STREAMS limit.
@@ -305,7 +270,7 @@ private:
         SlotWaiter* waiter;
         [[nodiscard]] bool await_ready() const noexcept {
             return session->state_ != State::kReady ||
-                   session->openStreamCount() < session->peerSettings_.maxConcurrentStreams();
+                   session->openStreamCount() < session->conn_.peerMaxConcurrentStreams();
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
             waiter->handle = handle;

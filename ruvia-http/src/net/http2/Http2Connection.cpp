@@ -154,6 +154,12 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
             appendGoaway(Http2ErrorCode::kFrameSizeError, "SETTINGS ack payload");
             return false;
         }
+        if (role_ == Http2Role::kClient && !receivedFirstSettings_) {
+            // The server preface must be a (possibly empty) non-ACK SETTINGS frame
+            // (RFC 9113 §3.4); an ACK alone does not satisfy it.
+            appendGoaway(Http2ErrorCode::kProtocolError, "SETTINGS ACK before SETTINGS");
+            return false;
+        }
         receivedFirstSettings_ = true;
         return true;
     }
@@ -162,7 +168,9 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
     }
     receivedFirstSettings_ = true;
     appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
-    // TODO(next): flow-control window may have opened -> mark unblocked streams.
+    // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred bodies
+    // and report the unblocked streams to the owner.
+    markSendWindowOpened();
     return true;
 }
 
@@ -252,12 +260,12 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
             return true;
         case Http2WindowUpdateResult::kZeroIncrement:
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             markSendWindowOpened();
             return true;
         case Http2WindowUpdateResult::kOverflow:
             appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             markSendWindowOpened();
             return true;
     }
@@ -648,7 +656,11 @@ bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, Header
         return false;
     }
     appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-    stream.markReset();
+    if (findStream(stream.id()) == &stream) {
+        closeStream(stream.id(), Http2StreamCloseSource::kLocal);  // emits kStreamClosed
+    } else {
+        stream.markReset();  // refused-stream scratch, not in the table
+    }
     return true;
 }
 
@@ -695,7 +707,11 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             lastStreamId_ = header.streamId;
         }
         appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+        if (findStream(header.streamId) != nullptr) {
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);  // owner observes the abort
+        } else {
+            closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+        }
         return true;
     }
 
@@ -805,12 +821,12 @@ bool Http2Connection::processTrailerHeaders(
     Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload) {
     if (stream.bodyEnded()) {
         appendRstStream(stream.id(), Http2ErrorCode::kStreamClosed);
-        stream.markReset();
+        closeStream(stream.id(), Http2StreamCloseSource::kLocal);
         return true;
     }
     if ((header.flags & kHttp2FlagEndStream) == 0) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-        stream.markReset();
+        closeStream(stream.id(), Http2StreamCloseSource::kLocal);
         return true;
     }
 
@@ -931,13 +947,13 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
     if (!stream->headersDecoded()) {
         appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        stream->markReset();
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
         dropDataFrame(payload.size(), /*windowConsumed=*/false);
         return true;
     }
     if (stream->bodyEnded()) {
         appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        stream->markReset();
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
         dropDataFrame(payload.size(), /*windowConsumed=*/false);
         return true;
     }
@@ -953,7 +969,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             // The stream debit was rejected, so the connection window was not touched:
             // credit the peer back without restoring it locally.
             appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             dropDataFrame(payload.size(), /*windowConsumed=*/false);
             return true;
     }
@@ -970,12 +986,12 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             break;
         case Http2BodyAccountingResult::kTooLarge:
             appendRstStream(header.streamId, Http2ErrorCode::kCancel);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             dropDataFrame(payload.size(), /*windowConsumed=*/true);
             return true;
         case Http2BodyAccountingResult::kContentLengthExceeded:
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             dropDataFrame(payload.size(), /*windowConsumed=*/true);
             return true;
     }
@@ -1002,7 +1018,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         if (!http2BodyLengthComplete(*stream)) {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            stream->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
             return true;
         }
         http2MarkBodyEnded(*stream);
@@ -1054,9 +1070,12 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             }
             return true;
         }
-        default:
-            appendGoaway(Http2ErrorCode::kInternalError, "frame type not yet ported");
+        case Http2FrameType::kPushPromise:
+            // Server: clients can never push. Client: we advertise ENABLE_PUSH=0.
+            appendGoaway(Http2ErrorCode::kProtocolError, "unexpected PUSH_PROMISE");
             return false;
+        default:
+            return true;  // RFC 9113 §4.1: unknown frame types MUST be ignored
     }
 }
 
