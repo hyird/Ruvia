@@ -59,6 +59,9 @@ struct Http2CoreConfig final {
     std::uint32_t initialSendWindow{kHttp2DefaultInitialWindowSize};
     std::uint32_t initialReceiveWindow{kHttp2LocalInitialWindowSize};
     std::size_t maxHeaderListBytes{kMaxHttpHeaderBytes};
+    // DoS-protection body caps (protocol-level, nghttp2-style; NOT server policy).
+    std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};      // 0 = unlimited
+    std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
 };
 
 enum class Http2FeedStatus : std::uint8_t {
@@ -160,6 +163,10 @@ private:
     [[nodiscard]] bool processTrailerHeaders(
         Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processContinuation(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processData(const Http2FrameHeader& header, std::string_view payload);
+    // A DATA frame we must discard while keeping the connection: hand the peer its
+    // connection flow-control credit back (WINDOW_UPDATE) so its send window recovers.
+    void dropDataFrame(std::size_t flowBytes, bool windowConsumed);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but

@@ -3,6 +3,7 @@
 #include <array>
 #include <utility>
 
+#include "Http2BodyQueue.h"
 #include "Http2BodyState.h"
 #include "Http2FlowControl.h"
 #include "Http2FrameCodec.h"
@@ -549,6 +550,120 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
     return true;
 }
 
+void Http2Connection::dropDataFrame(std::size_t flowBytes, bool windowConsumed) {
+    // RFC 9113 §6.9.1: DATA counts against the peer's connection send window even when
+    // the frame is in error. Keeping the connection means we must return that credit or
+    // the peer's window drains to zero and stalls. Only the connection window is
+    // re-advertised; the stream is being abandoned.
+    if (windowConsumed) {
+        connectionReceiveWindow_ += static_cast<std::int32_t>(flowBytes);
+    }
+    if (flowBytes == 0) {
+        return;
+    }
+    char buf[kHttp2WindowUpdateFrameBytes];
+    http2WriteWindowUpdate(buf, 0, static_cast<std::uint32_t>(flowBytes));
+    outBuffer_.append(buf, sizeof(buf));
+}
+
+bool Http2Connection::processData(const Http2FrameHeader& header, std::string_view payload) {
+    if (header.streamId == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "DATA stream id must be nonzero");
+        return false;
+    }
+    if ((header.streamId & 1U) == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "DATA on invalid client stream id");
+        return false;
+    }
+    auto* stream = findStream(header.streamId);
+    if (stream == nullptr) {
+        if (header.streamId <= lastStreamId_) {
+            appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+            dropDataFrame(payload.size(), /*windowConsumed=*/false);
+            return true;
+        }
+        appendGoaway(Http2ErrorCode::kProtocolError, "DATA before HEADERS");
+        return false;
+    }
+    if (stream->isReset()) {
+        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        return true;
+    }
+    if (!stream->headersDecoded()) {
+        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+        stream->markReset();
+        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        return true;
+    }
+    if (stream->bodyEnded()) {
+        appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+        stream->markReset();
+        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        return true;
+    }
+
+    const auto flowBytes = static_cast<std::int32_t>(payload.size());
+    switch (http2ConsumeReceiveWindows(connectionReceiveWindow_, *stream, flowBytes)) {
+        case Http2ReceiveWindowResult::kOk:
+            break;
+        case Http2ReceiveWindowResult::kConnectionExceeded:
+            appendGoaway(Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
+            return false;
+        case Http2ReceiveWindowResult::kStreamExceeded:
+            // The stream debit was rejected, so the connection window was not touched:
+            // credit the peer back without restoring it locally.
+            appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
+            stream->markReset();
+            dropDataFrame(payload.size(), /*windowConsumed=*/false);
+            return true;
+    }
+
+    std::string_view data;
+    if (!http2DecodeDataPayload(header, payload, data)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid DATA padding");
+        return false;
+    }
+
+    switch (http2AccountDataBody(
+        *stream, data.size(), config_.maxStreamBodyBytes, config_.maxBufferedBodyBytes)) {
+        case Http2BodyAccountingResult::kOk:
+            break;
+        case Http2BodyAccountingResult::kTooLarge:
+            appendRstStream(header.streamId, Http2ErrorCode::kCancel);
+            stream->markReset();
+            dropDataFrame(payload.size(), /*windowConsumed=*/true);
+            return true;
+        case Http2BodyAccountingResult::kContentLengthExceeded:
+            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            stream->markReset();
+            dropDataFrame(payload.size(), /*windowConsumed=*/true);
+            return true;
+    }
+    if (flowBytes > 0) {
+        const auto increment = static_cast<std::uint32_t>(flowBytes);
+        http2RestoreReceiveWindows(connectionReceiveWindow_, *stream, flowBytes);
+        char buf[kHttp2WindowUpdateFrameBytes * 2];
+        auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
+        outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
+    }
+
+    // sans-I/O: hand the body to the owner as an event; the core does not buffer it
+    // (buffered vs streaming delivery is web/edge policy). Content-length and size caps
+    // were already enforced by http2AccountDataBody above. The view is valid until the
+    // next feed (input_ is only reclaimed at the start of the following feed).
+    events_.push_back(Http2Event{Http2Event::Kind::kRequestBodyChunk, header.streamId, data});
+    if ((header.flags & kHttp2FlagEndStream) != 0) {
+        if (!http2BodyLengthComplete(*stream)) {
+            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            stream->markReset();
+            return true;
+        }
+        http2MarkBodyEnded(*stream);
+        events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, header.streamId, {}});
+    }
+    return true;
+}
+
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (!receivedFirstSettings_ &&
         header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
@@ -574,11 +689,11 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processHeaders(header, payload);
         case Http2FrameType::kContinuation:
             return processContinuation(header, payload);
+        case Http2FrameType::kData:
+            return processData(header, payload);
         case Http2FrameType::kGoaway:
             closing_ = true;
             return true;
-        // TODO(sans-io): kData is ported next (body -> kRequestBodyChunk / kRequestEnd
-        // with receive-window flow control).
         default:
             appendGoaway(Http2ErrorCode::kInternalError, "frame type not yet ported");
             return false;
@@ -586,6 +701,19 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
 }
 
 Http2FeedResult Http2Connection::feed(std::string_view in) {
+    // Reclaim the prefix consumed by the PREVIOUS feed now, at the start of this one --
+    // not at the end of that feed. A kRequestBodyChunk event carries a view INTO input_,
+    // and erasing the prefix shifts the buffer (invalidating those views); deferring the
+    // reclaim keeps them valid until this next feed, matching the documented contract.
+    // The prior feed's events reference now-stale bytes, so reset the event queue too:
+    // the owner must drain events after each feed (standard sans-I/O contract).
+    if (inputOffset_ > 0) {
+        input_.erase(0, inputOffset_);
+        inputOffset_ = 0;
+    }
+    events_.clear();
+    eventOffset_ = 0;
+
     // Buffer all fed bytes (nghttp2_session_mem_recv semantics: the caller may drop
     // its buffer after feed). Then consume as many complete frames as are available.
     input_.append(in.data(), in.size());
@@ -613,11 +741,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
             break;
         }
     }
-    // Reclaim the consumed prefix so input_ does not grow unbounded.
-    if (inputOffset_ > 0) {
-        input_.erase(0, inputOffset_);
-        inputOffset_ = 0;
-    }
+    // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
+    // so body-chunk views handed out via events stay valid until then.
     return {in.size(), Http2FeedStatus::kOk};
 }
 
