@@ -414,6 +414,37 @@ RUVIA_TEST(http2_connection_submit_response_head_and_body) {
     RUVIA_CHECK((dd.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
 }
 
+// submitStreamingResponseHead emits HEADERS with NO Content-Length and leaves the
+// stream open; subsequent submitData chunks stream the body, the last with END_STREAM.
+RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+
+    ruvia::HttpResponse resp(&resource);
+    resp.status(200);
+    conn.submitStreamingResponseHead(1, resp, /*bodyForbidden=*/false);
+
+    const auto head = conn.pendingOutput();
+    const auto hd = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
+    RUVIA_CHECK_EQ(hd.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK((hd.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
+    RUVIA_CHECK((hd.flags & ruvia::detail::kHttp2FlagEndStream) == 0);  // stays open
+    conn.consumeOutput(head.size());
+
+    conn.submitData(1, "chunk1", /*endStream=*/false);
+    conn.submitData(1, "chunk2", /*endStream=*/true);
+    const auto body = conn.pendingOutput();
+    const auto d1 = ruvia::detail::http2ParseFrameHeader(body.substr(0, 9));
+    RUVIA_CHECK_EQ(d1.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(d1.length, static_cast<std::uint32_t>(6));
+    RUVIA_CHECK((d1.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
+    const auto d2 = ruvia::detail::http2ParseFrameHeader(body.substr(9 + 6, 9));
+    RUVIA_CHECK_EQ(d2.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK((d2.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+}
+
 // A body larger than the send window is partially sent and the remainder buffered
 // (kBlocked). A WINDOW_UPDATE drains the rest with END_STREAM and reports the stream
 // unblocked -- the sans-I/O equivalent of nghttp2 defer/resume.

@@ -130,6 +130,12 @@ public:
 
     // Submit a response for `streamId`. Head first, then data chunks, then end.
     void submitResponseHead(std::uint32_t streamId, const HttpResponse& response, bool bodyForbidden);
+    // Submit a STREAMING response head: emit the HEADERS block with NO auto
+    // Content-Length (the body length is unknown), leaving the stream open for
+    // subsequent submitData chunks unless bodyForbidden (then END_STREAM on the head).
+    // The owner then streams the body with submitData(..., endStream) at the end.
+    void submitStreamingResponseHead(
+        std::uint32_t streamId, const HttpResponse& head, bool bodyForbidden);
     [[nodiscard]] Http2SubmitResult submitData(std::uint32_t streamId, std::string_view chunk, bool endStream);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
