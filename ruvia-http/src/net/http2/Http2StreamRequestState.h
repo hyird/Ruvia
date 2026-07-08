@@ -120,6 +120,24 @@ public:
         webSocketTunnel_ = true;
     }
 
+    // Client role: the decoded response :status for a stream this endpoint opened,
+    // and how many 1xx interim heads preceded the final one (bounded by the owner).
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return responseStatus_;
+    }
+
+    void setResponseStatus(std::uint16_t status) noexcept {
+        responseStatus_ = status;
+    }
+
+    [[nodiscard]] std::uint8_t interimResponseCount() const noexcept {
+        return interimResponses_;
+    }
+
+    void countInterimResponse() noexcept {
+        ++interimResponses_;
+    }
+
 private:
     bool hasMethod_ : 1 {false};
     bool hasProtocol_ : 1 {false};
@@ -136,6 +154,8 @@ private:
     bool webSocketTunnel_ : 1 {false};
     std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
+    std::uint16_t responseStatus_{0};
+    std::uint8_t interimResponses_{0};
 };
 
 }  // namespace ruvia::detail

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <utility>
 
 #include "HttpResponseBodyAccess.h"
@@ -21,7 +22,8 @@
 
 namespace ruvia::detail {
 
-Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2CoreConfig config)
+Http2Connection::Http2Connection(
+    std::pmr::memory_resource* resource, Http2CoreConfig config, Http2Role role)
     : resource_(resource),
       config_(config),
       input_(resource),
@@ -35,7 +37,8 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2CoreC
       pinnedStreams_(resource),
       localMaxFrameSize_(config.maxFrameSize),
       connectionSendWindow_(static_cast<std::int32_t>(config.initialSendWindow)),
-      connectionReceiveWindow_(static_cast<std::int32_t>(config.initialReceiveWindow)) {
+      connectionReceiveWindow_(static_cast<std::int32_t>(config.initialReceiveWindow)),
+      role_(role) {
     decoder_.setMaxDynamicTableSize(4096);
 }
 
@@ -237,7 +240,7 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
     }
     auto* stream = streams_.find(header.streamId);
     if (stream == nullptr) {
-        if (http2IsIdleStream(header.streamId, lastStreamId_)) {
+        if (isIdleStreamId(header.streamId)) {
             appendGoaway(Http2ErrorCode::kProtocolError, "WINDOW_UPDATE on idle stream");
             return false;
         }
@@ -316,7 +319,7 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         return false;
     }
     if (streams_.find(header.streamId) == nullptr &&
-        http2IsIdleStream(header.streamId, lastStreamId_)) {
+        isIdleStreamId(header.streamId)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
         return false;
     }
@@ -366,6 +369,60 @@ Http2StreamState* Http2Connection::createStream(std::uint32_t streamId) {
     return streams_.create(streamId, peerSettings_.initialWindowSize());
 }
 
+bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
+    if (role_ == Http2Role::kClient) {
+        // No server-initiated streams exist (push is never enabled), so every even id
+        // is idle, as is any odd id this endpoint has not opened yet.
+        return (streamId & 1U) == 0 || streamId >= nextLocalStreamId_;
+    }
+    return http2IsIdleStream(streamId, lastStreamId_);
+}
+
+void Http2Connection::queueClientPreface() {
+    outBuffer_.append(kHttp2ClientPreface.data(), kHttp2ClientPreface.size());
+    queueLocalSettings();
+}
+
+std::uint32_t Http2Connection::openLocalStream() {
+    if (role_ != Http2Role::kClient || closing_ || nextLocalStreamId_ > 0x7fffffffU) {
+        return 0;
+    }
+    auto* stream = createStream(nextLocalStreamId_);
+    if (stream == nullptr) {
+        return 0;
+    }
+    const auto streamId = nextLocalStreamId_;
+    nextLocalStreamId_ += 2;
+    return streamId;
+}
+
+void Http2Connection::submitRequestHead(
+    std::uint32_t streamId,
+    std::string_view method,
+    std::string_view scheme,
+    std::string_view authority,
+    std::string_view path,
+    std::span<const HttpHeaderView> headers,
+    bool endStream) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return;
+    }
+    stream->setRequestMethod(parseMethod(method));
+    auto& block = stream->responseHeaderBlock();
+    block.clear();
+    HpackEncoder::encodeHeader(block, ":method", method);
+    HpackEncoder::encodeHeader(block, ":scheme", scheme);
+    HpackEncoder::encodeHeader(block, ":authority", authority);
+    HpackEncoder::encodeHeader(block, ":path", path);
+    for (const auto& header : headers) {
+        HpackEncoder::encodeHeader(block, header.name(), header.value());
+    }
+    appendResponseHeaderFrames(
+        *stream, std::string_view(block.data(), block.size()), endStream);
+    http2ReleaseResponseHeaderBlock(*stream);
+}
+
 HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
     const auto result = decoder_.decode(
@@ -406,6 +463,107 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     // resolution and body-mode selection are ruvia-web/edge policy the owner applies
     // after pulling the kRequestHeaders event.
     return HeaderDecodeStatus::kOk;
+}
+
+namespace {
+
+// RFC 9113 §8.1: at most this many 1xx interim heads before the final response head
+// (DoS bound; mirrors the retired client session's limit).
+constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
+
+struct Http2ResponseDecodeContext final {
+    Http2HeaderDecodeContext base;
+    std::uint16_t status{0};
+    bool sawStatus{false};
+    bool sawRegular{false};
+};
+
+// Client-role response head decode: ':status' once and first, then validated regular
+// headers into the stream's header table (1xx heads are validated but not stored).
+bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::string_view value) {
+    auto* context = static_cast<Http2ResponseDecodeContext*>(target);
+    if (!http2AccumulateHeaderListBytes(context->base, name, value)) {
+        return false;
+    }
+    auto& stream = context->base.stream;
+    if (name.empty() || stream.requestHeadersFull()) {
+        return false;
+    }
+    if (name.front() == ':') {
+        if (name != ":status" || context->sawStatus || context->sawRegular) {
+            return false;
+        }
+        int status = 0;
+        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), status);
+        if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size() ||
+            status < 100 || status > 999 || status == 101) {
+            return false;
+        }
+        context->status = static_cast<std::uint16_t>(status);
+        context->sawStatus = true;
+        return true;
+    }
+    if (!context->sawStatus || !http2IsValidRegularHeader(name, value)) {
+        return false;
+    }
+    context->sawRegular = true;
+    if (context->status < 200) {
+        return true;  // interim head: validate only, never stored
+    }
+    const auto kind = classifyRequestHeader(name);
+    if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
+        if (!stream.markSingletonRequestHeader(singletonBit)) {
+            return false;
+        }
+    }
+    if (kind == RequestHeaderKind::kContentLength) {
+        std::size_t parsed = 0;
+        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+        if (ec != std::errc{} || ptr != value.data() + value.size()) {
+            return false;
+        }
+        if (!stream.setContentLength(parsed)) {
+            return false;
+        }
+    }
+    return stream.appendRequestHeader(name, value, kind);
+}
+
+}  // namespace
+
+HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
+    Http2ResponseDecodeContext context{Http2HeaderDecodeContext{stream}};
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedResponseHeader(target, name, value);
+        });
+    http2ResetHeaderBlock(stream);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
+        return status;
+    }
+    if (!context.sawStatus) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (context.status < 200) {
+        // 1xx interim head: cannot end the stream, bounded in count; the stream stays
+        // NOT headersDecoded so the next HEADERS block decodes as the (next) head.
+        if (stream.peerEndStream()) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        stream.countInterimResponse();
+        if (stream.interimResponseCount() > kMaxHttp2InterimResponses) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        return HeaderDecodeStatus::kOk;
+    }
+    stream.setResponseStatus(context.status);
+    stream.markHeadersDecoded();
+    return HeaderDecodeStatus::kOk;
+}
+
+HeaderDecodeStatus Http2Connection::decodeInitialHeaderBlock(Http2StreamState& stream) {
+    return role_ == Http2Role::kClient ? decodeResponseHeaderBlock(stream) : decodeHeaderBlock(stream);
 }
 
 HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream) {
@@ -454,8 +612,13 @@ bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, Header
 void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // RFC 9113 §8.1.1: a declared content-length must equal the summed DATA payload.
     // A body-less HEADERS (END_STREAM set) with a nonzero content-length can never be
-    // satisfied -- reject it here so both END_STREAM routes stay consistent.
-    if (stream.peerEndStream() && !http2BodyLengthComplete(stream)) {
+    // satisfied -- reject it here so both END_STREAM routes stay consistent. Client
+    // role: HEAD responses and 204/304 are exempt (their content-length describes the
+    // body a GET would have had, RFC 9110 §8.6).
+    const bool lengthExempt = role_ == Http2Role::kClient &&
+        (stream.requestMethod() == HttpMethod::kHead ||
+         stream.responseStatus() == 204 || stream.responseStatus() == 304);
+    if (stream.peerEndStream() && !lengthExempt && !http2BodyLengthComplete(stream)) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
         stream.markReset();
         return;
@@ -473,7 +636,9 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
     if ((header.streamId & 1U) == 0) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid client stream id");
+        appendGoaway(
+            Http2ErrorCode::kProtocolError,
+            role_ == Http2Role::kClient ? "HEADERS on even stream id" : "invalid client stream id");
         return false;
     }
 
@@ -483,7 +648,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
     if ((header.flags & kHttp2FlagPriority) != 0 && dependency == header.streamId) {
-        if (header.streamId > lastStreamId_) {
+        if (role_ == Http2Role::kServer && header.streamId > lastStreamId_) {
             lastStreamId_ = header.streamId;
         }
         appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
@@ -491,6 +656,8 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return true;
     }
 
+    Http2StreamState* stream = nullptr;
+    bool refusedStream = false;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
         if (existing->headersDecoded() && !existing->isReset()) {
             return processTrailerHeaders(*existing, header, payload);
@@ -503,34 +670,52 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
             return false;
         }
-        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        existing->markReset();
-        return true;
-    }
-    if (header.streamId <= lastStreamId_) {
-        const auto source = closedStreams_.source(header.streamId);
-        if (source == Http2StreamCloseSource::kPeer) {
-            appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+        if (role_ == Http2Role::kClient) {
+            // A 1xx interim head was decoded on this stream; this block is the next
+            // (possibly final) response head -- decode it through the shared tail.
+            stream = existing;
+        } else {
+            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            existing->markReset();
             return true;
         }
-        if (source == Http2StreamCloseSource::kLocal) {
-            appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
+    } else if (role_ == Http2Role::kClient) {
+        if (isIdleStreamId(header.streamId)) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "HEADERS on idle stream");
             return false;
         }
-        appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
-        return false;
-    }
-
-    // While draining, a stream above the id we advertised in GOAWAY must not be
-    // processed (RFC 9113 §6.8); route it through the refused-stream path so its
-    // header block is still decoded (to keep HPACK in sync) and then RST'd.
-    const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
-    auto* stream = drainRefused ? nullptr : createStream(header.streamId);
-    lastStreamId_ = header.streamId;
-    const bool refusedStream = stream == nullptr;
-    if (refusedStream) {
+        // A head for a stream this endpoint already closed (e.g. cancelled): decode
+        // and discard to keep HPACK in sync; the close was already signalled, so no
+        // RST_STREAM is added on top.
+        refusedStream = true;
         refusedHeaderStream_.emplace(header.streamId, resource_);
         stream = &*refusedHeaderStream_;
+    } else {
+        if (header.streamId <= lastStreamId_) {
+            const auto source = closedStreams_.source(header.streamId);
+            if (source == Http2StreamCloseSource::kPeer) {
+                appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+                return true;
+            }
+            if (source == Http2StreamCloseSource::kLocal) {
+                appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
+                return false;
+            }
+            appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
+            return false;
+        }
+
+        // While draining, a stream above the id we advertised in GOAWAY must not be
+        // processed (RFC 9113 §6.8); route it through the refused-stream path so its
+        // header block is still decoded (to keep HPACK in sync) and then RST'd.
+        const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+        stream = drainRefused ? nullptr : createStream(header.streamId);
+        lastStreamId_ = header.streamId;
+        refusedStream = stream == nullptr;
+        if (refusedStream) {
+            refusedHeaderStream_.emplace(header.streamId, resource_);
+            stream = &*refusedHeaderStream_;
+        }
     }
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         stream->markPeerEndStream();
@@ -548,19 +733,24 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
+        const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeInitialHeaderBlock(*stream);
         if (status != HeaderDecodeStatus::kOk) {
+            // Handle the failure BEFORE dropping the refused-stream storage `stream`
+            // may point into (using it after reset() would be use-after-destroy).
+            const bool keepConnection = handleHeaderDecodeFailure(*stream, status);
             if (refusedStream) {
                 refusedHeaderStream_.reset();
             }
-            return handleHeaderDecodeFailure(*stream, status);
+            return keepConnection;
         }
         if (refusedStream) {
-            appendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
-            closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+            if (role_ == Http2Role::kServer) {
+                appendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
+                closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+            }
             refusedHeaderStream_.reset();
-        } else {
-            emitRequestHeaders(*stream);
+        } else if (stream->headersDecoded()) {
+            emitRequestHeaders(*stream);  // not yet decoded = a 1xx interim head (client)
         }
     } else {
         headerContinuation_.start(stream->id(), false);
@@ -634,18 +824,22 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
             }
         } else {
             const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id();
-            const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
+            const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeInitialHeaderBlock(*stream);
             if (status != HeaderDecodeStatus::kOk) {
+                const bool keepConnection = handleHeaderDecodeFailure(*stream, status);
                 if (refusedStream) {
                     refusedHeaderStream_.reset();
                 }
-                return handleHeaderDecodeFailure(*stream, status);
+                return keepConnection;
             }
             if (refusedStream) {
-                appendRstStream(stream->id(), Http2ErrorCode::kRefusedStream);
-                closedStreams_.remember(stream->id(), Http2StreamCloseSource::kLocal);
+                const auto refusedId = stream->id();
+                if (role_ == Http2Role::kServer) {
+                    appendRstStream(refusedId, Http2ErrorCode::kRefusedStream);
+                    closedStreams_.remember(refusedId, Http2StreamCloseSource::kLocal);
+                }
                 refusedHeaderStream_.reset();
-            } else {
+            } else if (stream->headersDecoded()) {
                 emitRequestHeaders(*stream);
             }
         }
@@ -680,7 +874,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
-        if (header.streamId <= lastStreamId_) {
+        if (!isIdleStreamId(header.streamId)) {
             appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
             dropDataFrame(payload.size(), /*windowConsumed=*/false);
             return true;
