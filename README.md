@@ -7,8 +7,8 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | Directory | Target | Public alias | Purpose |
 | --- | --- | --- | --- |
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Coroutine task type, PMR memory resources, mimalloc integration, and small dependency-light helpers. |
-| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero asio): HTTP types, h1 parser, the shared HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, response helpers, cookies, cache helpers, body streams. |
-| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, HTTP server runtime, TLS, streaming, WebSocket routes, the outbound HTTP client runtime (`Context::fetch`/`proxy`), and optional DB/Redis/JWT integrations. |
+| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero asio): HTTP types, h1 parser + `Http1Connection`, the shared HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, the outbound client's protocol/policy half + public API, response helpers, cookies, cache helpers, body streams. |
+| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, the server + outbound-client I/O drivers over the http cores (TLS, streaming, WebSocket routes, `Context::fetch`/`proxy`), and optional DB/Redis/JWT integrations. |
 | `ruvia-edge/` | `ruvia-edge` | `ruvia::edge` | Edge product target built on `ruvia::http` without linking `ruvia::web`. |
 
 Dependency direction:
@@ -152,7 +152,7 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 `ruvia::http` is intended to be useful without the web framework, in the nghttp2 class: a pure, asio-free, sans-I/O protocol library. It owns HTTP protocol types and reusable helpers -- the h1 parser, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core, HPACK, response/cookie/cache/multipart helpers, and body streams. You feed it bytes and drive its events from any runtime.
 
-It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, edge policy, or any socket/TLS I/O. In particular, the ready-to-use outbound HTTP client runtime (connection pools, TLS, redirects, timeouts) lives in `ruvia::web` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`; `ruvia::http` provides only the protocol engine such a client is built from.
+It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, edge policy, or any socket/TLS I/O. The outbound HTTP client is a `ruvia::http` capability with the same split as the server: its public API (`ruvia/http/HttpClient.h`) and sans-I/O protocol/policy half (response parsing, redirect rules, content decoding) live in `ruvia::http`, while the asio runtime driver over them ships in `ruvia::web` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`.
 
 ## Edge Target
 
@@ -169,7 +169,7 @@ It does not own `App`, `Context`, `Controller`, `Router`, middleware, model vali
 | `RUVIA_ENABLE_REDIS` | `OFF` | Build Redis integration into `ruvia-web`. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Build JWT helpers into `ruvia-web`. |
 
-The outbound HTTP client runtime is part of `ruvia-web` (no build switch); its protocol engine is the shared `Http2Connection` / h1 parser in `ruvia-http`.
+The outbound HTTP client is a `ruvia-http` capability (public API + sans-I/O protocol/policy; no build switch); its asio runtime driver ships in `ruvia-web`, mirroring the server-side split.
 
 ## Repository Layout
 

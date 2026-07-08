@@ -1,7 +1,6 @@
 set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolLifecycle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolSlots.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http2ClientSession.cpp
@@ -138,7 +137,6 @@ ruvia_install_public_headers(web
     include/ruvia/app/RateLimitRule.h
     include/ruvia/http/StaticFiles.h
     include/ruvia/http/Context.h
-    include/ruvia/http/HttpClient.h
     include/ruvia/http/Context.inl
     include/ruvia/http/ContextModel.h
     include/ruvia/http/Controller.h

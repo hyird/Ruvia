@@ -205,7 +205,7 @@ tests/
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- outbound HTTP client 运行时（HttpClientPool / Http2ClientSession / HttpClientRegistry）归属 `ruvia-web`（`src/client/`，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）；`ruvia-http` 只含其协议引擎（共享的 `Http2Connection` client 角色 + h1 parser + 消息模型）与公共类型之外的零 client 运行时。public 头 `ruvia/http/HttpClient.h` 由 `ruvia-web` 安装。
+- outbound HTTP client 是 `ruvia-http` 能力（public 头 `ruvia/http/HttpClient.h` 由 http 安装；协议/策略半部在 `ruvia-http/src/client/`：响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O），与 server 同构地把 asio 运行时 driver 放在上层：`ruvia-web/src/client/`（HttpClientPool / Http2ClientSession / HttpClientRegistry，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
 - 下游推荐：
 
 ```cmake
