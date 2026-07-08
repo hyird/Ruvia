@@ -4,9 +4,9 @@
 #include <charconv>
 #include <stdexcept>
 
-#include "../HeaderTokenUtils.h"
-#include "../RequestBodyDecoding.h"
-#include "../parser/HttpParserSyntax.h"
+#include "HeaderTokenUtils.h"
+#include "RequestBodyDecoding.h"
+#include "parser/HttpParserSyntax.h"
 #include "HttpClientAccess.h"
 #include "ruvia/http/HttpCommon.h"
 

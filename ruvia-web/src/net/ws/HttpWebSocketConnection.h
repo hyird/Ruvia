@@ -12,8 +12,8 @@
 #include <asio.hpp>
 
 #include "net/server/ConnectionScanner.h"
-#include "HttpWebSocketPermessageDeflate.h"
-#include "HttpWebSocketUtils.h"
+#include "net/ws/HttpWebSocketPermessageDeflate.h"
+#include "net/ws/HttpWebSocketUtils.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/app/Task.h"

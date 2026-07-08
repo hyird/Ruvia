@@ -5,8 +5,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "../HeaderTokenUtils.h"
-#include "../parser/HttpRequestTarget.h"
+#include "HeaderTokenUtils.h"
+#include "parser/HttpRequestTarget.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpCommon.h"
 

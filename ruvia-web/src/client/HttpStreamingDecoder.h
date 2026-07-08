@@ -11,7 +11,7 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include "../HeaderAcceptUtils.h"  // HttpContentCoding
+#include "HeaderAcceptUtils.h"  // HttpContentCoding
 
 namespace ruvia::detail {
 

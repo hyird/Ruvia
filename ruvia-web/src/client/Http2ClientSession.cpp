@@ -20,8 +20,8 @@
 #include <string>
 
 #include "runtime/AsioAwait.h"
-#include "../HeaderTokenUtils.h"
-#include "../parser/HttpRequestTarget.h"
+#include "HeaderTokenUtils.h"
+#include "parser/HttpRequestTarget.h"
 #include "HttpClientContentEncoding.h"
 #include "HttpClientConfigValidation.h"
 #include "HttpClientDecodingStreamSource.h"

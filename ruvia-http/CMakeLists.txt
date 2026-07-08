@@ -16,8 +16,6 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserErrors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/body/HttpTransferCodingDecoder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/ConnectionScanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpDateCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHeadBuffer.cpp
@@ -30,13 +28,6 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/WsConnection.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolLifecycle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolSlots.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http2ClientSession.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1StreamSource.cpp
 )
 add_library(ruvia::http ALIAS ruvia-http)
 
@@ -56,8 +47,6 @@ target_include_directories(ruvia-http
 target_link_libraries(ruvia-http
     PUBLIC
         ruvia::core
-        asio::asio
-        Threads::Threads
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB

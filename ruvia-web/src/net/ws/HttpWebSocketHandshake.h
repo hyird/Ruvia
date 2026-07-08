@@ -4,8 +4,8 @@
 #include <asio/write.hpp>
 #include <string_view>
 
-#include "HttpWebSocketPermessageDeflate.h"
-#include "HttpWebSocketUtils.h"
+#include "net/ws/HttpWebSocketPermessageDeflate.h"
+#include "net/ws/HttpWebSocketUtils.h"
 #include "HttpRequestFlags.h"
 #include "HttpRequestInternal.h"
 #include "runtime/AsioAwait.h"
