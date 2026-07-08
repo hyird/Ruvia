@@ -89,8 +89,8 @@ tests/
 - cookie/cache/range/conditional request/content negotiation/CORS/security header helper。
 - multipart/form/url encoding/body stream。
 - WebSocket 协议 helper。
-- outbound HTTP client、HTTP2 client/session/protocol primitive。
-- 纯协议和 transport primitive。
+- HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、WebSocket sans-I/O 核心。
+- 纯协议 primitive（零 asio、零 socket；client/server 的 I/O runtime 都在 `ruvia-web`）。
 
 禁止包含：
 
@@ -205,7 +205,7 @@ tests/
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- HTTP client 固定归属 `ruvia-http`，不再提供旧构建开关。
+- outbound HTTP client 运行时（HttpClientPool / Http2ClientSession / HttpClientRegistry）归属 `ruvia-web`（`src/client/`，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）；`ruvia-http` 只含其协议引擎（共享的 `Http2Connection` client 角色 + h1 parser + 消息模型）与公共类型之外的零 client 运行时。public 头 `ruvia/http/HttpClient.h` 由 `ruvia-web` 安装。
 - 下游推荐：
 
 ```cmake
