@@ -216,6 +216,20 @@ public:
         std::string_view path,
         std::span<const HttpHeaderView> headers,
         bool endStream);
+    // Streaming response consumers: bank this stream's DATA receive-window credit as
+    // debt instead of re-advertising per frame (call before the response arrives)...
+    void deferStreamWindowRelease(std::uint32_t streamId);
+    // ...and release ALL banked debt once the consumer drained the buffered bytes:
+    // credits the connection window (and the stream window while the stream is still
+    // open) and queues the WINDOW_UPDATEs. Safe when the stream is gone.
+    void releaseStreamWindow(std::uint32_t streamId);
+    // True while submitData left a window-blocked remainder queued for this stream
+    // (the owner waits for the drain report before pulling its next body chunk).
+    [[nodiscard]] bool hasBlockedSend(std::uint32_t streamId) const noexcept;
+    [[nodiscard]] std::uint32_t peerMaxConcurrentStreams() const noexcept;
+    // Peer handshake / lifecycle observability for client drivers.
+    [[nodiscard]] bool receivedPeerSettings() const noexcept { return receivedFirstSettings_; }
+    [[nodiscard]] bool peerGoaway() const noexcept { return peerGoaway_; }
 
     // Concurrent dispatch support: a request/response built from a stream holds VIEWS
     // into that stream's decoded storage, so the stream must outlive an in-flight
@@ -342,6 +356,7 @@ private:
     std::uint32_t goawayLastStreamId_{0};
     Http2Role role_{Http2Role::kServer};
     std::uint32_t nextLocalStreamId_{1};  // client role: next odd stream id to open
+    bool peerGoaway_{false};
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
     Http2ConnectionPhase phase_{Http2ConnectionPhase::kIdle};

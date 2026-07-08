@@ -384,7 +384,7 @@ void Http2Connection::queueClientPreface() {
 }
 
 std::uint32_t Http2Connection::openLocalStream() {
-    if (role_ != Http2Role::kClient || closing_ || nextLocalStreamId_ > 0x7fffffffU) {
+    if (role_ != Http2Role::kClient || closing_ || peerGoaway_ || nextLocalStreamId_ > 0x7fffffffU) {
         return 0;
     }
     auto* stream = createStream(nextLocalStreamId_);
@@ -394,6 +394,49 @@ std::uint32_t Http2Connection::openLocalStream() {
     const auto streamId = nextLocalStreamId_;
     nextLocalStreamId_ += 2;
     return streamId;
+}
+
+void Http2Connection::deferStreamWindowRelease(std::uint32_t streamId) {
+    if (auto* stream = findStream(streamId)) {
+        stream->setDeferWindowRelease();
+    }
+}
+
+void Http2Connection::releaseStreamWindow(std::uint32_t streamId) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr) {
+        return;  // debt (if any) died with the stream; nothing left to credit
+    }
+    const auto debt = stream->takeWindowDebt();
+    if (debt == 0) {
+        return;
+    }
+    connectionReceiveWindow_ += static_cast<std::int32_t>(debt);
+    // Re-advertise the stream window only while the peer can still send on it; a
+    // stream-scoped WINDOW_UPDATE on an ended/reset stream can trip a strict peer.
+    if (!stream->bodyEnded() && !stream->isReset()) {
+        stream->restoreReceiveWindow(static_cast<std::int32_t>(debt));
+        char buf[kHttp2WindowUpdateFrameBytes * 2];
+        auto* out = http2WriteDataWindowUpdates(buf, streamId, debt);
+        outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
+    } else {
+        char buf[kHttp2WindowUpdateFrameBytes];
+        http2WriteWindowUpdate(buf, 0, debt);
+        outBuffer_.append(buf, sizeof(buf));
+    }
+}
+
+bool Http2Connection::hasBlockedSend(std::uint32_t streamId) const noexcept {
+    for (const auto& pending : pendingSends_) {
+        if (pending.streamId == streamId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::uint32_t Http2Connection::peerMaxConcurrentStreams() const noexcept {
+    return peerSettings_.maxConcurrentStreams();
 }
 
 void Http2Connection::submitRequestHead(
@@ -937,11 +980,18 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             return true;
     }
     if (flowBytes > 0) {
-        const auto increment = static_cast<std::uint32_t>(flowBytes);
-        http2RestoreReceiveWindows(connectionReceiveWindow_, *stream, flowBytes);
-        char buf[kHttp2WindowUpdateFrameBytes * 2];
-        auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
-        outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
+        if (stream->deferWindowRelease()) {
+            // Streaming consumer: bank the credit; releaseStreamWindow() re-advertises
+            // it as the owner drains, so a slow reader stalls the peer (backpressure)
+            // instead of growing the buffered response without bound.
+            stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
+        } else {
+            const auto increment = static_cast<std::uint32_t>(flowBytes);
+            http2RestoreReceiveWindows(connectionReceiveWindow_, *stream, flowBytes);
+            char buf[kHttp2WindowUpdateFrameBytes * 2];
+            auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
+            outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
+        }
     }
 
     // sans-I/O: hand the body to the owner as an event; the core does not buffer it
@@ -988,9 +1038,22 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processContinuation(header, payload);
         case Http2FrameType::kData:
             return processData(header, payload);
-        case Http2FrameType::kGoaway:
-            closing_ = true;
+        case Http2FrameType::kGoaway: {
+            if (header.streamId != 0 || payload.size() < 8) {
+                appendGoaway(Http2ErrorCode::kProtocolError, "malformed GOAWAY");
+                return false;
+            }
+            peerGoaway_ = true;
+            const auto lastProcessed = http2Read31(
+                reinterpret_cast<const unsigned char*>(payload.data()));
+            // The owner reacts (client: fail streams above lastProcessed, stop opening
+            // new ones; streams at or below it keep running to completion).
+            events_.push_back(Http2Event{Http2Event::Kind::kGoaway, lastProcessed, {}});
+            if (role_ == Http2Role::kServer) {
+                closing_ = true;  // a departing client: drain and stop reading
+            }
             return true;
+        }
         default:
             appendGoaway(Http2ErrorCode::kInternalError, "frame type not yet ported");
             return false;

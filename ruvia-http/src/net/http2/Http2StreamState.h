@@ -28,6 +28,8 @@ class Http2StreamState final {
     Http2StreamRouting routing_;
     Http2StreamRequestState requestState_;
     Http2StreamFlowControl flowControl_;
+    bool deferWindowRelease_{false};
+    std::uint32_t windowDebt_{0};
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData requestData_;
 
@@ -60,6 +62,27 @@ public:
 
     [[nodiscard]] bool consumeReceiveWindow(std::int32_t bytes) noexcept {
         return flowControl_.consumeReceive(bytes);
+    }
+
+    // Client streaming consumers: when set, DATA receive-window credit is banked as
+    // windowDebt instead of being re-advertised per frame; the owner releases it as
+    // the consumer drains (Http2Connection::releaseStreamWindow).
+    [[nodiscard]] bool deferWindowRelease() const noexcept {
+        return deferWindowRelease_;
+    }
+
+    void setDeferWindowRelease() noexcept {
+        deferWindowRelease_ = true;
+    }
+
+    void addWindowDebt(std::uint32_t bytes) noexcept {
+        windowDebt_ += bytes;
+    }
+
+    [[nodiscard]] std::uint32_t takeWindowDebt() noexcept {
+        const auto debt = windowDebt_;
+        windowDebt_ = 0;
+        return debt;
     }
 
     void restoreReceiveWindow(std::int32_t bytes) noexcept {
