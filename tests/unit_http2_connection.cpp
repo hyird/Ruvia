@@ -142,3 +142,40 @@ RUVIA_TEST(http2_connection_feed_zero_window_update_goaway) {
     const auto goaway = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
     RUVIA_CHECK_EQ(goaway.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
 }
+
+// RST_STREAM referencing an idle (never-opened) stream is a protocol error (GOAWAY).
+RUVIA_TEST(http2_connection_feed_rst_on_idle_stream_goaway) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char frame[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(frame, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(frame + 9, 0);
+    const auto result = conn.feed(std::string_view(frame, sizeof(frame)));
+
+    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kError);
+    RUVIA_CHECK(conn.closing());
+    const auto g = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK_EQ(g.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+}
+
+// PRIORITY where a stream depends on itself is a stream error: the core RST_STREAMs it
+// (but the connection survives).
+RUVIA_TEST(http2_connection_feed_priority_self_dependency_resets) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char frame[9 + 5];
+    ruvia::detail::http2EncodeFrameHeader(frame, 5, Http2FrameType::kPriority, 0, 1);
+    ruvia::detail::http2Write32(frame + 9, 1);  // depends on stream 1 (itself)
+    frame[13] = 0;                              // weight
+    const auto result = conn.feed(std::string_view(frame, sizeof(frame)));
+
+    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kOk);
+    RUVIA_CHECK(!conn.closing());
+    const auto rst = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(rst.streamId, static_cast<std::uint32_t>(1));
+}
