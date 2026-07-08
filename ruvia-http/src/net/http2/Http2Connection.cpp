@@ -1,8 +1,11 @@
 #include "Http2Connection.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
+#include "HttpResponseBodyAccess.h"
+#include "HttpResponseFileAccess.h"
 #include "Http2BodyQueue.h"
 #include "Http2BodyState.h"
 #include "Http2FlowControl.h"
@@ -10,6 +13,7 @@
 #include "Http2FramePayload.h"
 #include "Http2HeaderBlock.h"
 #include "Http2RequestHeaders.h"
+#include "Http2ResponseHeaders.h"
 #include "Http2WindowUpdate.h"
 
 namespace ruvia::detail {
@@ -22,7 +26,7 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2CoreC
       streams_(resource),
       decoder_(resource),
       events_(resource),
-      blockedStreams_(resource),
+      pendingSends_(resource),
       unblockedStreams_(resource),
       localMaxFrameSize_(config.maxFrameSize),
       connectionSendWindow_(static_cast<std::int32_t>(config.initialSendWindow)),
@@ -141,11 +145,48 @@ void Http2Connection::appendRstStream(std::uint32_t streamId, Http2ErrorCode err
         std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())));
 }
 
-void Http2Connection::markSendWindowOpened() noexcept {
-    for (const auto id : blockedStreams_) {
-        unblockedStreams_.push_back(id);
+std::size_t Http2Connection::sendDataUpToWindow(
+    Http2StreamState& stream, std::string_view data, std::size_t offset, bool endStream) {
+    const auto total = data.size();
+    while (offset < total) {
+        const auto available = http2AvailableSendWindow(connectionSendWindow_, stream);
+        if (available == 0) {
+            break;  // window exhausted; caller buffers the remainder
+        }
+        const auto chunk = std::min<std::size_t>(
+            {total - offset, available, peerSettings_.maxFrameSize()});
+        const bool last = offset + chunk == total;
+        http2ConsumeSendWindow(connectionSendWindow_, stream, chunk);
+        appendFrame(
+            Http2FrameType::kData,
+            static_cast<std::uint8_t>(endStream && last ? kHttp2FlagEndStream : 0),
+            stream.id(), data.substr(offset, chunk));
+        offset += chunk;
     }
-    blockedStreams_.clear();
+    return offset;
+}
+
+void Http2Connection::markSendWindowOpened() {
+    // Drain buffered response bodies now that the window (may have) opened. A body that
+    // fully drains reports its stream as unblocked so the owner pulls the next chunk.
+    for (std::size_t i = 0; i < pendingSends_.size();) {
+        auto& pending = pendingSends_[i];
+        auto* stream = findStream(pending.streamId);
+        if (stream == nullptr || stream->isReset()) {
+            unblockedStreams_.push_back(pending.streamId);
+            pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        pending.offset = sendDataUpToWindow(
+            *stream, std::string_view(pending.bytes.data(), pending.bytes.size()),
+            pending.offset, pending.endStream);
+        if (pending.offset >= pending.bytes.size()) {
+            unblockedStreams_.push_back(pending.streamId);
+            pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;  // still window-blocked; keep the remainder for the next opening
+        }
+    }
 }
 
 bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::string_view payload) {
@@ -750,25 +791,103 @@ Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
     return streams_.find(streamId);
 }
 
+void Http2Connection::appendResponseHeaderFrames(
+    Http2StreamState& stream, std::string_view headerBlock, bool endStream) {
+    // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
+    // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
+    // guarantees that ordering (replacing the coroutine writeHeaders' atomic write).
+    const std::size_t maxFrame = peerSettings_.maxFrameSize();
+    std::size_t offset = 0;
+    bool first = true;
+    while (offset < headerBlock.size()) {
+        const auto chunk = std::min<std::size_t>(headerBlock.size() - offset, maxFrame);
+        const bool last = offset + chunk == headerBlock.size();
+        const auto flags = static_cast<std::uint8_t>(
+            (last ? kHttp2FlagEndHeaders : 0) | (endStream && last ? kHttp2FlagEndStream : 0));
+        appendFrame(
+            first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
+            flags, stream.id(), headerBlock.substr(offset, chunk));
+        offset += chunk;
+        first = false;
+    }
+}
+
 void Http2Connection::submitResponseHead(
-    std::uint32_t /*streamId*/, const HttpResponse& /*response*/, bool /*bodyForbidden*/) {
-    // TODO: port appendHttp2ResponseHeaders -> outBuffer_ (writeHeaders atomic
-    // HEADERS+CONTINUATION sequence).
+    std::uint32_t streamId, const HttpResponse& response, bool bodyForbidden) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return;
+    }
+    const auto policy = responseWritePolicy(response.status());
+    const bool bodyAllowed = policy.bodyAllowed();
+    const bool sendBody = bodyAllowed && !bodyForbidden;
+    const bool streamBody = responseHasStreamBody(response);
+
+    // Mirror writeResponse's framing decision: the writer owns an auto Content-Length
+    // only for a buffered (non-streaming) body; a streaming body sends no length.
+    std::uint64_t contentLength = 0;
+    if (bodyAllowed && !streamBody) {
+        contentLength = responseHasFileBody(response)
+            ? responseFileBody(response).length
+            : responseBodySize(response);
+    }
+    appendHttp2ResponseHeaders(*stream, response, contentLength, !streamBody);
+    const bool endStream = !sendBody || (!streamBody && contentLength == 0);
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        endStream);
+    http2ReleaseResponseHeaderBlock(*stream);
 }
 
 Http2SubmitResult Http2Connection::submitData(
-    std::uint32_t /*streamId*/, std::string_view /*chunk*/, bool /*endStream*/) {
-    // TODO: port writeData: split by min(window, peerMaxFrameSize); consume send
-    // window; on closed window record blockedStreams_ and return kBlocked.
+    std::uint32_t streamId, std::string_view chunk, bool endStream) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return Http2SubmitResult::kClosed;
+    }
+    // If this stream still has a window-blocked body queued, appending preserves DATA
+    // ordering; it drains (with the accumulated END_STREAM) when the window reopens.
+    for (auto& pending : pendingSends_) {
+        if (pending.streamId == streamId) {
+            pending.bytes.append(chunk.data(), chunk.size());
+            if (endStream) {
+                pending.endStream = true;
+            }
+            return Http2SubmitResult::kBlocked;
+        }
+    }
+    if (chunk.empty()) {
+        if (endStream) {
+            appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
+        }
+        return Http2SubmitResult::kOk;
+    }
+    const auto consumed = sendDataUpToWindow(*stream, chunk, 0, endStream);
+    if (consumed < chunk.size()) {
+        std::pmr::string remainder(resource_);
+        remainder.append(chunk.data() + consumed, chunk.size() - consumed);
+        pendingSends_.push_back(Http2PendingSend{streamId, std::move(remainder), 0, endStream});
+        return Http2SubmitResult::kBlocked;
+    }
     return Http2SubmitResult::kOk;
 }
 
-void Http2Connection::submitReset(std::uint32_t /*streamId*/, std::uint32_t /*errorCode*/) {
-    // TODO: port sendRstStream -> outBuffer_.
+void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCode) {
+    appendRstStream(streamId, static_cast<Http2ErrorCode>(errorCode));
+    if (auto* stream = findStream(streamId); stream != nullptr) {
+        stream->markReset();
+    }
+    // Drop any buffered body for the aborted stream.
+    pendingSends_.erase(
+        std::remove_if(
+            pendingSends_.begin(), pendingSends_.end(),
+            [streamId](const Http2PendingSend& p) { return p.streamId == streamId; }),
+        pendingSends_.end());
 }
 
-void Http2Connection::beginGoaway(std::uint32_t /*errorCode*/) {
-    // TODO: port sendGoaway -> outBuffer_; set closing_.
+void Http2Connection::beginGoaway(std::uint32_t errorCode) {
+    appendGoaway(static_cast<Http2ErrorCode>(errorCode));
     closing_ = true;
 }
 
