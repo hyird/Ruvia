@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ConnectionScanner.h"
-#include "HttpResponseStreamDispatch.h"
+#include "net/server/ConnectionScanner.h"
+#include "net/server/HttpResponseStreamDispatch.h"
 #include "HttpResponseStreamSink.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"

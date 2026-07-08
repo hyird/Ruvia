@@ -3,7 +3,7 @@ Http2ServerSession<Stream>::Http2ServerSession(
     Stream& stream,
     asio::ip::tcp::socket& socket,
     WorkerMemory& memory,
-    const RouteTable& routes,
+    const RequestDispatcher& routes,
     DbRegistry* databases,
     RedisRegistry* redis,
     HttpClientRegistry* httpClients,

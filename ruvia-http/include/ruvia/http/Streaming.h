@@ -13,6 +13,7 @@
 namespace ruvia {
 
 class Context;
+class HttpResponse;
 
 namespace detail {
 struct StreamingAccess;
@@ -91,7 +92,11 @@ private:
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*);
     using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
-    using BindContext = void (*)(void*, Context*) noexcept;
+    // Web supplies this thunk (wrapping ContextAccess::streamingHead) so the http
+    // streaming layer can produce the response head from the bound Context without
+    // naming ContextAccess.
+    using StreamingHeadThunk = HttpResponse (*)(Context&);
+    using BindContext = void (*)(void*, Context*, StreamingHeadThunk) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
     using AddTrailer = void (*)(void*, std::string_view, std::string_view);
     using Committed = bool (*)(void*) noexcept;
@@ -117,8 +122,8 @@ private:
           committed_(committed),
           aborted_(aborted) {}
 
-    void bindContext(Context& context) noexcept {
-        bindContext_(target_, &context);
+    void bindContext(Context& context, StreamingHeadThunk streamingHead) noexcept {
+        bindContext_(target_, &context, streamingHead);
     }
 
     [[nodiscard]] std::pmr::string& scratch() const {

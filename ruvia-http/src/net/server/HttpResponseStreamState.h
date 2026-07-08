@@ -1,6 +1,7 @@
 #pragma once
 
-#include "HttpResponseTrailers.h"
+#include "net/server/HttpResponseTrailers.h"
+#include "ruvia/http/HttpResponse.h"
 
 #include <stdexcept>
 #include <string_view>
@@ -25,18 +26,24 @@ public:
         return bodyForbidden_;
     }
 
-    void bindContext(Context* context) noexcept {
+    // The streaming response head is produced from the bound Context by a web-supplied
+    // thunk (wrapping ContextAccess::streamingHead), so this http-layer state never
+    // names ContextAccess -- keeping the h2/ws sinks compilable without ruvia-web.
+    using StreamingHeadThunk = HttpResponse (*)(Context&);
+
+    void bindContext(Context* context, StreamingHeadThunk streamingHead) noexcept {
         context_ = context;
+        streamingHead_ = streamingHead;
     }
 
-    [[nodiscard]] Context& requireContextBeforeCommit() const {
+    [[nodiscard]] HttpResponse streamingHead() const {
         if (ended_) {
             throw std::logic_error("response stream is already ended");
         }
-        if (context_ == nullptr) {
+        if (context_ == nullptr || streamingHead_ == nullptr) {
             throw std::logic_error("response stream context is not bound");
         }
-        return *context_;
+        return streamingHead_(*context_);
     }
 
     void markCommitted(bool bodyForbidden) noexcept {
@@ -76,6 +83,7 @@ private:
     }
 
     Context* context_{nullptr};
+    StreamingHeadThunk streamingHead_{nullptr};
     bool committed_{false};
     bool ended_{false};
     bool bodyForbidden_{false};

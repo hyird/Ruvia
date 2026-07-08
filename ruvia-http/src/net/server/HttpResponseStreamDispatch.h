@@ -4,11 +4,15 @@
 #include <exception>
 #include <utility>
 
-#include "router/RouteTable.h"
+#include "router/RequestDispatcher.h"
 #include "StreamingInternal.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/Streaming.h"
+
+namespace ruvia {
+class Context;  // only used as Context* in a type-erased bind thunk; web supplies the definition
+}
 
 namespace ruvia::detail {
 
@@ -38,8 +42,9 @@ void responseStreamAddTrailerThunk(void* target, std::string_view name, std::str
 }
 
 template <typename Sink>
-void responseStreamBindContextThunk(void* target, Context* context) noexcept {
-    static_cast<Sink*>(target)->bindContext(context);
+void responseStreamBindContextThunk(
+    void* target, Context* context, HttpResponse (*streamingHead)(Context&)) noexcept {
+    static_cast<Sink*>(target)->bindContext(context, streamingHead);
 }
 
 template <typename Sink>
@@ -153,7 +158,7 @@ private:
 template <typename Sink, typename PeerAborted>
 Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     Sink& sink,
-    const RouteTable& routes,
+    const RequestDispatcher& routes,
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& requestMemory,

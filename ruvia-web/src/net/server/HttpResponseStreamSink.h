@@ -2,9 +2,9 @@
 
 #include "runtime/AsioAwait.h"
 
-#include "HttpResponseHead.h"
-#include "HttpResponseStreamHead.h"
-#include "HttpResponseStreamState.h"
+#include "net/server/HttpResponseHead.h"
+#include "net/server/HttpResponseStreamHead.h"
+#include "net/server/HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
@@ -59,13 +59,13 @@ public:
     template <typename Sink>
     friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
     template <typename Sink>
-    friend void responseStreamBindContextThunk(void*, Context*) noexcept;
+    friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk) noexcept;
     template <typename Sink>
     friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
 
 private:
-    void bindContext(Context* context) noexcept {
-        state_.bindContext(context);
+    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+        state_.bindContext(context, streamingHead);
     }
 
     [[nodiscard]] std::pmr::string& scratch() noexcept {
@@ -79,7 +79,7 @@ private:
         }
 
         auto streamHead = prepareResponseStreamHead(
-            state_.requireContextBeforeCommit(),
+            state_.streamingHead(),
             mode_,
             framing_,
             connectionWillClose_);

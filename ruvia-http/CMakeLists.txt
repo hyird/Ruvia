@@ -19,6 +19,12 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/body/HttpTransferCodingDecoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/ConnectionScanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpDateCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseCompression.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHead.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHeadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2Hpack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackDynamic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackEncoder.cpp

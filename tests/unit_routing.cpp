@@ -450,7 +450,7 @@ ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
 }
 ruvia::Task<void> scEnd(void*) { co_return; }
 ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
-void scBind(void*, ruvia::Context*) noexcept {}
+void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 std::pmr::string& scScratch(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->scratch;
 }

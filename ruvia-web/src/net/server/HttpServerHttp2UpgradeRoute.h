@@ -3,7 +3,7 @@
 #include "net/body/HttpRequestBody.h"
 #include "net/http2/Http2Upgrade.h"
 #include "net/http2/Http2UpgradeHandshake.h"
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpServerCleartextHttp2.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"

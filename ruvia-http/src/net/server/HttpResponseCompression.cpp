@@ -1,4 +1,4 @@
-#include "HttpResponseCompression.h"
+#include "net/server/HttpResponseCompression.h"
 
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseFileAccess.h"

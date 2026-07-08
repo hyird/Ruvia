@@ -15,6 +15,7 @@
 #include "HttpWebSocketPermessageDeflate.h"
 #include "HttpWebSocketUtils.h"
 #include "runtime/AsioAwait.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/http/detail/PmrString.h"

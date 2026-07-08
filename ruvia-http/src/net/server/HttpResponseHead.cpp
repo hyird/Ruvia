@@ -1,9 +1,9 @@
-#include "HttpResponseHead.h"
+#include "net/server/HttpResponseHead.h"
 
 #include <charconv>
 #include <cstring>
 
-#include "HttpDateCache.h"
+#include "net/server/HttpDateCache.h"
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderState.h"

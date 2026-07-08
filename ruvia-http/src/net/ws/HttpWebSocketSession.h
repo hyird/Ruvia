@@ -4,7 +4,7 @@
 
 #include "HttpWebSocketConnection.h"
 #include "net/server/ConnectionScanner.h"
-#include "router/RouteTable.h"
+#include "router/RequestDispatcher.h"
 #include "WebSocketInternal.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -48,7 +48,7 @@ template <typename Transport>
 Task<void> runWebSocketSession(
     WebSocketConnection<Transport>& connection,
     ConnectionScanner::Entry& scannerEntry,
-    const RouteTable& routes,
+    const RequestDispatcher& routes,
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& requestMemory,

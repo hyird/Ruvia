@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpServerResponseState.h"
 #include "net/ws/HttpWebSocketConnection.h"
 #include "net/ws/HttpWebSocketSession.h"

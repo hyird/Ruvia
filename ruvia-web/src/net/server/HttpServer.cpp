@@ -3,12 +3,12 @@
 #include <asio/ssl.hpp>
 #include <type_traits>
 
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpRequestInternal.h"
-#include "HttpBufferedResponse.h"
+#include "net/server/HttpBufferedResponse.h"
 #include "HttpConnectionState.h"
 #include "HttpResponseWriter.h"
-#include "HttpServerAccessLog.h"
+#include "net/server/HttpServerAccessLog.h"
 #include "HttpServerBufferedRoute.h"
 #include "HttpServerSessionUtils.h"
 #include "HttpParserInternal.h"

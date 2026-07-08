@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpConnectionState.h"
 #include "runtime/AsioAwait.h"
 

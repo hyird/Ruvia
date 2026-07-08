@@ -20,7 +20,7 @@
 #include <sys/socket.h>
 #endif
 
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpConnectionState.h"
 #include "HttpServerOptionsValidation.h"
 #include "HeaderTokenUtils.h"

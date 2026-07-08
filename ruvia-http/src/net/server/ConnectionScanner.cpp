@@ -1,6 +1,6 @@
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 
-#include "SocketUtils.h"
+#include "net/server/SocketUtils.h"
 
 #include <asio/error.hpp>
 #include <chrono>

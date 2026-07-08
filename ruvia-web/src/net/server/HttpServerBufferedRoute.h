@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpServerBodyRouteCompletion.h"
 #include "HttpParserInternal.h"
 #include "router/RouteTable.h"

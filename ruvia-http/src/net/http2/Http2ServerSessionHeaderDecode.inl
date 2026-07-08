@@ -150,9 +150,8 @@ void Http2ServerSession<Stream>::resolveStreamRoute(Http2StreamState& stream) no
         return;
     }
 
-    const auto& route = resolution.route();
-    stream.setBodyMode(route.bodyMode());
-    if (stream.extendedConnectWebSocket() && route.isWebSocketResponse()) {
+    stream.setBodyMode(resolution.bodyMode());
+    if (stream.extendedConnectWebSocket() && resolution.isWebSocketResponse()) {
         stream.markWebSocketTunnel();
         stream.setBodyMode(RequestBodyMode::kStream);
     }

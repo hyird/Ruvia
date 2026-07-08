@@ -171,6 +171,15 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
     return dispatchStreamRoute(request, resolution, memory, services.withWebSocket(webSocket));
 }
 
+namespace {
+// Web-side thunk producing the streaming response head from the bound Context. It is
+// handed to the http streaming layer (ResponseStreamWriter::bindContext) so the h1/h2
+// sinks can build the head at commit without naming ContextAccess (web).
+[[nodiscard]] HttpResponse streamingHeadThunk(Context& context) {
+    return detail::ContextAccess::streamingHead(context);
+}
+}  // namespace
+
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
     const RouteResolution& resolution,
@@ -185,7 +194,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
     auto* responseStream = services.responseStream();
     if (responseStream != nullptr) {
-        detail::StreamingAccess::bindContext(*responseStream, context);
+        detail::StreamingAccess::bindContext(*responseStream, context, &streamingHeadThunk);
     }
 
     std::exception_ptr exception;

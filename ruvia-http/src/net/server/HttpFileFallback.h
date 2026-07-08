@@ -5,7 +5,7 @@
 #include "net/HttpNativeFile.h"
 #include "runtime/AsioAwait.h"
 
-#include "HttpFileChunkBuffer.h"
+#include "net/server/HttpFileChunkBuffer.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/memory/MemoryPool.h"

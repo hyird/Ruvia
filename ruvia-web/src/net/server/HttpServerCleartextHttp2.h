@@ -2,6 +2,7 @@
 
 #include "net/http2/Http2Frame.h"
 #include "net/http2/Http2ServerSession.h"
+#include "router/RouteTable.h"
 #include "HttpParserInternal.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"

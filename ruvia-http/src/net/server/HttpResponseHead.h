@@ -1,7 +1,7 @@
 #pragma once
 
-#include "HttpResponseHeadBuffer.h"
-#include "HttpResponseHeadPolicy.h"
+#include "net/server/HttpResponseHeadBuffer.h"
+#include "net/server/HttpResponseHeadPolicy.h"
 
 namespace ruvia {
 

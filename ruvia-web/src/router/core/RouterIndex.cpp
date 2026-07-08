@@ -9,6 +9,17 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
+// Snapshot the RouteEntry metadata the transport sessions need into a
+// Context-agnostic RouteDisposition, so RouteResolution carries it and the
+// sessions never dereference RouteEntry.
+[[nodiscard]] detail::RouteDisposition dispositionOf(const detail::RouteEntry& route) noexcept {
+    return detail::RouteDisposition{
+        route.bodyMode(),
+        route.responseMode(),
+        route.webSocketSubprotocols(),
+        route.webSocketHeartbeat()};
+}
+
 }  // namespace
 
 detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request, RouteMatch& match) const noexcept {
@@ -27,12 +38,12 @@ detail::RouteResolution detail::RouteTable::resolve(
         return RouteResolution{};
     }
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
-        return RouteResolution::foundStatic(route);
+        return RouteResolution::foundStatic(route, dispositionOf(*route));
     }
 
     const auto* dynamicRoute = findDynamicRoute(method, path, match);
     if (dynamicRoute != nullptr) {
-        return RouteResolution::foundDynamic(dynamicRoute, match);
+        return RouteResolution::foundDynamic(dynamicRoute, match, dispositionOf(*dynamicRoute));
     }
 
     auto methodMask = allowedMethods(path, method);
