@@ -236,7 +236,7 @@ RUVIA_TEST(http2_connection_feed_priority_self_dependency_resets) {
 }
 
 // A complete HEADERS frame (END_HEADERS + END_STREAM) decodes the request head and the
-// sans-I/O core emits kRequestHeaders then kRequestEnd; the head is exposed via stream().
+// sans-I/O core emits kMessageHead then kMessageEnd; the head is exposed via stream().
 RUVIA_TEST(http2_connection_feed_headers_emits_request_event) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
@@ -254,10 +254,10 @@ RUVIA_TEST(http2_connection_feed_headers_emits_request_event) {
     RUVIA_CHECK(!conn.closing());
 
     const auto e1 = conn.nextEvent();
-    RUVIA_CHECK(e1.kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK(e1.kind == Http2Event::Kind::kMessageHead);
     RUVIA_CHECK_EQ(e1.streamId, static_cast<std::uint32_t>(1));
     const auto e2 = conn.nextEvent();
-    RUVIA_CHECK(e2.kind == Http2Event::Kind::kRequestEnd);
+    RUVIA_CHECK(e2.kind == Http2Event::Kind::kMessageEnd);
     RUVIA_CHECK_EQ(e2.streamId, static_cast<std::uint32_t>(1));
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
 
@@ -299,8 +299,8 @@ RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
     RUVIA_CHECK(conn.feed(std::string_view(cont.data(), cont.size())).status ==
                 ruvia::detail::Http2FeedStatus::kOk);
 
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestEnd);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kMessageEnd);
     auto* s = conn.stream(1);
     RUVIA_CHECK(s != nullptr && s->requestMethod() == ruvia::HttpMethod::kGet);
 }
@@ -334,8 +334,8 @@ std::pmr::string dataFrame(
     return frame;
 }
 
-// A DATA frame after the head yields a kRequestBodyChunk carrying the bytes, then
-// (on END_STREAM) kRequestEnd; the core also credits the peer back with WINDOW_UPDATE.
+// A DATA frame after the head yields a kMessageBodyChunk carrying the bytes, then
+// (on END_STREAM) kMessageEnd; the core also credits the peer back with WINDOW_UPDATE.
 RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
@@ -343,7 +343,7 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
 
     const auto h = postHeadFrame(&resource, "");
     conn.feed(std::string_view(h.data(), h.size()));
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kMessageHead);
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
 
     const char body[5] = {'h', 'e', 'l', 'l', 'o'};
@@ -352,11 +352,11 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     conn.feed(std::string_view(d.data(), d.size()));
 
     const auto chunk = conn.nextEvent();
-    RUVIA_CHECK(chunk.kind == Http2Event::Kind::kRequestBodyChunk);
+    RUVIA_CHECK(chunk.kind == Http2Event::Kind::kMessageBodyChunk);
     RUVIA_CHECK_EQ(chunk.streamId, static_cast<std::uint32_t>(1));
     RUVIA_CHECK(chunk.bytes == std::string_view(body, 5));
     const auto end = conn.nextEvent();
-    RUVIA_CHECK(end.kind == Http2Event::Kind::kRequestEnd);
+    RUVIA_CHECK(end.kind == Http2Event::Kind::kMessageEnd);
     RUVIA_CHECK_EQ(end.streamId, static_cast<std::uint32_t>(1));
 
     const auto wu = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
@@ -364,7 +364,7 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
 }
 
 // A DATA/END_STREAM that falls short of a declared content-length is a protocol error:
-// the core RST_STREAMs the stream and does NOT emit kRequestEnd.
+// the core RST_STREAMs the stream and does NOT emit kMessageEnd.
 RUVIA_TEST(http2_connection_feed_data_short_of_content_length_resets) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
@@ -372,15 +372,15 @@ RUVIA_TEST(http2_connection_feed_data_short_of_content_length_resets) {
 
     const auto h = postHeadFrame(&resource, "10");  // promises 10 bytes
     conn.feed(std::string_view(h.data(), h.size()));
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kMessageHead);
 
     const char body[5] = {'s', 'h', 'o', 'r', 't'};  // only 5, with END_STREAM
     const auto d = dataFrame(
         &resource, 1, ruvia::detail::kHttp2FlagEndStream, std::string_view(body, 5));
     conn.feed(std::string_view(d.data(), d.size()));
 
-    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestBodyChunk);
-    // The length mismatch aborts the stream: kStreamClosed (never kRequestEnd), and
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kMessageBodyChunk);
+    // The length mismatch aborts the stream: kStreamClosed (never kMessageEnd), and
     // the (unpinned) stream is removed from the table.
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kStreamClosed);
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
@@ -542,11 +542,11 @@ RUVIA_TEST(http2_connection_unpin_frees_completed_stream) {
     RUVIA_CHECK(conn.stream(1) == nullptr);
 }
 
-// RFC 8441 Extended CONNECT: a CONNECT + :protocol=websocket head emits kRequestHeaders
-// with NO kRequestEnd (the tunnel stays open), and the stream carries the
+// RFC 8441 Extended CONNECT: a CONNECT + :protocol=websocket head emits kMessageHead
+// with NO kMessageEnd (the tunnel stays open), and the stream carries the
 // extendedConnectWebSocket mark for the owner's route policy. After the owner marks the
 // tunnel, submitWebSocketHandshake answers 200 WITHOUT END_STREAM, tunnel DATA flows as
-// kRequestBodyChunk events (no content-length required), and submitData carries frames
+// kMessageBodyChunk events (no content-length required), and submitData carries frames
 // back on the still-open stream.
 RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     std::pmr::monotonic_buffer_resource resource;
@@ -570,8 +570,8 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     for (;;) {
         const auto event = conn.nextEvent();
         if (event.kind == Http2Event::Kind::kNone) break;
-        if (event.kind == Http2Event::Kind::kRequestHeaders && event.streamId == 1) sawHeaders = true;
-        if (event.kind == Http2Event::Kind::kRequestEnd) sawEnd = true;
+        if (event.kind == Http2Event::Kind::kMessageHead && event.streamId == 1) sawHeaders = true;
+        if (event.kind == Http2Event::Kind::kMessageEnd) sawEnd = true;
     }
     RUVIA_CHECK(sawHeaders);
     RUVIA_CHECK(!sawEnd);  // the tunnel must stay open
@@ -604,7 +604,7 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     for (;;) {
         const auto event = conn.nextEvent();
         if (event.kind == Http2Event::Kind::kNone) break;
-        if (event.kind == Http2Event::Kind::kRequestBodyChunk && event.streamId == 1 &&
+        if (event.kind == Http2Event::Kind::kMessageBodyChunk && event.streamId == 1 &&
             event.bytes.size() == 4) {
             sawChunk = true;
         }
@@ -663,7 +663,7 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
     bool clientSawHead = false;
     bool clientSawEnd = false;
     const auto onServerEvent = [&](const Http2Event& event) {
-        if (event.kind == Http2Event::Kind::kRequestEnd) {
+        if (event.kind == Http2Event::Kind::kMessageEnd) {
             ruvia::HttpResponse response(&resource);
             response.status(200);
             response.setBodyCopy("pong");
@@ -672,14 +672,14 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
         }
     };
     const auto onClientEvent = [&](const Http2Event& event) {
-        if (event.kind == Http2Event::Kind::kRequestHeaders) {
+        if (event.kind == Http2Event::Kind::kMessageHead) {
             clientSawHead = true;
             if (auto* stream = client.stream(event.streamId)) {
                 status = stream->responseStatus();
             }
-        } else if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+        } else if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
             clientBody.append(event.bytes.data(), event.bytes.size());
-        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+        } else if (event.kind == Http2Event::Kind::kMessageEnd) {
             clientSawEnd = true;
         }
     };
@@ -720,9 +720,9 @@ RUVIA_TEST(http2_connection_client_role_post_round_trip) {
     std::string clientBody;
     bool clientSawEnd = false;
     const auto onServerEvent = [&](const Http2Event& event) {
-        if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+        if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
             serverBody.append(event.bytes.data(), event.bytes.size());
-        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+        } else if (event.kind == Http2Event::Kind::kMessageEnd) {
             ruvia::HttpResponse response(&resource);
             response.status(200);
             response.setBodyCopy(serverBody);
@@ -732,9 +732,9 @@ RUVIA_TEST(http2_connection_client_role_post_round_trip) {
         }
     };
     const auto onClientEvent = [&](const Http2Event& event) {
-        if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+        if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
             clientBody.append(event.bytes.data(), event.bytes.size());
-        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+        } else if (event.kind == Http2Event::Kind::kMessageEnd) {
             clientSawEnd = true;
         }
     };
@@ -803,9 +803,9 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
     for (;;) {
         const auto event = client.nextEvent();
         if (event.kind == Http2Event::Kind::kNone) break;
-        if (event.kind == Http2Event::Kind::kRequestHeaders) ++heads;
-        if (event.kind == Http2Event::Kind::kRequestBodyChunk) body.append(event.bytes.data(), event.bytes.size());
-        if (event.kind == Http2Event::Kind::kRequestEnd) end = true;
+        if (event.kind == Http2Event::Kind::kMessageHead) ++heads;
+        if (event.kind == Http2Event::Kind::kMessageBodyChunk) body.append(event.bytes.data(), event.bytes.size());
+        if (event.kind == Http2Event::Kind::kMessageEnd) end = true;
     }
     RUVIA_CHECK_EQ(heads, 1);  // only the final head is surfaced
     RUVIA_CHECK(body == "ok");

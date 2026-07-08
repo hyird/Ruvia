@@ -56,6 +56,17 @@ void Http2Connection::consumeOutput(std::size_t n) noexcept {
     }
 }
 
+void Http2Connection::takeOutput(std::pmr::string& into) {
+    if (outOffset_ == 0 && into.get_allocator() == outBuffer_.get_allocator()) {
+        into.swap(outBuffer_);   // copy-free; outBuffer_ inherits into's old capacity
+        outBuffer_.clear();
+    } else {
+        into.assign(outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
+        outBuffer_.clear();
+        outOffset_ = 0;
+    }
+}
+
 // --- event queue --------------------------------------------------------------
 
 Http2Event Http2Connection::nextEvent() {
@@ -76,10 +87,10 @@ std::span<const std::uint32_t> Http2Connection::takeUnblockedStreams() noexcept 
 }
 
 // =============================================================================
-// TODO(sans-io phase 2): the following are ported incrementally from the pure
-// logic currently embedded in the Http2ServerSession*.inl coroutine loop. Each
-// keeps the protocol logic 1:1 and replaces (a) inline async_write -> append to
-// outBuffer_, (b) coroutine resume -> event / unblockedStreams_ marking.
+// Frame processing below is a 1:1 port of the retired coroutine session's pure
+// logic: inline async_write became append-to-outBuffer_, coroutine resume became
+// events / unblockedStreams_ marking. The coroutine stack itself is deleted; this
+// core is the single h2 implementation for both server and client roles.
 // =============================================================================
 
 void Http2Connection::appendFrame(
@@ -459,7 +470,9 @@ void Http2Connection::submitRequestHead(
     if (stream == nullptr || stream->isReset()) {
         return;
     }
-    stream->setRequestMethod(parseMethod(method));
+    if (const auto parsed = parseMethod(method); parsed != HttpMethod::kUnknown) {
+        stream->setRequestMethod(parsed);  // enables the HEAD content-length exemption
+    }
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", method);
@@ -512,7 +525,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     stream.markHeadersDecoded();
     // NOTE (sans-I/O): resolveStreamRoute is deliberately NOT called here -- route
     // resolution and body-mode selection are ruvia-web/edge policy the owner applies
-    // after pulling the kRequestHeaders event.
+    // after pulling the kMessageHead event.
     return HeaderDecodeStatus::kOk;
 }
 
@@ -646,7 +659,7 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream)
     }
     stream.markPeerEndStream();
     stream.markBodyEnded();
-    events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, stream.id(), {}});
+    events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, stream.id(), {}});
     return HeaderDecodeStatus::kOk;
 }
 
@@ -678,10 +691,10 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
         stream.markReset();
         return;
     }
-    events_.push_back(Http2Event{Http2Event::Kind::kRequestHeaders, stream.id(), {}});
+    events_.push_back(Http2Event{Http2Event::Kind::kMessageHead, stream.id(), {}});
     if (stream.peerEndStream() || stream.standardConnect()) {
         stream.markBodyEnded();
-        events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, stream.id(), {}});
+        events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, stream.id(), {}});
     }
 }
 
@@ -1014,7 +1027,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     // (buffered vs streaming delivery is web/edge policy). Content-length and size caps
     // were already enforced by http2AccountDataBody above. The view is valid until the
     // next feed (input_ is only reclaimed at the start of the following feed).
-    events_.push_back(Http2Event{Http2Event::Kind::kRequestBodyChunk, header.streamId, data});
+    events_.push_back(Http2Event{Http2Event::Kind::kMessageBodyChunk, header.streamId, data});
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         if (!http2BodyLengthComplete(*stream)) {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
@@ -1022,7 +1035,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             return true;
         }
         http2MarkBodyEnded(*stream);
-        events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, header.streamId, {}});
+        events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, header.streamId, {}});
     }
     return true;
 }
@@ -1081,7 +1094,7 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
 
 Http2FeedResult Http2Connection::feed(std::string_view in) {
     // Reclaim the prefix consumed by the PREVIOUS feed now, at the start of this one --
-    // not at the end of that feed. A kRequestBodyChunk event carries a view INTO input_,
+    // not at the end of that feed. A kMessageBodyChunk event carries a view INTO input_,
     // and erasing the prefix shifts the buffer (invalidating those views); deferring the
     // reclaim keeps them valid until this next feed, matching the documented contract.
     // The prior feed's events reference now-stale bytes, so reset the event queue too:
@@ -1243,17 +1256,26 @@ Http2SubmitResult Http2Connection::submitData(
     return Http2SubmitResult::kOk;
 }
 
-void Http2Connection::submitWebSocketHandshake(std::uint32_t streamId, std::string_view subprotocol) {
+void Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isReset()) {
         return;
     }
-    http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol);
+    http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol, extensions);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
         /*endStream=*/false);
     http2ReleaseResponseHeaderBlock(*stream);
+}
+
+void Http2Connection::submitTrailers(std::uint32_t streamId, std::string_view headerBlock) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset() || headerBlock.empty()) {
+        return;
+    }
+    appendResponseHeaderFrames(*stream, headerBlock, /*endStream=*/true);
 }
 
 void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCode) {

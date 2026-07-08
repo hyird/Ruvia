@@ -71,6 +71,8 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
     }
 
     std::pmr::string upgradedBodyStorage(memory.resource());
+    std::pmr::string pendingFramesStorage(memory.resource());
+    std::size_t pendingFramesBytes = 0;
     std::string_view pendingFrames;
     std::exception_ptr upgradeBodyException;
     try {
@@ -90,8 +92,11 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
             false);
         const auto upgradedBody = co_await upgradeBody.readAll();
         upgradedBodyStorage.assign(upgradedBody.data(), upgradedBody.size());
-        upgradeBody.restorePipeline(readBuffer, usedBytes);
-        pendingFrames = std::string_view(readBuffer.data(), usedBytes);
+        // Restore the pipelined remainder (a client preface sent before our 101) into
+        // SEPARATE storage: rewriting readBuffer would clobber the views `parsed` holds
+        // into it, corrupting the request the h2 session is about to seed stream 1 from.
+        upgradeBody.restorePipeline(pendingFramesStorage, pendingFramesBytes);
+        pendingFrames = std::string_view(pendingFramesStorage.data(), pendingFramesBytes);
     } catch (...) {
         upgradeBodyException = std::current_exception();
     }

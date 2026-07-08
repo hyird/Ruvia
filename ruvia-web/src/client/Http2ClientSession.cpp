@@ -290,10 +290,9 @@ Task<void> Http2ClientSession::flushLoop() {
             }
             continue;
         }
-        // Copy out: the core buffer can grow (reads, submits) while the write is in flight.
-        const auto out = conn_.pendingOutput();
-        scratch.assign(out.data(), out.size());
-        conn_.consumeOutput(out.size());
+        // Move out (allocator-matching swap, copy-free): the core buffer can grow
+        // (reads, submits) while the write is in flight.
+        conn_.takeOutput(scratch);
         const auto ec = co_await writeBytes(scratch);
         if (ec) {
             closeNow();
@@ -315,13 +314,13 @@ void Http2ClientSession::drainCoreEvents() {
             break;
         }
         switch (event.kind) {
-            case Http2Event::Kind::kRequestHeaders:
+            case Http2Event::Kind::kMessageHead:
                 onResponseHead(event.streamId);
                 break;
-            case Http2Event::Kind::kRequestBodyChunk:
+            case Http2Event::Kind::kMessageBodyChunk:
                 onResponseChunk(event.streamId, event.bytes);
                 break;
-            case Http2Event::Kind::kRequestEnd:
+            case Http2Event::Kind::kMessageEnd:
                 if (Stream* stream = findStream(event.streamId)) {
                     touchStreamDeadline(*stream);
                     markRemoteEnd(*stream);

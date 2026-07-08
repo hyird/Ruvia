@@ -6,6 +6,12 @@
 // feed it inbound bytes and it advances the protocol and emits events (a complete
 // message, a ping/pong, a close); you submit outbound messages/pongs/closes and it
 // produces bytes for you to write. No socket, coroutine, timer or asio -- the I/O
+//
+// ROLE NOTE: this is the embeddable pure ws core for external runtimes and future
+// edge/client drivers. Ruvia's own server path currently drives the transport-
+// agnostic WebSocketConnection<Transport> template (ruvia-web) instead, whose
+// heartbeat/write coordination is coroutine-shaped; both build on the same pure
+// frame codec, assembler, validation and RFC 7692 deflate in this directory.
 // loop and timeouts live entirely in the caller.
 //
 // Scope of this first slice: the unextended RFC 6455 protocol. permessage-deflate

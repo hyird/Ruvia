@@ -44,16 +44,6 @@ namespace ruvia::detail {
 
 struct HttpServerParseResult;  // h1 parse result seeding an h2c-upgraded stream
 
-// Connection phase, used by the (external) I/O layer to pick an inactivity timeout.
-// A pure enum so the core never depends on ConnectionScanner (which is asio-bound).
-enum class Http2ConnectionPhase : std::uint8_t {
-    kIdle,
-    kReadingHeader,
-    kReadingBody,
-    kWriting,
-    kWebSocket,
-};
-
 // Which side of the connection this endpoint is. A server accepts peer-initiated odd
 // streams and answers them; a client opens odd streams itself and decodes RESPONSE
 // heads (:status) off them. One state machine serves both roles (the frame codec,
@@ -87,19 +77,21 @@ struct Http2FeedResult final {
     Http2FeedStatus status{Http2FeedStatus::kNeedMore};
 };
 
-// Events pulled by the core's owner (ruvia-web / ruvia-edge) to drive handlers.
+// Events pulled by the core's owner to drive handlers. Direction-neutral: the peer
+// "message" is the request when this endpoint is the server, the response when it is
+// the client.
 struct Http2Event final {
     enum class Kind : std::uint8_t {
         kNone,
-        kRequestHeaders,   // a full request head is available on `streamId`
-        kRequestBodyChunk, // inbound DATA for `streamId` (view valid until next feed)
-        kRequestEnd,       // END_STREAM seen for `streamId`
-        kStreamClosed,     // `streamId` fully closed / reset
-        kGoaway,           // peer sent GOAWAY; drain
+        kMessageHead,       // the peer's full message head decoded on `streamId`
+        kMessageBodyChunk,  // inbound DATA for `streamId` (view valid until next feed)
+        kMessageEnd,        // END_STREAM seen for `streamId`
+        kStreamClosed,      // `streamId` aborted (peer RST or local protocol reject)
+        kGoaway,            // peer sent GOAWAY; `streamId` = its last-processed id
     };
     Kind kind{Kind::kNone};
     std::uint32_t streamId{0};
-    std::string_view bytes{};  // for kRequestBodyChunk
+    std::string_view bytes{};  // for kMessageBodyChunk
 };
 
 // Result of submitting response DATA: kBlocked means flow-control window is closed;
@@ -143,6 +135,11 @@ public:
     // Bytes the core wants written to the peer (frame headers + payloads, batched).
     [[nodiscard]] std::string_view pendingOutput() const noexcept;
     void consumeOutput(std::size_t n) noexcept;
+    // Move ALL pending outbound bytes into `into` (allocator-matching swap when nothing
+    // was partially consumed, so the common path is copy-free) and reset the buffer.
+    // REQUIRED for any writer that awaits mid-write: a pendingOutput() view dangles if
+    // a concurrent submit reallocates the buffer during the write.
+    void takeOutput(std::pmr::string& into);
     [[nodiscard]] bool wantsWrite() const noexcept { return outOffset_ < outBuffer_.size(); }
 
     // Submit a response for `streamId`. Head first, then data chunks, then end.
@@ -158,7 +155,11 @@ public:
     // optional sec-websocket-protocol, NO END_STREAM) so the stream stays open as the
     // tunnel; the owner then exchanges WebSocket frames via submitData. Mirrors the
     // coroutine session's writeHttp2WebSocketHandshake byte-for-byte.
-    void submitWebSocketHandshake(std::uint32_t streamId, std::string_view subprotocol);
+    void submitWebSocketHandshake(
+        std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
+    // Emit an HPACK-encoded trailer block as the stream's final HEADERS (END_STREAM),
+    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1).
+    void submitTrailers(std::uint32_t streamId, std::string_view headerBlock);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
     // After WINDOW_UPDATE/SETTINGS opened windows, the owner calls this so blocked
@@ -167,7 +168,8 @@ public:
     [[nodiscard]] std::span<const std::uint32_t> takeUnblockedStreams() noexcept;
 
     // --- lifecycle / timeout ---------------------------------------------------
-    [[nodiscard]] Http2ConnectionPhase phase() const noexcept { return phase_; }
+    // (Inactivity-timeout phase selection is the I/O layer's job; it keys off
+    // headerBlockInProgress() -- see the web session's scanner-phase mapping.)
     [[nodiscard]] bool closing() const noexcept { return closing_; }
     void beginGoaway(std::uint32_t errorCode);
 
@@ -179,7 +181,7 @@ public:
 
     // h2c upgrade (RFC 7540 §3.2): apply the HTTP2-Settings payload as the peer's
     // initial SETTINGS, seed stream 1 from the parsed upgraded h1 request (emitting its
-    // kRequestHeaders/kRequestEnd events), queue local SETTINGS + the upgrade SETTINGS
+    // kMessageHead/kMessageEnd events), queue local SETTINGS + the upgrade SETTINGS
     // ACK, and expect the client preface next. Returns false with GOAWAY bytes queued
     // (and closing() set) when the payload or upgraded request is invalid.
     [[nodiscard]] bool beginUpgraded(
@@ -289,7 +291,7 @@ private:
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
     // WITHOUT resolveStreamRoute -- route resolution is web/edge policy the owner runs
-    // after pulling kRequestHeaders). Return the classification; the caller reacts.
+    // after pulling kMessageHead). Return the classification; the caller reacts.
     [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
     // stream's header table). A 1xx interim head is validated then discarded WITHOUT
@@ -306,8 +308,8 @@ private:
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
     // else RST_STREAMs the stream and survives (returns true).
     [[nodiscard]] bool handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status);
-    // sans-I/O replacement for admitDecodedInitialStream/queueReady: emit kRequestHeaders
-    // (and kRequestEnd when the peer already ended the stream) for the owner to dispatch.
+    // sans-I/O replacement for admitDecodedInitialStream/queueReady: emit kMessageHead
+    // (and kMessageEnd when the peer already ended the stream) for the owner to dispatch.
     void emitRequestHeaders(Http2StreamState& stream);
 
     [[nodiscard]] Http2StreamState* findStream(std::uint32_t streamId) noexcept;
@@ -359,7 +361,6 @@ private:
     bool peerGoaway_{false};
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
-    Http2ConnectionPhase phase_{Http2ConnectionPhase::kIdle};
     bool receivedFirstSettings_{false};
     bool awaitingClientPreface_{false};
     bool closing_{false};
