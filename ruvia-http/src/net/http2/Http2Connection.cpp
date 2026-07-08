@@ -3,8 +3,12 @@
 #include <array>
 #include <utility>
 
+#include "Http2BodyState.h"
 #include "Http2FlowControl.h"
 #include "Http2FrameCodec.h"
+#include "Http2FramePayload.h"
+#include "Http2HeaderBlock.h"
+#include "Http2RequestHeaders.h"
 #include "Http2WindowUpdate.h"
 
 namespace ruvia::detail {
@@ -252,6 +256,299 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
     return true;
 }
 
+Http2StreamState* Http2Connection::findStream(std::uint32_t streamId) noexcept {
+    return streams_.find(streamId);
+}
+
+Http2StreamState* Http2Connection::createStream(std::uint32_t streamId) {
+    return streams_.create(streamId, peerSettings_.initialWindowSize());
+}
+
+HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) {
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedInitialHeader(
+                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+        });
+    http2ResetHeaderBlock(stream);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
+        return status;
+    }
+    if (!stream.hasMethod()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (stream.hasProtocol()) {
+        if (stream.requestMethod() != HttpMethod::kConnect ||
+            !stream.protocolIsWebSocket() ||
+            !stream.hasScheme() ||
+            !stream.hasPath() ||
+            !stream.hasAuthority()) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        stream.markExtendedConnectWebSocket();
+    } else if (stream.requestMethod() == HttpMethod::kConnect) {
+        if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath()) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        stream.markStandardConnect();
+    } else if (!stream.hasScheme() || !stream.hasPath()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    if (stream.bufferedBodyExceedsContentLength()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    stream.markHeadersDecoded();
+    // NOTE (sans-I/O): resolveStreamRoute is deliberately NOT called here -- route
+    // resolution and body-mode selection are ruvia-web/edge policy the owner applies
+    // after pulling the kRequestHeaders event.
+    return HeaderDecodeStatus::kOk;
+}
+
+HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& stream) {
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedInitialHeader(
+                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+        });
+    http2ResetHeaderBlock(stream);
+    return http2ClassifyHeaderDecodeResult(result);
+}
+
+HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream) {
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2OnDecodedTrailer(
+                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+        });
+    http2ResetHeaderBlock(stream);
+    if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
+        return status;
+    }
+    if (!stream.bodyLengthComplete()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
+    stream.markPeerEndStream();
+    stream.markBodyEnded();
+    events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, stream.id(), {}});
+    return HeaderDecodeStatus::kOk;
+}
+
+bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status) {
+    if (status == HeaderDecodeStatus::kCompressionError) {
+        appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
+        return false;
+    }
+    appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+    stream.markReset();
+    return true;
+}
+
+void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
+    // RFC 9113 §8.1.1: a declared content-length must equal the summed DATA payload.
+    // A body-less HEADERS (END_STREAM set) with a nonzero content-length can never be
+    // satisfied -- reject it here so both END_STREAM routes stay consistent.
+    if (stream.peerEndStream() && !http2BodyLengthComplete(stream)) {
+        appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+        stream.markReset();
+        return;
+    }
+    events_.push_back(Http2Event{Http2Event::Kind::kRequestHeaders, stream.id(), {}});
+    if (stream.peerEndStream() || stream.standardConnect()) {
+        stream.markBodyEnded();
+        events_.push_back(Http2Event{Http2Event::Kind::kRequestEnd, stream.id(), {}});
+    }
+}
+
+bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string_view payload) {
+    if (header.streamId == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "HEADERS stream id must be nonzero");
+        return false;
+    }
+    if ((header.streamId & 1U) == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid client stream id");
+        return false;
+    }
+
+    std::uint32_t dependency = 0;
+    if (!http2HeadersPriorityDependency(header, payload, dependency)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS priority");
+        return false;
+    }
+    if ((header.flags & kHttp2FlagPriority) != 0 && dependency == header.streamId) {
+        if (header.streamId > lastStreamId_) {
+            lastStreamId_ = header.streamId;
+        }
+        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+        closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+        return true;
+    }
+
+    if (auto* existing = findStream(header.streamId); existing != nullptr) {
+        if (existing->headersDecoded() && !existing->isReset()) {
+            return processTrailerHeaders(*existing, header, payload);
+        }
+        if (existing->isReset()) {
+            if (existing->closeSource() == Http2StreamCloseSource::kPeer) {
+                appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+                return true;
+            }
+            appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
+            return false;
+        }
+        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+        existing->markReset();
+        return true;
+    }
+    if (header.streamId <= lastStreamId_) {
+        const auto source = closedStreams_.source(header.streamId);
+        if (source == Http2StreamCloseSource::kPeer) {
+            appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+            return true;
+        }
+        if (source == Http2StreamCloseSource::kLocal) {
+            appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
+            return false;
+        }
+        appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
+        return false;
+    }
+
+    // TODO(sans-io): graceful-drain refused-stream handling depends on beginGoaway
+    // wiring (draining_/goawayLastStreamId_), ported when the submit path lands.
+    auto* stream = createStream(header.streamId);
+    lastStreamId_ = header.streamId;
+    const bool refusedStream = stream == nullptr;
+    if (refusedStream) {
+        refusedHeaderStream_.emplace(header.streamId, resource_);
+        stream = &*refusedHeaderStream_;
+    }
+    if ((header.flags & kHttp2FlagEndStream) != 0) {
+        stream->markPeerEndStream();
+    }
+
+    std::string_view fragment;
+    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
+        return false;
+    }
+    if (!http2StartHeaderBlock(*stream, fragment)) {
+        appendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream->markReset();
+        return true;
+    }
+
+    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
+        if (status != HeaderDecodeStatus::kOk) {
+            if (refusedStream) {
+                refusedHeaderStream_.reset();
+            }
+            return handleHeaderDecodeFailure(*stream, status);
+        }
+        if (refusedStream) {
+            appendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
+            closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
+            refusedHeaderStream_.reset();
+        } else {
+            emitRequestHeaders(*stream);
+        }
+    } else {
+        headerContinuation_.start(stream->id(), false);
+    }
+    return true;
+}
+
+bool Http2Connection::processTrailerHeaders(
+    Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload) {
+    if (stream.bodyEnded()) {
+        appendRstStream(stream.id(), Http2ErrorCode::kStreamClosed);
+        stream.markReset();
+        return true;
+    }
+    if ((header.flags & kHttp2FlagEndStream) == 0) {
+        appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
+        stream.markReset();
+        return true;
+    }
+
+    std::string_view fragment;
+    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid trailer padding");
+        return false;
+    }
+    if (!http2StartHeaderBlock(stream, fragment)) {
+        appendRstStream(stream.id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream.markReset();
+        return true;
+    }
+
+    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        const auto status = finishTrailerBlock(stream);
+        if (status != HeaderDecodeStatus::kOk) {
+            return handleHeaderDecodeFailure(stream, status);
+        }
+    } else {
+        headerContinuation_.start(stream.id(), true);
+    }
+    return true;
+}
+
+bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::string_view payload) {
+    if (!headerContinuation_.matches(header.streamId)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid CONTINUATION");
+        return false;
+    }
+    auto* stream = findStream(header.streamId);
+    if (stream == nullptr) {
+        if (!refusedHeaderStream_ || refusedHeaderStream_->id() != header.streamId) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "missing CONTINUATION stream");
+            return false;
+        }
+        stream = &*refusedHeaderStream_;
+    }
+    if (!http2AppendHeaderBlock(*stream, payload)) {
+        appendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
+        stream->markReset();
+        headerContinuation_.reset();
+        if (refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id()) {
+            refusedHeaderStream_.reset();
+        }
+        return true;
+    }
+    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        const bool trailers = headerContinuation_.finishWasTrailers();
+        if (trailers) {
+            const auto status = finishTrailerBlock(*stream);
+            if (status != HeaderDecodeStatus::kOk) {
+                return handleHeaderDecodeFailure(*stream, status);
+            }
+        } else {
+            const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id();
+            const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeHeaderBlock(*stream);
+            if (status != HeaderDecodeStatus::kOk) {
+                if (refusedStream) {
+                    refusedHeaderStream_.reset();
+                }
+                return handleHeaderDecodeFailure(*stream, status);
+            }
+            if (refusedStream) {
+                appendRstStream(stream->id(), Http2ErrorCode::kRefusedStream);
+                closedStreams_.remember(stream->id(), Http2StreamCloseSource::kLocal);
+                refusedHeaderStream_.reset();
+            } else {
+                emitRequestHeaders(*stream);
+            }
+        }
+    }
+    return true;
+}
+
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (!receivedFirstSettings_ &&
         header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
@@ -273,12 +570,15 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processRstStream(header, payload);
         case Http2FrameType::kPriority:
             return processPriority(header, payload);
+        case Http2FrameType::kHeaders:
+            return processHeaders(header, payload);
+        case Http2FrameType::kContinuation:
+            return processContinuation(header, payload);
         case Http2FrameType::kGoaway:
             closing_ = true;
             return true;
-        // TODO(sans-io): kData/kHeaders/kPriority/kRstStream/kPing/kWindowUpdate/
-        // kContinuation are ported next (each 1:1 from processData/processHeaders/...
-        // with async_write -> appendFrame and coroutine-resume -> events/unblocked).
+        // TODO(sans-io): kData is ported next (body -> kRequestBodyChunk / kRequestEnd
+        // with receive-window flow control).
         default:
             appendGoaway(Http2ErrorCode::kInternalError, "frame type not yet ported");
             return false;
@@ -321,9 +621,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     return {in.size(), Http2FeedStatus::kOk};
 }
 
-Http2StreamState* Http2Connection::stream(std::uint32_t /*streamId*/) noexcept {
-    // TODO: return streams_.find(streamId)
-    return nullptr;
+Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
+    return streams_.find(streamId);
 }
 
 void Http2Connection::submitResponseHead(

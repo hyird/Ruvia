@@ -30,6 +30,7 @@
 #include "Http2ClosedStreams.h"
 #include "Http2Frame.h"
 #include "Http2HeaderContinuation.h"
+#include "Http2HeaderDecode.h"
 #include "Http2Hpack.h"
 #include "Http2LocalSettings.h"
 #include "Http2PeerSettings.h"
@@ -155,7 +156,27 @@ private:
     [[nodiscard]] bool processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processRstStream(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPriority(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processHeaders(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processTrailerHeaders(
+        Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processContinuation(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
+
+    // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
+    // WITHOUT resolveStreamRoute -- route resolution is web/edge policy the owner runs
+    // after pulling kRequestHeaders). Return the classification; the caller reacts.
+    [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream);
+    // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
+    // else RST_STREAMs the stream and survives (returns true).
+    [[nodiscard]] bool handleHeaderDecodeFailure(Http2StreamState& stream, HeaderDecodeStatus status);
+    // sans-I/O replacement for admitDecodedInitialStream/queueReady: emit kRequestHeaders
+    // (and kRequestEnd when the peer already ended the stream) for the owner to dispatch.
+    void emitRequestHeaders(Http2StreamState& stream);
+
+    [[nodiscard]] Http2StreamState* findStream(std::uint32_t streamId) noexcept;
+    [[nodiscard]] Http2StreamState* createStream(std::uint32_t streamId);
 
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
