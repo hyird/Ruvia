@@ -7,11 +7,21 @@
 
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2FrameCodec.h"
+#include "net/http2/Http2WindowUpdate.h"
 
 namespace {
 
 using ruvia::detail::Http2Connection;
 using ruvia::detail::Http2FrameType;
+
+// Feed the peer's empty SETTINGS frame and drain the resulting ACK, leaving the
+// connection ready for post-handshake frames.
+void handshake(Http2Connection& conn) {
+    char settings[9];
+    ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+    conn.feed(std::string_view(settings, sizeof(settings)));
+    conn.consumeOutput(conn.pendingOutput().size());
+}
 
 }  // namespace
 
@@ -99,4 +109,36 @@ RUVIA_TEST(http2_connection_feed_ping_echoes_ack) {
     RUVIA_CHECK_EQ(ack.type, static_cast<std::uint8_t>(Http2FrameType::kPing));
     RUVIA_CHECK((ack.flags & ruvia::detail::kHttp2FlagAck) != 0);
     RUVIA_CHECK(out.substr(9, 8) == std::string_view(data, 8));
+}
+
+// A valid connection-level WINDOW_UPDATE just opens the send window: no error, no
+// output frame.
+RUVIA_TEST(http2_connection_feed_connection_window_update_ok) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(wu, 0, 1000);
+    const auto result = conn.feed(std::string_view(wu, sizeof(wu)));
+
+    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kOk);
+    RUVIA_CHECK(!conn.closing());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+}
+
+// A zero-increment connection WINDOW_UPDATE is a protocol error (GOAWAY).
+RUVIA_TEST(http2_connection_feed_zero_window_update_goaway) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(wu, 0, 0);
+    const auto result = conn.feed(std::string_view(wu, sizeof(wu)));
+
+    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kError);
+    RUVIA_CHECK(conn.closing());
+    const auto goaway = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK_EQ(goaway.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
 }
