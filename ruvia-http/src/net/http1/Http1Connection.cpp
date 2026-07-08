@@ -8,7 +8,7 @@
 namespace ruvia::detail {
 
 Http1Connection::Http1Connection(std::pmr::memory_resource* resource, Http1CoreConfig config)
-    : config_(config), input_(resource), events_(resource) {}
+    : config_(config), input_(resource), headStorage_(resource), events_(resource) {}
 
 Http1FeedResult Http1Connection::feed(std::string_view in) {
     // Same per-feed view contract as Http2Connection: the previous feed's event views
@@ -17,6 +17,15 @@ Http1FeedResult Http1Connection::feed(std::string_view in) {
     eventOffset_ = 0;
     if (state_ == State::kError) {
         return {0, Http1FeedStatus::kError};
+    }
+    // Reclaim the body prefix consumed by the PREVIOUS feed now (h2-style: at the start
+    // of the NEXT feed, so this feed's body-chunk views stayed valid until now). The
+    // head lives in the stable headStorage_ (see advance()), so head() views survive
+    // this reclaim -- and a content-length/streaming body no longer accumulates the
+    // whole message in input_ (previously unbounded with maxBodyBytes=0).
+    if (inBodyState() && cursor_ > 0) {
+        input_.erase(0, cursor_);
+        cursor_ = 0;
     }
     input_.append(in.data(), in.size());
     advance();
@@ -59,14 +68,28 @@ void Http1Connection::nextMessage() {
     }
     events_.clear();
     eventOffset_ = 0;
-    input_.erase(0, cursor_);
+    input_.erase(0, cursor_);  // drop this message's trailing bytes; keep pipelined input
     cursor_ = 0;
+    headStorage_.clear();
     headerSearchOffset_ = 0;
     bodyRemaining_ = 0;
     decodedBodyBytes_ = 0;
     error_ = HttpParseError::kNone;
     state_ = State::kHead;
     advance();  // pipelined requests: parse what is already buffered
+}
+
+bool Http1Connection::inBodyState() const noexcept {
+    switch (state_) {
+        case State::kBodyContentLength:
+        case State::kChunkSize:
+        case State::kChunkData:
+        case State::kChunkDataCrlf:
+        case State::kChunkTrailers:
+            return true;
+        default:
+            return false;
+    }
 }
 
 void Http1Connection::fail(HttpParseError error) {
@@ -110,7 +133,19 @@ void Http1Connection::advance() {
                     fail(parsed_.error);
                     return;
                 }
-                cursor_ = parsed_.headerBytes;
+                // Stabilize the head: parsed_.request holds views into input_, but a
+                // later feed's append (or the body reclaim above) can reallocate/shift
+                // input_ and dangle them. Copy the head bytes into headStorage_ and
+                // re-parse into that stable buffer so head() stays valid until
+                // nextMessage(), then drop the head from input_ (cursor_ back to 0, so
+                // body/pipelined bytes are indexed from the front).
+                headStorage_.assign(input_.data(), parsed_.headerBytes);
+                std::size_t stableOffset = 0;
+                parser_.parseHeaders(
+                    std::string_view(headStorage_.data(), headStorage_.size()), parsed_,
+                    stableOffset);
+                input_.erase(0, parsed_.headerBytes);
+                cursor_ = 0;
                 events_.push_back(Http1Event{Http1Event::Kind::kMessageHead, {}});
                 if (parsed_.chunked) {
                     state_ = State::kChunkSize;

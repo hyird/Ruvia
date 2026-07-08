@@ -112,6 +112,18 @@ public:
         if (result == Http2SubmitResult::kClosed) {
             co_return std::make_error_code(std::errc::connection_reset);
         }
+        // Backpressure: if the send window is closed, park until the core drains this
+        // stream's blocked remainder (the reader wakes signal_ via takeUnblockedStreams).
+        // Without this, a WS client that stops granting window while the app keeps
+        // writing (broadcast/heartbeat) grows the core's pendingSends_ without bound.
+        // WebSocketConnection serializes writers, so suspending here is safe.
+        while (!signal_->ended && connection_->hasBlockedSend(streamId_)) {
+            auto* stream = connection_->stream(streamId_);
+            if (stream == nullptr || stream->isReset()) {
+                co_return std::make_error_code(std::errc::connection_reset);
+            }
+            co_await signal_->wait();
+        }
         co_return std::error_code{};
     }
 

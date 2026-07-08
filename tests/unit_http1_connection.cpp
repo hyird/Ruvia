@@ -195,3 +195,31 @@ RUVIA_TEST(http1_connection_unconsumed_input_for_upgrade_handoff) {
     RUVIA_CHECK(conn.head().flags.upgrade);
     RUVIA_CHECK(conn.unconsumedInput() == "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
 }
+
+// P1 regression: head() views must stay valid across body feeds that reallocate the
+// input buffer. Feed a head, then a large content-length body in many chunks (forcing
+// input_ to grow/reallocate), and assert the method/path/header views still read right
+// at every step. Before the fix, the head views pointed into input_ and dangled.
+RUVIA_TEST(http1_connection_head_survives_reallocating_body) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http1Connection conn(&resource);
+
+    (void)conn.feed(
+        "POST /submit?x=1 HTTP/1.1\r\nHost: h\r\nX-Marker: keep-me\r\nContent-Length: 5000\r\n\r\n");
+    (void)drain(conn);
+    RUVIA_CHECK(conn.head().request.method() == ruvia::HttpMethod::kPost);
+    RUVIA_CHECK(conn.head().request.path() == "/submit");
+
+    std::size_t got = 0;
+    for (int i = 0; i < 50; ++i) {
+        (void)conn.feed(std::string(100, 'x'));  // 100-byte body chunks
+        got += drain(conn).body.size();
+        // Head views must remain readable after each reallocating append.
+        RUVIA_CHECK(conn.head().request.method() == ruvia::HttpMethod::kPost);
+        RUVIA_CHECK(conn.head().request.path() == "/submit");
+        RUVIA_CHECK(conn.head().request.header("X-Marker") == "keep-me");
+    }
+    RUVIA_CHECK_EQ(got, static_cast<std::size_t>(5000));
+    RUVIA_CHECK(conn.messageComplete());
+    RUVIA_CHECK(conn.head().request.header("Host") == "h");
+}

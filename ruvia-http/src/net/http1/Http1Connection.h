@@ -11,7 +11,9 @@
 // Contract (same discipline as Http2Connection):
 //   - Event `bytes` views point into the connection's input buffer; drain all events
 //     after each feed() / nextMessage() before calling either again.
-//   - The head() views are valid from kMessageHead until nextMessage().
+//   - The head() views are valid from kMessageHead until nextMessage() -- the head is
+//     copied into stable storage at kMessageHead, so a later reallocating body feed
+//     does NOT dangle it, and the body is reclaimed each feed (no whole-message buildup).
 //   - After kMessageEnd the core STOPS consuming (pipelined bytes stay buffered and
 //     are visible via unconsumedInput()) until the owner -- having written its
 //     response -- calls nextMessage(), which reclaims the finished message and
@@ -106,6 +108,7 @@ private:
     };
 
     void advance();
+    [[nodiscard]] bool inBodyState() const noexcept;
     void fail(HttpParseError error);
     void finishMessage();
     [[nodiscard]] bool accountBody(std::size_t bytes);
@@ -114,6 +117,7 @@ private:
     HttpServerParser parser_;
     HttpServerParseResult parsed_;
     std::pmr::string input_;
+    std::pmr::string headStorage_;  // stable copy of the current head (head() views point here)
     std::pmr::vector<Http1Event> events_;
     std::size_t eventOffset_{0};
     std::size_t headerSearchOffset_{0};

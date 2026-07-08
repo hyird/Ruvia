@@ -87,7 +87,7 @@ Http2ClientSession::Http2ClientSession(
       resource_(pmrResourceOrDefault(resource)),
       socket_(ioContext),
       resolver_(ioContext),
-      conn_(resource_, http2ClientCoreConfig(), Http2Role::kClient),
+      conn_(std::in_place, resource_, http2ClientCoreConfig(), Http2Role::kClient),
       authority_(makeHttpClientHostHeader(config_, resource_)),
       scheme_(config_.tls ? "https" : "http"),
       readBuffer_(resource_),
@@ -133,12 +133,43 @@ Task<std::error_code> Http2ClientSession::writeBytes(std::string_view bytes) {
 
 // --- Connection setup ----------------------------------------------------
 
+void Http2ClientSession::resetForReconnect() {
+    // Return the closed session to a fresh kIdle so the next fetch reconnects, instead
+    // of permanently bricking the origin after a transient GOAWAY / idle-close / network
+    // blip (the h1 pool already reconnects per request). Only called once fully wound
+    // down (isReconnectable): no loops, no live streams, no posted resumes -- so every
+    // member below is safely re-initialisable.
+    std::error_code ignored;
+    socket_.close(ignored);
+    socket_ = asio::ip::tcp::socket(ioContext_);
+    tlsStream_.reset();
+    conn_.emplace(resource_, http2ClientCoreConfig(), Http2Role::kClient);
+    streams_.clear();
+    readyWaiters_.clear();
+    streamSlotWaiters_.clear();
+    sendWindowWaiters_.clear();
+    flushWaiter_ = {};
+    settingsReceived_ = false;
+    hasConnectDeadline_ = false;
+    state_ = State::kIdle;
+}
+
+bool Http2ClientSession::isReconnectable() const noexcept {
+    return state_ == State::kClosed && runningLoops_ == 0 && streams_.empty() &&
+        pendingResumes_ == 0;
+}
+
 Task<void> Http2ClientSession::connect() {
     if (state_ == State::kReady) {
         co_return;
     }
     if (state_ == State::kClosed) {
-        throw std::runtime_error("http/2 session is closed");
+        if (!isReconnectable()) {
+            // Closed and still winding down (loops/resumes/streams in flight): a
+            // transient state, not a permanent brick -- the caller may retry.
+            throw std::runtime_error("http/2 session is closing");
+        }
+        resetForReconnect();  // -> kIdle, falls through to a fresh connect below
     }
     if (state_ == State::kConnecting) {
         co_await ReadyAwaiter{this};
@@ -215,13 +246,13 @@ Task<void> Http2ClientSession::doConnect() {
 
         // Send the client connection preface, our SETTINGS, and the connection-level
         // WINDOW_UPDATE that opens our receive window (all queued by the core).
-        conn_.queueClientPreface();
-        const auto preface = conn_.pendingOutput();
+        conn_->queueClientPreface();
+        const auto preface = conn_->pendingOutput();
         const auto prefaceEc = co_await writeBytes(preface);
         if (prefaceEc) {
             throw std::system_error(prefaceEc, "http/2: failed to send preface");
         }
-        conn_.consumeOutput(preface.size());
+        conn_->consumeOutput(preface.size());
     } catch (...) {
         state_ = State::kClosed;
         std::pmr::vector<std::coroutine_handle<>> waiters(resource_);
@@ -253,8 +284,8 @@ Task<void> Http2ClientSession::readLoop() {
         if (ec || n == 0) {
             break;
         }
-        const auto result = conn_.feed(std::string_view(readBuffer_.data(), n));
-        if (!settingsReceived_ && conn_.receivedPeerSettings()) {
+        const auto result = conn_->feed(std::string_view(readBuffer_.data(), n));
+        if (!settingsReceived_ && conn_->receivedPeerSettings()) {
             settingsReceived_ = true;
             if (state_ == State::kConnecting) {
                 state_ = State::kReady;
@@ -267,7 +298,7 @@ Task<void> Http2ClientSession::readLoop() {
         }
         drainCoreEvents();
         wakeFlusher();
-        if (result.status == Http2FeedStatus::kError || conn_.closing() ||
+        if (result.status == Http2FeedStatus::kError || conn_->closing() ||
             state_ == State::kClosed) {
             break;
         }
@@ -284,7 +315,7 @@ Task<void> Http2ClientSession::flushLoop() {
     std::pmr::string scratch(resource_);
     for (;;) {
         co_await FlushAwaiter{this};
-        if (!conn_.wantsWrite()) {
+        if (!conn_->wantsWrite()) {
             if (state_ == State::kClosed) {
                 break;
             }
@@ -292,13 +323,13 @@ Task<void> Http2ClientSession::flushLoop() {
         }
         // Move out (allocator-matching swap, copy-free): the core buffer can grow
         // (reads, submits) while the write is in flight.
-        conn_.takeOutput(scratch);
+        conn_->takeOutput(scratch);
         const auto ec = co_await writeBytes(scratch);
         if (ec) {
             closeNow();
             break;
         }
-        if (state_ == State::kClosed && !conn_.wantsWrite()) {
+        if (state_ == State::kClosed && !conn_->wantsWrite()) {
             break;
         }
     }
@@ -309,7 +340,7 @@ Task<void> Http2ClientSession::flushLoop() {
 
 void Http2ClientSession::drainCoreEvents() {
     for (;;) {
-        const auto event = conn_.nextEvent();
+        const auto event = conn_->nextEvent();
         if (event.kind == Http2Event::Kind::kNone) {
             break;
         }
@@ -336,11 +367,11 @@ void Http2ClientSession::drainCoreEvents() {
                 // END_STREAM frame (stray DATA / trailers) -- that server is misbehaving,
                 // so the fetch still fails.
                 if (Stream* stream = findStream(event.streamId)) {
-                    auto* core = conn_.stream(event.streamId);
+                    auto* core = conn_->stream(event.streamId);
                     const bool peerClosed = core != nullptr &&
                         core->closeSource() == Http2StreamCloseSource::kPeer;
                     if (stream->remoteEnded && peerClosed) {
-                        conn_.releaseStreamWindow(event.streamId);  // return any banked debt
+                        conn_->releaseStreamWindow(event.streamId);  // return any banked debt
                     } else {
                         failStream(*stream, Http2ErrorCode::kCancel);
                     }
@@ -354,7 +385,7 @@ void Http2ClientSession::drainCoreEvents() {
         }
     }
     // Send-window drain reports: the paced request-body senders can pull more.
-    for (const auto streamId : conn_.takeUnblockedStreams()) {
+    for (const auto streamId : conn_->takeUnblockedStreams()) {
         if (Stream* stream = findStream(streamId)) {
             touchStreamDeadline(*stream);  // upload progressed
         }
@@ -365,7 +396,7 @@ void Http2ClientSession::drainCoreEvents() {
         if (stream->failed || stream->remoteEnded) {
             continue;
         }
-        auto* core = conn_.stream(id);
+        auto* core = conn_->stream(id);
         if (core == nullptr || core->isReset()) {
             failStream(*stream, Http2ErrorCode::kCancel);
         }
@@ -375,7 +406,7 @@ void Http2ClientSession::drainCoreEvents() {
 
 void Http2ClientSession::onResponseHead(std::uint32_t streamId) {
     Stream* stream = findStream(streamId);
-    auto* core = conn_.stream(streamId);
+    auto* core = conn_->stream(streamId);
     if (stream == nullptr || core == nullptr) {
         return;
     }
@@ -410,7 +441,7 @@ void Http2ClientSession::onResponseChunk(std::uint32_t streamId, std::string_vie
     if (stream->failed) {
         // A failed streaming stream banks deferred window debt; return the credit so
         // the connection window does not shrink permanently.
-        conn_.releaseStreamWindow(streamId);
+        conn_->releaseStreamWindow(streamId);
         return;
     }
     if (!stream->responseBodyAllowed && !data.empty()) {
@@ -448,7 +479,7 @@ void Http2ClientSession::handlePeerGoaway(std::uint32_t lastStreamId) noexcept {
 }
 
 void Http2ClientSession::resetStream(std::uint32_t streamId, Http2ErrorCode error) noexcept {
-    conn_.submitReset(streamId, static_cast<std::uint32_t>(error));
+    conn_->submitReset(streamId, static_cast<std::uint32_t>(error));
     wakeFlusher();
 }
 
@@ -492,8 +523,8 @@ void Http2ClientSession::destroyStream(std::uint32_t id) noexcept {
     // Return any deferred receive-window credit before the core stream is freed, then
     // release the pin: the core removes the stream and remembers it as closed (late
     // frames on the id are handled by the core's closed-stream rules).
-    conn_.releaseStreamWindow(id);
-    conn_.unpinStream(id);
+    conn_->releaseStreamWindow(id);
+    conn_->unpinStream(id);
     streams_.erase(it);
     destroyPmrObject(stream, resource_);
 }
@@ -504,7 +535,7 @@ void Http2ClientSession::touchStreamDeadline(Stream& stream) noexcept {
     }
     // Sending the request body -> proxy_send_timeout; reading the response -> proxy_read_timeout.
     // A body fully handed to the core but still window-blocked is still "sending".
-    const bool stillSending = !stream.localEndSent || conn_.hasBlockedSend(stream.id);
+    const bool stillSending = !stream.localEndSent || conn_->hasBlockedSend(stream.id);
     const auto timeout = stillSending ? stream.sendTimeout : stream.readTimeout;
     if (timeout.count() > 0) {
         stream.deadline = std::chrono::steady_clock::now() + timeout;
@@ -562,7 +593,7 @@ void Http2ClientSession::failStream(Stream& stream, Http2ErrorCode error) noexce
     // a failed stream is never read (readChunk) nor app-closed (streamClose), and the
     // withheld credit would otherwise shrink the connection window permanently.
     if (state_ != State::kClosed) {
-        conn_.releaseStreamWindow(stream.id);
+        conn_->releaseStreamWindow(stream.id);
         wakeFlusher();
     }
     releaseSlot(stream);
@@ -708,13 +739,13 @@ Task<void> Http2ClientSession::streamRequestBody(
             co_return;
         }
         if (chunk.empty()) {
-            (void)conn_.submitData(streamId, {}, /*endStream=*/true);
+            (void)conn_->submitData(streamId, {}, /*endStream=*/true);
             stream->localEndSent = true;
             wakeFlusher();
             co_return;
         }
 
-        const auto result = conn_.submitData(streamId, chunk, /*endStream=*/false);
+        const auto result = conn_->submitData(streamId, chunk, /*endStream=*/false);
         wakeFlusher();
         touchStreamDeadline(*stream);
         if (result == Http2SubmitResult::kClosed) {
@@ -722,7 +753,7 @@ Task<void> Http2ClientSession::streamRequestBody(
         }
         // The core queued any window-blocked remainder in order; wait for it to drain
         // before pulling the next chunk so the upload is paced by the peer's windows.
-        while (conn_.hasBlockedSend(streamId)) {
+        while (conn_->hasBlockedSend(streamId)) {
             co_await SendWindowAwaiter{this, streamId};
             if (shouldStop(findStream(streamId))) {
                 co_return;
@@ -753,7 +784,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         slotWaiter.hasDeadline = true;
     }
     while (state_ == State::kReady &&
-           openStreamCount() >= conn_.peerMaxConcurrentStreams()) {
+           openStreamCount() >= conn_->peerMaxConcurrentStreams()) {
         co_await StreamSlotAwaiter{this, &slotWaiter};
         if (slotWaiter.timedOut) {
             throw std::runtime_error("http/2: timed out waiting for a concurrency slot");
@@ -762,7 +793,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     if (state_ != State::kReady) {
         throw std::runtime_error("http/2 session is not ready");
     }
-    if (conn_.peerGoaway()) {
+    if (conn_->peerGoaway()) {
         throw std::runtime_error("http/2 server is going away");
     }
 
@@ -804,15 +835,15 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
 
     const bool streamedBody = static_cast<bool>(options.bodyStream);
     const bool hasBody = !options.body.empty() || streamedBody;
-    const auto id = conn_.openLocalStream();
+    const auto id = conn_->openLocalStream();
     if (id == 0) {
         throw std::runtime_error("http/2 stream ids exhausted");
     }
     // Pin: the core keeps the stream (and its decoded response storage) alive until
     // destroyStream unpins it, even across a peer RST.
-    conn_.pinStream(id);
+    conn_->pinStream(id);
     if (streaming) {
-        conn_.deferStreamWindowRelease(id);  // consume-paced receive window (backpressure)
+        conn_->deferStreamWindowRelease(id);  // consume-paced receive window (backpressure)
     }
 
     Stream* stream = constructPmrObject<Stream>(resource_, requestResource);
@@ -837,12 +868,12 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     try {
         streams_.emplace(id, stream);
     } catch (...) {
-        conn_.unpinStream(id);
+        conn_->unpinStream(id);
         destroyPmrObject(stream, resource_);
         throw;
     }
 
-    conn_.submitRequestHead(
+    conn_->submitRequestHead(
         id, method, scheme_, std::string_view(authority_), target,
         std::span<const HttpHeaderView>(headerViews.data(), headerViews.size()),
         /*endStream=*/!hasBody);
@@ -855,7 +886,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
     } else {
         // Buffered body: one submit; the core sends up to the send window and drains
         // the remainder in order as WINDOW_UPDATEs arrive (the read loop feeds them).
-        (void)conn_.submitData(id, options.body, /*endStream=*/true);
+        (void)conn_->submitData(id, options.body, /*endStream=*/true);
         stream->localEndSent = true;
         wakeFlusher();
     }
@@ -955,7 +986,7 @@ Task<std::pmr::string> Http2ClientSession::streamReadChunk(std::uint32_t streamI
             chunk.swap(responseBody);
             // The consumer drained the buffered bytes: re-advertise the banked
             // receive-window credit so the peer can send the next slices.
-            conn_.releaseStreamWindow(streamId);
+            conn_->releaseStreamWindow(streamId);
             wakeFlusher();
             co_return chunk;
         }
@@ -981,7 +1012,7 @@ void Http2ClientSession::streamClose(std::uint32_t streamId) noexcept {
         }
         // Return any banked receive-window credit for buffered-but-undrained DATA
         // (destroyStream also releases; doing it here keeps the wire prompt).
-        conn_.releaseStreamWindow(streamId);
+        conn_->releaseStreamWindow(streamId);
         wakeFlusher();
     }
     // Resume any reader parked on this stream (defensive against close() racing a suspended
