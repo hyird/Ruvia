@@ -1062,7 +1062,11 @@ bool Http2Connection::beginUpgraded(
         return false;
     }
     queueLocalSettings();
-    appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
+    // Deliberately NO SETTINGS ACK for the HTTP2-Settings payload: RFC 7540 §3.2.1 --
+    // the 101 response is the implicit acknowledgement. An unsolicited ACK breaks
+    // clients that did not register those settings as ACK-pending (e.g. curl/nghttp2
+    // fails the whole connection on an ACK it never expected). The coroutine session
+    // sent one; that was a latent bug.
     expectClientPreface();
     return true;
 }

@@ -44,12 +44,14 @@ public:
         std::uint32_t streamId,
         ResponseBodyMode mode,
         std::pmr::memory_resource* resource,
-        Executor executor) noexcept
+        Executor executor,
+        asio::steady_timer* writeSignal = nullptr) noexcept
         : connection_(connection),
           streamId_(streamId),
           mode_(mode),
           scratch_(resource),
-          executor_(executor) {}
+          executor_(executor),
+          writeSignal_(writeSignal) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -74,6 +76,7 @@ public:
         co_await commit();
         state_.ensureBodyAllowed();
         (void)connection_.submitData(streamId_, chunk, /*endStream=*/false);
+        wakeWriter();
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
@@ -101,6 +104,7 @@ public:
             co_return;
         }
         (void)connection_.submitData(streamId_, {}, /*endStream=*/true);
+        wakeWriter();
         state_.markEnded();
     }
 
@@ -114,8 +118,18 @@ private:
         state_.markCommitted(streamHead.bodyForbidden());
         connection_.submitStreamingResponseHead(
             streamId_, streamHead.response(), streamHead.bodyForbidden());
+        wakeWriter();
         if (state_.bodyForbidden()) {
             state_.markEnded();
+        }
+    }
+
+    // Wake the session's single writer so submitted bytes actually flush; without
+    // this, output produced between inbound frames sits in the core's buffer until
+    // the peer happens to send something (SSE over a quiet connection stalls).
+    void wakeWriter() noexcept {
+        if (writeSignal_ != nullptr) {
+            writeSignal_->cancel();
         }
     }
 
@@ -125,6 +139,7 @@ private:
     ResponseStreamState state_;
     std::pmr::string scratch_;
     Executor executor_;
+    asio::steady_timer* writeSignal_{nullptr};
 };
 
 }  // namespace ruvia::detail

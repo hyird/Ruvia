@@ -32,6 +32,10 @@
 #include "HttpResponseFileAccess.h"
 #include "net/server/HttpResponseWriter.h"
 #include "net/server/HttpServerSessionUtils.h"
+// The accept loop now runs the sans-I/O session, so the umbrella no longer pulls in
+// the coroutine Http2ServerSession; include it directly while these tests still
+// exercise it (they are ported/retired when the coroutine stack is deleted).
+#include "net/http2/Http2ServerSession.h"
 #include "net/server/ConnectionScanner.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"

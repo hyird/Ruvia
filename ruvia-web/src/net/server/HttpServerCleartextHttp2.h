@@ -1,7 +1,7 @@
 #pragma once
 
 #include "net/http2/Http2Frame.h"
-#include "net/http2/Http2ServerSession.h"
+#include "net/server/Http2SansIoSession.h"
 #include "router/RouteTable.h"
 #include "HttpParserInternal.h"
 #include "runtime/AsioAwait.h"
@@ -52,6 +52,8 @@ enum class CleartextHttp2DispatchResult {
     return CleartextHttp2Probe::kHttp1;
 }
 
+// Entry point for a direct HTTP/2 connection (TLS ALPN h2, or a cleartext client
+// preface). Runs the sans-I/O session (the coroutine Http2ServerSession is replaced).
 template <typename Stream>
 Task<void> runHttp2ServerSession(
     Stream& stream,
@@ -68,21 +70,17 @@ Task<void> runHttp2ServerSession(
     std::string_view clientCertificate = {},
     std::string_view initialBytes = {},
     const std::atomic_bool* serverStarted = nullptr) {
-    Http2ServerSession<Stream> session(
-        stream,
-        socket,
-        memory,
-        routes,
-        &databases,
-        &redis,
-        &httpClients,
-        options,
-        scannerEntry,
-        remoteAddress,
-        rateLimiter,
-        clientCertificate,
-        serverStarted);
-    co_await session.run(initialBytes);
+    (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
+    Http2SansIoSessionEnv env;
+    env.databases = &databases;
+    env.redis = &redis;
+    env.httpClients = &httpClients;
+    env.rateLimiter = rateLimiter;
+    env.options = &options;
+    env.scannerEntry = &scannerEntry;
+    env.clientCertificate = clientCertificate;
+    env.serverStarted = serverStarted;
+    co_await runHttp2SansIoSession(stream, routes, memory, remoteAddress, env, initialBytes);
 }
 
 template <typename Stream>
@@ -144,6 +142,8 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     co_return CleartextHttp2DispatchResult::kSessionFinished;
 }
 
+// Entry point for an h2c-upgraded connection (RFC 7540 §3.2): the parsed h1 request
+// seeds stream 1, then the sans-I/O session takes over the connection.
 template <typename Stream>
 Task<void> runUpgradedHttp2ServerSession(
     Stream& stream,
@@ -162,21 +162,19 @@ Task<void> runUpgradedHttp2ServerSession(
     std::string_view body,
     std::string_view initialBytes,
     const std::atomic_bool* serverStarted = nullptr) {
-    Http2ServerSession<Stream> session(
-        stream,
-        socket,
-        memory,
-        routes,
-        &databases,
-        &redis,
-        &httpClients,
-        options,
-        scannerEntry,
-        remoteAddress,
-        rateLimiter,
-        {},
-        serverStarted);
-    co_await session.runUpgraded(parsed, settingsPayload, body, initialBytes);
+    (void)socket;
+    const Http2SansIoUpgradeSeed seed{&parsed, settingsPayload, body};
+    Http2SansIoSessionEnv env;
+    env.databases = &databases;
+    env.redis = &redis;
+    env.httpClients = &httpClients;
+    env.rateLimiter = rateLimiter;
+    env.options = &options;
+    env.scannerEntry = &scannerEntry;
+    env.clientCertificate = {};
+    env.serverStarted = serverStarted;
+    env.upgrade = &seed;
+    co_await runHttp2SansIoSession(stream, routes, memory, remoteAddress, env, initialBytes);
 }
 
 }  // namespace ruvia::detail
