@@ -137,6 +137,11 @@ public:
     void submitStreamingResponseHead(
         std::uint32_t streamId, const HttpResponse& head, bool bodyForbidden);
     [[nodiscard]] Http2SubmitResult submitData(std::uint32_t streamId, std::string_view chunk, bool endStream);
+    // RFC 8441 Extended CONNECT: emit the WebSocket handshake response HEADERS (200 +
+    // optional sec-websocket-protocol, NO END_STREAM) so the stream stays open as the
+    // tunnel; the owner then exchanges WebSocket frames via submitData. Mirrors the
+    // coroutine session's writeHttp2WebSocketHandshake byte-for-byte.
+    void submitWebSocketHandshake(std::uint32_t streamId, std::string_view subprotocol);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
     // After WINDOW_UPDATE/SETTINGS opened windows, the owner calls this so blocked

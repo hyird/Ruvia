@@ -69,6 +69,30 @@ ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("fast");
 }
 
+// A WebSocket echo handler: echoes each text message back and finishes when the peer
+// closes (read returns nullopt).
+ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
+    auto& ws = ctx.webSocket();
+    while (auto message = co_await ws.read()) {
+        if (message->text()) {
+            co_await ws.text(message->payload());
+        }
+    }
+}
+
+// Build a masked client->server WebSocket frame (RFC 6455 §5.1, short lengths only).
+std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload) {
+    std::string f;
+    f.push_back(static_cast<char>(0x80U | opcode));  // FIN | opcode
+    f.push_back(static_cast<char>(0x80U | static_cast<std::uint8_t>(payload.size())));
+    const unsigned char mask[4] = {0x11, 0x22, 0x33, 0x44};
+    f.append(reinterpret_cast<const char*>(mask), 4);
+    for (std::size_t i = 0; i < payload.size(); ++i) {
+        f.push_back(static_cast<char>(static_cast<unsigned char>(payload[i]) ^ mask[i % 4]));
+    }
+    return f;
+}
+
 std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
     ruvia::detail::http2WriteFrameHeader(
@@ -445,4 +469,240 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
     RUVIA_CHECK(replies[0].second == "fast");
     RUVIA_CHECK_EQ(replies[1].first, static_cast<std::uint32_t>(1));
     RUVIA_CHECK(replies[1].second == "slow");
+}
+
+// End-to-end WebSocket over the sans-I/O session (RFC 8441 Extended CONNECT): the
+// client opens a tunnel to a registered WebSocket echo route, sends a masked text
+// frame as HTTP/2 DATA, and must get the unmasked echo back; a client Close is then
+// answered with the server's Close carrying END_STREAM. Proves the per-stream inbound
+// pipe + Http2SansIoWsTransport + the shared runWebSocketSession over the core.
+RUVIA_TEST(sansio_driver_h2_websocket_echo) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    bool gotHandshake = false;
+    std::string echoedFrame;      // reassembled ws frame bytes from stream-1 DATA
+    bool gotCloseEndStream = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/ws", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
+                ruvia::detail::ResponseBodyMode::kWebSocket,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoBufferedSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto readFrameInto = [&readExact](
+                ruvia::detail::Http2FrameHeader& header, std::string& payload) -> asio::awaitable<bool> {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return false;
+                header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                payload.assign(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                    co_return false;
+                }
+                co_return true;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
+            HpackEncoder::encodeHeader(headerBlock, ":protocol", "websocket");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/ws");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-version", "13");
+            // Extended CONNECT: END_HEADERS only -- the stream MUST stay open.
+            if (!co_await writeAll(frame(
+                    0x1 /*HEADERS*/, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            // Wait for the 200 handshake HEADERS on stream 1.
+            ruvia::detail::Http2FrameHeader header{};
+            std::string payload;
+            for (;;) {
+                if (!co_await readFrameInto(header, payload)) co_return;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
+                    header.streamId == 1) {
+                    gotHandshake = true;
+                    break;
+                }
+            }
+
+            // Send a masked text frame through the tunnel and reassemble the echo
+            // (the transport may split the ws frame across DATA frames).
+            if (!co_await writeAll(frame(0x0 /*DATA*/, 0, 1, maskedWsFrame(0x1, "hello")))) co_return;
+            std::string tunnelBytes;
+            while (echoedFrame.empty()) {
+                if (!co_await readFrameInto(header, payload)) co_return;
+                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
+                    header.streamId != 1) {
+                    continue;
+                }
+                tunnelBytes += payload;
+                if (tunnelBytes.size() >= 2) {
+                    const auto len = static_cast<std::size_t>(
+                        static_cast<unsigned char>(tunnelBytes[1]) & 0x7FU);
+                    if (tunnelBytes.size() >= 2 + len) {
+                        echoedFrame = tunnelBytes.substr(0, 2 + len);
+                    }
+                }
+            }
+
+            // Close the tunnel: masked Close (1000) -> the server echoes a Close and
+            // half-closes the stream (END_STREAM).
+            if (!co_await writeAll(frame(
+                    0x0 /*DATA*/, 0, 1, maskedWsFrame(0x8, std::string_view("\x03\xE8", 2))))) {
+                co_return;
+            }
+            for (;;) {
+                if (!co_await readFrameInto(header, payload)) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header.streamId == 1 &&
+                    (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    gotCloseEndStream = true;
+                    break;
+                }
+            }
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(gotHandshake);
+    // FIN|text, length 5, "hello" -- unmasked server frame, payload echoed intact.
+    RUVIA_CHECK_EQ(echoedFrame.size(), static_cast<std::size_t>(7));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[0]), static_cast<unsigned char>(0x81));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[1]), static_cast<unsigned char>(5));
+    RUVIA_CHECK(echoedFrame.substr(2) == "hello");
+    RUVIA_CHECK(gotCloseEndStream);
+}
+
+// An Extended CONNECT to a WebSocket route with a bad sec-websocket-version must be
+// answered with a buffered error response (HEADERS then DATA+END_STREAM), mirroring
+// the coroutine session's invalid-handshake 400 path.
+RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    bool gotResponseHead = false;
+    bool gotEndStream = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/ws", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
+                ruvia::detail::ResponseBodyMode::kWebSocket,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoBufferedSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
+            HpackEncoder::encodeHeader(headerBlock, ":protocol", "websocket");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/ws");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-version", "12");  // bad
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.streamId != 1) continue;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
+                    gotResponseHead = true;
+                }
+                if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    gotEndStream = true;
+                    break;
+                }
+            }
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(gotResponseHead);
+    RUVIA_CHECK(gotEndStream);
 }

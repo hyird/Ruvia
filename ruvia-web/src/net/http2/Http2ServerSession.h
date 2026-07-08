@@ -25,6 +25,7 @@
 #include "net/http2/Http2ContinuationQueue.h"
 #include "net/http2/Http2FlowControl.h"
 #include "net/http2/Http2HeaderBlock.h"
+#include "net/http2/Http2FramePhase.h"
 #include "net/http2/Http2HeaderContinuation.h"
 #include "net/http2/Http2HeaderDecode.h"
 #include "net/http2/Http2Hpack.h"
