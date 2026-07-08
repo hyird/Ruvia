@@ -28,6 +28,7 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2CoreC
       events_(resource),
       pendingSends_(resource),
       unblockedStreams_(resource),
+      pinnedStreams_(resource),
       localMaxFrameSize_(config.maxFrameSize),
       connectionSendWindow_(static_cast<std::int32_t>(config.initialSendWindow)),
       connectionReceiveWindow_(static_cast<std::int32_t>(config.initialReceiveWindow)) {
@@ -235,13 +236,47 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
     return true;
 }
 
+bool Http2Connection::isPinned(std::uint32_t streamId) const noexcept {
+    return std::find(pinnedStreams_.begin(), pinnedStreams_.end(), streamId) != pinnedStreams_.end();
+}
+
+void Http2Connection::pinStream(std::uint32_t streamId) {
+    if (!isPinned(streamId)) {
+        pinnedStreams_.push_back(streamId);
+    }
+}
+
+void Http2Connection::unpinStream(std::uint32_t streamId) {
+    pinnedStreams_.erase(
+        std::remove(pinnedStreams_.begin(), pinnedStreams_.end(), streamId), pinnedStreams_.end());
+    auto* stream = streams_.find(streamId);
+    if (stream == nullptr) {
+        return;  // never created, or already removed
+    }
+    readyQueue_.remove(streamId);
+    if (!stream->isReset()) {
+        // Normal completion (no RST arrived while pinned): remember it as locally closed
+        // so any late frame on this id is treated as closed, not idle.
+        closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
+    }
+    // An RST that arrived while pinned already recorded closedStreams_ in closeStream.
+    streams_.remove(streamId);
+}
+
 void Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource source) {
     auto* stream = streams_.find(streamId);
     readyQueue_.remove(streamId);
     if (stream != nullptr) {
         stream->markClosed(source);
         events_.push_back(Http2Event{Http2Event::Kind::kStreamClosed, streamId, {}});
-        streams_.remove(streamId);
+        if (isPinned(streamId)) {
+            // A handler still holds views into this stream's decoded storage. Keep it in
+            // the table (so those views stay valid) but mark it reset so later frames are
+            // dropped; unpinStream frees it once the handler finishes.
+            stream->markReset();
+        } else {
+            streams_.remove(streamId);
+        }
     }
     closedStreams_.remember(streamId, source);
 }

@@ -464,3 +464,47 @@ RUVIA_TEST(http2_connection_submit_reset_emits_rst) {
     RUVIA_CHECK_EQ(r.streamId, static_cast<std::uint32_t>(1));
     RUVIA_CHECK(conn.stream(1)->isReset());
 }
+
+// A pinned stream (handler in flight) is NOT freed by a peer RST_STREAM: it stays in
+// the table (so the handler's request views survive) but is marked reset, and
+// kStreamClosed is emitted so the owner can drop the response. unpin then frees it.
+RUVIA_TEST(http2_connection_pinned_stream_survives_peer_reset) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);  // stream 1 created + decoded
+    RUVIA_CHECK(conn.stream(1) != nullptr);
+
+    conn.pinStream(1);
+
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(rst + 9, 8 /* CANCEL */);
+    conn.feed(std::string_view(rst, sizeof(rst)));
+
+    auto* s = conn.stream(1);
+    RUVIA_CHECK(s != nullptr);   // kept alive because pinned
+    RUVIA_CHECK(s->isReset());   // but marked reset
+    bool sawClosed = false;
+    for (;;) {
+        const auto event = conn.nextEvent();
+        if (event.kind == Http2Event::Kind::kNone) break;
+        if (event.kind == Http2Event::Kind::kStreamClosed && event.streamId == 1) sawClosed = true;
+    }
+    RUVIA_CHECK(sawClosed);
+
+    conn.unpinStream(1);
+    RUVIA_CHECK(conn.stream(1) == nullptr);  // freed once the handler finished
+}
+
+// Unpinning a stream that completed normally (no RST) frees it too.
+RUVIA_TEST(http2_connection_unpin_frees_completed_stream) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+    conn.pinStream(1);
+    RUVIA_CHECK(conn.stream(1) != nullptr);
+    conn.unpinStream(1);
+    RUVIA_CHECK(conn.stream(1) == nullptr);
+}
