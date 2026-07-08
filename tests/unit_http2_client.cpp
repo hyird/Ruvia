@@ -2917,3 +2917,119 @@ RUVIA_TEST(http2_client_credits_connection_window_when_streamed_data_is_reset) {
     RUVIA_CHECK(clientThrew);
     RUVIA_CHECK(sawConnectionCreditForData);
 }
+
+// P1 regression: an Http2ClientSession whose connection closes (server GOAWAY/idle
+// close) must RECONNECT on the next fetch, not permanently brick the origin. Serves
+// two sequential connections; the first closes after responding, the second must
+// still succeed -- proving the session reset itself back to a connectable state.
+RUVIA_TEST(http2_client_reconnects_after_server_close) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    int connectionsServed = 0;
+    std::string error;
+
+    // Server: accept two connections in turn; each does the minimal h2 dance (preface,
+    // SETTINGS + ack, one HEADERS -> 200 empty response with END_STREAM), then closes.
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            for (int c = 0; c < 2; ++c) {
+                auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+                auto readExact = [&sock](void* d, std::size_t n) -> asio::awaitable<bool> {
+                    auto [ec, got] = co_await asio::async_read(
+                        sock, asio::buffer(d, n), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && got == n;
+                };
+                auto writeAll = [&sock](std::string_view b) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_write(
+                        sock, asio::buffer(b.data(), b.size()), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == b.size();
+                };
+                char preface[24];
+                if (!co_await readExact(preface, sizeof(preface))) co_return;
+                char settings[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+                if (!co_await writeAll(std::string_view(settings, sizeof(settings)))) co_return;
+
+                std::uint32_t streamId = 0;
+                for (;;) {
+                    char hb[kHttp2FrameHeaderBytes];
+                    if (!co_await readExact(hb, sizeof(hb))) co_return;
+                    const auto header = http2ParseFrameHeader(std::string_view(hb, sizeof(hb)));
+                    std::string payload(header.length, '\0');
+                    if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kSettings) {
+                        if ((header.flags & kHttp2FlagAck) == 0) {
+                            char ack[kHttp2FrameHeaderBytes];
+                            http2WriteFrameHeader(ack, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
+                            if (!co_await writeAll(std::string_view(ack, sizeof(ack)))) co_return;
+                        }
+                        continue;
+                    }
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kHeaders) {
+                        streamId = header.streamId;
+                        break;
+                    }
+                }
+                std::pmr::string block(resource);
+                HpackEncoder::encodeStatus(block, 200);
+                char rh[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(
+                    rh, static_cast<std::uint32_t>(block.size()), Http2FrameType::kHeaders,
+                    static_cast<std::uint8_t>(kHttp2FlagEndHeaders | kHttp2FlagEndStream), streamId);
+                if (!co_await writeAll(std::string_view(rh, sizeof(rh))) ||
+                    !co_await writeAll(std::string_view(block.data(), block.size()))) {
+                    co_return;
+                }
+                ++connectionsServed;
+                std::error_code ignored;
+                sock.shutdown(tcp::socket::shutdown_both, ignored);
+                sock.close(ignored);  // force the client to observe a close between fetches
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+    auto watchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(500));
+    watchdog->async_wait([&](const std::error_code& ec) {
+        if (!ec) { session->closeNow(); std::error_code ig; acceptor.close(ig); }
+    });
+
+    int successes = 0;
+    asio::co_spawn(
+        io,
+        [&, watchdog]() -> asio::awaitable<void> {
+            for (int i = 0; i < 2; ++i) {
+                try {
+                    ruvia::FetchOptions options;
+                    auto response = co_await taskAsAwaitable(session->fetch("/x", options, resource));
+                    if (response.status() == 200) {
+                        ++successes;
+                    }
+                } catch (const std::exception& e) {
+                    error += std::string("fetch") + std::to_string(i) + ":" + e.what() + ";";
+                }
+                // Let the read loop observe the server's close before the next fetch, so
+                // the second fetch takes the reconnect path (not the still-open session).
+                asio::steady_timer gap(io, std::chrono::milliseconds(50));
+                co_await gap.async_wait(asio::as_tuple(asio::use_awaitable));
+            }
+            std::error_code ig;
+            watchdog->cancel(ig);
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(error.empty());
+    RUVIA_CHECK_EQ(successes, 2);            // BOTH fetches succeeded (reconnect worked)
+    RUVIA_CHECK_EQ(connectionsServed, 2);   // server accepted two distinct connections
+}

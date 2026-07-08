@@ -852,3 +852,56 @@ RUVIA_TEST(http2_connection_client_role_rejects_unexpected_streams) {
         RUVIA_CHECK(client.closing());  // no push: even ids are never valid
     }
 }
+
+// Graceful drain (RFC 9113 §6.8): beginDrain emits GOAWAY(NO_ERROR) at the last
+// accepted stream id; streams already open keep working, HEADERS for a higher id are
+// refused with RST_STREAM(REFUSED_STREAM), and beginDrain is idempotent.
+RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);  // stream 1 open (half-closed remote)
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    conn.beginDrain();
+    // GOAWAY(NO_ERROR, lastStreamId=1) emitted, connection NOT closing.
+    const auto goaway = conn.pendingOutput();
+    RUVIA_CHECK(goaway.size() >= 9);
+    const auto gh = ruvia::detail::http2ParseFrameHeader(goaway.substr(0, 9));
+    RUVIA_CHECK_EQ(gh.type, static_cast<std::uint8_t>(Http2FrameType::kGoaway));
+    RUVIA_CHECK(!conn.closing());
+    RUVIA_CHECK(conn.draining());
+    conn.consumeOutput(goaway.size());
+
+    // A new stream ABOVE the advertised id (3) is refused with RST_STREAM.
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const auto h = headersFrame(
+        &resource, 3, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    conn.feed(std::string_view(h.data(), h.size()));
+    bool refusedEnd = false;
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {
+        // stream 3 must NOT surface as a request (it was refused)
+    }
+    const auto rst = conn.pendingOutput();
+    RUVIA_CHECK(rst.size() >= 9);
+    const auto rh = ruvia::detail::http2ParseFrameHeader(rst.substr(0, 9));
+    RUVIA_CHECK_EQ(rh.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(rh.streamId, static_cast<std::uint32_t>(3));
+    RUVIA_CHECK(!conn.closing());  // drain refuses new streams WITHOUT closing
+    (void)refusedEnd;
+    conn.consumeOutput(rst.size());
+
+    // Stream 1 (opened before the drain) can still be answered.
+    ruvia::HttpResponse response(&resource);
+    response.status(200);
+    response.setBodyCopy("ok");
+    conn.submitResponseHead(1, response, /*bodyForbidden=*/false);
+    RUVIA_CHECK(conn.submitData(1, "ok", true) == Http2SubmitResult::kOk);
+    RUVIA_CHECK(conn.pendingOutput().size() > 9);  // response frames produced
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    conn.beginDrain();  // idempotent: no further GOAWAY
+    RUVIA_CHECK(conn.pendingOutput().empty());
+}

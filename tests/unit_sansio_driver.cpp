@@ -75,6 +75,11 @@ ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("fast");
 }
 
+ruvia::Task<ruvia::HttpResponse> seededHandler(void*, ruvia::Context& ctx) {
+    // Reached only if the seeded h1 request dispatched to the /seeded route on stream 1.
+    co_return ctx.text("seeded-ok");
+}
+
 // Path + size of the large temp file the pacing test serves (set in the test body).
 inline std::string& largeFilePath() {
     static std::string path;
@@ -1268,4 +1273,88 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
     std::filesystem::remove(path);
     RUVIA_CHECK_EQ(received, kLargeFileBytes);  // every byte delivered, not truncated
     RUVIA_CHECK(sawEnd);
+}
+
+// h2c upgrade (RFC 7540 §3.2) end-to-end at the session level: a parsed h1 request is
+// packaged as an Http2SansIoUpgradeSeed and handed to runHttp2SansIoSession via
+// env.upgrade. The client sends ONLY the connection preface + SETTINGS (the request
+// was already seeded), and the seeded request must be answered on stream 1. Exercises
+// beginUpgraded seeding + the drain-seed-before-feed ordering invariant.
+RUVIA_TEST(sansio_driver_h2c_upgrade_seed_answers_stream1) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string body;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/seeded", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &seededHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+
+            // Parse an h1 request to seed stream 1 from (as the upgrade route would).
+            const std::string h1 = "GET /seeded HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            ruvia::detail::HttpServerParser parser;
+            ruvia::detail::HttpServerParseResult parsed;
+            parser.parseHeaders(h1, parsed, 0);
+            const ruvia::detail::Http2SansIoUpgradeSeed seed{&parsed, {}, {}};
+            ruvia::detail::Http2SansIoSessionEnv env;
+            env.upgrade = &seed;
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1", env));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            // Only the preface + empty SETTINGS: the request itself was seeded server-side.
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header.streamId == 1 && !payload.empty()) {
+                    body = payload;
+                    break;
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(body == "seeded-ok");
 }
