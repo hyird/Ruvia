@@ -24,11 +24,14 @@
 #include "net/http2/Http2RequestBuilder.h"
 #include "net/server/Http2SansIoSession.h"
 #include "router/RouteResolution.h"
+#include "router/RouterInternal.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
 #include "runtime/SansIoDriver.h"
+#include "ruvia/http/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
+#include "ruvia/router/Router.h"
 
 namespace {
 
@@ -39,6 +42,12 @@ using ruvia::detail::Http2FrameType;
 using ruvia::detail::HpackEncoder;
 
 constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+// A real route handler: returns a distinctive body so the client can confirm the
+// registered handler actually ran through the sans-I/O dispatch pipeline.
+ruvia::Task<ruvia::HttpResponse> echoHandler(void*, ruvia::Context& ctx) {
+    co_return ctx.text("handler-ran");
+}
 
 std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
     std::string bytes(ruvia::detail::kHttp2FrameHeaderBytes, '\0');
@@ -230,4 +239,93 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
 
     io.run();
     RUVIA_CHECK(gotResponseHead);
+}
+
+// End-to-end proof that a REAL registered handler runs over the sans-I/O core with a
+// request body: a POST /echo route echoes the body; the buffered helper accumulates the
+// DATA into the stream, dispatches to the handler, and submits the echoed response.
+RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string echoed;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kPost,
+                std::pmr::string("/echo", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &echoHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoBufferedSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/echo");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            // HEADERS (END_HEADERS, body follows) then DATA "hello" (END_STREAM).
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+            if (!co_await writeAll(frame(0x0 /*DATA*/, ruvia::detail::kHttp2FlagEndStream, 1, "hello"))) {
+                co_return;
+            }
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header.streamId == 1 && !payload.empty()) {
+                    echoed = payload;
+                    break;
+                }
+            }
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(echoed == "handler-ran");
 }
