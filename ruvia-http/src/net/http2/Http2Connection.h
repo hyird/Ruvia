@@ -147,6 +147,10 @@ public:
     // the outbound buffer.
     void queueLocalSettings();
 
+    // Server mode: require the 24-byte client connection preface (RFC 9113 §3.4) before
+    // the first frame. Call once after construction; feed() consumes + validates it.
+    void expectClientPreface() noexcept { awaitingClientPreface_ = true; }
+
 private:
     // Outbound frame emission: encode a 9-byte header + payload into outBuffer_.
     // Replaces the coroutine writeFramePayload; the encoders are pure.
@@ -243,6 +247,7 @@ private:
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
     Http2ConnectionPhase phase_{Http2ConnectionPhase::kIdle};
     bool receivedFirstSettings_{false};
+    bool awaitingClientPreface_{false};
     bool closing_{false};
 };
 
