@@ -400,7 +400,7 @@ Task<void> runHttp2SansIoSession(
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
                 connection, streamId, resolution.responseMode(), requestMemory.resource(),
-                executor);
+                executor, &writeSignal);
             auto result = co_await dispatchResponseStreamWith(
                 sink, routes, request, resolution, requestMemory, dispatchServices,
                 /*closeConnectionOnError=*/false,
@@ -563,10 +563,15 @@ Task<void> runHttp2SansIoSession(
         executor, taskAsAwaitable(writerLoop()),
         [&writerFinished](std::exception_ptr) noexcept { writerFinished.cancel(); });
 
+    // Drain the h2c seeded request BEFORE feeding any initial bytes: feed() resets the
+    // event queue at entry (its per-feed view contract), which would wipe the seed's
+    // kRequestHeaders/kRequestEnd when the client pipelined its preface after the
+    // upgrade request. Seed events carry no input views, so draining first is safe.
+    drainEvents();
     if (!connection.closing() && !initialBytes.empty()) {
         (void)connection.feed(initialBytes);
+        drainEvents();
     }
-    drainEvents();  // h2c seeded request and/or events from the initial bytes
     wakeWriter();
 
     // Reader loop: feed inbound bytes, then act on the drained events.
