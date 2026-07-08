@@ -319,8 +319,11 @@ void Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource
         if (isPinned(streamId)) {
             // A handler still holds views into this stream's decoded storage. Keep it in
             // the table (so those views stay valid) but mark it reset so later frames are
-            // dropped; unpinStream frees it once the handler finishes.
-            stream->markReset();
+            // dropped; unpinStream frees it once the handler finishes. Preserve the close
+            // SOURCE (markReset defaults to kLocal, which would clobber a peer RST -- the
+            // owner reads closeSource() to tell a legitimate peer abort from a local
+            // protocol reject, e.g. keeping a complete response on peer RST_STREAM).
+            stream->markReset(source);
         } else {
             streams_.remove(streamId);
         }

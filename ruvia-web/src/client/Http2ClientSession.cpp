@@ -327,10 +327,23 @@ void Http2ClientSession::drainCoreEvents() {
                 }
                 break;
             case Http2Event::Kind::kStreamClosed:
-                // Peer RST (or an equivalent local abort inside the core): the stream
-                // storage stays alive under our pin; fail the fetch/reader.
+                // The stream aborted; its storage stays alive under our pin. Keep an
+                // already-complete response ONLY when the peer itself closed the stream:
+                // RFC 9113 §8.1 lets a server send a full response then RST_STREAM to
+                // abort the client's request-body upload (nginx does this for e.g. an
+                // early 413), and the client MUST NOT discard the response. A LOCAL
+                // close after remoteEnded means the core rejected a malformed post-
+                // END_STREAM frame (stray DATA / trailers) -- that server is misbehaving,
+                // so the fetch still fails.
                 if (Stream* stream = findStream(event.streamId)) {
-                    failStream(*stream, Http2ErrorCode::kCancel);
+                    auto* core = conn_.stream(event.streamId);
+                    const bool peerClosed = core != nullptr &&
+                        core->closeSource() == Http2StreamCloseSource::kPeer;
+                    if (stream->remoteEnded && peerClosed) {
+                        conn_.releaseStreamWindow(event.streamId);  // return any banked debt
+                    } else {
+                        failStream(*stream, Http2ErrorCode::kCancel);
+                    }
                 }
                 break;
             case Http2Event::Kind::kGoaway:
@@ -428,7 +441,7 @@ void Http2ClientSession::handlePeerGoaway(std::uint32_t lastStreamId) noexcept {
     // surface the refusal. Streams at or below it keep running to completion; new
     // opens are refused by the core (openLocalStream returns 0 after peerGoaway).
     for (auto& [id, stream] : streams_) {
-        if (id > lastStreamId) {
+        if (id > lastStreamId && !stream->remoteEnded) {
             failStream(*stream, Http2ErrorCode::kRefusedStream);
         }
     }
@@ -445,7 +458,14 @@ void Http2ClientSession::resume(std::coroutine_handle<> handle) noexcept {
     if (!handle) {
         return;
     }
-    asio::post(ioContext_, [handle]() { handle.resume(); });
+    // The resumed coroutine (a suspended fetch/fetchStream/readChunk) touches the
+    // session after it wakes, so the session must outlive the post: count it so
+    // isQuiescent() stays false until the resume has actually run.
+    ++pendingResumes_;
+    asio::post(ioContext_, [this, handle]() {
+        --pendingResumes_;
+        handle.resume();
+    });
 }
 
 void Http2ClientSession::wakeFlusher() noexcept {
@@ -999,9 +1019,13 @@ void Http2ClientSession::closeNow() noexcept {
 }
 
 bool Http2ClientSession::isQuiescent() const noexcept {
-    // Closed and both detached loops have exited (they hold `this`), so the session -- and the
-    // stream coroutines it drives -- are done and it is safe to destroy.
-    return state_ == State::kClosed && runningLoops_ == 0;
+    // Safe to destroy only when: closed, both detached loops have exited (they hold
+    // `this`), NO stream is still registered (an app-held FetchResponseStream keeps its
+    // Stream in streams_ via the Http2StreamSource back-pointer until destroyStream, so
+    // reaping with a live stream would free the session under a readChunk/streamClose),
+    // and NO posted coroutine resume is still queued (each touches the session on wake).
+    return state_ == State::kClosed && runningLoops_ == 0 && streams_.empty() &&
+        pendingResumes_ == 0;
 }
 
 bool Http2ClientSession::hasAnyTimeout() const noexcept {

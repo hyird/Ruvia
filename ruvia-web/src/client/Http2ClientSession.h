@@ -129,9 +129,17 @@ private:
         Http2ClientSession* session;
         [[nodiscard]] bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
+            // Counted like resume(): the resumed fetch coroutine touches the session
+            // (destroyStream etc.), so the session must not be reaped while this is
+            // in flight -- isQuiescent() stays false until the post runs.
+            auto* session = this->session;
+            ++session->pendingResumes_;
             auto executor = session->ioContext_.get_executor();
-            asio::post(executor, [executor, handle]() mutable {
-                asio::post(executor, [handle]() { handle.resume(); });
+            asio::post(executor, [session, executor, handle]() mutable {
+                asio::post(executor, [session, handle]() {
+                    --session->pendingResumes_;
+                    handle.resume();
+                });
             });
         }
         void await_resume() const noexcept {}
@@ -259,7 +267,8 @@ private:
     bool hasConnectDeadline_{false};
 
     State state_{State::kIdle};
-    std::size_t runningLoops_{0};  // detached read/flush loops still holding `this`
+    std::size_t runningLoops_{0};    // detached read/flush loops still holding `this`
+    std::size_t pendingResumes_{0};  // posted coroutine resumes not yet run (all touch `this`)
     bool settingsReceived_{false};
 
     // fetch() parks here (returns not-ready) until an open-stream slot frees below the peer's

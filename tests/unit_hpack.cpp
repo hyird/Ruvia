@@ -313,3 +313,66 @@ RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
     RUVIA_CHECK(!result.ok());
     RUVIA_CHECK(result.error == HpackError::kInvalidIndex);
 }
+
+// A callback that rejects at a chosen header index (mid-block), like the h2 core does
+// when a decoded header violates policy (over-limit list, duplicate singleton, ...).
+struct RejectAt final {
+    std::size_t rejectIndex;
+    std::size_t seen{0};
+    std::vector<std::pair<std::string, std::string>> before;
+};
+
+bool rejectAtCallback(void* target, std::string_view name, std::string_view value) {
+    auto* r = static_cast<RejectAt*>(target);
+    if (r->seen == r->rejectIndex) {
+        ++r->seen;
+        return false;  // reject THIS header
+    }
+    if (r->seen < r->rejectIndex) {
+        r->before.emplace_back(std::string(name), std::string(value));
+    }
+    ++r->seen;
+    return true;
+}
+
+// A callback-rejected block must STILL decode fully so the connection-global dynamic
+// table stays consistent (RFC 7541 4.1 / RFC 9113 4.3): the decoder reports the
+// rejection, but a later block referencing an entry the rejected block inserted must
+// still decode correctly. Regression for the P0 where decode aborted mid-block.
+RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
+    HpackDecoder decoder(std::pmr::get_default_resource());
+
+    // Block A: three literal-with-incremental-indexing headers (0x40 prefix, new name),
+    // hand-encoded so each is inserted into the dynamic table. The callback rejects the
+    // SECOND; all three must nonetheless be inserted.
+    const auto litIncremental = [](std::string_view name, std::string_view value) {
+        std::string out;
+        out.push_back(static_cast<char>(0x40));                  // literal, incremental, new name
+        out.push_back(static_cast<char>(name.size()));           // name len (no huffman)
+        out.append(name);
+        out.push_back(static_cast<char>(value.size()));          // value len (no huffman)
+        out.append(value);
+        return out;
+    };
+    const std::string blockA =
+        litIncremental("a-one", "1") + litIncremental("b-two", "2") + litIncremental("c-three", "3");
+
+    RejectAt rejectAt{.rejectIndex = 1};
+    const auto resultA = decoder.decode(blockA, &rejectAt, &rejectAtCallback);
+    RUVIA_CHECK(!resultA.ok());  // rejection surfaced to the caller...
+    // The callback is suppressed after it rejects, so it fires only for a-one (emitted)
+    // and b-two (the rejecting call) -- never c-three. But c-three is STILL inserted
+    // into the dynamic table (verified by block B below), which is the whole point.
+    RUVIA_CHECK_EQ(rejectAt.seen, static_cast<std::size_t>(2));
+    RUVIA_CHECK_EQ(rejectAt.before.size(), static_cast<std::size_t>(1));  // only 'a-one' emitted
+
+    // Block B on the same decoder: reference the newest dynamic entry (index 62 = the
+    // last inserted, 'c-three'). If block A had aborted mid-decode, the table would be
+    // desynced and this would decode wrong (or fail). 0xBE = indexed, dynamic idx 62.
+    Collector out;
+    const auto resultB = decoder.decode(bytes({0xBE}), &out, &collect);
+    RUVIA_CHECK(resultB.ok());
+    RUVIA_CHECK_EQ(out.headers.size(), static_cast<std::size_t>(1));
+    RUVIA_CHECK(out.headers[0].first == "c-three");
+    RUVIA_CHECK(out.headers[0].second == "3");
+}
