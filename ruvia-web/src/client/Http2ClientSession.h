@@ -172,7 +172,7 @@ private:
     struct FlushAwaiter final {
         Http2ClientSession* session;
         [[nodiscard]] bool await_ready() const noexcept {
-            return session->conn_.wantsWrite() || session->state_ == State::kClosed;
+            return session->conn_->wantsWrite() || session->state_ == State::kClosed;
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept { session->flushWaiter_ = handle; }
         void await_resume() const noexcept {}
@@ -192,7 +192,7 @@ private:
             if (it == session->streams_.end() || it->second->failed || it->second->remoteEnded) {
                 return true;  // gone/reset, or the server already sent a full response
             }
-            return !session->conn_.hasBlockedSend(streamId);
+            return !session->conn_->hasBlockedSend(streamId);
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
             session->sendWindowWaiters_.push_back(handle);
@@ -201,6 +201,10 @@ private:
     };
 
     Task<void> doConnect();
+    // Reconnect support: reset a fully-wound-down closed session back to kIdle so the
+    // next fetch reopens the origin (self-healing, like the h1 pool).
+    [[nodiscard]] bool isReconnectable() const noexcept;
+    void resetForReconnect();
     Task<void> readLoop();
     Task<void> flushLoop();
     Task<std::pair<std::error_code, std::size_t>> readSome(asio::mutable_buffer buffer);
@@ -252,7 +256,7 @@ private:
     std::optional<asio::ssl::context> sslContext_;
     std::unique_ptr<TlsStream, TlsStreamDeleter> tlsStream_;
 
-    Http2Connection conn_;         // the sans-I/O h2 core, client role
+    std::optional<Http2Connection> conn_;  // the sans-I/O h2 core, client role (optional for reconnect reset)
     std::pmr::string authority_;   // host[:port] for the :authority pseudo-header
     std::string_view scheme_;      // "https" or "http"
     std::pmr::string readBuffer_;  // scratch for socket reads fed into the core
@@ -278,7 +282,7 @@ private:
         SlotWaiter* waiter;
         [[nodiscard]] bool await_ready() const noexcept {
             return session->state_ != State::kReady ||
-                   session->openStreamCount() < session->conn_.peerMaxConcurrentStreams();
+                   session->openStreamCount() < session->conn_->peerMaxConcurrentStreams();
         }
         void await_suspend(std::coroutine_handle<> handle) noexcept {
             waiter->handle = handle;

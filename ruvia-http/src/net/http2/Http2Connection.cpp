@@ -733,6 +733,9 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
 
     Http2StreamState* stream = nullptr;
     bool refusedStream = false;
+    // A HEADERS block on a stream WE locally closed: decode it (HPACK sync) but discard
+    // the result and RST(STREAM_CLOSED) rather than tearing the connection down.
+    bool discardIntoStream = false;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
         if (existing->headersDecoded() && !existing->isReset()) {
             return processTrailerHeaders(*existing, header, payload);
@@ -742,8 +745,14 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
                 appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
                 return true;
             }
-            appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
-            return false;
+            // Locally closed (we RST'd on a body cap / content-length mismatch, or the
+            // handler finished): the peer's in-flight HEADERS/trailers are legal (RFC
+            // 9113 §5.1 -- a peer may send frames before observing our RST). Do NOT
+            // GOAWAY the whole connection; decode-and-discard the block into this reset
+            // stream's buffer to keep the connection-global HPACK table in sync, then
+            // RST(STREAM_CLOSED). Handled by the discardIntoStream path below.
+            discardIntoStream = true;
+            stream = existing;
         }
         if (role_ == Http2Role::kClient) {
             // A 1xx interim head was decoded on this stream; this block is the next
@@ -773,25 +782,62 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
                 return true;
             }
             if (source == Http2StreamCloseSource::kLocal) {
-                appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS on closed stream");
+                // We locally closed this stream (early response, then the peer's
+                // trailers are still in flight): decode-and-discard through the refused
+                // path to keep HPACK synced, then RST(STREAM_CLOSED) -- NOT GOAWAY,
+                // which would kill every other multiplexed stream in a benign race.
+                refusedStream = true;
+                refusedHeaderStream_.emplace(header.streamId, resource_);
+                stream = &*refusedHeaderStream_;
+            } else {
+                appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
                 return false;
             }
-            appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
-            return false;
         }
 
-        // While draining, a stream above the id we advertised in GOAWAY must not be
-        // processed (RFC 9113 §6.8); route it through the refused-stream path so its
-        // header block is still decoded (to keep HPACK in sync) and then RST'd.
-        const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
-        stream = drainRefused ? nullptr : createStream(header.streamId);
-        lastStreamId_ = header.streamId;
-        refusedStream = stream == nullptr;
-        if (refusedStream) {
-            refusedHeaderStream_.emplace(header.streamId, resource_);
-            stream = &*refusedHeaderStream_;
+        // A genuinely-new stream (not the locally-closed decode-and-discard case above,
+        // which already resolved `stream`). While draining, a stream above the id we
+        // advertised in GOAWAY must not be processed (RFC 9113 §6.8); route it through
+        // the refused-stream path so its block is still decoded (HPACK sync) then RST'd.
+        if (stream == nullptr) {
+            const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+            stream = drainRefused ? nullptr : createStream(header.streamId);
+            lastStreamId_ = header.streamId;
+            refusedStream = stream == nullptr;
+            if (refusedStream) {
+                refusedHeaderStream_.emplace(header.streamId, resource_);
+                stream = &*refusedHeaderStream_;
+            }
         }
     }
+    if (discardIntoStream) {
+        // A HEADERS block on the in-table stream we locally reset (case a): decode it
+        // for HPACK consistency, discard the result, and RST(STREAM_CLOSED). A
+        // multi-frame block into a still-pinned reset stream would need continuation-
+        // mode tracking on the live stream, which we do not have -- fall back to the
+        // (safe) connection close only for that rare race; the common single-frame
+        // trailer survives.
+        if ((header.flags & kHttp2FlagEndHeaders) == 0) {
+            appendGoaway(Http2ErrorCode::kStreamClosed, "multi-frame HEADERS on closed stream");
+            return false;
+        }
+        std::string_view fragment;
+        if (!http2DecodeHeadersPayload(header, payload, fragment)) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
+            return false;
+        }
+        if (!http2StartHeaderBlock(*stream, fragment)) {
+            appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
+            return false;
+        }
+        if (decodeRefusedHeaderBlock(*stream) == HeaderDecodeStatus::kCompressionError) {
+            appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
+            return false;
+        }
+        appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+        return true;
+    }
+
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         stream->markPeerEndStream();
     }
@@ -802,9 +848,12 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
     if (!http2StartHeaderBlock(*stream, fragment)) {
-        appendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
-        stream->markReset();
-        return true;
+        // The block exceeds the header buffer cap. We cannot decode a block we could
+        // not fully buffer, and skipping it would desync the connection-global HPACK
+        // dynamic table for every later block (RFC 9113 §4.3) -- so this is a
+        // CONNECTION error, not a survivable stream reset.
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
+        return false;
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
@@ -852,9 +901,10 @@ bool Http2Connection::processTrailerHeaders(
         return false;
     }
     if (!http2StartHeaderBlock(stream, fragment)) {
-        appendRstStream(stream.id(), Http2ErrorCode::kEnhanceYourCalm);
-        stream.markReset();
-        return true;
+        // Un-bufferable trailer block: same HPACK-consistency reasoning as HEADERS --
+        // connection error rather than a survivable stream reset.
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "trailer block too large");
+        return false;
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
@@ -882,13 +932,11 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         stream = &*refusedHeaderStream_;
     }
     if (!http2AppendHeaderBlock(*stream, payload)) {
-        appendRstStream(stream->id(), Http2ErrorCode::kEnhanceYourCalm);
-        stream->markReset();
-        headerContinuation_.reset();
-        if (refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id()) {
-            refusedHeaderStream_.reset();
-        }
-        return true;
+        // The accumulated HEADERS+CONTINUATION block overflowed the buffer cap; the
+        // partial block cannot be decoded, so skipping it would desync HPACK for the
+        // whole connection -- a CONNECTION error (RFC 9113 §4.3), not a stream reset.
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
+        return false;
     }
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
         const bool trailers = headerContinuation_.finishWasTrailers();

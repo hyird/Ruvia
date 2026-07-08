@@ -200,11 +200,14 @@ HttpServer::HttpServer(
             static_cast<RedisRegistry*>(target)->scanDeadlines();
         });
     }
-    if (!httpClients_.empty()) {
-        connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
-            static_cast<HttpClientRegistry*>(target)->scanDeadlines();
-        });
-    }
+    // Register unconditionally, NOT only when static clients exist: a server with zero
+    // static clients still creates backends at runtime via Context::proxy(config) /
+    // addClient, and those need scanDeadlines to enforce timeouts and to reap retired
+    // backends. An empty-registry scan is a cheap no-op. (ConnectionScanner runs
+    // whenever any worker scanner is registered.)
+    connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
+        static_cast<HttpClientRegistry*>(target)->scanDeadlines();
+    });
 }
 
 HttpServer::~HttpServer() {
