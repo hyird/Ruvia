@@ -106,13 +106,19 @@ private:
         const unsigned char* end,
         std::pmr::string& scratch,
         std::string_view& value);
+    // `rejected` is an in/out latch: once a callback has returned false, no further
+    // callbacks fire, BUT the block keeps decoding and dynamic-table insertions still
+    // apply (including this entry's) so the connection-global table stays consistent
+    // -- RFC 7541 requires the whole field block to be processed. Set true here when a
+    // fresh callback rejects; the caller reports it after finishing the block.
     [[nodiscard]] HpackError decodeLiteralHeader(
         const unsigned char*& cursor,
         const unsigned char* end,
         std::uint8_t nameIndexPrefixBits,
         bool indexIntoDynamic,
         void* target,
-        HeaderCallback callback);
+        HeaderCallback callback,
+        bool& rejected);
     [[nodiscard]] HpackError decodeHuffman(std::string_view encoded, std::pmr::string& output);
     void releaseScratch();
     [[nodiscard]] HpackError indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;

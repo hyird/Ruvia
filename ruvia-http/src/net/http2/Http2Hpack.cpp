@@ -98,7 +98,8 @@ HpackError HpackDecoder::decodeLiteralHeader(
     std::uint8_t nameIndexPrefixBits,
     bool indexIntoDynamic,
     void* target,
-    HeaderCallback callback) {
+    HeaderCallback callback,
+    bool& rejected) {
     std::uint32_t nameIndex = 0;
     if (const auto error = decodeInteger(cursor, end, nameIndexPrefixBits, nameIndex); error != HpackError::kNone) {
         return error;
@@ -117,8 +118,11 @@ HpackError HpackDecoder::decodeLiteralHeader(
     if (const auto error = decodeString(cursor, end, valueScratch_, value); error != HpackError::kNone) {
         return error;
     }
-    if (callback != nullptr && !callback(target, name, value)) {
-        return HpackError::kCallbackRejected;
+    // Suppress the callback once rejected, but ALWAYS apply the dynamic-table insertion
+    // below -- skipping it would desync the connection-global table for every later
+    // block (RFC 7541 §4.1). The rejection is reported after the whole block decodes.
+    if (!rejected && callback != nullptr && !callback(target, name, value)) {
+        rejected = true;
     }
     if (indexIntoDynamic) {
         addDynamic(name, value);
@@ -144,6 +148,12 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
     const auto* cursor = reinterpret_cast<const unsigned char*>(block.data());
     const auto* const end = cursor + block.size();
     bool sawHeader = false;
+    // Callback rejection does NOT abort the block: the whole field block must be
+    // decoded so the connection-global dynamic table stays consistent (RFC 7541 §4.1 /
+    // RFC 9113 §4.3). We keep going with the callback suppressed and report the
+    // rejection at the end; the caller then RST_STREAMs the (validated-as-bad) stream
+    // while the connection -- and every later block on it -- decodes correctly.
+    bool rejected = false;
 
     while (cursor < end) {
         const auto first = *cursor;
@@ -156,15 +166,15 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
             if (const auto error = indexedHeader(index, header); error != HpackError::kNone) {
                 return {error};
             }
-            if (callback != nullptr && !callback(target, header.name, header.value)) {
-                return {HpackError::kCallbackRejected};
+            if (!rejected && callback != nullptr && !callback(target, header.name, header.value)) {
+                rejected = true;
             }
             sawHeader = true;
             continue;
         }
 
         if ((first & 0x40U) != 0) {
-            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback);
+            if (const auto error = decodeLiteralHeader(cursor, end, 6, true, target, callback, rejected);
                 error != HpackError::kNone) {
                 return {error};
             }
@@ -189,7 +199,7 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         }
 
         if ((first & 0xf0U) == 0x00U || (first & 0xf0U) == 0x10U) {
-            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback);
+            if (const auto error = decodeLiteralHeader(cursor, end, 4, false, target, callback, rejected);
                 error != HpackError::kNone) {
                 return {error};
             }
@@ -200,7 +210,9 @@ HpackDecodeResult HpackDecoder::decode(std::string_view block, void* target, Hea
         return {HpackError::kInvalidIndex};
     }
 
-    return {};
+    // The whole block decoded and the dynamic table is consistent; surface a late
+    // callback rejection now so the owner RST_STREAMs without desyncing the connection.
+    return {rejected ? HpackError::kCallbackRejected : HpackError::kNone};
 }
 
 }  // namespace ruvia::detail

@@ -122,6 +122,7 @@ Task<void> runHttp2SansIoSession(
     int inFlight = 0;       // concurrent handlers not yet finished
     bool stopping = false;  // reader has finished (EOF/error/closing)
     bool writeFailed = false;
+    bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
 
     const auto wakeWriter = [&writeSignal]() noexcept {
         writeSignal.cancel();  // wakes async_wait with operation_aborted
@@ -144,11 +145,21 @@ Task<void> runHttp2SansIoSession(
     // The pending bytes are MOVED out before each write (takeOutput): concurrent
     // handlers keep submitting while async_write is in flight, and an append that
     // reallocated the core's buffer would dangle a pendingOutput() view mid-write.
+    //
+    // CRITICAL: the writer's ONLY exit is `stopping && inFlight == 0`. A write error
+    // sets writeFailed but keeps looping (draining and discarding output) until every
+    // in-flight handler has finished, because the session's teardown join treats the
+    // writer's exit as the handler join too -- exiting early with inFlight > 0 would
+    // let the session destroy this frame's state under a still-suspended detached
+    // handler (use-after-free). Once writeFailed, no bytes actually reach the socket.
     auto writerLoop = [&]() -> Task<void> {
         std::pmr::string writeScratch(worker.resource());
         for (;;) {
             while (connection.wantsWrite()) {
-                connection.takeOutput(writeScratch);
+                connection.takeOutput(writeScratch);  // always drain so the buffer can't grow
+                if (writeFailed) {
+                    continue;  // socket is dead; discard, but keep serving handlers
+                }
                 const auto ec = co_await asyncError([&stream, &writeScratch](auto handler) mutable {
                     asio::async_write(
                         stream, asio::buffer(writeScratch.data(), writeScratch.size()),
@@ -156,11 +167,11 @@ Task<void> runHttp2SansIoSession(
                 });
                 if (ec) {
                     writeFailed = true;
-                    co_return;
+                    continue;
                 }
                 scannerEntry.touch();
             }
-            if ((stopping && inFlight == 0) || writeFailed) {
+            if (stopping && inFlight == 0) {
                 co_return;  // nothing left to write and no more will be produced
             }
             writeSignal.expires_at((asio::steady_timer::time_point::max)());
@@ -171,20 +182,26 @@ Task<void> runHttp2SansIoSession(
     };
 
     // Wait until the reader reports this stream's window-blocked remainder drained
-    // (via takeUnblockedStreams -> signal wake). A false wake (request-body chunk)
-    // just re-submits and re-blocks -- submitData appends in order, so it converges.
+    // (via takeUnblockedStreams -> signal wake). Loops on hasBlockedSend so a false
+    // wake (a request-body chunk, or another stream's unblock) does NOT let the caller
+    // read the next body chunk ahead while still blocked -- that would grow the core's
+    // pendingSends_ without bound and defeat the backpressure. Returns false (stop) if
+    // the stream died or the signal ended (session teardown).
     auto awaitSendWindow = [&](std::uint32_t streamId) -> Task<bool> {
-        auto* live = connection.stream(streamId);
-        if (live == nullptr || live->isReset()) {
-            co_return false;
-        }
         auto* signal = findSignal(streamId);
-        if (signal == nullptr || signal->ended) {
-            co_return false;
+        for (;;) {
+            auto* live = connection.stream(streamId);
+            if (live == nullptr || live->isReset()) {
+                co_return false;
+            }
+            if (!connection.hasBlockedSend(streamId)) {
+                co_return true;  // window reopened; the remainder drained
+            }
+            if (signal == nullptr || signal->ended) {
+                co_return false;
+            }
+            co_await signal->wait();
         }
-        co_await signal->wait();
-        live = connection.stream(streamId);
-        co_return live != nullptr && !live->isReset();
     };
 
     // Submit a complete response through the core, mirroring the coroutine
@@ -502,6 +519,19 @@ Task<void> runHttp2SansIoSession(
         }
     };
 
+    // Admit a stream for dispatch: EVERY dispatched stream gets a signal, so response
+    // send-window pacing (awaitSendWindow / the streaming sink) can be woken by
+    // takeUnblockedStreams no matter the body kind -- a plain route returning a large
+    // file or a stream body blocks on the send window exactly like a streaming route,
+    // and without a signal its blocked submit could never be woken (truncation + hang).
+    const auto admitStream = [&](std::uint32_t streamId) {
+        streamSignals.emplace_back(
+            streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
+        connection.pinStream(streamId);
+        asio::co_spawn(
+            executor, taskAsAwaitable(dispatchOne(streamId)), asio::detached);
+    };
+
     // Drain the core's event queue, admitting streams and routing body bytes.
     const auto drainEvents = [&]() {
         for (;;) {
@@ -521,11 +551,7 @@ Task<void> runHttp2SansIoSession(
                 if (wsTunnel || streamingBody) {
                     // Dispatch NOW; body bytes stream through the stream's chunk queue
                     // while the handler runs (mirrors queueInitialStreamIfReady).
-                    streamSignals.emplace_back(
-                        event.streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
-                    connection.pinStream(event.streamId);
-                    asio::co_spawn(
-                        executor, taskAsAwaitable(dispatchOne(event.streamId)), asio::detached);
+                    admitStream(event.streamId);
                 }
             } else if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
                 if (streamState->webSocketTunnel() || streamState->usesStreamRequestBody()) {
@@ -540,16 +566,7 @@ Task<void> runHttp2SansIoSession(
                 if (auto* signal = findSignal(event.streamId)) {
                     signal->wake();  // bodyEnded was marked by the core before this event
                 } else {
-                    const auto& resolution = streamState->routeResolution();
-                    if (resolution.found() && resolution.usesResponseStream()) {
-                        // Streaming responses pace on the send window; give the stream
-                        // a signal so takeUnblockedStreams can wake the sink.
-                        streamSignals.emplace_back(
-                            event.streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
-                    }
-                    connection.pinStream(event.streamId);
-                    asio::co_spawn(
-                        executor, taskAsAwaitable(dispatchOne(event.streamId)), asio::detached);
+                    admitStream(event.streamId);  // buffered request: dispatch at end
                 }
             } else if (event.kind == Http2Event::Kind::kStreamClosed) {
                 if (auto* signal = findSignal(event.streamId)) {
@@ -575,13 +592,20 @@ Task<void> runHttp2SansIoSession(
         connection.queueLocalSettings();
     }
 
-    // Spawn the writer; it runs concurrently with the reader below. A cancel of
-    // writerFinished latches the writer's exit so we can join it before returning.
+    // Spawn the writer; it runs concurrently with the reader below. The join below is
+    // LEVEL-triggered on writerDone, not on the timer cancel alone: steady_timer::cancel
+    // only aborts an already-registered wait, so if the writer finishes before the
+    // reader reaches the join (common on an abrupt peer RST, where the write error
+    // surfaces first), a cancel-only latch would be a no-op and the join would sleep
+    // until time_point::max() forever. The bool makes a late join return immediately.
     asio::steady_timer writerFinished(executor);
     writerFinished.expires_at((asio::steady_timer::time_point::max)());
     asio::co_spawn(
         executor, taskAsAwaitable(writerLoop()),
-        [&writerFinished](std::exception_ptr) noexcept { writerFinished.cancel(); });
+        [&writerFinished, &writerDone](std::exception_ptr) noexcept {
+            writerDone = true;
+            writerFinished.cancel();
+        });
 
     // Drain the h2c seeded request BEFORE feeding any initial bytes: feed() resets the
     // event queue at entry (its per-feed view contract), which would wipe the seed's
@@ -620,8 +644,8 @@ Task<void> runHttp2SansIoSession(
             (void)connection.feed(std::string_view(readBuffer.data(), bytesRead));
             drainEvents();
             wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush
-            if (connection.closing()) {
-                break;
+            if (connection.closing() || writeFailed) {
+                break;  // closing, or the write side is dead -- stop admitting work
             }
         }
     }
@@ -634,12 +658,14 @@ Task<void> runHttp2SansIoSession(
 
     // Let the writer drain the last output once every handler has finished, then join
     // it (handlers wake the writer as they complete, so joining the writer waits for
-    // them too).
+    // them too). Level-triggered: skip the wait entirely if the writer already exited.
     stopping = true;
     wakeWriter();
-    co_await asyncError([&writerFinished](auto handler) mutable {
-        writerFinished.async_wait(std::move(handler));
-    });
+    while (!writerDone) {
+        co_await asyncError([&writerFinished](auto handler) mutable {
+            writerFinished.async_wait(std::move(handler));
+        });
+    }
     co_return;
 }
 

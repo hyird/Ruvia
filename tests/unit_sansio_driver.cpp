@@ -19,6 +19,10 @@
 #include <utility>
 #include <vector>
 
+#include <filesystem>
+#include <fstream>
+
+#include "HttpResponseFileAccess.h"
 #include "HttpRequestInternal.h"
 #include "HttpResponseBodyAccess.h"
 #include "http/ContextServices.h"
@@ -69,6 +73,23 @@ ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx)
 
 ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("fast");
+}
+
+// Path + size of the large temp file the pacing test serves (set in the test body).
+inline std::string& largeFilePath() {
+    static std::string path;
+    return path;
+}
+constexpr std::uint64_t kLargeFileBytes = 200000;  // > default send window (65535)
+
+// A plain (buffered) route returning a FILE body larger than the send window: this is
+// the path that had NO stream signal, so a window block could never be woken.
+ruvia::Task<ruvia::HttpResponse> largeFileHandler(void*, ruvia::Context&) {
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(200);
+    ruvia::detail::setResponseFileBody(
+        response, std::filesystem::path(largeFilePath()), kLargeFileBytes, 0, kLargeFileBytes);
+    co_return response;
 }
 
 // A WebSocket echo handler: echoes each text message back and finishes when the peer
@@ -1123,5 +1144,128 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
 
     io.run();
     RUVIA_CHECK_EQ(received, static_cast<std::size_t>(64));
+    RUVIA_CHECK(sawEnd);
+}
+
+// P0 regression: a plain route returning a FILE body larger than the send window must
+// pace on WINDOW_UPDATEs and deliver EVERY byte + END_STREAM. Before the fix, such
+// streams got no Http2SansIoStreamSignal, so the first window-blocked file chunk could
+// never be woken -- the response was silently truncated and the stream hung.
+RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
+    // Write the temp file (kLargeFileBytes of a repeating pattern).
+    const auto path = (std::filesystem::temp_directory_path() /
+                       "ruvia_sansio_large_file_test.bin").string();
+    largeFilePath() = path;
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        std::string block(4096, '\0');
+        for (std::size_t i = 0; i < block.size(); ++i) {
+            block[i] = static_cast<char>('A' + (i % 26));
+        }
+        std::uint64_t written = 0;
+        while (written < kLargeFileBytes) {
+            const auto n = static_cast<std::size_t>(
+                std::min<std::uint64_t>(block.size(), kLargeFileBytes - written));
+            out.write(block.data(), static_cast<std::streamsize>(n));
+            written += n;
+        }
+    }
+
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::uint64_t received = 0;
+    bool sawEnd = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/file", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &largeFileHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            // Small initial window (16) so the file body blocks almost immediately and
+            // only completes if WINDOW_UPDATE-driven pacing wakes it repeatedly.
+            const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x10};
+            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6)))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/file");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    1, std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.streamId != 1 ||
+                    header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) {
+                    continue;
+                }
+                received += payload.size();
+                if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                    sawEnd = true;
+                    break;
+                }
+                if (!payload.empty()) {
+                    char updates[2 * (ruvia::detail::kHttp2FrameHeaderBytes + 4)];
+                    char* out = ruvia::detail::http2WriteWindowUpdate(
+                        updates, 0, static_cast<std::uint32_t>(payload.size()));
+                    out = ruvia::detail::http2WriteWindowUpdate(
+                        out, 1, static_cast<std::uint32_t>(payload.size()));
+                    if (!co_await writeAll(std::string_view(
+                            updates, static_cast<std::size_t>(out - updates)))) {
+                        break;
+                    }
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    std::filesystem::remove(path);
+    RUVIA_CHECK_EQ(received, kLargeFileBytes);  // every byte delivered, not truncated
     RUVIA_CHECK(sawEnd);
 }

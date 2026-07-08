@@ -1241,6 +1241,167 @@ H2BadFrameOutcome runH2DataAfterEndStream() {
     return out;
 }
 
+H2BadFrameOutcome runH2RstAfterCompleteResponse() {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+
+    H2BadFrameOutcome out;
+    std::shared_ptr<tcp::socket> serverSocket;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                serverSocket = std::make_shared<tcp::socket>(
+                    co_await acceptor.async_accept(asio::use_awaitable));
+                auto& sock = *serverSocket;
+                auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == size;
+                };
+                auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                    auto [ec, n] = co_await asio::async_write(
+                        sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                    co_return !ec && n == bytes.size();
+                };
+
+                char preface[24];
+                if (!co_await readExact(preface, sizeof(preface))) {
+                    co_return;
+                }
+                char settings[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+                if (!co_await writeAll(std::string_view(settings, sizeof(settings)))) {
+                    co_return;
+                }
+
+                std::uint32_t streamId = 0;
+                for (;;) {
+                    char headerBytes[kHttp2FrameHeaderBytes];
+                    if (!co_await readExact(headerBytes, sizeof(headerBytes))) {
+                        co_return;
+                    }
+                    const auto header = http2ParseFrameHeader(std::string_view(headerBytes, sizeof(headerBytes)));
+                    std::string payload(header.length, '\0');
+                    if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) {
+                        co_return;
+                    }
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kSettings) {
+                        if ((header.flags & kHttp2FlagAck) == 0) {
+                            char ack[kHttp2FrameHeaderBytes];
+                            http2WriteFrameHeader(ack, 0, Http2FrameType::kSettings, kHttp2FlagAck, 0);
+                            if (!co_await writeAll(std::string_view(ack, sizeof(ack)))) {
+                                co_return;
+                            }
+                        }
+                        continue;
+                    }
+                    if (static_cast<Http2FrameType>(header.type) == Http2FrameType::kHeaders) {
+                        streamId = header.streamId;
+                        break;
+                    }
+                }
+
+                std::pmr::string block(resource);
+                HpackEncoder::encodeStatus(block, 200);
+                char responseHeaders[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(
+                    responseHeaders, static_cast<std::uint32_t>(block.size()),
+                    Http2FrameType::kHeaders, kHttp2FlagEndHeaders, streamId);
+                if (!co_await writeAll(std::string_view(responseHeaders, sizeof(responseHeaders))) ||
+                    !co_await writeAll(std::string_view(block.data(), block.size()))) {
+                    co_return;
+                }
+
+                const std::string body = "ok";
+                char dataHeader[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(
+                    dataHeader, static_cast<std::uint32_t>(body.size()), Http2FrameType::kData, 0, streamId);
+                if (!co_await writeAll(std::string_view(dataHeader, sizeof(dataHeader))) ||
+                    !co_await writeAll(body)) {
+                    co_return;
+                }
+
+                char trailer[kHttp2FrameHeaderBytes];
+                http2WriteFrameHeader(
+                    trailer, 0, Http2FrameType::kHeaders,
+                    static_cast<std::uint8_t>(kHttp2FlagEndHeaders | kHttp2FlagEndStream), streamId);
+                if (!co_await writeAll(std::string_view(trailer, sizeof(trailer)))) {
+                    co_return;
+                }
+
+                // RFC 9113 8.1: after a COMPLETE response, RST_STREAM(NO_ERROR) is a
+                // legitimate request to abort the (already-sent) upload -- the client
+                // MUST keep the response, not discard it.
+                char rst[kHttp2FrameHeaderBytes + 4];
+                http2WriteFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, streamId);
+                http2Write32(rst + kHttp2FrameHeaderBytes,
+                             static_cast<std::uint32_t>(Http2ErrorCode::kNoError));
+                if (!co_await writeAll(std::string_view(rst, sizeof(rst)))) {
+                    co_return;
+                }
+
+                char next[kHttp2FrameHeaderBytes];
+                for (;;) {
+                    auto [ec, n] = co_await asio::async_read(
+                        sock, asio::buffer(next, sizeof(next)), asio::as_tuple(asio::use_awaitable));
+                    if (ec || n == 0) {
+                        out.serverSawClose = true;
+                        break;
+                    }
+                }
+            } catch (const std::exception& e) {
+                out.error += std::string("server:") + e.what();
+            }
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+
+    auto session = std::make_unique<Http2ClientSession>(io, std::move(config), resource);
+    auto watchdog = std::make_shared<asio::steady_timer>(io, std::chrono::milliseconds(300));
+    watchdog->async_wait([&](const std::error_code& ec) {
+        if (ec) {
+            return;
+        }
+        out.timedOut = true;
+        if (serverSocket) {
+            std::error_code ignored;
+            serverSocket->close(ignored);
+        }
+        session->closeNow();
+        std::error_code ignored;
+        acceptor.close(ignored);
+    });
+
+    asio::co_spawn(
+        io,
+        [&, watchdog]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                auto response = co_await taskAsAwaitable(session->fetch("/rst-after-complete", options, resource));
+                out.status = response.status();
+                out.body.assign(response.body().data(), response.body().size());
+            } catch (...) {
+                out.clientFailed = true;
+            }
+            std::error_code ignored;
+            watchdog->cancel(ignored);
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    return out;
+}
+
 H2BadFrameOutcome runH2HeadersAfterEndStream() {
     asio::io_context io;
     auto* resource = std::pmr::get_default_resource();
@@ -2226,6 +2387,19 @@ RUVIA_TEST(http2_data_before_headers_is_rejected) {
     RUVIA_CHECK(!out.timedOut);
     RUVIA_CHECK(out.clientFailed);
     RUVIA_CHECK(out.serverSawClose);
+}
+
+// RFC 9113 8.1: a complete response followed by RST_STREAM(NO_ERROR) -- a server
+// aborting the client's request-body upload after already answering (e.g. nginx on an
+// early 413) -- must yield the response, NOT a failure. Regression for the P0 where
+// the RST was treated like any stream abort and discarded a good response.
+RUVIA_TEST(http2_rst_after_complete_response_keeps_response) {
+    const auto out = runH2RstAfterCompleteResponse();
+    RUVIA_CHECK(out.error.empty());
+    RUVIA_CHECK(!out.timedOut);
+    RUVIA_CHECK(!out.clientFailed);
+    RUVIA_CHECK_EQ(out.status, 200);
+    RUVIA_CHECK_EQ(out.body, std::string("ok"));
 }
 
 RUVIA_TEST(http2_data_after_end_stream_is_rejected) {
