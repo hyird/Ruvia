@@ -40,10 +40,10 @@ std::size_t countOccurrences(std::string_view haystack, std::string_view needle)
 
 RUVIA_TEST(finalize_buffered_response_signals_keep_alive_only_for_http10) {
     using ruvia::detail::finalizeBufferedRouteResponse;
-    using ruvia::detail::requestNeedsKeepAliveSignal;
+    using ruvia::detail::http1RequestNeedsKeepAliveSignal;
 
-    RUVIA_CHECK(requestNeedsKeepAliveSignal("HTTP/1.0"));
-    RUVIA_CHECK(!requestNeedsKeepAliveSignal("HTTP/1.1"));
+    RUVIA_CHECK(http1RequestNeedsKeepAliveSignal("HTTP/1.0"));
+    RUVIA_CHECK(!http1RequestNeedsKeepAliveSignal("HTTP/1.1"));
 
     const auto finalize = [](std::string_view version, bool keepAlive) {
         HttpResponse response(std::pmr::new_delete_resource());
@@ -51,7 +51,7 @@ RUVIA_TEST(finalize_buffered_response_signals_keep_alive_only_for_http10) {
         std::size_t count = 0;
         finalizeBufferedRouteResponse(
             response, keepAlive, count, /*maxRequests=*/0,
-            requestNeedsKeepAliveSignal(version));
+            http1RequestNeedsKeepAliveSignal(version));
         return std::string(response.header("Connection"));
     };
 

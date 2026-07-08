@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HttpServerAutoHttps.h"
+#include "HttpServerAlpn.h"
 #include "HttpServerCleartextHttp2.h"
 #include "HttpServerConnectionGuards.h"
 #include "HttpServerHttp2UpgradeRoute.h"

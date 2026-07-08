@@ -84,7 +84,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
         requestCount,
         options.keepaliveRequests,
         bodyState.consumed(),
-        requestNeedsKeepAliveSignal(parsed.request.httpVersion()),
+        http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()),
         readBuffer,
         usedBytes,
         consumedBytes,

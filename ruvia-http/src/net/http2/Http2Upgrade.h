@@ -14,6 +14,12 @@
 
 namespace ruvia::detail {
 
+inline constexpr std::string_view kHttp2UpgradeResponsePrefix =
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Connection: Upgrade\r\n"
+    "Upgrade: h2c\r\n"
+    "Server: ruvia\r\n";
+
 struct Http2UpgradeRequest final {
     std::pmr::string settingsPayload;
     bool valid{false};

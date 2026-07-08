@@ -86,7 +86,7 @@ tests/
 
 - HTTP method/status/header/request/response 类型。
 - HTTP/1 parser、chunk parser、request target parser。
-- cookie/cache/range/conditional request/content negotiation/CORS/security header helper。
+- cookie/cache/range/conditional request/content negotiation/header token 与 header value 通用 helper。
 - multipart/form/url encoding/body stream。
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
@@ -96,7 +96,7 @@ tests/
 
 - App、Context、Controller、Router、route macro、middleware、Next。
 - Model/validation 宏。
-- DB、Redis、JWT、CSRF、Session 的 Web 集成。
+- DB、Redis、JWT、CSRF、Session、CORS、security headers、RateLimit 的 Web 集成。
 - Edge origin/cache/purge/rule policy。
 
 ### ruvia-web
@@ -109,9 +109,18 @@ tests/
 - Context、Controller、Router、middleware、Next、route macro。
 - HTTP server runtime、TLS、HTTP2 server、WebSocket route、response streaming。
 - Model、JSON/form parsing、validation middleware。
+- Session、CSRF、RateLimit、CORS、安全头、静态文件目录扫描/索引、AutoHTTPS redirect 等基于 HTTP 的 Web 应用能力。
 - 可选 MariaDB、Redis、JWT 集成。
 
 `ruvia-web` 可以依赖 `ruvia::http`，但不得把 Web-only API 下沉到 `ruvia-http`。
+
+### HTTP 协议与上层应用边界
+
+`ruvia-http` 拥有 HTTP 协议本体：wire/message/framing/connection 语义，以及跨 server/client/edge 都能复用的 sans-I/O 状态机和纯协议 helper。包括但不限于 HTTP/1 request/response 解析、chunked 与 Content-Length framing、keep-alive 与 `Connection` 语义、`Expect: 100-continue`、Upgrade/h2c/WebSocket 握手字节、HTTP/1.0 close-delimited 响应流、HTTP/2 frame/HPACK/settings/flow-control、response head 序列化、WebSocket frame/close code/permessage-deflate 协议处理。
+
+`ruvia-web` 拥有 HTTP 之上的应用能力：App/Context/Router/middleware/controller、route validation、session、CSRF、JWT、rate limit、CORS 策略与中间件、安全头中间件、静态文件目录扫描/索引/产品配置、AutoHTTPS redirect、DB/Redis 集成、WebSocket route 绑定等。它们可以读写 HTTP header，但这不等于它们属于 HTTP 协议本体。
+
+边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议错误如何映射”，应放在 `ruvia-http`；如果代码决定“某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。`ruvia-web` 应只用 asio/TLS/socket/timeouts 驱动 `ruvia-http` 的 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
 ### ruvia-edge
 

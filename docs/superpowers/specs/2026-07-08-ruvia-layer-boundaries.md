@@ -13,8 +13,8 @@ ruvia-core  ←  ruvia-http  ←  ruvia-web
 
 **A thing belongs to a layer by what concepts it *knows*, not by what it is named.**
 - Knows nothing of HTTP or the app → `core`.
-- Knows the HTTP protocol but nothing of `Context`/`Router`/`App` **and nothing of sockets/asio** → `http`.
-- Knows `Context`/`Router`/`App` (web-framework semantics) or performs I/O for the framework → `web`.
+- Knows the HTTP protocol itself but nothing of `Context`/`Router`/`App` **and nothing of sockets/asio** → `http`.
+- Knows `Context`/`Router`/`App` (web-framework semantics), owns HTTP-based application policy, or performs I/O for the framework → `web`.
 - CDN/reverse-proxy product policy, never uses `Context` → `edge`.
 
 ## Per-target responsibility
@@ -28,12 +28,13 @@ The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable from any run
 - h2: `Http2Connection` — **one connection state machine for BOTH roles**: server (accepts peer streams, `submit*` responses, RFC 8441 WebSocket handshake, GOAWAY drain, h2c upgrade seeding) and client (`Http2Role::kClient`: odd streams, request heads, RESPONSE decode with 1xx handling, consume-paced receive windows). Frame codec, HPACK, flow control, stream state underneath.
 - ws: `WsConnection` sans-I/O core + the pure frame codec/assembler/validation/permessage-deflate shared by every driver.
 - Message model (`HttpRequest`/`HttpResponse`, headers, methods, status, cookies-parsing, body streams, multipart), content coding, protocol value helpers (Cache-Control, HTTP-date, Range, Accept).
+- HTTP protocol semantics: request/response parsing, transfer framing, keep-alive/`Connection`, `Expect: 100-continue`, Upgrade/h2c/WebSocket handshake bytes, HTTP/1.0 close-delimited response streams, HTTP/2 frames/settings/flow-control, WebSocket frames/close codes/extensions.
 - **Outbound client (http-owned, sans-I/O like everything here)**: the public surface `ruvia/http/HttpClient.h` (installed by http) and the client's protocol/policy half in `src/client/` -- response parsing, redirect rules, content decoding, streaming decoder, config validation -- plus the h2 core's client role. Same split as the server: the asio runtime driver lives one layer up (web, below); edge builds its own driver on these pieces when it needs one.
 - **MUST NOT own**: `Context`, `Router`, `Controller`, route macros, middleware, `App`, DB/Redis/JWT integration, CDN policy, sockets, TLS, timers, or any `#include <asio...>`.
 - Deliberate boundary artifacts hosted here (documented in-file, not drift): `router/RouteResolution.h` (the http-side dispatcher-contract POD; `RouteEntry` only as an opaque pointer) and the `HttpErrorHandler`/`HttpNotFoundHandler` aliases in `ruvia/http/Error.h` (web hook types next to `HttpErrorInfo`; never invoked by http).
 
 ### ruvia-web — the web framework product (all framework I/O drivers live here)
-`App`, `Router`, `Controller`, route macros, middleware, `Context`, model validation, DB/Redis/JWT/CSRF/sessions. **All framework policy**: rate limiting, access-log policy, CORS, static-file serving, cookie signing, server timeouts, `HttpServerOptions`. **All I/O drivers over the http cores**:
+`App`, `Router`, `Controller`, route macros, middleware, `Context`, model validation, DB/Redis/JWT/CSRF/sessions. **All HTTP-based application policy**: rate limiting, access-log policy, CORS policy and middleware, security-header middleware, static-file root scanning/indexing/product configuration, cookie signing, server timeouts, `HttpServerOptions`. These can read/write HTTP headers, but that does not make them HTTP protocol ownership. **All I/O drivers over the http cores**:
 - `src/net/server/Http2SansIoSession.h` — the production h2 server session (reader + single writer over `Http2Connection`; the accept loop's TLS-ALPN / cleartext-preface / h2c-upgrade entries all run it).
 - `src/net/server/HttpServerStreamSession.inl` — the h1 server session (an I/O driver over the single pure parser; not a duplicate protocol implementation).
 - `src/net/ws/` — `WebSocketConnection<Transport>` + socket/h2 transports + the h1 101 handshake writer.

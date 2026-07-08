@@ -121,7 +121,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             HttpErrorInfo(400, {}, "missing Host header"),
                             true,
                             baseRouteServices);
-                        markConnectionClose(response);
+                        http1MarkConnectionClose(response);
                     } else {
                         response = makeAutoHttpsRedirectResponse(
                             parsed.request,
@@ -190,7 +190,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
                         response = std::move(*documentResponse);
-                        keepAlive = shouldKeepAlive(parsed) &&
+                        keepAlive = http1ShouldKeepAlive(parsed) &&
                             parsed.contentLength == 0 &&
                             !parsed.chunked;
                         finalizeBufferedRouteResponse(
@@ -198,7 +198,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             keepAlive,
                             requestCount,
                             options_.keepaliveRequests,
-                            requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
+                            http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()));
                         scannerEntry.touch();
                         break;
                     }

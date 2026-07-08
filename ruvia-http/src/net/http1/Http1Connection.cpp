@@ -39,8 +39,7 @@ Http1Event Http1Connection::nextEvent() {
 
 bool Http1Connection::keepAlive() const noexcept {
     // RFC 9112 §9.3: explicit close wins; explicit keep-alive wins for HTTP/1.0;
-    // otherwise persistence is the HTTP/1.1 default. (Same rule the web session's
-    // shouldKeepAlive applies -- protocol semantics, so it lives here too.)
+    // otherwise persistence is the HTTP/1.1 default.
     if (parsed_.flags.connectionClose) {
         return false;
     }

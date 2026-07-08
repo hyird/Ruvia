@@ -83,7 +83,7 @@ inline void prepareHttpLazyBufferedBodyRoute(
         parsed.transferCodings,
         options.maxBufferedBodyBytes,
         scannerEntry,
-        (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
+        (parsed.contentLength > 0 || parsed.chunked) && http1WantsContinue(parsed));
 }
 
 [[nodiscard]] inline std::string_view beginHttpBodyRoute(
@@ -93,7 +93,7 @@ inline void prepareHttpLazyBufferedBodyRoute(
     bool& keepAlive,
     std::size_t& consumedBytes) noexcept {
     consumedBytes = parsed.headerBytes;
-    keepAlive = shouldKeepAlive(parsed);
+    keepAlive = http1ShouldKeepAlive(parsed);
     return std::string_view(readBuffer.data() + parsed.headerBytes, usedBytes - parsed.headerBytes);
 }
 

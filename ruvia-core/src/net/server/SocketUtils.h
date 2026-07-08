@@ -1,11 +1,9 @@
 #pragma once
 
 #include <asio/ip/tcp.hpp>
-#include <asio/ssl.hpp>
 #include <array>
 #include <charconv>
 #include <cstddef>
-#include <cstring>
 #include <memory_resource>
 #include <string>
 #include <system_error>
@@ -22,13 +20,6 @@ inline void closeSocket(asio::ip::tcp::socket& socket) noexcept {
 inline void configureAcceptedSocket(asio::ip::tcp::socket& socket) noexcept {
     std::error_code ignored;
     socket.set_option(asio::ip::tcp::no_delay(true), ignored);
-}
-
-inline bool isHttp2AlpnSelected(asio::ssl::stream<asio::ip::tcp::socket&>& tlsStream) noexcept {
-    const unsigned char* selected = nullptr;
-    unsigned int selectedLength = 0;
-    SSL_get0_alpn_selected(tlsStream.native_handle(), &selected, &selectedLength);
-    return selectedLength == 2 && selected != nullptr && std::memcmp(selected, "h2", 2) == 0;
 }
 
 inline void assignRemoteAddress(std::pmr::string& output, const asio::ip::address& address) {
