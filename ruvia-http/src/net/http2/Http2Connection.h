@@ -151,6 +151,16 @@ public:
     // the first frame. Call once after construction; feed() consumes + validates it.
     void expectClientPreface() noexcept { awaitingClientPreface_ = true; }
 
+    // Concurrent dispatch support: a request/response built from a stream holds VIEWS
+    // into that stream's decoded storage, so the stream must outlive an in-flight
+    // (possibly-suspended) handler. Pin the stream before spawning its handler; while
+    // pinned, a peer RST_STREAM/close only marks it reset (keeping the storage, and
+    // emitting kStreamClosed so the owner can drop the response) instead of freeing it.
+    // Unpin when the handler finishes; the stream is then removed. No-op / safe if the
+    // stream is already gone.
+    void pinStream(std::uint32_t streamId);
+    void unpinStream(std::uint32_t streamId);
+
 private:
     // Outbound frame emission: encode a 9-byte header + payload into outBuffer_.
     // Replaces the coroutine writeFramePayload; the encoders are pure.
@@ -208,6 +218,7 @@ private:
 
     [[nodiscard]] Http2StreamState* findStream(std::uint32_t streamId) noexcept;
     [[nodiscard]] Http2StreamState* createStream(std::uint32_t streamId);
+    [[nodiscard]] bool isPinned(std::uint32_t streamId) const noexcept;
 
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
@@ -240,6 +251,9 @@ private:
     // flow-control-deferred response bodies + streams that just fully drained
     std::pmr::vector<Http2PendingSend> pendingSends_;
     std::pmr::vector<std::uint32_t> unblockedStreams_;
+
+    // streams with an in-flight handler; closeStream keeps these alive (see pinStream)
+    std::pmr::vector<std::uint32_t> pinnedStreams_;
 
     std::uint32_t localMaxFrameSize_{kHttp2DefaultMaxFrameSize};
     std::uint32_t lastStreamId_{0};
