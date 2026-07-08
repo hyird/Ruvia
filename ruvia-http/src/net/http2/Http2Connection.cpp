@@ -189,6 +189,53 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
     return true;
 }
 
+void Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource source) {
+    auto* stream = streams_.find(streamId);
+    readyQueue_.remove(streamId);
+    if (stream != nullptr) {
+        stream->markClosed(source);
+        events_.push_back(Http2Event{Http2Event::Kind::kStreamClosed, streamId, {}});
+        streams_.remove(streamId);
+    }
+    closedStreams_.remember(streamId, source);
+}
+
+bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::string_view payload) {
+    if (payload.size() != 4) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid RST_STREAM");
+        return false;
+    }
+    if (header.streamId == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM stream id must be nonzero");
+        return false;
+    }
+    if (streams_.find(header.streamId) == nullptr &&
+        http2IsIdleStream(header.streamId, lastStreamId_)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
+        return false;
+    }
+    closeStream(header.streamId, Http2StreamCloseSource::kPeer);
+    return true;
+}
+
+bool Http2Connection::processPriority(const Http2FrameHeader& header, std::string_view payload) {
+    if (payload.size() != 5) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PRIORITY");
+        return false;
+    }
+    if (header.streamId == 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "PRIORITY stream id must be nonzero");
+        return false;
+    }
+    const auto dependency = http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));
+    if (dependency == header.streamId) {
+        // A stream that depends on itself is a protocol error on that stream.
+        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+    }
+    return true;
+}
+
 bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_view payload) {
     if (payload.size() != 8) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PING");
@@ -222,6 +269,10 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processPing(header, payload);
         case Http2FrameType::kWindowUpdate:
             return processWindowUpdate(header, payload);
+        case Http2FrameType::kRstStream:
+            return processRstStream(header, payload);
+        case Http2FrameType::kPriority:
+            return processPriority(header, payload);
         case Http2FrameType::kGoaway:
             closing_ = true;
             return true;

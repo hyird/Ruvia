@@ -153,7 +153,13 @@ private:
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processRstStream(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processPriority(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
+
+    // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
+    // (so the owner cancels any handler), remove it, and remember it as closed.
+    void closeStream(std::uint32_t streamId, Http2StreamCloseSource source);
 
     std::pmr::memory_resource* resource_;
     Http2CoreConfig config_;
