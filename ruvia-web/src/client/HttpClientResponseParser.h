@@ -4,7 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "../HeaderAcceptUtils.h"
+#include "HeaderAcceptUtils.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {

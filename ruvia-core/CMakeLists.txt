@@ -1,6 +1,7 @@
 add_library(ruvia-core
     ${CMAKE_CURRENT_SOURCE_DIR}/src/memory/MemoryPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/memory/MimallocOverride.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/ConnectionScanner.cpp
 )
 add_library(ruvia::core ALIAS ruvia-core)
 
@@ -19,6 +20,8 @@ target_include_directories(ruvia-core
 target_link_libraries(ruvia-core
     PUBLIC
         ${RUVIA_MIMALLOC_TARGET}
+        asio::asio
+        Threads::Threads
 )
 
 ruvia_install_target(ruvia-core core)

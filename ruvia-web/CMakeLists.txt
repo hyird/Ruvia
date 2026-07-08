@@ -1,4 +1,12 @@
 set(RUVIA_WEB_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolLifecycle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolSlots.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http2ClientSession.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1StreamSource.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp

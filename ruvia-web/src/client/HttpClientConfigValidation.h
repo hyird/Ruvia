@@ -10,7 +10,7 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrResource.h"
 #include "ConfigValidation.h"
-#include "../parser/HttpRequestTarget.h"
+#include "parser/HttpRequestTarget.h"
 
 namespace ruvia::detail {
 
