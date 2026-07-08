@@ -706,3 +706,67 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
     RUVIA_CHECK(gotResponseHead);
     RUVIA_CHECK(gotEndStream);
 }
+
+#include "client/Http2ClientSession.h"
+#include "ruvia/http/HttpClient.h"
+
+// The crown-jewel loopback: Ruvia's HTTP/2 CLIENT (Http2ClientSession, driven by the
+// sans-I/O core in client role) talks to Ruvia's HTTP/2 SERVER (runHttp2SansIoSession,
+// the same core in server role) over a real socket -- ONE protocol implementation on
+// both ends. POST /echo round-trips the body through real framework dispatch.
+RUVIA_TEST(sansio_h2_client_to_sansio_h2_server_round_trip) {
+    asio::io_context io;
+    auto* resource = std::pmr::get_default_resource();
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string body;
+    std::string error;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kPost,
+                std::pmr::string("/echo", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &echoHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    ruvia::HttpClientConfig config;
+    config.host = std::pmr::string("127.0.0.1", resource);
+    config.port = port;
+    config.tls = false;
+    config.http2 = true;
+    auto session = std::make_unique<ruvia::detail::Http2ClientSession>(io, std::move(config), resource);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                ruvia::FetchOptions options;
+                options.method = "POST";
+                options.body = "ping-through-one-core";
+                auto response = co_await ruvia::detail::taskAsAwaitable(
+                    session->fetch("/echo", options, resource));
+                body.assign(response.body().data(), response.body().size());
+            } catch (const std::exception& e) {
+                error = e.what();
+            }
+            session->closeNow();
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(error.empty());
+    RUVIA_CHECK(body == "handler-ran");
+}
