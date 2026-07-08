@@ -34,6 +34,8 @@
 #include "http/ContextServices.h"
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2RequestBuilder.h"
+#include "net/http2/Http2SansIoResponseStreamSink.h"
+#include "net/server/HttpResponseStreamDispatch.h"
 #include "router/RouteResolution.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
@@ -98,14 +100,41 @@ Task<void> runHttp2SansIoBufferedSession(
                 HttpRequestAccess::setTransport(request, remoteAddress, std::string_view{}, false);
                 RouteMatch match;
                 const auto resolution = routes.resolve(request, match);
-                HttpResponse response = co_await routes.dispatchBuffered(
-                    request, resolution, requestMemory, /*closeConnectionOnError=*/false,
-                    ContextServices{});
-                auto* live = connection.stream(streamId);
-                if (live != nullptr && !live->isReset()) {
-                    const bool bodyForbidden = request.method() == HttpMethod::kHead;
-                    connection.submitResponseHead(streamId, response, bodyForbidden);
-                    connection.submitData(streamId, responseBodyBytes(response), /*endStream=*/true);
+                const bool bodyForbidden = request.method() == HttpMethod::kHead;
+
+                if (resolution.usesResponseStream()) {
+                    // Streaming route (Context::proxy / SSE): drive the shared streaming
+                    // dispatch through a sans-I/O sink that submits chunks via the core.
+                    Http2SansIoResponseStreamSink<decltype(executor)> sink(
+                        connection, streamId, resolution.responseMode(), requestMemory.resource(),
+                        executor);
+                    auto result = co_await dispatchResponseStreamWith(
+                        sink, routes, request, resolution, requestMemory, ContextServices{},
+                        /*closeConnectionOnError=*/false,
+                        [&connection, streamId]() noexcept {
+                            auto* s = connection.stream(streamId);
+                            return s == nullptr || s->isReset();
+                        });
+                    if (result.abortedAfterCommit()) {
+                        connection.submitReset(
+                            streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
+                    } else if (result.hasBufferedResponse()) {
+                        HttpResponse response = result.takeResponse();
+                        auto* live = connection.stream(streamId);
+                        if (live != nullptr && !live->isReset()) {
+                            connection.submitResponseHead(streamId, response, bodyForbidden);
+                            connection.submitData(streamId, responseBodyBytes(response), true);
+                        }
+                    }
+                } else {
+                    HttpResponse response = co_await routes.dispatchBuffered(
+                        request, resolution, requestMemory, /*closeConnectionOnError=*/false,
+                        ContextServices{});
+                    auto* live = connection.stream(streamId);
+                    if (live != nullptr && !live->isReset()) {
+                        connection.submitResponseHead(streamId, response, bodyForbidden);
+                        connection.submitData(streamId, responseBodyBytes(response), /*endStream=*/true);
+                    }
                 }
             }
         }
