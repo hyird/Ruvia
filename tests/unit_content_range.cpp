@@ -257,7 +257,8 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
         }
         auto streamHead = prepareResponseStreamHead(
-            context, ResponseBodyMode::kSse, ResponseStreamFraming::kHttp1Chunked);
+            ContextAccess::streamingHead(context), ResponseBodyMode::kSse,
+            ResponseStreamFraming::kHttp1Chunked);
         return std::string(streamHead.response().header("Cache-Control"));
     };
 
@@ -285,7 +286,8 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
         auto streamHead = prepareResponseStreamHead(
-            context, ResponseBodyMode::kStream, framing, connectionWillClose);
+            ContextAccess::streamingHead(context), ResponseBodyMode::kStream, framing,
+            connectionWillClose);
         return std::pair<std::string, std::string>(
             std::string(streamHead.response().header("Transfer-Encoding")),
             std::string(streamHead.response().header("Connection")));

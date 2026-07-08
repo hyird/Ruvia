@@ -1,7 +1,7 @@
 #pragma once
 
 #include "HeaderAcceptUtils.h"
-#include "ruvia/app/App.h"
+#include "ruvia/http/HttpServerOptions.h"
 #include "ruvia/http/HttpTypes.h"
 
 #include <cstddef>

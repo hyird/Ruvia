@@ -1,7 +1,7 @@
 #pragma once
 
 #include "net/body/HttpRequestBody.h"
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpServerBodyRouteCompletion.h"
 #include "HttpParserInternal.h"
 #include "router/RouteTable.h"

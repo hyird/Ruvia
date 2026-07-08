@@ -1,7 +1,7 @@
 #pragma once
 
 #include "net/body/HttpRequestBody.h"
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpServerRequestState.h"
 #include "HttpServerResponseState.h"
 #include "RequestBodyLoader.h"

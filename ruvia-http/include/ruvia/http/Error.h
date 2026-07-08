@@ -11,9 +11,8 @@
 
 namespace ruvia {
 
-#ifdef RUVIA_ENABLE_WEB
 class Context;
-#endif
+class HttpResponse;
 
 class HttpErrorInfo final {
 public:
@@ -57,10 +56,12 @@ private:
     std::string_view detailsJson_{};
 };
 
-#ifdef RUVIA_ENABLE_WEB
+// Function-pointer aliases for the web error/not-found handlers. Defined
+// unconditionally (they only need Context/HttpResponse forward-declared) so
+// ContextServices -- which stores them -- compiles in http-only builds too; a
+// non-web product simply leaves them null.
 using HttpErrorHandler = Task<HttpResponse> (*)(Context&, HttpErrorInfo);
 using HttpNotFoundHandler = Task<HttpResponse> (*)(Context&);
-#endif
 
 class HttpError final : public std::exception {
 public:

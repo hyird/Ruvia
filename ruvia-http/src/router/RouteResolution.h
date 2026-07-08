@@ -6,7 +6,9 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/WebSocket.h"
 
 // Lightweight route-resolution result types. Kept below the RouteTable layer so
 // the request hot path, including the connection work set that embeds
@@ -50,19 +52,33 @@ private:
     std::size_t paramCount_{0};
 };
 
+// Context-agnostic copy of the RouteEntry metadata the transport sessions read,
+// so h1/h2/ws can consume it off RouteResolution without dereferencing RouteEntry
+// (which lives in ruvia-web). Populated by RouteTable::resolve at match time.
+struct RouteDisposition final {
+    RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
+    ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
+    std::string_view webSocketSubprotocols{};
+    WebSocketHeartbeatOptions webSocketHeartbeat{};
+};
+
 struct RouteResolution final {
-    [[nodiscard]] static RouteResolution foundStatic(const RouteEntry* route) noexcept {
+    [[nodiscard]] static RouteResolution foundStatic(
+        const RouteEntry* route, const RouteDisposition& disposition = {}) noexcept {
         RouteResolution resolution;
         resolution.route_ = route;
+        resolution.disposition_ = disposition;
         return resolution;
     }
 
     [[nodiscard]] static RouteResolution foundDynamic(
         const RouteEntry* route,
-        const RouteMatch& match) noexcept {
+        const RouteMatch& match,
+        const RouteDisposition& disposition = {}) noexcept {
         RouteResolution resolution;
         resolution.route_ = route;
         resolution.match_ = &match;
+        resolution.disposition_ = disposition;
         return resolution;
     }
 
@@ -92,10 +108,39 @@ struct RouteResolution final {
         return allowedMethods_;
     }
 
+    // Route metadata, readable without dereferencing RouteEntry (web). Mirrors the
+    // corresponding RouteEntry accessors exactly.
+    [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
+        return disposition_.bodyMode;
+    }
+    [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
+        return disposition_.responseMode;
+    }
+    [[nodiscard]] bool usesStreamRequestBody() const noexcept {
+        return disposition_.bodyMode == RequestBodyMode::kStream;
+    }
+    [[nodiscard]] bool isBufferedResponse() const noexcept {
+        return disposition_.responseMode == ResponseBodyMode::kBuffered;
+    }
+    [[nodiscard]] bool isWebSocketResponse() const noexcept {
+        return disposition_.responseMode == ResponseBodyMode::kWebSocket;
+    }
+    [[nodiscard]] bool usesResponseStream() const noexcept {
+        return disposition_.responseMode == ResponseBodyMode::kStream ||
+            disposition_.responseMode == ResponseBodyMode::kSse;
+    }
+    [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
+        return disposition_.webSocketSubprotocols;
+    }
+    [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
+        return disposition_.webSocketHeartbeat;
+    }
+
 private:
     const RouteEntry* route_{nullptr};
     const RouteMatch* match_{nullptr};
     std::uint32_t allowedMethods_{0};
+    RouteDisposition disposition_{};
 };
 
 }  // namespace ruvia::detail

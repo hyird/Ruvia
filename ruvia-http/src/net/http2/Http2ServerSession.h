@@ -57,12 +57,11 @@
 #include "HttpParserInternal.h"
 #include "net/server/ConnectionScanner.h"
 #include "net/server/HttpBufferedResponse.h"
+#include "net/server/HttpFileFallback.h"
 #include "net/server/HttpServerAccessLog.h"
 #include "net/server/HttpResponseStreamDispatch.h"
-#include "net/server/RateLimiter.h"
 #include "runtime/AsioAwait.h"
-#include "router/RouteTable.h"
-#include "ruvia/http/Context.h"
+#include "router/RequestDispatcher.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -93,7 +92,7 @@ public:
         Stream& stream,
         asio::ip::tcp::socket& socket,
         WorkerMemory& memory,
-        const RouteTable& routes,
+        const RequestDispatcher& routes,
         DbRegistry* databases,
         RedisRegistry* redis,
         HttpClientRegistry* httpClients,
@@ -279,7 +278,7 @@ private:
     Stream& stream_;
     asio::ip::tcp::socket& socket_;
     WorkerMemory& memory_;
-    const RouteTable& routes_;
+    const RequestDispatcher& routes_;
     DbRegistry* databases_;
     RedisRegistry* redis_;
     HttpClientRegistry* httpClients_;

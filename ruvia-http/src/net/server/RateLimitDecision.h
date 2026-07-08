@@ -2,8 +2,8 @@
 
 #include <string_view>
 
-#include "RateLimitKey.h"
-#include "RateLimiter.h"
+#include "net/server/RateLimitKey.h"
+#include "net/server/RateLimiter.h"
 
 namespace ruvia::detail {
 

@@ -15,9 +15,12 @@
 #include "net/server/HttpResponseStreamHead.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
-#include "ruvia/http/Context.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
+
+namespace ruvia {
+class Context;  // only stored/forwarded as Context* (type-erased bindContext); web supplies the definition
+}
 
 namespace ruvia::detail {
 
@@ -52,13 +55,13 @@ public:
     template <typename Sink>
     friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
     template <typename Sink>
-    friend void responseStreamBindContextThunk(void*, Context*) noexcept;
+    friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk) noexcept;
     template <typename Sink>
     friend std::pmr::string& responseStreamScratchThunk(void*) noexcept;
 
 private:
-    void bindContext(Context* context) noexcept {
-        state_.bindContext(context);
+    void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
+        state_.bindContext(context, streamingHead);
     }
 
     [[nodiscard]] std::pmr::string& scratch() noexcept {
@@ -72,7 +75,7 @@ private:
         }
 
         auto streamHead = prepareResponseStreamHead(
-            state_.requireContextBeforeCommit(),
+            state_.streamingHead(),
             mode_,
             ResponseStreamFraming::kHttp2DataFrames);
         appendHttp2ResponseHeaders(stream_, streamHead.response(), 0, false);

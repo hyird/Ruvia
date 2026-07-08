@@ -4,7 +4,7 @@
 #include <cstring>
 #include <memory>
 
-#include "HttpResponseCompression.h"
+#include "net/server/HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrObject.h"

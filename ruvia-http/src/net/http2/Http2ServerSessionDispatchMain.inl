@@ -70,8 +70,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
 
     HttpResponse response(requestMemory.resource());
     if (resolution.found()) {
-        const auto& route = resolution.route();
-        if (route.isWebSocketResponse()) {
+        if (resolution.isWebSocketResponse()) {
             auto dispatchResult = co_await dispatchHttp2WebSocketRoute(
                 stream,
                 request,
@@ -84,7 +83,7 @@ Task<void> Http2ServerSession<Stream>::dispatchStream(Http2StreamState& stream) 
             if (dispatchResult.bufferedResponse()) {
                 response = dispatchResult.takeResponse();
             }
-        } else if (route.usesResponseStream()) {
+        } else if (resolution.usesResponseStream()) {
             auto dispatchResult = co_await dispatchHttp2ResponseStreamRoute(
                 stream,
                 request,

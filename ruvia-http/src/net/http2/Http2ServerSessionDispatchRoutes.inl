@@ -20,14 +20,13 @@ Task<Http2RouteDispatchResult> Http2ServerSession<Stream>::dispatchHttp2WebSocke
         co_return Http2RouteDispatchResult::makeBufferedResponse(std::move(errorResponse));
     }
 
-    const auto& route = resolution.route();
     co_await writeHttp2WebSocketHandshake(
         stream,
-        http2ChooseWebSocketSubprotocol(request, route.webSocketSubprotocols()));
+        http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()));
     Http2WebSocketConnection<Http2ServerSession> webSocketConnection(
         Http2WebSocketTransport<Http2ServerSession>{*this, stream},
         scannerEntry_,
-        route.webSocketHeartbeat(),
+        resolution.webSocketHeartbeat(),
         options_.maxWebSocketMessageBytes,
         memory_.resource());
     co_await runWebSocketSession(
@@ -48,8 +47,7 @@ Task<Http2RouteDispatchResult> Http2ServerSession<Stream>::dispatchHttp2Response
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
     ContextServices services) {
-    const auto& route = resolution.route();
-    Http2ResponseStreamSink<Http2ServerSession> responseSink(*this, stream, route.responseMode());
+    Http2ResponseStreamSink<Http2ServerSession> responseSink(*this, stream, resolution.responseMode());
     auto result = co_await dispatchResponseStreamWith(
         responseSink,
         routes_,

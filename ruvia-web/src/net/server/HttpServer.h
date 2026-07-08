@@ -21,13 +21,13 @@
 #include "ruvia/app/App.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/memory/MemoryPool.h"
-#include "ConnectionScanner.h"
+#include "net/server/ConnectionScanner.h"
 #include "HttpConnectionState.h"
-#include "RateLimiter.h"
+#include "net/server/RateLimiter.h"
 #include "db/DbInternal.h"
 #include "redis/RedisInternal.h"
 #include "client/HttpClientInternal.h"
-#include "RateLimitDecision.h"
+#include "net/server/RateLimitDecision.h"
 
 namespace ruvia::detail {
 

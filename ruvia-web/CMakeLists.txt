@@ -15,18 +15,12 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpClientContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/ConnectionScanner.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpFileZeroCopy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpConnectionState.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpDateCache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHeadBuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHead.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServerAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServerDocumentRoot.cpp

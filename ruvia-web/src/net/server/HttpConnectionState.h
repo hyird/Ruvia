@@ -4,8 +4,8 @@
 #include <memory_resource>
 #include <string>
 
-#include "ConnectionScanner.h"
-#include "HttpResponseHeadBuffer.h"
+#include "net/server/ConnectionScanner.h"
+#include "net/server/HttpResponseHeadBuffer.h"
 #include "HttpParserInternal.h"
 #include "router/RouteResolution.h"
 #include "ruvia/memory/MemoryPool.h"

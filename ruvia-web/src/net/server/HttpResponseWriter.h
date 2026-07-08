@@ -8,10 +8,10 @@
 
 #include <asio.hpp>
 
-#include "HttpFileFallback.h"
+#include "net/server/HttpFileFallback.h"
 #include "HttpFileZeroCopy.h"
-#include "HttpResponseHead.h"
-#include "HttpResponseHeadPolicy.h"
+#include "net/server/HttpResponseHead.h"
+#include "net/server/HttpResponseHeadPolicy.h"
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseFileAccess.h"
 #include "HttpResponseHeaderBits.h"

@@ -15,7 +15,9 @@
 #include "http/ContextServices.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/detail/CallableRef.h"
+#include "router/RequestDispatcher.h"
 #include "router/RouteResolution.h"
+#include "router/RouteStreamResult.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/Next.h"
 #include "ruvia/http/WebSocket.h"
@@ -50,33 +52,8 @@ using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
 using RouteMiddleware = CallableRef<void, Context&, Next&>;
 
-enum class RouteStreamDispatchOutcome {
-    kBufferedResponse,
-    kStreamHandled
-};
-
-class StreamDispatchResult final {
-public:
-    StreamDispatchResult(HttpResponse response, RouteStreamDispatchOutcome outcome)
-        : response_(std::move(response)),
-          outcome_(outcome) {}
-
-    [[nodiscard]] bool streamHandled() const noexcept {
-        return outcome_ == RouteStreamDispatchOutcome::kStreamHandled;
-    }
-
-    [[nodiscard]] bool bufferedResponse() const noexcept {
-        return outcome_ == RouteStreamDispatchOutcome::kBufferedResponse;
-    }
-
-    [[nodiscard]] HttpResponse takeResponse() noexcept {
-        return std::move(response_);
-    }
-
-private:
-    HttpResponse response_;
-    RouteStreamDispatchOutcome outcome_{RouteStreamDispatchOutcome::kBufferedResponse};
-};
+// RouteStreamDispatchOutcome / StreamDispatchResult moved to
+// ruvia-http/src/router/RouteStreamResult.h (Context-agnostic; usable by http sessions).
 
 class RouteEntry final {
 public:
@@ -194,7 +171,7 @@ private:
     WebSocketHeartbeatOptions webSocketHeartbeat_{};
 };
 
-class RouteTable final {
+class RouteTable final : public RequestDispatcher {
 public:
     explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;

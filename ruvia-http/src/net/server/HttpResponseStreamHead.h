@@ -1,8 +1,8 @@
 #pragma once
 
-#include "HttpResponseHeadPolicy.h"
+#include "net/server/HttpResponseHeadPolicy.h"
 #include "HttpResponseHeaderState.h"
-#include "http/ContextInternal.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
 
 #include <cstddef>
@@ -48,11 +48,10 @@ private:
 };
 
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
-    Context& context,
+    HttpResponse response,
     ResponseBodyMode mode,
     ResponseStreamFraming framing,
     bool connectionWillClose = false) {
-    auto response = ContextAccess::streamingHead(context);
     const auto policy = responseWritePolicy(response.status());
     const bool needsSseContentType =
         mode == ResponseBodyMode::kSse &&

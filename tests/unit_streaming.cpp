@@ -37,7 +37,7 @@ ruvia::Task<void> sleepStream(void*, std::chrono::milliseconds) {
     co_return;
 }
 
-void bindContext(void*, ruvia::Context*) noexcept {}
+void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 
 std::pmr::string& scratch(void* target) noexcept {
     return static_cast<CaptureStreamSink*>(target)->scratch;

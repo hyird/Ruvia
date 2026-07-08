@@ -3,7 +3,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "HttpResponseCompression.h"
+#include "net/server/HttpResponseCompression.h"
 #include "HeaderAcceptUtils.h"
 #include "HttpResponseBodyAccess.h"
 #include "HttpRequestInternal.h"

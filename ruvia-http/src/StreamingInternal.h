@@ -44,8 +44,11 @@ struct StreamingAccess final {
         return SseWriter(writer);
     }
 
-    static void bindContext(ResponseStreamWriter& writer, Context& context) noexcept {
-        writer.bindContext(context);
+    static void bindContext(
+        ResponseStreamWriter& writer,
+        Context& context,
+        ResponseStreamWriter::StreamingHeadThunk streamingHead) noexcept {
+        writer.bindContext(context, streamingHead);
     }
 
     [[nodiscard]] static std::pmr::string& scratch(const ResponseStreamWriter& writer) noexcept {
