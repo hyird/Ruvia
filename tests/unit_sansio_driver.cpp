@@ -15,12 +15,19 @@
 #include <string>
 #include <string_view>
 
+#include "HttpRequestInternal.h"
+#include "HttpResponseBodyAccess.h"
+#include "http/ContextServices.h"
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2FrameCodec.h"
 #include "net/http2/Http2Hpack.h"
+#include "net/http2/Http2RequestBuilder.h"
+#include "router/RouteResolution.h"
+#include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
 #include "runtime/SansIoDriver.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/memory/MemoryPool.h"
 
 namespace {
 
@@ -143,4 +150,118 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
 
     io.run();
     RUVIA_CHECK(gotPong);
+}
+
+// End-to-end proof that REAL framework dispatch runs over the sans-I/O core: onReadable
+// builds an HttpRequest from the stream (Http2RequestBuilder), resolves it against a
+// RouteTable, and runs the actual dispatchBuffered pipeline (which 404s an empty table),
+// then submits the response. The client verifies a response HEADERS frame comes back --
+// proving request-build -> resolve -> dispatch -> submit works with no coroutine session.
+RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    bool gotResponseHead = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            std::pmr::monotonic_buffer_resource resource;
+            ruvia::WorkerMemory worker;
+            ruvia::detail::RouteTable routes(worker.resource());  // empty -> 404
+            Http2Connection conn(&resource);
+            conn.expectClientPreface();
+            conn.queueLocalSettings();
+
+            auto onReadable = [&worker, &routes](Http2Connection& c) -> ruvia::Task<void> {
+                for (;;) {
+                    const auto event = c.nextEvent();
+                    if (event.kind == Http2Event::Kind::kNone) {
+                        break;
+                    }
+                    if (event.kind != Http2Event::Kind::kRequestEnd) {
+                        continue;
+                    }
+                    auto* stream = c.stream(event.streamId);
+                    if (stream == nullptr) {
+                        continue;
+                    }
+                    ruvia::RequestMemory requestMemory(worker);
+                    auto request = ruvia::detail::HttpRequestAccess::make();
+                    if (!ruvia::detail::Http2RequestBuilder::build(
+                            *stream, request, requestMemory.resource())) {
+                        continue;
+                    }
+                    ruvia::detail::HttpRequestAccess::setTransport(
+                        request, "127.0.0.1", std::string_view{}, false);
+                    ruvia::detail::RouteMatch match;
+                    const auto resolution = routes.resolve(request, match);
+                    ruvia::HttpResponse response = co_await routes.dispatchBuffered(
+                        request, resolution, requestMemory, false, ruvia::detail::ContextServices{});
+                    c.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
+                    c.submitData(
+                        event.streamId, ruvia::detail::responseBodyBytes(response), /*endStream=*/true);
+                }
+                co_return;
+            };
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::pumpSansIoConnection(conn, sock, onReadable));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4 /*SETTINGS*/, 0, 0, {}))) co_return;
+
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/missing");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    1, std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
+                    header.streamId == 1) {
+                    gotResponseHead = true;
+                    break;
+                }
+            }
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(gotResponseHead);
 }
