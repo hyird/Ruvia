@@ -17,6 +17,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpClientContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp

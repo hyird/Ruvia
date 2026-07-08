@@ -1,5 +1,4 @@
 add_library(ruvia-http
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
