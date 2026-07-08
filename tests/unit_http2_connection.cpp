@@ -7,12 +7,36 @@
 
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2FrameCodec.h"
+#include "net/http2/Http2Hpack.h"
 #include "net/http2/Http2WindowUpdate.h"
 
 namespace {
 
 using ruvia::detail::Http2Connection;
+using ruvia::detail::Http2Event;
 using ruvia::detail::Http2FrameType;
+using ruvia::detail::HpackEncoder;
+
+// Encode a minimal valid GET request header block (HPACK literals) into `block`.
+void encodeGetRequest(std::pmr::string& block) {
+    HpackEncoder::encodeHeader(block, ":method", "GET");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+}
+
+// Frame a HEADERS block on `streamId` with the given flags into a fed-ready buffer.
+std::pmr::string headersFrame(
+    std::pmr::memory_resource* resource, std::uint32_t streamId, std::uint8_t flags,
+    std::string_view block) {
+    std::pmr::string frame(resource);
+    char hdr[9];
+    ruvia::detail::http2EncodeFrameHeader(
+        hdr, static_cast<std::uint32_t>(block.size()), Http2FrameType::kHeaders, flags, streamId);
+    frame.append(hdr, 9);
+    frame.append(block.data(), block.size());
+    return frame;
+}
 
 // Feed the peer's empty SETTINGS frame and drain the resulting ACK, leaving the
 // connection ready for post-handshake frames.
@@ -178,4 +202,74 @@ RUVIA_TEST(http2_connection_feed_priority_self_dependency_resets) {
     const auto rst = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
     RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
     RUVIA_CHECK_EQ(rst.streamId, static_cast<std::uint32_t>(1));
+}
+
+// A complete HEADERS frame (END_HEADERS + END_STREAM) decodes the request head and the
+// sans-I/O core emits kRequestHeaders then kRequestEnd; the head is exposed via stream().
+RUVIA_TEST(http2_connection_feed_headers_emits_request_event) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const auto frame = headersFrame(
+        &resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    const auto result = conn.feed(std::string_view(frame.data(), frame.size()));
+
+    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kOk);
+    RUVIA_CHECK(!conn.closing());
+
+    const auto e1 = conn.nextEvent();
+    RUVIA_CHECK(e1.kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK_EQ(e1.streamId, static_cast<std::uint32_t>(1));
+    const auto e2 = conn.nextEvent();
+    RUVIA_CHECK(e2.kind == Http2Event::Kind::kRequestEnd);
+    RUVIA_CHECK_EQ(e2.streamId, static_cast<std::uint32_t>(1));
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
+
+    auto* s = conn.stream(1);
+    RUVIA_CHECK(s != nullptr);
+    RUVIA_CHECK(s->requestMethod() == ruvia::HttpMethod::kGet);
+}
+
+// A HEADERS frame WITHOUT END_HEADERS leaves the block open (awaiting CONTINUATION); a
+// CONTINUATION carrying the rest with END_HEADERS completes the head and emits the event.
+RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string first(&resource);
+    HpackEncoder::encodeHeader(first, ":method", "GET");
+    HpackEncoder::encodeHeader(first, ":scheme", "https");
+    std::pmr::string second(&resource);
+    HpackEncoder::encodeHeader(second, ":path", "/");
+    HpackEncoder::encodeHeader(second, ":authority", "example.com");
+
+    // HEADERS with END_STREAM but no END_HEADERS -> no event yet.
+    const auto h = headersFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(first.data(), first.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(h.data(), h.size())).status ==
+                ruvia::detail::Http2FeedStatus::kOk);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);
+
+    // CONTINUATION with END_HEADERS -> head completes.
+    char chdr[9];
+    ruvia::detail::http2EncodeFrameHeader(
+        chdr, static_cast<std::uint32_t>(second.size()), Http2FrameType::kContinuation,
+        ruvia::detail::kHttp2FlagEndHeaders, 1);
+    std::pmr::string cont(&resource);
+    cont.append(chdr, 9);
+    cont.append(second.data(), second.size());
+    RUVIA_CHECK(conn.feed(std::string_view(cont.data(), cont.size())).status ==
+                ruvia::detail::Http2FeedStatus::kOk);
+
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestHeaders);
+    RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kRequestEnd);
+    auto* s = conn.stream(1);
+    RUVIA_CHECK(s != nullptr && s->requestMethod() == ruvia::HttpMethod::kGet);
 }
