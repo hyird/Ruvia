@@ -98,6 +98,16 @@ enum class Http2SubmitResult : std::uint8_t {
     kClosed,  // stream is gone (reset/closed); drop the response
 };
 
+// A response body the send window could not fully drain: the core keeps the unsent
+// remainder and flushes it as WINDOW_UPDATE/SETTINGS reopen the window (nghttp2-style
+// deferred data). One per blocked stream.
+struct Http2PendingSend final {
+    std::uint32_t streamId{0};
+    std::pmr::string bytes;
+    std::size_t offset{0};
+    bool endStream{false};
+};
+
 class Http2Connection final {
 public:
     explicit Http2Connection(std::pmr::memory_resource* resource, Http2CoreConfig config = {});
@@ -147,9 +157,19 @@ private:
     void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
     // sans-I/O replacement for resumeSendWindowWaiters: a WINDOW_UPDATE/SETTINGS that
-    // opened send window moves flow-control-blocked streams onto unblockedStreams_ so
-    // the owner (via takeUnblockedStreams) re-pumps them. No coroutine resume.
-    void markSendWindowOpened() noexcept;
+    // opened the send window drains buffered response bodies (pendingSends_) into the
+    // outbound buffer; a stream whose body fully drains is reported via unblockedStreams_
+    // so the owner can pull the next chunk of a streaming source. No coroutine resume.
+    void markSendWindowOpened();
+
+    // Emit a response header block as HEADERS + CONTINUATION frames (atomic sequence,
+    // RFC 9113 §6.10) into the outbound buffer, ending the stream when endStream is set.
+    void appendResponseHeaderFrames(
+        Http2StreamState& stream, std::string_view headerBlock, bool endStream);
+    // Emit DATA frames for data.substr(offset) while the send window allows, returning
+    // the new offset (== data.size() when fully sent). Consumes send-window credit.
+    [[nodiscard]] std::size_t sendDataUpToWindow(
+        Http2StreamState& stream, std::string_view data, std::size_t offset, bool endStream);
 
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
     // on a fatal protocol error, having appended GOAWAY and set closing_).
@@ -213,8 +233,8 @@ private:
     std::pmr::vector<Http2Event> events_;
     std::size_t eventOffset_{0};
 
-    // flow-control-blocked streams awaiting more window (defer/resume)
-    std::pmr::vector<std::uint32_t> blockedStreams_;
+    // flow-control-deferred response bodies + streams that just fully drained
+    std::pmr::vector<Http2PendingSend> pendingSends_;
     std::pmr::vector<std::uint32_t> unblockedStreams_;
 
     std::uint32_t localMaxFrameSize_{kHttp2DefaultMaxFrameSize};

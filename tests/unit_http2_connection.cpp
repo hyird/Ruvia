@@ -47,6 +47,37 @@ void handshake(Http2Connection& conn) {
     conn.consumeOutput(conn.pendingOutput().size());
 }
 
+using ruvia::detail::Http2SubmitResult;
+
+// Handshake but declare a small peer SETTINGS_INITIAL_WINDOW_SIZE so freshly created
+// streams start with a tiny send window (to exercise flow-control backpressure).
+void handshakeWithWindow(Http2Connection& conn, std::uint32_t window) {
+    char s[9 + 6];
+    ruvia::detail::http2EncodeFrameHeader(s, 6, Http2FrameType::kSettings, 0, 0);
+    s[9] = 0;
+    s[10] = 4;  // SETTINGS_INITIAL_WINDOW_SIZE
+    s[11] = static_cast<char>((window >> 24) & 0xFF);
+    s[12] = static_cast<char>((window >> 16) & 0xFF);
+    s[13] = static_cast<char>((window >> 8) & 0xFF);
+    s[14] = static_cast<char>(window & 0xFF);
+    conn.feed(std::string_view(s, sizeof(s)));
+    conn.consumeOutput(conn.pendingOutput().size());
+}
+
+// Feed a complete GET on stream 1, drain its events and any output, leaving stream 1
+// open (half-closed remote) and ready to receive a response.
+void driveGetRequest(Http2Connection& conn, std::pmr::memory_resource* res) {
+    std::pmr::string block(res);
+    encodeGetRequest(block);
+    const auto h = headersFrame(
+        res, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    conn.feed(std::string_view(h.data(), h.size()));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+}
+
 }  // namespace
 
 // The sans-I/O core produces a SETTINGS frame (stream 0) into its outbound buffer,
@@ -352,4 +383,84 @@ RUVIA_TEST(http2_connection_feed_data_short_of_content_length_resets) {
     RUVIA_CHECK(conn.nextEvent().kind == Http2Event::Kind::kNone);  // no kRequestEnd
     auto* s = conn.stream(1);
     RUVIA_CHECK(s != nullptr && s->isReset());
+}
+
+// submitResponseHead emits a HEADERS block (END_HEADERS, no END_STREAM when a body
+// follows); submitData then sends the buffered body as a terminal DATA frame.
+RUVIA_TEST(http2_connection_submit_response_head_and_body) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+
+    ruvia::HttpResponse resp(&resource);
+    resp.status(200);
+    resp.setBodyCopy("hello");
+    conn.submitResponseHead(1, resp, /*bodyForbidden=*/false);
+
+    const auto head = conn.pendingOutput();
+    const auto hd = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
+    RUVIA_CHECK_EQ(hd.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK((hd.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
+    RUVIA_CHECK((hd.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
+    conn.consumeOutput(head.size());
+
+    const auto r = conn.submitData(1, "hello", /*endStream=*/true);
+    RUVIA_CHECK(r == Http2SubmitResult::kOk);
+    const auto body = conn.pendingOutput();
+    const auto dd = ruvia::detail::http2ParseFrameHeader(body.substr(0, 9));
+    RUVIA_CHECK_EQ(dd.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(dd.length, static_cast<std::uint32_t>(5));
+    RUVIA_CHECK((dd.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+}
+
+// A body larger than the send window is partially sent and the remainder buffered
+// (kBlocked). A WINDOW_UPDATE drains the rest with END_STREAM and reports the stream
+// unblocked -- the sans-I/O equivalent of nghttp2 defer/resume.
+RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshakeWithWindow(conn, 3);  // stream 1 starts with a 3-byte send window
+    driveGetRequest(conn, &resource);
+
+    const char body[5] = {'a', 'b', 'c', 'd', 'e'};
+    const auto r1 = conn.submitData(1, std::string_view(body, 5), /*endStream=*/true);
+    RUVIA_CHECK(r1 == Http2SubmitResult::kBlocked);
+
+    const auto out1 = conn.pendingOutput();
+    const auto d1 = ruvia::detail::http2ParseFrameHeader(out1.substr(0, 9));
+    RUVIA_CHECK_EQ(d1.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(d1.length, static_cast<std::uint32_t>(3));            // only 3 fit
+    RUVIA_CHECK((d1.flags & ruvia::detail::kHttp2FlagEndStream) == 0);   // not terminal
+    conn.consumeOutput(out1.size());
+
+    char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
+    ruvia::detail::http2WriteWindowUpdate(wu, 1, 10);  // reopen stream 1's window
+    conn.feed(std::string_view(wu, sizeof(wu)));
+
+    const auto out2 = conn.pendingOutput();
+    const auto d2 = ruvia::detail::http2ParseFrameHeader(out2.substr(0, 9));
+    RUVIA_CHECK_EQ(d2.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(d2.length, static_cast<std::uint32_t>(2));            // remaining 2
+    RUVIA_CHECK((d2.flags & ruvia::detail::kHttp2FlagEndStream) != 0);   // now terminal
+
+    const auto unblocked = conn.takeUnblockedStreams();
+    RUVIA_CHECK_EQ(unblocked.size(), static_cast<std::size_t>(1));
+    RUVIA_CHECK_EQ(unblocked[0], static_cast<std::uint32_t>(1));
+}
+
+// submitReset emits a RST_STREAM and marks the stream reset so no further response
+// bytes are produced for it.
+RUVIA_TEST(http2_connection_submit_reset_emits_rst) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+
+    conn.submitReset(1, 0x8 /* CANCEL */);
+    const auto out = conn.pendingOutput();
+    const auto r = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(r.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK_EQ(r.streamId, static_cast<std::uint32_t>(1));
+    RUVIA_CHECK(conn.stream(1)->isReset());
 }
