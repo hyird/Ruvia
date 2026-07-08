@@ -33,6 +33,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketValidation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/WsConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolLifecycle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
