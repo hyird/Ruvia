@@ -56,10 +56,11 @@ private:
     std::string_view detailsJson_{};
 };
 
-// Function-pointer aliases for the web error/not-found handlers. Defined
-// unconditionally (they only need Context/HttpResponse forward-declared) so
-// ContextServices -- which stores them -- compiles in http-only builds too; a
-// non-web product simply leaves them null.
+// DELIBERATE BOUNDARY ARTIFACT: hook types for the web framework's error /
+// not-found handlers. They live next to HttpErrorInfo so the error surface is one
+// public header, and they only require Context/HttpResponse forward declarations --
+// ruvia::http itself never defines Context nor invokes these; only ruvia::web
+// (Router::setErrorHandler / dispatch) does. A non-web product leaves them null.
 using HttpErrorHandler = Task<HttpResponse> (*)(Context&, HttpErrorInfo);
 using HttpNotFoundHandler = Task<HttpResponse> (*)(Context&);
 

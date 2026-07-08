@@ -138,6 +138,7 @@ ruvia_install_public_headers(web
     include/ruvia/app/RateLimitRule.h
     include/ruvia/http/StaticFiles.h
     include/ruvia/http/Context.h
+    include/ruvia/http/HttpClient.h
     include/ruvia/http/Context.inl
     include/ruvia/http/ContextModel.h
     include/ruvia/http/Controller.h

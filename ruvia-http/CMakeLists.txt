@@ -63,7 +63,6 @@ ruvia_install_public_headers(http
     include/ruvia/http/Error.h
     include/ruvia/http/HttpBodyStream.h
     include/ruvia/http/HttpCache.h
-    include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpCommon.h
     include/ruvia/http/HttpLimits.h
     include/ruvia/http/HttpParseTypes.h

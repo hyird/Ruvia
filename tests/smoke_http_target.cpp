@@ -1,5 +1,4 @@
 #include "ruvia/http/HttpCache.h"
-#include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpParser.h"
 #include "ruvia/http/HttpResponse.h"
 
@@ -14,9 +13,10 @@ int main() {
         return 2;
     }
 
-    ruvia::HttpClientConfig config;
-    config.host = "example.test";
-    config.port = 443;
-    config.tls = true;
-    return config.host.empty() || config.port == 0 || !config.tls ? 3 : 0;
+    // NOTE: the outbound client's public API (ruvia/http/HttpClient.h) is installed
+    // by ruvia::web (its runtime is web I/O policy), so it deliberately does NOT
+    // appear in this http-standalone proof.
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(204);
+    return response.status() == 204 ? 0 : 3;
 }

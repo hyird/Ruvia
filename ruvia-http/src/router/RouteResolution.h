@@ -10,11 +10,15 @@
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/WebSocket.h"
 
-// Lightweight route-resolution result types. Kept below the RouteTable layer so
-// the request hot path, including the connection work set that embeds
-// RouteResolution, can name them without pulling in route indexes or router
-// builder state. RouteEntry is only referenced through a pointer here, so a
-// forward declaration suffices.
+// Lightweight route-resolution result types.
+//
+// DELIBERATE BOUNDARY ARTIFACT (not drift): this is the http-side half of the
+// dispatcher contract. The h2 stream state (http) embeds a RouteResolution so the
+// owner's route policy survives across frames, while the actual router -- RouteEntry,
+// RouteTable, the RequestDispatcher interface -- lives entirely in ruvia-web.
+// RouteEntry is referenced ONLY through an opaque pointer (forward declaration);
+// everything the protocol drivers read is copied into the Context-free
+// RouteDisposition below at match time. ruvia::http never dereferences RouteEntry.
 
 namespace ruvia::detail {
 

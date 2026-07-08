@@ -13,42 +13,50 @@ ruvia-core  ←  ruvia-http  ←  ruvia-web
 
 **A thing belongs to a layer by what concepts it *knows*, not by what it is named.**
 - Knows nothing of HTTP or the app → `core`.
-- Knows the HTTP protocol but nothing of `Context`/`Router`/`App` → `http`.
-- Knows `Context`/`Router`/`App` (web-framework semantics) → `web`.
+- Knows the HTTP protocol but nothing of `Context`/`Router`/`App` **and nothing of sockets/asio** → `http`.
+- Knows `Context`/`Router`/`App` (web-framework semantics) or performs I/O for the framework → `web`.
 - CDN/reverse-proxy product policy, never uses `Context` → `edge`.
 
 ## Per-target responsibility
 
 ### ruvia-core — runtime
-`Task`/coroutine primitives, PMR memory helpers, ascii/hex/base64/const-time/date utils, the asio glue (`AsioAwait`). Zero HTTP, zero framework. (Future: the generic sans-I/O driver template + `ConnectionScanner` timeout live here — a concept-driven driver that does not name HTTP, so `core` never depends on `http`.)
+`Task`/coroutine primitives, PMR memory helpers, ascii/hex/base64/const-time/date utils, the asio glue (`AsioAwait`), the generic sans-I/O pump (`runtime/SansIoDriver.h`), and the connection timeout scanner + socket utils (`ruvia-core/src/net/server/ConnectionScanner.{h,cpp}`, `SocketUtils.h` — include path unchanged: `net/server/...`). Core links asio; it knows nothing of HTTP.
 
-### ruvia-http — pure protocol
-The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable by anyone (nghttp2 / picohttpparser class):
-- h1 parser (already sans-I/O), h2 frame codec + HPACK + flow control + stream state, ws frame codec + handshake + permessage-deflate.
-- Message model (`HttpRequest`/`HttpResponse`, headers, methods, status, cookies-parsing, body streams, multipart), transfer/content coding (chunked, gzip/br/zstd), protocol value helpers (Cache-Control, HTTP-date, Range, Accept).
-- Outbound HTTP client transport (protocol client, shares the h2 core).
-- **MUST NOT own**: `Context`, `Router`, `Controller`, route macros, middleware, `App`, DB/Redis/JWT integration, and CDN policy.
+### ruvia-http — pure sans-I/O protocol (ZERO asio, grep-enforced)
+The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable from any runtime (nghttp2 / picohttpparser class). You feed it bytes, it emits events and produces bytes:
+- h1 parser (`src/parser/`, sans-I/O).
+- h2: `Http2Connection` — **one connection state machine for BOTH roles**: server (accepts peer streams, `submit*` responses, RFC 8441 WebSocket handshake, GOAWAY drain, h2c upgrade seeding) and client (`Http2Role::kClient`: odd streams, request heads, RESPONSE decode with 1xx handling, consume-paced receive windows). Frame codec, HPACK, flow control, stream state underneath.
+- ws: `WsConnection` sans-I/O core + the pure frame codec/assembler/validation/permessage-deflate shared by every driver.
+- Message model (`HttpRequest`/`HttpResponse`, headers, methods, status, cookies-parsing, body streams, multipart), content coding, protocol value helpers (Cache-Control, HTTP-date, Range, Accept).
+- **Client note**: `ruvia::http` contains the client's *protocol engine* (the h2 core's client role + the h1 parser + message types), NOT a ready-to-use client runtime. The runtime is web (below); the public surface `ruvia/http/HttpClient.h` is installed by **ruvia-web**.
+- **MUST NOT own**: `Context`, `Router`, `Controller`, route macros, middleware, `App`, DB/Redis/JWT integration, CDN policy, sockets, TLS, timers, or any `#include <asio...>`.
+- Deliberate boundary artifacts hosted here (documented in-file, not drift): `router/RouteResolution.h` (the http-side dispatcher-contract POD; `RouteEntry` only as an opaque pointer) and the `HttpErrorHandler`/`HttpNotFoundHandler` aliases in `ruvia/http/Error.h` (web hook types next to `HttpErrorInfo`; never invoked by http).
 
-### ruvia-web — the web framework product
-`App`, `Router`, `Controller`, route macros, middleware, `Context`, model validation, DB/Redis/JWT/CSRF/sessions. **All framework policy**: rate limiting, access-log policy, CORS, static-file serving, cookie signing, server timeouts, and `HttpServerOptions`.
+### ruvia-web — the web framework product (all framework I/O drivers live here)
+`App`, `Router`, `Controller`, route macros, middleware, `Context`, model validation, DB/Redis/JWT/CSRF/sessions. **All framework policy**: rate limiting, access-log policy, CORS, static-file serving, cookie signing, server timeouts, `HttpServerOptions`. **All I/O drivers over the http cores**:
+- `src/net/server/Http2SansIoSession.h` — the production h2 server session (reader + single writer over `Http2Connection`; the accept loop's TLS-ALPN / cleartext-preface / h2c-upgrade entries all run it).
+- `src/net/server/HttpServerStreamSession.inl` — the h1 server session (an I/O driver over the single pure parser; not a duplicate protocol implementation).
+- `src/net/ws/` — `WebSocketConnection<Transport>` + socket/h2 transports + the h1 101 handshake writer.
+- `src/net/body/` — asio streaming request-body readers.
+- `src/client/` — the outbound HTTP client **runtime**: `HttpClientPool` (h1), `Http2ClientSession` (a thin driver over the shared `Http2Connection` client role), `HttpClientRegistry`, TLS verification, redirects, deadlines, streaming sources. Surfaced via `Context::fetch` / `fetchStream` / `proxy`.
 
 ### ruvia-edge — the CDN / reverse-proxy product
-Origin selection, cache store/key policy, stale-while-revalidate, purge, edge rules, reverse-proxy assembly over `ruvia-http` primitives. **MUST NOT** depend on `ruvia-web`, `App`, `Router`, middleware, or `Context`.
+Origin selection, cache store/key policy, stale-while-revalidate, purge, edge rules, reverse-proxy assembly over `ruvia-http` primitives (and its own drivers when built). **MUST NOT** depend on `ruvia-web`, `App`, `Router`, middleware, or `Context`. Currently an empty skeleton by decision.
 
-## Verification (how "clear responsibilities + no bugs" is checked)
+## Verification (mechanised)
 
-Run from repo root (client build variant, `-DRUVIA_BUILD_TESTS=ON -DRUVIA_BUILD_EDGE=ON`):
-- **No bugs**: `cmake --build build-client` green; `ruvia_unit_tests` 950 pass; `ruvia_smoke_http_target` / `ruvia_smoke_edge_target` exit 0.
-- **Dependency direction** enforced by CMake: each target exposes only its own `src` as an include root; an upward `#include` fails to compile.
-- **h2/ws server sessions are http-clean** (compile with only http+core include dirs, no `RUVIA_ENABLE_WEB`, no web path):
-  `g++ -std=c++23 -fsyntax-only -DASIO_STANDALONE -I ruvia-http/src -I ruvia-http/src/net -I ruvia-http/include -I ruvia-core/src -I ruvia-core/include -I <vcpkg>/include <tu including net/http2/Http2ServerSession.h>` → 0 errors. Same for `net/ws/HttpWebSocketSession.h`.
-- **sans-I/O protocol core is asio-free**: `Http2Connection.h` has no `#include <asio…>`; compiles standalone with http+core includes only.
-- **edge does not link web**: `ruvia-edge/CMakeLists.txt` links only `ruvia::http`; `smoke_edge_target` runs without web.
+`scripts/check_layer_boundaries.sh` runs the checks below; the `ruvia_check_boundaries` CMake target (built with tests) executes it, so a violation fails the build. Manual anytime: `bash scripts/check_layer_boundaries.sh`.
 
-## Tracked scoped refinements (not violations — future work, plan-tracked)
+1. **http is asio-free**: no `#include <asio` / `#include "asio` / `asio::` anywhere under `ruvia-http/` (covers `Http2Connection.h` / `WsConnection.h` transitively, since the whole target is clean).
+2. **http does not reach the framework**: no include of `ruvia/router/...`, `ruvia/http/Context.h`, `ruvia/app/App.h`, or other web-hosted `ruvia/app/...` headers (core's `ruvia/app/Task.h` + `ruvia/app/detail/...` are allowed).
+3. **edge stays web-free**: `ruvia-edge/CMakeLists.txt` does not link `ruvia-web`/`ruvia::web`; edge sources include no `Context`/router/app headers.
+4. **docs carry no stale ownership**: `README.md` / `AGENTS.md` / this spec must not attribute the client runtime to the http target nor reference the deleted coroutine h2 server session class by name.
+5. **No bugs**: `cmake --build build-client` green; `ruvia_unit_tests` all pass (985 at the time of writing, incl. the core-vs-core loopback `sansio_h2_client_to_sansio_h2_server_round_trip`); `ruvia_smoke_http_target` / `ruvia_smoke_edge_target` exit 0.
+6. **Dependency direction** enforced by CMake: each target exposes only its own roots; an upward `#include` fails to compile.
 
-1. **Pure-protocol purity of `ruvia-http`**: a few framework-policy files (RateLimiter, AccessLogRecord, HttpCors, HttpServerOptions) were pulled into `ruvia-http` while making the h2/ws sessions compile there (commit `dd65b1f`). Per this boundary spec they belong in `ruvia-web`. Moving them back is entangled with the session's direct use of them; it is done cleanly once the **sans-I/O refactor** removes those uses (session emits events; web applies policy). Sequenced last in the sans-I/O plan.
-2. **sans-I/O rewrite** (in progress): `Http2Connection` sans-I/O core skeleton landed (commit `f1e3e85`), asio-free and verified; the `feed`/`submit` logic port (1:1 from the current coroutine `Http2ServerSession*.inl`, backpressure via defer/resume) + a dedicated `Http2Connection` unit test are the remaining work. Turns `ruvia-http` into a runtime-agnostic protocol library.
-3. **h1 server session** currently lives in `ruvia-web` (names `RouteTable`); it is web's own session and not a boundary violation, but gets the same sans-I/O treatment for edge reuse later.
+## History / remaining refinements
 
-Full design + phasing: the approved sans-I/O plan. Progress log: memory `ruvia-library-split`.
+- The sans-I/O unification is COMPLETE (commits `88eb8ac..17bdb47`, 2026-07-08): the coroutine h2 server session stack and the client's standalone h2 implementation are deleted; `Http2Connection` is the single h2 state machine for both sides; `ruvia-http` preprocesses with zero asio.
+- **h1 sans-I/O core**: the parser is already the single h1 protocol implementation; an embeddable `Http1Connection` (feed → head/body/end events, h2-core-shaped) is the remaining refinement so edge can reuse h1 connection handling without the web session. The web h1 session keeps driving the parser directly until edge needs it.
+
+Progress log: memory `ruvia-sansio-migration`.
