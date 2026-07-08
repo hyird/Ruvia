@@ -16,9 +16,10 @@ using ruvia::detail::WsFeedStatus;
 // Build a masked client->server frame (RFC 6455 §5.1): FIN/opcode byte, MASK bit + a
 // short length (<=125 for tests), a 4-byte mask, then the masked payload.
 std::pmr::string maskedFrame(
-    std::pmr::memory_resource* res, std::uint8_t opcode, std::string_view payload, bool fin = true) {
+    std::pmr::memory_resource* res, std::uint8_t opcode, std::string_view payload, bool fin = true,
+    bool rsv1 = false) {
     std::pmr::string f(res);
-    f.push_back(static_cast<char>((fin ? 0x80U : 0U) | opcode));
+    f.push_back(static_cast<char>((fin ? 0x80U : 0U) | (rsv1 ? 0x40U : 0U) | opcode));
     f.push_back(static_cast<char>(0x80U | static_cast<std::uint8_t>(payload.size())));
     const unsigned char mask[4] = {0x11, 0x22, 0x33, 0x44};
     f.append(reinterpret_cast<const char*>(mask), 4);
@@ -152,4 +153,52 @@ RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
     RUVIA_CHECK(e.payload == std::string_view("split"));
+}
+
+// With permessage-deflate negotiated, an RSV1 (compressed) message is inflated and
+// delivered as its original text.
+RUVIA_TEST(ws_connection_inflates_compressed_message) {
+    std::pmr::monotonic_buffer_resource resource;
+    WsConnection conn(&resource, 0, /*permessageDeflate=*/true);
+
+    ruvia::detail::WebSocketDeflate encoder;
+    RUVIA_CHECK(encoder.ok());
+    std::pmr::string compressed(&resource);
+    RUVIA_CHECK(encoder.compress("hello hello hello", compressed));
+
+    const auto f = maskedFrame(
+        &resource, 0x1, std::string_view(compressed.data(), compressed.size()),
+        /*fin=*/true, /*rsv1=*/true);
+    conn.feed(std::string_view(f.data(), f.size()));
+
+    const auto e = conn.nextEvent();
+    RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
+    RUVIA_CHECK(e.payload == std::string_view("hello hello hello"));
+}
+
+// With permessage-deflate on, submitMessage compresses a shrinkable payload and sets
+// the RSV1 bit.
+RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
+    std::pmr::monotonic_buffer_resource resource;
+    WsConnection conn(&resource, 0, /*permessageDeflate=*/true);
+
+    const std::pmr::string repetitive(200, 'a', &resource);
+    conn.submitMessage(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size()));
+
+    const auto out = conn.pendingOutput();
+    RUVIA_CHECK((static_cast<unsigned char>(out[0]) & 0x40U) != 0);  // RSV1 (compressed)
+    RUVIA_CHECK((static_cast<unsigned char>(out[0]) & 0x0FU) == 0x1);  // Text opcode
+    RUVIA_CHECK(out.size() < repetitive.size());                      // actually smaller
+}
+
+// An RSV1 frame when permessage-deflate was NOT negotiated is a protocol error.
+RUVIA_TEST(ws_connection_rejects_rsv1_without_deflate) {
+    std::pmr::monotonic_buffer_resource resource;
+    WsConnection conn(&resource);  // no deflate
+
+    const auto f = maskedFrame(&resource, 0x1, "x", /*fin=*/true, /*rsv1=*/true);
+    conn.feed(std::string_view(f.data(), f.size()));
+
+    RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kProtocolError);
+    RUVIA_CHECK(conn.closing());
 }

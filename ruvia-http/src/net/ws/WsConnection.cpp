@@ -4,14 +4,20 @@
 
 namespace ruvia::detail {
 
-WsConnection::WsConnection(std::pmr::memory_resource* resource, std::size_t maxMessageBytes)
+WsConnection::WsConnection(
+    std::pmr::memory_resource* resource, std::size_t maxMessageBytes, bool permessageDeflate)
     : resource_(resource),
       maxMessageBytes_(maxMessageBytes),
       input_(resource),
       outBuffer_(resource),
       assembler_(resource),
       events_(resource),
-      messageStore_(resource) {}
+      messageStore_(resource),
+      outboundDeflated_(resource) {
+    if (permessageDeflate) {
+        deflate_.emplace();
+    }
+}
 
 // --- outbound byte buffer -----------------------------------------------------
 
@@ -56,7 +62,18 @@ void WsConnection::appendClose(std::uint16_t code, std::string_view reason) {
 // --- outbound submit ----------------------------------------------------------
 
 void WsConnection::submitMessage(WebSocketOpcode opcode, std::string_view payload) {
-    appendFrame(opcode, payload);
+    // permessage-deflate: compress data frames only, and only keep the result when it
+    // actually shrinks the payload (RSV1 is per-message; RFC 7692 §6/§7.2.1).
+    bool rsv1 = false;
+    const bool dataFrame = opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary;
+    if (dataFrame && deflate_.has_value()) {
+        outboundDeflated_.clear();
+        if (deflate_->compress(payload, outboundDeflated_) && outboundDeflated_.size() < payload.size()) {
+            payload = std::string_view(outboundDeflated_.data(), outboundDeflated_.size());
+            rsv1 = true;
+        }
+    }
+    appendFrame(opcode, payload, rsv1);
 }
 
 void WsConnection::submitPing(std::string_view payload) {
@@ -84,8 +101,8 @@ WsConnection::WsReadStatus WsConnection::readFrame(WebSocketFrameView& out) {
     std::uint64_t length = second & 0x7FU;
     std::size_t headerSize = 2;
 
-    // Not negotiating permessage-deflate in this slice: RSV1 frames are rejected.
-    if (!decodeWebSocketFrameStart(first, second, frameStart, /*allowRsv1=*/false)) {
+    // RSV1 (compressed) is valid only when permessage-deflate was negotiated.
+    if (!decodeWebSocketFrameStart(first, second, frameStart, /*allowRsv1=*/deflate_.has_value())) {
         throw WebSocketProtocolError(1002, "invalid websocket frame");
     }
     if (length == 126) {
@@ -196,13 +213,36 @@ WsFeedResult WsConnection::feed(std::string_view in) {
                         std::string_view(held.data(), held.size()), 0});
                     break;
                 }
-                case WebSocketInboundAction::kDeliverCompressed:
-                    // permessage-deflate is a follow-up; a compressed message here means
-                    // the peer used an extension we did not negotiate.
-                    appendClose(1002, "compression not supported");
+                case WebSocketInboundAction::kDeliverCompressed: {
+                    // Inflate into stable per-feed storage, then validate + deliver.
+                    messageStore_.emplace_back();
+                    auto& inflated = messageStore_.back();
+                    const auto result = deflate_.has_value()
+                        ? deflate_->decompress(message.payload(), inflated, maxMessageBytes_)
+                        : WebSocketInflateResult::kError;
+                    if (result == WebSocketInflateResult::kTooLarge) {
+                        appendClose(1009, "message too large");
+                        events_.push_back(WsEvent{
+                            WsEvent::Kind::kProtocolError, WebSocketOpcode::kClose, {}, 1009});
+                        break;
+                    }
+                    if (result != WebSocketInflateResult::kOk) {
+                        appendClose(1002, "decompression failed");
+                        events_.push_back(WsEvent{
+                            WsEvent::Kind::kProtocolError, WebSocketOpcode::kClose, {}, 1002});
+                        break;
+                    }
+                    const auto view = std::string_view(inflated.data(), inflated.size());
+                    if (message.opcode() == WebSocketOpcode::kText && !isValidUtf8(view)) {
+                        appendClose(1007, "invalid utf-8");
+                        events_.push_back(WsEvent{
+                            WsEvent::Kind::kProtocolError, WebSocketOpcode::kClose, {}, 1007});
+                        break;
+                    }
                     events_.push_back(
-                        WsEvent{WsEvent::Kind::kProtocolError, WebSocketOpcode::kClose, {}, 1002});
+                        WsEvent{WsEvent::Kind::kMessage, message.opcode(), view, 0});
                     break;
+                }
                 case WebSocketInboundAction::kInvalidUtf8:
                     appendClose(1007, "invalid utf-8");
                     events_.push_back(
