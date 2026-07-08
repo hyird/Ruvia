@@ -9,19 +9,21 @@
 // loop and timeouts live entirely in the caller.
 //
 // Scope of this first slice: the unextended RFC 6455 protocol. permessage-deflate
-// (RFC 7692) is a follow-up; RSV1 (compressed) frames are rejected here, exactly as
-// required when the extension is not negotiated. Control-frame auto-responses (Pong
-// on Ping, Close echo on peer Close) are produced into the outbound buffer, matching
-// the coroutine connection's behaviour, and also surfaced as events for the owner.
+// (RFC 7692) is enabled per connection via the constructor; when it is off, RSV1
+// (compressed) frames are rejected exactly as required. Control-frame auto-responses
+// (Pong on Ping, Close echo on peer Close) are produced into the outbound buffer,
+// matching the coroutine connection's behaviour, and also surfaced as events.
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "HttpWebSocketPermessageDeflate.h"
 #include "HttpWebSocketUtils.h"
 
 namespace ruvia::detail {
@@ -54,7 +56,10 @@ struct WsEvent final {
 
 class WsConnection final {
 public:
-    explicit WsConnection(std::pmr::memory_resource* resource, std::size_t maxMessageBytes = 0);
+    explicit WsConnection(
+        std::pmr::memory_resource* resource,
+        std::size_t maxMessageBytes = 0,
+        bool permessageDeflate = false);
 
     // --- inbound ---------------------------------------------------------------
     [[nodiscard]] WsFeedResult feed(std::string_view in);
@@ -100,6 +105,10 @@ private:
     // across messages, so a message view handed out as an event is copied here (a
     // deque keeps element references stable as more messages land in the same feed).
     std::pmr::deque<std::pmr::string> messageStore_;
+
+    // permessage-deflate (RFC 7692), present only when negotiated for this connection.
+    std::optional<WebSocketDeflate> deflate_;
+    std::pmr::string outboundDeflated_;
 
     bool closing_{false};
 };
