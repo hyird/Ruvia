@@ -24,7 +24,7 @@ ruvia-core  ←  ruvia-http  ←  ruvia-web
 
 ### ruvia-http — pure sans-I/O protocol (ZERO asio, grep-enforced)
 The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable from any runtime (nghttp2 / picohttpparser class). You feed it bytes, it emits events and produces bytes:
-- h1 parser (`src/parser/`, sans-I/O).
+- h1: the parser (`src/parser/`, sans-I/O) + `Http1Connection` (`src/net/http1/`) — the embeddable server connection core (feed → head/body/end events, keep-alive pipelining one message at a time, chunked de-framing, upgrade hand-off via `unconsumedInput()`).
 - h2: `Http2Connection` — **one connection state machine for BOTH roles**: server (accepts peer streams, `submit*` responses, RFC 8441 WebSocket handshake, GOAWAY drain, h2c upgrade seeding) and client (`Http2Role::kClient`: odd streams, request heads, RESPONSE decode with 1xx handling, consume-paced receive windows). Frame codec, HPACK, flow control, stream state underneath.
 - ws: `WsConnection` sans-I/O core + the pure frame codec/assembler/validation/permessage-deflate shared by every driver.
 - Message model (`HttpRequest`/`HttpResponse`, headers, methods, status, cookies-parsing, body streams, multipart), content coding, protocol value helpers (Cache-Control, HTTP-date, Range, Accept).
@@ -57,6 +57,6 @@ Origin selection, cache store/key policy, stale-while-revalidate, purge, edge ru
 ## History / remaining refinements
 
 - The sans-I/O unification is COMPLETE (commits `88eb8ac..17bdb47`, 2026-07-08): the coroutine h2 server session stack and the client's standalone h2 implementation are deleted; `Http2Connection` is the single h2 state machine for both sides; `ruvia-http` preprocesses with zero asio.
-- **h1 sans-I/O core**: the parser is already the single h1 protocol implementation; an embeddable `Http1Connection` (feed → head/body/end events, h2-core-shaped) is the remaining refinement so edge can reuse h1 connection handling without the web session. The web h1 session keeps driving the parser directly until edge needs it.
+- **h1 sans-I/O core**: `Http1Connection` landed (h2-core-shaped: feed → head/body/end events, chunked framing, pipelining, caps) so edge can reuse h1 connection handling without the web session. The web h1 session keeps driving the parser directly (same single protocol implementation underneath); swapping it onto `Http1Connection` is optional future work, sequenced with edge.
 
 Progress log: memory `ruvia-sansio-migration`.

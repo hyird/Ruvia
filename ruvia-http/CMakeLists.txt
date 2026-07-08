@@ -19,6 +19,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpDateCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHeadBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http1/Http1Connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2Connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2Hpack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackDynamic.cpp

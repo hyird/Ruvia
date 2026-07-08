@@ -53,6 +53,7 @@ add_executable(ruvia_unit_tests
     unit_http2_header_rules.cpp
     unit_response_trailers.cpp
     unit_http2_frame_payload.cpp
+    unit_http1_connection.cpp
     unit_http2_connection.cpp
     unit_ws_connection.cpp
     unit_sansio_driver.cpp

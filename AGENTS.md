@@ -89,7 +89,7 @@ tests/
 - cookie/cache/range/conditional request/content negotiation/CORS/security header helper。
 - multipart/form/url encoding/body stream。
 - WebSocket 协议 helper。
-- HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、WebSocket sans-I/O 核心。
+- HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
 - 纯协议 primitive（零 asio、零 socket；client/server 的 I/O runtime 都在 `ruvia-web`）。
 
 禁止包含：
