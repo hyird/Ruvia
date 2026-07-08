@@ -2,7 +2,7 @@
 
 #include <exception>
 
-#include "HttpWebSocketConnection.h"
+#include "net/ws/HttpWebSocketConnection.h"
 #include "net/server/ConnectionScanner.h"
 #include "router/RequestDispatcher.h"
 #include "WebSocketInternal.h"

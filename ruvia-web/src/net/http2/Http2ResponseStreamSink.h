@@ -9,8 +9,8 @@
 
 #include <asio.hpp>
 
-#include "Http2ResponseHeaders.h"
-#include "Http2StreamState.h"
+#include "net/http2/Http2ResponseHeaders.h"
+#include "net/http2/Http2StreamState.h"
 #include "runtime/AsioAwait.h"
 #include "net/server/HttpResponseStreamHead.h"
 #include "net/server/HttpResponseStreamState.h"
