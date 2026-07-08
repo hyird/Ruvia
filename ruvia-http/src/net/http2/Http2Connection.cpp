@@ -3,6 +3,7 @@
 #include <array>
 #include <utility>
 
+#include "Http2FlowControl.h"
 #include "Http2FrameCodec.h"
 #include "Http2WindowUpdate.h"
 
@@ -127,6 +128,67 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
     return true;
 }
 
+void Http2Connection::appendRstStream(std::uint32_t streamId, Http2ErrorCode error) {
+    std::array<char, 4> payload;
+    auto* out = http2Write32(payload.data(), static_cast<std::uint32_t>(error));
+    appendFrame(
+        Http2FrameType::kRstStream, 0, streamId,
+        std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())));
+}
+
+void Http2Connection::markSendWindowOpened() noexcept {
+    for (const auto id : blockedStreams_) {
+        unblockedStreams_.push_back(id);
+    }
+    blockedStreams_.clear();
+}
+
+bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::string_view payload) {
+    if (payload.size() != 4) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid WINDOW_UPDATE");
+        return false;
+    }
+    const auto increment = http2WindowUpdateIncrement(payload);
+    if (header.streamId == 0) {
+        switch (http2ApplyWindowUpdate(connectionSendWindow_, increment)) {
+            case Http2WindowUpdateResult::kOk:
+                markSendWindowOpened();
+                return true;
+            case Http2WindowUpdateResult::kZeroIncrement:
+                appendGoaway(Http2ErrorCode::kProtocolError, "zero connection WINDOW_UPDATE");
+                return false;
+            case Http2WindowUpdateResult::kOverflow:
+                appendGoaway(Http2ErrorCode::kFlowControlError, "connection window overflow");
+                return false;
+        }
+        return true;
+    }
+    auto* stream = streams_.find(header.streamId);
+    if (stream == nullptr) {
+        if (http2IsIdleStream(header.streamId, lastStreamId_)) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "WINDOW_UPDATE on idle stream");
+            return false;
+        }
+        return true;
+    }
+    switch (http2ApplyStreamWindowUpdate(*stream, increment)) {
+        case Http2WindowUpdateResult::kOk:
+            markSendWindowOpened();
+            return true;
+        case Http2WindowUpdateResult::kZeroIncrement:
+            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            stream->markReset();
+            markSendWindowOpened();
+            return true;
+        case Http2WindowUpdateResult::kOverflow:
+            appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
+            stream->markReset();
+            markSendWindowOpened();
+            return true;
+    }
+    return true;
+}
+
 bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_view payload) {
     if (payload.size() != 8) {
         appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PING");
@@ -158,6 +220,8 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processSettings(header, payload);
         case Http2FrameType::kPing:
             return processPing(header, payload);
+        case Http2FrameType::kWindowUpdate:
+            return processWindowUpdate(header, payload);
         case Http2FrameType::kGoaway:
             closing_ = true;
             return true;

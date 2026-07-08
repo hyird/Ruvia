@@ -140,12 +140,19 @@ private:
         Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
         std::string_view first, std::string_view second = {});
     void appendGoaway(Http2ErrorCode error, std::string_view debug = {});
+    void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
+
+    // sans-I/O replacement for resumeSendWindowWaiters: a WINDOW_UPDATE/SETTINGS that
+    // opened send window moves flow-control-blocked streams onto unblockedStreams_ so
+    // the owner (via takeUnblockedStreams) re-pumps them. No coroutine resume.
+    void markSendWindowOpened() noexcept;
 
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
     // on a fatal protocol error, having appended GOAWAY and set closing_).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     std::pmr::memory_resource* resource_;
