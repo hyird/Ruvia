@@ -127,6 +127,22 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
     return true;
 }
 
+bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_view payload) {
+    if (payload.size() != 8) {
+        appendGoaway(Http2ErrorCode::kFrameSizeError, "invalid PING");
+        return false;
+    }
+    if (header.streamId != 0) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "PING stream id must be zero");
+        return false;
+    }
+    if ((header.flags & kHttp2FlagAck) != 0) {
+        return true;  // our own ping's ack; ignore
+    }
+    appendFrame(Http2FrameType::kPing, kHttp2FlagAck, 0, payload);  // echo back
+    return true;
+}
+
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
     if (!receivedFirstSettings_ &&
         header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
@@ -140,6 +156,8 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
     switch (static_cast<Http2FrameType>(header.type)) {
         case Http2FrameType::kSettings:
             return processSettings(header, payload);
+        case Http2FrameType::kPing:
+            return processPing(header, payload);
         case Http2FrameType::kGoaway:
             closing_ = true;
             return true;

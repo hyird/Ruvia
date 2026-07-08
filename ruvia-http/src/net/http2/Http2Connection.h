@@ -145,6 +145,7 @@ private:
     // on a fatal protocol error, having appended GOAWAY and set closing_).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     std::pmr::memory_resource* resource_;
