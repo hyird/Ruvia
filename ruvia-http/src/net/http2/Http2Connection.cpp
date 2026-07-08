@@ -13,9 +13,11 @@
 #include "Http2FramePayload.h"
 #include "Http2HeaderBlock.h"
 #include "Http2RequestHeaders.h"
+#include "Http2HeaderRules.h"
 #include "Http2ResponseHeaders.h"
 #include "Http2WebSocketHandshake.h"
 #include "Http2WindowUpdate.h"
+#include "HttpParserInternal.h"
 
 namespace ruvia::detail {
 
@@ -29,6 +31,7 @@ Http2Connection::Http2Connection(std::pmr::memory_resource* resource, Http2CoreC
       events_(resource),
       pendingSends_(resource),
       unblockedStreams_(resource),
+      takenUnblockedStreams_(resource),
       pinnedStreams_(resource),
       localMaxFrameSize_(config.maxFrameSize),
       connectionSendWindow_(static_cast<std::int32_t>(config.initialSendWindow)),
@@ -62,7 +65,11 @@ Http2Event Http2Connection::nextEvent() {
 }
 
 std::span<const std::uint32_t> Http2Connection::takeUnblockedStreams() noexcept {
-    return std::span<const std::uint32_t>(unblockedStreams_.data(), unblockedStreams_.size());
+    // Swap-and-clear so each unblock is reported exactly once; the returned span stays
+    // valid until the next call (double buffer, no allocation churn).
+    takenUnblockedStreams_.swap(unblockedStreams_);
+    unblockedStreams_.clear();
+    return std::span<const std::uint32_t>(takenUnblockedStreams_.data(), takenUnblockedStreams_.size());
 }
 
 // =============================================================================
@@ -87,13 +94,30 @@ void Http2Connection::appendFrame(
     }
 }
 
-void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
+void Http2Connection::appendGoawayFrame(
+    std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug) {
     std::array<char, 8> payload;
-    auto* out = http2WriteGoawayPayload(payload.data(), lastStreamId_, error);
-    closing_ = true;
+    auto* out = http2WriteGoawayPayload(payload.data(), lastStreamId, error);
     appendFrame(
         Http2FrameType::kGoaway, 0, 0,
         std::string_view(payload.data(), static_cast<std::size_t>(out - payload.data())), debug);
+}
+
+void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
+    closing_ = true;
+    appendGoawayFrame(lastStreamId_, error, debug);
+}
+
+void Http2Connection::beginDrain() {
+    // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
+    // stream id WITHOUT closing -- streams already started keep running, and HEADERS
+    // for a stream above the advertised id are refused in processHeaders.
+    if (draining_ || closing_) {
+        return;
+    }
+    draining_ = true;
+    goawayLastStreamId_ = lastStreamId_;
+    appendGoawayFrame(lastStreamId_, Http2ErrorCode::kNoError, "server draining");
 }
 
 bool Http2Connection::applySettingsPayload(std::string_view payload) {
@@ -497,9 +521,11 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
 
-    // TODO(sans-io): graceful-drain refused-stream handling depends on beginGoaway
-    // wiring (draining_/goawayLastStreamId_), ported when the submit path lands.
-    auto* stream = createStream(header.streamId);
+    // While draining, a stream above the id we advertised in GOAWAY must not be
+    // processed (RFC 9113 §6.8); route it through the refused-stream path so its
+    // header block is still decoded (to keep HPACK in sync) and then RST'd.
+    const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
+    auto* stream = drainRefused ? nullptr : createStream(header.streamId);
     lastStreamId_ = header.streamId;
     const bool refusedStream = stream == nullptr;
     if (refusedStream) {
@@ -970,6 +996,75 @@ void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCod
 void Http2Connection::beginGoaway(std::uint32_t errorCode) {
     appendGoaway(static_cast<Http2ErrorCode>(errorCode));
     closing_ = true;
+}
+
+bool Http2Connection::seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body) {
+    // 1:1 port of the coroutine session's seedUpgradedStream, with queueReady replaced
+    // by emitRequestHeaders (the owner dispatches off the events).
+    auto* stream = createStream(1);
+    if (stream == nullptr) {
+        return false;
+    }
+    lastStreamId_ = 1;
+    stream->setRequestMethod(parsed.request.method());
+    stream->assignRequestPath(parsed.request.target());
+    const auto host = requestKnownHeader(parsed.request, RequestKnownHeader::kHost);
+    if (!host.empty()) {
+        stream->assignRequestAuthority(host);
+        stream->markAuthority();
+        stream->markHost();
+    }
+    stream->markMethod();
+    stream->markScheme(80);
+    stream->markPath();
+    if (!parsed.chunked && parsed.contentLength != 0) {
+        if (body.size() != parsed.contentLength) {
+            return false;
+        }
+        if (!stream->setContentLength(parsed.contentLength)) {
+            return false;
+        }
+    }
+    if (!body.empty()) {
+        stream->assignRequestBody(body);
+        stream->setReceivedBodyBytes(body.size());
+    }
+    for (const auto& header : parsed.request.headers()) {
+        if (http2IsForbiddenUpgradedRequestHeader(header.name())) {
+            continue;
+        }
+        if (!stream->appendRequestHeader(
+            header.name(),
+            header.value(),
+            classifyRequestHeader(header.name()))) {
+            return false;
+        }
+    }
+    stream->markHeadersDecoded();
+    stream->markPeerEndStream();
+    stream->markBodyEnded();
+    emitRequestHeaders(*stream);
+    return true;
+}
+
+bool Http2Connection::beginUpgraded(
+    const HttpServerParseResult& parsed, std::string_view settingsPayload, std::string_view body) {
+    // h2c upgrade (RFC 7540 §3.2), mirroring the coroutine runUpgraded: apply the
+    // HTTP2-Settings payload as the peer's initial SETTINGS (the real first SETTINGS
+    // still arrives after the preface, so receivedFirstSettings_ stays false), seed
+    // stream 1 from the upgraded h1 request, answer with our SETTINGS + a SETTINGS
+    // ACK for the upgrade payload, and expect the client connection preface next.
+    if (!applySettingsPayload(settingsPayload)) {
+        return false;  // GOAWAY queued, closing_ set by appendGoaway
+    }
+    if (!seedUpgradedStream(parsed, body)) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid upgraded request");
+        return false;
+    }
+    queueLocalSettings();
+    appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
+    expectClientPreface();
+    return true;
 }
 
 void Http2Connection::queueLocalSettings() {
