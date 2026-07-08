@@ -539,3 +539,82 @@ RUVIA_TEST(http2_connection_unpin_frees_completed_stream) {
     conn.unpinStream(1);
     RUVIA_CHECK(conn.stream(1) == nullptr);
 }
+
+// RFC 8441 Extended CONNECT: a CONNECT + :protocol=websocket head emits kRequestHeaders
+// with NO kRequestEnd (the tunnel stays open), and the stream carries the
+// extendedConnectWebSocket mark for the owner's route policy. After the owner marks the
+// tunnel, submitWebSocketHandshake answers 200 WITHOUT END_STREAM, tunnel DATA flows as
+// kRequestBodyChunk events (no content-length required), and submitData carries frames
+// back on the still-open stream.
+RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":protocol", "websocket");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/ws");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    HpackEncoder::encodeHeader(block, "sec-websocket-version", "13");
+    const auto h = headersFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(block.data(), block.size()));
+    conn.feed(std::string_view(h.data(), h.size()));
+
+    bool sawHeaders = false;
+    bool sawEnd = false;
+    for (;;) {
+        const auto event = conn.nextEvent();
+        if (event.kind == Http2Event::Kind::kNone) break;
+        if (event.kind == Http2Event::Kind::kRequestHeaders && event.streamId == 1) sawHeaders = true;
+        if (event.kind == Http2Event::Kind::kRequestEnd) sawEnd = true;
+    }
+    RUVIA_CHECK(sawHeaders);
+    RUVIA_CHECK(!sawEnd);  // the tunnel must stay open
+
+    auto* stream = conn.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->extendedConnectWebSocket());
+
+    // Owner route policy admitted a WebSocket route: mark the tunnel and answer 200.
+    stream->markWebSocketTunnel();
+    conn.consumeOutput(conn.pendingOutput().size());
+    conn.submitWebSocketHandshake(1, "chat");
+
+    const auto out = conn.pendingOutput();
+    RUVIA_CHECK(out.size() > 9);
+    const auto head = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(head.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK_EQ(head.streamId, static_cast<std::uint32_t>(1));
+    RUVIA_CHECK((head.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
+    RUVIA_CHECK((head.flags & ruvia::detail::kHttp2FlagEndStream) == 0);  // stream open
+    conn.consumeOutput(out.size());
+
+    // Inbound tunnel bytes (a would-be masked frame) surface as body chunks even with
+    // no content-length: the tunnel is exempt from body accounting.
+    char data[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(data, 4, Http2FrameType::kData, 0, 1);
+    std::memcpy(data + 9, "\x81\x80\x01\x02", 4);
+    conn.feed(std::string_view(data, sizeof(data)));
+    bool sawChunk = false;
+    for (;;) {
+        const auto event = conn.nextEvent();
+        if (event.kind == Http2Event::Kind::kNone) break;
+        if (event.kind == Http2Event::Kind::kRequestBodyChunk && event.streamId == 1 &&
+            event.bytes.size() == 4) {
+            sawChunk = true;
+        }
+    }
+    RUVIA_CHECK(sawChunk);
+
+    // Outbound tunnel frames ride submitData on the still-open stream.
+    conn.consumeOutput(conn.pendingOutput().size());
+    RUVIA_CHECK(conn.submitData(1, "\x81\x02hi", false) == Http2SubmitResult::kOk);
+    const auto frameOut = conn.pendingOutput();
+    const auto dataHead = ruvia::detail::http2ParseFrameHeader(frameOut.substr(0, 9));
+    RUVIA_CHECK_EQ(dataHead.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK((dataHead.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
+    RUVIA_CHECK(frameOut.substr(9) == std::string_view("\x81\x02hi"));
+}

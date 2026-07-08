@@ -14,6 +14,7 @@
 #include "Http2HeaderBlock.h"
 #include "Http2RequestHeaders.h"
 #include "Http2ResponseHeaders.h"
+#include "Http2WebSocketHandshake.h"
 #include "Http2WindowUpdate.h"
 
 namespace ruvia::detail {
@@ -938,6 +939,19 @@ Http2SubmitResult Http2Connection::submitData(
         return Http2SubmitResult::kBlocked;
     }
     return Http2SubmitResult::kOk;
+}
+
+void Http2Connection::submitWebSocketHandshake(std::uint32_t streamId, std::string_view subprotocol) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return;
+    }
+    http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol);
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        /*endStream=*/false);
+    http2ReleaseResponseHeaderBlock(*stream);
 }
 
 void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCode) {

@@ -4,6 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "net/http2/Http2FramePhase.h"
 #include "net/http2/Http2HeaderContinuation.h"
 #include "net/http2/Http2HeaderDecode.h"
 #include "net/http2/Http2Upgrade.h"
