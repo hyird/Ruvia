@@ -24,7 +24,7 @@
 #include "net/http2/Http2FrameCodec.h"
 #include "net/http2/Http2FrameTypes.h"
 #include "net/http2/Http2Hpack.h"
-// Instantiating Http2ServerSession pulls in its response-write .inl templates, which
+// The umbrella include order mirrors the production instantiation TU, whose helpers
 // reference free-function helpers (ensureFileChunkBuffer, setRetryAfterSeconds, ...)
 // by non-dependent name — so those must be visible first. Mirror the exact include
 // order of the production instantiation TU (HttpServerAccept.cpp): HttpResponseWriter.h
@@ -32,10 +32,7 @@
 #include "HttpResponseFileAccess.h"
 #include "net/server/HttpResponseWriter.h"
 #include "net/server/HttpServerSessionUtils.h"
-// The accept loop now runs the sans-I/O session, so the umbrella no longer pulls in
-// the coroutine Http2ServerSession; include it directly while these tests still
-// exercise it (they are ported/retired when the coroutine stack is deleted).
-#include "net/http2/Http2ServerSession.h"
+#include "net/server/Http2SansIoSession.h"
 #include "net/server/ConnectionScanner.h"
 #include "router/RouteTable.h"
 #include "runtime/AsioAwait.h"
@@ -61,7 +58,7 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
     return bytes;
 }
 
-// Drives a real Http2ServerSession as the peer: completes the handshake, sends a
+// Drives the real sans-I/O h2 server session as the peer: completes the handshake, sends a
 // body-less request on stream 1, then sends a DATA frame on that now-ended stream.
 // That DATA frame is dropped by the server (RFC 9113 6.9.1: it is counted against
 // the connection flow-control window even though the stream is gone). Returns every
@@ -85,19 +82,11 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::HttpServerOptions options;
             ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2ServerSession<tcp::socket> session(
-                sock,
-                sock,
-                worker,
-                routes,
-                nullptr,
-                nullptr,
-                nullptr,
-                options,
-                scannerEntry,
-                "127.0.0.1",
-                nullptr);
-            co_await ruvia::detail::taskAsAwaitable(session.run());
+            ruvia::detail::Http2SansIoSessionEnv env;
+            env.options = &options;
+            env.scannerEntry = &scannerEntry;
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
         },
         asio::detached);
 
@@ -187,10 +176,11 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             ruvia::detail::RouteTable routes(worker.resource());
             ruvia::HttpServerOptions options;
             ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2ServerSession<tcp::socket> session(
-                sock, sock, worker, routes, nullptr, nullptr, nullptr, options, scannerEntry,
-                "127.0.0.1", nullptr);
-            co_await ruvia::detail::taskAsAwaitable(session.run());
+            ruvia::detail::Http2SansIoSessionEnv env;
+            env.options = &options;
+            env.scannerEntry = &scannerEntry;
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
         },
         asio::detached);
 
@@ -296,10 +286,11 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             routes.setNotFoundHandler(&largeHeaderNotFoundHandler);
             ruvia::HttpServerOptions options;
             ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2ServerSession<tcp::socket> session(
-                sock, sock, worker, routes, nullptr, nullptr, nullptr, options, scannerEntry,
-                "127.0.0.1", nullptr);
-            co_await ruvia::detail::taskAsAwaitable(session.run());
+            ruvia::detail::Http2SansIoSessionEnv env;
+            env.options = &options;
+            env.scannerEntry = &scannerEntry;
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
         },
         asio::detached);
 
@@ -399,7 +390,7 @@ ruvia::Task<ruvia::HttpResponse> missingFileBodyHandler(ruvia::Context& context)
     co_return response;
 }
 
-// Drives a real Http2ServerSession over loopback whose not-found handler returns a
+// Drives the real sans-I/O h2 session over loopback whose not-found handler returns a
 // file-body response that cannot be delivered (truncated on disk, or the file is
 // missing). Returns the RST_STREAM error code the server sends for stream 1, or
 // std::nullopt if it emitted no RST. The connection is deliberately left open (no
@@ -423,10 +414,11 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             routes.setNotFoundHandler(handler);
             ruvia::HttpServerOptions options;
             ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2ServerSession<tcp::socket> session(
-                sock, sock, worker, routes, nullptr, nullptr, nullptr, options, scannerEntry,
-                "127.0.0.1", nullptr);
-            co_await ruvia::detail::taskAsAwaitable(session.run());
+            ruvia::detail::Http2SansIoSessionEnv env;
+            env.options = &options;
+            env.scannerEntry = &scannerEntry;
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
         },
         asio::detached);
 

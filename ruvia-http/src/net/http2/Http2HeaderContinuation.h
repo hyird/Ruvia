@@ -6,10 +6,6 @@
 
 namespace ruvia::detail {
 
-// NOTE: http2ReadFramePhase (the ConnectionScanner phase mapping for frame reads)
-// lives in ruvia-web/src/net/http2/Http2FramePhase.h -- ConnectionScanner is
-// asio-bound I/O policy, and this header is part of the asio-free protocol core.
-
 class Http2HeaderContinuation final {
 public:
     [[nodiscard]] bool active() const noexcept {
