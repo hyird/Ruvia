@@ -7,13 +7,17 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "HttpRequestInternal.h"
 #include "HttpResponseBodyAccess.h"
@@ -47,6 +51,22 @@ constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 // registered handler actually ran through the sans-I/O dispatch pipeline.
 ruvia::Task<ruvia::HttpResponse> echoHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("handler-ran");
+}
+
+// A slow handler: suspends on a timer (executor passed via the handler context) before
+// responding, so a concurrently-dispatched fast handler can finish first.
+ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx) {
+    auto* io = static_cast<asio::io_context*>(context);
+    asio::steady_timer timer(*io);
+    timer.expires_after(std::chrono::milliseconds(30));
+    co_await ruvia::detail::asyncError([&timer](auto handler) mutable {
+        timer.async_wait(std::move(handler));
+    });
+    co_return ctx.text("slow");
+}
+
+ruvia::Task<ruvia::HttpResponse> fastHandler(void*, ruvia::Context& ctx) {
+    co_return ctx.text("fast");
 }
 
 std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId, std::string_view payload) {
@@ -328,4 +348,101 @@ RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
 
     io.run();
     RUVIA_CHECK(echoed == "handler-ran");
+}
+
+// Multiplexing proof: two concurrent requests -- stream 1 to a SLOW handler, stream 3
+// to a FAST one -- must both complete, and the fast response must come back first even
+// though its request arrived second. That out-of-order completion proves the handlers
+// run concurrently rather than blocking the read/dispatch loop.
+RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::vector<std::pair<std::uint32_t, std::string>> replies;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/slow", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(&io, &slowHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.registerRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/fast", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &fastHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoBufferedSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto requestOn = [](std::uint32_t streamId, std::string_view path) {
+                std::pmr::string block(std::pmr::get_default_resource());
+                HpackEncoder::encodeHeader(block, ":method", "GET");
+                HpackEncoder::encodeHeader(block, ":path", path);
+                HpackEncoder::encodeHeader(block, ":scheme", "http");
+                HpackEncoder::encodeHeader(block, ":authority", "localhost");
+                return frame(
+                    0x1, ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    streamId, std::string_view(block.data(), block.size()));
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            if (!co_await writeAll(requestOn(1, "/slow"))) co_return;  // slow first
+            if (!co_await writeAll(requestOn(3, "/fast"))) co_return;  // fast second
+
+            while (replies.size() < 2) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) && !payload.empty()) {
+                    replies.emplace_back(header.streamId, payload);
+                }
+            }
+
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK_EQ(replies.size(), static_cast<std::size_t>(2));
+    // The fast handler (stream 3, requested second) completes and replies first.
+    RUVIA_CHECK_EQ(replies[0].first, static_cast<std::uint32_t>(3));
+    RUVIA_CHECK(replies[0].second == "fast");
+    RUVIA_CHECK_EQ(replies[1].first, static_cast<std::uint32_t>(1));
+    RUVIA_CHECK(replies[1].second == "slow");
 }
