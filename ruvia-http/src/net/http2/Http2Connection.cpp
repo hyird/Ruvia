@@ -758,6 +758,22 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     // Buffer all fed bytes (nghttp2_session_mem_recv semantics: the caller may drop
     // its buffer after feed). Then consume as many complete frames as are available.
     input_.append(in.data(), in.size());
+
+    // Server mode: the 24-byte client connection preface precedes the first frame
+    // (RFC 9113 §3.4). Consume + validate it before any frame parsing.
+    if (awaitingClientPreface_) {
+        constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        if (input_.size() - inputOffset_ < kClientPreface.size()) {
+            return {in.size(), Http2FeedStatus::kNeedMore};  // wait for the full preface
+        }
+        if (std::string_view(input_.data() + inputOffset_, kClientPreface.size()) != kClientPreface) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "invalid connection preface");
+            return {in.size(), Http2FeedStatus::kError};
+        }
+        inputOffset_ += kClientPreface.size();
+        awaitingClientPreface_ = false;
+    }
+
     for (;;) {
         const std::size_t available = input_.size() - inputOffset_;
         if (available < kHttp2FrameHeaderBytes) {
