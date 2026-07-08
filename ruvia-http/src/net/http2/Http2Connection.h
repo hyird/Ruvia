@@ -42,6 +42,8 @@
 
 namespace ruvia::detail {
 
+struct HttpServerParseResult;  // h1 parse result seeding an h2c-upgraded stream
+
 // Connection phase, used by the (external) I/O layer to pick an inactivity timeout.
 // A pure enum so the core never depends on ConnectionScanner (which is asio-bound).
 enum class Http2ConnectionPhase : std::uint8_t {
@@ -154,6 +156,24 @@ public:
     [[nodiscard]] bool closing() const noexcept { return closing_; }
     void beginGoaway(std::uint32_t errorCode);
 
+    // Graceful drain (server shutdown): advertise GOAWAY(NO_ERROR) at the current last
+    // stream id and keep serving streams already accepted; HEADERS for a stream above
+    // the advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent.
+    void beginDrain();
+    [[nodiscard]] bool draining() const noexcept { return draining_; }
+
+    // h2c upgrade (RFC 7540 §3.2): apply the HTTP2-Settings payload as the peer's
+    // initial SETTINGS, seed stream 1 from the parsed upgraded h1 request (emitting its
+    // kRequestHeaders/kRequestEnd events), queue local SETTINGS + the upgrade SETTINGS
+    // ACK, and expect the client preface next. Returns false with GOAWAY bytes queued
+    // (and closing() set) when the payload or upgraded request is invalid.
+    [[nodiscard]] bool beginUpgraded(
+        const HttpServerParseResult& parsed, std::string_view settingsPayload, std::string_view body);
+
+    // True while a HEADERS block is still being assembled (awaiting CONTINUATION); the
+    // I/O layer maps this to its tight header-read inactivity timeout.
+    [[nodiscard]] bool headerBlockInProgress() const noexcept { return headerContinuation_.active(); }
+
     // Emit connection preface SETTINGS (call once after construction). Bytes land in
     // the outbound buffer.
     void queueLocalSettings();
@@ -178,8 +198,12 @@ private:
     void appendFrame(
         Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
         std::string_view first, std::string_view second = {});
+    void appendGoawayFrame(std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug);
     void appendGoaway(Http2ErrorCode error, std::string_view debug = {});
     void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
+
+    // Seed stream 1 from the parsed h1 request of an h2c upgrade (RFC 7540 §3.2).
+    [[nodiscard]] bool seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body);
 
     // sans-I/O replacement for resumeSendWindowWaiters: a WINDOW_UPDATE/SETTINGS that
     // opened the send window drains buffered response bodies (pendingSends_) into the
@@ -262,12 +286,15 @@ private:
     // flow-control-deferred response bodies + streams that just fully drained
     std::pmr::vector<Http2PendingSend> pendingSends_;
     std::pmr::vector<std::uint32_t> unblockedStreams_;
+    std::pmr::vector<std::uint32_t> takenUnblockedStreams_;  // takeUnblockedStreams double buffer
 
     // streams with an in-flight handler; closeStream keeps these alive (see pinStream)
     std::pmr::vector<std::uint32_t> pinnedStreams_;
 
     std::uint32_t localMaxFrameSize_{kHttp2DefaultMaxFrameSize};
     std::uint32_t lastStreamId_{0};
+    bool draining_{false};
+    std::uint32_t goawayLastStreamId_{0};
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
     Http2ConnectionPhase phase_{Http2ConnectionPhase::kIdle};

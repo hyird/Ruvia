@@ -1,26 +1,28 @@
 #pragma once
 
-// WebSocket transport for the sans-I/O HTTP/2 session (RFC 8441 Extended CONNECT).
+// Per-stream async plumbing for the sans-I/O HTTP/2 session.
 //
-// Mirrors Http2WebSocketTransport (the coroutine session's transport) but drives an
-// Http2Connection through its submit* API: outbound WebSocket frames become DATA
-// submits (the session's single writer flushes them), and inbound tunnel bytes arrive
-// through a per-stream Http2WsInboundPipe that the session's reader fills from
-// kRequestBodyChunk events. readMore suspends on the pipe's signal timer until the
-// reader pushes bytes or ends the pipe (peer END_STREAM, RST, or connection teardown).
+// Inbound bytes for a stream consumed asynchronously (a WebSocket tunnel or a
+// streaming request body) live in the stream's own body-chunk queue -- the same
+// Http2BodyQueue the coroutine session's readBodyChunk popped, so the core's
+// backlog accounting (http2AccountDataBody's queued-bytes cap) keeps bounding a
+// consumer that falls behind. The session's reader enqueues each kRequestBodyChunk
+// and wakes the stream's Http2SansIoStreamSignal; the consumers here pop chunks,
+// mirroring readBodyChunk's semantics exactly (reset/EOF -> end of stream).
 //
-// The same-executor discipline of the session (reader, writer and handlers all run on
-// the connection's executor) means pipe accesses never race: a wake via signal.cancel()
-// while nothing is waiting is a no-op, and readMore always re-checks data before
-// suspending, so no wakeup is lost.
+// The same-executor discipline of the session (reader, writer and handlers all run
+// on the connection's executor) means these never race: a wake via signal.cancel()
+// while nothing is waiting is a no-op, and every consumer re-checks its condition
+// before suspending, so no wakeup is lost.
 
 #include <cstdint>
-#include <memory_resource>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
 #include <asio/steady_timer.hpp>
 
+#include "net/http2/Http2BodyQueue.h"
 #include "net/http2/Http2Connection.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"
@@ -28,16 +30,14 @@
 
 namespace ruvia::detail {
 
-// Inbound byte pipe for one WebSocket tunnel stream. Created by the session's reader
-// when it admits the tunnel (so no DATA chunk can slip past before the handler runs)
-// and destroyed by the handler task when the WebSocket session ends.
-struct Http2WsInboundPipe final {
+// Wake signal for one dispatched stream: readers of the stream's body queue (and
+// window-blocked response-body writers) suspend on it; the session's reader wakes it
+// on new chunks / body end / RST / send-window reopen, and ends it at teardown.
+struct Http2SansIoStreamSignal final {
     template <typename Executor>
-    Http2WsInboundPipe(Executor executor, std::pmr::memory_resource* resource)
-        : data(resource), signal(executor) {}
+    explicit Http2SansIoStreamSignal(Executor executor) : signal(executor) {}
 
-    void push(std::string_view bytes) {
-        data.append(bytes.data(), bytes.size());
+    void wake() {
         signal.cancel();
     }
 
@@ -46,23 +46,33 @@ struct Http2WsInboundPipe final {
         signal.cancel();
     }
 
-    std::pmr::string data;        // bytes not yet drained by readMore
-    asio::steady_timer signal;    // wakes a suspended readMore (cancel() = wake)
-    bool ended{false};            // peer END_STREAM / RST / connection teardown
+    [[nodiscard]] Task<void> wait() {
+        signal.expires_at((asio::steady_timer::time_point::max)());
+        (void)co_await asyncError([this](auto handler) mutable {
+            signal.async_wait(std::move(handler));
+        });
+    }
+
+    asio::steady_timer signal;
+    bool ended{false};  // session teardown: no more events will arrive
 };
 
+// WebSocket transport (RFC 8441 Extended CONNECT) over the sans-I/O core. Mirrors the
+// coroutine Http2WebSocketTransport: readMore pops tunnel DATA from the stream's body
+// queue (the coroutine's readBodyChunk), writeFrame submits DATA through the core (a
+// window-blocked remainder is queued in-order inside the core) and wakes the writer.
 template <typename Executor>
 class Http2SansIoWsTransport final {
 public:
     Http2SansIoWsTransport(
         Http2Connection& connection,
         std::uint32_t streamId,
-        Http2WsInboundPipe& pipe,
+        Http2SansIoStreamSignal& signal,
         asio::steady_timer& writeSignal,
         Executor executor) noexcept
         : connection_(&connection),
           streamId_(streamId),
-          pipe_(&pipe),
+          signal_(&signal),
           writeSignal_(&writeSignal),
           executor_(executor) {}
 
@@ -72,18 +82,21 @@ public:
 
     [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
         for (;;) {
-            if (!pipe_->data.empty()) {
-                buffer.append(pipe_->data.data(), pipe_->data.size());
-                pipe_->data.clear();
-                co_return true;
-            }
-            if (pipe_->ended) {
+            auto* stream = connection_->stream(streamId_);
+            if (stream == nullptr || stream->isReset()) {
                 co_return false;
             }
-            pipe_->signal.expires_at((asio::steady_timer::time_point::max)());
-            co_await asyncError([this](auto handler) mutable {
-                pipe_->signal.async_wait(std::move(handler));
-            });
+            if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
+                buffer.append(chunk.data(), chunk.size());
+                co_return true;
+            }
+            if (http2HasQueuedStreamBodyChunk(*stream)) {
+                continue;
+            }
+            if (stream->bodyEnded() || signal_->ended) {
+                co_return false;
+            }
+            co_await signal_->wait();
         }
     }
 
@@ -91,9 +104,6 @@ public:
         std::string_view header,
         std::string_view payload,
         bool endStream) {
-        // submitData only appends to the connection's outbound buffer (a window-blocked
-        // remainder is queued in-order inside the core), so two submits keep the frame
-        // contiguous on the wire; the writer is then woken to flush.
         auto result = connection_->submitData(streamId_, header, payload.empty() && endStream);
         if (!payload.empty()) {
             result = connection_->submitData(streamId_, payload, endStream);
@@ -108,9 +118,46 @@ public:
 private:
     Http2Connection* connection_;
     std::uint32_t streamId_;
-    Http2WsInboundPipe* pipe_;
+    Http2SansIoStreamSignal* signal_;
     asio::steady_timer* writeSignal_;
     Executor executor_;
+};
+
+// Streaming request-body reader for the sans-I/O session; the BodyReader facade wraps
+// it for handler consumption. Chunk-for-chunk port of the coroutine readBodyChunk. A
+// null signal means the body already ended when dispatch started (END_STREAM on the
+// request HEADERS, or an h2c-upgrade seeded body), so read never needs to wait.
+class Http2SansIoRequestBodyReader final {
+public:
+    Http2SansIoRequestBodyReader(
+        Http2Connection& connection,
+        std::uint32_t streamId,
+        Http2SansIoStreamSignal* signal) noexcept
+        : connection_(&connection), streamId_(streamId), signal_(signal) {}
+
+    [[nodiscard]] Task<std::optional<std::string_view>> read() {
+        for (;;) {
+            auto* stream = connection_->stream(streamId_);
+            if (stream == nullptr || stream->isReset()) {
+                co_return std::nullopt;
+            }
+            if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
+                co_return chunk;
+            }
+            if (http2HasQueuedStreamBodyChunk(*stream)) {
+                continue;
+            }
+            if (stream->bodyEnded() || signal_ == nullptr || signal_->ended) {
+                co_return std::nullopt;
+            }
+            co_await signal_->wait();
+        }
+    }
+
+private:
+    Http2Connection* connection_;
+    std::uint32_t streamId_;
+    Http2SansIoStreamSignal* signal_;
 };
 
 }  // namespace ruvia::detail
