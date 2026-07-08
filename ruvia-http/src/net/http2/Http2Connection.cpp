@@ -891,6 +891,22 @@ void Http2Connection::submitResponseHead(
     http2ReleaseResponseHeaderBlock(*stream);
 }
 
+void Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId, const HttpResponse& head, bool bodyForbidden) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return;
+    }
+    // No auto Content-Length for a streaming body (length unknown); mirror the coroutine
+    // sink's commit(). END_STREAM only when the status/method forbids a body.
+    appendHttp2ResponseHeaders(*stream, head, 0, /*emitAutoContentLength=*/false);
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        bodyForbidden);
+    http2ReleaseResponseHeaderBlock(*stream);
+}
+
 Http2SubmitResult Http2Connection::submitData(
     std::uint32_t streamId, std::string_view chunk, bool endStream) {
     auto* stream = findStream(streamId);
