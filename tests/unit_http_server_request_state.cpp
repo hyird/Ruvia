@@ -15,8 +15,8 @@ using ruvia::detail::appendHttpsPort;
 using ruvia::detail::contentLengthExceedsLimit;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::HttpServerParser;
-using ruvia::detail::shouldKeepAlive;
-using ruvia::detail::wantsContinue;
+using ruvia::detail::http1ShouldKeepAlive;
+using ruvia::detail::http1WantsContinue;
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {
     std::pmr::string location(std::pmr::get_default_resource());
@@ -35,30 +35,30 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
 
 RUVIA_TEST(request_state_keep_alive_by_connection_header) {
     HttpServerParser parser;
-    RUVIA_CHECK(!shouldKeepAlive(
+    RUVIA_CHECK(!http1ShouldKeepAlive(
         parser.parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")));
-    RUVIA_CHECK(shouldKeepAlive(
+    RUVIA_CHECK(http1ShouldKeepAlive(
         parser.parse("GET / HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")));
 }
 
 RUVIA_TEST(request_state_keep_alive_default_by_version) {
     HttpServerParser parser;
     // HTTP/1.1 defaults to persistent; HTTP/1.0 defaults to close.
-    RUVIA_CHECK(shouldKeepAlive(parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n")));
-    RUVIA_CHECK(!shouldKeepAlive(parser.parse("GET / HTTP/1.0\r\n\r\n")));
+    RUVIA_CHECK(http1ShouldKeepAlive(parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n")));
+    RUVIA_CHECK(!http1ShouldKeepAlive(parser.parse("GET / HTTP/1.0\r\n\r\n")));
     // HTTP/1.0 can still opt in with an explicit keep-alive.
-    RUVIA_CHECK(shouldKeepAlive(parser.parse("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")));
+    RUVIA_CHECK(http1ShouldKeepAlive(parser.parse("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n")));
 }
 
 RUVIA_TEST(request_state_wants_continue) {
     HttpServerParser parser;
-    RUVIA_CHECK(wantsContinue(parser.parse(
+    RUVIA_CHECK(http1WantsContinue(parser.parse(
         "POST / HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n")));
-    RUVIA_CHECK(!wantsContinue(parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n")));
+    RUVIA_CHECK(!http1WantsContinue(parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n")));
     // A 100-continue expectation from an HTTP/1.0 client MUST be ignored: RFC 9110
     // §15.2 forbids sending any 1xx response to an HTTP/1.0 client, which would
     // misread the interim 100 as the final response.
-    RUVIA_CHECK(!wantsContinue(parser.parse(
+    RUVIA_CHECK(!http1WantsContinue(parser.parse(
         "POST / HTTP/1.0\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n")));
 }
 

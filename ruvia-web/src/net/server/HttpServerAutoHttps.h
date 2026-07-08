@@ -84,7 +84,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     // redirect and serves it for another (a Host-header cache-poisoning open
     // redirect); a browser still caches it per-origin, keeping the HTTPS memory.
     setResponseHeaderStableView(response, "Cache-Control", "private");
-    markConnectionClose(response);
+    http1MarkConnectionClose(response);
     return response;
 }
 

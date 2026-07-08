@@ -66,7 +66,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     HttpResponse& response,
     bool& keepAlive,
     std::size_t& requestCount) {
-    keepAlive = shouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
+    keepAlive = http1ShouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
     // RFC 9112 6.1: only an HTTP/1.1 client may be sent chunked framing. An HTTP/1.0
     // stream is delimited by the connection close instead -- no Transfer-Encoding and
     // no chunk framing -- which then forces the connection shut once the body ends.
@@ -122,7 +122,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             keepAlive,
             requestCount,
             options.keepaliveRequests,
-            requestNeedsKeepAliveSignal(parsed.request.httpVersion()));
+            http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()));
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }

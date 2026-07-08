@@ -51,7 +51,7 @@ Task<void> dispatchHttpStreamBodyRoute(
             parsed.transferCodings,
             options.maxStreamBodyBytes,
             scannerEntry,
-            (parsed.contentLength > 0 || parsed.chunked) && wantsContinue(parsed));
+            (parsed.contentLength > 0 || parsed.chunked) && http1WantsContinue(parsed));
         emplaceBodyReaderFacade(bodyReader, *streamReader);
         response = co_await routes.dispatch(
             parsed.request,
@@ -86,7 +86,7 @@ Task<void> dispatchHttpStreamBodyRoute(
         requestCount,
         options.keepaliveRequests,
         streamReader->finished(),
-        requestNeedsKeepAliveSignal(parsed.request.httpVersion()),
+        http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()),
         readBuffer,
         usedBytes,
         consumedBytes,

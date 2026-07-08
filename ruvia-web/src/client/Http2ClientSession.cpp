@@ -381,7 +381,6 @@ void Http2ClientSession::onResponseHead(std::uint32_t streamId) {
     }
     stream->responseBodyAllowed =
         stream->responseBodyAllowed && http2ResponseStatusMayHaveBody(status);
-    stream->remoteEndFromHeaders = core->peerEndStream();
     touchStreamDeadline(*stream);
     // For a streaming request, deliver the response headers to fetchStream as soon as
     // they arrive (the body then flows through streamReadChunk).
@@ -859,9 +858,10 @@ Task<FetchResponse> Http2ClientSession::fetch(
         const auto id = stream->id;
 
         co_await StreamAwaiter{stream};
-        if (stream->remoteEndFromHeaders && !stream->failed) {
+        if (stream->remoteEnded && !stream->failed) {
             // Keep the stream visible for one I/O turn after END_STREAM so same-burst late
             // frames can still fail the fetch instead of racing with destroyStream().
+            // This covers both header-only responses and trailer-terminated responses.
             co_await IoTurnAwaiter{this};
         }
 

@@ -7,9 +7,9 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | Directory | Target | Public alias | Purpose |
 | --- | --- | --- | --- |
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Coroutine task type, PMR memory resources, mimalloc integration, and small dependency-light helpers. |
-| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero asio): HTTP types, h1 parser + `Http1Connection`, the shared HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, the outbound client's protocol/policy half + public API, response helpers, cookies, cache helpers, body streams. |
-| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, the server + outbound-client I/O drivers over the http cores (TLS, streaming, WebSocket routes, `Context::fetch`/`proxy`), and optional DB/Redis/JWT integrations. |
-| `ruvia-edge/` | `ruvia-edge` | `ruvia::edge` | Edge product target built on `ruvia::http` without linking `ruvia::web`. |
+| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero asio): HTTP message types, header token/value helpers, HTTP/1 parser + server semantics, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, body framing/streams, cookie/cache/range/conditional/negotiation helpers, and the outbound client's public API + protocol core. |
+| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, server and outbound-client I/O drivers over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, `Context::fetch`/`proxy`), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
+| `ruvia-edge/` | `ruvia-edge` | `ruvia::edge` | Edge product target built directly on `ruvia::http`, without linking `ruvia::web` or using `Context`, `Router`, controllers, route macros, or middleware. |
 
 Dependency direction:
 
@@ -17,6 +17,17 @@ Dependency direction:
 ruvia-web  -> ruvia-http -> ruvia-core
 ruvia-edge -> ruvia-http -> ruvia-core
 ```
+
+## Layer Boundary
+
+The boundary is decided by who owns the behavior, not by whether a file touches HTTP header names.
+
+- `ruvia-core` owns framework-independent primitives: coroutine task machinery, PMR resources, ASCII/base64/constant-time/number/path helpers, and other dependency-light utilities.
+- `ruvia-http` owns HTTP itself: wire bytes, message shape, header syntax helpers, parser/framing rules, connection persistence, `Expect: 100-continue`, upgrade handshakes, HTTP/2 frames/settings/flow control, WebSocket frames, and protocol errors.
+- `ruvia-web` owns the application framework built on HTTP: route dispatch, middleware, controllers, `Context`, validation, sessions, CSRF, JWT integration, CORS policy, security-header policy, rate limits, static-file indexing, AutoHTTPS redirect, DB/Redis integrations, and the socket/TLS/Asio runtime drivers.
+- `ruvia-edge` owns edge product behavior. It may call `ruvia::http` directly, but it must not depend on `ruvia::web` abstractions.
+
+If code decides how bytes are parsed, framed, serialized, kept alive, upgraded, or rejected by the HTTP/WebSocket/HTTP2 protocols, it belongs in `ruvia-http`. If code decides what the application product does with those protocol facts, it belongs in `ruvia-web` or `ruvia-edge`.
 
 The root `CMakeLists.txt` only coordinates global options, dependency discovery, installation, package export, tests, and examples. Each library owns its own `CMakeLists.txt`, `include/`, and `src/` directory. There is no root-level source `include/`, `src/`, or `fuzz/` tree.
 
@@ -150,9 +161,11 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 ## HTTP Library
 
-`ruvia::http` is intended to be useful without the web framework, in the nghttp2 class: a pure, asio-free, sans-I/O protocol library. It owns HTTP protocol types and reusable helpers -- the h1 parser, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core, HPACK, response/cookie/cache/multipart helpers, and body streams. You feed it bytes and drive its events from any runtime.
+`ruvia::http` is intended to be useful without the web framework, in the nghttp2 class: a pure, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and server semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core, HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding, and body streams. You feed it bytes and drive its events from any runtime.
 
-It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, edge policy, or any socket/TLS I/O. The outbound HTTP client is a `ruvia::http` capability with the same split as the server: its public API (`ruvia/http/HttpClient.h`) and sans-I/O protocol/policy half (response parsing, redirect rules, content decoding) live in `ruvia::http`, while the asio runtime driver over them ships in `ruvia::web` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`.
+It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, edge policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web` or `ruvia::edge`.
+
+The outbound HTTP client follows the same split as the server: its public API (`ruvia/http/HttpClient.h`) and sans-I/O HTTP client core (response parsing, transfer/content decoding, generic redirect replay checks, and HTTP/2 client protocol state) live in `ruvia::http`, while the Asio/TLS runtime driver over them ships in `ruvia::web` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`.
 
 ## Edge Target
 
@@ -169,31 +182,31 @@ It does not own `App`, `Context`, `Controller`, `Router`, middleware, model vali
 | `RUVIA_ENABLE_REDIS` | `OFF` | Build Redis integration into `ruvia-web`. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Build JWT helpers into `ruvia-web`. |
 
-The outbound HTTP client is a `ruvia-http` capability (public API + sans-I/O protocol/policy; no build switch); its asio runtime driver ships in `ruvia-web`, mirroring the server-side split.
+The outbound HTTP client is a `ruvia-http` capability (public API + sans-I/O HTTP client core; no build switch); its Asio/TLS runtime driver ships in `ruvia-web`, mirroring the server-side split.
 
 ## Repository Layout
 
 ```text
 .
-├── CMakeLists.txt
-├── ruvia-core/
-│   ├── CMakeLists.txt
-│   ├── include/
-│   └── src/
-├── ruvia-http/
-│   ├── CMakeLists.txt
-│   ├── include/
-│   └── src/
-├── ruvia-web/
-│   ├── CMakeLists.txt
-│   ├── include/
-│   └── src/
-├── ruvia-edge/
-│   ├── CMakeLists.txt
-│   └── src/
-├── examples/
-├── tests/
-└── vcpkg.json
+|-- CMakeLists.txt
+|-- ruvia-core/
+|   |-- CMakeLists.txt
+|   |-- include/
+|   `-- src/
+|-- ruvia-http/
+|   |-- CMakeLists.txt
+|   |-- include/
+|   `-- src/
+|-- ruvia-web/
+|   |-- CMakeLists.txt
+|   |-- include/
+|   `-- src/
+|-- ruvia-edge/
+|   |-- CMakeLists.txt
+|   `-- src/
+|-- examples/
+|-- tests/
+`-- vcpkg.json
 ```
 
 The only local build directory is `build/`. If CMake cache or generated files become suspicious, delete `build/` and configure again. Vcpkg installation trees, CodeGraph indexes, and local agent directories are ignored.

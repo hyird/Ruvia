@@ -97,7 +97,6 @@ private:
         bool headersComplete{false};
         bool localEndSent{false};       // we sent (or queued) END_STREAM for the request
         bool remoteEnded{false};        // server sent END_STREAM
-        bool remoteEndFromHeaders{false};
         bool failed{false};
         bool completed{false};          // the fetch/fetchStream waiter has been signaled
         bool slotReleased{false};       // stream no longer counts toward MAX_CONCURRENT_STREAMS
