@@ -1,6 +1,6 @@
 
 #include "HttpClientPool.h"
-#include "HttpClientConfigValidation.h"
+#include "client/HttpClientConfigValidation.h"
 #include "HttpClientTlsVerification.h"
 #include "ruvia/memory/PmrResource.h"
 

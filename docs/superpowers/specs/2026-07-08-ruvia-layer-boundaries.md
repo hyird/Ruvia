@@ -28,7 +28,7 @@ The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable from any run
 - h2: `Http2Connection` — **one connection state machine for BOTH roles**: server (accepts peer streams, `submit*` responses, RFC 8441 WebSocket handshake, GOAWAY drain, h2c upgrade seeding) and client (`Http2Role::kClient`: odd streams, request heads, RESPONSE decode with 1xx handling, consume-paced receive windows). Frame codec, HPACK, flow control, stream state underneath.
 - ws: `WsConnection` sans-I/O core + the pure frame codec/assembler/validation/permessage-deflate shared by every driver.
 - Message model (`HttpRequest`/`HttpResponse`, headers, methods, status, cookies-parsing, body streams, multipart), content coding, protocol value helpers (Cache-Control, HTTP-date, Range, Accept).
-- **Client note**: `ruvia::http` contains the client's *protocol engine* (the h2 core's client role + the h1 parser + message types), NOT a ready-to-use client runtime. The runtime is web (below); the public surface `ruvia/http/HttpClient.h` is installed by **ruvia-web**.
+- **Outbound client (http-owned, sans-I/O like everything here)**: the public surface `ruvia/http/HttpClient.h` (installed by http) and the client's protocol/policy half in `src/client/` -- response parsing, redirect rules, content decoding, streaming decoder, config validation -- plus the h2 core's client role. Same split as the server: the asio runtime driver lives one layer up (web, below); edge builds its own driver on these pieces when it needs one.
 - **MUST NOT own**: `Context`, `Router`, `Controller`, route macros, middleware, `App`, DB/Redis/JWT integration, CDN policy, sockets, TLS, timers, or any `#include <asio...>`.
 - Deliberate boundary artifacts hosted here (documented in-file, not drift): `router/RouteResolution.h` (the http-side dispatcher-contract POD; `RouteEntry` only as an opaque pointer) and the `HttpErrorHandler`/`HttpNotFoundHandler` aliases in `ruvia/http/Error.h` (web hook types next to `HttpErrorInfo`; never invoked by http).
 
@@ -38,7 +38,7 @@ The most basic HTTP/1.1, HTTP/2, WebSocket protocol library, usable from any run
 - `src/net/server/HttpServerStreamSession.inl` — the h1 server session (an I/O driver over the single pure parser; not a duplicate protocol implementation).
 - `src/net/ws/` — `WebSocketConnection<Transport>` + socket/h2 transports + the h1 101 handshake writer.
 - `src/net/body/` — asio streaming request-body readers.
-- `src/client/` — the outbound HTTP client **runtime**: `HttpClientPool` (h1), `Http2ClientSession` (a thin driver over the shared `Http2Connection` client role), `HttpClientRegistry`, TLS verification, redirects, deadlines, streaming sources. Surfaced via `Context::fetch` / `fetchStream` / `proxy`.
+- `src/client/` — the outbound HTTP client **runtime driver**: `HttpClientPool` (h1), `Http2ClientSession` (a thin driver over the shared `Http2Connection` client role), `HttpClientRegistry`, TLS verification, deadlines, socket streaming sources. Drives the http-owned client pieces; surfaced via `Context::fetch` / `fetchStream` / `proxy`.
 
 ### ruvia-edge — the CDN / reverse-proxy product
 Origin selection, cache store/key policy, stale-while-revalidate, purge, edge rules, reverse-proxy assembly over `ruvia-http` primitives (and its own drivers when built). **MUST NOT** depend on `ruvia-web`, `App`, `Router`, middleware, or `Context`. Currently an empty skeleton by decision.
@@ -47,7 +47,7 @@ Origin selection, cache store/key policy, stale-while-revalidate, purge, edge ru
 
 `scripts/check_layer_boundaries.sh` runs the checks below; the `ruvia_check_boundaries` CMake target (built with tests) executes it, so a violation fails the build. Manual anytime: `bash scripts/check_layer_boundaries.sh`.
 
-1. **http is asio-free**: no `#include <asio` / `#include "asio` / `asio::` anywhere under `ruvia-http/` (covers `Http2Connection.h` / `WsConnection.h` transitively, since the whole target is clean).
+1. **http is asio-free — everything, `src/client/` included**: no `#include <asio` / `#include "asio` / `asio::` anywhere under `ruvia-http/` (covers `Http2Connection.h` / `WsConnection.h` / `Http1Connection.h` transitively, since the whole target is clean).
 2. **http does not reach the framework**: no include of `ruvia/router/...`, `ruvia/http/Context.h`, `ruvia/app/App.h`, or other web-hosted `ruvia/app/...` headers (core's `ruvia/app/Task.h` + `ruvia/app/detail/...` are allowed).
 3. **edge stays web-free**: `ruvia-edge/CMakeLists.txt` does not link `ruvia-web`/`ruvia::web`; edge sources include no `Context`/router/app headers.
 4. **docs carry no stale ownership**: `README.md` / `AGENTS.md` / this spec must not attribute the client runtime to the http target nor reference the deleted coroutine h2 server session class by name.

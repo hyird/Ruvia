@@ -2,13 +2,16 @@
 
 // Outbound HTTP client PUBLIC SURFACE (configuration, fetch options, responses).
 //
-// OWNERSHIP: this API ships with ruvia::web. The client RUNTIME (connection pools,
-// TLS, timeouts, redirects, deadlines -- HttpClientPool / Http2ClientSession /
-// HttpClientRegistry in ruvia-web/src/client/) is web-layer I/O + policy, surfaced
-// through Context::fetch / Context::fetchStream / Context::proxy. ruvia::http alone
-// deliberately contains NO ready-to-use client runtime; what it provides is the
-// PROTOCOL ENGINE a client is built from (the shared sans-I/O Http2Connection in
-// client role, the h1 parser, and the message model), which any runtime can drive.
+// OWNERSHIP: the outbound HTTP client is a ruvia::http capability -- it knows the
+// HTTP protocol, never the web framework (no Context/Router/App). Like everything in
+// ruvia::http it is sans-I/O: this public surface plus the client's protocol/policy
+// half (response parsing, redirect rules, content decoding, config validation in
+// ruvia-http/src/client/) and the shared Http2Connection client role are asio-free
+// (grep-enforced). The asio RUNTIME DRIVER over these pieces -- HttpClientPool,
+// Http2ClientSession, HttpClientRegistry in ruvia-web/src/client/ -- follows the same
+// split as the server (protocol in http, I/O driver above), and ruvia::web surfaces
+// it as Context::fetch / fetchStream / proxy; ruvia::edge builds its own driver on
+// the same http pieces when it needs one.
 
 #include <array>
 #include <chrono>

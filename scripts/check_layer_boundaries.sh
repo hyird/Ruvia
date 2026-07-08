@@ -14,8 +14,9 @@ err() {
 
 SRC_GLOBS=(--include='*.h' --include='*.cpp' --include='*.inl')
 
-# 1. ruvia-http is asio-free (covers Http2Connection.h / WsConnection.h transitively:
-#    the whole target carries no asio include or symbol).
+# 1. ruvia-http is asio-free -- EVERYTHING, src/client/ included (the client's pure
+#    protocol/policy half lives there; its asio runtime driver is ruvia-web/src/client).
+#    Covers Http2Connection.h / WsConnection.h / Http1Connection.h transitively.
 hits=$(grep -rnE '#include[[:space:]]*[<"]asio|\basio::' ruvia-http "${SRC_GLOBS[@]}" || true)
 [ -n "$hits" ] && err "ruvia-http must not reference asio" "$hits"
 
@@ -39,10 +40,8 @@ hits=$(grep -rnE '#include[[:space:]]*"(ruvia/router/|ruvia/http/Context\.(h|inl
 DOCS=(README.md AGENTS.md docs/superpowers/specs/2026-07-08-ruvia-layer-boundaries.md)
 hits=$(grep -n 'Http2ServerSession' "${DOCS[@]}" || true)
 [ -n "$hits" ] && err "docs reference the deleted coroutine h2 server session" "$hits"
-hits=$(grep -n 'ruvia-http/src/client' "${DOCS[@]}" || true)
-[ -n "$hits" ] && err "docs claim a client under ruvia-http/src/client" "$hits"
-hits=$(grep -nE 'client belongs to .ruvia-http|client 固定归属 .?ruvia-http' "${DOCS[@]}" || true)
-[ -n "$hits" ] && err "docs claim the client runtime belongs to ruvia-http" "$hits"
+hits=$(grep -nE 'client.*(belongs to|归属)[^。.]*web|HttpClient\.h[^。.]*(installed by[^.。]*web|由[^。.]*web[^。.]*安装)' "${DOCS[@]}" || true)
+[ -n "$hits" ] && err "docs attribute the outbound client's ownership to web (it is http-owned; only the runtime driver lives in ruvia-web/src/client)" "$hits"
 
 if [ "$fail" -ne 0 ]; then
     exit 1

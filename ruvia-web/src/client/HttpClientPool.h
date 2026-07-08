@@ -22,7 +22,7 @@
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
 #include "HttpClientBackend.h"
-#include "HttpClientResponseParser.h"
+#include "client/HttpClientResponseParser.h"
 #include "PoolWaiterQueue.h"
 
 namespace ruvia::detail {

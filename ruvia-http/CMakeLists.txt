@@ -29,6 +29,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/WsConnection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
 )
 add_library(ruvia::http ALIAS ruvia-http)
 
@@ -64,6 +65,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/Error.h
     include/ruvia/http/HttpBodyStream.h
     include/ruvia/http/HttpCache.h
+    include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpCommon.h
     include/ruvia/http/HttpLimits.h
     include/ruvia/http/HttpParseTypes.h

@@ -13,8 +13,8 @@
 #include <system_error>
 #include <utility>
 
-#include "HttpClientAccess.h"
-#include "HttpClientDecodingStreamSource.h"
+#include "client/HttpClientAccess.h"
+#include "client/HttpClientDecodingStreamSource.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
