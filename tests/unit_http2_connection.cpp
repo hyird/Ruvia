@@ -618,3 +618,235 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
     RUVIA_CHECK((dataHead.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
     RUVIA_CHECK(frameOut.substr(9) == std::string_view("\x81\x02hi"));
 }
+
+namespace {
+
+using ruvia::detail::Http2Role;
+
+// Byte shuttle between two cores (no sockets): move pending output of `from` into
+// `to`, draining `to`'s events into the collectors first would lose them -- so the
+// caller passes a per-hop event sink invoked after every feed.
+template <typename OnEvent>
+void shuttleOnce(Http2Connection& from, Http2Connection& to, OnEvent&& onEvent) {
+    while (from.wantsWrite()) {
+        const auto out = from.pendingOutput();
+        std::pmr::string copy(out.data(), out.size(), std::pmr::get_default_resource());
+        from.consumeOutput(out.size());
+        (void)to.feed(std::string_view(copy.data(), copy.size()));
+        for (;;) {
+            const auto event = to.nextEvent();
+            if (event.kind == Http2Event::Kind::kNone) {
+                break;
+            }
+            onEvent(event);
+        }
+    }
+}
+
+}  // namespace
+
+// Client role end-to-end against the server core with ZERO I/O: the client core opens
+// stream 1, sends a GET, the server core dispatches a 200 "pong", and the client core
+// surfaces the response head (status via the stream state), body chunk, and end.
+RUVIA_TEST(http2_connection_client_role_get_round_trip) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    server.expectClientPreface();
+    server.queueLocalSettings();
+    Http2Connection client(&resource, {}, Http2Role::kClient);
+    client.queueClientPreface();
+
+    std::string clientBody;
+    std::uint16_t status = 0;
+    bool clientSawHead = false;
+    bool clientSawEnd = false;
+    const auto onServerEvent = [&](const Http2Event& event) {
+        if (event.kind == Http2Event::Kind::kRequestEnd) {
+            ruvia::HttpResponse response(&resource);
+            response.status(200);
+            response.setBodyCopy("pong");
+            server.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
+            (void)server.submitData(event.streamId, "pong", /*endStream=*/true);
+        }
+    };
+    const auto onClientEvent = [&](const Http2Event& event) {
+        if (event.kind == Http2Event::Kind::kRequestHeaders) {
+            clientSawHead = true;
+            if (auto* stream = client.stream(event.streamId)) {
+                status = stream->responseStatus();
+            }
+        } else if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+            clientBody.append(event.bytes.data(), event.bytes.size());
+        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+            clientSawEnd = true;
+        }
+    };
+
+    const auto streamId = client.openLocalStream();
+    RUVIA_CHECK_EQ(streamId, static_cast<std::uint32_t>(1));
+    client.pinStream(streamId);
+    client.submitRequestHead(streamId, "GET", "http", "example.com", "/", {}, /*endStream=*/true);
+
+    for (int round = 0; round < 4; ++round) {
+        shuttleOnce(client, server, onServerEvent);
+        shuttleOnce(server, client, onClientEvent);
+    }
+
+    RUVIA_CHECK(clientSawHead);
+    RUVIA_CHECK_EQ(status, static_cast<std::uint16_t>(200));
+    RUVIA_CHECK(clientBody == "pong");
+    RUVIA_CHECK(clientSawEnd);
+    auto* stream = client.stream(streamId);
+    RUVIA_CHECK(stream != nullptr);
+    // content-length was decoded into the stream (auto CL from the server head).
+    RUVIA_CHECK(stream->hasContentLength());
+    client.unpinStream(streamId);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
+}
+
+// Client role POST: the request body flows through submitData with END_STREAM, the
+// server core buffers it (owner-side append) and answers; both directions complete.
+RUVIA_TEST(http2_connection_client_role_post_round_trip) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    server.expectClientPreface();
+    server.queueLocalSettings();
+    Http2Connection client(&resource, {}, Http2Role::kClient);
+    client.queueClientPreface();
+
+    std::string serverBody;
+    std::string clientBody;
+    bool clientSawEnd = false;
+    const auto onServerEvent = [&](const Http2Event& event) {
+        if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+            serverBody.append(event.bytes.data(), event.bytes.size());
+        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+            ruvia::HttpResponse response(&resource);
+            response.status(200);
+            response.setBodyCopy(serverBody);
+            server.submitResponseHead(event.streamId, response, false);
+            (void)server.submitData(
+                event.streamId, std::string_view(serverBody.data(), serverBody.size()), true);
+        }
+    };
+    const auto onClientEvent = [&](const Http2Event& event) {
+        if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+            clientBody.append(event.bytes.data(), event.bytes.size());
+        } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+            clientSawEnd = true;
+        }
+    };
+
+    const auto streamId = client.openLocalStream();
+    client.pinStream(streamId);
+    const ruvia::HttpHeaderView headers[] = {ruvia::HttpHeaderView{"content-length", "5"}};
+    client.submitRequestHead(streamId, "POST", "http", "example.com", "/echo",
+        std::span<const ruvia::HttpHeaderView>(headers, 1), /*endStream=*/false);
+    RUVIA_CHECK(client.submitData(streamId, "hello", /*endStream=*/true) == Http2SubmitResult::kOk);
+
+    for (int round = 0; round < 4; ++round) {
+        shuttleOnce(client, server, onServerEvent);
+        shuttleOnce(server, client, onClientEvent);
+    }
+
+    RUVIA_CHECK(serverBody == "hello");
+    RUVIA_CHECK(clientBody == "hello");
+    RUVIA_CHECK(clientSawEnd);
+}
+
+// A 1xx interim head is validated and skipped (no events, stream not decoded); the
+// following 200 head is the one surfaced. Hand-encoded server bytes drive the client.
+RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, {}, Http2Role::kClient);
+    client.queueClientPreface();
+    client.consumeOutput(client.pendingOutput().size());
+
+    const auto streamId = client.openLocalStream();
+    client.pinStream(streamId);
+    client.submitRequestHead(streamId, "GET", "http", "example.com", "/", {}, true);
+    client.consumeOutput(client.pendingOutput().size());
+
+    // Server bytes: SETTINGS, then HEADERS(103), then HEADERS(200) + DATA END_STREAM.
+    std::pmr::string bytes(&resource);
+    {
+        char settings[9];
+        ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+        bytes.append(settings, sizeof(settings));
+        std::pmr::string interim(&resource);
+        HpackEncoder::encodeHeader(interim, ":status", "103");
+        HpackEncoder::encodeHeader(interim, "link", "</style.css>; rel=preload");
+        const auto interimFrame = headersFrame(
+            &resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(interim.data(), interim.size()));
+        bytes.append(interimFrame.data(), interimFrame.size());
+        std::pmr::string final_(&resource);
+        HpackEncoder::encodeHeader(final_, ":status", "200");
+        HpackEncoder::encodeHeader(final_, "content-length", "2");
+        const auto finalFrame = headersFrame(
+            &resource, streamId, ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(final_.data(), final_.size()));
+        bytes.append(finalFrame.data(), finalFrame.size());
+        char data[9 + 2];
+        ruvia::detail::http2EncodeFrameHeader(data, 2, Http2FrameType::kData,
+            ruvia::detail::kHttp2FlagEndStream, streamId);
+        std::memcpy(data + 9, "ok", 2);
+        bytes.append(data, sizeof(data));
+    }
+    (void)client.feed(std::string_view(bytes.data(), bytes.size()));
+
+    int heads = 0;
+    std::string body;
+    bool end = false;
+    for (;;) {
+        const auto event = client.nextEvent();
+        if (event.kind == Http2Event::Kind::kNone) break;
+        if (event.kind == Http2Event::Kind::kRequestHeaders) ++heads;
+        if (event.kind == Http2Event::Kind::kRequestBodyChunk) body.append(event.bytes.data(), event.bytes.size());
+        if (event.kind == Http2Event::Kind::kRequestEnd) end = true;
+    }
+    RUVIA_CHECK_EQ(heads, 1);  // only the final head is surfaced
+    RUVIA_CHECK(body == "ok");
+    RUVIA_CHECK(end);
+    auto* stream = client.stream(streamId);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK_EQ(stream->responseStatus(), static_cast<std::uint16_t>(200));
+    RUVIA_CHECK_EQ(static_cast<int>(stream->interimResponseCount()), 1);
+    RUVIA_CHECK(!client.closing());
+}
+
+// Client role protocol errors: HEADERS on an odd stream never opened is a connection
+// error, and HEADERS on an even (server-initiated) stream is one too (push disabled).
+RUVIA_TEST(http2_connection_client_role_rejects_unexpected_streams) {
+    std::pmr::monotonic_buffer_resource resource;
+    {
+        Http2Connection client(&resource, {}, Http2Role::kClient);
+        client.queueClientPreface();
+        client.consumeOutput(client.pendingOutput().size());
+        char settings[9];
+        ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+        (void)client.feed(std::string_view(settings, sizeof(settings)));
+        std::pmr::string head(&resource);
+        HpackEncoder::encodeHeader(head, ":status", "200");
+        const auto idle = headersFrame(
+            &resource, 5, ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(head.data(), head.size()));
+        (void)client.feed(std::string_view(idle.data(), idle.size()));
+        RUVIA_CHECK(client.closing());  // HEADERS on idle stream -> GOAWAY
+    }
+    {
+        Http2Connection client(&resource, {}, Http2Role::kClient);
+        client.queueClientPreface();
+        client.consumeOutput(client.pendingOutput().size());
+        char settings[9];
+        ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+        (void)client.feed(std::string_view(settings, sizeof(settings)));
+        std::pmr::string head(&resource);
+        HpackEncoder::encodeHeader(head, ":status", "200");
+        const auto even = headersFrame(
+            &resource, 2, ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(head.data(), head.size()));
+        (void)client.feed(std::string_view(even.data(), even.size()));
+        RUVIA_CHECK(client.closing());  // no push: even ids are never valid
+    }
+}

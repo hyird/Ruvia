@@ -431,6 +431,22 @@ public:
         requestState_.markWebSocketTunnel();
     }
 
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return requestState_.responseStatus();
+    }
+
+    void setResponseStatus(std::uint16_t status) noexcept {
+        requestState_.setResponseStatus(status);
+    }
+
+    [[nodiscard]] std::uint8_t interimResponseCount() const noexcept {
+        return requestState_.interimResponseCount();
+    }
+
+    void countInterimResponse() noexcept {
+        requestState_.countInterimResponse();
+    }
+
 };
 
 }  // namespace ruvia::detail

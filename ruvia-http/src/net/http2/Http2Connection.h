@@ -54,6 +54,16 @@ enum class Http2ConnectionPhase : std::uint8_t {
     kWebSocket,
 };
 
+// Which side of the connection this endpoint is. A server accepts peer-initiated odd
+// streams and answers them; a client opens odd streams itself and decodes RESPONSE
+// heads (:status) off them. One state machine serves both roles (the frame codec,
+// HPACK, flow control and lifecycle are identical); only stream-id admission rules
+// and header-block semantics switch on the role.
+enum class Http2Role : std::uint8_t {
+    kServer,
+    kClient,
+};
+
 // Protocol-only configuration (NOT server policy). Server policy such as timeouts,
 // CORS, rate limiting and access logging lives in ruvia-web, never here.
 struct Http2CoreConfig final {
@@ -112,7 +122,12 @@ struct Http2PendingSend final {
 
 class Http2Connection final {
 public:
-    explicit Http2Connection(std::pmr::memory_resource* resource, Http2CoreConfig config = {});
+    explicit Http2Connection(
+        std::pmr::memory_resource* resource,
+        Http2CoreConfig config = {},
+        Http2Role role = Http2Role::kServer);
+
+    [[nodiscard]] Http2Role role() const noexcept { return role_; }
 
     // --- inbound ---------------------------------------------------------------
     // Feed raw bytes read from the peer; advances the protocol. Returns bytes
@@ -182,6 +197,26 @@ public:
     // the first frame. Call once after construction; feed() consumes + validates it.
     void expectClientPreface() noexcept { awaitingClientPreface_ = true; }
 
+    // --- client role -------------------------------------------------------------
+    // Emit the 24-byte client connection preface + our SETTINGS (+ the connection
+    // WINDOW_UPDATE opening the receive window). Call once after construction.
+    void queueClientPreface();
+    // Open the next locally-initiated (odd) stream; returns its id, or 0 when the id
+    // space is exhausted / the connection is closing / the stream table is full.
+    // Concurrency slots (peer SETTINGS_MAX_CONCURRENT_STREAMS) are the OWNER's policy.
+    [[nodiscard]] std::uint32_t openLocalStream();
+    // Encode + queue the request HEADERS block for a stream returned by
+    // openLocalStream. Headers must already be lowercase + validated (owner policy);
+    // endStream marks a body-less request. The body then flows via submitData.
+    void submitRequestHead(
+        std::uint32_t streamId,
+        std::string_view method,
+        std::string_view scheme,
+        std::string_view authority,
+        std::string_view path,
+        std::span<const HttpHeaderView> headers,
+        bool endStream);
+
     // Concurrent dispatch support: a request/response built from a stream holds VIEWS
     // into that stream's decoded storage, so the stream must outlive an in-flight
     // (possibly-suspended) handler. Pin the stream before spawning its handler; while
@@ -242,6 +277,16 @@ private:
     // WITHOUT resolveStreamRoute -- route resolution is web/edge policy the owner runs
     // after pulling kRequestHeaders). Return the classification; the caller reacts.
     [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
+    // Client role: decode a RESPONSE header block (:status + regular headers into the
+    // stream's header table). A 1xx interim head is validated then discarded WITHOUT
+    // marking the stream decoded, so the next HEADERS block decodes as the real head;
+    // the callers emit events only when headersDecoded() flipped.
+    [[nodiscard]] HeaderDecodeStatus decodeResponseHeaderBlock(Http2StreamState& stream);
+    // Role-aware initial-head decode dispatch (request vs response semantics).
+    [[nodiscard]] HeaderDecodeStatus decodeInitialHeaderBlock(Http2StreamState& stream);
+    // Role-aware idle-stream test (server: above the highest peer id; client: any even
+    // id or an odd id we have not opened yet).
+    [[nodiscard]] bool isIdleStreamId(std::uint32_t streamId) const noexcept;
     [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream);
     [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream);
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
@@ -295,6 +340,8 @@ private:
     std::uint32_t lastStreamId_{0};
     bool draining_{false};
     std::uint32_t goawayLastStreamId_{0};
+    Http2Role role_{Http2Role::kServer};
+    std::uint32_t nextLocalStreamId_{1};  // client role: next odd stream id to open
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
     std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
     Http2ConnectionPhase phase_{Http2ConnectionPhase::kIdle};
