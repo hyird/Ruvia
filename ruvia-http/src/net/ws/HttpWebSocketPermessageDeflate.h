@@ -162,6 +162,16 @@ struct WebSocketDeflateNegotiation final {
     return {};
 }
 
+// Response Sec-WebSocket-Extensions VALUES for an accepted permessage-deflate offer
+// (no-context-takeover both directions; the MaxWindow variant echoes a client-pinned
+// server_max_window_bits=15 per RFC 7692 §7.1.2.1). Shared by the h1 header line and
+// the h2 HPACK handshake.
+inline constexpr std::string_view kWebSocketDeflateResponseExtensions =
+    "permessage-deflate; server_no_context_takeover; client_no_context_takeover";
+inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
+    "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
+    "server_max_window_bits=15";
+
 [[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
     const HttpRequest& request) noexcept {
     // RFC 6455 §9.1: extension declarations may be split across multiple

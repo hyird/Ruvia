@@ -10,7 +10,7 @@
 // when idle and is woken whenever new output is produced.
 //
 // Framework parity with the coroutine Http2ServerSession (which this replaces): route
-// policy resolved at kRequestHeaders (mirroring resolveStreamRoute), rate limiting,
+// policy resolved at kMessageHead (mirroring resolveStreamRoute), rate limiting,
 // request-body size limits, streaming request bodies (BodyReader over the stream's
 // body-chunk queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
 // responses with compression/CORS via prepareBufferedHttpResponse, access logging,
@@ -62,6 +62,7 @@
 #include "net/server/HttpServerResponseState.h"
 #include "net/server/RateLimitDecision.h"
 #include "net/ws/HttpWebSocketConnection.h"
+#include "net/ws/HttpWebSocketPermessageDeflate.h"
 #include "net/ws/HttpWebSocketSession.h"
 #include "router/RequestDispatcher.h"
 #include "router/RouteResolution.h"
@@ -140,19 +141,23 @@ Task<void> runHttp2SansIoSession(
     };
 
     // Single writer: serialize all outbound writes; sleep on writeSignal when idle.
+    // The pending bytes are MOVED out before each write (takeOutput): concurrent
+    // handlers keep submitting while async_write is in flight, and an append that
+    // reallocated the core's buffer would dangle a pendingOutput() view mid-write.
     auto writerLoop = [&]() -> Task<void> {
+        std::pmr::string writeScratch(worker.resource());
         for (;;) {
             while (connection.wantsWrite()) {
-                const auto out = connection.pendingOutput();
-                const auto ec = co_await asyncError([&stream, out](auto handler) mutable {
+                connection.takeOutput(writeScratch);
+                const auto ec = co_await asyncError([&stream, &writeScratch](auto handler) mutable {
                     asio::async_write(
-                        stream, asio::buffer(out.data(), out.size()), std::move(handler));
+                        stream, asio::buffer(writeScratch.data(), writeScratch.size()),
+                        std::move(handler));
                 });
                 if (ec) {
                     writeFailed = true;
                     co_return;
                 }
-                connection.consumeOutput(out.size());
                 scannerEntry.touch();
             }
             if ((stopping && inFlight == 0) || writeFailed) {
@@ -371,9 +376,15 @@ Task<void> runHttp2SansIoSession(
         HttpResponse response(requestMemory.resource());
         if (resolution.found() && resolution.isWebSocketResponse()) {
             if (http2IsValidWebSocketRequest(*streamState, request)) {
+                // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
+                const auto deflate = webSocketNegotiatePermessageDeflate(request);
                 connection.submitWebSocketHandshake(
                     streamId,
-                    http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()));
+                    http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()),
+                    !deflate.enabled ? std::string_view{}
+                        : deflate.echoServerMaxWindowBits
+                            ? kWebSocketDeflateResponseExtensionsMaxWindow
+                            : kWebSocketDeflateResponseExtensions);
                 wakeWriter();  // flush the 200 before the first tunnel read suspends
                 auto* signal = findSignal(streamId);
                 if (signal == nullptr) {
@@ -385,7 +396,9 @@ Task<void> runHttp2SansIoSession(
                     scannerEntry,
                     resolution.webSocketHeartbeat(),
                     options.maxWebSocketMessageBytes,
-                    requestMemory.resource());
+                    requestMemory.resource(),
+                    /*initialBytes=*/{},
+                    deflate.enabled);
                 co_await runWebSocketSession(
                     webSocketConnection, scannerEntry, routes, request, resolution,
                     requestMemory, baseServices);
@@ -400,7 +413,7 @@ Task<void> runHttp2SansIoSession(
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
                 connection, streamId, resolution.responseMode(), requestMemory.resource(),
-                executor, &writeSignal);
+                executor, &writeSignal, findSignal(streamId));
             auto result = co_await dispatchResponseStreamWith(
                 sink, routes, request, resolution, requestMemory, dispatchServices,
                 /*closeConnectionOnError=*/false,
@@ -468,7 +481,7 @@ Task<void> runHttp2SansIoSession(
     };
 
     // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
-    // kRequestHeaders so body-mode/tunnel decisions land BEFORE the next feed.
+    // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
     const auto resolveStreamRoute = [&routes](Http2StreamState& streamState) noexcept {
         const auto method = Http2RequestBuilder::requestMethod(streamState);
         const auto path = Http2RequestBuilder::requestPath(streamState);
@@ -500,7 +513,7 @@ Task<void> runHttp2SansIoSession(
             if (streamState == nullptr) {
                 continue;
             }
-            if (event.kind == Http2Event::Kind::kRequestHeaders) {
+            if (event.kind == Http2Event::Kind::kMessageHead) {
                 resolveStreamRoute(*streamState);
                 const bool wsTunnel = streamState->webSocketTunnel();
                 const bool streamingBody = !wsTunnel &&
@@ -514,7 +527,7 @@ Task<void> runHttp2SansIoSession(
                     asio::co_spawn(
                         executor, taskAsAwaitable(dispatchOne(event.streamId)), asio::detached);
                 }
-            } else if (event.kind == Http2Event::Kind::kRequestBodyChunk) {
+            } else if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
                 if (streamState->webSocketTunnel() || streamState->usesStreamRequestBody()) {
                     streamState->enqueueBodyChunk(event.bytes);
                     if (auto* signal = findSignal(event.streamId)) {
@@ -523,10 +536,17 @@ Task<void> runHttp2SansIoSession(
                 } else {
                     streamState->appendRequestBody(event.bytes);
                 }
-            } else if (event.kind == Http2Event::Kind::kRequestEnd) {
+            } else if (event.kind == Http2Event::Kind::kMessageEnd) {
                 if (auto* signal = findSignal(event.streamId)) {
                     signal->wake();  // bodyEnded was marked by the core before this event
                 } else {
+                    const auto& resolution = streamState->routeResolution();
+                    if (resolution.found() && resolution.usesResponseStream()) {
+                        // Streaming responses pace on the send window; give the stream
+                        // a signal so takeUnblockedStreams can wake the sink.
+                        streamSignals.emplace_back(
+                            event.streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
+                    }
                     connection.pinStream(event.streamId);
                     asio::co_spawn(
                         executor, taskAsAwaitable(dispatchOne(event.streamId)), asio::detached);
@@ -565,7 +585,7 @@ Task<void> runHttp2SansIoSession(
 
     // Drain the h2c seeded request BEFORE feeding any initial bytes: feed() resets the
     // event queue at entry (its per-feed view contract), which would wipe the seed's
-    // kRequestHeaders/kRequestEnd when the client pipelined its preface after the
+    // kMessageHead/kMessageEnd when the client pipelined its preface after the
     // upgrade request. Seed events carry no input views, so draining first is safe.
     drainEvents();
     if (!connection.closing() && !initialBytes.empty()) {

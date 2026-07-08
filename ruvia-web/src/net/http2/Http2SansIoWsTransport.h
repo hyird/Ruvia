@@ -6,7 +6,7 @@
 // streaming request body) live in the stream's own body-chunk queue -- the same
 // Http2BodyQueue the coroutine session's readBodyChunk popped, so the core's
 // backlog accounting (http2AccountDataBody's queued-bytes cap) keeps bounding a
-// consumer that falls behind. The session's reader enqueues each kRequestBodyChunk
+// consumer that falls behind. The session's reader enqueues each kMessageBodyChunk
 // and wakes the stream's Http2SansIoStreamSignal; the consumers here pop chunks,
 // mirroring readBodyChunk's semantics exactly (reset/EOF -> end of stream).
 //

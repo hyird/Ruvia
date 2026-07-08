@@ -33,13 +33,17 @@ namespace ruvia::detail {
 
 inline void http2EncodeWebSocketHandshakeHeaders(
     std::pmr::string& headerBlock,
-    std::string_view subprotocol) {
+    std::string_view subprotocol,
+    std::string_view extensions = {}) {
     headerBlock.clear();
     HpackEncoder::encodeStatus(headerBlock, 200);
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kServer, "ruvia");
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
     if (!subprotocol.empty()) {
         HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", subprotocol);
+    }
+    if (!extensions.empty()) {
+        HpackEncoder::encodeHeader(headerBlock, "sec-websocket-extensions", extensions);
     }
 }
 

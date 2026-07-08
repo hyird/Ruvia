@@ -8,9 +8,10 @@
 // and end() closes the stream. The shared dispatchResponseStreamWith machinery calls
 // these via the responseStream*Thunk<Sink> function pointers, so the method set matches.
 //
-// v1 scope: trailers are validated but not yet emitted on the sans-I/O path (rare on
-// streams); backpressure is handled by the core (submitData buffers a blocked remainder
-// and drains it on WINDOW_UPDATE).
+// Backpressure: a window-blocked submit parks on the stream's signal until the
+// session's reader reports the core drained the remainder (takeUnblockedStreams), so a
+// slow consumer stalls the producer instead of growing the out-buffer without bound.
+// Trailers are HPACK-collected and emitted as the final HEADERS (END_STREAM) frame.
 
 #include <chrono>
 #include <cstdint>
@@ -23,6 +24,8 @@
 #include <asio/steady_timer.hpp>
 
 #include "net/http2/Http2Connection.h"
+#include "net/http2/Http2Hpack.h"
+#include "net/http2/Http2SansIoWsTransport.h"
 #include "net/server/HttpResponseStreamHead.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
@@ -45,13 +48,17 @@ public:
         ResponseBodyMode mode,
         std::pmr::memory_resource* resource,
         Executor executor,
-        asio::steady_timer* writeSignal = nullptr) noexcept
+        asio::steady_timer* writeSignal = nullptr,
+        Http2SansIoStreamSignal* streamSignal = nullptr) noexcept
         : connection_(connection),
           streamId_(streamId),
           mode_(mode),
           scratch_(resource),
+          trailers_(resource),
+          lowerName_(resource),
           executor_(executor),
-          writeSignal_(writeSignal) {}
+          writeSignal_(writeSignal),
+          streamSignal_(streamSignal) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -75,8 +82,11 @@ public:
         }
         co_await commit();
         state_.ensureBodyAllowed();
-        (void)connection_.submitData(streamId_, chunk, /*endStream=*/false);
+        const auto result = connection_.submitData(streamId_, chunk, /*endStream=*/false);
         wakeWriter();
+        if (result == Http2SubmitResult::kBlocked) {
+            co_await awaitSendWindow();
+        }
     }
 
     Task<void> sleep(std::chrono::milliseconds duration) {
@@ -89,9 +99,17 @@ public:
         }
     }
 
+    // RFC 9113 §8.1 trailers are queued before the stream ends and HPACK encoded into
+    // a header block flushed at end() as a trailing HEADERS frame carrying END_STREAM,
+    // in place of the empty END_STREAM DATA frame. Mirrors the retired coroutine sink.
     void addTrailer(std::string_view name, std::string_view value) {
-        // v1: validate but do not emit (sans-I/O trailer HEADERS frame is a follow-up).
         state_.ensureTrailerAllowed(name, value);
+        lowerName_.clear();
+        lowerName_.reserve(name.size());
+        for (const char ch : name) {
+            lowerName_.push_back(static_cast<char>(asciiToLower(static_cast<unsigned char>(ch))));
+        }
+        HpackEncoder::encodeHeader(trailers_, lowerName_, value);
     }
 
     Task<void> end() {
@@ -103,7 +121,12 @@ public:
             state_.markEnded();
             co_return;
         }
-        (void)connection_.submitData(streamId_, {}, /*endStream=*/true);
+        if (trailers_.empty()) {
+            (void)connection_.submitData(streamId_, {}, /*endStream=*/true);
+        } else {
+            connection_.submitTrailers(
+                streamId_, std::string_view(trailers_.data(), trailers_.size()));
+        }
         wakeWriter();
         state_.markEnded();
     }
@@ -133,13 +156,30 @@ private:
         }
     }
 
+    // Park until the reader reports the window-blocked remainder drained. A spurious
+    // wake just re-checks; if the stream dies or the session tears down, stop waiting
+    // (the dispatch wrapper observes the abort via peerAborted / isReset).
+    Task<void> awaitSendWindow() {
+        while (streamSignal_ != nullptr && !streamSignal_->ended &&
+               connection_.hasBlockedSend(streamId_)) {
+            auto* stream = connection_.stream(streamId_);
+            if (stream == nullptr || stream->isReset()) {
+                co_return;
+            }
+            co_await streamSignal_->wait();
+        }
+    }
+
     Http2Connection& connection_;
     std::uint32_t streamId_;
     ResponseBodyMode mode_;
     ResponseStreamState state_;
     std::pmr::string scratch_;
+    std::pmr::string trailers_;   // HPACK-encoded trailer block, flushed at end()
+    std::pmr::string lowerName_;
     Executor executor_;
     asio::steady_timer* writeSignal_{nullptr};
+    Http2SansIoStreamSignal* streamSignal_{nullptr};
 };
 
 }  // namespace ruvia::detail

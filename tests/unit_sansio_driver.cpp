@@ -26,6 +26,8 @@
 #include "net/http2/Http2FrameCodec.h"
 #include "net/http2/Http2Hpack.h"
 #include "net/http2/Http2RequestBuilder.h"
+#include "net/http2/Http2WindowUpdate.h"
+#include "net/ws/HttpWebSocketPermessageDeflate.h"
 #include "net/server/Http2SansIoSession.h"
 #include "router/RouteResolution.h"
 #include "router/RouterInternal.h"
@@ -81,9 +83,9 @@ ruvia::Task<void> wsEchoHandler(void*, ruvia::Context& ctx) {
 }
 
 // Build a masked client->server WebSocket frame (RFC 6455 §5.1, short lengths only).
-std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload) {
+std::string maskedWsFrame(std::uint8_t opcode, std::string_view payload, bool rsv1 = false) {
     std::string f;
-    f.push_back(static_cast<char>(0x80U | opcode));  // FIN | opcode
+    f.push_back(static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | opcode));  // FIN | RSV1? | opcode
     f.push_back(static_cast<char>(0x80U | static_cast<std::uint8_t>(payload.size())));
     const unsigned char mask[4] = {0x11, 0x22, 0x33, 0x44};
     f.append(reinterpret_cast<const char*>(mask), 4);
@@ -132,7 +134,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                     if (event.kind == Http2Event::Kind::kNone) {
                         break;
                     }
-                    if (event.kind == Http2Event::Kind::kRequestEnd) {
+                    if (event.kind == Http2Event::Kind::kMessageEnd) {
                         ruvia::HttpResponse response(&resource);
                         response.status(200);
                         response.setBodyCopy("pong");
@@ -769,4 +771,357 @@ RUVIA_TEST(sansio_h2_client_to_sansio_h2_server_round_trip) {
     io.run();
     RUVIA_CHECK(error.empty());
     RUVIA_CHECK(body == "handler-ran");
+}
+
+namespace {
+
+// Streaming handler that queues a trailer: the h2 stream must end with a trailing
+// HEADERS frame (END_STREAM) instead of an empty DATA frame.
+ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
+    auto& stream = c.streamText();
+    co_await stream.write("body-part");
+    stream.addTrailer("x-checksum", "abc123");
+}
+
+// Streaming handler pushing one large chunk; used to exercise send-window pacing.
+ruvia::Task<void> streamBigChunkHandler(void*, ruvia::Context& c) {
+    auto& stream = c.streamText();
+    co_await stream.write(std::string(64, 'z'));
+}
+
+struct HpackCollect {
+    std::string joined;
+    static bool onHeader(void* target, std::string_view name, std::string_view value) {
+        auto* self = static_cast<HpackCollect*>(target);
+        self->joined.append(name).append("=").append(value).append(";");
+        return true;
+    }
+};
+
+}  // namespace
+
+// Trailers over the sans-I/O h2 streaming path: HEAD(no END_STREAM), DATA body, then a
+// trailing HEADERS frame carrying END_STREAM whose block decodes to the queued trailer.
+RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string body;
+    std::string trailerFields;
+    bool trailerEndStream = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/trail", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &streamTrailerHandler),
+                ruvia::detail::ResponseBodyMode::kStream,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/trail");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    1, std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            bool sawHead = false;
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.streamId != 1) continue;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders)) {
+                    HpackCollect collect;
+                    (void)decoder.decode(payload, &collect, &HpackCollect::onHeader);
+                    if (!sawHead) {
+                        sawHead = true;
+                    } else {
+                        trailerFields = collect.joined;  // the trailing HEADERS block
+                        trailerEndStream =
+                            (header.flags & ruvia::detail::kHttp2FlagEndStream) != 0;
+                        break;
+                    }
+                } else if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
+                    body += payload;
+                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) break;
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(body == "body-part");
+    RUVIA_CHECK(trailerFields == "x-checksum=abc123;");
+    RUVIA_CHECK(trailerEndStream);
+}
+
+// permessage-deflate over h2 Extended CONNECT: the handshake echoes the negotiated
+// extension, and a compressed (RSV1) client frame is inflated before reaching the
+// handler, whose echo round-trips intact.
+RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string handshakeFields;
+    std::string echoedFrame;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/ws", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
+                ruvia::detail::ResponseBodyMode::kWebSocket,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "CONNECT");
+            HpackEncoder::encodeHeader(headerBlock, ":protocol", "websocket");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/ws");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            HpackEncoder::encodeHeader(headerBlock, "sec-websocket-version", "13");
+            HpackEncoder::encodeHeader(
+                headerBlock, "sec-websocket-extensions", "permessage-deflate; client_max_window_bits");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            // Handshake HEADERS: decode and capture the echoed extension.
+            ruvia::detail::HpackDecoder decoder(std::pmr::get_default_resource());
+            ruvia::detail::Http2FrameHeader header{};
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return;
+                header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kHeaders) &&
+                    header.streamId == 1) {
+                    HpackCollect collect;
+                    (void)decoder.decode(payload, &collect, &HpackCollect::onHeader);
+                    handshakeFields = collect.joined;
+                    break;
+                }
+            }
+
+            // Send a COMPRESSED masked text frame; the server must inflate + echo it.
+            ruvia::detail::WebSocketDeflate clientCodec;
+            std::pmr::string compressed(std::pmr::get_default_resource());
+            if (!clientCodec.compress("hello-deflate", compressed)) co_return;
+            if (!co_await writeAll(frame(
+                    0x0, 0, 1,
+                    maskedWsFrame(0x1, std::string_view(compressed.data(), compressed.size()),
+                                  /*rsv1=*/true)))) {
+                co_return;
+            }
+            std::string tunnelBytes;
+            while (echoedFrame.empty()) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) co_return;
+                header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData) ||
+                    header.streamId != 1) {
+                    continue;
+                }
+                tunnelBytes += payload;
+                if (tunnelBytes.size() >= 2) {
+                    const auto len = static_cast<std::size_t>(
+                        static_cast<unsigned char>(tunnelBytes[1]) & 0x7FU);
+                    if (tunnelBytes.size() >= 2 + len) {
+                        echoedFrame = tunnelBytes.substr(0, 2 + len);
+                    }
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(handshakeFields.find("sec-websocket-extensions=permessage-deflate") != std::string::npos);
+    // 13-byte echo does not shrink under deflate, so it comes back as a plain frame.
+    RUVIA_CHECK_EQ(echoedFrame.size(), static_cast<std::size_t>(15));
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(echoedFrame[0]), static_cast<unsigned char>(0x81));
+    RUVIA_CHECK(echoedFrame.substr(2) == "hello-deflate");
+}
+
+// Send-window pacing: with a tiny stream window the streaming sink must park until the
+// client grants WINDOW_UPDATEs, and every byte must still arrive, ending the stream.
+RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::size_t received = 0;
+    bool sawEnd = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/big", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &streamBigChunkHandler),
+                ruvia::detail::ResponseBodyMode::kStream,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            // SETTINGS_INITIAL_WINDOW_SIZE = 8: the 64-byte body must be granted 8 at a time.
+            const char settingsPayload[6] = {0x00, 0x04, 0x00, 0x00, 0x00, 0x08};
+            if (!co_await writeAll(frame(0x4, 0, 0, std::string_view(settingsPayload, 6)))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "GET");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/big");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndStream | ruvia::detail::kHttp2FlagEndHeaders,
+                    1, std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+
+            for (;;) {
+                char headerBytes[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(headerBytes, sizeof(headerBytes))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(headerBytes, sizeof(headerBytes)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.streamId != 1) continue;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData)) {
+                    received += payload.size();
+                    if ((header.flags & ruvia::detail::kHttp2FlagEndStream) != 0) {
+                        sawEnd = true;
+                        break;
+                    }
+                    if (!payload.empty()) {
+                        // Grant the next window slice (connection + stream scoped).
+                        char updates[2 * (ruvia::detail::kHttp2FrameHeaderBytes + 4)];
+                        char* out = ruvia::detail::http2WriteWindowUpdate(
+                            updates, 0, static_cast<std::uint32_t>(payload.size()));
+                        out = ruvia::detail::http2WriteWindowUpdate(
+                            out, 1, static_cast<std::uint32_t>(payload.size()));
+                        if (!co_await writeAll(std::string_view(
+                                updates, static_cast<std::size_t>(out - updates)))) {
+                            break;
+                        }
+                    }
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK_EQ(received, static_cast<std::size_t>(64));
+    RUVIA_CHECK(sawEnd);
 }
