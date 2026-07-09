@@ -119,6 +119,12 @@ target_link_libraries(ruvia-web
     PUBLIC
         ruvia::core
         ruvia::http
+        # TLS (ALPN/SNI + the socket client/server drivers) and HMAC cookie signing are
+        # WEB-layer capabilities, so web links OpenSSL directly. Previously it came in
+        # transitively via ruvia-http, which had a dead OpenSSL link -- removing that
+        # dead link surfaced web's real, direct dependency.
+        OpenSSL::SSL
+        OpenSSL::Crypto
 )
 
 if(RUVIA_ENABLE_MARIADB)
