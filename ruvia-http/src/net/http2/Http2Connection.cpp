@@ -1169,13 +1169,39 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
     }
 }
 
+bool Http2Connection::consumeFrames(std::string_view buffer, std::size_t& offset) {
+    for (;;) {
+        const std::size_t available = buffer.size() - offset;
+        if (available < kHttp2FrameHeaderBytes) {
+            break;
+        }
+        const auto header = http2ParseFrameHeader(buffer.substr(offset, kHttp2FrameHeaderBytes));
+        if (header.length > kHttp2MaxFrameSizeLimit || header.length > localMaxFrameSize_) {
+            appendGoaway(Http2ErrorCode::kFrameSizeError, "frame too large");
+            return false;
+        }
+        if (available < kHttp2FrameHeaderBytes + header.length) {
+            break;  // partial frame; wait for the next feed
+        }
+        const auto payload = buffer.substr(offset + kHttp2FrameHeaderBytes, header.length);
+        if (!processFrame(header, payload)) {
+            return false;
+        }
+        offset += kHttp2FrameHeaderBytes + header.length;
+        if (closing_) {
+            break;
+        }
+    }
+    return true;
+}
+
 Http2FeedResult Http2Connection::feed(std::string_view in) {
     // Reclaim the prefix consumed by the PREVIOUS feed now, at the start of this one --
-    // not at the end of that feed. A kMessageBodyChunk event carries a view INTO input_,
-    // and erasing the prefix shifts the buffer (invalidating those views); deferring the
-    // reclaim keeps them valid until this next feed, matching the documented contract.
-    // The prior feed's events reference now-stale bytes, so reset the event queue too:
-    // the owner must drain events after each feed (standard sans-I/O contract).
+    // not at the end of that feed. A kMessageBodyChunk event carries a view INTO input_
+    // (or into the caller's `in` on the fast path), and reclaiming shifts the buffer;
+    // deferring the reclaim keeps those views valid until this next feed, matching the
+    // documented contract. The prior feed's events reference now-stale bytes, so reset
+    // the event queue too (the owner must drain events after each feed).
     if (inputOffset_ > 0) {
         input_.erase(0, inputOffset_);
         inputOffset_ = 0;
@@ -1183,8 +1209,25 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     events_.clear();
     eventOffset_ = 0;
 
-    // Buffer all fed bytes (nghttp2_session_mem_recv semantics: the caller may drop
-    // its buffer after feed). Then consume as many complete frames as are available.
+    // FAST PATH: nothing buffered and no preface pending -> parse the complete frames
+    // DIRECTLY over the caller's `in`, buffering only the unconsumed partial-frame tail.
+    // This avoids copying the whole read (up to the driver's read-chunk size) into
+    // input_ on the common case where each read delivers whole frames. Event body views
+    // then point into `in`, valid until the next feed -- the same lifetime input_ views
+    // have, and both in-tree drivers keep their read buffer alive across a feed.
+    if (input_.empty() && !awaitingClientPreface_) {
+        std::size_t offset = 0;
+        if (!consumeFrames(in, offset)) {
+            return {in.size(), Http2FeedStatus::kError};
+        }
+        if (offset < in.size()) {
+            input_.append(in.data() + offset, in.size() - offset);  // partial-frame tail
+        }
+        return {in.size(), Http2FeedStatus::kOk};
+    }
+
+    // SLOW PATH: a buffered partial-frame tail and/or the connection preface is pending.
+    // Buffer all fed bytes (nghttp2_session_mem_recv semantics) then consume frames.
     input_.append(in.data(), in.size());
 
     // Server mode: the 24-byte client connection preface precedes the first frame
@@ -1202,29 +1245,8 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
         awaitingClientPreface_ = false;
     }
 
-    for (;;) {
-        const std::size_t available = input_.size() - inputOffset_;
-        if (available < kHttp2FrameHeaderBytes) {
-            break;
-        }
-        const auto header = http2ParseFrameHeader(
-            std::string_view(input_.data() + inputOffset_, kHttp2FrameHeaderBytes));
-        if (header.length > kHttp2MaxFrameSizeLimit || header.length > localMaxFrameSize_) {
-            appendGoaway(Http2ErrorCode::kFrameSizeError, "frame too large");
-            return {in.size(), Http2FeedStatus::kError};
-        }
-        if (available < kHttp2FrameHeaderBytes + header.length) {
-            break;  // partial frame; wait for the next feed
-        }
-        const auto payload = std::string_view(
-            input_.data() + inputOffset_ + kHttp2FrameHeaderBytes, header.length);
-        if (!processFrame(header, payload)) {
-            return {in.size(), Http2FeedStatus::kError};
-        }
-        inputOffset_ += kHttp2FrameHeaderBytes + header.length;
-        if (closing_) {
-            break;
-        }
+    if (!consumeFrames(std::string_view(input_.data(), input_.size()), inputOffset_)) {
+        return {in.size(), Http2FeedStatus::kError};
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
     // so body-chunk views handed out via events stay valid until then.
