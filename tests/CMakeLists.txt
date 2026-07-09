@@ -185,7 +185,7 @@ add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down, edge
 # web-free, docs ownership). Runs on every test build so a violation fails fast;
-# rules: docs/superpowers/specs/2026-07-08-ruvia-layer-boundaries.md
+# rules: README.md and AGENTS.md
 if(UNIX)
     add_custom_target(ruvia_check_boundaries ALL
         COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh

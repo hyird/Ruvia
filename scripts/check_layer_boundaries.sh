@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Mechanised layer-boundary checks.
-# Authoritative rules: docs/superpowers/specs/2026-07-08-ruvia-layer-boundaries.md
+# Authoritative rules: README.md and AGENTS.md
 # Run from anywhere: resolves the repo root from its own location.
 set -u
 cd "$(dirname "$0")/.." || exit 2
@@ -15,7 +15,7 @@ err() {
 SRC_GLOBS=(--include='*.h' --include='*.cpp' --include='*.inl')
 
 REQUIRED_DIRS=(ruvia-core ruvia-http ruvia-web ruvia-edge)
-REQUIRED_DOCS=(README.md AGENTS.md docs/superpowers/specs/2026-07-08-ruvia-layer-boundaries.md)
+REQUIRED_DOCS=(README.md AGENTS.md)
 for d in "${REQUIRED_DIRS[@]}"; do
     [ -d "$d" ] || { echo "boundary-check FAIL: missing target dir $d (checks would be vacuous)" >&2; exit 2; }
 done
@@ -60,7 +60,7 @@ hits=$(grep -rnE '#include[[:space:]]*"(ruvia/router/|ruvia/http/Context\.(h|inl
 [ -n "$hits" ] && err "ruvia-edge must not include web framework headers" "$hits"
 
 # 4. Docs must not carry stale ownership.
-DOCS=(README.md AGENTS.md docs/superpowers/specs/2026-07-08-ruvia-layer-boundaries.md)
+DOCS=(README.md AGENTS.md)
 hits=$(grep -n 'Http2ServerSession' "${DOCS[@]}" || true)
 [ -n "$hits" ] && err "docs reference the deleted coroutine h2 server session" "$hits"
 hits=$(grep -nE 'ruvia-(web|edge)[[:space:]]*->[[:space:]]*ruvia-http[[:space:]]*->[[:space:]]*ruvia-core|http[[:space:]]*->[[:space:]]*core|http.*asio/TLS runtime driver|http.*socket/TLS runtime driver' "${DOCS[@]}" || true)
