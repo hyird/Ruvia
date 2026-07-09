@@ -36,14 +36,31 @@ std::int64_t ConnectionScanner::Entry::lastActiveMs() const noexcept {
 }
 
 void ConnectionScanner::Entry::setWebSocketHeartbeat(void* target, WebSocketTick tick) noexcept {
-    webSocketTarget_ = target;
-    webSocketTick_ = tick;
+    // Reuse the slot already holding this target (re-register), else the first free one.
+    HeartbeatSlot* free = nullptr;
+    for (auto& slot : webSocketHeartbeats_) {
+        if (slot.target == target) {
+            slot.tick = tick;
+            return;
+        }
+        if (free == nullptr && slot.target == nullptr) {
+            free = &slot;
+        }
+    }
+    if (free != nullptr) {
+        free->target = target;
+        free->tick = tick;
+    }
+    // else: all slots taken -- this tunnel simply gets no server-initiated heartbeat.
 }
 
 void ConnectionScanner::Entry::clearWebSocketHeartbeat(void* target) noexcept {
-    if (webSocketTarget_ == target) {
-        webSocketTarget_ = nullptr;
-        webSocketTick_ = nullptr;
+    for (auto& slot : webSocketHeartbeats_) {
+        if (slot.target == target) {
+            slot.target = nullptr;
+            slot.tick = nullptr;
+            return;
+        }
     }
 }
 
@@ -52,7 +69,15 @@ bool ConnectionScanner::Entry::linked() const noexcept {
 }
 
 bool ConnectionScanner::Entry::tickWebSocket(std::int64_t now) noexcept {
-    return webSocketTick_ != nullptr && webSocketTarget_ != nullptr && webSocketTick_(webSocketTarget_, now);
+    // Tick EVERY registered tunnel; if any signals a dead peer (missed pong) the
+    // connection is closed, tearing down all tunnels that share the socket.
+    bool shouldClose = false;
+    for (auto& slot : webSocketHeartbeats_) {
+        if (slot.tick != nullptr && slot.target != nullptr && slot.tick(slot.target, now)) {
+            shouldClose = true;
+        }
+    }
+    return shouldClose;
 }
 
 ConnectionScanner::Guard::Guard(ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
@@ -120,8 +145,7 @@ void ConnectionScanner::unregisterEntry(Entry& entry) noexcept {
     entry.next_ = nullptr;
     entry.socket_ = nullptr;
     entry.nowMs_ = nullptr;
-    entry.webSocketTarget_ = nullptr;
-    entry.webSocketTick_ = nullptr;
+    entry.webSocketHeartbeats_ = {};
 }
 
 void ConnectionScanner::closeAll() noexcept {

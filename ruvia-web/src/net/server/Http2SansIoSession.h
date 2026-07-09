@@ -436,14 +436,10 @@ Task<void> runHttp2SansIoSession(
                 if (signal == nullptr) {
                     co_return;  // ws streams are admitted with a signal; defensive
                 }
-                // KNOWN LIMITATION: the connection's single ConnectionScanner::Entry has
-                // ONE WebSocket-heartbeat slot, so N concurrent Extended-CONNECT tunnels
-                // on one h2 connection share it -- the last to register wins and its close
-                // clears it, leaving the others without server-initiated heartbeat pings
-                // (idle detection still works; the ping is an optional keepalive). This is
-                // safe (the tick guards on the target pointer, no UAF) and rare (one WS
-                // per connection is the norm). A per-tunnel heartbeat timer is a deliberate
-                // non-goal until a real multi-tunnel workload needs it.
+                // Each Extended-CONNECT tunnel registers its OWN heartbeat on the
+                // connection's scanner entry (Entry holds a small set of heartbeat
+                // slots, not one), so concurrent tunnels on this h2 connection do not
+                // clobber each other's server-initiated pings.
                 using WsTransport = Http2SansIoWsTransport<decltype(executor)>;
                 WebSocketConnection<WsTransport> webSocketConnection(
                     WsTransport(connection, streamId, *signal, writeSignal, executor),

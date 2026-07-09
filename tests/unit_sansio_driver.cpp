@@ -1667,3 +1667,107 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
     RUVIA_CHECK_EQ(received, static_cast<std::uint64_t>(kLargeBufferedBytes));
     RUVIA_CHECK(sawEnd);
 }
+
+// #1 regression: TWO concurrent WebSocket tunnels (two Extended-CONNECT streams) on
+// ONE h2 connection must both work -- each registers its own heartbeat slot on the
+// shared scanner entry, and both echo. Before the per-tunnel heartbeat-slot fix they
+// clobbered each other's registration; this proves multiplexed tunnels coexist.
+RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string echo1;
+    std::string echo3;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerStreamRoute(
+                ruvia::HttpMethod::kGet,
+                std::pmr::string("/ws", std::pmr::get_default_resource()),
+                ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
+                ruvia::detail::ResponseBodyMode::kWebSocket,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto openTunnel = [](std::uint32_t streamId) {
+                std::pmr::string block(std::pmr::get_default_resource());
+                HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+                HpackEncoder::encodeHeader(block, ":protocol", "websocket");
+                HpackEncoder::encodeHeader(block, ":scheme", "http");
+                HpackEncoder::encodeHeader(block, ":path", "/ws");
+                HpackEncoder::encodeHeader(block, ":authority", "localhost");
+                HpackEncoder::encodeHeader(block, "sec-websocket-version", "13");
+                return frame(0x1, ruvia::detail::kHttp2FlagEndHeaders, streamId,
+                             std::string_view(block.data(), block.size()));
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            // Open BOTH tunnels (streams 1 and 3) before sending any frames.
+            if (!co_await writeAll(openTunnel(1))) co_return;
+            if (!co_await writeAll(openTunnel(3))) co_return;
+            // A masked text frame down each tunnel.
+            if (!co_await writeAll(frame(0x0, 0, 1, maskedWsFrame(0x1, "one")))) co_return;
+            if (!co_await writeAll(frame(0x0, 0, 3, maskedWsFrame(0x1, "three")))) co_return;
+
+            std::string tunnel1;
+            std::string tunnel3;
+            auto extractFrame = [](std::string& acc) -> std::string {
+                if (acc.size() < 2) return {};
+                const auto len = static_cast<std::size_t>(
+                    static_cast<unsigned char>(acc[1]) & 0x7FU);
+                if (acc.size() < 2 + len) return {};
+                return acc.substr(0, 2 + len);
+            };
+            while (echo1.empty() || echo3.empty()) {
+                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(hb, sizeof(hb))) co_return;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(hb, sizeof(hb)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) co_return;
+                if (header.type != static_cast<std::uint8_t>(Http2FrameType::kData)) continue;
+                if (header.streamId == 1) {
+                    tunnel1 += payload;
+                    if (echo1.empty()) echo1 = extractFrame(tunnel1);
+                } else if (header.streamId == 3) {
+                    tunnel3 += payload;
+                    if (echo3.empty()) echo3 = extractFrame(tunnel3);
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(echo1.size() == 5 && echo1.substr(2) == "one");     // FIN|text len3 "one"
+    RUVIA_CHECK(echo3.size() == 7 && echo3.substr(2) == "three");   // FIN|text len5 "three"
+}
