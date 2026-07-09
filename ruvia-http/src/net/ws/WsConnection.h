@@ -8,7 +8,7 @@
 // produces bytes for you to write. No socket, coroutine, timer or asio -- the I/O
 //
 // ROLE NOTE: this is the embeddable pure ws core for external runtimes and future
-// edge/client drivers. Ruvia's own server path currently drives the transport-
+// client or external runtime drivers. Ruvia's own server path currently drives the transport-
 // agnostic WebSocketConnection<Transport> template (ruvia-web) instead, whose
 // heartbeat/write coordination is coroutine-shaped; both build on the same pure
 // frame codec, assembler, validation and RFC 7692 deflate in this directory.

@@ -9,13 +9,11 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Runtime foundation: coroutine task type, Asio integration glue, PMR memory resources, mimalloc integration, and small runtime helpers. |
 | `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero core/asio/socket runtime): HTTP message types, header token/value helpers, HTTP/1 parser + connection core, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, body framing/streams, multipart/SSE/content-encoding protocol helpers, cookie/cache/range/conditional/negotiation helpers, and the outbound client's protocol core. |
 | `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, server and outbound-client I/O drivers over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, `Context::fetch`/`proxy`), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
-| `ruvia-edge/` | `ruvia-edge` | `ruvia::edge` | Edge product target built directly on `ruvia::http`, without linking `ruvia::web` or using `Context`, `Router`, controllers, route macros, or middleware. |
 
 Dependency direction:
 
 ```text
 ruvia-web  -> ruvia-core + ruvia-http
-ruvia-edge -> ruvia-core + ruvia-http
 ```
 
 ## Layer Boundary
@@ -25,9 +23,8 @@ The boundary is decided by who owns the behavior, not by whether a file touches 
 - `ruvia-core` owns the runtime foundation: coroutine task machinery, Asio awaiter/driver glue, PMR resources, worker memory, connection scanning, and small runtime helpers.
 - `ruvia-http` owns HTTP itself and must not depend on `ruvia-core`: wire bytes, message shape, header syntax helpers, parser/framing rules, connection persistence, `Expect: 100-continue`, upgrade handshakes, HTTP/2 frames/settings/flow control, WebSocket frames, multipart/SSE/content-encoding protocol logic, and protocol errors.
 - `ruvia-web` owns the application framework built on HTTP: route dispatch, middleware, controllers, `Context`, validation, sessions, CSRF, JWT integration, CORS policy, security-header policy, rate limits, static-file indexing, AutoHTTPS redirect, DB/Redis integrations, and the socket/TLS/Asio runtime drivers that drive `ruvia-http`.
-- `ruvia-edge` owns edge product behavior. It may call `ruvia::http` directly, but it must not depend on `ruvia::web` abstractions.
 
-If code decides how bytes are parsed, framed, serialized, kept alive, upgraded, or rejected by the HTTP/WebSocket/HTTP2 protocols, it belongs in `ruvia-http`. If code decides what the application product does with those protocol facts, it belongs in `ruvia-web` or `ruvia-edge`.
+If code decides how bytes are parsed, framed, serialized, kept alive, upgraded, or rejected by the HTTP/WebSocket/HTTP2 protocols, it belongs in `ruvia-http`. If code decides what the application product does with those protocol facts, it belongs in `ruvia-web`.
 
 The root `CMakeLists.txt` only coordinates global options, dependency discovery, installation, package export, tests, and examples. Each library owns its own `CMakeLists.txt`, `include/`, and `src/` directory. There is no root-level source `include/`, `src/`, or `fuzz/` tree.
 
@@ -52,15 +49,14 @@ cmake -S . -B build `
 cmake --build build --config Debug
 ```
 
-Build tests, examples, and the edge target:
+Build tests and examples:
 
 ```powershell
 cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_BUILD_EXAMPLES=ON `
-  -DRUVIA_BUILD_EDGE=ON
+  -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
@@ -100,9 +96,6 @@ target_link_libraries(tool PRIVATE ruvia::core)
 
 find_package(ruvia CONFIG REQUIRED COMPONENTS http)
 target_link_libraries(proxy_tool PRIVATE ruvia::http)
-
-find_package(ruvia CONFIG REQUIRED COMPONENTS edge)
-target_link_libraries(edge_app PRIVATE ruvia::edge)
 ```
 
 When no component is requested, the package loads the built direct targets. New projects should still request the component they use explicitly.
@@ -163,13 +156,9 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 `ruvia::http` is intended to be useful without the web framework or the Ruvia runtime foundation, in the nghttp2 class: a pure, core-free, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and connection semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core (`WebSocketProtocol.h`), HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding (`MultipartParser.h`), SSE formatting (`Sse.h`), content decoding, and opaque protocol body handles. You feed it bytes and drive its events from any runtime.
 
-It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, edge policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web` or `ruvia::edge`.
+It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
 
 The outbound HTTP client follows the same split as the server: the protocol model and sans-I/O HTTP client core (response parsing, transfer/content decoding, generic redirect replay checks, `HttpClientTypes.h`, and HTTP/2 client protocol state) live in `ruvia::http`; the Asio/TLS runtime facade (`FetchOptions`, `RequestBodyStream`, `FetchResponseStream`, `ProxyOptions`) lives in `ruvia::web` via `HttpClientRuntime.h` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`.
-
-## Edge Target
-
-`ruvia::edge` is a sibling product target, not a web-framework plugin. It may use `ruvia::core` and `ruvia::http`, but it must not link to `ruvia::web` or depend on web routing abstractions.
 
 ## Build Options
 
@@ -177,7 +166,6 @@ The outbound HTTP client follows the same split as the server: the protocol mode
 | --- | --- | --- |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit and smoke tests. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples. |
-| `RUVIA_BUILD_EDGE` | `OFF` | Build `ruvia-edge` / `ruvia::edge`. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Build MariaDB-compatible DB integration into `ruvia-web`. |
 | `RUVIA_ENABLE_REDIS` | `OFF` | Build Redis integration into `ruvia-web`. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Build JWT helpers into `ruvia-web`. |
@@ -201,9 +189,6 @@ The outbound HTTP client protocol core is a `ruvia-http` capability (no build sw
 |   |-- CMakeLists.txt
 |   |-- include/
 |   `-- src/
-|-- ruvia-edge/
-|   |-- CMakeLists.txt
-|   `-- src/
 |-- examples/
 |-- tests/
 `-- vcpkg.json
@@ -220,8 +205,7 @@ cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_BUILD_EXAMPLES=ON `
-  -DRUVIA_BUILD_EDGE=ON
+  -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 cmake --install build --config Debug --prefix build/install
@@ -231,5 +215,5 @@ Quick cleanup checks:
 
 ```powershell
 git diff --check
-rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web ruvia-edge tests examples
+rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web tests examples
 ```

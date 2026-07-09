@@ -14,7 +14,7 @@ err() {
 
 SRC_GLOBS=(--include='*.h' --include='*.cpp' --include='*.inl')
 
-REQUIRED_DIRS=(ruvia-core ruvia-http ruvia-web ruvia-edge)
+REQUIRED_DIRS=(ruvia-core ruvia-http ruvia-web)
 REQUIRED_DOCS=(README.md AGENTS.md)
 for d in "${REQUIRED_DIRS[@]}"; do
     [ -d "$d" ] || { echo "boundary-check FAIL: missing target dir $d (checks would be vacuous)" >&2; exit 2; }
@@ -51,19 +51,11 @@ hits=$(grep -rnE '#include[[:space:]]*"ruvia/(app/|memory/|detail/|router/|http/
 hits=$(grep -nE 'ruvia::core|ruvia-core' ruvia-http/CMakeLists.txt || true)
 [ -n "$hits" ] && err "ruvia-http must not link/name ruvia-core in CMake" "$hits"
 
-# 3a. ruvia-edge must not link web.
-hits=$(grep -nE 'ruvia(-|::)?web' ruvia-edge/CMakeLists.txt || true)
-[ -n "$hits" ] && err "ruvia-edge must not link/name ruvia-web in CMake" "$hits"
-
-# 3b. ruvia-edge sources must not include web framework headers.
-hits=$(grep -rnE '#include[[:space:]]*"(ruvia/router/|ruvia/http/Context\.(h|inl)|ruvia/app/App\.h|router/|http/ContextServices\.h|app/AppAccess\.h)' ruvia-edge "${SRC_GLOBS[@]}" || true)
-[ -n "$hits" ] && err "ruvia-edge must not include web framework headers" "$hits"
-
-# 4. Docs must not carry stale ownership.
+# 3. Docs must not carry stale ownership.
 DOCS=(README.md AGENTS.md)
 hits=$(grep -n 'Http2ServerSession' "${DOCS[@]}" || true)
 [ -n "$hits" ] && err "docs reference the deleted coroutine h2 server session" "$hits"
-hits=$(grep -nE 'ruvia-(web|edge)[[:space:]]*->[[:space:]]*ruvia-http[[:space:]]*->[[:space:]]*ruvia-core|http[[:space:]]*->[[:space:]]*core|http.*asio/TLS runtime driver|http.*socket/TLS runtime driver' "${DOCS[@]}" || true)
+hits=$(grep -nE 'ruvia-web[[:space:]]*->[[:space:]]*ruvia-http[[:space:]]*->[[:space:]]*ruvia-core|http[[:space:]]*->[[:space:]]*core|http.*asio/TLS runtime driver|http.*socket/TLS runtime driver' "${DOCS[@]}" || true)
 [ -n "$hits" ] && err "docs contain stale dependency/runtime ownership" "$hits"
 
 if [ "$fail" -ne 0 ]; then

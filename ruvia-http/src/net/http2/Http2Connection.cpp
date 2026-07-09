@@ -561,7 +561,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     }
     stream.markHeadersDecoded();
     // NOTE (sans-I/O): resolveStreamRoute is deliberately NOT called here -- route
-    // resolution and body-mode selection are ruvia-web/edge policy the owner applies
+    // resolution and body-mode selection are application policy the owner applies
     // after pulling the kMessageHead event.
     return HeaderDecodeStatus::kOk;
 }
@@ -1109,7 +1109,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
 
     // sans-I/O: hand the body to the owner as an event; the core does not buffer it
-    // (buffered vs streaming delivery is web/edge policy). Content-length and size caps
+    // (buffered vs streaming delivery is application policy). Content-length and size caps
     // were already enforced by http2AccountDataBody above. The view is valid until the
     // next feed (input_ is only reclaimed at the start of the following feed).
     events_.push_back(Http2Event{Http2Event::Kind::kMessageBodyChunk, header.streamId, data});

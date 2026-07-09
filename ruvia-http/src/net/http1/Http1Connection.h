@@ -6,7 +6,7 @@
 // like Http2Connection: you feed it inbound bytes and it emits events -- a decoded
 // request head, de-chunked/measured body slices, message end -- one message at a
 // time, honoring keep-alive pipelining. It never touches a socket, a timer, or
-// asio, so any runtime (the web session, edge, an external embedder) can drive it.
+// asio, so any runtime (the web session, client, or an external embedder) can drive it.
 //
 // Contract (same discipline as Http2Connection):
 //   - Event `bytes` views point into the connection's input buffer; drain all events

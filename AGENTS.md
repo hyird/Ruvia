@@ -10,14 +10,12 @@ Ruvia 是 C++23 HTTP/Web 框架仓库，当前采用 monorepo + 多 CMake target
 ruvia-core  -> ruvia::core
 ruvia-http  -> ruvia::http
 ruvia-web   -> ruvia::web
-ruvia-edge  -> ruvia::edge
 ```
 
 依赖方向固定：
 
 ```text
 ruvia-web  -> ruvia-core + ruvia-http
-ruvia-edge -> ruvia-core + ruvia-http
 ```
 
 新代码、新示例和新文档使用 `ruvia::web`，不保留历史 Web 框架别名。
@@ -38,7 +36,6 @@ ruvia-edge -> ruvia-core + ruvia-http
 ruvia-core/
 ruvia-http/
 ruvia-web/
-ruvia-edge/
 examples/
 tests/
 ```
@@ -76,7 +73,7 @@ tests/
 禁止包含：
 
 - HTTP/Web 语义。
-- App、Context、Controller、Router、middleware、model、DB、Redis、JWT、edge policy。
+- App、Context、Controller、Router、middleware、model、DB、Redis、JWT。
 - 对 HTTP/Web 协议语义、OpenSSL、zlib、brotli、zstd、MariaDB、hiredis 的公开依赖。
 
 ### ruvia-http
@@ -92,14 +89,14 @@ tests/
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
 - multipart/SSE/content-encoding 等 wire-format 和协议语义实现；runtime reader/writer facade 留在 `ruvia-web`。
-- 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或 `ruvia-edge` 驱动）。
+- 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或外部 runtime 驱动）。
 
 禁止包含：
 
 - App、Context、Controller、Router、route macro、middleware、Next。
 - Model/validation 宏。
 - DB、Redis、JWT、CSRF、Session、CORS、security headers、RateLimit 的 Web 集成。
-- Edge origin/cache/purge/rule policy。
+- origin/cache/purge/rule 等产品策略。
 
 ### ruvia-web
 
@@ -118,22 +115,11 @@ tests/
 
 ### HTTP 协议与上层应用边界
 
-`ruvia-http` 拥有 HTTP 协议本体：wire/message/framing/connection 语义，以及跨 server/client/edge 都能复用的 sans-I/O 状态机和纯协议 helper。所有 HTTP/1、HTTP/2、WebSocket、SSE、multipart、content-coding 等协议实现都应留在 `ruvia-http`。包括但不限于 HTTP/1 request/response 解析、chunked 与 Content-Length framing、keep-alive 与 `Connection` 语义、`Expect: 100-continue`、Upgrade/h2c/WebSocket 握手字节、HTTP/1.0 close-delimited 响应流、HTTP/2 frame/HPACK/settings/flow-control、response head 序列化、WebSocket frame/close code/permessage-deflate 协议处理。
+`ruvia-http` 拥有 HTTP 协议本体：wire/message/framing/connection 语义，以及跨 server/client/外部 runtime 都能复用的 sans-I/O 状态机和纯协议 helper。所有 HTTP/1、HTTP/2、WebSocket、SSE、multipart、content-coding 等协议实现都应留在 `ruvia-http`。包括但不限于 HTTP/1 request/response 解析、chunked 与 Content-Length framing、keep-alive 与 `Connection` 语义、`Expect: 100-continue`、Upgrade/h2c/WebSocket 握手字节、HTTP/1.0 close-delimited 响应流、HTTP/2 frame/HPACK/settings/flow-control、response head 序列化、WebSocket frame/close code/permessage-deflate 协议处理。
 
 `ruvia-web` 拥有 HTTP 之上的应用能力：App/Context/Router/middleware/controller、route validation、session、CSRF、JWT、rate limit、CORS 策略与中间件、安全头中间件、静态文件目录扫描/索引/产品配置、AutoHTTPS redirect、DB/Redis 集成、WebSocket route 绑定等。它们可以读写 HTTP header，但这不等于它们属于 HTTP 协议本体。
 
 边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议错误如何映射”，应放在 `ruvia-http`；如果代码决定“某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
-
-### ruvia-edge
-
-`ruvia-edge` 是 edge 产品 target。
-
-规则：
-
-- 只能依赖 `ruvia::core` 和 `ruvia::http`。
-- 不得依赖 `ruvia::web`。
-- 不得使用 Context、Router、Controller、route macro、middleware。
-- 需要复用时优先下沉到 `ruvia-core` 或 `ruvia-http`，不要让 edge 和 web 互相耦合。
 
 ## 性能原则
 
@@ -211,7 +197,6 @@ tests/
 ## CMake 和安装
 
 - 默认构建 `ruvia-core`、`ruvia-http`、`ruvia-web`。
-- `RUVIA_BUILD_EDGE=ON` 才构建 `ruvia-edge`。
 - MariaDB、Redis、JWT 是严格 feature：
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
@@ -224,8 +209,8 @@ find_package(ruvia CONFIG REQUIRED COMPONENTS web)
 target_link_libraries(app PRIVATE ruvia::web)
 ```
 
-- 需要更小依赖面时使用 `COMPONENTS core`、`COMPONENTS http` 或 `COMPONENTS edge`。
-- 安装包必须暴露组件 target：`ruvia::core`、`ruvia::http`、`ruvia::web`、可选 `ruvia::edge`；不要再暴露历史 Web 框架别名。
+- 需要更小依赖面时使用 `COMPONENTS core` 或 `COMPONENTS http`。
+- 安装包必须暴露组件 target：`ruvia::core`、`ruvia::http`、`ruvia::web`；不要再暴露历史 Web 框架别名。
 
 ## 验证要求
 
@@ -235,7 +220,7 @@ target_link_libraries(app PRIVATE ruvia::web)
 
 ```powershell
 git diff --check
-rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web ruvia-edge tests examples
+rg -n '<stale split terms>' README.md AGENTS.md CMakeLists.txt ruvia-core ruvia-http ruvia-web tests examples
 ```
 
 构建验证：
@@ -245,8 +230,7 @@ cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
-  -DRUVIA_BUILD_EXAMPLES=ON `
-  -DRUVIA_BUILD_EDGE=ON
+  -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```

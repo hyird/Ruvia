@@ -306,7 +306,7 @@ private:
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
-    // WITHOUT resolveStreamRoute -- route resolution is web/edge policy the owner runs
+    // WITHOUT resolveStreamRoute -- route resolution is application policy the owner runs
     // after pulling kMessageHead). Return the classification; the caller reacts.
     [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
