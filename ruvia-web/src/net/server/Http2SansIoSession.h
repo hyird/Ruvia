@@ -47,6 +47,7 @@
 #include "http/ContextServices.h"
 #include "net/HttpFileOpen.h"
 #include "net/RequestBodyLimit.h"
+#include "net/RequestMemoryArena.h"
 #include "net/body/HttpRequestBodyFacade.h"
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2RequestBuilder.h"
@@ -70,6 +71,7 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/HttpServerOptions.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -170,6 +172,10 @@ Task<void> runHttp2SansIoSession(
                     continue;
                 }
                 scannerEntry.touch();
+                // Release a peak-sized batch buffer so it (and, via takeOutput's swap,
+                // the core's outBuffer_) does not pin the connection's high-water
+                // capacity for its whole lifetime (the h1 work-set trims the same way).
+                clearPmrStringRetainingSmall(writeScratch, 64 * 1024);
             }
             if (stopping && inFlight == 0) {
                 co_return;  // nothing left to write and no more will be produced
@@ -331,7 +337,15 @@ Task<void> runHttp2SansIoSession(
     // dispatchStream. Early co_returns are safe -- dispatchOne (below) owns cleanup.
     auto dispatchOneInner = [&](std::uint32_t streamId) -> Task<void> {
         const auto requestStart = std::chrono::steady_clock::now();
-        RequestMemory requestMemory(worker);
+        // Seed the request arena from a block carried on THIS coroutine frame (already
+        // heap-allocated by co_spawn), so the common request does zero extra heap work
+        // -- restoring the coroutine session's zero-alloc invariant that the retrofit
+        // lost by constructing RequestMemory(worker) (a separate >=4KB alloc/free pair).
+        std::array<std::byte, kRequestArenaStackBytes> arenaBlock;
+        std::optional<RequestMemory> requestMemoryStorage;
+        RequestMemory& requestMemory = emplaceRequestMemory(
+            requestMemoryStorage, worker,
+            std::span<std::byte>(arenaBlock.data(), arenaBlock.size()));
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr) {
             co_return;
@@ -619,10 +633,17 @@ Task<void> runHttp2SansIoSession(
     if (!connection.closing()) {
         std::array<char, 16384> readBuffer;
         for (;;) {
+            // Pick the inactivity phase: mid-header-block -> the tight header timeout;
+            // nothing in flight (no admitted handler, no signalled tunnel/body stream)
+            // -> kIdle so a keep-alive connection between requests is governed by the
+            // keepalive timeout, NOT client_body_timeout; otherwise a body/response is
+            // in progress -> kReadingBody. (WS tunnels carry their own heartbeat.)
             scannerEntry.setPhase(
                 connection.headerBlockInProgress()
                     ? ConnectionScanner::Phase::kReadingHeader
-                    : ConnectionScanner::Phase::kReadingBody);
+                    : (inFlight == 0 && streamSignals.empty())
+                        ? ConnectionScanner::Phase::kIdle
+                        : ConnectionScanner::Phase::kReadingBody);
             const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
                 [&stream, &readBuffer](auto handler) mutable {
                     stream.async_read_some(
