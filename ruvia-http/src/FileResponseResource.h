@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ruvia/memory/ProcessResource.h"
+#include <memory_resource>
 
 namespace ruvia::detail {
 
 [[nodiscard]] inline std::pmr::memory_resource* fileResponseResource() noexcept {
-    return processResource();
+    return std::pmr::get_default_resource();
 }
 
 }  // namespace ruvia::detail

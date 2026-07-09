@@ -2,12 +2,13 @@
 
 #include "MultipartReaderInternal.h"
 #include "MultipartParsing.h"
+#include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/PmrResource.h"
 
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 
@@ -16,7 +17,7 @@ MultipartReader::MultipartReader(
     std::string_view boundary,
     std::pmr::memory_resource* resource)
     : bodyReader_(bodyReader),
-      resource_(detail::pmrResourceOrDefault(resource)),
+      resource_(detail::httpPmrResourceOrDefault(resource)),
       buffer_(resource_),
       boundaryLine_(resource_),
       boundaryPrefix_(resource_),
@@ -24,30 +25,6 @@ MultipartReader::MultipartReader(
       currentFilename_(resource_),
       currentContentType_(resource_) {
     detail::httpAssignMultipartBoundaryMarkers(boundaryLine_, boundaryPrefix_, boundary);
-}
-
-Task<std::optional<MultipartStreamPart>> MultipartReader::read() {
-    for (;;) {
-        compactPending();
-        switch (state_) {
-            case State::kBoundary:
-                co_await processBoundary();
-                if (state_ == State::kDone) {
-                    co_return std::nullopt;
-                }
-                break;
-            case State::kHeaders:
-                co_await processHeaders();
-                break;
-            case State::kBody:
-                if (auto part = co_await readBodyChunk()) {
-                    co_return part;
-                }
-                break;
-            case State::kDone:
-                co_return std::nullopt;
-        }
-    }
 }
 
 std::string_view MultipartReader::bufferView() const noexcept {
@@ -78,25 +55,46 @@ void MultipartReader::compactPending() {
     pendingEraseBytes_ = 0;
 }
 
-Task<bool> MultipartReader::appendMore() {
+void MultipartReader::appendChunk(std::string_view chunk) {
     compactConsumedPrefix();
-    auto chunk = co_await bodyReader_.read();
-    if (!chunk) {
-        co_return false;
-    }
-    buffer_.append(chunk->data(), chunk->size());
-    co_return true;
+    buffer_.append(chunk.data(), chunk.size());
 }
 
-Task<void> MultipartReader::processBoundary() {
-    // RFC 2046 §5.1.1: the first boundary may be preceded by a preamble that "is to
-    // be ignored". Skip it once, reusing the buffered parser's boundary finder so
-    // the streaming and buffered (parseBody) paths accept exactly the same bodies
-    // instead of the streaming path rejecting a preamble the buffered path skips.
-    // The discarded preamble is bounded like the per-part header block so a body
-    // that never presents a boundary cannot buffer without limit. Inter-part
-    // boundaries stay strict (must immediately follow the previous part) so a
-    // corrupt inter-part gap cannot be silently skipped.
+MultipartReader::PollResult MultipartReader::poll() {
+    for (;;) {
+        compactPending();
+        switch (state_) {
+            case State::kBoundary: {
+                const auto status = processBoundary();
+                if (status == PollStatus::kNeedMore || status == PollStatus::kDone) {
+                    return {status, std::nullopt};
+                }
+                break;
+            }
+            case State::kHeaders: {
+                const auto status = processHeaders();
+                if (status == PollStatus::kNeedMore) {
+                    return {status, std::nullopt};
+                }
+                break;
+            }
+            case State::kBody: {
+                auto result = readBodyChunk();
+                if (result.status != PollStatus::kContinue) {
+                    return result;
+                }
+                break;
+            }
+            case State::kDone:
+                return {PollStatus::kDone, std::nullopt};
+        }
+    }
+}
+
+MultipartReader::PollStatus MultipartReader::processBoundary() {
+    // RFC 2046 section 5.1.1: the first boundary may be preceded by a preamble that
+    // is ignored. Skip it once, reusing the buffered parser's boundary finder so
+    // the streaming and buffered paths accept exactly the same bodies.
     constexpr std::size_t kMaxMultipartPreambleBytes = 64 * 1024;
     for (;;) {
         if (firstBoundary_) {
@@ -106,20 +104,15 @@ Task<void> MultipartReader::processBoundary() {
                 if (bufferView().size() > kMaxMultipartPreambleBytes) {
                     throw std::invalid_argument("multipart preamble exceeds limit");
                 }
-                if (!(co_await appendMore())) {
-                    throw std::invalid_argument("invalid multipart body");
-                }
-                continue;
+                return PollStatus::kNeedMore;
             }
             consume(pos);
             firstBoundary_ = false;
         } else if (bufferView().starts_with("\r\n")) {
             consume(2);
         }
-        while (bufferView().size() < boundaryLine_.size() + 2) {
-            if (!(co_await appendMore())) {
-                throw std::invalid_argument("invalid multipart body");
-            }
+        if (bufferView().size() < boundaryLine_.size() + 2) {
+            return PollStatus::kNeedMore;
         }
         const auto buffer = bufferView();
         if (!buffer.starts_with(boundaryLine_)) {
@@ -128,28 +121,21 @@ Task<void> MultipartReader::processBoundary() {
         const auto afterBoundary = boundaryLine_.size();
         if (buffer.substr(afterBoundary, 2) == "--") {
             state_ = State::kDone;
-            co_return;
+            return PollStatus::kDone;
         }
         if (buffer.substr(afterBoundary, 2) == "\r\n") {
             consume(afterBoundary + 2);
             state_ = State::kHeaders;
-            co_return;
+            return PollStatus::kContinue;
         }
-        // The while above guaranteed the two bytes after the boundary line are
-        // present, and appendMore only grows the buffer tail (consuming nothing), so
-        // these fixed bytes can never become "--" or "\r\n". A boundary followed by
-        // anything else is definitively malformed: reject it now rather than buffer
-        // the entire remaining body -- unbounded, unlike the preamble/header phases --
-        // waiting for a delimiter that can never arrive. The buffered parser
-        // (parseBody) rejects the same input immediately, so the two paths agree.
+        // The two bytes after the boundary are present and cannot become a valid
+        // terminator after more input; reject now instead of buffering unboundedly.
         throw std::invalid_argument("invalid multipart body");
     }
 }
 
-Task<void> MultipartReader::processHeaders() {
-    // Cap on a single part's header block, mirroring the 64KB request-header
-    // limit, so a part that opens headers but never terminates them (\r\n\r\n)
-    // cannot force the entire streamed body to buffer in memory.
+MultipartReader::PollStatus MultipartReader::processHeaders() {
+    // Cap on a single part's header block, mirroring the 64KB request-header limit.
     constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
     for (;;) {
         const auto buffer = bufferView();
@@ -158,10 +144,7 @@ Task<void> MultipartReader::processHeaders() {
             if (buffer.size() > kMaxMultipartHeaderBytes) {
                 throw std::invalid_argument("multipart part headers exceed limit");
             }
-            if (!(co_await appendMore())) {
-                throw std::invalid_argument("invalid multipart body");
-            }
-            continue;
+            return PollStatus::kNeedMore;
         }
 
         const auto headers = buffer.substr(0, headersEnd);
@@ -175,8 +158,6 @@ Task<void> MultipartReader::processHeaders() {
                 throw std::invalid_argument("invalid multipart field name");
         }
 
-        // Decode Content-Disposition quoted-pairs so name/filename match the buffered
-        // parser (which does the same in MultipartPartAccess::make).
         currentName_.clear();
         detail::httpAppendDecodedQuotedPairs(currentName_, partHeaders.name);
         currentFilename_.clear();
@@ -190,7 +171,7 @@ Task<void> MultipartReader::processHeaders() {
         consume(headersEnd + 4);
         partBegin_ = true;
         state_ = State::kBody;
-        co_return;
+        return PollStatus::kContinue;
     }
 }
 
@@ -206,23 +187,11 @@ MultipartStreamPart MultipartReader::makePart(std::string_view body, bool partEn
     return part;
 }
 
-Task<std::optional<MultipartStreamPart>> MultipartReader::readBodyChunk() {
+MultipartReader::PollResult MultipartReader::readBodyChunk() {
     for (;;) {
         const auto buffer = bufferView();
-        // Match the buffered parser's boundary detection (httpMultipartBoundaryAt via
-        // this helper): a "\r\n--<boundary>" run is a real delimiter only when it ends
-        // in CRLF or "--". A raw find() would treat the boundary token appearing inside
-        // a part body (e.g. "...\r\n--<boundary>x...") as a delimiter, truncating the
-        // part and then rejecting the stream, diverging from the buffered path. Sole
-        // owner of boundary detection now shared by both parsers. boundaryPrefix_ is
-        // "\r\n--<boundary>", so substr(4) is the bare boundary token.
         const auto boundary = detail::httpFindMultipartBoundaryPrefix(
             buffer, std::string_view(boundaryPrefix_).substr(4));
-        // httpFindMultipartBoundaryPrefix returns an EOF-possible match when the
-        // terminator (CRLF / "--") is not buffered yet. Commit only once both
-        // terminator bytes are present, so a boundary token split across reads -- or a
-        // boundary prefix appearing inside a part body -- is not mistaken for a
-        // delimiter before its terminator can be confirmed (or rejected as content).
         const bool boundaryConfirmed = boundary != std::string_view::npos &&
             boundary + boundaryPrefix_.size() + 2 <= buffer.size();
         if (boundaryConfirmed) {
@@ -230,10 +199,10 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readBodyChunk() {
                 auto part = makePart(buffer.substr(0, boundary), true);
                 pendingEraseBytes_ = boundary;
                 state_ = State::kBoundary;
-                co_return part;
+                return {PollStatus::kPart, std::move(part)};
             }
             state_ = State::kBoundary;
-            break;
+            return {PollStatus::kContinue, std::nullopt};
         }
 
         const auto keepTail = boundaryLine_.size() + 6;
@@ -241,15 +210,11 @@ Task<std::optional<MultipartStreamPart>> MultipartReader::readBodyChunk() {
             const auto bytes = buffer.size() - keepTail;
             auto part = makePart(buffer.substr(0, bytes), false);
             pendingEraseBytes_ = bytes;
-            co_return part;
+            return {PollStatus::kPart, std::move(part)};
         }
 
-        if (!(co_await appendMore())) {
-            throw std::invalid_argument("invalid multipart body");
-        }
+        return {PollStatus::kNeedMore, std::nullopt};
     }
-
-    co_return std::nullopt;
 }
 
 }  // namespace ruvia

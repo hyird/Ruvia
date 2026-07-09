@@ -9,7 +9,7 @@
 #include "HttpRequestInternal.h"
 #include "HttpParserInternal.h"
 #include "HeaderTokenUtils.h"
-#include "ruvia/detail/Base64Url.h"
+#include "detail/HttpBase64Url.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
@@ -30,12 +30,12 @@ struct Http2UpgradeRequest final {
 
 [[nodiscard]] inline bool isHttp2UpgradeAttempt(const HttpServerParseResult& parsed) noexcept {
     return parsed.flags.upgrade &&
-        asciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
+        httpAsciiEqualsIgnoreCase(requestKnownHeader(parsed.request, RequestKnownHeader::kUpgrade), "h2c");
 }
 
 [[nodiscard]] inline bool http2UpgradeConnectionHasSettingsToken(const HttpRequest& request) noexcept {
     for (const auto& header : request.headers()) {
-        if (asciiEqualsIgnoreCase(header.name(), "Connection") &&
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Connection") &&
             httpHasToken(header.value(), "HTTP2-Settings")) {
             return true;
         }
@@ -87,11 +87,11 @@ struct Http2UpgradeRequest final {
     std::uint8_t bits = 0;
     for (const auto ch : input) {
         // RFC 7540 §3.2.1 requires HTTP2-Settings to be UNPADDED base64url. '=' is
-        // not in the base64url alphabet, so decodeBase64UrlChar rejects it. This
+        // not in the base64url alphabet, so httpDecodeBase64UrlChar rejects it. This
         // also rejects a padded final group whose significant length is 1 -- e.g.
         // "A===" -- which the raw-length `% 4 == 1` guard above misses because the
         // trailing padding makes the total length a multiple of 4.
-        const auto value = decodeBase64UrlChar(ch);
+        const auto value = httpDecodeBase64UrlChar(ch);
         if (value < 0) {
             return false;
         }
@@ -125,7 +125,7 @@ struct Http2UpgradeRequest final {
     std::string_view encodedSettings;
     bool seenSettings = false;
     for (const auto& header : parsed.request.headers()) {
-        if (!asciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "HTTP2-Settings")) {
             continue;
         }
         // RFC 7540 3.2.1: a request with more than one HTTP2-Settings header

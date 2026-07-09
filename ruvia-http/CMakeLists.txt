@@ -48,7 +48,6 @@ target_include_directories(ruvia-http
 
 target_link_libraries(ruvia-http
     PUBLIC
-        ruvia::core
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
@@ -82,5 +81,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/detail/CallableRef.h
     include/ruvia/http/detail/Hex.h
     include/ruvia/http/detail/HttpOws.h
+    include/ruvia/http/detail/NativePath.h
+    include/ruvia/http/detail/PmrResource.h
     include/ruvia/http/detail/PmrString.h
 )

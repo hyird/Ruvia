@@ -7,6 +7,7 @@
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderState.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/detail/NumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/Hex.h"

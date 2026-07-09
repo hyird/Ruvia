@@ -132,12 +132,12 @@ private:
             // Counted like resume(): the resumed fetch coroutine touches the session
             // (destroyStream etc.), so the session must not be reaped while this is
             // in flight -- isQuiescent() stays false until the post runs.
-            auto* session = this->session;
-            ++session->pendingResumes_;
-            auto executor = session->ioContext_.get_executor();
-            asio::post(executor, [session, executor, handle]() mutable {
-                asio::post(executor, [session, handle]() {
-                    --session->pendingResumes_;
+            auto* owner = session;
+            ++owner->pendingResumes_;
+            auto executor = owner->ioContext_.get_executor();
+            asio::post(executor, [owner, executor, handle]() mutable {
+                asio::post(executor, [owner, handle]() {
+                    --owner->pendingResumes_;
                     handle.resume();
                 });
             });

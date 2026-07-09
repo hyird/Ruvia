@@ -9,9 +9,11 @@ set_target_properties(ruvia-edge PROPERTIES
 )
 
 ruvia_configure_library(ruvia-edge)
+ruvia_configure_runtime_library(ruvia-edge)
 
 target_link_libraries(ruvia-edge
     PUBLIC
+        ruvia::core
         ruvia::http
 )
 

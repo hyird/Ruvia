@@ -3,7 +3,7 @@
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderBits.h"
 #include "HttpResponseKnownHeaders.h"
-#include "ruvia/detail/NumberFormat.h"
+#include "detail/HttpNumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
 
 #include <charconv>
@@ -247,7 +247,7 @@ bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t kno
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
         const bool matches = knownBit != 0
             ? headerKnownBit == knownBit
-            : detail::asciiEqualsIgnoreCase(read->name(), key);
+            : detail::httpAsciiEqualsIgnoreCase(read->name(), key);
         if (matches) {
             headers_.releaseHeader(*read);
             removed = true;
@@ -287,7 +287,7 @@ void HttpResponse::setHeaderStableView(std::string_view key, std::string_view va
 }
 
 void HttpResponse::setHeaderUnsigned(std::string_view key, std::uint64_t value, std::uint32_t knownBit) {
-    auto& header = prepareHeaderValueStorage(key, detail::unsignedDecimalSize(value), knownBit);
+    auto& header = prepareHeaderValueStorage(key, detail::httpUnsignedDecimalSize(value), knownBit);
     writeUnsignedHeaderValue(header, value);
 }
 
@@ -302,17 +302,17 @@ void HttpResponse::setContentRange(std::uint64_t offset, std::uint64_t length, s
     }
     const auto endOffset = offset + length - 1;
     const auto valueSize = std::string_view("bytes ").size() +
-        detail::unsignedDecimalSize(offset) +
+        detail::httpUnsignedDecimalSize(offset) +
         1 +
-        detail::unsignedDecimalSize(endOffset) +
+        detail::httpUnsignedDecimalSize(endOffset) +
         1 +
-        detail::unsignedDecimalSize(size);
+        detail::httpUnsignedDecimalSize(size);
     auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeHeaderValue(header, offset, length, size);
 }
 
 void HttpResponse::setContentRangeUnsatisfied(std::uint64_t size) {
-    const auto valueSize = std::string_view("bytes */").size() + detail::unsignedDecimalSize(size);
+    const auto valueSize = std::string_view("bytes */").size() + detail::httpUnsignedDecimalSize(size);
     auto& header = prepareHeaderValueStorage("Content-Range", valueSize, detail::kResponseHeaderContentRange);
     writeContentRangeUnsatisfiedHeaderValue(header, size);
 }

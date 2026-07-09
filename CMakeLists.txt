@@ -83,12 +83,6 @@ function(ruvia_configure_library target)
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_compile_definitions(${target}
-        PUBLIC
-            ASIO_STANDALONE
-    )
-    target_precompile_headers(${target} PRIVATE "${PROJECT_SOURCE_DIR}/ruvia-core/src/pch.h")
-
     if(WIN32)
         target_compile_definitions(${target} PUBLIC _WIN32_WINNT=0x0A00)
     endif()
@@ -105,6 +99,14 @@ function(ruvia_configure_library target)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     endif()
+endfunction()
+
+function(ruvia_configure_runtime_library target)
+    target_compile_definitions(${target}
+        PUBLIC
+            ASIO_STANDALONE
+    )
+    target_precompile_headers(${target} PRIVATE "${PROJECT_SOURCE_DIR}/ruvia-core/src/pch.h")
 endfunction()
 
 set(RUVIA_MIMALLOC_TARGET mimalloc)
@@ -160,7 +162,7 @@ foreach(_ruvia_target IN ITEMS ruvia-core ruvia-http ruvia-web ruvia-edge)
 endforeach()
 
 if(WIN32)
-    target_link_libraries(ruvia-http PUBLIC Mswsock Ws2_32)
+    target_link_libraries(ruvia-core PUBLIC Mswsock Ws2_32)
     set_target_properties(ruvia-core PROPERTIES
         INTERFACE_LINK_LIBRARIES_DIRECT "$<TARGET_LINKER_FILE:${RUVIA_MIMALLOC_TARGET}>"
     )
@@ -205,7 +207,6 @@ foreach(_ruvia_component IN LISTS _ruvia_requested_components)
     if(_ruvia_component STREQUAL "core")
         set(_ruvia_needs_core TRUE)
     elseif(_ruvia_component STREQUAL "http")
-        set(_ruvia_needs_core TRUE)
         set(_ruvia_needs_http TRUE)
     elseif(_ruvia_component STREQUAL "web")
         set(_ruvia_needs_core TRUE)
@@ -220,11 +221,11 @@ endforeach()
 
 if(_ruvia_needs_core)
     find_dependency(mimalloc CONFIG REQUIRED)
+    find_dependency(asio CONFIG REQUIRED)
+    find_dependency(Threads REQUIRED)
 endif()
 
 if(_ruvia_needs_http)
-    find_dependency(asio CONFIG REQUIRED)
-    find_dependency(Threads REQUIRED)
     find_dependency(OpenSSL REQUIRED)
     find_dependency(ZLIB REQUIRED)
     find_dependency(unofficial-brotli CONFIG REQUIRED)

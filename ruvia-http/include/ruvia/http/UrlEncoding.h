@@ -10,7 +10,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/Hex.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -130,7 +130,7 @@ template <typename Visitor>
         const auto pair = pairEnd == std::string_view::npos ? input : input.substr(0, pairEnd);
 
         // Skip empty segments ("&&", leading/trailing "&") rather than emitting a phantom
-        // ("", "") pair — a segment with no bytes carries no field.
+        // ("", "") pair : a segment with no bytes carries no field.
         if (!pair.empty()) {
             const auto equals = pair.find('=');
             const auto name = equals == std::string_view::npos ? pair : pair.substr(0, equals);
@@ -166,7 +166,7 @@ template <typename Visitor>
     std::string_view input,
     std::pmr::memory_resource* resource,
     UrlDecodeMode mode) {
-    std::pmr::string output(pmrResourceOrDefault(resource));
+    std::pmr::string output(httpPmrResourceOrDefault(resource));
     if (!decodeUrlComponent(input, output, mode)) {
         return std::nullopt;
     }

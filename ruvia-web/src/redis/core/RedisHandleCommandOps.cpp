@@ -1,6 +1,7 @@
 #include "RedisHandleCommandOps.h"
 
 #include "RedisHandleHelpers.h"
+#include "ruvia/detail/AsciiCase.h"
 
 namespace ruvia::detail {
 

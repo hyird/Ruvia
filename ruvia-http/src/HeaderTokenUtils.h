@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/detail/HttpOws.h"
 
 namespace ruvia::detail {
@@ -188,7 +188,7 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     std::string_view name) {
     std::optional<std::string_view> result;
     httpVisitSemicolonParametersQuoted(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (asciiEqualsIgnoreCase(key, name)) {
+        if (httpAsciiEqualsIgnoreCase(key, name)) {
             result = parameterValue;
         }
         return true;
@@ -201,7 +201,7 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     std::string_view name) {
     std::optional<std::string_view> result;
     httpVisitSemicolonParameters(value, [name, &result](std::string_view key, std::string_view parameterValue) {
-        if (asciiEqualsIgnoreCase(key, name)) {
+        if (httpAsciiEqualsIgnoreCase(key, name)) {
             result = parameterValue;
         }
         return true;
@@ -213,11 +213,11 @@ inline void httpVisitSemicolonParametersQuoted(std::string_view value, Visitor&&
     if (expected.empty()) {
         return false;
     }
-    const auto expectedFirst = asciiToLower(static_cast<unsigned char>(expected.front()));
+    const auto expectedFirst = httpAsciiToLower(static_cast<unsigned char>(expected.front()));
     return !httpFindHeaderToken(value, [expected, expectedFirst](std::string_view token) noexcept {
         if (token.size() == expected.size() &&
-            asciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst &&
-            asciiEqualsIgnoreCase(token, expected)) {
+            httpAsciiToLower(static_cast<unsigned char>(token.front())) == expectedFirst &&
+            httpAsciiEqualsIgnoreCase(token, expected)) {
             return true;
         }
         return false;
@@ -251,22 +251,22 @@ inline void httpUpdateConnectionFlags(
         switch (token.size()) {
             case 5:
                 if (!close &&
-                    asciiToLower(static_cast<unsigned char>(token.front())) == 'c' &&
-                    asciiEqualsIgnoreCase(token, "close")) {
+                    httpAsciiToLower(static_cast<unsigned char>(token.front())) == 'c' &&
+                    httpAsciiEqualsIgnoreCase(token, "close")) {
                     close = true;
                 }
                 break;
             case 7:
                 if (!upgrade &&
-                    asciiToLower(static_cast<unsigned char>(token.front())) == 'u' &&
-                    asciiEqualsIgnoreCase(token, "Upgrade")) {
+                    httpAsciiToLower(static_cast<unsigned char>(token.front())) == 'u' &&
+                    httpAsciiEqualsIgnoreCase(token, "Upgrade")) {
                     upgrade = true;
                 }
                 break;
             case 10:
                 if (!keepAlive &&
-                    asciiToLower(static_cast<unsigned char>(token.front())) == 'k' &&
-                    asciiEqualsIgnoreCase(token, "keep-alive")) {
+                    httpAsciiToLower(static_cast<unsigned char>(token.front())) == 'k' &&
+                    httpAsciiEqualsIgnoreCase(token, "keep-alive")) {
                     keepAlive = true;
                 }
                 break;
@@ -282,7 +282,7 @@ inline void httpUpdateConnectionFlags(
 
 [[nodiscard]] inline bool httpUpdateExpectContinueFlag(std::string_view value, bool& expectContinue) noexcept {
     value = httpTrimOws(value);
-    if (!asciiEqualsIgnoreCase(value, "100-continue")) {
+    if (!httpAsciiEqualsIgnoreCase(value, "100-continue")) {
         return false;
     }
     expectContinue = true;

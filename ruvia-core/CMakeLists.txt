@@ -11,6 +11,7 @@ set_target_properties(ruvia-core PROPERTIES
 )
 
 ruvia_configure_library(ruvia-core)
+ruvia_configure_runtime_library(ruvia-core)
 
 target_include_directories(ruvia-core
     PUBLIC

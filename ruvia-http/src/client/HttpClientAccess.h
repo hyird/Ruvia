@@ -19,10 +19,10 @@ struct FetchResponseHeaderAccess final {
         std::string_view value,
         std::pmr::memory_resource* resource) {
         return FetchResponseHeader(
-            ResolvedPmrResourceTag{},
+            HttpResolvedPmrResourceTag{},
             name,
             value,
-            pmrResourceOrDefault(resource));
+            httpPmrResourceOrDefault(resource));
     }
 };
 

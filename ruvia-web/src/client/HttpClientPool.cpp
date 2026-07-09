@@ -22,6 +22,7 @@
 #include "client/HttpClientResponseLimits.h"
 #include "client/HttpClientResponseParser.h"
 #include "HttpClientTlsVerification.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"

@@ -9,6 +9,7 @@
 #include "MultipartParsing.h"
 #include "RequestBodyDecoding.h"
 #include "RequestBodyLoader.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/model/Parser.h"

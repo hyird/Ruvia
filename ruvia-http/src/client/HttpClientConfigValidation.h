@@ -8,7 +8,7 @@
 #include <system_error>
 
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 #include "ConfigValidation.h"
 #include "parser/HttpRequestTarget.h"
 
@@ -56,7 +56,7 @@ inline void validateHttpClientConfig(const HttpClientConfig& config) {
     std::pmr::memory_resource* resource) {
     validateHttpClientConfig(config);
 
-    auto* const targetResource = pmrResourceOrDefault(resource);
+    auto* const targetResource = httpPmrResourceOrDefault(resource);
     // An explicit Host override (e.g. a reverse proxy fronting a vhost behind an IP) is used
     // verbatim; otherwise the Host is derived from the connect host + non-default port.
     if (!config.hostHeader.empty()) {

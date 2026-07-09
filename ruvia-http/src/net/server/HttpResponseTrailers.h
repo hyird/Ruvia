@@ -74,36 +74,36 @@ namespace ruvia::detail {
 
     switch (name.size()) {
         case 2:
-            return asciiEqualsIgnoreCase(name, "TE");
+            return httpAsciiEqualsIgnoreCase(name, "TE");
         case 3:
             // Response control data (RFC 9110 §7.4).
-            return asciiEqualsIgnoreCase(name, "Age");
+            return httpAsciiEqualsIgnoreCase(name, "Age");
         case 4:
-            return asciiEqualsIgnoreCase(name, "Date") ||
-                asciiEqualsIgnoreCase(name, "Vary");
+            return httpAsciiEqualsIgnoreCase(name, "Date") ||
+                httpAsciiEqualsIgnoreCase(name, "Vary");
         case 6:
-            return asciiEqualsIgnoreCase(name, "Pragma");
+            return httpAsciiEqualsIgnoreCase(name, "Pragma");
         case 7:
-            return asciiEqualsIgnoreCase(name, "Trailer") ||
-                asciiEqualsIgnoreCase(name, "Expires") ||
-                asciiEqualsIgnoreCase(name, "Warning");
+            return httpAsciiEqualsIgnoreCase(name, "Trailer") ||
+                httpAsciiEqualsIgnoreCase(name, "Expires") ||
+                httpAsciiEqualsIgnoreCase(name, "Warning");
         case 8:
-            return asciiEqualsIgnoreCase(name, "Location");
+            return httpAsciiEqualsIgnoreCase(name, "Location");
         case 10:
-            return asciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                asciiEqualsIgnoreCase(name, "Set-Cookie");
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 11:
-            return asciiEqualsIgnoreCase(name, "Retry-After");
+            return httpAsciiEqualsIgnoreCase(name, "Retry-After");
         case 12:
-            return asciiEqualsIgnoreCase(name, "Max-Forwards");
+            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
-            return asciiEqualsIgnoreCase(name, "Cache-Control") ||
-                asciiEqualsIgnoreCase(name, "Accept-Ranges") ||
-                asciiEqualsIgnoreCase(name, "Content-Range");
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
+                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 18:
-            return asciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
-            return asciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
         default:
             return false;
     }

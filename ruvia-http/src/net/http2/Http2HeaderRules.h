@@ -26,14 +26,14 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline bool http2IsForbiddenUpgradedRequestHeader(std::string_view name) noexcept {
-    return asciiEqualsIgnoreCase(name, "connection") ||
-        asciiEqualsIgnoreCase(name, "upgrade") ||
-        asciiEqualsIgnoreCase(name, "http2-settings") ||
-        asciiEqualsIgnoreCase(name, "keep-alive") ||
-        asciiEqualsIgnoreCase(name, "proxy-connection") ||
-        asciiEqualsIgnoreCase(name, "te") ||
-        asciiEqualsIgnoreCase(name, "trailer") ||
-        asciiEqualsIgnoreCase(name, "transfer-encoding");
+    return httpAsciiEqualsIgnoreCase(name, "connection") ||
+        httpAsciiEqualsIgnoreCase(name, "upgrade") ||
+        httpAsciiEqualsIgnoreCase(name, "http2-settings") ||
+        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
+        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+        httpAsciiEqualsIgnoreCase(name, "te") ||
+        httpAsciiEqualsIgnoreCase(name, "trailer") ||
+        httpAsciiEqualsIgnoreCase(name, "transfer-encoding");
 }
 
 [[nodiscard]] inline bool http2IsValidRegularHeader(

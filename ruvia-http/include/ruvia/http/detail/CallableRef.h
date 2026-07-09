@@ -1,10 +1,13 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
-
 #include <utility>
 
-namespace ruvia::detail {
+namespace ruvia {
+
+template <typename T>
+class Task;
+
+namespace detail {
 
 template <typename Result, typename... Args>
 class CallableRef final {
@@ -37,4 +40,5 @@ private:
     Invoke invoke_{nullptr};
 };
 
-}  // namespace ruvia::detail
+}  // namespace detail
+}  // namespace ruvia

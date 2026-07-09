@@ -16,8 +16,8 @@ ruvia-edge  -> ruvia::edge
 依赖方向固定：
 
 ```text
-ruvia-web  -> ruvia-http -> ruvia-core
-ruvia-edge -> ruvia-http -> ruvia-core
+ruvia-web  -> ruvia-core + ruvia-http
+ruvia-edge -> ruvia-core + ruvia-http
 ```
 
 新代码、新示例和新文档使用 `ruvia::web`，不保留历史 Web 框架别名。
@@ -64,23 +64,24 @@ tests/
 
 ### ruvia-core
 
-`ruvia-core` 是通用核心库，可给外部用户单独使用。
+`ruvia-core` 是 runtime 底座库，可给外部用户单独使用，也承载 Ruvia 的 Asio/Task/内存运行时基础设施。
 
 可以包含：
 
-- `ruvia::Task<T>` 及非 Asio coroutine promise/awaiter。
+- `ruvia::Task<T>`、coroutine promise/awaiter、Asio awaiter/driver glue。
 - PMR、memory resource、mimalloc 包装、对象生命周期 helper。
+- worker/request memory、connection scanner、socket/runtime helper。
 - ASCII、base64/base64url、constant-time、number/path 等小型通用 helper。
 
 禁止包含：
 
 - HTTP/Web 语义。
 - App、Context、Controller、Router、middleware、model、DB、Redis、JWT、edge policy。
-- 对 Asio、OpenSSL、zlib、brotli、zstd、MariaDB、hiredis 的公开依赖。
+- 对 HTTP/Web 协议语义、OpenSSL、zlib、brotli、zstd、MariaDB、hiredis 的公开依赖。
 
 ### ruvia-http
 
-`ruvia-http` 是通用 HTTP/协议库，可给外部用户单独使用。
+`ruvia-http` 是通用 HTTP/协议库，可给外部用户单独使用。它是纯协议 target，不依赖 `ruvia-core`、Asio、socket 或 Ruvia runtime。
 
 可以包含：
 
@@ -90,7 +91,8 @@ tests/
 - multipart/form/url encoding/body stream。
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
-- 纯协议 primitive（零 asio、零 socket；client/server 的 I/O runtime 都在 `ruvia-web`）。
+- multipart/SSE/content-encoding 等 wire-format 和协议语义实现。
+- 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或 `ruvia-edge` 驱动）。
 
 禁止包含：
 
@@ -112,15 +114,15 @@ tests/
 - Session、CSRF、RateLimit、CORS、安全头、静态文件目录扫描/索引、AutoHTTPS redirect 等基于 HTTP 的 Web 应用能力。
 - 可选 MariaDB、Redis、JWT 集成。
 
-`ruvia-web` 可以依赖 `ruvia::http`，但不得把 Web-only API 下沉到 `ruvia-http`。
+`ruvia-web` 依赖 `ruvia::core` 和 `ruvia::http`，但不得把 Web-only API 下沉到 `ruvia-http`。
 
 ### HTTP 协议与上层应用边界
 
-`ruvia-http` 拥有 HTTP 协议本体：wire/message/framing/connection 语义，以及跨 server/client/edge 都能复用的 sans-I/O 状态机和纯协议 helper。包括但不限于 HTTP/1 request/response 解析、chunked 与 Content-Length framing、keep-alive 与 `Connection` 语义、`Expect: 100-continue`、Upgrade/h2c/WebSocket 握手字节、HTTP/1.0 close-delimited 响应流、HTTP/2 frame/HPACK/settings/flow-control、response head 序列化、WebSocket frame/close code/permessage-deflate 协议处理。
+`ruvia-http` 拥有 HTTP 协议本体：wire/message/framing/connection 语义，以及跨 server/client/edge 都能复用的 sans-I/O 状态机和纯协议 helper。所有 HTTP/1、HTTP/2、WebSocket、SSE、multipart、content-coding 等协议实现都应留在 `ruvia-http`。包括但不限于 HTTP/1 request/response 解析、chunked 与 Content-Length framing、keep-alive 与 `Connection` 语义、`Expect: 100-continue`、Upgrade/h2c/WebSocket 握手字节、HTTP/1.0 close-delimited 响应流、HTTP/2 frame/HPACK/settings/flow-control、response head 序列化、WebSocket frame/close code/permessage-deflate 协议处理。
 
 `ruvia-web` 拥有 HTTP 之上的应用能力：App/Context/Router/middleware/controller、route validation、session、CSRF、JWT、rate limit、CORS 策略与中间件、安全头中间件、静态文件目录扫描/索引/产品配置、AutoHTTPS redirect、DB/Redis 集成、WebSocket route 绑定等。它们可以读写 HTTP header，但这不等于它们属于 HTTP 协议本体。
 
-边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议错误如何映射”，应放在 `ruvia-http`；如果代码决定“某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。`ruvia-web` 应只用 asio/TLS/socket/timeouts 驱动 `ruvia-http` 的 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
+边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议错误如何映射”，应放在 `ruvia-http`；如果代码决定“某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
 ### ruvia-edge
 
@@ -128,7 +130,7 @@ tests/
 
 规则：
 
-- 只能依赖 `ruvia::http`。
+- 只能依赖 `ruvia::core` 和 `ruvia::http`。
 - 不得依赖 `ruvia::web`。
 - 不得使用 Context、Router、Controller、route macro、middleware。
 - 需要复用时优先下沉到 `ruvia-core` 或 `ruvia-http`，不要让 edge 和 web 互相耦合。
@@ -214,7 +216,7 @@ tests/
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- outbound HTTP client 是 `ruvia-http` 能力（public 头 `ruvia/http/HttpClient.h` 由 http 安装；协议/策略半部在 `ruvia-http/src/client/`：响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O），与 server 同构地把 asio 运行时 driver 放在上层：`ruvia-web/src/client/`（HttpClientPool / Http2ClientSession / HttpClientRegistry，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
+- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 放在上层：`ruvia-web/src/client/`（HttpClientPool / Http2ClientSession / HttpClientRegistry，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
 - 下游推荐：
 
 ```cmake

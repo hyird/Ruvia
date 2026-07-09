@@ -41,21 +41,21 @@ namespace {
 
     switch (name.size()) {
         case 2:
-            return asciiEqualsIgnoreCase(name, "TE");
+            return httpAsciiEqualsIgnoreCase(name, "TE");
         case 7:
-            return asciiEqualsIgnoreCase(name, "Trailer");
+            return httpAsciiEqualsIgnoreCase(name, "Trailer");
         case 10:
-            return asciiEqualsIgnoreCase(name, "Keep-Alive") ||
-                asciiEqualsIgnoreCase(name, "Set-Cookie");
+            return httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+                httpAsciiEqualsIgnoreCase(name, "Set-Cookie");
         case 12:
-            return asciiEqualsIgnoreCase(name, "Max-Forwards");
+            return httpAsciiEqualsIgnoreCase(name, "Max-Forwards");
         case 13:
             // The common classified forbidden fields are caught above; keep the
             // less common trailer-forbidden names here without growing the hot
             // request known-header table.
-            return asciiEqualsIgnoreCase(name, "Cache-Control") ||
-                asciiEqualsIgnoreCase(name, "Accept-Ranges") ||
-                asciiEqualsIgnoreCase(name, "Content-Range");
+            return httpAsciiEqualsIgnoreCase(name, "Cache-Control") ||
+                httpAsciiEqualsIgnoreCase(name, "Accept-Ranges") ||
+                httpAsciiEqualsIgnoreCase(name, "Content-Range");
         case 16:
             // Proxy-Connection completes the connection-specific set that must not
             // arrive late in a trailer (Connection / Keep-Alive / Transfer-Encoding
@@ -64,12 +64,12 @@ namespace {
             // exactly as for Upgrade; the HTTP/2 path already bans it as a
             // connection-specific header. Content-Encoding is also caught by the
             // classified path above and is repeated here only defensively.
-            return asciiEqualsIgnoreCase(name, "Content-Encoding") ||
-                asciiEqualsIgnoreCase(name, "Proxy-Connection");
+            return httpAsciiEqualsIgnoreCase(name, "Content-Encoding") ||
+                httpAsciiEqualsIgnoreCase(name, "Proxy-Connection");
         case 18:
-            return asciiEqualsIgnoreCase(name, "Proxy-Authenticate");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authenticate");
         case 19:
-            return asciiEqualsIgnoreCase(name, "Proxy-Authorization");
+            return httpAsciiEqualsIgnoreCase(name, "Proxy-Authorization");
         default:
             return false;
     }

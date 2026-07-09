@@ -7,7 +7,7 @@ Task<std::optional<WebSocketMessage>> WebSocketConnection<Transport>::read() {
     for (;;) {
         std::optional<WebSocketFrameView> frame;
         auto message = WebSocketMessageAccess::make(WebSocketOpcode::kText, {});
-        WebSocketInboundAction action;
+        WebSocketInboundAction action = WebSocketInboundAction::kContinue;
         // co_await is not allowed inside a catch handler, so record the violation
         // and send the Close after the try. A protocol violation sets a nonzero
         // close code; an abnormal mid-frame EOF ends the loop with no Close frame.
@@ -91,9 +91,19 @@ Task<bool> WebSocketConnection<Transport>::ensure(std::size_t bytes) {
 
 template <typename Transport>
 Task<std::optional<WebSocketFrameView>> WebSocketConnection<Transport>::readFrame() {
-    return webSocketReadFrame(
-        buffer_, offset_, pendingCompactUntil_, maxMessageBytes_, permessageDeflate_,
-        [this](std::size_t bytes) { return ensure(bytes); });
+    for (;;) {
+        auto result = webSocketTryReadFrame(
+            buffer_, offset_, pendingCompactUntil_, maxMessageBytes_, permessageDeflate_);
+        if (result.status == WebSocketFrameReadStatus::kFrame) {
+            co_return std::move(result.frame);
+        }
+        if (!(co_await ensure(result.requiredBytes))) {
+            if (result.cleanEofAllowed) {
+                co_return std::nullopt;
+            }
+            throw std::invalid_argument("incomplete websocket frame");
+        }
+    }
 }
 
 }  // namespace ruvia::detail

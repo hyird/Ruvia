@@ -1,0 +1,13 @@
+#include "StreamingInternal.h"
+
+#include "ruvia/app/Task.h"
+
+namespace ruvia {
+
+Task<void> SseWriter::writeSSE(const SseMessage& message) {
+    auto& frame = detail::StreamingAccess::scratch(writer_);
+    detail::formatSseMessage(frame, message);
+    co_await writer_.write(frame);
+}
+
+}  // namespace ruvia

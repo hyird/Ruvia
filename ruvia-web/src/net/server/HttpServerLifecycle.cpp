@@ -25,6 +25,7 @@
 #include "HttpServerOptionsValidation.h"
 #include "HeaderTokenUtils.h"
 #include "runtime/AsioAwait.h"
+#include "ruvia/detail/AsciiCase.h"
 
 namespace ruvia::detail {
 

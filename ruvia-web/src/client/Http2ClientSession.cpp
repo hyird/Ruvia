@@ -28,6 +28,7 @@
 #include "client/HttpClientRedirect.h"
 #include "client/HttpClientResponseLimits.h"
 #include "HttpClientTlsVerification.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrResource.h"

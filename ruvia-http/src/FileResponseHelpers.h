@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/detail/NativePath.h"
+#include "ruvia/http/detail/NativePath.h"
 #include "FileResponseResource.h"
 #include "HttpImfFixdate.h"
 
@@ -56,7 +56,7 @@ template <typename Char>
 [[nodiscard]] inline std::pmr::string httpLowerFileExtension(
     const std::filesystem::path& path,
     std::pmr::memory_resource* resource = fileResponseResource()) {
-    const auto native = nativePathView(path);
+    const auto native = httpNativePathView(path);
     const auto source = httpFileExtension(native);
     if (source.empty()) {
         return std::pmr::string(resource);
@@ -65,9 +65,9 @@ template <typename Char>
     extension.reserve(source.size());
     for (const auto c : source) {
         auto out = c;
-        if (out >= static_cast<NativePathChar>('A') &&
-            out <= static_cast<NativePathChar>('Z')) {
-            out = static_cast<NativePathChar>(out + static_cast<NativePathChar>('a' - 'A'));
+        if (out >= static_cast<HttpNativePathChar>('A') &&
+            out <= static_cast<HttpNativePathChar>('Z')) {
+            out = static_cast<HttpNativePathChar>(out + static_cast<HttpNativePathChar>('a' - 'A'));
         }
         extension.push_back(static_cast<char>(out));
     }
@@ -75,7 +75,7 @@ template <typename Char>
 }
 
 [[nodiscard]] inline std::string_view httpGuessContentType(const std::filesystem::path& path) {
-    const auto native = nativePathView(path);
+    const auto native = httpNativePathView(path);
     const auto extension = httpFileExtension(native);
     if (httpExtensionEquals(extension, ".html") || httpExtensionEquals(extension, ".htm")) {
         return "text/html; charset=utf-8";

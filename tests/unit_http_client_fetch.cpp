@@ -35,6 +35,7 @@
 #include "client/HttpClientInternal.h"
 #include "client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/MemoryPool.h"
 

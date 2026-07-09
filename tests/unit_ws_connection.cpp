@@ -53,7 +53,7 @@ RUVIA_TEST(ws_connection_auto_pongs_ping) {
     WsConnection conn(&resource);
 
     const auto f = maskedFrame(&resource, 0x9, "pp");
-    conn.feed(std::string_view(f.data(), f.size()));
+    (void)conn.feed(std::string_view(f.data(), f.size()));
 
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kPing);
@@ -76,7 +76,7 @@ RUVIA_TEST(ws_connection_echoes_close) {
     body.push_back(static_cast<char>(0x03));  // 1000 = normal closure
     body.push_back(static_cast<char>(0xE8));
     const auto f = maskedFrame(&resource, 0x8, std::string_view(body.data(), body.size()));
-    conn.feed(std::string_view(f.data(), f.size()));
+    (void)conn.feed(std::string_view(f.data(), f.size()));
 
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kClose);
@@ -98,7 +98,7 @@ RUVIA_TEST(ws_connection_reassembles_fragmented_message) {
     std::pmr::string both(&resource);
     both.append(f1.data(), f1.size());
     both.append(f2.data(), f2.size());
-    conn.feed(std::string_view(both.data(), both.size()));
+    (void)conn.feed(std::string_view(both.data(), both.size()));
 
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
@@ -117,7 +117,7 @@ RUVIA_TEST(ws_connection_rejects_unmasked_frame) {
     f.push_back(static_cast<char>(0x81));  // FIN|Text
     f.push_back(static_cast<char>(2));     // no mask bit, len 2
     f.append("hi", 2);
-    conn.feed(std::string_view(f.data(), f.size()));
+    (void)conn.feed(std::string_view(f.data(), f.size()));
 
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kProtocolError);
@@ -131,7 +131,7 @@ RUVIA_TEST(ws_connection_submit_message_encodes_unmasked_frame) {
     std::pmr::monotonic_buffer_resource resource;
     WsConnection conn(&resource);
 
-    conn.submitMessage(WebSocketOpcode::kText, "hello");
+    (void)conn.submitMessage(WebSocketOpcode::kText, "hello");
     const auto out = conn.pendingOutput();
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x81));  // FIN|Text
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[1]), static_cast<unsigned char>(5));      // unmasked len
@@ -145,11 +145,11 @@ RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
     WsConnection conn(&resource);
 
     const auto f = maskedFrame(&resource, 0x1, "split");
-    conn.feed(std::string_view(f.data(), 3));  // header only, no full payload
+    (void)conn.feed(std::string_view(f.data(), 3));  // header only, no full payload
     RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kNone);
     RUVIA_CHECK(!conn.closing());
 
-    conn.feed(std::string_view(f.data() + 3, f.size() - 3));  // remainder
+    (void)conn.feed(std::string_view(f.data() + 3, f.size() - 3));  // remainder
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
     RUVIA_CHECK(e.payload == std::string_view("split"));
@@ -169,7 +169,7 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
     const auto f = maskedFrame(
         &resource, 0x1, std::string_view(compressed.data(), compressed.size()),
         /*fin=*/true, /*rsv1=*/true);
-    conn.feed(std::string_view(f.data(), f.size()));
+    (void)conn.feed(std::string_view(f.data(), f.size()));
 
     const auto e = conn.nextEvent();
     RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
@@ -183,7 +183,7 @@ RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     WsConnection conn(&resource, 0, /*permessageDeflate=*/true);
 
     const std::pmr::string repetitive(200, 'a', &resource);
-    conn.submitMessage(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size()));
+    (void)conn.submitMessage(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size()));
 
     const auto out = conn.pendingOutput();
     RUVIA_CHECK((static_cast<unsigned char>(out[0]) & 0x40U) != 0);  // RSV1 (compressed)
@@ -197,7 +197,7 @@ RUVIA_TEST(ws_connection_rejects_rsv1_without_deflate) {
     WsConnection conn(&resource);  // no deflate
 
     const auto f = maskedFrame(&resource, 0x1, "x", /*fin=*/true, /*rsv1=*/true);
-    conn.feed(std::string_view(f.data(), f.size()));
+    (void)conn.feed(std::string_view(f.data(), f.size()));
 
     RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kProtocolError);
     RUVIA_CHECK(conn.closing());

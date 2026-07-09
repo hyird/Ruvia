@@ -70,7 +70,7 @@ template <typename HeaderPointer, std::size_t Count>
     for (auto cursor = begin; cursor != end; ++cursor) {
         const auto headerKnownBit = responseHeaderKnownBit(*cursor);
         if ((knownBit != 0 && headerKnownBit == knownBit) ||
-            (knownBit == 0 && asciiEqualsIgnoreCase(cursor->name(), name))) {
+            (knownBit == 0 && httpAsciiEqualsIgnoreCase(cursor->name(), name))) {
             return cursor;
         }
     }

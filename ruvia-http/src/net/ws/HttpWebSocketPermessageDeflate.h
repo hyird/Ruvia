@@ -144,7 +144,7 @@ struct WebSocketDeflateNegotiation final {
         const auto offer = httpTrimOws(comma == std::string_view::npos ? offers : offers.substr(0, comma));
         const auto semicolon = offer.find(';');
         const auto name = httpTrimOws(semicolon == std::string_view::npos ? offer : offer.substr(0, semicolon));
-        if (asciiEqualsIgnoreCase(name, "permessage-deflate")) {
+        if (httpAsciiEqualsIgnoreCase(name, "permessage-deflate")) {
             const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
             const auto serverWindow = httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits");
             if (!serverWindow.has_value()) {
@@ -193,7 +193,7 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
     // independently (first honorable wins), so first-honorable-across-lines is the
     // same result as scanning the joined list.
     for (const auto& header : request.headers()) {
-        if (!asciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Sec-WebSocket-Extensions")) {
             continue;
         }
         const auto negotiation = webSocketScanDeflateOffers(header.value());

@@ -85,7 +85,7 @@ public:
 
 private:
     enum class WsReadStatus : std::uint8_t { kFrame, kNeedMore };
-    // Synchronous, sans-I/O reimplementation of webSocketReadFrame: parse one masked
+    // Synchronous, sans-I/O frame reader matching webSocketTryReadFrame: parse one masked
     // frame from input_ at inputOffset_. Throws WebSocketProtocolError on a violation.
     [[nodiscard]] WsReadStatus readFrame(WebSocketFrameView& out);
     // Encode a frame header + payload into the outbound buffer (server frames are

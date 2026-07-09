@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -152,7 +152,7 @@ public:
     using const_iterator = const RequestNameValueView*;
 
     explicit RequestNameValueList(Token, std::pmr::memory_resource* resource = nullptr)
-        : items_(detail::pmrResourceOrDefault(resource)) {}
+        : items_(detail::httpPmrResourceOrDefault(resource)) {}
 
     RequestNameValueList(const RequestNameValueList&) = delete;
     RequestNameValueList& operator=(const RequestNameValueList&) = delete;
@@ -241,7 +241,7 @@ class RequestValueGroup final {
 public:
     RequestValueGroup(Token, std::pmr::memory_resource* resource, std::string_view name)
         : name_(name),
-          values_(detail::pmrResourceOrDefault(resource)) {}
+          values_(detail::httpPmrResourceOrDefault(resource)) {}
 
     RequestValueGroup(const RequestValueGroup&) = delete;
     RequestValueGroup& operator=(const RequestValueGroup&) = delete;
@@ -285,7 +285,7 @@ public:
     using const_iterator = const RequestValueGroup*;
 
     explicit RequestValueGroupList(Token, std::pmr::memory_resource* resource = nullptr)
-        : groups_(detail::pmrResourceOrDefault(resource)) {}
+        : groups_(detail::httpPmrResourceOrDefault(resource)) {}
 
     RequestValueGroupList(const RequestValueGroupList&) = delete;
     RequestValueGroupList& operator=(const RequestValueGroupList&) = delete;

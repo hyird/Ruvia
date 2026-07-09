@@ -9,7 +9,7 @@
 
 namespace ruvia::detail {
 
-// Response content-codings the server can negotiate (RFC 9110 §8.4.1). gzip is
+// Response content-codings the server can negotiate (RFC 9110 section 8.4.1). gzip is
 // RFC 1952, br (Brotli) is RFC 7932, zstd is RFC 8878.
 enum class HttpContentCoding : std::uint8_t {
     kNone,
@@ -52,13 +52,13 @@ enum class HttpContentCoding : std::uint8_t {
 
 [[nodiscard]] inline int httpQualityParameter(std::string_view value) noexcept {
     // Reuse the shared quote-aware parameter scanner so a ';' inside a quoted media-range
-    // parameter (RFC 7231 §5.3.1: token "=" (token / quoted-string)) is not mistaken for a
-    // parameter separator — the same helper multipart Content-Type parsing uses. The leading
+    // parameter (RFC 7231 section 5.3.1: token "=" (token / quoted-string)) is not mistaken for a
+    // parameter separator ; the same helper multipart Content-Type parsing uses. The leading
     // media-type / coding token has no '=', so it is skipped exactly as before; first q wins.
     int quality = 1000;
     httpVisitSemicolonParametersQuoted(
         value, [&quality](std::string_view name, std::string_view parameter) noexcept {
-            if (asciiEqualsIgnoreCase(name, "q")) {
+            if (httpAsciiEqualsIgnoreCase(name, "q")) {
                 const auto parsed = httpParseQualityValue(parameter);
                 quality = parsed < 0 ? 0 : parsed;
                 return false;  // first q wins; later parameters are accept-ext
@@ -82,7 +82,7 @@ inline void httpUpdateAcceptedEncodingQuality(
         acceptEncoding,
         [coding, &explicitQuality, &wildcardQuality](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
-            if (asciiEqualsIgnoreCase(token, coding)) {
+            if (httpAsciiEqualsIgnoreCase(token, coding)) {
                 explicitQuality = httpQualityParameter(item);
             } else if (token == "*") {
                 wildcardQuality = httpQualityParameter(item);
@@ -152,7 +152,7 @@ struct HttpAcceptedEncodingQuality {
 // Single-pass Accept-Encoding scan that updates the gzip/br/zstd qualities
 // together. Equivalent to gzip.update()/brotli.update()/zstd.update() with the
 // same header value, but walks the comma-separated list once instead of three
-// times — this runs on the per-request header-parse hot path. Like
+// times ; this runs on the per-request header-parse hot path. Like
 // HttpAcceptedEncodingQuality::update it accumulates across calls (a later
 // matching item overwrites), so repeated Accept-Encoding header lines compose.
 inline void httpUpdateResponseCodingQualities(
@@ -164,11 +164,11 @@ inline void httpUpdateResponseCodingQualities(
         acceptEncoding,
         [&gzip, &brotli, &zstd](std::string_view item) noexcept {
             const auto token = httpHeaderTokenBeforeParameters(item);
-            if (asciiEqualsIgnoreCase(token, "gzip")) {
+            if (httpAsciiEqualsIgnoreCase(token, "gzip")) {
                 gzip.explicitQuality = httpQualityParameter(item);
-            } else if (asciiEqualsIgnoreCase(token, "br")) {
+            } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
                 brotli.explicitQuality = httpQualityParameter(item);
-            } else if (asciiEqualsIgnoreCase(token, "zstd")) {
+            } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
                 zstd.explicitQuality = httpQualityParameter(item);
             } else if (token == "*") {
                 const auto wildcard = httpQualityParameter(item);
@@ -244,11 +244,11 @@ struct HttpMediaTypeParts final {
     if (rangeParts.type == "*" && rangeParts.subtype == "*") {
         return true;
     }
-    if (!asciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
+    if (!httpAsciiEqualsIgnoreCase(rangeParts.type, offeredParts.type)) {
         return false;
     }
     return rangeParts.subtype == "*" ||
-        asciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
+        httpAsciiEqualsIgnoreCase(rangeParts.subtype, offeredParts.subtype);
 }
 
 [[nodiscard]] inline int httpMediaRangeSpecificity(std::string_view range) noexcept {

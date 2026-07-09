@@ -48,7 +48,7 @@ inline void httpAssignMultipartBoundaryMarkers(
     }
     // A real delimiter line ends the boundary token with CRLF (next part) or "--" (close);
     // a boundary that is merely a prefix of a longer content token (e.g. "abc" inside "abcXYZ")
-    // is NOT a delimiter. At end-of-buffer the match is incomplete — leave that to the caller.
+    // is NOT a delimiter. At end-of-buffer the match is incomplete ; leave that to the caller.
     const auto after = offset + markerSize;
     if (after == input.size()) {
         return true;
@@ -105,7 +105,7 @@ inline void httpAssignMultipartBoundaryMarkers(
         const auto colon = line.find(':');
         if (colon != std::string_view::npos) {
             const auto key = httpTrimOws(line.substr(0, colon));
-            if (asciiEqualsIgnoreCase(key, name)) {
+            if (httpAsciiEqualsIgnoreCase(key, name)) {
                 result = httpTrimOws(line.substr(colon + 1));
             }
         }
@@ -122,7 +122,7 @@ inline void httpAssignMultipartBoundaryMarkers(
 [[nodiscard]] inline std::optional<std::string_view> httpDispositionParameter(
     std::string_view disposition,
     std::string_view name) noexcept {
-    // Content-Disposition parameter names are case-insensitive (RFC 6266 §4.1 /
+    // Content-Disposition parameter names are case-insensitive (RFC 6266 section 4.1 /
     // RFC 2183), matching how httpParseMultipartBoundary treats the Content-Type
     // "boundary" parameter. Match "name"/"filename" the same way so a part using
     // e.g. `Name=` or `FileName=` is not spuriously rejected.
@@ -134,7 +134,7 @@ inline void httpAssignMultipartBoundaryMarkers(
     const auto value = httpTrimOws(disposition);
     const auto semicolon = value.find(';');
     const auto type = httpTrimOws(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-    return asciiEqualsIgnoreCase(type, "form-data");
+    return httpAsciiEqualsIgnoreCase(type, "form-data");
 }
 
 struct HttpMultipartPartHeaders final {
@@ -162,7 +162,7 @@ enum class HttpMultipartBoundaryStatus {
     const auto mediaEnd = contentType.find(';');
     const auto mediaType = httpTrimOws(
         mediaEnd == std::string_view::npos ? contentType : contentType.substr(0, mediaEnd));
-    if (!asciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
+    if (!httpAsciiEqualsIgnoreCase(mediaType, "multipart/form-data")) {
         return HttpMultipartBoundaryStatus::kInvalidContentType;
     }
     if (mediaEnd == std::string_view::npos) {

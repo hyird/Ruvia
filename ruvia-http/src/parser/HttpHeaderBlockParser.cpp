@@ -61,18 +61,18 @@ enum class TransferEncodingParse {
             return false;
         }
 
-        if (asciiEqualsIgnoreCase(token, "chunked")) {
+        if (httpAsciiEqualsIgnoreCase(token, "chunked")) {
             block.sawChunked = true;
             block.sawTransferEncoding = true;
-        } else if (asciiEqualsIgnoreCase(token, "gzip") ||
-                   asciiEqualsIgnoreCase(token, "x-gzip")) {
+        } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
+                   httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
             if (block.transferCodings.count == kMaxTransferCodings) {
                 result = TransferEncodingParse::kUnsupported;
                 return false;
             }
             block.sawTransferEncoding = true;
             block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kGzip;
-        } else if (asciiEqualsIgnoreCase(token, "deflate")) {
+        } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
             if (block.transferCodings.count == kMaxTransferCodings) {
                 result = TransferEncodingParse::kUnsupported;
                 return false;

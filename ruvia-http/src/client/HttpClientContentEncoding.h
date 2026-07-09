@@ -21,7 +21,7 @@ template <typename Headers>
     bool seen = false;
     HttpContentCoding coding = HttpContentCoding::kNone;
     for (const auto& header : headers) {
-        if (!asciiEqualsIgnoreCase(header.name(), "content-encoding")) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "content-encoding")) {
             continue;
         }
         if (seen) {
