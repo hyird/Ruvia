@@ -20,7 +20,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "client/HttpClientAccess.h"
 #include "HttpClientBackend.h"
 #include "net/http2/Http2Connection.h"
@@ -60,7 +60,7 @@ public:
         const FetchOptions& options,
         std::pmr::memory_resource* resource) override;
 
-    void destroy() noexcept override { destroyPmrObject(this, resource_); }
+    void destroy() noexcept override { destroyHttpPmrObject(this, resource_); }
 
     // Called by Http2StreamSource (the streaming HttpBodyStream source) to pull the body and
     // release the stream.
@@ -69,7 +69,7 @@ public:
 
 private:
     using TlsStream = asio::ssl::stream<asio::ip::tcp::socket&>;
-    using TlsStreamDeleter = PmrObjectDeleter<TlsStream>;
+    using TlsStreamDeleter = HttpPmrObjectDeleter<TlsStream>;
 
     enum class State : std::uint8_t { kIdle, kConnecting, kReady, kClosed };
 

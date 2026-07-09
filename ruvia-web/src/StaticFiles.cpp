@@ -2,7 +2,7 @@
 
 #include "FileResponseHelpers.h"
 #include "FileResponseResource.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -177,7 +177,7 @@ std::pmr::string contentTypeFor(
 [[nodiscard]] std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter> makeStaticRootState() {
     auto* const resource = detail::fileResponseResource();
     return std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter>(
-        detail::constructPmrObject<detail::StaticRootState>(resource, resource));
+        detail::constructHttpPmrObject<detail::StaticRootState>(resource, resource));
 }
 
 [[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(
@@ -370,7 +370,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
 StaticRoot::~StaticRoot() = default;
 
 void detail::StaticRootStateDeleter::operator()(StaticRootState* state) const noexcept {
-    destroyPmrObject(state, detail::fileResponseResource());
+    destroyHttpPmrObject(state, detail::fileResponseResource());
 }
 
 std::filesystem::path StaticRoot::path() const {

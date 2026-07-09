@@ -24,7 +24,7 @@ Task<void> detail::MariaDbPool::connectUnlocked(ConnectionSlot& slot) {
             throw std::runtime_error("mysql_init failed");
         }
         slot.connection = connection;
-        slot.waitSocket = detail::makePmrObject<detail::SlotSocket>(resource_, ioContext_);
+        slot.waitSocket = detail::makeHttpPmrObject<detail::SlotSocket>(resource_, ioContext_);
         constexpr std::size_t kMysqlAsyncStackBytes = 1024 * 1024;
         (void)mysql_options(slot.connection, MYSQL_OPT_NONBLOCK, &kMysqlAsyncStackBytes);
         detail::setMysqlTimeout(*slot.connection, MYSQL_OPT_CONNECT_TIMEOUT, config_.connectTimeout);

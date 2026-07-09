@@ -39,12 +39,12 @@ public:
         std::pmr::memory_resource* resource) = 0;
 
     // Destroy and deallocate self through the concrete type's PMR resource. Implementations
-    // call destroyPmrObject(this, resource_) so the correct object size is returned to the pool.
+    // call destroyHttpPmrObject(this, resource_) so the correct object size is returned to the pool.
     virtual void destroy() noexcept = 0;
 };
 
 // Deleter for unique_ptr<HttpClientBackend, ...>: defers to the backend's own PMR-aware
-// destroy(), sidestepping PmrObjectDeleter's need to know the concrete size statically.
+// destroy(), sidestepping HttpPmrObjectDeleter's need to know the concrete size statically.
 struct HttpClientBackendDeleter final {
     void operator()(HttpClientBackend* backend) const noexcept {
         if (backend != nullptr) {

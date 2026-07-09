@@ -42,11 +42,11 @@ HttpClientPool::HttpClientPool(
     free_.reserve(n);
     try {
         for (std::size_t i = 0; i < n; ++i) {
-            auto* connection = constructPmrObject<Connection>(resource_, ioContext_, resource_);
+            auto* connection = constructHttpPmrObject<Connection>(resource_, ioContext_, resource_);
             try {
                 connections_.push_back(connection);
             } catch (...) {
-                destroyPmrObject(connection, resource_);
+                destroyHttpPmrObject(connection, resource_);
                 throw;
             }
             free_.push_back(i);
@@ -158,7 +158,7 @@ void HttpClientPool::closeConnection(Connection& conn) noexcept {
 }
 
 void HttpClientPool::destroyConnection(Connection* conn) noexcept {
-    destroyPmrObject(conn, resource_);
+    destroyHttpPmrObject(conn, resource_);
 }
 
 }  // namespace ruvia::detail

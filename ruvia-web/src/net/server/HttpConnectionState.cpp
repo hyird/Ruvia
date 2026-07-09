@@ -7,7 +7,7 @@
 #include "net/server/HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 
 namespace ruvia::detail {
 namespace {
@@ -53,7 +53,7 @@ ConnectionWorkSetPool::~ConnectionWorkSetPool() {
     auto* current = freeHead_;
     while (current != nullptr) {
         auto* next = current->poolNext;
-        destroyPmrObject(current, memory_->resource());
+        destroyHttpPmrObject(current, memory_->resource());
         current = next;
     }
 }
@@ -66,7 +66,7 @@ ConnectionWorkSet* ConnectionWorkSetPool::acquire() {
         --freeCount_;
         return workSet;
     }
-    return constructPmrObject<ConnectionWorkSet>(memory_->resource(), *memory_);
+    return constructHttpPmrObject<ConnectionWorkSet>(memory_->resource(), *memory_);
 }
 
 void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
@@ -74,7 +74,7 @@ void ConnectionWorkSetPool::release(ConnectionWorkSet* workSet) noexcept {
         return;
     }
     const auto destroy = [this](ConnectionWorkSet* victim) noexcept {
-        destroyPmrObject(victim, memory_->resource());
+        destroyHttpPmrObject(victim, memory_->resource());
     };
     if (freeCount_ >= kMaxPooledWorkSets) {
         destroy(workSet);

@@ -1,12 +1,11 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <new>
 #include <span>
 #include <utility>
-
-#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
 
@@ -97,7 +96,18 @@ public:
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         auto* node = static_cast<CleanupNode*>(arena_.allocate(sizeof(CleanupNode), alignof(CleanupNode)));
-        auto* object = detail::constructPmrObject<T>(&arena_, std::forward<Args>(args)...);
+        // Construct the object directly in the request arena. This is the sole
+        // reason core once depended on detail::constructPmrObject; inlining the
+        // allocate/construct/rollback here keeps the pmr-object helper an
+        // http-only utility (ruvia-http/src/detail/HttpPmrObject.h).
+        auto* storage = arena_.allocate(sizeof(T), alignof(T));
+        T* object;
+        try {
+            object = std::construct_at(static_cast<T*>(storage), std::forward<Args>(args)...);
+        } catch (...) {
+            arena_.deallocate(storage, sizeof(T), alignof(T));
+            throw;
+        }
         node->object = object;
         node->destroy = [](void* value) noexcept {
             std::destroy_at(static_cast<T*>(value));

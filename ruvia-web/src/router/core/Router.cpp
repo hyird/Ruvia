@@ -1,7 +1,7 @@
 #include "../RouterInternal.h"
 
 #include "ruvia/http/detail/RegistrationResource.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 
 #include <stdexcept>
 
@@ -40,16 +40,16 @@ detail::RouterImpl::RouterImpl(Router& router) noexcept
       routeTable_(nullptr, RouteTableDeleter{resource_}) {}
 
 void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
-    destroyPmrObject(impl, registrationResource());
+    destroyHttpPmrObject(impl, registrationResource());
 }
 
 void detail::RouterImpl::RouteTableDeleter::operator()(RouteTable* table) const noexcept {
-    destroyPmrObject(table, registrationResourceOrDefault(resource));
+    destroyHttpPmrObject(table, registrationResourceOrDefault(resource));
 }
 
 Router::Router()
     : impl_(
-          constructPmrObject<detail::RouterImpl>(registrationResource(), *this)) {}
+          constructHttpPmrObject<detail::RouterImpl>(registrationResource(), *this)) {}
 
 Router::~Router() = default;
 
@@ -159,7 +159,7 @@ void detail::RouterImpl::finalize() {
     }
 
     validateNoDynamicRouteConflict(pendingRoutes_);
-    routeTable_.reset(constructPmrObject<RouteTable>(resource_, buildRouteTable()));
+    routeTable_.reset(constructHttpPmrObject<RouteTable>(resource_, buildRouteTable()));
     routeTable_.get_deleter().resource = resource_;
     routeTable_->setErrorHandler(errorHandler_);
     routeTable_->setNotFoundHandler(notFoundHandler_);

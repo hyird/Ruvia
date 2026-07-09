@@ -49,18 +49,18 @@ namespace detail {
 
 struct AppRuntimeGraph final {
     explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
-        : documentRoot(nullptr, PmrObjectDeleter<StaticRoot>{resource}),
-          rateLimiter(nullptr, PmrObjectDeleter<RateLimiter>{resource}),
+        : documentRoot(nullptr, HttpPmrObjectDeleter<StaticRoot>{resource}),
+          rateLimiter(nullptr, HttpPmrObjectDeleter<RateLimiter>{resource}),
           workers(resource) {}
 
-    std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
-    std::unique_ptr<RateLimiter, PmrObjectDeleter<RateLimiter>> rateLimiter;
-    std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
+    std::unique_ptr<StaticRoot, HttpPmrObjectDeleter<StaticRoot>> documentRoot;
+    std::unique_ptr<RateLimiter, HttpPmrObjectDeleter<RateLimiter>> rateLimiter;
+    std::pmr::vector<std::unique_ptr<HttpServer, HttpPmrObjectDeleter<HttpServer>>> workers;
 };
 
 AppState::AppState()
     : threadNum(std::max(1U, std::thread::hardware_concurrency())),
-      runtime(nullptr, PmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
+      runtime(nullptr, HttpPmrObjectDeleter<AppRuntimeGraph>{detail::appResource()}) {
     listenAddress.assign("0.0.0.0");
 }
 
@@ -78,12 +78,12 @@ App& app() {
 }
 
 App::App()
-    : state_(detail::constructPmrObject<detail::AppState>(detail::appResource())) {}
+    : state_(detail::constructHttpPmrObject<detail::AppState>(detail::appResource())) {}
 
 App::~App() = default;
 
 void detail::AppStateDeleter::operator()(AppState* state) const noexcept {
-    destroyPmrObject(state, detail::appResource());
+    destroyHttpPmrObject(state, detail::appResource());
 }
 
 const Env& App::env() const noexcept {
@@ -94,7 +94,7 @@ void App::run() {
     auto& state = *state_;
     auto* runtimeResource = detail::appResource();
     std::pmr::vector<detail::HttpServer*> startedWorkers(runtimeResource);
-    auto runtime = detail::makePmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
+    auto runtime = detail::makeHttpPmrObject<detail::AppRuntimeGraph>(runtimeResource, runtimeResource);
 
     {
         std::lock_guard lock(state.mutex);
@@ -121,7 +121,7 @@ void App::run() {
 
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);
-            runtime->documentRoot = detail::makePmrObject<StaticRoot>(
+            runtime->documentRoot = detail::makeHttpPmrObject<StaticRoot>(
                 runtimeResource,
                 documentRootPath,
                 state.documentRootConfig->staticOptions);
@@ -144,7 +144,7 @@ void App::run() {
         }
 
         const auto address = asio::ip::make_address(state.listenAddress);
-        runtime->rateLimiter = detail::makePmrObject<detail::RateLimiter>(
+        runtime->rateLimiter = detail::makeHttpPmrObject<detail::RateLimiter>(
             runtimeResource,
             state.options.rateLimit,
             runtimeResource);
@@ -165,7 +165,7 @@ void App::run() {
                 auto workerOptions = i + 1 == state.threadNum
                     ? std::move(listenerOptions)
                     : listenerOptions;
-                runtime->workers.push_back(detail::makePmrObject<detail::HttpServer>(
+                runtime->workers.push_back(detail::makeHttpPmrObject<detail::HttpServer>(
                     runtimeResource,
                     endpoint,
                     routeTable,

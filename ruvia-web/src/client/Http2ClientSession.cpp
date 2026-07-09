@@ -28,7 +28,7 @@
 #include "client/HttpClientRedirect.h"
 #include "client/HttpClientResponseLimits.h"
 #include "HttpClientTlsVerification.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrResource.h"
@@ -58,7 +58,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
         "connection", "keep-alive", "proxy-connection", "transfer-encoding",
         "upgrade", "host", "content-length", "trailer"};
     for (const auto forbidden : kForbidden) {
-        if (asciiEqualsIgnoreCase(name, forbidden)) {
+        if (httpAsciiEqualsIgnoreCase(name, forbidden)) {
             return true;
         }
     }
@@ -71,7 +71,7 @@ constexpr std::size_t kHttp2ReadChunk = 16 * 1024;
     if (isForbiddenH2RequestHeader(name)) {
         return false;
     }
-    return !asciiEqualsIgnoreCase(name, "te") || value == "trailers";
+    return !httpAsciiEqualsIgnoreCase(name, "te") || value == "trailers";
 }
 
 [[nodiscard]] bool http2ResponseStatusMayHaveBody(std::uint16_t status) noexcept {
@@ -105,7 +105,7 @@ Http2ClientSession::Http2ClientSession(
 
 Http2ClientSession::~Http2ClientSession() {
     for (auto& [id, stream] : streams_) {
-        destroyPmrObject(stream, resource_);
+        destroyHttpPmrObject(stream, resource_);
     }
     streams_.clear();
 }
@@ -220,7 +220,7 @@ Task<void> Http2ClientSession::doConnect() {
         }
 
         if (config_.tls) {
-            tlsStream_ = makePmrObject<TlsStream>(resource_, socket_, *sslContext_);
+            tlsStream_ = makeHttpPmrObject<TlsStream>(resource_, socket_, *sslContext_);
             // RFC 6066 SNI + RFC 6125 host-name verification, shared with the HTTP/1.1
             // pool via one owner; ALPN below is HTTP/2-specific.
             applyClientTlsIdentity(
@@ -525,7 +525,7 @@ void Http2ClientSession::destroyStream(std::uint32_t id) noexcept {
     conn_->releaseStreamWindow(id);
     conn_->unpinStream(id);
     streams_.erase(it);
-    destroyPmrObject(stream, resource_);
+    destroyHttpPmrObject(stream, resource_);
 }
 
 void Http2ClientSession::touchStreamDeadline(Stream& stream) noexcept {
@@ -674,7 +674,7 @@ public:
     }
     static void streamDestroy(void* self) noexcept {
         auto* source = static_cast<Http2StreamSource*>(self);
-        destroyPmrObject(source, source->resource_);
+        destroyHttpPmrObject(source, source->resource_);
     }
 
 private:
@@ -835,7 +835,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         auto& lowerName = loweredNames.emplace_back();  // vector propagates its pmr allocator
         lowerName.reserve(name.size());
         for (const auto ch : name) {
-            lowerName.push_back(static_cast<char>(asciiToLower(static_cast<unsigned char>(ch))));
+            lowerName.push_back(static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(ch))));
         }
         headerViews.push_back(HttpHeaderView{
             std::string_view(lowerName.data(), lowerName.size()), value});
@@ -854,10 +854,10 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         conn_->deferStreamWindowRelease(id);  // consume-paced receive window (backpressure)
     }
 
-    Stream* stream = constructPmrObject<Stream>(resource_, requestResource);
+    Stream* stream = constructHttpPmrObject<Stream>(resource_, requestResource);
     stream->id = id;
     stream->streaming = streaming;
-    stream->responseBodyAllowed = !asciiEqualsIgnoreCase(method, "HEAD");
+    stream->responseBodyAllowed = !httpAsciiEqualsIgnoreCase(method, "HEAD");
     stream->requestResource = requestResource;
     stream->maxBodyBytes = streaming ? 0 : config_.maxResponseBodyBytes;
     // Every stream (buffered AND streaming) gets an inactivity deadline refreshed on each frame
@@ -877,7 +877,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         streams_.emplace(id, stream);
     } catch (...) {
         conn_->unpinStream(id);
-        destroyPmrObject(stream, resource_);
+        destroyHttpPmrObject(stream, resource_);
         throw;
     }
 
@@ -969,7 +969,7 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
     }
 
     // The source pulls DATA by stream id; status + headers go to the FetchResponseStream directly.
-    auto* source = constructPmrObject<Http2StreamSource>(requestResource, this, id, requestResource);
+    auto* source = constructHttpPmrObject<Http2StreamSource>(requestResource, this, id, requestResource);
     HttpBodyStream body(source, &Http2StreamSource::streamNextChunk, &Http2StreamSource::streamDestroy);
     auto& responseHeaders = FetchResponseAccess::headers(stream->response);
     body = maybeWrapDecodingStreamSource(

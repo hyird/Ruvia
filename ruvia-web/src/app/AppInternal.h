@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "ruvia/router/Router.h"
 #include "AppResource.h"
 #include "DotenvInternal.h"
@@ -54,7 +54,7 @@ struct AppState final {
 
     Env env;
     ControllerStore controllerLifetimes;
-    std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;
+    std::unique_ptr<AppRuntimeGraph, HttpPmrObjectDeleter<AppRuntimeGraph>> runtime;
     Router router;
 
     mutable std::mutex mutex;

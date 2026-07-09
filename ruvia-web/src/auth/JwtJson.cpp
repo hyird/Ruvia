@@ -1,6 +1,6 @@
 #include "JwtInternal.h"
 
-#include "ruvia/detail/NumberFormat.h"
+#include "detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/json/JsonObjectFields.h"
 #include "ruvia/http/detail/json/JsonString.h"
 
@@ -98,7 +98,7 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
     first = false;
     jwtAppendJsonEscaped(out, name);
     out.push_back(':');
-    appendFormattedNumber(out, value, "failed to format JWT numeric claim");
+    appendHttpFormattedNumber(out, value, "failed to format JWT numeric claim");
 }
 
 std::string_view jwtFindJsonString(

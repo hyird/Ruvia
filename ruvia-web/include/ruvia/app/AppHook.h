@@ -6,7 +6,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "ruvia/memory/ProcessResource.h"
 
 namespace ruvia {
@@ -75,15 +75,15 @@ private:
 
     template <typename Stored, typename Callable>
     void emplace(Callable&& callable) {
-        target_ = detail::constructPmrObject<Stored>(resource_, std::forward<Callable>(callable));
+        target_ = detail::constructHttpPmrObject<Stored>(resource_, std::forward<Callable>(callable));
         invoke_ = [](void* target) {
             (*static_cast<Stored*>(target))();
         };
         destroy_ = [](void* target, std::pmr::memory_resource* resource) noexcept {
-            detail::destroyPmrObject(static_cast<Stored*>(target), resource);
+            detail::destroyHttpPmrObject(static_cast<Stored*>(target), resource);
         };
         clone_ = [](const void* target, std::pmr::memory_resource* resource) -> void* {
-            return detail::constructPmrObject<Stored>(
+            return detail::constructHttpPmrObject<Stored>(
                 resource,
                 *static_cast<const Stored*>(target));
         };

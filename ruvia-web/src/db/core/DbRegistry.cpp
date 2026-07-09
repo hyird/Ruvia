@@ -31,7 +31,7 @@ detail::DbRegistry::DbRegistry(
             throw std::invalid_argument("duplicate database alias");
         }
 
-        auto client = detail::makePmrObject<MariaDbPool>(resource_, ioContext, definition.config, resource_);
+        auto client = detail::makeHttpPmrObject<MariaDbPool>(resource_, ioContext, definition.config, resource_);
         clients_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(client)});

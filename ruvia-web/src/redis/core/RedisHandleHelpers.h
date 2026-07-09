@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../RedisInternal.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 
 #include <chrono>
 #include <initializer_list>

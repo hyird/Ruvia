@@ -1,7 +1,7 @@
 #include "RedisHandleHelpers.h"
 
 #include "RedisUtils.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 
 #include <stdexcept>
 #include <utility>
@@ -136,7 +136,7 @@ Task<void> redisOkCommand(
     std::pmr::memory_resource* resource) {
     auto value = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(value);
-    if (!asciiEqualsIgnoreCase(redisValueString(value), "OK")) {
+    if (!httpAsciiEqualsIgnoreCase(redisValueString(value), "OK")) {
         throw RedisError(RedisError::Code::kCommandError, "unexpected redis status reply");
     }
     co_return;

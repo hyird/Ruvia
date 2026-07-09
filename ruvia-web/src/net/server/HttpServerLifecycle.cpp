@@ -25,7 +25,7 @@
 #include "HttpServerOptionsValidation.h"
 #include "HeaderTokenUtils.h"
 #include "runtime/AsioAwait.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 
 namespace ruvia::detail {
 
@@ -69,7 +69,7 @@ int selectSniContext(SSL* ssl, int*, void* arg) noexcept {
     }
     const auto& lookup = *static_cast<const SniContextLookup*>(arg);
     for (const auto& [host, context] : lookup) {
-        if (asciiEqualsIgnoreCase(host, name)) {
+        if (httpAsciiEqualsIgnoreCase(host, name)) {
             SSL_set_SSL_CTX(ssl, context->native_handle());
             break;
         }

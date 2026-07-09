@@ -29,7 +29,7 @@
 #include "net/server/HttpResponseStreamHead.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -108,7 +108,7 @@ public:
         lowerName_.clear();
         lowerName_.reserve(name.size());
         for (const char ch : name) {
-            lowerName_.push_back(static_cast<char>(asciiToLower(static_cast<unsigned char>(ch))));
+            lowerName_.push_back(static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(ch))));
         }
         HpackEncoder::encodeHeader(trailers_, lowerName_, value);
     }

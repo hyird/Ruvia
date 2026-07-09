@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/detail/AsciiCase.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpAsciiCase.h"
+#include "detail/HttpPmrObject.h"
 
 namespace ruvia {
 namespace {
@@ -28,12 +28,12 @@ template <typename Variables>
 }  // namespace
 
 Env::Env()
-    : state_(detail::constructPmrObject<detail::EnvState>(detail::appResource())) {}
+    : state_(detail::constructHttpPmrObject<detail::EnvState>(detail::appResource())) {}
 
 Env::~Env() = default;
 
 void detail::EnvStateDeleter::operator()(EnvState* state) const noexcept {
-    destroyPmrObject(state, detail::appResource());
+    destroyHttpPmrObject(state, detail::appResource());
 }
 
 std::optional<std::string_view> Env::get(std::string_view name) const noexcept {
@@ -57,14 +57,14 @@ std::optional<bool> Env::parseBoolValue(std::string_view value) noexcept {
     // ASCII-only case fold via the shared owner: the boolean tokens are ASCII, and
     // std::tolower is locale-dependent (a non-"C" LC_CTYPE set by the host app could
     // fold bytes unexpectedly).
-    if (detail::asciiEqualsIgnoreCase(value, "true") ||
-        detail::asciiEqualsIgnoreCase(value, "yes") ||
-        detail::asciiEqualsIgnoreCase(value, "on")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "true") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "yes") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "on")) {
         return true;
     }
-    if (detail::asciiEqualsIgnoreCase(value, "false") ||
-        detail::asciiEqualsIgnoreCase(value, "no") ||
-        detail::asciiEqualsIgnoreCase(value, "off")) {
+    if (detail::httpAsciiEqualsIgnoreCase(value, "false") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "no") ||
+        detail::httpAsciiEqualsIgnoreCase(value, "off")) {
         return false;
     }
 

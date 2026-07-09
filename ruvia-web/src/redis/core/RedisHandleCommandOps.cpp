@@ -1,7 +1,7 @@
 #include "RedisHandleCommandOps.h"
 
 #include "RedisHandleHelpers.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 
 namespace ruvia::detail {
 
@@ -10,7 +10,7 @@ Task<void> executeRedisPing(
     std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource) {
     auto reply = co_await redisStatusCommand(pool, std::move(args), resource);
-    if (!asciiEqualsIgnoreCase(reply, "PONG")) {
+    if (!httpAsciiEqualsIgnoreCase(reply, "PONG")) {
         throw RedisError(RedisError::Code::kCommandError, "unexpected redis ping reply");
     }
 }
@@ -27,7 +27,7 @@ Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(
     }
     const auto text = redisValueString(reply);
     if (!get) {
-        if (!asciiEqualsIgnoreCase(text, "OK")) {
+        if (!httpAsciiEqualsIgnoreCase(text, "OK")) {
             throw RedisError(RedisError::Code::kCommandError, "unexpected redis set reply");
         }
         co_return std::nullopt;
@@ -44,7 +44,7 @@ Task<bool> executeRedisSetNx(
     if (reply.null()) {
         co_return false;
     }
-    co_return asciiEqualsIgnoreCase(redisValueString(reply), "OK");
+    co_return httpAsciiEqualsIgnoreCase(redisValueString(reply), "OK");
 }
 
 Task<bool> executeRedisIntegerBool(

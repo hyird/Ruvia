@@ -47,7 +47,7 @@ public:
 #include <string_view>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "PoolWaiterQueue.h"
 
 struct st_mysql;
@@ -103,7 +103,7 @@ private:
         ConnectionSlot(ConnectionSlot&&) noexcept;
         ConnectionSlot& operator=(ConnectionSlot&&) noexcept;
 
-        using SlotSocketDeleter = PmrObjectDeleter<SlotSocket>;
+        using SlotSocketDeleter = HttpPmrObjectDeleter<SlotSocket>;
 
         st_mysql* connection{nullptr};
         std::unique_ptr<SlotSocket, SlotSocketDeleter> waitSocket;
@@ -195,7 +195,7 @@ public:
         RequestMemory* requestMemory = nullptr) const;
 
 private:
-    using MariaDbPoolDeleter = PmrObjectDeleter<MariaDbPool>;
+    using MariaDbPoolDeleter = HttpPmrObjectDeleter<MariaDbPool>;
 
     struct Entry {
         std::pmr::string alias;
