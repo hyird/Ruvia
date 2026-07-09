@@ -121,6 +121,7 @@ private:
     std::pmr::vector<Http1Event> events_;
     std::size_t eventOffset_{0};
     std::size_t headerSearchOffset_{0};
+    std::size_t scanResume_{0};    // resume offset for chunk-size/trailer scans (avoids O(n^2))
     std::size_t cursor_{0};         // consumed-framing cursor within input_
     std::size_t bodyRemaining_{0};  // content-length remainder / current chunk remainder
     std::size_t decodedBodyBytes_{0};

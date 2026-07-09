@@ -398,10 +398,7 @@ Task<void> runHttp2SansIoSession(
                 connection.submitWebSocketHandshake(
                     streamId,
                     http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()),
-                    !deflate.enabled ? std::string_view{}
-                        : deflate.echoServerMaxWindowBits
-                            ? kWebSocketDeflateResponseExtensionsMaxWindow
-                            : kWebSocketDeflateResponseExtensions);
+                    webSocketDeflateResponseExtensions(deflate));
                 wakeWriter();  // flush the 200 before the first tunnel read suspends
                 auto* signal = findSignal(streamId);
                 if (signal == nullptr) {

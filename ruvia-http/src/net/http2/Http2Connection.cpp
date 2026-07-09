@@ -293,6 +293,23 @@ void Http2Connection::pinStream(std::uint32_t streamId) {
     }
 }
 
+void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
+    // A streaming consumer's banked receive-window credit (deferStreamWindowRelease)
+    // must return to the CONNECTION window when the stream is removed, or the owner's
+    // releaseStreamWindow-after-removal is a silent no-op and the connection window
+    // shrinks permanently (nghttp2 self-heals unconsumed data at stream close the same
+    // way). Connection-scope only: a stream-scope WINDOW_UPDATE on a gone stream is a
+    // peer protocol error.
+    const auto debt = stream.takeWindowDebt();
+    if (debt == 0) {
+        return;
+    }
+    connectionReceiveWindow_ += static_cast<std::int32_t>(debt);
+    char buf[kHttp2WindowUpdateFrameBytes];
+    http2WriteWindowUpdate(buf, 0, debt);
+    outBuffer_.append(buf, sizeof(buf));
+}
+
 void Http2Connection::unpinStream(std::uint32_t streamId) {
     pinnedStreams_.erase(
         std::remove(pinnedStreams_.begin(), pinnedStreams_.end(), streamId), pinnedStreams_.end());
@@ -300,6 +317,7 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     if (stream == nullptr) {
         return;  // never created, or already removed
     }
+    flushWindowDebt(*stream);
     readyQueue_.remove(streamId);
     if (!stream->isReset()) {
         // Normal completion (no RST arrived while pinned): remember it as locally closed
@@ -319,12 +337,14 @@ void Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource
         if (isPinned(streamId)) {
             // A handler still holds views into this stream's decoded storage. Keep it in
             // the table (so those views stay valid) but mark it reset so later frames are
-            // dropped; unpinStream frees it once the handler finishes. Preserve the close
-            // SOURCE (markReset defaults to kLocal, which would clobber a peer RST -- the
-            // owner reads closeSource() to tell a legitimate peer abort from a local
-            // protocol reject, e.g. keeping a complete response on peer RST_STREAM).
+            // dropped; unpinStream frees it (and flushes its window debt) once the
+            // handler finishes. Preserve the close SOURCE (markReset defaults to kLocal,
+            // which would clobber a peer RST -- the owner reads closeSource() to tell a
+            // legitimate peer abort from a local reject, e.g. keeping a complete
+            // response on peer RST_STREAM).
             stream->markReset(source);
         } else {
+            flushWindowDebt(*stream);  // return banked receive credit to the connection
             streams_.remove(streamId);
         }
     }
@@ -360,9 +380,15 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
     }
     const auto dependency = http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));
     if (dependency == header.streamId) {
-        // A stream that depends on itself is a protocol error on that stream.
-        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+        // A stream that depends on itself is a protocol error (RFC 9113 §5.3.1). On a
+        // live stream that is a stream error -> RST_STREAM. On an IDLE stream (one never
+        // opened) we must NOT RST -- an RST_STREAM on an idle stream is itself something
+        // the peer MUST treat as a connection error, so we would be provoking a teardown
+        // over a deprecated, purely-advisory PRIORITY frame. Ignore it instead.
+        if (findStream(header.streamId) != nullptr) {
+            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+        }
     }
     return true;
 }
@@ -691,7 +717,7 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
          stream.responseStatus() == 204 || stream.responseStatus() == 304);
     if (stream.peerEndStream() && !lengthExempt && !http2BodyLengthComplete(stream)) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-        stream.markReset();
+        closeStream(stream.id(), Http2StreamCloseSource::kLocal);  // remove, don't leak the slot
         return;
     }
     events_.push_back(Http2Event{Http2Event::Kind::kMessageHead, stream.id(), {}});
@@ -760,7 +786,7 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             stream = existing;
         } else {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            existing->markReset();
+            closeStream(header.streamId, Http2StreamCloseSource::kLocal);  // remove, don't leak
             return true;
         }
     } else if (role_ == Http2Role::kClient) {

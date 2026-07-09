@@ -119,12 +119,4 @@ void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
     encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
 }
 
-std::pmr::string webSocketAccept(std::string_view key, std::pmr::memory_resource* resource) {
-    WebSocketAcceptKey encoded;
-    encodeWebSocketAccept(encoded, key);
-    std::pmr::string accept(resource);
-    accept.append(encoded.data(), encoded.size());
-    return accept;
-}
-
 }  // namespace ruvia::detail

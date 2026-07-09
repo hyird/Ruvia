@@ -10,7 +10,8 @@
 namespace {
 
 std::string accept(std::string_view key) {
-    const auto out = ruvia::detail::webSocketAccept(key, std::pmr::get_default_resource());
+    ruvia::detail::WebSocketAcceptKey out;
+    ruvia::detail::encodeWebSocketAccept(out, key);
     return std::string(out.data(), out.size());
 }
 

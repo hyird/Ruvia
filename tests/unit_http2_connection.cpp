@@ -222,17 +222,32 @@ RUVIA_TEST(http2_connection_feed_priority_self_dependency_resets) {
     Http2Connection conn(&resource);
     handshake(conn);
 
-    char frame[9 + 5];
-    ruvia::detail::http2EncodeFrameHeader(frame, 5, Http2FrameType::kPriority, 0, 1);
-    ruvia::detail::http2Write32(frame + 9, 1);  // depends on stream 1 (itself)
-    frame[13] = 0;                              // weight
-    const auto result = conn.feed(std::string_view(frame, sizeof(frame)));
-
-    RUVIA_CHECK(result.status == ruvia::detail::Http2FeedStatus::kOk);
+    // Self-dependent PRIORITY on a LIVE stream is a stream error -> RST_STREAM.
+    driveGetRequest(conn, &resource);  // stream 1 open
+    conn.consumeOutput(conn.pendingOutput().size());
+    char live[9 + 5];
+    ruvia::detail::http2EncodeFrameHeader(live, 5, Http2FrameType::kPriority, 0, 1);
+    ruvia::detail::http2Write32(live + 9, 1);  // depends on stream 1 (itself)
+    live[13] = 0;
+    RUVIA_CHECK(conn.feed(std::string_view(live, sizeof(live))).status ==
+                ruvia::detail::Http2FeedStatus::kOk);
     RUVIA_CHECK(!conn.closing());
     const auto rst = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
     RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
     RUVIA_CHECK_EQ(rst.streamId, static_cast<std::uint32_t>(1));
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    // Self-dependent PRIORITY on an IDLE stream is IGNORED (a deprecated advisory frame;
+    // RST_STREAM on an idle stream would provoke a peer connection error). No output,
+    // connection survives.
+    char idle[9 + 5];
+    ruvia::detail::http2EncodeFrameHeader(idle, 5, Http2FrameType::kPriority, 0, 7);
+    ruvia::detail::http2Write32(idle + 9, 7);  // idle stream depends on itself
+    idle[13] = 0;
+    RUVIA_CHECK(conn.feed(std::string_view(idle, sizeof(idle))).status ==
+                ruvia::detail::Http2FeedStatus::kOk);
+    RUVIA_CHECK(!conn.closing());
+    RUVIA_CHECK(conn.pendingOutput().empty());  // ignored: no RST, no GOAWAY
 }
 
 // A complete HEADERS frame (END_HEADERS + END_STREAM) decodes the request head and the
@@ -904,4 +919,58 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
 
     conn.beginDrain();  // idempotent: no further GOAWAY
     RUVIA_CHECK(conn.pendingOutput().empty());
+}
+
+// A streaming consumer's banked receive-window debt (deferStreamWindowRelease) must
+// return to the CONNECTION window when the stream is removed, even if the owner never
+// calls releaseStreamWindow -- otherwise the connection window shrinks permanently.
+RUVIA_TEST(http2_connection_window_debt_flushed_on_removal) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    // Open stream 1 with a body (POST, content-length) and mark it deferred-release.
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "POST");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    HpackEncoder::encodeHeader(block, "content-length", "5");
+    const auto h = headersFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(block.data(), block.size()));
+    conn.feed(std::string_view(h.data(), h.size()));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {}
+    conn.deferStreamWindowRelease(1);
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    // Feed 5 body bytes: the receive-window credit is BANKED (deferred), so NO
+    // per-frame WINDOW_UPDATE is emitted.
+    char data[9 + 5];
+    ruvia::detail::http2EncodeFrameHeader(data, 5, Http2FrameType::kData, 0, 1);
+    std::memcpy(data + 9, "hello", 5);
+    conn.feed(std::string_view(data, sizeof(data)));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {}
+    RUVIA_CHECK(conn.pendingOutput().empty());  // debt banked, not advertised
+
+    // Peer RST_STREAM removes the (unpinned) stream. The banked 5 bytes must be
+    // returned to the CONNECTION window via a stream-0 WINDOW_UPDATE.
+    char rst[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, 1);
+    ruvia::detail::http2Write32(rst + 9, 8 /* CANCEL */);
+    conn.feed(std::string_view(rst, sizeof(rst)));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {}
+
+    bool sawConnWindowUpdate = false;
+    auto out = conn.pendingOutput();
+    while (out.size() >= 9) {
+        const auto fh = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+        if (fh.type == static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate) && fh.streamId == 0) {
+            const auto inc = ruvia::detail::http2WindowUpdateIncrement(out.substr(9, 4));
+            if (inc == 5) sawConnWindowUpdate = true;
+        }
+        out = out.substr(9 + fh.length);
+    }
+    RUVIA_CHECK(sawConnWindowUpdate);  // connection window self-healed on removal
+    RUVIA_CHECK(conn.stream(1) == nullptr);
 }
