@@ -278,6 +278,11 @@ private:
     [[nodiscard]] std::size_t sendDataUpToWindow(
         Http2StreamState& stream, std::string_view data, std::size_t offset, bool endStream);
 
+    // Consume complete frames from `buffer` starting at `offset` (advanced past each
+    // consumed frame; a trailing partial frame is left for the caller). Returns false on
+    // a fatal protocol error (GOAWAY queued). Shared by feed()'s fast (parse over the
+    // caller's bytes) and slow (parse the buffered input_) paths.
+    [[nodiscard]] bool consumeFrames(std::string_view buffer, std::size_t& offset);
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
     // on a fatal protocol error, having appended GOAWAY and set closing_).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
