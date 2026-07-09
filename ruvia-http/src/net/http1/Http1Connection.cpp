@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "Http1ServerSemantics.h"
 #include "../../parser/HttpChunkParser.h"
 #include "../../parser/HttpParserSyntax.h"
 
@@ -47,15 +48,9 @@ Http1Event Http1Connection::nextEvent() {
 }
 
 bool Http1Connection::keepAlive() const noexcept {
-    // RFC 9112 §9.3: explicit close wins; explicit keep-alive wins for HTTP/1.0;
-    // otherwise persistence is the HTTP/1.1 default.
-    if (parsed_.flags.connectionClose) {
-        return false;
-    }
-    if (parsed_.flags.connectionKeepAlive) {
-        return true;
-    }
-    return parsed_.request.httpVersion() == "HTTP/1.1";
+    // RFC 9112 §9.3 persistence -- single-sourced in Http1ServerSemantics.h (also used
+    // by the web h1 session), since it is pure protocol semantics.
+    return http1ShouldKeepAlive(parsed_);
 }
 
 std::string_view Http1Connection::unconsumedInput() const noexcept {
@@ -72,6 +67,7 @@ void Http1Connection::nextMessage() {
     cursor_ = 0;
     headStorage_.clear();
     headerSearchOffset_ = 0;
+    scanResume_ = 0;
     bodyRemaining_ = 0;
     decodedBodyBytes_ = 0;
     error_ = HttpParseError::kNone;
@@ -148,6 +144,7 @@ void Http1Connection::advance() {
                 cursor_ = 0;
                 events_.push_back(Http1Event{Http1Event::Kind::kMessageHead, {}});
                 if (parsed_.chunked) {
+                    scanResume_ = 0;
                     state_ = State::kChunkSize;
                 } else if (parsed_.contentLength > 0) {
                     bodyRemaining_ = parsed_.contentLength;
@@ -176,13 +173,20 @@ void Http1Connection::advance() {
                 return;
             }
             case State::kChunkSize: {
-                const auto lineEnd = available.find("\r\n");
-                if (lineEnd == std::string_view::npos) {
+                // Resume the "\r\n" search where the last feed left off (scanResume_ is
+                // relative to `available`) instead of re-scanning the whole accumulating
+                // line -- otherwise a chunk-size line trickled byte-by-byte is O(n^2).
+                const auto found = available.find("\r\n", scanResume_);
+                if (found == std::string_view::npos) {
                     if (available.size() > config_.maxHeaderBytes) {
                         fail(HttpParseError::kInvalidChunkSize);
+                        return;
                     }
+                    scanResume_ = available.size() >= 1 ? available.size() - 1 : 0;
                     return;
                 }
+                scanResume_ = 0;
+                const auto lineEnd = found;
                 std::size_t chunkSize = 0;
                 switch (parseHttpChunkSizeLine(available.substr(0, lineEnd), chunkSize)) {
                     case ChunkSizeLineStatus::kOk:
@@ -199,6 +203,7 @@ void Http1Connection::advance() {
                 }
                 cursor_ += lineEnd + 2;
                 if (chunkSize == 0) {
+                    scanResume_ = 0;
                     state_ = State::kChunkTrailers;
                 } else {
                     bodyRemaining_ = chunkSize;
@@ -232,6 +237,7 @@ void Http1Connection::advance() {
                     return;
                 }
                 cursor_ += 2;
+                scanResume_ = 0;
                 state_ = State::kChunkSize;
                 break;
             }
@@ -242,8 +248,9 @@ void Http1Connection::advance() {
                     finishMessage();
                     return;
                 }
-                const auto terminator = available.find("\r\n\r\n");
+                const auto terminator = available.find("\r\n\r\n", scanResume_);
                 if (terminator == std::string_view::npos) {
+                    scanResume_ = available.size() >= 3 ? available.size() - 3 : 0;
                     if (available.size() > config_.maxHeaderBytes) {
                         fail(HttpParseError::kInvalidTrailer);
                     }

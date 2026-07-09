@@ -57,10 +57,13 @@ enum class Http2Role : std::uint8_t {
 // Protocol-only configuration (NOT server policy). Server policy such as timeouts,
 // CORS, rate limiting and access logging lives in ruvia-web, never here.
 struct Http2CoreConfig final {
+    // These three seed the flow-control / framing ACCOUNTING and MUST match the values
+    // advertised in the local connection preface SETTINGS (queueLocalSettings). They
+    // default to exactly the advertised constants; only override them together with a
+    // matching custom SETTINGS frame, or accounting will diverge from the wire.
     std::uint32_t maxFrameSize{kHttp2DefaultMaxFrameSize};
     std::uint32_t initialSendWindow{kHttp2DefaultInitialWindowSize};
     std::uint32_t initialReceiveWindow{kHttp2LocalInitialWindowSize};
-    std::size_t maxHeaderListBytes{kMaxHttpHeaderBytes};
     // DoS-protection body caps (protocol-level, nghttp2-style; NOT server policy).
     std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};      // 0 = unlimited
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
@@ -158,7 +161,11 @@ public:
     void submitWebSocketHandshake(
         std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
     // Emit an HPACK-encoded trailer block as the stream's final HEADERS (END_STREAM),
-    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1).
+    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1). PRECONDITION: the
+    // stream has NO window-blocked DATA remainder (hasBlockedSend(streamId) == false);
+    // callers must pace the body on the send window before ending (the streaming sink
+    // does via awaitSendWindow), or the END_STREAM trailer would jump ahead of queued
+    // body bytes. Emitting when blocked is a caller bug.
     void submitTrailers(std::uint32_t streamId, std::string_view headerBlock);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
@@ -319,6 +326,8 @@ private:
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
     void closeStream(std::uint32_t streamId, Http2StreamCloseSource source);
+    // Return a stream's banked receive-window debt to the connection window on removal.
+    void flushWindowDebt(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
     Http2CoreConfig config_;

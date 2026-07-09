@@ -261,7 +261,6 @@ inline void compactWebSocketReadBuffer(
 }
 
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key);
-[[nodiscard]] std::pmr::string webSocketAccept(std::string_view key, std::pmr::memory_resource* resource);
 [[nodiscard]] bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept;
 [[nodiscard]] bool isValidWebSocketRequest(const HttpRequest& request, const HttpRequestFlags& flags) noexcept;
 [[nodiscard]] bool isValidWebSocketCloseCode(std::uint16_t code) noexcept;

@@ -172,6 +172,18 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
     "permessage-deflate; server_no_context_takeover; client_no_context_takeover; "
     "server_max_window_bits=15";
 
+// The response Sec-WebSocket-Extensions VALUE for a negotiation result (empty when
+// deflate was not accepted). Single-sources the h1 handshake and the h2 tunnel path.
+[[nodiscard]] inline std::string_view webSocketDeflateResponseExtensions(
+    const WebSocketDeflateNegotiation& negotiation) noexcept {
+    if (!negotiation.enabled) {
+        return {};
+    }
+    return negotiation.echoServerMaxWindowBits
+        ? kWebSocketDeflateResponseExtensionsMaxWindow
+        : kWebSocketDeflateResponseExtensions;
+}
+
 [[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
     const HttpRequest& request) noexcept {
     // RFC 6455 §9.1: extension declarations may be split across multiple

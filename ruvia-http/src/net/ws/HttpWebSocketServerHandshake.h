@@ -38,11 +38,7 @@ struct HttpWebSocketServerHandshake final {
     handshake.subprotocol = chooseWebSocketSubprotocol(request, flags, supportedSubprotocols);
     const auto deflate = webSocketNegotiatePermessageDeflate(request);
     handshake.permessageDeflate = deflate.enabled;
-    if (deflate.enabled) {
-        handshake.extensions = deflate.echoServerMaxWindowBits
-            ? kWebSocketDeflateResponseExtensionsMaxWindow
-            : kWebSocketDeflateResponseExtensions;
-    }
+    handshake.extensions = webSocketDeflateResponseExtensions(deflate);
     return handshake;
 }
 
