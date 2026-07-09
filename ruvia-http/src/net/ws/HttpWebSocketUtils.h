@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -374,24 +375,36 @@ struct WebSocketFrameView final {
     bool rsv1{false};
 };
 
+enum class WebSocketFrameReadStatus {
+    kNeedMore,
+    kFrame
+};
+
+struct WebSocketFrameReadResult final {
+    WebSocketFrameReadStatus status{WebSocketFrameReadStatus::kNeedMore};
+    std::size_t requiredBytes{0};
+    bool cleanEofAllowed{false};
+    std::optional<WebSocketFrameView> frame;
+};
+
 // Single owner of WebSocket frame decode (RFC 6455 §5.2): FIN/opcode/length
 // parsing, control-frame and length-limit validation, and in-place unmasking.
-// `ensure` is a callable returning an awaitable<bool>; `co_await ensure(n)`
-// yields true once at least n bytes are buffered from `offset`, or false if the
-// stream ended first. A clean end at a frame boundary returns std::nullopt; an
-// end mid-frame throws. Shared by the HTTP/1.1 and HTTP/2 transports, which
-// differ only in how `ensure` fills the buffer.
-template <typename Ensure>
-[[nodiscard]] Task<std::optional<WebSocketFrameView>> webSocketReadFrame(
+// It never performs I/O: callers retry after buffering at least `requiredBytes`
+// from `offset`. A clean end is allowed only when the caller reaches EOF with no
+// partial frame buffered and `cleanEofAllowed` is true.
+[[nodiscard]] inline WebSocketFrameReadResult webSocketTryReadFrame(
     std::pmr::string& buffer,
     std::size_t& offset,
     std::size_t& pendingCompactUntil,
     std::size_t maxMessageBytes,
-    bool permessageDeflate,
-    Ensure ensure) {
+    bool permessageDeflate) {
     compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
-    if (!(co_await ensure(2))) {
-        co_return std::nullopt;
+    const auto available = buffer.size() - offset;
+    if (available < 2) {
+        return {
+            .status = WebSocketFrameReadStatus::kNeedMore,
+            .requiredBytes = 2,
+            .cleanEofAllowed = available == 0};
     }
     const auto first = static_cast<unsigned char>(buffer[offset]);
     const auto second = static_cast<unsigned char>(buffer[offset + 1]);
@@ -403,14 +416,18 @@ template <typename Ensure>
         throw WebSocketProtocolError(1002, "invalid websocket frame");
     }
     if (length == 126) {
-        if (!(co_await ensure(headerSize + 2))) {
-            throw std::invalid_argument("incomplete websocket frame");
+        if (available < headerSize + 2) {
+            return {
+                .status = WebSocketFrameReadStatus::kNeedMore,
+                .requiredBytes = headerSize + 2};
         }
         length = readWebSocketUint16(buffer.data() + offset + headerSize);
         headerSize += 2;
     } else if (length == 127) {
-        if (!(co_await ensure(headerSize + 8))) {
-            throw std::invalid_argument("incomplete websocket frame");
+        if (available < headerSize + 8) {
+            return {
+                .status = WebSocketFrameReadStatus::kNeedMore,
+                .requiredBytes = headerSize + 8};
         }
         if (!readWebSocketUint64(buffer.data() + offset + headerSize, length)) {
             throw WebSocketProtocolError(1002, "invalid websocket frame length");
@@ -427,8 +444,11 @@ template <typename Ensure>
     if (webSocketMaskedFrameReadSizeOverflows(length, headerSize)) {
         throw WebSocketProtocolError(1002, "invalid websocket frame length");
     }
-    if (!(co_await ensure(headerSize + 4 + static_cast<std::size_t>(length)))) {
-        throw std::invalid_argument("incomplete websocket frame");
+    const auto totalFrameBytes = headerSize + 4 + static_cast<std::size_t>(length);
+    if (available < totalFrameBytes) {
+        return {
+            .status = WebSocketFrameReadStatus::kNeedMore,
+            .requiredBytes = totalFrameBytes};
     }
 
     const auto maskOffset = offset + headerSize;
@@ -442,12 +462,14 @@ template <typename Ensure>
     }
     offset = payloadOffset + payloadSize;
     pendingCompactUntil = offset;
-    co_return WebSocketFrameView{
-        .opcode = frameStart.opcode,
-        .payload = payloadView,
-        .fin = frameStart.fin,
-        .continuation = frameStart.continuation,
-        .rsv1 = frameStart.rsv1};
+    return {
+        .status = WebSocketFrameReadStatus::kFrame,
+        .frame = WebSocketFrameView{
+            .opcode = frameStart.opcode,
+            .payload = payloadView,
+            .fin = frameStart.fin,
+            .continuation = frameStart.continuation,
+            .rsv1 = frameStart.rsv1}};
 }
 
 }  // namespace detail

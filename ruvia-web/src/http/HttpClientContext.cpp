@@ -12,6 +12,7 @@
 #include "HttpResponseBodyAccess.h"
 #include "client/HttpClientInternal.h"
 #include "client/HttpClientPool.h"
+#include "ruvia/detail/AsciiCase.h"
 
 namespace ruvia {
 

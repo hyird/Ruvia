@@ -6,9 +6,10 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/app/Task.h"
-
 namespace ruvia {
+
+template <typename T>
+class Task;
 
 enum class WebSocketOpcode : std::uint8_t {
     kText = 0x1,
@@ -77,29 +78,17 @@ public:
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
-    [[nodiscard]] Task<std::optional<WebSocketMessage>> read() {
-        return read_(target_);
-    }
+    [[nodiscard]] Task<std::optional<WebSocketMessage>> read();
 
-    Task<void> text(std::string_view payload) {
-        return write(WebSocketOpcode::kText, payload);
-    }
+    Task<void> text(std::string_view payload);
 
-    Task<void> binary(std::string_view payload) {
-        return write(WebSocketOpcode::kBinary, payload);
-    }
+    Task<void> binary(std::string_view payload);
 
-    Task<void> pong(std::string_view payload) {
-        return write(WebSocketOpcode::kPong, payload);
-    }
+    Task<void> pong(std::string_view payload);
 
-    Task<void> ping(std::string_view payload = {}) {
-        return write(WebSocketOpcode::kPing, payload);
-    }
+    Task<void> ping(std::string_view payload = {});
 
-    Task<void> close(std::uint16_t code = 1000, std::string_view reason = {}) {
-        return close_(target_, code, reason);
-    }
+    Task<void> close(std::uint16_t code = 1000, std::string_view reason = {});
 
 private:
     friend struct detail::WebSocketAccess;
@@ -107,9 +96,7 @@ private:
     constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
         : target_(target), read_(read), write_(write), close_(close) {}
 
-    Task<void> write(WebSocketOpcode opcode, std::string_view payload) {
-        return write_(target_, opcode, payload);
-    }
+    Task<void> write(WebSocketOpcode opcode, std::string_view payload);
 
     void* target_;
     Read read_;

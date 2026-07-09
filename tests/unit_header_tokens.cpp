@@ -63,7 +63,7 @@ RUVIA_TEST(header_decode_quoted_pairs) {
     };
     RUVIA_CHECK_EQ(decode("plain"), std::string("plain"));      // no escapes -> unchanged
     RUVIA_CHECK_EQ(decode("a\\\"b"), std::string("a\"b"));      // \" -> "
-    RUVIA_CHECK_EQ(decode("x\\\\y"), std::string("x\\y"));      // \\ -> \
+    RUVIA_CHECK_EQ(decode("x\\\\y"), std::string("x\\y"));      // two backslashes -> one
     RUVIA_CHECK_EQ(decode("\\a\\b\\c"), std::string("abc"));    // each pair unescaped
     RUVIA_CHECK_EQ(decode("end\\"), std::string("end\\"));      // trailing lone '\' kept verbatim
 }

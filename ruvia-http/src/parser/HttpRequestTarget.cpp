@@ -130,10 +130,10 @@ struct AuthorityParts {
 
 [[nodiscard]] bool parseAbsoluteTarget(std::string_view target, RequestTargetView& output) noexcept {
     std::size_t authorityBegin = 0;
-    if (target.size() >= 7 && asciiEqualsIgnoreCase(target.substr(0, 7), "http://")) {
+    if (target.size() >= 7 && httpAsciiEqualsIgnoreCase(target.substr(0, 7), "http://")) {
         authorityBegin = 7;
         output.defaultPort = 80;
-    } else if (target.size() >= 8 && asciiEqualsIgnoreCase(target.substr(0, 8), "https://")) {
+    } else if (target.size() >= 8 && httpAsciiEqualsIgnoreCase(target.substr(0, 8), "https://")) {
         authorityBegin = 8;
         output.defaultPort = 443;
     } else {
@@ -229,7 +229,7 @@ bool authorityMatchesHost(
     std::string_view authority,
     std::string_view host,
     std::uint16_t defaultPort) noexcept {
-    if (asciiEqualsIgnoreCase(authority, host)) {
+    if (httpAsciiEqualsIgnoreCase(authority, host)) {
         return true;
     }
 
@@ -238,7 +238,7 @@ bool authorityMatchesHost(
     if (!splitAuthority(authority, authorityParts) || !splitAuthority(host, hostParts)) {
         return false;
     }
-    if (!asciiEqualsIgnoreCase(authorityParts.host, hostParts.host)) {
+    if (!httpAsciiEqualsIgnoreCase(authorityParts.host, hostParts.host)) {
         return false;
     }
 

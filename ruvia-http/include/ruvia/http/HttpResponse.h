@@ -1,10 +1,9 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
-#include "ruvia/detail/NativePath.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpCommon.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/NativePath.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 #include <array>
 #include <cstddef>
@@ -99,7 +98,7 @@ private:
     using iterator = HttpResponseHeader*;
 
     explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
-    HttpResponseHeaders(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
+    HttpResponseHeaders(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     ~HttpResponseHeaders();
 
     HttpResponseHeaders(const HttpResponseHeaders&) = delete;
@@ -187,8 +186,8 @@ private:
     using StreamBody = HttpBodyStream;
     class FileBody final {
     public:
-        using NativePathChar = detail::NativePathChar;
-        using NativePathString = detail::NativePathString;
+        using NativePathChar = detail::HttpNativePathChar;
+        using NativePathString = detail::HttpNativePathString;
 
         FileBody(
             std::pmr::memory_resource* resource,
@@ -200,7 +199,7 @@ private:
               size_(size),
               offset_(offset),
               length_(length) {
-            detail::assignNativePath(ownedPath_, file);
+            detail::assignHttpNativePath(ownedPath_, file);
         }
 
         FileBody(
@@ -244,7 +243,7 @@ private:
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);
-    HttpResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
+    HttpResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
     void setFileBody(std::filesystem::path file, std::uint64_t size);
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);

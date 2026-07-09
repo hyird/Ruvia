@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
 #include "ruvia/http/detail/CallableRef.h"
 
 #include <chrono>
@@ -11,6 +10,9 @@
 #include <string_view>
 
 namespace ruvia {
+
+template <typename T>
+class Task;
 
 class Context;
 class HttpResponse;
@@ -32,9 +34,7 @@ public:
     BodyReader(const BodyReader&) = delete;
     BodyReader& operator=(const BodyReader&) = delete;
 
-    [[nodiscard]] Task<std::optional<std::string_view>> read() {
-        return read_();
-    }
+    [[nodiscard]] Task<std::optional<std::string_view>> read();
 
 private:
     detail::CallableRef<std::optional<std::string_view>> read_;
@@ -45,26 +45,13 @@ public:
     ResponseStreamWriter(const ResponseStreamWriter&) = delete;
     ResponseStreamWriter& operator=(const ResponseStreamWriter&) = delete;
 
-    Task<void> write(std::string_view chunk) {
-        return write_(target_, chunk);
-    }
+    Task<void> write(std::string_view chunk);
 
     // Writes chunk followed by "\n" as a single chunk.
-    Task<void> writeln(std::string_view chunk) {
-        auto& buffer = scratch_(target_);
-        buffer.clear();
-        buffer.reserve(chunk.size() + 1);
-        if (!chunk.empty()) {
-            buffer.append(chunk.data(), chunk.size());
-        }
-        buffer.push_back('\n');
-        return write_(target_, std::string_view(buffer.data(), buffer.size()));
-    }
+    Task<void> writeln(std::string_view chunk);
 
     // Suspends the handler on the connection's worker without blocking it.
-    Task<void> sleep(std::chrono::milliseconds duration) {
-        return sleep_(target_, duration);
-    }
+    Task<void> sleep(std::chrono::milliseconds duration);
 
     // True once the peer is known gone: an HTTP/2 RST_STREAM, or a failed
     // write on HTTP/1.1. HTTP/1.1 cannot observe a disconnect until a write
@@ -74,9 +61,7 @@ public:
         return aborted_(target_);
     }
 
-    Task<void> end() {
-        return end_(target_);
-    }
+    Task<void> end();
 
     // Queues a trailer field to be emitted when the stream ends: an HTTP/1.1
     // chunked trailer or an HTTP/2 trailing HEADERS field, depending on the
@@ -152,13 +137,15 @@ struct SseMessage final {
     std::optional<std::uint32_t> retry;
 };
 
+namespace detail {
+void formatSseMessage(std::pmr::string& frame, const SseMessage& message);
+}  // namespace detail
+
 class SseWriter final {
 public:
     Task<void> writeSSE(const SseMessage& message);
 
-    Task<void> sleep(std::chrono::milliseconds duration) {
-        return writer_.sleep(duration);
-    }
+    Task<void> sleep(std::chrono::milliseconds duration);
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_.aborted();
@@ -168,18 +155,13 @@ public:
         writer_.addTrailer(name, value);
     }
 
-    Task<void> end() {
-        return writer_.end();
-    }
+    Task<void> end();
 
 private:
     friend class Context;
     friend struct detail::StreamingAccess;
 
     explicit SseWriter(ResponseStreamWriter& writer) noexcept : writer_(writer) {}
-
-    static void appendData(std::pmr::string& frame, std::string_view data);
-    static void appendUnsigned(std::pmr::string& frame, std::uint32_t value);
 
     ResponseStreamWriter& writer_;
 };

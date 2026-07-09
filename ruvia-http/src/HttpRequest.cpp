@@ -37,7 +37,7 @@ std::string_view HttpRequest::header(std::string_view name) const noexcept {
 
     for (std::size_t i = headerCount_; i > 0; --i) {
         const auto index = i - 1;
-        if (detail::asciiEqualsIgnoreCase(headers_[index].name(), name)) {
+        if (detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), name)) {
             return headers_[index].value();
         }
     }
@@ -52,7 +52,7 @@ std::optional<std::string_view> HttpRequest::query(std::string_view name) const 
 std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const noexcept {
     for (std::size_t i = headerCount_; i > 0; --i) {
         const auto index = i - 1;
-        if (!detail::asciiEqualsIgnoreCase(headers_[index].name(), "Cookie")) {
+        if (!detail::httpAsciiEqualsIgnoreCase(headers_[index].name(), "Cookie")) {
             continue;
         }
         if (auto value = detail::httpFindSemicolonParameter(headers_[index].value(), name)) {
@@ -63,7 +63,7 @@ std::optional<std::string_view> HttpRequest::cookie(std::string_view name) const
 }
 
 std::pmr::memory_resource* HttpRequest::resource() const noexcept {
-    return detail::pmrResourceOrDefault(resource_);
+    return detail::httpPmrResourceOrDefault(resource_);
 }
 
 }  // namespace ruvia

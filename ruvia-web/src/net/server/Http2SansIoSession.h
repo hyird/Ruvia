@@ -181,9 +181,10 @@ Task<void> runHttp2SansIoSession(
                 co_return;  // nothing left to write and no more will be produced
             }
             writeSignal.expires_at((asio::steady_timer::time_point::max)());
-            co_await asyncError([&writeSignal](auto handler) mutable {
+            const auto waitEc = co_await asyncError([&writeSignal](auto handler) mutable {
                 writeSignal.async_wait(std::move(handler));
             });
+            (void)waitEc;
         }
     };
 
@@ -702,9 +703,10 @@ Task<void> runHttp2SansIoSession(
     stopping = true;
     wakeWriter();
     while (!writerDone) {
-        co_await asyncError([&writerFinished](auto handler) mutable {
+        const auto waitEc = co_await asyncError([&writerFinished](auto handler) mutable {
             writerFinished.async_wait(std::move(handler));
         });
+        (void)waitEc;
     }
     co_return;
 }

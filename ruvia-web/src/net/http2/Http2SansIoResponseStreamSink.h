@@ -29,6 +29,7 @@
 #include "net/server/HttpResponseStreamHead.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"

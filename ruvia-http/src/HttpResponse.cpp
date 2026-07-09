@@ -1,7 +1,7 @@
 #include "ruvia/http/HttpResponse.h"
 
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 #include <stdexcept>
 #include <utility>
@@ -10,14 +10,14 @@ namespace ruvia {
 
 HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
     : HttpResponse(
-          detail::ResolvedPmrResourceTag{},
-          detail::pmrResourceOrDefault(resource)) {}
+          detail::HttpResolvedPmrResourceTag{},
+          detail::httpPmrResourceOrDefault(resource)) {}
 
 HttpResponse::HttpResponse(
-    detail::ResolvedPmrResourceTag,
+    detail::HttpResolvedPmrResourceTag,
     std::pmr::memory_resource* resource)
     : statusText_(resource),
-      headers_(detail::ResolvedPmrResourceTag{}, resource),
+      headers_(detail::HttpResolvedPmrResourceTag{}, resource),
       body_(resource) {}
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {

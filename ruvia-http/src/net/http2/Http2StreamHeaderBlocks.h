@@ -3,14 +3,14 @@
 #include <memory_resource>
 #include <string>
 
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {
 
 class Http2StreamHeaderBlocks final {
 public:
     explicit Http2StreamHeaderBlocks(std::pmr::memory_resource* resource = nullptr)
-        : Http2StreamHeaderBlocks(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
+        : Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] std::pmr::string& request() noexcept {
         return request_;
@@ -29,7 +29,7 @@ public:
     }
 
 private:
-    Http2StreamHeaderBlocks(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : request_(resource),
           response_(resource) {}
 

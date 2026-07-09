@@ -4,6 +4,7 @@
 #include "HttpResponseFileAccess.h"
 #include "HeaderTokenUtils.h"
 #include "ResponseHeaderUtils.h"
+#include "ruvia/detail/AsciiCase.h"
 #include "ruvia/http/detail/PmrString.h"
 
 #include <algorithm>

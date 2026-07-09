@@ -29,7 +29,7 @@ struct HttpResponseFileAccess final {
 
     static void setBorrowedNativeFile(
         HttpResponse& response,
-        const NativePathChar* file,
+        const HttpNativePathChar* file,
         std::uint64_t size) {
         response.setBorrowedNativeFileBody(file, size);
     }
@@ -45,7 +45,7 @@ struct HttpResponseFileAccess final {
 
     static void setBorrowedNativeFile(
         HttpResponse& response,
-        const NativePathChar* file,
+        const HttpNativePathChar* file,
         std::uint64_t size,
         std::uint64_t offset,
         std::uint64_t length) {
@@ -97,14 +97,14 @@ inline void setResponseBorrowedFileBody(
 
 inline void setResponseBorrowedNativeFileBody(
     HttpResponse& response,
-    const NativePathChar* file,
+    const HttpNativePathChar* file,
     std::uint64_t size) {
     HttpResponseFileAccess::setBorrowedNativeFile(response, file, size);
 }
 
 inline void setResponseBorrowedNativeFileBody(
     HttpResponse& response,
-    const NativePathChar* file,
+    const HttpNativePathChar* file,
     std::uint64_t size,
     std::uint64_t offset,
     std::uint64_t length) {

@@ -1,5 +1,5 @@
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -10,11 +10,11 @@ namespace ruvia {
 
 HttpResponseHeaders::HttpResponseHeaders(std::pmr::memory_resource* resource)
     : HttpResponseHeaders(
-          detail::ResolvedPmrResourceTag{},
-          detail::pmrResourceOrDefault(resource)) {}
+          detail::HttpResolvedPmrResourceTag{},
+          detail::httpPmrResourceOrDefault(resource)) {}
 
 HttpResponseHeaders::HttpResponseHeaders(
-    detail::ResolvedPmrResourceTag,
+    detail::HttpResolvedPmrResourceTag,
     std::pmr::memory_resource* resource)
     : resource_(resource),
       heap_(resource_) {}

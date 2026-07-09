@@ -78,6 +78,17 @@ private:
         kBody,
         kDone
     };
+    enum class PollStatus {
+        kNeedMore,
+        kContinue,
+        kPart,
+        kDone
+    };
+
+    struct PollResult final {
+        PollStatus status;
+        std::optional<MultipartStreamPart> part;
+    };
 
     static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
 
@@ -85,11 +96,12 @@ private:
     void consume(std::size_t bytes) noexcept;
     void compactConsumedPrefix();
     void compactPending();
-    Task<bool> appendMore();
-    Task<void> processBoundary();
-    Task<void> processHeaders();
+    void appendChunk(std::string_view chunk);
+    [[nodiscard]] PollResult poll();
+    [[nodiscard]] PollStatus processBoundary();
+    [[nodiscard]] PollStatus processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
-    Task<std::optional<MultipartStreamPart>> readBodyChunk();
+    [[nodiscard]] PollResult readBodyChunk();
 
     BodyReader& bodyReader_;
     std::pmr::memory_resource* resource_;

@@ -11,37 +11,37 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
     if (name.empty()) {
         return RequestHeaderKind::kOther;
     }
-    const auto first = asciiToLower(static_cast<unsigned char>(name.front()));
+    const auto first = httpAsciiToLower(static_cast<unsigned char>(name.front()));
     switch (name.size()) {
         case 4:
-            if (first == 'h' && asciiEqualsIgnoreCase(name, "Host")) {
+            if (first == 'h' && httpAsciiEqualsIgnoreCase(name, "Host")) {
                 return RequestHeaderKind::kHost;
             }
             break;
         case 5:
-            if (first == 'r' && asciiEqualsIgnoreCase(name, "Range")) {
+            if (first == 'r' && httpAsciiEqualsIgnoreCase(name, "Range")) {
                 return RequestHeaderKind::kRange;
             }
             break;
         case 6:
             switch (first) {
                 case 'a':
-                    if (asciiEqualsIgnoreCase(name, "Accept")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Accept")) {
                         return RequestHeaderKind::kAccept;
                     }
                     break;
                 case 'c':
-                    if (asciiEqualsIgnoreCase(name, "Cookie")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Cookie")) {
                         return RequestHeaderKind::kCookie;
                     }
                     break;
                 case 'e':
-                    if (asciiEqualsIgnoreCase(name, "Expect")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Expect")) {
                         return RequestHeaderKind::kExpect;
                     }
                     break;
                 case 'o':
-                    if (asciiEqualsIgnoreCase(name, "Origin")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Origin")) {
                         return RequestHeaderKind::kOrigin;
                     }
                     break;
@@ -50,16 +50,16 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
             }
             break;
         case 7:
-            if (first == 'u' && asciiEqualsIgnoreCase(name, "Upgrade")) {
+            if (first == 'u' && httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
                 return RequestHeaderKind::kUpgrade;
             }
             break;
         case 8:
             if (first == 'i') {
-                if (asciiEqualsIgnoreCase(name, "If-Match")) {
+                if (httpAsciiEqualsIgnoreCase(name, "If-Match")) {
                     return RequestHeaderKind::kIfMatch;
                 }
-                if (asciiEqualsIgnoreCase(name, "If-Range")) {
+                if (httpAsciiEqualsIgnoreCase(name, "If-Range")) {
                     return RequestHeaderKind::kIfRange;
                 }
             }
@@ -67,12 +67,12 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
         case 10:
             switch (first) {
                 case 'c':
-                    if (asciiEqualsIgnoreCase(name, "Connection")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Connection")) {
                         return RequestHeaderKind::kConnection;
                     }
                     break;
                 case 'u':
-                    if (asciiEqualsIgnoreCase(name, "User-Agent")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "User-Agent")) {
                         return RequestHeaderKind::kUserAgent;
                     }
                     break;
@@ -81,19 +81,19 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
             }
             break;
         case 12:
-            if (first == 'c' && asciiEqualsIgnoreCase(name, "Content-Type")) {
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Type")) {
                 return RequestHeaderKind::kContentType;
             }
             break;
         case 13:
             switch (first) {
                 case 'a':
-                    if (asciiEqualsIgnoreCase(name, "Authorization")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Authorization")) {
                         return RequestHeaderKind::kAuthorization;
                     }
                     break;
                 case 'i':
-                    if (asciiEqualsIgnoreCase(name, "If-None-Match")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "If-None-Match")) {
                         return RequestHeaderKind::kIfNoneMatch;
                     }
                     break;
@@ -102,34 +102,34 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
             }
             break;
         case 14:
-            if (first == 'c' && asciiEqualsIgnoreCase(name, "Content-Length")) {
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Length")) {
                 return RequestHeaderKind::kContentLength;
             }
             break;
         case 15:
-            if (first == 'a' && asciiEqualsIgnoreCase(name, "Accept-Encoding")) {
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Accept-Encoding")) {
                 return RequestHeaderKind::kAcceptEncoding;
             }
             break;
         case 16:
-            if (first == 'c' && asciiEqualsIgnoreCase(name, "Content-Encoding")) {
+            if (first == 'c' && httpAsciiEqualsIgnoreCase(name, "Content-Encoding")) {
                 return RequestHeaderKind::kContentEncoding;
             }
             break;
         case 17:
             switch (first) {
                 case 'i':
-                    if (asciiEqualsIgnoreCase(name, "If-Modified-Since")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "If-Modified-Since")) {
                         return RequestHeaderKind::kIfModifiedSince;
                     }
                     break;
                 case 's':
-                    if (asciiEqualsIgnoreCase(name, "Sec-WebSocket-Key")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Key")) {
                         return RequestHeaderKind::kSecWebSocketKey;
                     }
                     break;
                 case 't':
-                    if (asciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
+                    if (httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
                         return RequestHeaderKind::kTransferEncoding;
                     }
                     break;
@@ -138,27 +138,27 @@ RequestHeaderKind classifyRequestHeader(std::string_view name) noexcept {
             }
             break;
         case 19:
-            if (first == 'i' && asciiEqualsIgnoreCase(name, "If-Unmodified-Since")) {
+            if (first == 'i' && httpAsciiEqualsIgnoreCase(name, "If-Unmodified-Since")) {
                 return RequestHeaderKind::kIfUnmodifiedSince;
             }
             break;
         case 21:
-            if (first == 's' && asciiEqualsIgnoreCase(name, "Sec-WebSocket-Version")) {
+            if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Version")) {
                 return RequestHeaderKind::kSecWebSocketVersion;
             }
             break;
         case 22:
-            if (first == 's' && asciiEqualsIgnoreCase(name, "Sec-WebSocket-Protocol")) {
+            if (first == 's' && httpAsciiEqualsIgnoreCase(name, "Sec-WebSocket-Protocol")) {
                 return RequestHeaderKind::kSecWebSocketProtocol;
             }
             break;
         case 29:
-            if (first == 'a' && asciiEqualsIgnoreCase(name, "Access-Control-Request-Method")) {
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Request-Method")) {
                 return RequestHeaderKind::kAccessControlRequestMethod;
             }
             break;
         case 30:
-            if (first == 'a' && asciiEqualsIgnoreCase(name, "Access-Control-Request-Headers")) {
+            if (first == 'a' && httpAsciiEqualsIgnoreCase(name, "Access-Control-Request-Headers")) {
                 return RequestHeaderKind::kAccessControlRequestHeaders;
             }
             break;

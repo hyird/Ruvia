@@ -22,8 +22,11 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpClientContext.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StaticFiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
@@ -101,16 +104,20 @@ set_target_properties(ruvia-web PROPERTIES
 )
 
 ruvia_configure_library(ruvia-web)
+ruvia_configure_runtime_library(ruvia-web)
 
 target_include_directories(ruvia-web
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/http
 )
 
 target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_WEB)
 
 target_link_libraries(ruvia-web
     PUBLIC
+        ruvia::core
         ruvia::http
 )
 

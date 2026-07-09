@@ -11,8 +11,8 @@
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/PmrObject.h"
-#include "HttpClientContentEncoding.h"
-#include "HttpStreamingDecoder.h"
+#include "client/HttpClientContentEncoding.h"
+#include "client/HttpStreamingDecoder.h"
 
 namespace ruvia::detail {
 

@@ -6,13 +6,14 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia {
 
 class Context;
 class HttpResponse;
+template <typename T>
+class Task;
 
 class HttpErrorInfo final {
 public:

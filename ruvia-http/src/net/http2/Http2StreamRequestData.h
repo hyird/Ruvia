@@ -7,7 +7,7 @@
 #include "Http2HeaderList.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {
 
@@ -16,7 +16,7 @@ class Http2StreamBodyQueue;
 class Http2StreamRequestData final {
 public:
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
-        : Http2StreamRequestData(ResolvedPmrResourceTag{}, pmrResourceOrDefault(resource)) {}
+        : Http2StreamRequestData(HttpResolvedPmrResourceTag{}, httpPmrResourceOrDefault(resource)) {}
 
     [[nodiscard]] HttpMethod method() const noexcept {
         return method_;
@@ -116,7 +116,7 @@ public:
     }
 
 private:
-    Http2StreamRequestData(ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    Http2StreamRequestData(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : authority_(resource),
           path_(resource),
           cookie_(resource),

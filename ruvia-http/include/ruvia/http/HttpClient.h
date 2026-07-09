@@ -23,11 +23,17 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/app/Task.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/http/detail/PmrResource.h"
+
+namespace ruvia {
+
+template <typename T>
+class Task;
+
+}  // namespace ruvia
 
 namespace ruvia::detail {
 inline constexpr std::string_view kDefaultHttpClientAlias = "default";
@@ -46,11 +52,11 @@ struct HttpClientConfig {
     bool tls{false};
     // Speak HTTP/2 instead of HTTP/1.1. Over TLS this negotiates ALPN "h2" (and fails the
     // handshake if the peer will not); in cleartext it uses HTTP/2 prior knowledge (RFC 7540
-    // §3.4). A single multiplexed connection is used instead of the HTTP/1.1 connection pool.
+    // section 3.4). A single multiplexed connection is used instead of the HTTP/1.1 connection pool.
     //
     // Only HTTP/1.1 and HTTP/2 are supported. HTTP/3 / QUIC is explicitly NOT supported: there
     // is no h3/QUIC transport, ALPN never offers "h3", and no Alt-Svc "h3" advertisement is
-    // acted upon — a request is always sent over TCP (h1.1 or, with http2=true, h2).
+    // acted upon : a request is always sent over TCP (h1.1 or, with http2=true, h2).
     bool http2{false};
     // Override the Host header sent to the upstream (default: host[:port]). Lets a reverse proxy
     // connect to one address (host) while presenting a different Host to the upstream vhost.
@@ -107,7 +113,7 @@ private:
         : name_(std::move(n)), value_(std::move(v)) {}
 
     FetchResponseHeader(
-        detail::ResolvedPmrResourceTag,
+        detail::HttpResolvedPmrResourceTag,
         std::string_view n,
         std::string_view v,
         std::pmr::memory_resource* resource)
@@ -132,12 +138,7 @@ public:
           nextChunk_(nextChunk) {}
 
     [[nodiscard]] constexpr explicit operator bool() const noexcept { return nextChunk_ != nullptr; }
-    [[nodiscard]] Task<std::string_view> nextChunk() const {
-        if (nextChunk_ == nullptr) {
-            co_return std::string_view{};
-        }
-        co_return co_await nextChunk_(target_);
-    }
+    [[nodiscard]] Task<std::string_view> nextChunk() const;
 
 private:
     void* target_{nullptr};
@@ -229,7 +230,7 @@ struct FetchOptions {
     // already provides send backpressure) and only when a body/bodyStream is present. If the
     // server answers with a final status (>= 200) first, the body is not sent and that response
     // is returned; if it stays silent, the body is sent anyway after a short bounded wait so a
-    // server that ignores the expectation cannot deadlock the request (RFC 7231 §5.1.1).
+    // server that ignores the expectation cannot deadlock the request (RFC 7231 section 5.1.1).
     bool expectContinue{false};
     // Streaming responses only (Context::fetchStream / FetchResponseStream): decode a single
     // gzip/br/zstd Content-Encoding on the fly so readChunk() yields decoded bytes. Off by
@@ -277,9 +278,9 @@ private:
     friend struct detail::FetchResponseAccess;
 
     explicit FetchResponse(std::pmr::memory_resource* resource)
-        : FetchResponse(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource)) {}
+        : FetchResponse(detail::HttpResolvedPmrResourceTag{}, detail::httpPmrResourceOrDefault(resource)) {}
 
-    FetchResponse(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource)
+    FetchResponse(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : headers_(resource),
           body_(resource) {}
 
@@ -304,10 +305,10 @@ struct HttpClientDefinition final {
 //
 // Lifetime: the stream holds the underlying HTTP client connection open and refers back to the
 // client, so it must be fully consumed or closed (and destroyed) before the App / HTTP client it
-// came from is torn down — do not retain one past the request that produced it. It is also single-
+// came from is torn down ; do not retain one past the request that produced it. It is also single-
 // consumer: readChunk()/close() must be driven from one coroutine, not concurrently.
 //
-// Note: unlike fetch(), a streamed body is by default delivered as received — a Content-Encoding
+// Note: unlike fetch(), a streamed body is by default delivered as received : a Content-Encoding
 // is NOT transparently decoded (the caller sees the encoded bytes). Set FetchOptions::decodeStream
 // to decode a single gzip/br/zstd coding on the fly; the Content-Encoding header is still present.
 class FetchResponseStream final {
@@ -324,7 +325,7 @@ public:
     }
     // Next slice of the body; an empty view signals end of stream (the view is valid until the next
     // readChunk()/close()). Throws on transport error.
-    [[nodiscard]] Task<std::string_view> readChunk() { return body_.nextChunk(); }
+    [[nodiscard]] Task<std::string_view> readChunk();
     // Release the connection/stream before the body is fully consumed.
     void close() noexcept { body_ = HttpBodyStream{}; }
 

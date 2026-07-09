@@ -2,7 +2,7 @@
 
 #include <charconv>
 
-#include "HeaderTokenUtils.h"       // httpTrimOws, asciiEqualsIgnoreCase
+#include "HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
 #include "FileResponseHelpers.h"    // detail::httpParseHttpDate
 
 namespace ruvia {
@@ -44,27 +44,27 @@ CacheControl parseCacheControl(std::string_view value) noexcept {
         const auto name = detail::httpTrimOws(eq == std::string_view::npos ? token : token.substr(0, eq));
         const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
 
-        if (detail::asciiEqualsIgnoreCase(name, "no-store")) {
+        if (detail::httpAsciiEqualsIgnoreCase(name, "no-store")) {
             result.noStore = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "no-cache")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "no-cache")) {
             result.noCache = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "must-revalidate")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "must-revalidate")) {
             result.mustRevalidate = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "proxy-revalidate")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "proxy-revalidate")) {
             result.proxyRevalidate = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "private")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "private")) {
             result.isPrivate = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "public")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "public")) {
             result.isPublic = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "immutable")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "immutable")) {
             result.immutable = true;
-        } else if (detail::asciiEqualsIgnoreCase(name, "max-age")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "max-age")) {
             result.maxAge = parseDeltaSeconds(arg);
-        } else if (detail::asciiEqualsIgnoreCase(name, "s-maxage")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "s-maxage")) {
             result.sMaxAge = parseDeltaSeconds(arg);
-        } else if (detail::asciiEqualsIgnoreCase(name, "stale-while-revalidate")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-while-revalidate")) {
             result.staleWhileRevalidate = parseDeltaSeconds(arg);
-        } else if (detail::asciiEqualsIgnoreCase(name, "stale-if-error")) {
+        } else if (detail::httpAsciiEqualsIgnoreCase(name, "stale-if-error")) {
             result.staleIfError = parseDeltaSeconds(arg);
         }
     }

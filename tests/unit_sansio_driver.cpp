@@ -65,9 +65,10 @@ ruvia::Task<ruvia::HttpResponse> slowHandler(void* context, ruvia::Context& ctx)
     auto* io = static_cast<asio::io_context*>(context);
     asio::steady_timer timer(*io);
     timer.expires_after(std::chrono::milliseconds(30));
-    co_await ruvia::detail::asyncError([&timer](auto handler) mutable {
+    const auto waitEc = co_await ruvia::detail::asyncError([&timer](auto handler) mutable {
         timer.async_wait(std::move(handler));
     });
+    (void)waitEc;
     co_return ctx.text("slow");
 }
 
@@ -188,8 +189,8 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                         ruvia::HttpResponse response(&resource);
                         response.status(200);
                         response.setBodyCopy("pong");
-                        c.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
-                        c.submitData(event.streamId, "pong", /*endStream=*/true);
+                        (void)c.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
+                        (void)c.submitData(event.streamId, "pong", /*endStream=*/true);
                     }
                 }
                 co_return;

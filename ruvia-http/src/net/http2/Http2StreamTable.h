@@ -10,15 +10,14 @@
 
 #include "Http2Frame.h"
 #include "Http2StreamState.h"
-#include "ruvia/memory/PmrObject.h"
-#include "ruvia/memory/PmrResource.h"
+#include "detail/HttpPmrObject.h"
 
 namespace ruvia::detail {
 
 class Http2StreamTable final {
 public:
     explicit Http2StreamTable(std::pmr::memory_resource* resource)
-        : resource_(pmrResourceOrDefault(resource)),
+        : resource_(httpPmrResourceOrDefault(resource)),
           overflow_(resource_) {}
 
     [[nodiscard]] std::size_t size() const noexcept {
@@ -79,7 +78,7 @@ public:
                 return &*slot;
             }
         }
-        auto stream = makePmrObject<Http2StreamState>(resource_, streamId, resource_);
+        auto stream = makeHttpPmrObject<Http2StreamState>(resource_, streamId, resource_);
         stream->setSendWindow(peerInitialWindowSize);
         auto* result = stream.get();
         overflow_.push_back(std::move(stream));
@@ -160,7 +159,7 @@ public:
 
 private:
     static constexpr std::size_t kInlineCapacity = 16;
-    using OverflowStream = std::unique_ptr<Http2StreamState, PmrObjectDeleter<Http2StreamState>>;
+    using OverflowStream = std::unique_ptr<Http2StreamState, HttpPmrObjectDeleter<Http2StreamState>>;
 
     class SnapshotIterationGuard final {
     public:

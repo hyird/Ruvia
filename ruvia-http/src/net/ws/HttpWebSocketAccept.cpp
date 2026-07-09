@@ -3,7 +3,7 @@
 #include <array>
 #include <span>
 
-#include "Base64.h"
+#include "detail/HttpBase64.h"
 #include "HeaderTokenUtils.h"
 
 namespace ruvia::detail {
@@ -116,7 +116,7 @@ constexpr std::string_view kWebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
 void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key) {
     key = detail::httpTrimOws(key);
     const auto digest = sha1(key, kWebSocketGuid);
-    encodeBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
+    encodeHttpBase64(output.data(), std::span<const std::uint8_t>(digest.data(), digest.size()));
 }
 
 }  // namespace ruvia::detail

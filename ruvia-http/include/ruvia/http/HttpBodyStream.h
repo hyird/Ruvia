@@ -1,11 +1,12 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
-
 #include <string_view>
 #include <utility>
 
 namespace ruvia {
+
+template <typename T>
+class Task;
 
 // The framework's single pull-based streaming body. A consumer calls nextChunk() repeatedly and
 // uses each returned slice -- a borrowed view valid only until the next nextChunk() call or until
@@ -53,12 +54,7 @@ public:
     // Next slice of the body; an empty view signals end of stream. The view is valid until the
     // next call to nextChunk() or the stream's destruction. An empty/closed stream (no producer)
     // safely yields end of stream rather than calling a null function pointer.
-    [[nodiscard]] Task<std::string_view> nextChunk() const {
-        if (next_ == nullptr) {
-            co_return std::string_view{};
-        }
-        co_return co_await next_(target_);
-    }
+    [[nodiscard]] Task<std::string_view> nextChunk() const;
 
 private:
     void reset() noexcept {
