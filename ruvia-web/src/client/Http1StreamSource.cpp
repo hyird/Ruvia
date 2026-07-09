@@ -15,6 +15,7 @@
 
 #include "client/HttpClientAccess.h"
 #include "client/HttpClientDecodingStreamSource.h"
+#include "client/HttpClientStreamAccess.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {

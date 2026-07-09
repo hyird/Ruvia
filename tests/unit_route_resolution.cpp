@@ -71,8 +71,10 @@ RUVIA_TEST(route_resolution_found_dynamic) {
     const auto resolution = RouteResolution::foundDynamic(fakeRoute(), match);
     RUVIA_CHECK(resolution.found());
     RUVIA_CHECK(!resolution.methodNotAllowed());
-    RUVIA_CHECK(resolution.match() == &match);
+    RUVIA_CHECK(resolution.match() != nullptr);
+    RUVIA_CHECK(resolution.match() != &match);
     RUVIA_CHECK_EQ(resolution.match()->size(), std::size_t{1});
+    RUVIA_CHECK_EQ(resolution.match()->values()[0], std::string_view("id"));
 }
 
 RUVIA_TEST(route_resolution_method_not_allowed_vs_not_found) {

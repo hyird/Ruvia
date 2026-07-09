@@ -27,6 +27,7 @@
 #include "net/http2/Http2Hpack.h"
 #include "net/http2/Http2SansIoWsTransport.h"
 #include "net/server/HttpResponseStreamHead.h"
+#include "net/server/HttpResponseStreamKindAdapter.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "runtime/AsioAwait.h"
 #include "detail/HttpAsciiCase.h"
@@ -138,7 +139,9 @@ private:
             co_return;
         }
         auto streamHead = prepareResponseStreamHead(
-            state_.streamingHead(), mode_, ResponseStreamFraming::kHttp2DataFrames);
+            state_.streamingHead(),
+            responseStreamKindForRouteMode(mode_),
+            ResponseStreamFraming::kHttp2DataFrames);
         state_.markCommitted(streamHead.bodyForbidden());
         connection_.submitStreamingResponseHead(
             streamId_, streamHead.response(), streamHead.bodyForbidden());

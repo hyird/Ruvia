@@ -1,18 +1,16 @@
 #pragma once
 
+#include "ruvia/app/Task.h"
+#include "ruvia/http/Sse.h"
 #include "ruvia/http/detail/CallableRef.h"
 
 #include <chrono>
-#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 
 namespace ruvia {
-
-template <typename T>
-class Task;
 
 class Context;
 class HttpResponse;
@@ -47,26 +45,16 @@ public:
 
     Task<void> write(std::string_view chunk);
 
-    // Writes chunk followed by "\n" as a single chunk.
     Task<void> writeln(std::string_view chunk);
 
-    // Suspends the handler on the connection's worker without blocking it.
     Task<void> sleep(std::chrono::milliseconds duration);
 
-    // True once the peer is known gone: an HTTP/2 RST_STREAM, or a failed
-    // write on HTTP/1.1. HTTP/1.1 cannot observe a disconnect until a write
-    // fails, so long-lived producers should keep writing (heartbeats) instead
-    // of expecting this to flip on its own.
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
     }
 
     Task<void> end();
 
-    // Queues a trailer field to be emitted when the stream ends: an HTTP/1.1
-    // chunked trailer or an HTTP/2 trailing HEADERS field, depending on the
-    // transport. Must be called before the stream is ended; throws on a field
-    // name/value that is not a valid or permissible trailer.
     void addTrailer(std::string_view name, std::string_view value) {
         addTrailer_(target_, name, value);
     }
@@ -77,9 +65,6 @@ private:
     using Write = Task<void> (*)(void*, std::string_view);
     using End = Task<void> (*)(void*);
     using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
-    // Web supplies this thunk (wrapping ContextAccess::streamingHead) so the http
-    // streaming layer can produce the response head from the bound Context without
-    // naming ContextAccess.
     using StreamingHeadThunk = HttpResponse (*)(Context&);
     using BindContext = void (*)(void*, Context*, StreamingHeadThunk) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
@@ -129,17 +114,6 @@ private:
     Committed committed_;
     Aborted aborted_;
 };
-
-struct SseMessage final {
-    std::string_view data;
-    std::string_view event;
-    std::string_view id;
-    std::optional<std::uint32_t> retry;
-};
-
-namespace detail {
-void formatSseMessage(std::pmr::string& frame, const SseMessage& message);
-}  // namespace detail
 
 class SseWriter final {
 public:

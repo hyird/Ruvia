@@ -761,7 +761,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
 }
 
 #include "client/Http2ClientSession.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 
 // The crown-jewel loopback: Ruvia's HTTP/2 CLIENT (Http2ClientSession, driven by the
 // sans-I/O core in client role) talks to Ruvia's HTTP/2 SERVER (runHttp2SansIoSession,

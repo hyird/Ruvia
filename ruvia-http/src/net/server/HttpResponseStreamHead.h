@@ -22,6 +22,11 @@ enum class ResponseStreamFraming : std::uint8_t {
     kHttp2DataFrames
 };
 
+enum class ResponseStreamKind : std::uint8_t {
+    kGeneric,
+    kSse
+};
+
 class ResponseStreamHead final {
 public:
     ResponseStreamHead(HttpResponse response, ResponseWritePolicy policy, bool bodyForbidden)
@@ -49,19 +54,19 @@ private:
 
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
     HttpResponse response,
-    ResponseBodyMode mode,
+    ResponseStreamKind kind,
     ResponseStreamFraming framing,
     bool connectionWillClose = false) {
     const auto policy = responseWritePolicy(response.status());
     const bool needsSseContentType =
-        mode == ResponseBodyMode::kSse &&
+        kind == ResponseStreamKind::kSse &&
         !responseHasKnownHeader(response, kResponseHeaderContentType);
     const bool needsHttp1Chunked =
         framing == ResponseStreamFraming::kHttp1Chunked &&
         policy.transferEncodingAllowed() &&
         !responseHasKnownHeader(response, kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
-        mode == ResponseBodyMode::kSse &&
+        kind == ResponseStreamKind::kSse &&
         (framing == ResponseStreamFraming::kHttp2DataFrames || policy.transferEncodingAllowed()) &&
         !responseHasKnownHeader(response, kResponseHeaderCacheControl);
     // The stream head is written before the session finalizes the connection

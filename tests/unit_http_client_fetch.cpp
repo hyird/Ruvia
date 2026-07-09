@@ -36,7 +36,7 @@
 #include "client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
 #include "detail/HttpAsciiCase.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 #include "ruvia/memory/MemoryPool.h"
 
 namespace {

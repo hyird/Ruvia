@@ -13,7 +13,7 @@
 #include "ruvia/app/AppHook.h"
 #include "ruvia/app/Dotenv.h"
 #include "ruvia/app/RateLimitRule.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/http/ErrorHandlers.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpServerOptions.h"
 #include "ruvia/http/StaticFiles.h"

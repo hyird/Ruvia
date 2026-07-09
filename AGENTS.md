@@ -88,10 +88,10 @@ tests/
 - HTTP method/status/header/request/response 类型。
 - HTTP/1 parser、chunk parser、request target parser。
 - cookie/cache/range/conditional request/content negotiation/header token 与 header value 通用 helper。
-- multipart/form/url encoding/body stream。
+- multipart/form/url encoding、SSE frame formatting、opaque body handle 与纯 parser。
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
-- multipart/SSE/content-encoding 等 wire-format 和协议语义实现。
+- multipart/SSE/content-encoding 等 wire-format 和协议语义实现；runtime reader/writer facade 留在 `ruvia-web`。
 - 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或 `ruvia-edge` 驱动）。
 
 禁止包含：
@@ -216,7 +216,7 @@ tests/
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 放在上层：`ruvia-web/src/client/`（HttpClientPool / Http2ClientSession / HttpClientRegistry，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
+- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 和 Web 代理 facade 放在上层：`ruvia-web/src/client/` 与 `HttpClientRuntime.h`（HttpClientPool / Http2ClientSession / HttpClientRegistry / `ProxyOptions`，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
 - 下游推荐：
 
 ```cmake

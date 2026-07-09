@@ -9,7 +9,8 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpBodyStream.h"
-#include "ruvia/http/HttpClient.h"
+#include "http/HttpBodyStreamAccess.h"
+#include "ruvia/http/HttpClientRuntime.h"
 #include "detail/HttpPmrObject.h"
 #include "client/HttpClientContentEncoding.h"
 #include "client/HttpStreamingDecoder.h"
@@ -72,7 +73,7 @@ private:
                 }
             }
 
-            const std::string_view chunk = co_await inner_.nextChunk();
+            const std::string_view chunk = co_await HttpBodyStreamAccess::nextChunk(inner_);
             if (chunk.empty()) {
                 innerEof_ = true;
             } else if (pendingInput_.empty()) {

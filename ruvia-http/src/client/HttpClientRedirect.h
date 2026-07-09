@@ -37,39 +37,52 @@ namespace ruvia::detail {
     return found;
 }
 
-inline void applyHttpClientRedirectMethod(FetchOptions& options, std::uint16_t status) {
+template <typename Options>
+inline void clearHttpClientRedirectRequestBody(Options& options) {
+    options.body = {};
+    if constexpr (requires { options.bodyStream = {}; }) {
+        options.bodyStream = {};
+    }
+}
+
+template <typename Options>
+inline void applyHttpClientRedirectMethod(Options& options, std::uint16_t status) {
     if (status == 303) {
         if (!httpAsciiEqualsIgnoreCase(options.method, "HEAD")) {
             options.method = "GET";
         }
-        options.body = {};
-        options.bodyStream = {};
+        clearHttpClientRedirectRequestBody(options);
         return;
     }
     if (status == 301 || status == 302) {
         if (!httpAsciiEqualsIgnoreCase(options.method, "GET") &&
             !httpAsciiEqualsIgnoreCase(options.method, "HEAD")) {
             options.method = "GET";
-            options.body = {};
-            options.bodyStream = {};
+            clearHttpClientRedirectRequestBody(options);
         }
     }
 }
 
+template <typename Options>
 [[nodiscard]] inline bool canReplayHttpClientRedirectRequest(
-    const FetchOptions& options,
+    const Options& options,
     std::uint16_t status) noexcept {
-    if (!options.bodyStream) {
+    if constexpr (!requires { static_cast<bool>(options.bodyStream); }) {
         return true;
     }
-    if (status == 303) {
-        return true;
+    else {
+        if (!options.bodyStream) {
+            return true;
+        }
+        if (status == 303) {
+            return true;
+        }
+        if (status == 301 || status == 302) {
+            return !httpAsciiEqualsIgnoreCase(options.method, "GET") &&
+                !httpAsciiEqualsIgnoreCase(options.method, "HEAD");
+        }
+        return false;
     }
-    if (status == 301 || status == 302) {
-        return !httpAsciiEqualsIgnoreCase(options.method, "GET") &&
-            !httpAsciiEqualsIgnoreCase(options.method, "HEAD");
-    }
-    return false;
 }
 
 [[nodiscard]] inline bool httpClientAuthorityMatchesOrigin(

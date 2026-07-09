@@ -226,10 +226,13 @@ if(_ruvia_needs_core)
 endif()
 
 if(_ruvia_needs_http)
-    find_dependency(OpenSSL REQUIRED)
     find_dependency(ZLIB REQUIRED)
     find_dependency(unofficial-brotli CONFIG REQUIRED)
     find_dependency(zstd CONFIG REQUIRED)
+endif()
+
+if(_ruvia_needs_web)
+    find_dependency(OpenSSL REQUIRED)
 endif()
 
 if(_ruvia_needs_web AND RUVIA_ENABLE_MARIADB)

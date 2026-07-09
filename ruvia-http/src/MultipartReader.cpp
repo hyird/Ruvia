@@ -1,4 +1,4 @@
-#include "ruvia/http/MultipartReader.h"
+#include "ruvia/http/MultipartParser.h"
 
 #include "MultipartReaderInternal.h"
 #include "MultipartParsing.h"
@@ -12,12 +12,8 @@
 
 namespace ruvia {
 
-MultipartReader::MultipartReader(
-    BodyReader& bodyReader,
-    std::string_view boundary,
-    std::pmr::memory_resource* resource)
-    : bodyReader_(bodyReader),
-      resource_(detail::httpPmrResourceOrDefault(resource)),
+MultipartParser::MultipartParser(std::string_view boundary, std::pmr::memory_resource* resource)
+    : resource_(detail::httpPmrResourceOrDefault(resource)),
       buffer_(resource_),
       boundaryLine_(resource_),
       boundaryPrefix_(resource_),
@@ -27,14 +23,14 @@ MultipartReader::MultipartReader(
     detail::httpAssignMultipartBoundaryMarkers(boundaryLine_, boundaryPrefix_, boundary);
 }
 
-std::string_view MultipartReader::bufferView() const noexcept {
+std::string_view MultipartParser::bufferView() const noexcept {
     if (bufferOffset_ >= buffer_.size()) {
         return {};
     }
     return std::string_view(buffer_.data() + bufferOffset_, buffer_.size() - bufferOffset_);
 }
 
-void MultipartReader::consume(std::size_t bytes) noexcept {
+void MultipartParser::consume(std::size_t bytes) noexcept {
     const auto available = bufferView().size();
     bufferOffset_ += std::min(bytes, available);
     if (bufferOffset_ == buffer_.size()) {
@@ -43,11 +39,11 @@ void MultipartReader::consume(std::size_t bytes) noexcept {
     }
 }
 
-void MultipartReader::compactConsumedPrefix() {
+void MultipartParser::compactConsumedPrefix() {
     detail::compactConsumedPrefix(buffer_, bufferOffset_, kCompactConsumedPrefixBytes);
 }
 
-void MultipartReader::compactPending() {
+void MultipartParser::compactPending() {
     if (pendingEraseBytes_ == 0) {
         return;
     }
@@ -55,12 +51,12 @@ void MultipartReader::compactPending() {
     pendingEraseBytes_ = 0;
 }
 
-void MultipartReader::appendChunk(std::string_view chunk) {
+void MultipartParser::appendChunk(std::string_view chunk) {
     compactConsumedPrefix();
     buffer_.append(chunk.data(), chunk.size());
 }
 
-MultipartReader::PollResult MultipartReader::poll() {
+MultipartParser::PollResult MultipartParser::poll() {
     for (;;) {
         compactPending();
         switch (state_) {
@@ -91,7 +87,7 @@ MultipartReader::PollResult MultipartReader::poll() {
     }
 }
 
-MultipartReader::PollStatus MultipartReader::processBoundary() {
+MultipartParser::PollStatus MultipartParser::processBoundary() {
     // RFC 2046 section 5.1.1: the first boundary may be preceded by a preamble that
     // is ignored. Skip it once, reusing the buffered parser's boundary finder so
     // the streaming and buffered paths accept exactly the same bodies.
@@ -134,7 +130,7 @@ MultipartReader::PollStatus MultipartReader::processBoundary() {
     }
 }
 
-MultipartReader::PollStatus MultipartReader::processHeaders() {
+MultipartParser::PollStatus MultipartParser::processHeaders() {
     // Cap on a single part's header block, mirroring the 64KB request-header limit.
     constexpr std::size_t kMaxMultipartHeaderBytes = 64 * 1024;
     for (;;) {
@@ -175,7 +171,7 @@ MultipartReader::PollStatus MultipartReader::processHeaders() {
     }
 }
 
-MultipartStreamPart MultipartReader::makePart(std::string_view body, bool partEnd) {
+MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEnd) {
     auto part = detail::MultipartStreamPartAccess::make(
         currentName_,
         currentFilename_,
@@ -187,7 +183,7 @@ MultipartStreamPart MultipartReader::makePart(std::string_view body, bool partEn
     return part;
 }
 
-MultipartReader::PollResult MultipartReader::readBodyChunk() {
+MultipartParser::PollResult MultipartParser::readBodyChunk() {
     for (;;) {
         const auto buffer = bufferView();
         const auto boundary = detail::httpFindMultipartBoundaryPrefix(

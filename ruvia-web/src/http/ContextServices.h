@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/Error.h"
+#include "ruvia/http/ErrorHandlers.h"
 
 namespace ruvia {
 

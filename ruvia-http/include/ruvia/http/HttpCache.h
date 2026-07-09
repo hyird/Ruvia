@@ -8,8 +8,8 @@
 namespace ruvia {
 
 // Parsed HTTP Cache-Control directives (RFC 9111 section 5.2). Unknown directives are ignored.
-// Boolean directives are flags; delta-seconds directives are optional (absent = not present). This
-// is a pure helper for building a caching reverse proxy / CDN edge on top of Context::proxy.
+// Boolean directives are flags; delta-seconds directives are optional (absent = not present).
+// This is a pure helper for building a caching reverse proxy / CDN edge.
 struct CacheControl {
     bool noStore{false};
     bool noCache{false};            // bare or field-name form -- both require revalidation

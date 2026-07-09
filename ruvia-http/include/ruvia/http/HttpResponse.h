@@ -20,7 +20,6 @@
 
 namespace ruvia {
 
-class Context;
 class HttpResponse;
 class HttpResponseHeaders;
 struct HttpResponseHeader;
@@ -30,6 +29,7 @@ namespace detail {
 struct HttpResponseBodyAccess;
 struct HttpResponseFileAccess;
 struct HttpResponseHeaderAccess;
+struct HttpResponseHeadersAccess;
 struct HttpResponseHeaderStateAccess;
 
 }  // namespace detail
@@ -67,6 +67,9 @@ public:
     using value_type = HttpResponseHeader;
     using const_iterator = const HttpResponseHeader*;
 
+    explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
+    ~HttpResponseHeaders();
+
     [[nodiscard]] const_iterator begin() const noexcept {
         return data();
     }
@@ -92,14 +95,12 @@ public:
     }
 
 private:
-    friend class Context;
     friend class HttpResponse;
+    friend struct detail::HttpResponseHeadersAccess;
 
     using iterator = HttpResponseHeader*;
 
-    explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
     HttpResponseHeaders(detail::HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource);
-    ~HttpResponseHeaders();
 
     HttpResponseHeaders(const HttpResponseHeaders&) = delete;
     HttpResponseHeaders& operator=(const HttpResponseHeaders&) = delete;
@@ -180,9 +181,8 @@ private:
         kFile,
         kStream
     };
-    // A streaming response body is the framework-wide HttpBodyStream (pull-based, owning). A normal
-    // route can return a response carrying one and the server streams it (h1 chunked / h2 DATA),
-    // which is how Context::proxy pipes an upstream response straight through.
+    // A streaming response body is a pull-based opaque handle. A runtime driver can
+    // stream it as h1 chunked bytes or h2 DATA without materializing the whole body.
     using StreamBody = HttpBodyStream;
     class FileBody final {
     public:

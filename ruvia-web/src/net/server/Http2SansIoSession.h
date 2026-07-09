@@ -44,15 +44,16 @@
 #include "HttpRequestInternal.h"
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseFileAccess.h"
+#include "http/HttpBodyStreamAccess.h"
 #include "http/ContextServices.h"
 #include "net/HttpFileOpen.h"
-#include "net/RequestBodyLimit.h"
 #include "net/RequestMemoryArena.h"
 #include "net/body/HttpRequestBodyFacade.h"
 #include "net/http2/Http2Connection.h"
 #include "net/http2/Http2RequestBuilder.h"
 #include "net/http2/Http2SansIoResponseStreamSink.h"
 #include "net/http2/Http2SansIoWsTransport.h"
+#include "net/http2/Http2StreamBodyPolicy.h"
 #include "net/http2/Http2WebSocketHandshake.h"
 #include "net/server/ConnectionScanner.h"
 #include "net/server/HttpBufferedResponse.h"
@@ -99,6 +100,16 @@ struct Http2SansIoSessionEnv final {
     const Http2SansIoUpgradeSeed* upgrade{nullptr};   // h2c upgrade seeding
 };
 
+struct Http2SansIoRouteState final {
+    std::uint32_t streamId{0};
+    RouteMatch scratch;
+    RouteResolution resolution;
+};
+
+[[nodiscard]] inline HttpRequestBodyMode httpRequestBodyModeForRoute(RequestBodyMode mode) noexcept {
+    return mode == RequestBodyMode::kStream ? HttpRequestBodyMode::kStream : HttpRequestBodyMode::kBuffered;
+}
+
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
     Stream& stream,
@@ -141,6 +152,27 @@ Task<void> runHttp2SansIoSession(
             }
         }
         return nullptr;
+    };
+    std::pmr::vector<Http2SansIoRouteState> streamRoutes(worker.resource());
+    const auto findRouteState = [&streamRoutes](std::uint32_t streamId) noexcept -> Http2SansIoRouteState* {
+        for (auto& entry : streamRoutes) {
+            if (entry.streamId == streamId) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    };
+    const auto ensureRouteState = [&streamRoutes, &findRouteState](std::uint32_t streamId) -> Http2SansIoRouteState& {
+        if (auto* existing = findRouteState(streamId)) {
+            return *existing;
+        }
+        streamRoutes.push_back(Http2SansIoRouteState{.streamId = streamId});
+        return streamRoutes.back();
+    };
+    const auto eraseRouteState = [&streamRoutes](std::uint32_t streamId) {
+        std::erase_if(streamRoutes, [streamId](const auto& entry) {
+            return entry.streamId == streamId;
+        });
     };
 
     // Single writer: serialize all outbound writes; sleep on writeSignal when idle.
@@ -242,7 +274,7 @@ Task<void> runHttp2SansIoSession(
                 std::string_view chunk;
                 bool failed = false;
                 try {
-                    chunk = co_await body.nextChunk();
+                    chunk = co_await HttpBodyStreamAccess::nextChunk(body);
                 } catch (...) {
                     failed = true;
                 }
@@ -382,7 +414,9 @@ Task<void> runHttp2SansIoSession(
             co_return;
         }
         HttpRequestAccess::setTransport(request, remoteAddress, env.clientCertificate, kTlsStream);
-        const auto& resolution = streamState->routeResolution();
+        const auto* routeState = findRouteState(streamId);
+        const RouteResolution resolution =
+            routeState != nullptr ? routeState->resolution : RouteResolution{};
 
         const auto appRateLimit = rateLimitRequestAllowed(env.rateLimiter, remoteAddress);
         if (!appRateLimit.allowed) {
@@ -396,7 +430,7 @@ Task<void> runHttp2SansIoSession(
                 options.accessLog, request, remoteAddress, response.status(), requestStart, true);
             co_return;
         }
-        const auto maxBody = requestBodyByteLimit(
+        const auto maxBody = httpRequestBodyByteLimit(
             streamState->bodyMode(), options.maxStreamBodyBytes, options.maxBufferedBodyBytes);
         if (maxBody != 0 && streamState->requestBodySize() > maxBody) {
             auto response = co_await routes.handleError(
@@ -525,6 +559,7 @@ Task<void> runHttp2SansIoSession(
         std::erase_if(streamSignals, [streamId](const auto& entry) {
             return entry.first == streamId;
         });
+        eraseRouteState(streamId);
         connection.unpinStream(streamId);
         --inFlight;
         wakeWriter();
@@ -533,23 +568,26 @@ Task<void> runHttp2SansIoSession(
 
     // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
     // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
-    const auto resolveStreamRoute = [&routes](Http2StreamState& streamState) noexcept {
+    const auto resolveStreamRoute = [&routes, &ensureRouteState](Http2StreamState& streamState) {
         const auto method = Http2RequestBuilder::requestMethod(streamState);
         const auto path = Http2RequestBuilder::requestPath(streamState);
+        auto& routeState = ensureRouteState(streamState.id());
+        routeState.scratch.clear();
+        routeState.resolution = {};
         if (method == HttpMethod::kUnknown || path.empty()) {
-            streamState.resetRoutingToBuffered();
+            streamState.resetBodyModeToBuffered();
             return;
         }
-        streamState.setRouteResolution(routes.resolve(method, path, streamState.routeMatch()));
-        const auto& resolution = streamState.routeResolution();
+        routeState.resolution = routes.resolve(method, path, routeState.scratch);
+        const auto& resolution = routeState.resolution;
         if (!resolution.found()) {
-            streamState.setBodyMode(RequestBodyMode::kBuffered);
+            streamState.setBodyMode(HttpRequestBodyMode::kBuffered);
             return;
         }
-        streamState.setBodyMode(resolution.bodyMode());
+        streamState.setBodyMode(httpRequestBodyModeForRoute(resolution.bodyMode()));
         if (streamState.extendedConnectWebSocket() && resolution.isWebSocketResponse()) {
             streamState.markWebSocketTunnel();
-            streamState.setBodyMode(RequestBodyMode::kStream);
+            streamState.setBodyMode(HttpRequestBodyMode::kStream);
         }
     };
 
@@ -605,6 +643,8 @@ Task<void> runHttp2SansIoSession(
             } else if (event.kind == Http2Event::Kind::kStreamClosed) {
                 if (auto* signal = findSignal(event.streamId)) {
                     signal->wake();  // stream is reset; blocked readers/writers see it
+                } else {
+                    eraseRouteState(event.streamId);
                 }
             }
         }

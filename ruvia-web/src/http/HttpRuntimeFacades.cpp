@@ -1,18 +1,11 @@
-#include "ruvia/http/HttpBodyStream.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 #include "ruvia/http/Streaming.h"
 #include "ruvia/http/WebSocket.h"
 
 #include "ruvia/app/Task.h"
+#include "HttpBodyStreamAccess.h"
 
 namespace ruvia {
-
-Task<std::string_view> HttpBodyStream::nextChunk() const {
-    if (next_ == nullptr) {
-        co_return std::string_view{};
-    }
-    co_return co_await next_(target_);
-}
 
 Task<std::optional<std::string_view>> BodyReader::read() {
     return read_();
@@ -57,7 +50,7 @@ Task<std::string_view> RequestBodyStream::nextChunk() const {
 }
 
 Task<std::string_view> FetchResponseStream::readChunk() {
-    return body_.nextChunk();
+    return detail::HttpBodyStreamAccess::nextChunk(body_);
 }
 
 Task<std::optional<WebSocketMessage>> WebSocket::read() {

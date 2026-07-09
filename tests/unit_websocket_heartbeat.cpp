@@ -4,7 +4,7 @@
 #include <cstdint>
 
 #include "net/ws/HttpWebSocketUtils.h"
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/http/WebSocketProtocol.h"
 
 namespace {
 

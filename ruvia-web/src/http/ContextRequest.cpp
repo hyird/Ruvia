@@ -431,16 +431,19 @@ const RequestNameValueList& Context::requestHeaders() const {
     if (requestHeaders_ == nullptr) {
         const auto rawHeaders = request_.headers();
         auto& names = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& headers = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
+        auto& headers = memory_.emplace<RequestNameValueList>(
+            detail::RequestNameValueListAccess::make(resource()));
         names.reserve(rawHeaders.size());
-        headers.reserve(rawHeaders.size());
+        detail::RequestNameValueListAccess::reserve(headers, rawHeaders.size());
         for (const auto& rawHeader : rawHeaders) {
             auto& name = names.emplace_back();
             name.reserve(rawHeader.name().size());
             appendLowerAscii(name, rawHeader.name());
-            headers.push_back(detail::RequestNameValueViewAccess::make(
-                std::string_view(name.data(), name.size()),
-                rawHeader.value()));
+            detail::RequestNameValueListAccess::pushBack(
+                headers,
+                detail::RequestNameValueViewAccess::make(
+                    std::string_view(name.data(), name.size()),
+                    rawHeader.value()));
         }
         requestHeaders_ = &headers;
     }
@@ -503,10 +506,10 @@ void Context::ensureRequestQuery() const {
         return left.firstIndex < right.firstIndex;
     });
 
-    auto& query = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
-    auto& groups = memory_.emplace<RequestValueGroupList>(RequestValueGroupList::Token{}, resource());
-    query.reserve(builds.size());
-    groups.reserve(builds.size());
+    auto& query = memory_.emplace<RequestNameValueList>(detail::RequestNameValueListAccess::make(resource()));
+    auto& groups = memory_.emplace<RequestValueGroupList>(detail::RequestValueGroupListAccess::make(resource()));
+    detail::RequestNameValueListAccess::reserve(query, builds.size());
+    detail::RequestValueGroupListAccess::reserve(groups, builds.size());
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
@@ -517,16 +520,18 @@ void Context::ensureRequestQuery() const {
         // order[build.end - 1] is the last occurrence. requestQueries() below still
         // lists every value in order.
         const auto lastIndex = order[build.end - 1];
-        query.push_back(detail::RequestNameValueViewAccess::make(
-            storedStringView(storage[lastIndex * 2]),
-            storedStringView(storage[lastIndex * 2 + 1])));
+        detail::RequestNameValueListAccess::pushBack(
+            query,
+            detail::RequestNameValueViewAccess::make(
+                storedStringView(storage[lastIndex * 2]),
+                storedStringView(storage[lastIndex * 2 + 1])));
 
-        auto group = RequestValueGroup(RequestValueGroup::Token{}, resource(), pairNameAt(storage, build.firstIndex));
+        auto group = detail::RequestValueGroupAccess::make(resource(), pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];
-            group.add(storedStringView(storage[pairIndex * 2 + 1]));
+            detail::RequestValueGroupAccess::add(group, storedStringView(storage[pairIndex * 2 + 1]));
         }
-        groups.push_back(std::move(group));
+        detail::RequestValueGroupListAccess::pushBack(groups, std::move(group));
     }
 
     requestQueryStorage_ = &storage;
@@ -589,8 +594,9 @@ const RequestNameValueList& Context::requestCookies() const {
             }
         }
 
-        auto& cookies = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
-        cookies.reserve(boundedFieldReserve(cookieCount));
+        auto& cookies = memory_.emplace<RequestNameValueList>(
+            detail::RequestNameValueListAccess::make(resource()));
+        detail::RequestNameValueListAccess::reserve(cookies, boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
             if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 continue;
@@ -598,7 +604,9 @@ const RequestNameValueList& Context::requestCookies() const {
             detail::httpVisitSemicolonParameters(
                 header.value(),
                 [&cookies](std::string_view key, std::string_view value) {
-                    cookies.push_back(detail::RequestNameValueViewAccess::make(key, value));
+                    detail::RequestNameValueListAccess::pushBack(
+                        cookies,
+                        detail::RequestNameValueViewAccess::make(key, value));
                     return true;
                 });
         }
@@ -632,9 +640,10 @@ const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRou
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
-        auto& params = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
+        auto& params = memory_.emplace<RequestNameValueList>(
+            detail::RequestNameValueListAccess::make(resource()));
         storage.reserve(paramCount_ * 2);
-        params.reserve(paramCount_);
+        detail::RequestNameValueListAccess::reserve(params, paramCount_);
         for (std::size_t i = 0; i < paramCount_; ++i) {
             std::pmr::string name(paramNames_[i].data(), paramNames_[i].size(), resource());
             std::pmr::string value(resource());
@@ -642,9 +651,11 @@ const RequestNameValueList& Context::routeParams() const {
             storage.push_back(std::move(name));
             storage.push_back(std::move(value));
             const auto nameIndex = storage.size() - 2;
-            params.push_back(detail::RequestNameValueViewAccess::make(
-                std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
-                std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
+            detail::RequestNameValueListAccess::pushBack(
+                params,
+                detail::RequestNameValueViewAccess::make(
+                    std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
+                    std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
         }
         routeParamStorage_ = &storage;
         routeParams_ = &params;

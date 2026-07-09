@@ -242,8 +242,8 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
     using ruvia::detail::ContextAccess;
     using ruvia::detail::HttpRequestAccess;
     using ruvia::detail::prepareResponseStreamHead;
-    using ruvia::detail::ResponseBodyMode;
     using ruvia::detail::ResponseStreamFraming;
+    using ruvia::detail::ResponseStreamKind;
 
     const auto head = [](bool presetNoCache) {
         ruvia::WorkerMemory worker;
@@ -257,7 +257,7 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
         }
         auto streamHead = prepareResponseStreamHead(
-            ContextAccess::streamingHead(context), ResponseBodyMode::kSse,
+            ContextAccess::streamingHead(context), ResponseStreamKind::kSse,
             ResponseStreamFraming::kHttp1Chunked);
         return std::string(streamHead.response().header("Cache-Control"));
     };
@@ -274,8 +274,8 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
     using ruvia::detail::ContextAccess;
     using ruvia::detail::HttpRequestAccess;
     using ruvia::detail::prepareResponseStreamHead;
-    using ruvia::detail::ResponseBodyMode;
     using ruvia::detail::ResponseStreamFraming;
+    using ruvia::detail::ResponseStreamKind;
 
     const auto head = [](ResponseStreamFraming framing, bool connectionWillClose) {
         ruvia::WorkerMemory worker;
@@ -286,7 +286,7 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
         auto streamHead = prepareResponseStreamHead(
-            ContextAccess::streamingHead(context), ResponseBodyMode::kStream, framing,
+            ContextAccess::streamingHead(context), ResponseStreamKind::kGeneric, framing,
             connectionWillClose);
         return std::pair<std::string, std::string>(
             std::string(streamHead.response().header("Transfer-Encoding")),

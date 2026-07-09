@@ -9,21 +9,21 @@ namespace ruvia {
 
 Task<std::optional<MultipartStreamPart>> MultipartReader::read() {
     for (;;) {
-        auto result = poll();
+        auto result = parser_.poll();
         switch (result.status) {
-            case PollStatus::kPart:
+            case MultipartParser::PollStatus::kPart:
                 co_return std::move(result.part);
-            case PollStatus::kDone:
+            case MultipartParser::PollStatus::kDone:
                 co_return std::nullopt;
-            case PollStatus::kNeedMore: {
+            case MultipartParser::PollStatus::kNeedMore: {
                 auto chunk = co_await bodyReader_.read();
                 if (!chunk) {
                     throw std::invalid_argument("invalid multipart body");
                 }
-                appendChunk(*chunk);
+                parser_.appendChunk(*chunk);
                 break;
             }
-            case PollStatus::kContinue:
+            case MultipartParser::PollStatus::kContinue:
                 break;
         }
     }

@@ -14,6 +14,14 @@
 
 namespace ruvia {
 
+namespace detail {
+
+struct RequestNameValueListAccess;
+struct RequestValueGroupAccess;
+struct RequestValueGroupListAccess;
+
+}  // namespace detail
+
 enum class HttpMethod {
     kGet,
     kPost,
@@ -35,25 +43,7 @@ inline constexpr HttpMethod Head = HttpMethod::kHead;
 inline constexpr HttpMethod Options = HttpMethod::kOptions;
 inline constexpr HttpMethod Connect = HttpMethod::kConnect;
 
-namespace detail {
-
-enum class RequestBodyMode {
-    kBuffered,
-    kStream
-};
-
-enum class ResponseBodyMode {
-    kBuffered,
-    kStream,
-    kSse,
-    kWebSocket
-};
-
-}  // namespace detail
-
 inline constexpr std::size_t kMaxRequestHeaders = 64;
-
-inline constexpr std::size_t kMaxRouteParams = 16;
 
 class HttpHeaderView final {
 public:
@@ -215,7 +205,7 @@ public:
     }
 
 private:
-    friend class Context;
+    friend struct detail::RequestNameValueListAccess;
 
     void reserve(std::size_t count) {
         items_.reserve(count);
@@ -265,7 +255,7 @@ public:
     }
 
 private:
-    friend class Context;
+    friend struct detail::RequestValueGroupAccess;
 
     void add(std::string_view value) {
         values_.push_back(value);
@@ -342,7 +332,7 @@ public:
     }
 
 private:
-    friend class Context;
+    friend struct detail::RequestValueGroupListAccess;
 
     void reserve(std::size_t count) {
         groups_.reserve(count);
@@ -368,6 +358,58 @@ private:
 
     std::pmr::vector<RequestValueGroup> groups_;
 };
+
+namespace detail {
+
+struct RequestNameValueListAccess final {
+    [[nodiscard]] static RequestNameValueList make(std::pmr::memory_resource* resource) {
+        return RequestNameValueList(RequestNameValueList::Token{}, resource);
+    }
+
+    static void reserve(RequestNameValueList& list, std::size_t count) {
+        list.reserve(count);
+    }
+
+    static void pushBack(RequestNameValueList& list, RequestNameValueView value) {
+        list.push_back(value);
+    }
+
+    template <typename... Args>
+    static RequestNameValueView& emplaceBack(RequestNameValueList& list, Args&&... args) {
+        return list.emplace_back(std::forward<Args>(args)...);
+    }
+};
+
+struct RequestValueGroupAccess final {
+    [[nodiscard]] static RequestValueGroup make(std::pmr::memory_resource* resource, std::string_view name) {
+        return RequestValueGroup(RequestValueGroup::Token{}, resource, name);
+    }
+
+    static void add(RequestValueGroup& group, std::string_view value) {
+        group.add(value);
+    }
+};
+
+struct RequestValueGroupListAccess final {
+    [[nodiscard]] static RequestValueGroupList make(std::pmr::memory_resource* resource) {
+        return RequestValueGroupList(RequestValueGroupList::Token{}, resource);
+    }
+
+    static void reserve(RequestValueGroupList& list, std::size_t count) {
+        list.reserve(count);
+    }
+
+    static void pushBack(RequestValueGroupList& list, RequestValueGroup value) {
+        list.push_back(std::move(value));
+    }
+
+    template <typename... Args>
+    static RequestValueGroup& emplaceBack(RequestValueGroupList& list, Args&&... args) {
+        return list.emplace_back(std::forward<Args>(args)...);
+    }
+};
+
+}  // namespace detail
 
 HttpMethod parseMethod(std::string_view method);
 std::string_view methodName(HttpMethod method);

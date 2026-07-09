@@ -5,6 +5,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Error.h"
+#include "ruvia/http/ErrorHandlers.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
@@ -17,13 +18,9 @@
 
 namespace ruvia::detail {
 
-// Context-agnostic dispatch contract. Implemented in ruvia-web by RouteTable
-// (which builds a Context and runs controllers + middleware) and, in future, by
-// the ruvia-edge product (reverse proxy, no Context). Server sessions (h1/h2/ws)
-// hold a const RequestDispatcher& instead of naming RouteTable, so they can live
-// in ruvia-http and be reused by ruvia-web and ruvia-edge -- siblings that cannot
-// link each other. Every parameter/return type here is http-layer, so the sessions
-// no longer need any ruvia-web header for dispatch.
+// Web dispatch contract implemented by RouteTable, which builds a Context and runs
+// controllers + middleware. Server sessions hold a const RequestDispatcher& instead
+// of naming RouteTable so transport code stays decoupled from the route index shape.
 class RequestDispatcher {
 public:
     virtual ~RequestDispatcher() = default;

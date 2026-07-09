@@ -4,6 +4,7 @@
 
 #include "net/server/HttpResponseHead.h"
 #include "net/server/HttpResponseStreamHead.h"
+#include "net/server/HttpResponseStreamKindAdapter.h"
 #include "net/server/HttpResponseStreamState.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Context.h"
@@ -80,7 +81,7 @@ private:
 
         auto streamHead = prepareResponseStreamHead(
             state_.streamingHead(),
-            mode_,
+            responseStreamKindForRouteMode(mode_),
             framing_,
             connectionWillClose_);
 
