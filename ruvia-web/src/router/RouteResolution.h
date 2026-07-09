@@ -6,19 +6,11 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/http/RouteModes.h"
+#include "ruvia/http/WebSocketProtocol.h"
 
 // Lightweight route-resolution result types.
-//
-// DELIBERATE BOUNDARY ARTIFACT (not drift): this is the http-side half of the
-// dispatcher contract. The h2 stream state (http) embeds a RouteResolution so the
-// owner's route policy survives across frames, while the actual router -- RouteEntry,
-// RouteTable, the RequestDispatcher interface -- lives entirely in ruvia-web.
-// RouteEntry is referenced ONLY through an opaque pointer (forward declaration);
-// everything the protocol drivers read is copied into the Context-free
-// RouteDisposition below at match time. ruvia::http never dereferences RouteEntry.
 
 namespace ruvia::detail {
 
@@ -81,7 +73,8 @@ struct RouteResolution final {
         const RouteDisposition& disposition = {}) noexcept {
         RouteResolution resolution;
         resolution.route_ = route;
-        resolution.match_ = &match;
+        resolution.match_ = match;
+        resolution.hasMatch_ = true;
         resolution.disposition_ = disposition;
         return resolution;
     }
@@ -105,7 +98,7 @@ struct RouteResolution final {
     }
 
     [[nodiscard]] const RouteMatch* match() const noexcept {
-        return match_;
+        return hasMatch_ ? &match_ : nullptr;
     }
 
     [[nodiscard]] std::uint32_t allowedMethods() const noexcept {
@@ -142,7 +135,8 @@ struct RouteResolution final {
 
 private:
     const RouteEntry* route_{nullptr};
-    const RouteMatch* match_{nullptr};
+    RouteMatch match_{};
+    bool hasMatch_{false};
     std::uint32_t allowedMethods_{0};
     RouteDisposition disposition_{};
 };

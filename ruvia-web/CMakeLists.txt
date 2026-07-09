@@ -157,20 +157,27 @@ ruvia_install_public_headers(web
     include/ruvia/http/ControllerRuntime.h
     include/ruvia/http/ControllerTypes.h
     include/ruvia/http/Csrf.h
+    include/ruvia/http/ErrorHandlers.h
     include/ruvia/http/Health.h
+    include/ruvia/http/HttpClientRuntime.h
     include/ruvia/http/MiddlewareDescriptor.h
     include/ruvia/http/MiddlewareRuntime.h
     include/ruvia/http/Model.h
     include/ruvia/http/ModelJson.h
     include/ruvia/http/ModelObject.h
     include/ruvia/http/ModelTypes.h
+    include/ruvia/http/MultipartReader.h
     include/ruvia/http/Next.h
     include/ruvia/http/RateLimit.h
+    include/ruvia/http/RouteModes.h
     include/ruvia/http/SecurityHeaders.h
     include/ruvia/http/Session.h
+    include/ruvia/http/Streaming.h
     include/ruvia/http/Validation.h
     include/ruvia/http/ValidationTypes.h
+    include/ruvia/http/WebSocket.h
     include/ruvia/http/detail/ContextValues.h
+    include/ruvia/http/detail/CallableRef.h
     include/ruvia/http/detail/RegistrationResource.h
     include/ruvia/http/detail/ValidatedValues.h
     include/ruvia/http/detail/json/JsonLex.h

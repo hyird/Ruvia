@@ -10,12 +10,12 @@
 
 namespace {
 
-using ruvia::detail::RequestBodyMode;
+using ruvia::detail::HttpRequestBodyMode;
 using ruvia::detail::Http2BodyAccountingResult;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::http2AccountDataBody;
 using ruvia::detail::http2BodyLengthComplete;
-using ruvia::detail::requestBodyByteLimit;
+using ruvia::detail::httpRequestBodyByteLimit;
 
 Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
@@ -24,8 +24,8 @@ Http2StreamState makeStream() {
 }  // namespace
 
 RUVIA_TEST(request_body_byte_limit_selects_by_mode) {
-    RUVIA_CHECK_EQ(requestBodyByteLimit(RequestBodyMode::kStream, 100, 200), std::size_t{100});
-    RUVIA_CHECK_EQ(requestBodyByteLimit(RequestBodyMode::kBuffered, 100, 200), std::size_t{200});
+    RUVIA_CHECK_EQ(httpRequestBodyByteLimit(HttpRequestBodyMode::kStream, 100, 200), std::size_t{100});
+    RUVIA_CHECK_EQ(httpRequestBodyByteLimit(HttpRequestBodyMode::kBuffered, 100, 200), std::size_t{200});
 }
 
 RUVIA_TEST(h2_account_data_body_ok_and_accumulates) {
@@ -54,7 +54,7 @@ RUVIA_TEST(h2_account_data_body_bounds_streaming_backlog) {
     // maxBufferedBodyBytes: the receive window is re-credited on every DATA frame, so a
     // peer that outruns the handler would otherwise grow memory without limit.
     auto stream = makeStream();
-    stream.setBodyMode(RequestBodyMode::kStream);
+    stream.setBodyMode(HttpRequestBodyMode::kStream);
     stream.enqueueBodyChunk(std::string(90, 'x'));  // backlog the handler has not drained
     RUVIA_CHECK_EQ(stream.queuedBodyBytes(), std::size_t{90});
 
@@ -73,14 +73,14 @@ RUVIA_TEST(h2_account_data_body_bounds_streaming_backlog) {
     // maxBufferedBodyBytes = 0 disables the backlog cap -- an explicit opt-in to
     // unbounded buffering, matching the "0 = unbounded" convention of the other limits.
     auto unbounded = makeStream();
-    unbounded.setBodyMode(RequestBodyMode::kStream);
+    unbounded.setBodyMode(HttpRequestBodyMode::kStream);
     unbounded.enqueueBodyChunk(std::string(200, 'z'));
     RUVIA_CHECK(http2AccountDataBody(unbounded, 100000, 0, 0) == Http2BodyAccountingResult::kOk);
 
     // Buffered mode ignores the backlog cap (its memory is bounded by the total cap
     // instead): the same backlog + a frame that trips the streaming cap is accepted.
     auto buffered = makeStream();
-    buffered.setBodyMode(RequestBodyMode::kBuffered);
+    buffered.setBodyMode(HttpRequestBodyMode::kBuffered);
     buffered.enqueueBodyChunk(std::string(90, 'y'));
     RUVIA_CHECK(http2AccountDataBody(buffered, 50, 0, 100) == Http2BodyAccountingResult::kOk);
 }
@@ -105,12 +105,12 @@ RUVIA_TEST(h2_account_data_body_websocket_tunnel_bypasses_limits) {
 RUVIA_TEST(h2_account_data_body_mode_selects_limit) {
     // Stream mode applies the stream limit.
     auto streamMode = makeStream();
-    streamMode.setBodyMode(RequestBodyMode::kStream);
+    streamMode.setBodyMode(HttpRequestBodyMode::kStream);
     RUVIA_CHECK(http2AccountDataBody(streamMode, 150, 100, 0) == Http2BodyAccountingResult::kTooLarge);
 
     // Buffered mode applies the buffered limit.
     auto bufferedMode = makeStream();
-    bufferedMode.setBodyMode(RequestBodyMode::kBuffered);
+    bufferedMode.setBodyMode(HttpRequestBodyMode::kBuffered);
     RUVIA_CHECK(http2AccountDataBody(bufferedMode, 150, 0, 100) == Http2BodyAccountingResult::kTooLarge);
 
     // A 0 limit means unbounded, so a large frame is accepted.

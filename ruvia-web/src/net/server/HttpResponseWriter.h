@@ -16,6 +16,7 @@
 #include "HttpResponseFileAccess.h"
 #include "HttpResponseHeaderBits.h"
 #include "HttpResponseHeaderState.h"
+#include "http/HttpBodyStreamAccess.h"
 #include "runtime/AsioAwait.h"
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -59,7 +60,7 @@ Task<void> writeStreamingResponse(
     for (;;) {
         std::string_view chunk;
         try {
-            chunk = co_await body.nextChunk();
+            chunk = co_await HttpBodyStreamAccess::nextChunk(body);
         } catch (...) {
             // The head is already committed, so a mid-body failure (e.g. a truncated upstream) can
             // only drop the connection; report an error so the caller closes it.

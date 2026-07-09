@@ -28,6 +28,8 @@ RUVIA_TEST(host_header_accepts_valid) {
     RUVIA_CHECK(isValidHostHeader("[::1]"));
     RUVIA_CHECK(isValidHostHeader("[::1]:8080"));
     RUVIA_CHECK(isValidHostHeader("[2001:db8::1]"));
+    RUVIA_CHECK(isValidHostHeader("[::ffff:192.0.2.128]"));
+    RUVIA_CHECK(isValidHostHeader("[2001:db8:0:0:0:0:192.0.2.1]"));
 }
 
 RUVIA_TEST(host_header_rejects_invalid) {
@@ -43,6 +45,8 @@ RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader("[::1]x"));              // junk after the bracket
     RUVIA_CHECK(!isValidHostHeader("[GG::1]"));             // non-hex byte in the IPv6 literal
     RUVIA_CHECK(!isValidHostHeader("[::::]"));              // not a valid IPv6 literal
+    RUVIA_CHECK(!isValidHostHeader("[1:2:3:4:5:6:7:8:9]")); // too many 16-bit groups
+    RUVIA_CHECK(!isValidHostHeader("[::ffff:999.0.2.128]"));
     // A zone/scope id is valid to getaddrinfo but not a legal URI host: it must
     // be rejected so a scoped address can never slip into host matching.
     RUVIA_CHECK(!isValidHostHeader("[fe80::1%eth0]"));

@@ -5,8 +5,9 @@
 
 namespace ruvia {
 
-template <typename T>
-class Task;
+namespace detail {
+struct HttpBodyStreamAccess;
+}
 
 // The framework's single pull-based streaming body. A consumer calls nextChunk() repeatedly and
 // uses each returned slice -- a borrowed view valid only until the next nextChunk() call or until
@@ -22,12 +23,16 @@ class Task;
 // alive); such a handle is still move-only for a single, uniform ownership story.
 class HttpBodyStream final {
 public:
-    using NextChunk = Task<std::string_view> (*)(void*);
+    using ErasedNextChunk = std::string_view (*)(void*);
     using Destroy = void (*)(void*) noexcept;
 
     HttpBodyStream() noexcept = default;
+
+    template <typename NextChunk>
     HttpBodyStream(void* target, NextChunk next, Destroy destroy = nullptr) noexcept
-        : target_(target), next_(next), destroy_(destroy) {}
+        : target_(target),
+          next_(reinterpret_cast<ErasedNextChunk>(next)),
+          destroy_(destroy) {}
 
     HttpBodyStream(HttpBodyStream&& other) noexcept
         : target_(std::exchange(other.target_, nullptr)),
@@ -51,12 +56,9 @@ public:
 
     [[nodiscard]] explicit operator bool() const noexcept { return next_ != nullptr; }
 
-    // Next slice of the body; an empty view signals end of stream. The view is valid until the
-    // next call to nextChunk() or the stream's destruction. An empty/closed stream (no producer)
-    // safely yields end of stream rather than calling a null function pointer.
-    [[nodiscard]] Task<std::string_view> nextChunk() const;
-
 private:
+    friend struct detail::HttpBodyStreamAccess;
+
     void reset() noexcept {
         if (target_ != nullptr && destroy_ != nullptr) {
             destroy_(target_);
@@ -66,7 +68,7 @@ private:
     }
 
     void* target_{nullptr};
-    NextChunk next_{nullptr};
+    ErasedNextChunk next_{nullptr};
     Destroy destroy_{nullptr};
 };
 

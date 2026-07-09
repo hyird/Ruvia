@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 
 namespace ruvia::detail {
 

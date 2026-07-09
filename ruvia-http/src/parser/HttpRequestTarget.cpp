@@ -5,14 +5,7 @@
 
 #include <array>
 #include <charconv>
-#include <cstring>
 #include <system_error>
-
-#ifdef _WIN32
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#endif
 
 namespace ruvia::detail {
 namespace {
@@ -57,15 +50,116 @@ inline constexpr std::array<bool, 256> kRegNameCharTable = [] {
     return parsePortValue(value, port);
 }
 
+[[nodiscard]] bool isDecimalDigit(char c) noexcept {
+    return c >= '0' && c <= '9';
+}
+
+[[nodiscard]] bool isHexDigit(char c) noexcept {
+    return (c >= '0' && c <= '9') ||
+        (c >= 'A' && c <= 'F') ||
+        (c >= 'a' && c <= 'f');
+}
+
+[[nodiscard]] bool parseIpv6HexGroup(std::string_view literal, std::size_t& offset) noexcept {
+    std::size_t digits = 0;
+    while (offset < literal.size() && digits < 4 && isHexDigit(literal[offset])) {
+        ++offset;
+        ++digits;
+    }
+    return digits != 0;
+}
+
+[[nodiscard]] bool parseIpv4Address(std::string_view value) noexcept {
+    std::size_t offset = 0;
+    for (int part = 0; part < 4; ++part) {
+        if (offset >= value.size() || !isDecimalDigit(value[offset])) {
+            return false;
+        }
+        unsigned int octet = 0;
+        std::size_t digits = 0;
+        while (offset < value.size() && isDecimalDigit(value[offset])) {
+            octet = octet * 10 + static_cast<unsigned int>(value[offset] - '0');
+            ++offset;
+            ++digits;
+            if (digits > 3 || octet > 255) {
+                return false;
+            }
+        }
+        if (part == 3) {
+            return offset == value.size();
+        }
+        if (offset >= value.size() || value[offset] != '.') {
+            return false;
+        }
+        ++offset;
+    }
+    return false;
+}
+
 [[nodiscard]] bool isValidIpv6Literal(std::string_view literal) noexcept {
-    if (literal.empty() || literal.size() >= INET6_ADDRSTRLEN) {
+    if (literal.empty()) {
         return false;
     }
 
-    char text[INET6_ADDRSTRLEN]{};
-    std::memcpy(text, literal.data(), literal.size());
-    std::array<unsigned char, 16> address{};
-    return inet_pton(AF_INET6, text, address.data()) == 1;
+    std::size_t offset = 0;
+    int groups = 0;
+    bool compressed = false;
+
+    if (literal.starts_with("::")) {
+        compressed = true;
+        offset = 2;
+        if (offset == literal.size()) {
+            return true;
+        }
+    }
+
+    while (offset < literal.size()) {
+        if (groups >= 8) {
+            return false;
+        }
+
+        const auto nextDot = literal.find('.', offset);
+        const auto nextColon = literal.find(':', offset);
+        if (isDecimalDigit(literal[offset]) &&
+            nextDot != std::string_view::npos &&
+            (nextColon == std::string_view::npos || nextDot < nextColon)) {
+            if (!parseIpv4Address(literal.substr(offset))) {
+                return false;
+            }
+            groups += 2;
+            offset = literal.size();
+            break;
+        }
+
+        if (!parseIpv6HexGroup(literal, offset)) {
+            return false;
+        }
+        ++groups;
+
+        if (offset == literal.size()) {
+            break;
+        }
+        if (literal[offset] != ':') {
+            return false;
+        }
+        if (offset + 1 < literal.size() && literal[offset + 1] == ':') {
+            if (compressed) {
+                return false;
+            }
+            compressed = true;
+            offset += 2;
+            if (offset == literal.size()) {
+                break;
+            }
+        } else {
+            ++offset;
+            if (offset == literal.size()) {
+                return false;
+            }
+        }
+    }
+
+    return compressed ? groups < 8 : groups == 8;
 }
 
 [[nodiscard]] bool isValidBracketedHost(std::string_view value) noexcept {

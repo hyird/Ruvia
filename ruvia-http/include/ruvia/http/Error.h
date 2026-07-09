@@ -10,10 +10,7 @@
 
 namespace ruvia {
 
-class Context;
 class HttpResponse;
-template <typename T>
-class Task;
 
 class HttpErrorInfo final {
 public:
@@ -57,14 +54,6 @@ private:
     std::string_view detailsJson_{};
 };
 
-// DELIBERATE BOUNDARY ARTIFACT: hook types for the web framework's error /
-// not-found handlers. They live next to HttpErrorInfo so the error surface is one
-// public header, and they only require Context/HttpResponse forward declarations --
-// ruvia::http itself never defines Context nor invokes these; only ruvia::web
-// (Router::setErrorHandler / dispatch) does. A non-web product leaves them null.
-using HttpErrorHandler = Task<HttpResponse> (*)(Context&, HttpErrorInfo);
-using HttpNotFoundHandler = Task<HttpResponse> (*)(Context&);
-
 class HttpError final : public std::exception {
 public:
     HttpError(
@@ -90,13 +79,5 @@ private:
     std::pmr::memory_resource* resource,
     HttpErrorInfo error,
     bool closeConnection = false);
-
-#ifdef RUVIA_ENABLE_WEB
-[[nodiscard]] Task<HttpResponse> makeErrorResponse(
-    Context& context,
-    HttpErrorInfo error,
-    bool closeConnection,
-    HttpErrorHandler handler);
-#endif
 
 }  // namespace ruvia

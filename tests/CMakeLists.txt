@@ -79,7 +79,7 @@ add_executable(ruvia_unit_tests
     unit_http2_peer_settings.cpp
     unit_route_resolution.cpp
     unit_connection_read_buffer.cpp
-    unit_http2_stream_routing.cpp
+    unit_http2_stream_body_policy.cpp
     unit_http2_stream_request_data.cpp
     unit_http2_request_headers.cpp
     unit_http1_parser.cpp
@@ -169,12 +169,12 @@ target_include_directories(ruvia_unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/ruvia-core/src
     ${CMAKE_SOURCE_DIR}/ruvia-core/include
+    ${CMAKE_SOURCE_DIR}/ruvia-web/include
     ${CMAKE_SOURCE_DIR}/ruvia-http/src
     ${CMAKE_SOURCE_DIR}/ruvia-http/src/net
     ${CMAKE_SOURCE_DIR}/ruvia-http/include
     ${CMAKE_SOURCE_DIR}/ruvia-web/src
     ${CMAKE_SOURCE_DIR}/ruvia-web/src/http
-    ${CMAKE_SOURCE_DIR}/ruvia-web/include
 )
 
 if(MSVC)

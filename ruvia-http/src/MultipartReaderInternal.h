@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/MultipartReader.h"
+#include "ruvia/http/MultipartParser.h"
 
 namespace ruvia::detail {
 

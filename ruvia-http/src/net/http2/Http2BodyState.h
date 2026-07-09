@@ -5,7 +5,6 @@
 #include <limits>
 
 #include "Http2StreamState.h"
-#include "../RequestBodyLimit.h"
 
 namespace ruvia::detail {
 
@@ -23,7 +22,7 @@ enum class Http2BodyAccountingResult : std::uint8_t {
     if (stream.webSocketTunnel()) {
         return Http2BodyAccountingResult::kOk;
     }
-    const auto maxBody = requestBodyByteLimit(
+    const auto maxBody = httpRequestBodyByteLimit(
         stream.bodyMode(),
         maxStreamBodyBytes,
         maxBufferedBodyBytes);

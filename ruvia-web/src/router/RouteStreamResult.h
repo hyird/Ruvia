@@ -8,8 +8,7 @@ namespace ruvia::detail {
 
 // Outcome of dispatching a streaming/websocket route: either the handler streamed
 // the response itself (kStreamHandled) or it fell back to a buffered response the
-// caller must still write (kBufferedResponse). Context-agnostic: lives in http so
-// the server sessions and the dispatch contract can name it without ruvia-web.
+// caller must still write (kBufferedResponse).
 enum class RouteStreamDispatchOutcome {
     kBufferedResponse,
     kStreamHandled

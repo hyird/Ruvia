@@ -1,4 +1,4 @@
-#include "ruvia/http/Streaming.h"
+#include "ruvia/http/Sse.h"
 
 #include <array>
 #include <charconv>

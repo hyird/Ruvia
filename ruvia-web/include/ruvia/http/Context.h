@@ -19,9 +19,12 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/Error.h"
+#include "ruvia/http/ErrorHandlers.h"
+#include "ruvia/http/HttpClientRuntime.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/MultipartReader.h"
+#include "ruvia/http/RouteModes.h"
 #include "ruvia/http/Streaming.h"
 #include "ruvia/http/ValidationTypes.h"
 #include "ruvia/http/WebSocket.h"
@@ -32,7 +35,6 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/redis/Redis.h"
 #endif
-#include "ruvia/http/HttpClient.h"
 
 namespace ruvia {
 

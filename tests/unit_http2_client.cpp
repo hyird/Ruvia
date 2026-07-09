@@ -28,7 +28,7 @@
 #include "net/http2/Http2FrameTypes.h"
 #include "net/http2/Http2Hpack.h"
 #include "runtime/AsioAwait.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 
 namespace {
 

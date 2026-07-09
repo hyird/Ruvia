@@ -67,6 +67,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpBodyStream.h
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h
+    include/ruvia/http/HttpClientTypes.h
     include/ruvia/http/HttpCommon.h
     include/ruvia/http/HttpLimits.h
     include/ruvia/http/HttpParseTypes.h
@@ -76,11 +77,10 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpStatus.h
     include/ruvia/http/HttpTypes.h
     include/ruvia/http/JsonUtils.h
-    include/ruvia/http/MultipartReader.h
-    include/ruvia/http/Streaming.h
+    include/ruvia/http/MultipartParser.h
+    include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h
-    include/ruvia/http/WebSocket.h
-    include/ruvia/http/detail/CallableRef.h
+    include/ruvia/http/WebSocketProtocol.h
     include/ruvia/http/detail/Hex.h
     include/ruvia/http/detail/HttpOws.h
     include/ruvia/http/detail/NativePath.h

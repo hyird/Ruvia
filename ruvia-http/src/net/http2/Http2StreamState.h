@@ -13,9 +13,9 @@
 #include "Http2StreamFlowControl.h"
 #include "Http2StreamHeaderBlocks.h"
 #include "Http2StreamLifecycle.h"
+#include "Http2StreamBodyPolicy.h"
 #include "Http2StreamRequestData.h"
 #include "Http2StreamRequestState.h"
-#include "Http2StreamRouting.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
@@ -25,7 +25,7 @@ class Http2StreamState final {
     Http2StreamBodyAccounting bodyAccounting_;
     Http2StreamLifecycle lifecycle_;
     Http2StreamBodyQueue bodyQueue_;
-    Http2StreamRouting routing_;
+    Http2StreamBodyPolicy bodyPolicy_;
     Http2StreamRequestState requestState_;
     Http2StreamFlowControl flowControl_;
     bool deferWindowRelease_{false};
@@ -237,32 +237,20 @@ public:
         return bodyQueue_.takeWaiter();
     }
 
-    [[nodiscard]] RouteMatch& routeMatch() noexcept {
-        return routing_.match();
-    }
-
-    [[nodiscard]] const RouteResolution& routeResolution() const noexcept {
-        return routing_.resolution();
-    }
-
-    [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
-        return routing_.bodyMode();
+    [[nodiscard]] HttpRequestBodyMode bodyMode() const noexcept {
+        return bodyPolicy_.bodyMode();
     }
 
     [[nodiscard]] bool usesStreamRequestBody() const noexcept {
-        return routing_.usesStreamRequestBody();
+        return bodyPolicy_.usesStreamRequestBody();
     }
 
-    void resetRoutingToBuffered() noexcept {
-        routing_.resetToBuffered();
+    void resetBodyModeToBuffered() noexcept {
+        bodyPolicy_.resetToBuffered();
     }
 
-    void setRouteResolution(RouteResolution resolution) noexcept {
-        routing_.setResolution(resolution);
-    }
-
-    void setBodyMode(RequestBodyMode bodyMode) noexcept {
-        routing_.setBodyMode(bodyMode);
+    void setBodyMode(HttpRequestBodyMode bodyMode) noexcept {
+        bodyPolicy_.setBodyMode(bodyMode);
     }
 
     [[nodiscard]] HttpMethod requestMethod() const noexcept {

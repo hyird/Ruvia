@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "ruvia/app/Task.h"
-#include "ruvia/http/HttpClient.h"
+#include "ruvia/http/HttpClientRuntime.h"
 #include "detail/HttpPmrObject.h"
 #include "HttpClientBackend.h"
 #include "client/HttpClientResponseParser.h"

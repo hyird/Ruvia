@@ -7,6 +7,7 @@
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderState.h"
+#include "HttpResponseHeadersAccess.h"
 #include "detail/HttpAsciiCase.h"
 #include "detail/HttpNumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
@@ -190,8 +191,8 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 HttpResponseHeader* Context::findResponseHeaderForUpdate(
     std::string_view name,
     std::uint32_t knownBit) noexcept {
-    auto* const begin = responseHeaders_.begin();
-    auto* const end = responseHeaders_.end();
+    auto* const begin = detail::HttpResponseHeadersAccess::begin(responseHeaders_);
+    auto* const end = detail::HttpResponseHeadersAccess::end(responseHeaders_);
     auto* const header = detail::findResponseHeaderIndexed(
         begin,
         end,
@@ -213,8 +214,9 @@ void Context::recordResponseKnownHeaderIndex(
 
 void Context::rebuildResponseHeaderIndexes() noexcept {
     responseHeaderIndexes_.fill(detail::kMissingResponseHeaderIndexSlot);
-    const auto* const begin = responseHeaders_.begin();
-    const auto* const end = responseHeaders_.end();
+    const auto& headers = responseHeaders_;
+    const auto* const begin = headers.begin();
+    const auto* const end = headers.end();
     for (auto* cursor = begin; cursor != end; ++cursor) {
         const auto knownBit = detail::responseHeaderKnownBit(*cursor);
         if (knownBit == 0) {
@@ -240,8 +242,8 @@ Context& Context::removeResponseHeader(std::string_view name) {
     }
 
     const auto knownBit = detail::classifyResponseKnownHeader(name);
-    auto* const begin = responseHeaders_.begin();
-    auto* const end = responseHeaders_.end();
+    auto* const begin = detail::HttpResponseHeadersAccess::begin(responseHeaders_);
+    auto* const end = detail::HttpResponseHeadersAccess::end(responseHeaders_);
     auto* write = begin;
     bool removed = false;
 
@@ -251,7 +253,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
             ? headerKnownBit == knownBit
             : detail::httpAsciiEqualsIgnoreCase(read->name(), name);
         if (matches) {
-            responseHeaders_.releaseHeader(*read);
+            detail::HttpResponseHeadersAccess::release(responseHeaders_, *read);
             removed = true;
             continue;
         }
@@ -262,13 +264,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
     }
 
     if (removed) {
-        if (responseHeaders_.spilled_) {
-            responseHeaders_.heap_.erase(
-                responseHeaders_.heap_.begin() + static_cast<std::ptrdiff_t>(write - begin),
-                responseHeaders_.heap_.end());
-        } else {
-            responseHeaders_.size_ = static_cast<std::size_t>(write - begin);
-        }
+        detail::HttpResponseHeadersAccess::truncate(responseHeaders_, begin, write);
         rebuildResponseHeaderIndexes();
     }
     if (response_ != nullptr) {
@@ -290,7 +286,7 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
             throw std::invalid_argument("HTTP response header cannot be appended");
         }
         const auto index = responseHeaders_.size();
-        auto& header = responseHeaders_.add(name, value, knownBit);
+        auto& header = detail::HttpResponseHeadersAccess::add(responseHeaders_, name, value, knownBit);
         detail::setResponseHeaderAppend(header, true);
         recordResponseKnownHeaderIndex(knownBit, index);
         if (response_ != nullptr) {
@@ -300,7 +296,7 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
     }
 
     if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
-        responseHeaders_.assign(*header, name, value, knownBit);
+        detail::HttpResponseHeadersAccess::assign(responseHeaders_, *header, name, value, knownBit);
         if (response_ != nullptr) {
             detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
         }
@@ -308,7 +304,7 @@ void Context::header(std::string_view name, std::string_view value, HeaderOption
     }
 
     const auto index = responseHeaders_.size();
-    responseHeaders_.add(name, value, knownBit);
+    (void)detail::HttpResponseHeadersAccess::add(responseHeaders_, name, value, knownBit);
     recordResponseKnownHeaderIndex(knownBit, index);
     if (response_ != nullptr) {
         detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
@@ -477,7 +473,8 @@ void writeSetCookie(
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const auto serialization = prepareSetCookie(name, value, options);
     const auto index = responseHeaders_.size();
-    auto& header = responseHeaders_.addUninitializedValue(
+    auto& header = detail::HttpResponseHeadersAccess::addUninitializedValue(
+        responseHeaders_,
         "Set-Cookie",
         serialization.size,
         detail::kResponseHeaderSetCookie);
@@ -545,7 +542,8 @@ void Context::storeResponse(HttpResponse&& response) {
         if (contextHeaderCount > 0) {
             detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
         }
-        for (const auto& header : responseHeaders_) {
+        const auto& headers = responseHeaders_;
+        for (const auto& header : headers) {
             const auto knownBit = detail::responseHeaderKnownBit(header);
             const auto name = header.name();
             const auto value = header.value();
@@ -1008,12 +1006,13 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
 Context& Context::setStableResponseHeader(std::string_view name, std::string_view value) {
     const auto knownBit = detail::classifyResponseKnownHeader(name);
     if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
-        responseHeaders_.assignStableView(*header, name, value, knownBit);
+        detail::HttpResponseHeadersAccess::assignStableView(
+            responseHeaders_, *header, name, value, knownBit);
         return *this;
     }
 
     const auto index = responseHeaders_.size();
-    responseHeaders_.addStableView(name, value, knownBit);
+    (void)detail::HttpResponseHeadersAccess::addStableView(responseHeaders_, name, value, knownBit);
     recordResponseKnownHeaderIndex(knownBit, index);
     return *this;
 }

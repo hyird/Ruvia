@@ -19,6 +19,7 @@
 #include "router/RouteResolution.h"
 #include "router/RouteStreamResult.h"
 #include "ruvia/http/Error.h"
+#include "ruvia/http/ErrorHandlers.h"
 #include "ruvia/http/Next.h"
 #include "ruvia/http/WebSocket.h"
 #include "ruvia/memory/PmrResource.h"
@@ -52,8 +53,8 @@ using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
 using RouteMiddleware = CallableRef<void, Context&, Next&>;
 
-// RouteStreamDispatchOutcome / StreamDispatchResult moved to
-// ruvia-http/src/router/RouteStreamResult.h (Context-agnostic; usable by http sessions).
+// Streaming dispatch result types are web-level because they describe the route
+// handler contract, not the HTTP wire protocol.
 
 class RouteEntry final {
 public:
