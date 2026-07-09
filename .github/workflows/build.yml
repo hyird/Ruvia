@@ -10,7 +10,6 @@ on:
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
-      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "benchmarks/**"
@@ -23,7 +22,6 @@ on:
       - "ruvia-core/**"
       - "ruvia-http/**"
       - "ruvia-web/**"
-      - "ruvia-edge/**"
       - "examples/**"
       - "tests/**"
       - "benchmarks/**"
@@ -90,7 +88,6 @@ jobs:
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
-            -DRUVIA_BUILD_EDGE=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
@@ -154,7 +151,6 @@ jobs:
           cmake -S . -B build/ubsan -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
-            -DRUVIA_BUILD_EDGE=ON \
             -DRUVIA_BUILD_TESTS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
@@ -209,7 +205,6 @@ jobs:
             -DRUVIA_ENABLE_MARIADB=ON `
             -DRUVIA_ENABLE_REDIS=ON `
             -DRUVIA_ENABLE_JWT=ON `
-            -DRUVIA_BUILD_EDGE=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
             -DRUVIA_BUILD_TESTS=ON `
             -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `

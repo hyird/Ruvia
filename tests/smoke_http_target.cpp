@@ -15,7 +15,7 @@ int main() {
     }
 
     // The outbound client is http-owned (framework-free): its public surface must
-    // be usable from a ruvia::http-only consumer such as this one (or ruvia::edge).
+    // be usable from a ruvia::http-only consumer.
     ruvia::HttpClientConfig config;
     config.host = "example.test";
     config.port = 443;

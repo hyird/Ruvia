@@ -157,12 +157,6 @@ add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
 target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
 add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
 
-if(TARGET ruvia::edge)
-    add_executable(ruvia_smoke_edge_target smoke_edge_target.cpp)
-    target_link_libraries(ruvia_smoke_edge_target PRIVATE ruvia::edge)
-    add_test(NAME ruvia_smoke_edge_target COMMAND ruvia_smoke_edge_target)
-endif()
-
 # Unit tests reach into target-owned internal detail headers in addition to
 # public include surfaces.
 target_include_directories(ruvia_unit_tests PRIVATE
@@ -183,8 +177,8 @@ endif()
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
 
-# Mechanised layer-boundary checks (asio-free http, no framework reach-down, edge
-# web-free, docs ownership). Runs on every test build so a violation fails fast;
+# Mechanised layer-boundary checks (asio-free http, no framework reach-down,
+# docs ownership). Runs on every test build so a violation fails fast;
 # rules: README.md and AGENTS.md
 if(UNIX)
     add_custom_target(ruvia_check_boundaries ALL
