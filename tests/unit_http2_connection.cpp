@@ -974,3 +974,47 @@ RUVIA_TEST(http2_connection_window_debt_flushed_on_removal) {
     RUVIA_CHECK(sawConnWindowUpdate);  // connection window self-healed on removal
     RUVIA_CHECK(conn.stream(1) == nullptr);
 }
+
+// Server-role trailers: a trailing HEADERS block WITHOUT END_STREAM is a protocol
+// error on that stream (RFC 9113 §8.1) -- the core RSTs and closes it, no kMessageEnd.
+RUVIA_TEST(http2_connection_server_trailers_without_end_stream_rejected) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    // Open stream 1 with a body (POST, no END_STREAM on HEADERS).
+    std::pmr::string block(&resource);
+    HpackEncoder::encodeHeader(block, ":method", "POST");
+    HpackEncoder::encodeHeader(block, ":scheme", "https");
+    HpackEncoder::encodeHeader(block, ":path", "/");
+    HpackEncoder::encodeHeader(block, ":authority", "example.com");
+    const auto h = headersFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(block.data(), block.size()));
+    conn.feed(std::string_view(h.data(), h.size()));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {}
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    // A trailer HEADERS block with END_HEADERS but NO END_STREAM -> stream error.
+    std::pmr::string trailer(&resource);
+    HpackEncoder::encodeHeader(trailer, "x-checksum", "abc");
+    const auto t = headersFrame(
+        &resource, 1, ruvia::detail::kHttp2FlagEndHeaders,  // deliberately no END_STREAM
+        std::string_view(trailer.data(), trailer.size()));
+    conn.feed(std::string_view(t.data(), t.size()));
+
+    bool sawClosed = false;
+    bool sawEnd = false;
+    for (;;) {
+        const auto event = conn.nextEvent();
+        if (event.kind == Http2Event::Kind::kNone) break;
+        if (event.kind == Http2Event::Kind::kStreamClosed) sawClosed = true;
+        if (event.kind == Http2Event::Kind::kMessageEnd) sawEnd = true;
+    }
+    RUVIA_CHECK(sawClosed);
+    RUVIA_CHECK(!sawEnd);            // never completes the request
+    RUVIA_CHECK(!conn.closing());    // stream error, not connection error
+    const auto rst = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+    RUVIA_CHECK(conn.stream(1) == nullptr);  // removed, not leaked
+}

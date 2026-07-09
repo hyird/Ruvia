@@ -54,6 +54,7 @@ add_executable(ruvia_unit_tests
     unit_response_trailers.cpp
     unit_http2_frame_payload.cpp
     unit_http1_connection.cpp
+    unit_sansio_tls.cpp
     unit_http2_connection.cpp
     unit_ws_connection.cpp
     unit_sansio_driver.cpp
@@ -193,4 +194,6 @@ if(UNIX)
         VERBATIM)
     add_test(NAME ruvia_check_boundaries
         COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh)
+    add_test(NAME ruvia_check_boundaries_self_test
+        COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh --self-test)
 endif()
