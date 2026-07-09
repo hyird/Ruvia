@@ -1018,3 +1018,54 @@ RUVIA_TEST(http2_connection_server_trailers_without_end_stream_rejected) {
     RUVIA_CHECK_EQ(rst.type, static_cast<std::uint8_t>(Http2FrameType::kRstStream));
     RUVIA_CHECK(conn.stream(1) == nullptr);  // removed, not leaked
 }
+
+// submitTrailers queued behind a window-blocked body: the trailer HEADERS must be
+// emitted AFTER the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place
+// of it -- never ahead of the body bytes.
+RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshakeWithWindow(conn, 4);  // tiny 4-byte stream send window
+    driveGetRequest(conn, &resource);
+    conn.consumeOutput(conn.pendingOutput().size());
+
+    // Streaming response head (no content-length), then an 8-byte body: only 4 fit the
+    // window, so 4 bytes are deferred -> kBlocked.
+    ruvia::HttpResponse head(&resource);
+    head.status(200);
+    conn.submitStreamingResponseHead(1, head, /*bodyForbidden=*/false);
+    conn.consumeOutput(conn.pendingOutput().size());
+    RUVIA_CHECK(conn.submitData(1, "AAAABBBB", /*endStream=*/false) == Http2SubmitResult::kBlocked);
+
+    // First 4 bytes went out as DATA (no END_STREAM).
+    auto out = conn.pendingOutput();
+    const auto d1 = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(d1.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(d1.length, static_cast<std::uint32_t>(4));
+    RUVIA_CHECK((d1.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
+    conn.consumeOutput(out.size());
+
+    // Queue trailers while the remaining 4 bytes are still window-blocked.
+    std::pmr::string trailer(&resource);
+    HpackEncoder::encodeHeader(trailer, "x-checksum", "ok");
+    conn.submitTrailers(1, std::string_view(trailer.data(), trailer.size()));
+    RUVIA_CHECK(conn.pendingOutput().empty());  // nothing emitted yet (still blocked)
+
+    // Peer WINDOW_UPDATE reopens the window: the deferred DATA drains, THEN the trailer
+    // HEADERS(END_STREAM) follows -- in that order.
+    char wu[9 + 4];
+    ruvia::detail::http2EncodeFrameHeader(wu, 4, Http2FrameType::kWindowUpdate, 0, 1);
+    ruvia::detail::http2Write32(wu + 9, 100);
+    conn.feed(std::string_view(wu, sizeof(wu)));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {}
+
+    out = conn.pendingOutput();
+    const auto d2 = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(d2.type, static_cast<std::uint8_t>(Http2FrameType::kData));
+    RUVIA_CHECK_EQ(d2.length, static_cast<std::uint32_t>(4));  // the remaining body
+    RUVIA_CHECK((d2.flags & ruvia::detail::kHttp2FlagEndStream) == 0);  // NOT on the DATA
+    out = out.substr(9 + d2.length);
+    const auto th = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
+    RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
+    RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
+}

@@ -327,9 +327,27 @@ Task<void> runHttp2SansIoSession(
             }
             co_return;
         }
-        // Buffered bytes: a window-blocked remainder drains inside the core.
-        (void)connection.submitData(streamId, responseBodyBytes(response), true);
-        wakeWriter();
+        // Buffered bytes: pace in frame-sized slices instead of one whole submit. The
+        // body view is stable (owned by `response` on this handler frame), so a slow
+        // client only ever makes the core buffer at most ONE slice as a window-blocked
+        // remainder (vs. a copy of the entire windowed-out tail for a large response).
+        const auto body = responseBodyBytes(response);
+        constexpr std::size_t kSlice = 16 * 1024;
+        std::size_t offset = 0;
+        while (offset < body.size()) {
+            const auto n = std::min<std::size_t>(kSlice, body.size() - offset);
+            const bool last = offset + n == body.size();
+            const auto result = connection.submitData(streamId, body.substr(offset, n), last);
+            wakeWriter();
+            offset += n;
+            if (result == Http2SubmitResult::kClosed) {
+                co_return;
+            }
+            if (result == Http2SubmitResult::kBlocked && !(co_await awaitSendWindow(streamId))) {
+                co_return;
+            }
+        }
+        // (contentLength == 0 returned earlier; submitResponseHead END_STREAM'd it.)
         co_return;
     };
 

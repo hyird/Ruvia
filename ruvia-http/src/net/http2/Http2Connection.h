@@ -113,6 +113,11 @@ struct Http2PendingSend final {
     std::pmr::string bytes;
     std::size_t offset{0};
     bool endStream{false};
+    // A trailer HEADERS block queued behind a window-blocked body: it must go out AFTER
+    // the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place of it. Set
+    // by submitTrailers when the stream still has a blocked remainder; emitted by
+    // markSendWindowOpened once the body fully drains.
+    std::pmr::string trailerBlock;
 };
 
 class Http2Connection final {
@@ -161,11 +166,10 @@ public:
     void submitWebSocketHandshake(
         std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
     // Emit an HPACK-encoded trailer block as the stream's final HEADERS (END_STREAM),
-    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1). PRECONDITION: the
-    // stream has NO window-blocked DATA remainder (hasBlockedSend(streamId) == false);
-    // callers must pace the body on the send window before ending (the streaming sink
-    // does via awaitSendWindow), or the END_STREAM trailer would jump ahead of queued
-    // body bytes. Emitting when blocked is a caller bug.
+    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1). If the stream still
+    // has a window-blocked DATA remainder, the trailer is queued behind it and emitted
+    // once that DATA drains (so it never jumps ahead of the body); otherwise it goes out
+    // immediately.
     void submitTrailers(std::uint32_t streamId, std::string_view headerBlock);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
