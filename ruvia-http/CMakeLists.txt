@@ -48,8 +48,10 @@ target_include_directories(ruvia-http
 
 target_link_libraries(ruvia-http
     PUBLIC
-        OpenSSL::SSL
-        OpenSSL::Crypto
+        # Content/transfer coding only (gzip/deflate/brotli/zstd). NO OpenSSL: the pure
+        # protocol library does no TLS -- that moved to the web-layer client/server
+        # drivers -- and the WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
+        # http consumer would otherwise pull OpenSSL in for nothing.
         ZLIB::ZLIB
         unofficial::brotli::brotlienc
         unofficial::brotli::brotlidec
