@@ -4,7 +4,7 @@
 #include "HttpResponseFileAccess.h"
 #include "HeaderTokenUtils.h"
 #include "ResponseHeaderUtils.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/detail/PmrString.h"
 
 #include <algorithm>
@@ -175,7 +175,7 @@ struct CodingCompressor final {
 
 [[nodiscard]] bool mediaTypeStartsWith(std::string_view mediaType, std::string_view prefix) noexcept {
     return mediaType.size() >= prefix.size() &&
-        asciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
+        httpAsciiEqualsIgnoreCase(mediaType.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] bool responseContentTypeSkipsCompression(std::string_view contentType) noexcept {
@@ -188,18 +188,18 @@ struct CodingCompressor final {
     if (mediaType.empty()) {
         return false;
     }
-    if (asciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
+    if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
         return false;
     }
     return mediaTypeStartsWith(mediaType, "image/") ||
         mediaTypeStartsWith(mediaType, "video/") ||
         mediaTypeStartsWith(mediaType, "audio/") ||
-        asciiEqualsIgnoreCase(mediaType, "application/gzip") ||
-        asciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
-        asciiEqualsIgnoreCase(mediaType, "application/zip") ||
-        asciiEqualsIgnoreCase(mediaType, "application/zstd") ||
-        asciiEqualsIgnoreCase(mediaType, "application/pdf") ||
-        asciiEqualsIgnoreCase(mediaType, "application/octet-stream");
+        httpAsciiEqualsIgnoreCase(mediaType, "application/gzip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/x-gzip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/zip") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/zstd") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/pdf") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/octet-stream");
 }
 
 // The handler's ETag validates its (identity) representation. Once the body is

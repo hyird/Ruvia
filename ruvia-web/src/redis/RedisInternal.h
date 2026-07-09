@@ -49,7 +49,7 @@ public:
 #include <string_view>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "PoolWaiterQueue.h"
 
 struct redisReader;
@@ -199,7 +199,7 @@ public:
     void scanDeadlines() noexcept;
 
 private:
-    using RedisPoolDeleter = PmrObjectDeleter<RedisPool>;
+    using RedisPoolDeleter = HttpPmrObjectDeleter<RedisPool>;
 
     struct Entry final {
         std::pmr::string alias;

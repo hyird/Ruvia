@@ -10,7 +10,7 @@
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "client/HttpClientContentEncoding.h"
 #include "client/HttpStreamingDecoder.h"
 
@@ -43,7 +43,7 @@ public:
     }
     static void streamDestroy(void* self) noexcept {
         auto* source = static_cast<DecodingStreamSource*>(self);
-        destroyPmrObject(source, source->resource_);
+        destroyHttpPmrObject(source, source->resource_);
     }
 
 private:
@@ -106,7 +106,7 @@ template <typename Headers>
     if (coding == HttpContentCoding::kNone) {
         return inner;
     }
-    auto* wrapped = constructPmrObject<DecodingStreamSource>(
+    auto* wrapped = constructHttpPmrObject<DecodingStreamSource>(
         resource, std::move(inner), coding, resource);
     return HttpBodyStream(
         wrapped, &DecodingStreamSource::streamNextChunk, &DecodingStreamSource::streamDestroy);

@@ -9,7 +9,7 @@
 #include "MultipartParsing.h"
 #include "RequestBodyDecoding.h"
 #include "RequestBodyLoader.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/model/Parser.h"
@@ -92,7 +92,7 @@ inline constexpr std::size_t kMaxParsedFieldReserve = 4096;
 
 void appendLowerAscii(std::pmr::string& output, std::string_view input) {
     for (const char ch : input) {
-        output.push_back(static_cast<char>(detail::asciiToLower(static_cast<unsigned char>(ch))));
+        output.push_back(static_cast<char>(detail::httpAsciiToLower(static_cast<unsigned char>(ch))));
     }
 }
 
@@ -403,7 +403,7 @@ void compactParsedBodyFields(
 
 std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
     for (auto it = headers_.rbegin(); it != headers_.rend(); ++it) {
-        if (detail::asciiEqualsIgnoreCase(it->name(), name)) {
+        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
             return it->value();
         }
     }
@@ -453,7 +453,7 @@ std::optional<std::string_view> Context::requestHeader(std::string_view name) co
     // for the list accessor). Last match wins, mirroring RequestNameValueList::get()'s reverse scan.
     const auto rawHeaders = request_.headers();
     for (auto it = rawHeaders.rbegin(); it != rawHeaders.rend(); ++it) {
-        if (detail::asciiEqualsIgnoreCase(it->name(), name)) {
+        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
             return it->value();
         }
     }
@@ -570,7 +570,7 @@ std::optional<std::string_view> Context::requestCookie(std::string_view name) co
     const auto headers = request_.headers();
     for (std::size_t i = headers.size(); i > 0; --i) {
         const auto& header = headers[i - 1];
-        if (!detail::asciiEqualsIgnoreCase(header.name(), "Cookie")) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
             continue;
         }
         if (auto value = detail::httpFindSemicolonParameter(header.value(), name)) {
@@ -584,7 +584,7 @@ const RequestNameValueList& Context::requestCookies() const {
     if (requestCookies_ == nullptr) {
         std::size_t cookieCount = 0;
         for (const auto& header : request_.headers()) {
-            if (detail::asciiEqualsIgnoreCase(header.name(), "Cookie")) {
+            if (detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 cookieCount += delimitedFieldCount(header.value(), ';');
             }
         }
@@ -592,7 +592,7 @@ const RequestNameValueList& Context::requestCookies() const {
         auto& cookies = memory_.emplace<RequestNameValueList>(RequestNameValueList::Token{}, resource());
         cookies.reserve(boundedFieldReserve(cookieCount));
         for (const auto& header : request_.headers()) {
-            if (!detail::asciiEqualsIgnoreCase(header.name(), "Cookie")) {
+            if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Cookie")) {
                 continue;
             }
             detail::httpVisitSemicolonParameters(
@@ -680,7 +680,7 @@ bool Context::requestAccepts(std::string_view mediaType) const noexcept {
     int bestQuality = 0;
     bool sawAccept = false;
     for (const auto& header : request_.headers()) {
-        if (!detail::asciiEqualsIgnoreCase(header.name(), "Accept") || header.value().empty()) {
+        if (!detail::httpAsciiEqualsIgnoreCase(header.name(), "Accept") || header.value().empty()) {
             continue;
         }
         sawAccept = true;

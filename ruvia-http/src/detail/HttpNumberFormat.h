@@ -2,6 +2,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -29,6 +30,23 @@ inline void appendHttpFormattedNumber(
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {
         throw std::logic_error(errorMessage);
+    }
+    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
+}
+
+template <typename NumberT>
+inline void appendHttpFormattedFiniteNumber(
+    std::pmr::string& output,
+    NumberT value,
+    const char* finiteErrorMessage,
+    const char* formatErrorMessage) {
+    if (!std::isfinite(value)) {
+        throw std::invalid_argument(finiteErrorMessage);
+    }
+    std::array<char, 64> buffer;
+    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    if (ec != std::errc{}) {
+        throw std::invalid_argument(formatErrorMessage);
     }
     output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
 }

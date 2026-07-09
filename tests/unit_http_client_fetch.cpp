@@ -35,7 +35,7 @@
 #include "client/HttpClientInternal.h"
 #include "client/HttpClientPool.h"
 #include "runtime/AsioAwait.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/memory/MemoryPool.h"
 
@@ -1121,7 +1121,7 @@ RedirectOutcome runRedirectFetch(std::vector<std::string> responses, ruvia::Fetc
                             const auto line = std::string_view(text).substr(start, end - start);
                             const auto colon = line.find(':');
                             if (colon != std::string_view::npos &&
-                                ruvia::detail::asciiEqualsIgnoreCase(line.substr(0, colon), name)) {
+                                ruvia::detail::httpAsciiEqualsIgnoreCase(line.substr(0, colon), name)) {
                                 return ruvia::detail::httpTrimOws(line.substr(colon + 1));
                             }
                             if (end == std::string::npos) {
@@ -1139,7 +1139,7 @@ RedirectOutcome runRedirectFetch(std::vector<std::string> responses, ruvia::Fetc
                             co_await readMore(bodyBytes);
                             pending.erase(0, bodyBytes);
                         }
-                    } else if (ruvia::detail::asciiEqualsIgnoreCase(headerValue("Transfer-Encoding"), "chunked")) {
+                    } else if (ruvia::detail::httpAsciiEqualsIgnoreCase(headerValue("Transfer-Encoding"), "chunked")) {
                         for (;;) {
                             const auto line = co_await readLine();
                             std::size_t chunkBytes = 0;

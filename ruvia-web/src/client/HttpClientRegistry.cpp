@@ -23,10 +23,10 @@ HttpClientBackendPtr makeHttpClientBackend(
     std::pmr::memory_resource* resource) {
     if (config.http2) {
         return HttpClientBackendPtr(
-            constructPmrObject<Http2ClientSession>(resource, ioContext, config, resource));
+            constructHttpPmrObject<Http2ClientSession>(resource, ioContext, config, resource));
     }
     return HttpClientBackendPtr(
-        constructPmrObject<HttpClientPool>(resource, ioContext, config, resource));
+        constructHttpPmrObject<HttpClientPool>(resource, ioContext, config, resource));
 }
 
 }  // namespace

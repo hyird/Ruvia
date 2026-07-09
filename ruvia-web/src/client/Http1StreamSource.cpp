@@ -64,7 +64,7 @@ public:
     }
     static void streamDestroy(void* self) noexcept {
         auto* source = static_cast<Http1StreamSource*>(self);
-        destroyPmrObject(source, source->resource_);
+        destroyHttpPmrObject(source, source->resource_);
     }
 
 private:
@@ -340,7 +340,7 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         framing = Http1StreamSource::Framing::kClose;
     }
 
-    auto* source = constructPmrObject<Http1StreamSource>(
+    auto* source = constructHttpPmrObject<Http1StreamSource>(
         requestResource, this, std::move(guard), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), readTimeout, requestResource);
     HttpBodyStream body(source, &Http1StreamSource::streamNextChunk, &Http1StreamSource::streamDestroy);

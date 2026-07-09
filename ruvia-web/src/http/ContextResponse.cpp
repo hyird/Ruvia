@@ -7,8 +7,8 @@
 #include "HttpResponseBodyAccess.h"
 #include "HttpResponseHeaderAccess.h"
 #include "HttpResponseHeaderState.h"
-#include "ruvia/detail/AsciiCase.h"
-#include "ruvia/detail/NumberFormat.h"
+#include "detail/HttpAsciiCase.h"
+#include "detail/HttpNumberFormat.h"
 #include "ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/Hex.h"
 
@@ -37,7 +37,7 @@ namespace {
     std::string_view name,
     std::string_view value) noexcept {
     for (const auto& header : response.headers()) {
-        if (detail::asciiEqualsIgnoreCase(header.name(), name) &&
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name) &&
             header.value() == value) {
             return true;
         }
@@ -49,7 +49,7 @@ namespace {
     const HttpResponse& response,
     std::string_view name) noexcept {
     for (const auto& header : response.headers()) {
-        if (detail::asciiEqualsIgnoreCase(header.name(), name)) {
+        if (detail::httpAsciiEqualsIgnoreCase(header.name(), name)) {
             return true;
         }
     }
@@ -249,7 +249,7 @@ Context& Context::removeResponseHeader(std::string_view name) {
         const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
         const bool matches = knownBit != 0
             ? headerKnownBit == knownBit
-            : detail::asciiEqualsIgnoreCase(read->name(), name);
+            : detail::httpAsciiEqualsIgnoreCase(read->name(), name);
         if (matches) {
             responseHeaders_.releaseHeader(*read);
             removed = true;
@@ -360,7 +360,7 @@ struct SetCookieSerialization final {
     serialization.maxAgeValue =
         serialization.hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
     serialization.maxAgeSize =
-        serialization.hasMaxAge ? detail::unsignedDecimalSize(serialization.maxAgeValue) : std::size_t{0};
+        serialization.hasMaxAge ? detail::httpUnsignedDecimalSize(serialization.maxAgeValue) : std::size_t{0};
 
     std::size_t cookieSize = serialization.prefixText.size() + name.size() + 1 + value.size();
     if (!options.path.empty()) {

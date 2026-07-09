@@ -20,7 +20,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "HttpClientBackend.h"
 #include "client/HttpClientResponseParser.h"
 #include "PoolWaiterQueue.h"
@@ -55,7 +55,7 @@ public:
         const FetchOptions& options,
         std::pmr::memory_resource* resource) override;
 
-    void destroy() noexcept override { destroyPmrObject(this, resource_); }
+    void destroy() noexcept override { destroyHttpPmrObject(this, resource_); }
 
 private:
     friend struct PoolWaiterAwaiter;
@@ -63,7 +63,7 @@ private:
     // Non-movable: TLS stream holds a reference to rawSocket by address.
     struct Connection final {
         using TlsStream = asio::ssl::stream<asio::ip::tcp::socket&>;
-        using TlsStreamDeleter = PmrObjectDeleter<TlsStream>;
+        using TlsStreamDeleter = HttpPmrObjectDeleter<TlsStream>;
 
         explicit Connection(asio::io_context& ctx, std::pmr::memory_resource* resource);
         Connection(const Connection&) = delete;

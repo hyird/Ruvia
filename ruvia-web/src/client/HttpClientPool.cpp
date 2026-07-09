@@ -22,7 +22,7 @@
 #include "client/HttpClientResponseLimits.h"
 #include "client/HttpClientResponseParser.h"
 #include "HttpClientTlsVerification.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -31,15 +31,15 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool isReservedHttpClientRequestHeader(std::string_view name) noexcept {
-    return asciiEqualsIgnoreCase(name, "Host") ||
-        asciiEqualsIgnoreCase(name, "Connection") ||
-        asciiEqualsIgnoreCase(name, "Keep-Alive") ||
-        asciiEqualsIgnoreCase(name, "Proxy-Connection") ||
-        asciiEqualsIgnoreCase(name, "TE") ||
-        asciiEqualsIgnoreCase(name, "Trailer") ||
-        asciiEqualsIgnoreCase(name, "Content-Length") ||
-        asciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
-        asciiEqualsIgnoreCase(name, "Upgrade");
+    return httpAsciiEqualsIgnoreCase(name, "Host") ||
+        httpAsciiEqualsIgnoreCase(name, "Connection") ||
+        httpAsciiEqualsIgnoreCase(name, "Keep-Alive") ||
+        httpAsciiEqualsIgnoreCase(name, "Proxy-Connection") ||
+        httpAsciiEqualsIgnoreCase(name, "TE") ||
+        httpAsciiEqualsIgnoreCase(name, "Trailer") ||
+        httpAsciiEqualsIgnoreCase(name, "Content-Length") ||
+        httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding") ||
+        httpAsciiEqualsIgnoreCase(name, "Upgrade");
 }
 
 void validateHttpClientRequestHead(
@@ -139,7 +139,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         // to conn.rawSocket by reference (stable address), which now holds the fresh socket.
         conn.tlsStream.reset();
         using TlsStream = Connection::TlsStream;
-        conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
+        conn.tlsStream = makeHttpPmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
         // RFC 6066 SNI + RFC 6125 host-name verification (verify_peer only checks the
         // chain), shared with the HTTP/2 path via one owner.
         applyClientTlsIdentity(
@@ -542,7 +542,7 @@ Task<HttpClientResponseHead> HttpClientPool::writeRequestAndReadHead(
     // header in, don't duplicate it (we still run the wait dance for their header).
     bool userSetExpect = false;
     for (const auto& hdr : options.headers) {
-        if (asciiEqualsIgnoreCase(hdr.name(), "Expect")) {
+        if (httpAsciiEqualsIgnoreCase(hdr.name(), "Expect")) {
             userSetExpect = true;
             break;
         }

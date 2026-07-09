@@ -98,7 +98,7 @@ detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resour
 }
 
 void detail::ControllerRouteBuilder::ImplDeleter::operator()(Impl* impl) const noexcept {
-    destroyPmrObject(impl, registrationResource());
+    destroyHttpPmrObject(impl, registrationResource());
 }
 
 void detail::RouterImpl::registerRoute(
@@ -182,7 +182,7 @@ detail::ControllerRouteBuilder::ControllerRouteBuilder(
     std::pmr::vector<ControllerMiddlewareDescriptor> middlewares,
     OwnedPrefixTag)
     : impl_(
-          constructPmrObject<Impl>(
+          constructHttpPmrObject<Impl>(
               registrationResource(),
               router,
               std::move(prefix),

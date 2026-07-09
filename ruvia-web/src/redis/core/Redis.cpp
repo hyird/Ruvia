@@ -29,7 +29,7 @@ RedisRegistry::RedisRegistry(
                 })) {
             throw std::invalid_argument("duplicate redis alias");
         }
-        auto pool = makePmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
+        auto pool = makeHttpPmrObject<RedisPool>(resource_, ioContext, definition.config, resource_);
         pools_.push_back(Entry{
             std::pmr::string(definition.alias, resource_),
             std::move(pool)});

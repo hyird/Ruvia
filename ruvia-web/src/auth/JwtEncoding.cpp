@@ -1,6 +1,6 @@
 #include "JwtInternal.h"
 
-#include "ruvia/detail/Base64Url.h"
+#include "detail/HttpBase64Url.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -32,7 +32,7 @@ std::pmr::string jwtBase64UrlDecode(std::string_view input, std::pmr::memory_res
     std::uint32_t buffer = 0;
     int bits = 0;
     for (const auto ch : input) {
-        const auto value = decodeBase64UrlChar(ch);
+        const auto value = httpDecodeBase64UrlChar(ch);
         if (value < 0) {
             throw std::invalid_argument("JWT base64url value is invalid");
         }

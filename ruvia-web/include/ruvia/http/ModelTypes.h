@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "ruvia/memory/PmrResource.h"
 
 namespace ruvia {
@@ -295,20 +295,20 @@ public:
     T& emplace(Args&&... args) {
         T* value = nullptr;
         if constexpr (sizeof...(Args) == 0 && std::constructible_from<T, std::pmr::memory_resource*>) {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{},
+            value = detail::constructHttpPmrObject<T>(
+                detail::HttpResolvedPmrResourceTag{},
                 resource_,
                 resource_);
         } else {
-            value = detail::constructPmrObject<T>(
-                detail::ResolvedPmrResourceTag{},
+            value = detail::constructHttpPmrObject<T>(
+                detail::HttpResolvedPmrResourceTag{},
                 resource_,
                 std::forward<Args>(args)...);
         }
         try {
             items_.push_back(value);
         } catch (...) {
-            detail::destroyPmrObject(detail::ResolvedPmrResourceTag{}, value, resource_);
+            detail::destroyHttpPmrObject(detail::HttpResolvedPmrResourceTag{}, value, resource_);
             throw;
         }
         return *value;

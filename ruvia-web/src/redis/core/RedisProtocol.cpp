@@ -14,10 +14,10 @@ namespace {
 
 template <typename Args>
 [[nodiscard]] std::size_t respSerializedSize(const Args& args) noexcept {
-    std::size_t size = 1 + unsignedDecimalSize(static_cast<std::uint64_t>(args.size())) + 2;
+    std::size_t size = 1 + httpUnsignedDecimalSize(static_cast<std::uint64_t>(args.size())) + 2;
     for (const auto& arg : args) {
         const auto bytes = static_cast<std::size_t>(arg.size());
-        size += 1 + unsignedDecimalSize(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
+        size += 1 + httpUnsignedDecimalSize(static_cast<std::uint64_t>(bytes)) + 2 + bytes + 2;
     }
     return size;
 }

@@ -9,7 +9,7 @@
 
 #include "ruvia/app/Task.h"
 #include "ruvia/http/HttpClient.h"
-#include "ruvia/memory/PmrObject.h"
+#include "detail/HttpPmrObject.h"
 #include "HttpClientBackend.h"
 
 namespace ruvia::detail {

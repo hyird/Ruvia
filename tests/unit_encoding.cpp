@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "Base64.h"
-#include "ruvia/detail/NumberFormat.h"
+#include "detail/HttpNumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/Hex.h"
 
@@ -174,26 +174,26 @@ RUVIA_TEST(url_visit_pairs_skips_empty_segments) {
 
 // --- Number formatting ---------------------------------------------------
 RUVIA_TEST(number_unsigned_decimal_size) {
-    using ruvia::detail::unsignedDecimalSize;
-    RUVIA_CHECK_EQ(unsignedDecimalSize(0), std::size_t(1));
-    RUVIA_CHECK_EQ(unsignedDecimalSize(9), std::size_t(1));
-    RUVIA_CHECK_EQ(unsignedDecimalSize(10), std::size_t(2));
-    RUVIA_CHECK_EQ(unsignedDecimalSize(99), std::size_t(2));
-    RUVIA_CHECK_EQ(unsignedDecimalSize(100), std::size_t(3));
-    RUVIA_CHECK_EQ(unsignedDecimalSize(UINT64_C(18446744073709551615)), std::size_t(20));
+    using ruvia::detail::httpUnsignedDecimalSize;
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(0), std::size_t(1));
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(9), std::size_t(1));
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(10), std::size_t(2));
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(99), std::size_t(2));
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(100), std::size_t(3));
+    RUVIA_CHECK_EQ(httpUnsignedDecimalSize(UINT64_C(18446744073709551615)), std::size_t(20));
 }
 
 RUVIA_TEST(number_append_formatted) {
     std::pmr::string out(std::pmr::get_default_resource());
-    ruvia::detail::appendFormattedNumber(out, 42, "err");
-    ruvia::detail::appendFormattedNumber(out, -7, "err");
+    ruvia::detail::appendHttpFormattedNumber(out, 42, "err");
+    ruvia::detail::appendHttpFormattedNumber(out, -7, "err");
     RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("42-7"));
 }
 
 RUVIA_TEST(number_append_formatted_finite_rejects_non_finite) {
     // A finite double formats as usual.
     std::pmr::string out(std::pmr::get_default_resource());
-    ruvia::detail::appendFormattedFiniteNumber(out, 3.5, "not finite", "bad format");
+    ruvia::detail::appendHttpFormattedFiniteNumber(out, 3.5, "not finite", "bad format");
     RUVIA_CHECK_EQ(std::string(out.c_str()), std::string("3.5"));
 
     // NaN and both infinities are rejected rather than emitted as the words
@@ -205,7 +205,7 @@ RUVIA_TEST(number_append_formatted_finite_rejects_non_finite) {
         std::pmr::string sink(std::pmr::get_default_resource());
         bool threw = false;
         try {
-            ruvia::detail::appendFormattedFiniteNumber(sink, bad, "not finite", "bad format");
+            ruvia::detail::appendHttpFormattedFiniteNumber(sink, bad, "not finite", "bad format");
         } catch (const std::invalid_argument&) {
             threw = true;
         }

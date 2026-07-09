@@ -12,7 +12,7 @@
 #include "HttpResponseBodyAccess.h"
 #include "client/HttpClientInternal.h"
 #include "client/HttpClientPool.h"
-#include "ruvia/detail/AsciiCase.h"
+#include "detail/HttpAsciiCase.h"
 
 namespace ruvia {
 
@@ -24,7 +24,7 @@ namespace {
         "host", "connection", "keep-alive", "proxy-connection", "te", "trailer",
         "transfer-encoding", "upgrade", "content-length"};
     for (const auto drop : kDrop) {
-        if (detail::asciiEqualsIgnoreCase(name, drop)) {
+        if (detail::httpAsciiEqualsIgnoreCase(name, drop)) {
             return true;
         }
     }
@@ -39,7 +39,7 @@ namespace {
         "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade",
         "content-length"};
     for (const auto drop : kDrop) {
-        if (detail::asciiEqualsIgnoreCase(name, drop)) {
+        if (detail::httpAsciiEqualsIgnoreCase(name, drop)) {
             return true;
         }
     }
