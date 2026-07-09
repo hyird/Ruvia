@@ -80,6 +80,19 @@ ruvia::Task<ruvia::HttpResponse> seededHandler(void*, ruvia::Context& ctx) {
     co_return ctx.text("seeded-ok");
 }
 
+// Streaming request-body handler: drains the body reader, records the total bytes seen
+// via the void* handler context, and replies with a fixed marker.
+ruvia::Task<ruvia::HttpResponse> streamBodyCountHandler(void* ctx, ruvia::Context& c) {
+    auto* out = static_cast<std::size_t*>(ctx);
+    std::size_t bytes = 0;
+    auto& reader = c.req().bodyReader();
+    while (auto chunk = co_await reader.read()) {
+        bytes += chunk->size();
+    }
+    *out = bytes;
+    co_return c.text("upload-done");
+}
+
 // Path + size of the large temp file the pacing test serves (set in the test body).
 inline std::string& largeFilePath() {
     static std::string path;
@@ -1357,4 +1370,190 @@ RUVIA_TEST(sansio_driver_h2c_upgrade_seed_answers_stream1) {
 
     io.run();
     RUVIA_CHECK(body == "seeded-ok");
+}
+
+// P2 coverage: a streaming request body (RequestBodyMode::kStream) flows through the
+// live session to the handler's body reader chunk by chunk. Guards the signal-wake /
+// body-queue handoff -- a regression there would hang a streaming upload forever.
+RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::size_t receivedBytes = 0;
+    std::string body;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kPost,
+                std::pmr::string("/upload", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(&receivedBytes, &streamBodyCountHandler),
+                ruvia::detail::RequestBodyMode::kStream,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+            auto yield = [&io]() -> asio::awaitable<void> {
+                asio::steady_timer t(io, std::chrono::milliseconds(5));
+                co_await t.async_wait(asio::as_tuple(asio::use_awaitable));
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/upload");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            // HEADERS with NO END_STREAM -> body follows in separate DATA frames.
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+            co_await yield();
+            if (!co_await writeAll(frame(0x0, 0, 1, "aaa"))) co_return;  // 3 bytes
+            co_await yield();
+            if (!co_await writeAll(frame(0x0, 0, 1, "bb"))) co_return;   // 2 bytes
+            co_await yield();
+            if (!co_await writeAll(frame(0x0, ruvia::detail::kHttp2FlagEndStream, 1, {}))) co_return;
+
+            for (;;) {
+                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(hb, sizeof(hb))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(hb, sizeof(hb)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header.streamId == 1 && !payload.empty()) {
+                    body = payload;
+                    break;
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK_EQ(receivedBytes, static_cast<std::size_t>(5));  // "aaa" + "bb"
+    RUVIA_CHECK(body == "upload-done");
+}
+
+// P2 coverage: a server-role request framed with trailers (DATA then a trailing
+// HEADERS with END_STREAM, gRPC-style) must dispatch normally. Guards the
+// processTrailerHeaders server path (client-role trailers were the only coverage).
+RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
+    asio::io_context io;
+    tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
+    const std::uint16_t port = acceptor.local_endpoint().port();
+    std::string body;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            auto sock = co_await acceptor.async_accept(asio::use_awaitable);
+            ruvia::WorkerMemory worker;
+            ruvia::Router router;
+            auto& impl = ruvia::detail::RouterImpl::from(router);
+            impl.registerRoute(
+                ruvia::HttpMethod::kPost,
+                std::pmr::string("/echo", std::pmr::get_default_resource()),
+                ruvia::detail::RouteHandler(nullptr, &echoHandler),
+                ruvia::detail::RequestBodyMode::kBuffered,
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
+                std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
+            impl.finalize();
+            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+                sock, impl.routeTable(), worker, "127.0.0.1"));
+        },
+        asio::detached);
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            tcp::socket sock(io);
+            co_await sock.async_connect(
+                tcp::endpoint(asio::ip::make_address("127.0.0.1"), port), asio::use_awaitable);
+            auto writeAll = [&sock](std::string_view bytes) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_write(
+                    sock, asio::buffer(bytes.data(), bytes.size()), asio::as_tuple(asio::use_awaitable));
+                (void)n;
+                co_return !ec;
+            };
+            auto readExact = [&sock](void* data, std::size_t size) -> asio::awaitable<bool> {
+                auto [ec, n] = co_await asio::async_read(
+                    sock, asio::buffer(data, size), asio::as_tuple(asio::use_awaitable));
+                co_return !ec && n == size;
+            };
+
+            if (!co_await writeAll(kClientPreface)) co_return;
+            if (!co_await writeAll(frame(0x4, 0, 0, {}))) co_return;
+            std::pmr::string headerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(headerBlock, ":method", "POST");
+            HpackEncoder::encodeHeader(headerBlock, ":path", "/echo");
+            HpackEncoder::encodeHeader(headerBlock, ":scheme", "http");
+            HpackEncoder::encodeHeader(headerBlock, ":authority", "localhost");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders, 1,
+                    std::string_view(headerBlock.data(), headerBlock.size())))) {
+                co_return;
+            }
+            // Body, then a trailing HEADERS block carrying END_STREAM.
+            if (!co_await writeAll(frame(0x0, 0, 1, "hi"))) co_return;
+            std::pmr::string trailerBlock(std::pmr::get_default_resource());
+            HpackEncoder::encodeHeader(trailerBlock, "x-checksum", "abc");
+            if (!co_await writeAll(frame(
+                    0x1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+                    1, std::string_view(trailerBlock.data(), trailerBlock.size())))) {
+                co_return;
+            }
+
+            for (;;) {
+                char hb[ruvia::detail::kHttp2FrameHeaderBytes];
+                if (!co_await readExact(hb, sizeof(hb))) break;
+                const auto header = ruvia::detail::http2ParseFrameHeader(
+                    std::string_view(hb, sizeof(hb)));
+                std::string payload(header.length, '\0');
+                if (header.length != 0 && !co_await readExact(payload.data(), payload.size())) break;
+                if (header.type == static_cast<std::uint8_t>(Http2FrameType::kData) &&
+                    header.streamId == 1 && !payload.empty()) {
+                    body = payload;
+                    break;
+                }
+            }
+            asio::error_code ignore;
+            sock.shutdown(tcp::socket::shutdown_both, ignore);
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(body == "handler-ran");  // trailers ended the request; handler dispatched
 }
