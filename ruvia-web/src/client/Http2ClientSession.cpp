@@ -29,6 +29,7 @@
 #include "client/HttpClientResponseLimits.h"
 #include "HttpClientTlsVerification.h"
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrResource.h"
 
 namespace ruvia::detail {
@@ -329,6 +330,9 @@ Task<void> Http2ClientSession::flushLoop() {
             closeNow();
             break;
         }
+        // Release a peak-sized batch so neither scratch nor (via takeOutput's swap) the
+        // core outBuffer_ pins high-water capacity for the connection lifetime.
+        clearPmrStringRetainingSmall(scratch, 64 * 1024);
         if (state_ == State::kClosed && !conn_->wantsWrite()) {
             break;
         }
@@ -390,17 +394,11 @@ void Http2ClientSession::drainCoreEvents() {
             touchStreamDeadline(*stream);  // upload progressed
         }
     }
-    // Defensive sweep: a core stream can be reset on paths that do not emit
-    // kStreamClosed (e.g. malformed WINDOW_UPDATE); its fetch must still fail.
-    for (auto& [id, stream] : streams_) {
-        if (stream->failed || stream->remoteEnded) {
-            continue;
-        }
-        auto* core = conn_->stream(id);
-        if (core == nullptr || core->isReset()) {
-            failStream(*stream, Http2ErrorCode::kCancel);
-        }
-    }
+    // NOTE: no per-feed reset sweep. Every core reset of a stream that is still in the
+    // table now emits a kStreamClosed event (handled above); only owner-initiated
+    // submitReset and the not-in-table refused-header scratch skip the event, and
+    // neither can silently reset a live client stream. Teardown is covered by
+    // failAllStreams in closeNow.
     wakeSendWindow();  // waiters re-check readiness (drain, failure, or teardown)
 }
 
@@ -823,6 +821,15 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         }
         if (!isAllowedH2RequestHeader(name, value)) {
             throw std::invalid_argument("http/2: request header is not allowed over HTTP/2");
+        }
+        // Common case: the name is already lowercase -- reference it directly (options
+        // .headers outlives submitRequestHead) and skip the per-header allocation.
+        const bool hasUpper = std::any_of(name.begin(), name.end(), [](char c) {
+            return c >= 'A' && c <= 'Z';
+        });
+        if (!hasUpper) {
+            headerViews.push_back(HttpHeaderView{name, value});
+            continue;
         }
         auto& lowerName = loweredNames.emplace_back();  // vector propagates its pmr allocator
         lowerName.reserve(name.size());

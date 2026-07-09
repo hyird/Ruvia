@@ -57,6 +57,13 @@ struct PoolWaiterAwaiter {
             throw std::runtime_error("http client pool acquire timed out");
         }
         if (pool.closing_) {
+            // We may hold a real slot (popped in await_suspend, or handed to us by
+            // release()->resumeNext) that we are about to abandon. Return it to free_
+            // before throwing, or free_.size() stays below connections_.size() forever
+            // and the retired pool never becomes quiescent (never gets reaped).
+            if (ready) {
+                pool.free_.push_back(index);
+            }
             throw std::runtime_error("http client pool is closed");
         }
         return index;
