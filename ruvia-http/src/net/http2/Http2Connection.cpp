@@ -229,6 +229,14 @@ void Http2Connection::markSendWindowOpened() {
             *stream, std::string_view(pending.bytes.data(), pending.bytes.size()),
             pending.offset, pending.endStream);
         if (pending.offset >= pending.bytes.size()) {
+            // The body fully drained. If a trailer block was queued behind it, emit it
+            // now as the terminal HEADERS(END_STREAM) -- strictly AFTER all the DATA.
+            if (!pending.trailerBlock.empty() && !stream->isReset()) {
+                appendResponseHeaderFrames(
+                    *stream,
+                    std::string_view(pending.trailerBlock.data(), pending.trailerBlock.size()),
+                    /*endStream=*/true);
+            }
             unblockedStreams_.push_back(pending.streamId);
             pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
         } else {
@@ -1349,7 +1357,8 @@ Http2SubmitResult Http2Connection::submitData(
     if (consumed < chunk.size()) {
         std::pmr::string remainder(resource_);
         remainder.append(chunk.data() + consumed, chunk.size() - consumed);
-        pendingSends_.push_back(Http2PendingSend{streamId, std::move(remainder), 0, endStream});
+        pendingSends_.push_back(
+            Http2PendingSend{streamId, std::move(remainder), 0, endStream, std::pmr::string(resource_)});
         return Http2SubmitResult::kBlocked;
     }
     return Http2SubmitResult::kOk;
@@ -1373,6 +1382,16 @@ void Http2Connection::submitTrailers(std::uint32_t streamId, std::string_view he
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isReset() || headerBlock.empty()) {
         return;
+    }
+    // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
+    // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
+    // from the body to the trailer (markSendWindowOpened emits it once the body drains).
+    for (auto& pending : pendingSends_) {
+        if (pending.streamId == streamId) {
+            pending.endStream = false;  // the trailer now carries END_STREAM
+            pending.trailerBlock.assign(headerBlock.data(), headerBlock.size());
+            return;
+        }
     }
     appendResponseHeaderFrames(*stream, headerBlock, /*endStream=*/true);
 }
