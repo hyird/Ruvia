@@ -88,6 +88,7 @@ private:
     static constexpr std::uintptr_t kGlobalScope = 1;
     static constexpr std::uintptr_t kFallbackRouteScope = 2;
     static constexpr std::size_t kSlotAlignment = 64;
+    static constexpr unsigned kInstallSpinBudget = 64;
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -104,6 +105,23 @@ private:
 #pragma warning(pop)
 #endif
     static_assert(alignof(Slot) >= kSlotAlignment, "rate limit slots must not share a cache line");
+
+    // A concurrent installer briefly parks a slot at kInstallingHash before publishing the
+    // real key. Wait for it on-core with a bounded spin (the window is only a few atomic
+    // stores, no I/O), escalating to yield() only if the installer looks preempted -- so a
+    // rate-limit lookup never deschedules the worker's io_context loop on the fast path
+    // (the previous unconditional std::this_thread::yield() handed the core to the OS
+    // scheduler on every install collision, which under a single-IP flood -- exactly the
+    // workload this limiter targets -- could briefly stall other connections on a worker).
+    static void waitForInstall(const Slot& slot) noexcept {
+        for (unsigned spins = 0;
+             slot.keyHash.load(std::memory_order_acquire) == kInstallingHash;) {
+            if (++spins >= kInstallSpinBudget) {
+                std::this_thread::yield();
+                spins = 0;
+            }
+        }
+    }
 
     [[nodiscard]] static std::pmr::polymorphic_allocator<Slot> allocatorFor(
         std::pmr::memory_resource* resource) noexcept {
@@ -403,7 +421,7 @@ private:
                 continue;
             }
             if (observedHash == kInstallingHash) {
-                std::this_thread::yield();
+                waitForInstall(slot);
                 --probe;
                 continue;
             }
@@ -436,7 +454,7 @@ private:
             auto& slot = slots_[(start + probe) & (slotCount_ - 1)];
             const auto observedHash = slot.keyHash.load(std::memory_order_acquire);
             if (observedHash == kInstallingHash) {
-                std::this_thread::yield();
+                waitForInstall(slot);
                 --probe;
                 continue;
             }

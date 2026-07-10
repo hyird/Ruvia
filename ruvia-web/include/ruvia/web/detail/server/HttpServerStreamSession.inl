@@ -368,7 +368,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             if (responseHasStreamBody(response)) {
-                // A normal route returned a streaming body (e.g. Context::proxy): stream it here
+                // A normal route returned a streaming body (e.g. Context::client().proxy): stream it here
                 // instead of buffering. HTTP/1.0 is close-delimited, so it cannot be kept alive.
                 const bool http11 = parsed.request.httpVersion() == "HTTP/1.1";
                 if (!http11) {

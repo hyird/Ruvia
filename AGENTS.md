@@ -212,7 +212,7 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path。
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 和 Web 代理 facade 放在上层：`ruvia-web/src/client/` 与 `HttpClientRuntime.h`（HttpClientPool / Http2ClientSession / HttpClientRegistry / `ProxyOptions`，经 `Context::fetch/fetchStream/proxy` 使用，无构建开关）。
+- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 和 Web 代理 facade 放在上层：`ruvia-web/src/client/` 与 `HttpClientRuntime.h`（HttpClientPool / Http2ClientSession / HttpClientRegistry / `ProxyOptions`，经 `Context::client()`（`c.client().fetch/fetchStream/proxy`）使用，无构建开关）。
 - 下游推荐：
 
 ```cmake

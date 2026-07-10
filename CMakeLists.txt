@@ -355,11 +355,16 @@ write_basic_package_version_file(
     COMPATIBILITY SameMajorVersion
 )
 
+# The package config + generated targets export are the find_package() glue shared by
+# every component. Tag them with a dedicated Development component so a component-scoped
+# install (cmake --install --component ...) can pull them deliberately instead of
+# silently omitting them (a full install still ships them, as it installs all components).
 install(
     FILES
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+    COMPONENT Development
 )
 
 install(
@@ -367,4 +372,5 @@ install(
     FILE ruviaTargets.cmake
     NAMESPACE ruvia::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+    COMPONENT Development
 )

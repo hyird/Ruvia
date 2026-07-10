@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpResponseFileBody.h"
-#include "ruvia/http/detail/file/HttpFileOpen.h"
-#include "ruvia/http/detail/file/HttpNativeFile.h"
+#include "ruvia/web/detail/server/HttpFileOpen.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/core/detail/AsioAwait.h"
 
 #include "ruvia/http/detail/server/HttpFileChunkBuffer.h"

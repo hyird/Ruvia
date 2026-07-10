@@ -40,6 +40,7 @@ namespace ruvia {
 
 class Context;
 class ContextRequest;
+class ContextClient;
 class Env;
 class StaticRoot;
 
@@ -1065,6 +1066,8 @@ public:
 
     [[nodiscard]] Task<RequestFormData> formData() const;
 
+    /// Streaming request-body reader for explicit stream routes. Each BodyReader::read()
+    /// returns a view valid only until the next read() call (see BodyReader::read).
     [[nodiscard]] BodyReader& bodyReader() const;
 
     [[nodiscard]] MultipartReader multipartReader() const;
@@ -1091,9 +1094,73 @@ private:
     return request.cloneRawRequest();
 }
 
+// Outbound HTTP client facet of Context: fetch, streamed fetch, and Hono-style reverse
+// proxy over the app's named client pools (plus ad-hoc per-origin clients). Reached via
+// Context::client(), mirroring the Context::req() request facade; definitions live in
+// ruvia-web/src/http/HttpClientContext.cpp.
+class ContextClient final {
+public:
+    // path is an HTTP/1.1 origin-form target: empty maps to "/", otherwise use "/..." or "*".
+    [[nodiscard]] Task<FetchResponse> fetch(
+        std::string_view path,
+        FetchOptions options = {}) const {
+        return fetch(detail::kDefaultHttpClientAlias, path, std::move(options));
+    }
+
+    [[nodiscard]] Task<FetchResponse> fetch(
+        std::string_view alias,
+        std::string_view path,
+        FetchOptions options = {}) const;
+
+    // Streamed variant: the response body is pulled incrementally via FetchResponseStream
+    // rather than fully buffered -- for large downloads or long-lived responses.
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        std::string_view path,
+        FetchOptions options = {}) const {
+        return fetchStream(detail::kDefaultHttpClientAlias, path, std::move(options));
+    }
+
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        std::string_view alias,
+        std::string_view path,
+        FetchOptions options = {}) const;
+
+    // Hono-style reverse proxy: forward this request to the named upstream client and return
+    // the upstream response as a streaming HttpResponse (status + headers passed through,
+    // hop-by-hop and framing headers stripped, body streamed as received). Use from a route:
+    //   RUVIA_ALL("/*", h);  Task<HttpResponse> h(Context& c){ co_return co_await c.client().proxy("up", c.req().raw().target()); }
+    [[nodiscard]] Task<HttpResponse> proxy(
+        std::string_view alias,
+        std::string_view target,
+        ProxyOptions options = {}) const;
+    [[nodiscard]] Task<HttpResponse> proxy(std::string_view target, ProxyOptions options = {}) const {
+        return proxy(detail::kDefaultHttpClientAlias, target, std::move(options));
+    }
+
+    // Ad-hoc upstream (an arbitrary origin computed per request, not pre-registered): the
+    // client is created on first use and pooled/reused for that origin, LRU-bounded per
+    // worker. For a CDN edge whose origins are dynamic. fetchStream(config,...) is the
+    // streaming fetch primitive; proxy(config,...) is the Hono-style reverse proxy over it.
+    [[nodiscard]] Task<FetchResponseStream> fetchStream(
+        const HttpClientConfig& config,
+        std::string_view target,
+        FetchOptions options = {}) const;
+    [[nodiscard]] Task<HttpResponse> proxy(
+        const HttpClientConfig& config,
+        std::string_view target,
+        ProxyOptions options = {}) const;
+
+private:
+    friend class Context;
+    explicit ContextClient(Context& context) noexcept : context_(context) {}
+
+    Context& context_;
+};
+
 class Context final {
 private:
     friend class ContextRequest;
+    friend class ContextClient;
     friend struct detail::ContextAccess;
     friend const RequestNameValueList& detail::requestHeaderFields(const ContextRequest& request);
     friend const RequestNameValueList& detail::requestQueryFields(const ContextRequest& request);
@@ -1280,56 +1347,11 @@ public:
     [[nodiscard]] RedisHandle redis() const;
     [[nodiscard]] RedisHandle redis(std::string_view alias) const;
 #endif
-    // path is an HTTP/1.1 origin-form target: empty maps to "/", otherwise use "/..." or "*".
-    [[nodiscard]] Task<FetchResponse> fetch(
-        std::string_view path,
-        FetchOptions options = {}) {
-        return fetch(detail::kDefaultHttpClientAlias, path, std::move(options));
+    // Outbound HTTP client facet: c.client().fetch(...) / .fetchStream(...) / .proxy(...).
+    // Grouped behind a sub-object (like req()) so the client subsystem is one cohesive name.
+    [[nodiscard]] ContextClient client() noexcept {
+        return ContextClient(*this);
     }
-
-    // path is an HTTP/1.1 origin-form target: empty maps to "/", otherwise use "/..." or "*".
-    [[nodiscard]] Task<FetchResponse> fetch(
-        std::string_view alias,
-        std::string_view path,
-        FetchOptions options = {});
-
-    // Streamed variant: the response body is pulled incrementally via FetchResponseStream rather
-    // than fully buffered — for large downloads or long-lived responses.
-    [[nodiscard]] Task<FetchResponseStream> fetchStream(
-        std::string_view path,
-        FetchOptions options = {}) {
-        return fetchStream(detail::kDefaultHttpClientAlias, path, std::move(options));
-    }
-
-    [[nodiscard]] Task<FetchResponseStream> fetchStream(
-        std::string_view alias,
-        std::string_view path,
-        FetchOptions options = {});
-
-    // Hono-style reverse proxy: forward this request to the named upstream client and return the
-    // upstream response as a streaming HttpResponse (status + headers passed through, hop-by-hop
-    // and framing headers stripped, body streamed as received). Use from a normal route:
-    //   RUVIA_ALL("/*", h);  Task<HttpResponse> h(Context& c){ co_return co_await c.proxy("up", c.request().raw().target()); }
-    [[nodiscard]] Task<HttpResponse> proxy(
-        std::string_view alias,
-        std::string_view target,
-        ProxyOptions options = {});
-    [[nodiscard]] Task<HttpResponse> proxy(std::string_view target, ProxyOptions options = {}) {
-        return proxy(detail::kDefaultHttpClientAlias, target, std::move(options));
-    }
-
-    // Ad-hoc upstream (an arbitrary origin computed per request, not pre-registered): the client is
-    // created on first use and pooled/reused for that origin, LRU-bounded per worker. For a CDN
-    // edge whose origins are dynamic. fetchStream(config,...) is the streaming fetch primitive;
-    // proxy(config,...) is the Hono-style reverse proxy over it.
-    [[nodiscard]] Task<FetchResponseStream> fetchStream(
-        const HttpClientConfig& config,
-        std::string_view target,
-        FetchOptions options = {});
-    [[nodiscard]] Task<HttpResponse> proxy(
-        const HttpClientConfig& config,
-        std::string_view target,
-        ProxyOptions options = {});
 
     // Fire-and-forget a background task on this worker's executor. The task runs detached after the
     // current handler returns; exceptions escaping it are swallowed. Intended for stale-while-

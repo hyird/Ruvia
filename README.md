@@ -8,7 +8,7 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | --- | --- | --- | --- |
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Runtime foundation: coroutine task type, Asio integration glue, PMR memory resources, mimalloc integration, and small runtime helpers. |
 | `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero core/asio/socket runtime): HTTP message types, header token/value helpers, HTTP/1 parser + connection core, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, body framing/streams, multipart/SSE/content-encoding protocol helpers, cookie/cache/range/conditional/negotiation helpers, and the outbound client's protocol core. |
-| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, server and outbound-client I/O drivers over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, `Context::fetch`/`proxy`), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
+| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, server and outbound-client I/O drivers over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, `Context::client().fetch`/`proxy`), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
 
 Dependency direction:
 
@@ -171,7 +171,13 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 - Explicit stream routes handle large request bodies.
 - Responses use fixed header buffers and scatter-gather writes.
 - File responses avoid full-file buffering and use zero-copy paths where available.
-- PMR memory is layered by process, worker, and request lifetime.
+- The HTTP/1 request path is allocation- and lock-free; HTTP/2 multiplexing adds one
+  recycled coroutine frame and one virtual dispatch per stream.
+- The optional rate limiter is the one shared-atomic structure on the request path; it is
+  off by default, so per-request atomic cost is opt-in.
+- Two PMR pooling tiers back memory: a process-level mimalloc resource and a per-request
+  monotonic arena. Per-worker isolation comes from an object pool plus mimalloc's
+  thread-local heaps rather than a distinct PMR tier.
 
 ## HTTP Library
 
@@ -179,7 +185,7 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
 
-The outbound HTTP client follows the same split as the server: the protocol model and sans-I/O HTTP client core (response parsing, transfer/content decoding, generic redirect replay checks, `HttpClientTypes.h`, and HTTP/2 client protocol state) live in `ruvia::http`; the Asio/TLS runtime facade (`FetchOptions`, `RequestBodyStream`, `FetchResponseStream`, `ProxyOptions`) lives in `ruvia::web` via `HttpClientRuntime.h` and is used through `Context::fetch` / `Context::fetchStream` / `Context::proxy`.
+The outbound HTTP client follows the same split as the server: the protocol model and sans-I/O HTTP client core (response parsing, transfer/content decoding, generic redirect replay checks, `HttpClientTypes.h`, and HTTP/2 client protocol state) live in `ruvia::http`; the Asio/TLS runtime facade (`FetchOptions`, `RequestBodyStream`, `FetchResponseStream`, `ProxyOptions`) lives in `ruvia::web` via `HttpClientRuntime.h` and is used through the `Context::client()` facet (`c.client().fetch` / `.fetchStream` / `.proxy`).
 
 ## Build Options
 

@@ -26,7 +26,7 @@ namespace ruvia::detail {
 
 // Writes a response whose body is a pull-based HttpBodyStream (BodyKind::kStream): a normal route
 // can return such a response and it is streamed here -- HTTP/1.1 with chunked framing, HTTP/1.0
-// close-delimited. This is what a reverse proxy (Context::proxy) returns. keep-alive / Connection
+// close-delimited. This is what a reverse proxy (Context::client().proxy) returns. keep-alive / Connection
 // were already finalized on `response` by finalizeBufferedRouteResponse before this runs.
 template <typename Stream, typename ScannerEntry>
 Task<void> writeStreamingResponse(

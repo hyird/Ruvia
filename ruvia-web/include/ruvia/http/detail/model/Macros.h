@@ -10,6 +10,7 @@
 #define RUVIA_MODEL(T, ...)                                                  \
     class T {                                                               \
     public:                                                                 \
+        RUVIA_MODEL_FIELD_COUNT_GUARD(__VA_ARGS__)                           \
         explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \
             : body_(::ruvia::detail::makeJsonRequestObject(::std::string_view{"{}"}, resource)) { \
             ruviaParsed_ = true;                                             \

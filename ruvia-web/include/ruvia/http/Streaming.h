@@ -32,6 +32,10 @@ public:
     BodyReader(const BodyReader&) = delete;
     BodyReader& operator=(const BodyReader&) = delete;
 
+    /// Reads the next chunk of the streamed request body.
+    /// @warning The returned view borrows the connection read buffer and is only valid
+    /// until the NEXT read() call; copy it out if you need to retain it past then. An
+    /// empty optional signals end-of-body.
     [[nodiscard]] Task<std::optional<std::string_view>> read();
 
 private:

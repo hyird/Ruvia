@@ -1,5 +1,11 @@
 #pragma once
 
+// Native file-open primitive for the web-layer server drivers. This performs real
+// OS file I/O (::open / ::CreateFileW with an owning fd/HANDLE), so it belongs in
+// ruvia-web, NOT in the pure sans-I/O ruvia-http protocol library. ruvia-http only
+// owns the ResponseFileBody DESCRIPTOR (path + size/offset) used to frame
+// Content-Length/Range; opening the file is a runtime driver concern.
+
 #include "ruvia/http/detail/HttpResponseFileBody.h"
 
 #include <system_error>
