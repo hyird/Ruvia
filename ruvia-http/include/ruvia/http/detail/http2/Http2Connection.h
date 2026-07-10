@@ -382,6 +382,12 @@ private:
     bool receivedFirstSettings_{false};
     bool awaitingClientPreface_{false};
     bool closing_{false};
+
+    // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
+    // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
+    std::uint32_t peerResetStreams_{0};    // inbound RST_STREAM count (rapid-reset budget)
+    std::uint32_t completedResponses_{0};  // streams finished without reset (refills budget)
+    std::uint32_t consecutivePings_{0};    // inbound PINGs since output was last drained
 };
 
 }  // namespace ruvia::detail

@@ -1,5 +1,9 @@
 #pragma once
 
+// std::ifstream file-open fallback for the web-layer server drivers. Real OS file
+// I/O lives in ruvia-web, not in the pure sans-I/O ruvia-http protocol library --
+// ruvia-http only owns the ResponseFileBody descriptor used to frame the response.
+
 #include "ruvia/http/detail/HttpResponseFileBody.h"
 
 #include <fstream>

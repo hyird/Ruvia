@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/server/HttpFileZeroCopy.h"
 
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/detail/file/HttpNativeFile.h"
+#include "ruvia/web/detail/server/HttpNativeFile.h"
 
 #include <algorithm>
 #include <cstddef>

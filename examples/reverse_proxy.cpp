@@ -2,7 +2,7 @@
 //
 // Every incoming request is forwarded to a registered upstream HTTP client and the upstream
 // response is streamed straight back to the downstream client. The handler is a normal controller
-// method that simply returns c.proxy(...) -- the framework streams the response body (HTTP/1.1
+// method that simply returns c.client().proxy(...) -- the framework streams the response body (HTTP/1.1
 // chunked or HTTP/2 DATA), so nothing is buffered.
 //
 // HTTP client support is part of ruvia-http.
@@ -25,7 +25,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> proxyAll(ruvia::Context& c) {
         // Forward method + origin-form target (path + query) + headers + body to "upstream";
         // return the upstream response, which the framework streams back.
-        co_return co_await c.proxy("upstream", c.req().raw().target());
+        co_return co_await c.client().proxy("upstream", c.req().raw().target());
     }
 };
 

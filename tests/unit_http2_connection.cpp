@@ -1069,3 +1069,109 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
     RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
 }
+
+// --- flood defense-in-depth budgets (GOAWAY ENHANCE_YOUR_CALM) -----------------
+
+namespace {
+// Walk the outbound buffer frame-by-frame and return the error code of the first GOAWAY,
+// or 0xffffffff if none is present.
+std::uint32_t firstGoawayError(std::string_view out) {
+    std::size_t pos = 0;
+    while (pos + 9 <= out.size()) {
+        const auto h = ruvia::detail::http2ParseFrameHeader(out.substr(pos, 9));
+        if (h.type == static_cast<std::uint8_t>(Http2FrameType::kGoaway) && h.length >= 8) {
+            const auto* p = reinterpret_cast<const unsigned char*>(out.data() + pos + 9);
+            return (static_cast<std::uint32_t>(p[4]) << 24) |
+                   (static_cast<std::uint32_t>(p[5]) << 16) |
+                   (static_cast<std::uint32_t>(p[6]) << 8) |
+                   static_cast<std::uint32_t>(p[7]);
+        }
+        pos += 9 + h.length;
+    }
+    return 0xffffffffU;
+}
+constexpr std::uint32_t kEnhanceYourCalm =
+    static_cast<std::uint32_t>(ruvia::detail::Http2ErrorCode::kEnhanceYourCalm);
+}  // namespace
+
+// A peer that floods PINGs without ever letting us flush the echoed ACKs is cut off with
+// GOAWAY(ENHANCE_YOUR_CALM) instead of accumulating unbounded ACK bytes.
+RUVIA_TEST(http2_connection_ping_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char ping[9 + 8];
+    ruvia::detail::http2EncodeFrameHeader(ping, 8, Http2FrameType::kPing, 0, 0);
+    std::memset(ping + 9, 0, 8);
+
+    bool tripped = false;
+    for (int i = 0; i < 1200 && !tripped; ++i) {
+        // Deliberately do NOT drain output between pings, so the un-drained PING budget
+        // accumulates (consumeOutput would reset it -- see the keepalive test below).
+        tripped = conn.feed(std::string_view(ping, sizeof(ping))).status ==
+                  ruvia::detail::Http2FeedStatus::kError;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.closing());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// Healthy keepalive PINGs (ACKs drained each round) never trip the budget, however many.
+RUVIA_TEST(http2_connection_drained_pings_never_trip) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char ping[9 + 8];
+    ruvia::detail::http2EncodeFrameHeader(ping, 8, Http2FrameType::kPing, 0, 0);
+    std::memset(ping + 9, 0, 8);
+
+    for (int i = 0; i < 5000; ++i) {
+        const auto r = conn.feed(std::string_view(ping, sizeof(ping)));
+        RUVIA_CHECK(r.status == ruvia::detail::Http2FeedStatus::kOk);
+        conn.consumeOutput(conn.pendingOutput().size());  // flush ACK -> resets budget
+        RUVIA_CHECK(!conn.closing());
+    }
+}
+
+// A rapid-reset flood (open a stream, RST it, repeat -- never letting a response finish)
+// is cut off with GOAWAY(ENHANCE_YOUR_CALM); the 128-stream cap alone never trips because
+// each RST immediately frees the slot (CVE-2023-44487).
+RUVIA_TEST(http2_connection_rapid_reset_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+
+    bool tripped = false;
+    for (std::uint32_t sid = 1; sid < 1U + 2U * 1200U; sid += 2) {
+        const auto h = headersFrame(
+            &resource, sid,
+            ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+            std::string_view(block.data(), block.size()));
+        if (conn.feed(std::string_view(h.data(), h.size())).status ==
+            ruvia::detail::Http2FeedStatus::kError) {
+            tripped = true;
+            break;
+        }
+        while (conn.nextEvent().kind != Http2Event::Kind::kNone) {
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+
+        char rst[9 + 4];
+        ruvia::detail::http2EncodeFrameHeader(rst, 4, Http2FrameType::kRstStream, 0, sid);
+        ruvia::detail::http2Write32(rst + 9, 0);
+        if (conn.feed(std::string_view(rst, sizeof(rst))).status ==
+            ruvia::detail::Http2FeedStatus::kError) {
+            tripped = true;
+            break;  // leave the GOAWAY in the outbound buffer for inspection
+        }
+        conn.consumeOutput(conn.pendingOutput().size());
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.closing());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}

@@ -48,46 +48,46 @@ namespace {
 
 }  // namespace
 
-Task<FetchResponse> Context::fetch(
+Task<FetchResponse> ContextClient::fetch(
     std::string_view alias,
     std::string_view path,
-    FetchOptions options) {
-    if (httpClients_ == nullptr) {
+    FetchOptions options) const {
+    if (context_.httpClients_ == nullptr) {
         throw std::logic_error(
             "no http client registered; call App::useHttpClient before run()");
     }
-    auto* pool = httpClients_->get(alias);
+    auto* pool = context_.httpClients_->get(alias);
     if (pool == nullptr) {
         throw std::logic_error("http client alias not found");
     }
-    co_return co_await pool->fetch(path, options, resource());
+    co_return co_await pool->fetch(path, options, context_.resource());
 }
 
-Task<FetchResponseStream> Context::fetchStream(
+Task<FetchResponseStream> ContextClient::fetchStream(
     std::string_view alias,
     std::string_view path,
-    FetchOptions options) {
-    if (httpClients_ == nullptr) {
+    FetchOptions options) const {
+    if (context_.httpClients_ == nullptr) {
         throw std::logic_error(
             "no http client registered; call App::useHttpClient before run()");
     }
-    auto* pool = httpClients_->get(alias);
+    auto* pool = context_.httpClients_->get(alias);
     if (pool == nullptr) {
         throw std::logic_error("http client alias not found");
     }
-    co_return co_await pool->fetchStream(path, options, resource());
+    co_return co_await pool->fetchStream(path, options, context_.resource());
 }
 
-Task<FetchResponseStream> Context::fetchStream(
+Task<FetchResponseStream> ContextClient::fetchStream(
     const HttpClientConfig& config,
     std::string_view target,
-    FetchOptions options) {
-    if (httpClients_ == nullptr) {
+    FetchOptions options) const {
+    if (context_.httpClients_ == nullptr) {
         throw std::logic_error("no http client subsystem; run() must have started an http client");
     }
     // Get-or-create a pooled client for this origin (LRU-bounded, reused across requests).
-    auto* backend = httpClients_->getOrCreate(config);
-    co_return co_await backend->fetchStream(target, options, resource());
+    auto* backend = context_.httpClients_->getOrCreate(config);
+    co_return co_await backend->fetchStream(target, options, context_.resource());
 }
 
 namespace {
@@ -131,36 +131,36 @@ void fillProxyRequest(
 
 }  // namespace
 
-Task<HttpResponse> Context::proxy(
+Task<HttpResponse> ContextClient::proxy(
     std::string_view alias,
     std::string_view target,
-    ProxyOptions options) {
+    ProxyOptions options) const {
     FetchOptions fetchOptions;
-    std::pmr::vector<HttpHeaderView> forwarded(allocator<HttpHeaderView>());
-    fillProxyRequest(*this, forwarded, fetchOptions, options);
-    const auto bodyBytes = co_await req().bytes();
+    std::pmr::vector<HttpHeaderView> forwarded(context_.allocator<HttpHeaderView>());
+    fillProxyRequest(context_, forwarded, fetchOptions, options);
+    const auto bodyBytes = co_await context_.req().bytes();
     if (!bodyBytes.empty()) {
         fetchOptions.body = std::string_view(
             reinterpret_cast<const char*>(bodyBytes.data()), bodyBytes.size());
     }
     auto upstream = co_await fetchStream(alias, target, fetchOptions);
-    co_return buildProxyResponse(resource(), upstream);
+    co_return buildProxyResponse(context_.resource(), upstream);
 }
 
-Task<HttpResponse> Context::proxy(
+Task<HttpResponse> ContextClient::proxy(
     const HttpClientConfig& config,
     std::string_view target,
-    ProxyOptions options) {
+    ProxyOptions options) const {
     FetchOptions fetchOptions;
-    std::pmr::vector<HttpHeaderView> forwarded(allocator<HttpHeaderView>());
-    fillProxyRequest(*this, forwarded, fetchOptions, options);
-    const auto bodyBytes = co_await req().bytes();
+    std::pmr::vector<HttpHeaderView> forwarded(context_.allocator<HttpHeaderView>());
+    fillProxyRequest(context_, forwarded, fetchOptions, options);
+    const auto bodyBytes = co_await context_.req().bytes();
     if (!bodyBytes.empty()) {
         fetchOptions.body = std::string_view(
             reinterpret_cast<const char*>(bodyBytes.data()), bodyBytes.size());
     }
     auto upstream = co_await fetchStream(config, target, fetchOptions);
-    co_return buildProxyResponse(resource(), upstream);
+    co_return buildProxyResponse(context_.resource(), upstream);
 }
 
 void Context::defer(Task<void> task) {

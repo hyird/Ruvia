@@ -35,8 +35,10 @@
 #include <utility>
 #include <vector>
 
+#include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
+#include <asio/recycling_allocator.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
 
@@ -46,7 +48,7 @@
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/web/detail/http/HttpBodyStreamAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/http/detail/file/HttpFileOpen.h"
+#include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -257,7 +259,7 @@ Task<void> runHttp2SansIoSession(
         const auto policy = responseWritePolicy(response.status());
         const bool sendBody = policy.bodyAllowed() && !skipBody;
         if (responseHasStreamBody(response)) {
-            // A normal route returned a streaming body (e.g. Context::proxy): HEADERS
+            // A normal route returned a streaming body (e.g. Context::client().proxy): HEADERS
             // without a content-length, then DATA pulled from the source; a mid-body
             // failure aborts the stream (RFC 9113 §8.1).
             connection.submitStreamingResponseHead(streamId, response, !sendBody);
@@ -494,7 +496,7 @@ Task<void> runHttp2SansIoSession(
                 HttpErrorInfo(400, {}, "invalid http2 websocket request"),
                 false, baseServices);
         } else if (resolution.found() && resolution.usesResponseStream()) {
-            // Streaming route (Context::proxy / SSE): drive the shared streaming
+            // Streaming route (Context::client().proxy / SSE): drive the shared streaming
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
                 connection, streamId, resolution.responseMode(), requestMemory.resource(),
@@ -600,8 +602,11 @@ Task<void> runHttp2SansIoSession(
         streamSignals.emplace_back(
             streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
         connection.pinStream(streamId);
+        // Recycle the per-stream handler's coroutine frame (mirrors the h1 accept path);
+        // under load the common request then does no extra heap work for the frame.
         asio::co_spawn(
-            executor, taskAsAwaitable(dispatchOne(streamId)), asio::detached);
+            executor, taskAsAwaitable(dispatchOne(streamId)),
+            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
     };
 
     // Drain the core's event queue, admitting streams and routing body bytes.

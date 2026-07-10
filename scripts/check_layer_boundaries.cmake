@@ -4,6 +4,11 @@ get_filename_component(RUVIA_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
 set(RULE_EDGE "ruvia-edge|ruvia::edge|RUVIA_BUILD_EDGE")
 set(RULE_ASIO "#[ \t]*include[ \t]*[<\"]asio|asio::")
+# The pure sans-I/O protocol library must do NO OS file I/O. The ResponseFileBody
+# descriptor (path + size) is fine; opening the file (ifstream / ::open / CreateFile)
+# is a web-layer runtime driver concern and must not ship in ruvia-http.
+set(RULE_FILE_IO
+    "#[ \t]*include[ \t]*[<\"](fstream|fcntl\\.h|unistd\\.h|io\\.h)|ifstream|ofstream|::open[ \t]*\\(|::CreateFile")
 set(RULE_HTTP_FRAMEWORK_INCLUDE
     "#[ \t]*include[ \t]*\"ruvia/(app/|core/|memory/|detail/|router/|http/Context\\.(h|inl))")
 set(RULE_HTTP_CORE_LINK "ruvia::core|ruvia-core")
@@ -43,6 +48,8 @@ endfunction()
 if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("removed edge target" "${RULE_EDGE}" "add_subdirectory(ruvia-edge)")
     expect_match("asio in HTTP" "${RULE_ASIO}" "#include <asio.hpp>")
+    expect_match("file I/O in HTTP" "${RULE_FILE_IO}" "#include <fstream>")
+    expect_match("native open in HTTP" "${RULE_FILE_IO}" "::open(path, O_RDONLY)")
     expect_match("framework include in HTTP" "${RULE_HTTP_FRAMEWORK_INCLUDE}"
         "#include \"ruvia/core/detail/AsioAwait.h\"")
     expect_match("core link in HTTP" "${RULE_HTTP_CORE_LINK}"
@@ -168,6 +175,8 @@ check_files_no_match("removed edge target is still referenced" "${RULE_EDGE}"
     ${EDGE_REFERENCE_SOURCE})
 check_files_no_match("ruvia-http must not reference asio" "${RULE_ASIO}"
     ${HTTP_SOURCE})
+check_files_no_match("ruvia-http must not perform OS file I/O (sans-I/O protocol lib)"
+    "${RULE_FILE_IO}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not include core/web headers"
     "${RULE_HTTP_FRAMEWORK_INCLUDE}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not link/name ruvia-core in CMake"

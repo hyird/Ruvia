@@ -6,13 +6,51 @@
 
 #define RUVIA_MODEL_EXPAND(x) x
 
+// Field counter. A model with 1..16 fields resolves to that count; 17..32 fields
+// resolve to the token OVERFLOW so the count-guard below can emit a readable
+// "at most 16 fields" static_assert instead of a cryptic deep-preprocessor error.
 #define RUVIA_MODEL_NARG(...) RUVIA_MODEL_NARG_(__VA_ARGS__, RUVIA_MODEL_RSEQ())
 #define RUVIA_MODEL_NARG_(...) RUVIA_MODEL_EXPAND(RUVIA_MODEL_ARG_N(__VA_ARGS__))
-#define RUVIA_MODEL_ARG_N(_1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16,N,...) N
-#define RUVIA_MODEL_RSEQ() 16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
+#define RUVIA_MODEL_ARG_N( \
+    _1,_2,_3,_4,_5,_6,_7,_8,_9,_10,_11,_12,_13,_14,_15,_16, \
+    _17,_18,_19,_20,_21,_22,_23,_24,_25,_26,_27,_28,_29,_30,_31,_32, \
+    N,...) N
+#define RUVIA_MODEL_RSEQ() \
+    OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW, \
+    OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW,OVERFLOW, \
+    16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0
 
 #define RUVIA_MODEL_CAT(a, b) RUVIA_MODEL_CAT_(a, b)
 #define RUVIA_MODEL_CAT_(a, b) a##b
+
+// Field-count overflow guard. Expands to nothing for a supported field count and to a
+// single readable static_assert for 17..32 fields. Placed once at class scope so an
+// over-large model fails with this message rather than a garbage RUVIA_MODEL_FE_<junk>.
+#define RUVIA_MODEL_GUARD_0
+#define RUVIA_MODEL_GUARD_1
+#define RUVIA_MODEL_GUARD_2
+#define RUVIA_MODEL_GUARD_3
+#define RUVIA_MODEL_GUARD_4
+#define RUVIA_MODEL_GUARD_5
+#define RUVIA_MODEL_GUARD_6
+#define RUVIA_MODEL_GUARD_7
+#define RUVIA_MODEL_GUARD_8
+#define RUVIA_MODEL_GUARD_9
+#define RUVIA_MODEL_GUARD_10
+#define RUVIA_MODEL_GUARD_11
+#define RUVIA_MODEL_GUARD_12
+#define RUVIA_MODEL_GUARD_13
+#define RUVIA_MODEL_GUARD_14
+#define RUVIA_MODEL_GUARD_15
+#define RUVIA_MODEL_GUARD_16
+#define RUVIA_MODEL_GUARD_OVERFLOW \
+    static_assert(false, \
+        "RUVIA_MODEL supports at most 16 fields; split large models into nested RUVIA_MODELs");
+#define RUVIA_MODEL_FIELD_COUNT_GUARD(...) \
+    RUVIA_MODEL_CAT(RUVIA_MODEL_GUARD_, RUVIA_MODEL_NARG(__VA_ARGS__))
+// Sink for the FOR_EACH dispatch on an overflowing model: emit nothing so the single
+// guard static_assert above is the only diagnostic (no cryptic FE_OVERFLOW error).
+#define RUVIA_MODEL_FE_OVERFLOW(m, T, ...)
 
 #define RUVIA_DEFAULT(value) ::ruvia::detail::model::Default{value}
 #define RUVIA_OMIT_EMPTY ::ruvia::detail::model::OmitEmpty{}

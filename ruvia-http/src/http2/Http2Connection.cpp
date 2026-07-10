@@ -22,6 +22,24 @@
 
 namespace ruvia::detail {
 
+namespace {
+// Defense-in-depth budgets for the sans-I/O h2 core. The core has no clock, so these are
+// per-connection counters (not rates); both trip GOAWAY(ENHANCE_YOUR_CALM).
+//
+// Rapid-reset (CVE-2023-44487): a peer can open a stream, let HEADERS complete so the
+// owner spawns a handler, then RST it to free the concurrency slot -- repeating forever
+// without ever tripping the 128-stream cap. We allow the peer to reset up to this many
+// MORE streams than it has let run to completion; a flood that never lets a response
+// finish climbs to the cap and trips, while legitimate cancels interleaved with
+// completed responses keep refilling the budget and never trip.
+constexpr std::uint32_t kHttp2MaxUnprocessedResets = 1000;
+// PING flood: every non-ACK PING is echoed as an ACK into the outbound buffer. Cap the
+// number of inbound PINGs seen since the owner last drained output; the counter resets on
+// every output drain (consumeOutput/takeOutput = ACKs flushed), so healthy keepalive
+// never trips and only a peer piling on PINGs faster than we can flush the ACKs does.
+constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
+}  // namespace
+
 Http2Connection::Http2Connection(
     std::pmr::memory_resource* resource, Http2CoreConfig config, Http2Role role)
     : resource_(resource),
@@ -53,10 +71,12 @@ void Http2Connection::consumeOutput(std::size_t n) noexcept {
     if (outOffset_ >= outBuffer_.size()) {
         outBuffer_.clear();
         outOffset_ = 0;
+        consecutivePings_ = 0;  // outbound (incl. PING ACKs) fully flushed
     }
 }
 
 void Http2Connection::takeOutput(std::pmr::string& into) {
+    consecutivePings_ = 0;  // outbound (incl. PING ACKs) is being flushed
     if (outOffset_ == 0 && into.get_allocator() == outBuffer_.get_allocator()) {
         into.swap(outBuffer_);   // copy-free; outBuffer_ inherits into's old capacity
         outBuffer_.clear();
@@ -329,8 +349,10 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     readyQueue_.remove(streamId);
     if (!stream->isReset()) {
         // Normal completion (no RST arrived while pinned): remember it as locally closed
-        // so any late frame on this id is treated as closed, not idle.
+        // so any late frame on this id is treated as closed, not idle. This is also the
+        // "connection made real progress" signal that refills the rapid-reset budget.
         closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
+        ++completedResponses_;
     }
     // An RST that arrived while pinned already recorded closedStreams_ in closeStream.
     streams_.remove(streamId);
@@ -374,6 +396,13 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         return false;
     }
     closeStream(header.streamId, Http2StreamCloseSource::kPeer);
+    // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
+    // ahead of the responses this connection has actually let complete.
+    ++peerResetStreams_;
+    if (peerResetStreams_ > completedResponses_ + kHttp2MaxUnprocessedResets) {
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive stream resets");
+        return false;
+    }
     return true;
 }
 
@@ -412,6 +441,13 @@ bool Http2Connection::processPing(const Http2FrameHeader& header, std::string_vi
     }
     if ((header.flags & kHttp2FlagAck) != 0) {
         return true;  // our own ping's ack; ignore
+    }
+    // PING-flood budget: bound inbound PINGs seen since the owner last flushed output
+    // (see kHttp2MaxUndrainedPings). A peer echoing keepalive normally lets us drain the
+    // ACKs and resets the counter; one flooding PINGs without reading the ACKs trips.
+    if (++consecutivePings_ > kHttp2MaxUndrainedPings) {
+        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "excessive PING frames");
+        return false;
     }
     appendFrame(Http2FrameType::kPing, kHttp2FlagAck, 0, payload);  // echo back
     return true;

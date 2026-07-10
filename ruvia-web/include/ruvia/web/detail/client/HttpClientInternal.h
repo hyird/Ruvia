@@ -43,7 +43,7 @@ public:
     void addClient(std::string_view alias, const HttpClientConfig& config);
     bool removeClient(std::string_view alias);
 
-    // Get-or-create a client for an ad-hoc origin config (Context::proxy to an arbitrary upstream),
+    // Get-or-create a client for an ad-hoc origin config (Context::client().proxy to an arbitrary upstream),
     // pooled and reused across requests to the same origin. Bounded: the least-recently-used ad-hoc
     // client is retired when the cap is reached. Never returns nullptr. Worker thread only.
     [[nodiscard]] HttpClientBackend* getOrCreate(const HttpClientConfig& config);

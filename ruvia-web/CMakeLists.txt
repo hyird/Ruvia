@@ -136,6 +136,10 @@ endif()
 ruvia_install_target(ruvia-web web)
 
 ruvia_install_public_header_tree(web include/ruvia/web/detail)
+# web owns the ruvia/http/detail/{json,model,...} contract subtree; install it as a
+# TREE so a newly added detail header cannot be silently dropped from the package (a
+# forgotten explicit entry breaks downstream find_package only in the installed form).
+ruvia_install_public_header_tree(web include/ruvia/http/detail)
 
 ruvia_install_public_headers(web
     include/ruvia/app/App.h
@@ -171,38 +175,6 @@ ruvia_install_public_headers(web
     include/ruvia/http/Validation.h
     include/ruvia/http/ValidationTypes.h
     include/ruvia/http/WebSocket.h
-    include/ruvia/http/detail/ContextValues.h
-    include/ruvia/http/detail/CallableRef.h
-    include/ruvia/http/detail/RegistrationResource.h
-    include/ruvia/http/detail/ValidatedValues.h
-    include/ruvia/http/detail/json/JsonLex.h
-    include/ruvia/http/detail/json/JsonLimits.h
-    include/ruvia/http/detail/json/JsonNumber.h
-    include/ruvia/http/detail/json/JsonObjectFields.h
-    include/ruvia/http/detail/json/JsonScanner.h
-    include/ruvia/http/detail/json/JsonSkip.h
-    include/ruvia/http/detail/json/JsonString.h
-    include/ruvia/http/detail/model/FieldAssign.h
-    include/ruvia/http/detail/model/FormParser.h
-    include/ruvia/http/detail/model/JsonParser.h
-    include/ruvia/http/detail/model/JsonWriter.h
-    include/ruvia/http/detail/model/MacroCore.h
-    include/ruvia/http/detail/model/MacroFieldOps.h
-    include/ruvia/http/detail/model/MacroJsonOps.h
-    include/ruvia/http/detail/model/Macros.h
-    include/ruvia/http/detail/model/ModelOptions.h
-    include/ruvia/http/detail/model/Parser.h
-    include/ruvia/http/detail/model/PatternCompiler.h
-    include/ruvia/http/detail/model/PatternMatcher.h
-    include/ruvia/http/detail/model/PatternTypes.h
-    include/ruvia/http/detail/model/RegexMatcher.h
-    include/ruvia/http/detail/model/RequestFieldVisitors.h
-    include/ruvia/http/detail/model/RequestObjectVisitors.h
-    include/ruvia/http/detail/model/Rules.h
-    include/ruvia/http/detail/model/RuleSupport.h
-    include/ruvia/http/detail/model/RuleTypes.h
-    include/ruvia/http/detail/model/RuleValidation.h
-    include/ruvia/http/detail/model/Traits.h
     include/ruvia/router/Router.h
 )
 
