@@ -2,11 +2,13 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/HttpCommonInternal.h"
 #include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/MultipartParser.h"
 
 // A boundary delimiter ends with CRLF (next part) or "--" (close). A lone '-'
 // after the boundary token is NOT a delimiter: "--<boundary>-x" must be skipped,
@@ -188,4 +190,41 @@ RUVIA_TEST(multipart_part_access_decodes_quoted_pairs) {
     RUVIA_CHECK_EQ(std::string(part.filename()), std::string("x\\y.txt"));
     RUVIA_CHECK_EQ(std::string(part.contentType()), std::string("text/plain"));
     RUVIA_CHECK_EQ(std::string(part.body()), std::string("the body"));
+}
+
+RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
+    const std::string body =
+        "preamble\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n\r\n"
+        "value\r\n"
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"\r\n"
+        "Content-Type: text/plain\r\n\r\n"
+        "file-data\r\n"
+        "--BOUNDARY--\r\n";
+    const auto parts = ruvia::parseMultipartBody(
+        body, "BOUNDARY", std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(parts[0].name(), std::string_view("field"));
+    RUVIA_CHECK_EQ(parts[0].body(), std::string_view("value"));
+    RUVIA_CHECK_EQ(parts[1].name(), std::string_view("upload"));
+    RUVIA_CHECK_EQ(parts[1].filename(), std::string_view("a.txt"));
+    RUVIA_CHECK_EQ(parts[1].contentType(), std::string_view("text/plain"));
+    RUVIA_CHECK_EQ(parts[1].body(), std::string_view("file-data"));
+    RUVIA_CHECK(parts[0].body().data() >= body.data());
+    RUVIA_CHECK(parts[0].body().data() < body.data() + body.size());
+}
+
+RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
+    bool threw = false;
+    try {
+        (void)ruvia::parseMultipartBody(
+            "--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close",
+            "BOUNDARY",
+            std::pmr::get_default_resource());
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }

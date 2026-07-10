@@ -5,7 +5,7 @@
 #include "ruvia/web/detail/server/HttpNativeFile.h"
 #include "ruvia/core/detail/AsioAwait.h"
 
-#include "ruvia/http/detail/server/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/core/memory/MemoryPool.h"

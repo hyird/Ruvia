@@ -46,7 +46,6 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/web/detail/http/HttpBodyStreamAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
@@ -59,7 +58,7 @@
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
-#include "ruvia/http/detail/server/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
@@ -72,7 +71,7 @@
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/web/HttpServerOptions.h"
@@ -244,72 +243,16 @@ Task<void> runHttp2SansIoSession(
         }
     };
 
-    // Submit a complete response through the core, mirroring the coroutine
-    // writeResponse: HEADERS (auto Content-Length for plain/file bodies), then the
-    // body as DATA -- buffered bytes in one submit, a file body read in chunks, or an
-    // async stream body pulled chunk by chunk. Chunked bodies pace themselves on the
-    // send window via awaitSendWindow so a slow client never balloons the out-buffer.
-    auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response,
-                              bool skipBody) -> Task<void> {
+    // Submit a complete buffered/file response through the core. Explicit response
+    // streaming has its own route dispatch and ResponseStreamSink call chain.
+    auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response) -> Task<void> {
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr || streamState->isReset()) {
             co_return;
         }
-        const auto policy = responseWritePolicy(response.status());
-        const bool sendBody = policy.bodyAllowed() && !skipBody;
-        if (responseHasStreamBody(response)) {
-            // A normal route returned a streaming body: HEADERS
-            // without a content-length, then DATA pulled from the source; a mid-body
-            // failure aborts the stream (RFC 9113 §8.1).
-            connection.submitStreamingResponseHead(streamId, response, !sendBody);
-            wakeWriter();
-            if (!sendBody) {
-                co_return;
-            }
-            const auto& body = HttpResponseBodyAccess::stream(response);
-            for (;;) {
-                auto* live = connection.stream(streamId);
-                if (live == nullptr || live->isReset()) {
-                    co_return;
-                }
-                std::string_view chunk;
-                bool failed = false;
-                try {
-                    chunk = co_await HttpBodyStreamAccess::nextChunk(body);
-                } catch (...) {
-                    failed = true;
-                }
-                if (failed) {
-                    connection.submitReset(
-                        streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
-                    wakeWriter();
-                    co_return;
-                }
-                if (chunk.empty()) {
-                    break;
-                }
-                const auto result = connection.submitData(streamId, chunk, false);
-                wakeWriter();
-                if (result == Http2SubmitResult::kClosed) {
-                    co_return;
-                }
-                if (result == Http2SubmitResult::kBlocked && !(co_await awaitSendWindow(streamId))) {
-                    co_return;
-                }
-            }
-            (void)connection.submitData(streamId, {}, true);
-            wakeWriter();
-            co_return;
-        }
-        std::uint64_t contentLength = 0;
-        if (policy.bodyAllowed()) {
-            contentLength = responseHasFileBody(response)
-                ? responseFileBody(response).length
-                : responseBodySize(response);
-        }
-        connection.submitResponseHead(streamId, response, skipBody);
+        const auto writePlan = connection.submitResponseHead(streamId, response);
         wakeWriter();
-        if (!sendBody || contentLength == 0) {
+        if (!writePlan.sendBody()) {
             co_return;
         }
         if (responseHasFileBody(response)) {
@@ -381,7 +324,7 @@ Task<void> runHttp2SansIoSession(
                 co_return;
             }
         }
-        // (contentLength == 0 returned earlier; submitResponseHead END_STREAM'd it.)
+        // An empty write plan returned earlier; submitResponseHead END_STREAM'd it.
         co_return;
     };
 
@@ -402,19 +345,19 @@ Task<void> runHttp2SansIoSession(
         if (streamState == nullptr) {
             co_return;
         }
-        const ContextServices baseServices(
-            env.databases, env.redis, env.rateLimiter);
+        const auto baseServices = ContextServices(
+            env.databases, env.redis, env.rateLimiter)
+            .withTransport(remoteAddress, env.clientCertificate, kTlsStream);
 
         HttpRequest request = HttpRequestAccess::make();
         if (!Http2RequestBuilder::build(*streamState, request, requestMemory.resource())) {
             auto response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
-                false, baseServices);
-            co_await submitResponse(streamId, response, false);
+                baseServices);
+            co_await submitResponse(streamId, response);
             co_return;
         }
-        HttpRequestAccess::setTransport(request, remoteAddress, env.clientCertificate, kTlsStream);
         const auto* routeState = findRouteState(streamId);
         const RouteResolution resolution =
             routeState != nullptr ? routeState->resolution : RouteResolution{};
@@ -424,9 +367,9 @@ Task<void> runHttp2SansIoSession(
             auto response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(429, {}, "rate limit exceeded"),
-                false, baseServices);
+                baseServices);
             setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
-            co_await submitResponse(streamId, response, false);
+            co_await submitResponse(streamId, response);
             recordHttpAccess(
                 options.accessLog, request, remoteAddress, response.status(), requestStart, true);
             co_return;
@@ -437,8 +380,8 @@ Task<void> runHttp2SansIoSession(
             auto response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(413, {}, "request body is too large"),
-                false, baseServices);
-            co_await submitResponse(streamId, response, false);
+                baseServices);
+            co_await submitResponse(streamId, response);
             co_return;
         }
 
@@ -493,7 +436,7 @@ Task<void> runHttp2SansIoSession(
             response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 websocket request"),
-                false, baseServices);
+                baseServices);
         } else if (resolution.found() && resolution.usesResponseStream()) {
             // Streaming route (for example SSE): drive the shared streaming
             // dispatch through a sans-I/O sink that submits chunks via the core.
@@ -502,7 +445,6 @@ Task<void> runHttp2SansIoSession(
                 executor, &writeSignal, findSignal(streamId));
             auto result = co_await dispatchResponseStreamWith(
                 sink, routes, request, resolution, requestMemory, dispatchServices,
-                /*closeConnectionOnError=*/false,
                 [&connection, streamId]() noexcept {
                     auto* s = connection.stream(streamId);
                     return s == nullptr || s->isReset();
@@ -526,7 +468,7 @@ Task<void> runHttp2SansIoSession(
             }
         } else {
             response = co_await routes.dispatchBuffered(
-                request, resolution, requestMemory, false, dispatchServices);
+                request, resolution, requestMemory, dispatchServices);
         }
 
         auto* live = connection.stream(streamId);
@@ -535,8 +477,8 @@ Task<void> runHttp2SansIoSession(
         }
         const auto preparation = prepareBufferedHttpResponse(
             request, response, options, live->responseCompressionScratch());
-        co_await submitResponse(streamId, response, preparation.skipBody);
-        if (preparation.bodyBorrowsCompressionScratch) {
+        co_await submitResponse(streamId, response);
+        if (preparation.bodyBorrowsCompressionScratch()) {
             live->clearRequestBody();
         }
         recordHttpAccess(

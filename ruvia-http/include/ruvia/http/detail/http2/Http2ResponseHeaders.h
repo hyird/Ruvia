@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -14,6 +15,7 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -198,6 +200,27 @@ inline void appendHttp2ResponseHeaders(
 
 inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
     clearPmrStringRetainingSmall(stream.responseHeaderBlock());
+}
+
+inline void appendHttp2ResponseTrailer(
+    Http2StreamState& stream,
+    std::string_view name,
+    std::string_view value) {
+    if (!responseTrailerFieldValid(name, value)) {
+        throw std::invalid_argument("invalid response trailer field");
+    }
+
+    auto& trailerBlock = stream.responseTrailerBlock();
+    std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
+    std::pmr::string lowerNameScratch(trailerBlock.get_allocator());
+    HpackEncoder::encodeHeader(
+        trailerBlock,
+        http2LowerHeaderName(name, lowerNameStack, lowerNameScratch),
+        value);
+}
+
+inline void http2ReleaseResponseTrailerBlock(Http2StreamState& stream) {
+    clearPmrStringRetainingSmall(stream.responseTrailerBlock());
 }
 
 }  // namespace ruvia::detail

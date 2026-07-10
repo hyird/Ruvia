@@ -10,7 +10,6 @@
 #include <asio.hpp>
 #include "ruvia/web/detail/body/HttpContinueWriter.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/Error.h"
 
 #include "ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
 #include "ruvia/web/detail/body/HttpStreamBodyReaderPipeline.inl"

@@ -96,8 +96,6 @@ void StreamBodyReader<Stream>::resetPipelineState() noexcept {
     initialBodyAndPipeline_ = {};
     readCursor_ = 0;
     pendingCompactUntil_ = 0;
-    trailerSearchOffset_ = 0;
-    readingTrailers_ = false;
 }
 
 template <typename Stream>
@@ -105,16 +103,10 @@ void StreamBodyReader<Stream>::materializeInitialRemainder() {
     if (initialBodyAndPipeline_.empty()) {
         return;
     }
-    const auto oldReadCursor = readCursor_;
     buffer_.assign(initialBodyAndPipeline_.data() + readCursor_, initialBodyAndPipeline_.size() - readCursor_);
     initialBodyAndPipeline_ = {};
     readCursor_ = 0;
     pendingCompactUntil_ = 0;
-    if (readingTrailers_) {
-        trailerSearchOffset_ = trailerSearchOffset_ > oldReadCursor
-            ? trailerSearchOffset_ - oldReadCursor
-            : 0;
-    }
 }
 
 }  // namespace ruvia::detail

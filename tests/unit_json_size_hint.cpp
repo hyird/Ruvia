@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/JsonUtils.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 
 namespace {
 

@@ -7,14 +7,38 @@
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
 
-struct HttpBufferedResponsePreparation final {
-    bool skipBody{false};
-    bool bodyBorrowsCompressionScratch{false};
+class HttpBufferedResponsePreparation final {
+public:
+    [[nodiscard]] const HttpBufferedResponseWritePlan& writePlan() const noexcept {
+        return writePlan_;
+    }
+
+    [[nodiscard]] bool bodyBorrowsCompressionScratch() const noexcept {
+        return bodyBorrowsCompressionScratch_;
+    }
+
+private:
+    friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(
+        const HttpRequest&,
+        HttpContentCoding,
+        HttpResponse&,
+        const HttpServerOptions&,
+        std::pmr::string&);
+
+    HttpBufferedResponsePreparation(
+        HttpBufferedResponseWritePlan writePlan,
+        bool bodyBorrowsCompressionScratch) noexcept
+        : writePlan_(writePlan),
+          bodyBorrowsCompressionScratch_(bodyBorrowsCompressionScratch) {}
+
+    HttpBufferedResponseWritePlan writePlan_;
+    bool bodyBorrowsCompressionScratch_{false};
 };
 
 [[nodiscard]] inline HttpContentCoding httpResponseCodingFor(const HttpRequest& request) noexcept {
@@ -29,16 +53,16 @@ struct HttpBufferedResponsePreparation final {
     std::pmr::string& compressionScratch) {
     materializeResponseBody(response);
     applyCorsHeaders(request, response, options.cors);
-    const bool skipBody = request.method() == HttpMethod::kHead;
+    const auto bodyPlan = httpResponseBodyPlan(request.method(), response.status());
     const bool bodyBorrowsCompressionScratch = compressResponseBodyIfAccepted(
         coding,
         response,
         options.compression,
         compressionScratch,
-        skipBody);
-    return HttpBufferedResponsePreparation{
-        .skipBody = skipBody,
-        .bodyBorrowsCompressionScratch = bodyBorrowsCompressionScratch};
+        bodyPlan);
+    return HttpBufferedResponsePreparation(
+        httpBufferedResponseWritePlan(bodyPlan, response),
+        bodyBorrowsCompressionScratch);
 }
 
 [[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(

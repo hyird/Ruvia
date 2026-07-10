@@ -53,9 +53,6 @@ void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std
     compactPending();
     restorePipelineBytes(readBuffer, usedBytes, initialPipelineRemainder(), bufferedPipelineRemainder());
     resetPipelineState();
-    if (chunked_) {
-        chunkDecoder_.resetDelimiter();
-    }
 }
 
 template <typename Stream>

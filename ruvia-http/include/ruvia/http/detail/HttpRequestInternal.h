@@ -76,9 +76,6 @@ struct HttpRequestAccess final {
         request.headerCount_ = 0;
         request.cachedHeaderBits_ = 0;
         request.body_ = {};
-        request.remoteAddress_ = {};
-        request.clientCertificate_ = {};
-        request.secure_ = false;
         request.resource_ = nullptr;
     }
 
@@ -135,21 +132,6 @@ struct HttpRequestAccess final {
 
     static void setBody(HttpRequest& request, std::string_view body) noexcept {
         request.body_ = body;
-    }
-
-    // Stamps the per-connection transport metadata that is not derived from the
-    // request bytes: peer address, client TLS certificate (PEM, empty when none),
-    // and whether the connection is TLS. Both the HTTP/1.1 and HTTP/2 dispatch
-    // paths funnel through this single entry point so a new transport field
-    // cannot be wired into one path and silently missed in the other.
-    static void setTransport(
-        HttpRequest& request,
-        std::string_view remoteAddress,
-        std::string_view clientCertificate,
-        bool secure) noexcept {
-        request.remoteAddress_ = remoteAddress;
-        request.clientCertificate_ = clientCertificate;
-        request.secure_ = secure;
     }
 
 private:

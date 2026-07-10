@@ -3,7 +3,7 @@
 #include <charconv>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
-#include "ruvia/http/detail/FileResponseHelpers.h"    // detail::httpParseHttpDate
+#include "ruvia/http/detail/HttpDate.h"
 
 namespace ruvia {
 namespace {

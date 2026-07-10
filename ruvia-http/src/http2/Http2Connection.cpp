@@ -557,6 +557,9 @@ void Http2Connection::submitRequestHead(
     }
     appendResponseHeaderFrames(
         *stream, std::string_view(block.data(), block.size()), endStream);
+    if (endStream) {
+        stream->markLocalEndStream();
+    }
     http2ReleaseResponseHeaderBlock(*stream);
 }
 
@@ -1322,54 +1325,61 @@ void Http2Connection::appendResponseHeaderFrames(
     }
 }
 
-void Http2Connection::submitResponseHead(
-    std::uint32_t streamId, const HttpResponse& response, bool bodyForbidden) {
+HttpBufferedResponseWritePlan Http2Connection::submitResponseHead(
+    std::uint32_t streamId, const HttpResponse& response) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isReset()) {
-        return;
+        return httpBufferedResponseWritePlan(HttpMethod::kUnknown, response);
     }
-    const auto policy = responseWritePolicy(response.status());
-    const bool bodyAllowed = policy.bodyAllowed();
-    const bool sendBody = bodyAllowed && !bodyForbidden;
-    const bool streamBody = responseHasStreamBody(response);
+    const auto writePlan = httpBufferedResponseWritePlan(stream->requestMethod(), response);
 
-    // Mirror writeResponse's framing decision: the writer owns an auto Content-Length
-    // only for a buffered (non-streaming) body; a streaming body sends no length.
-    std::uint64_t contentLength = 0;
-    if (bodyAllowed && !streamBody) {
-        contentLength = responseHasFileBody(response)
-            ? responseFileBody(response).length
-            : responseBodySize(response);
-    }
-    appendHttp2ResponseHeaders(*stream, response, contentLength, !streamBody);
-    const bool endStream = !sendBody || (!streamBody && contentLength == 0);
+    // A complete HttpResponse is buffered or file-backed, so its size is known.
+    // Explicit response streaming uses submitStreamingResponseHead() instead.
+    appendHttp2ResponseHeaders(*stream, response, writePlan.contentLength(), true);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
-        endStream);
+        !writePlan.sendBody());
+    if (!writePlan.sendBody()) {
+        stream->markLocalEndStream();
+    }
     http2ReleaseResponseHeaderBlock(*stream);
+    return writePlan;
 }
 
-void Http2Connection::submitStreamingResponseHead(
-    std::uint32_t streamId, const HttpResponse& head, bool bodyForbidden) {
+HttpResponseBodyPlan Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind) {
     auto* stream = findStream(streamId);
+    const auto bodyPlan = httpResponseBodyPlan(
+        stream == nullptr ? HttpMethod::kUnknown : stream->requestMethod(),
+        head.status());
     if (stream == nullptr || stream->isReset()) {
-        return;
+        return bodyPlan;
     }
+    auto streamHead = prepareResponseStreamHead(
+        std::move(head),
+        kind,
+        ResponseStreamFraming::kHttp2DataFrames,
+        bodyPlan);
     // No auto Content-Length for a streaming body (length unknown); mirror the coroutine
     // sink's commit(). END_STREAM only when the status/method forbids a body.
-    appendHttp2ResponseHeaders(*stream, head, 0, /*emitAutoContentLength=*/false);
+    appendHttp2ResponseHeaders(
+        *stream, streamHead.response(), 0, /*emitAutoContentLength=*/false);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
-        bodyForbidden);
+        bodyPlan.bodySuppressed());
+    if (bodyPlan.bodySuppressed()) {
+        stream->markLocalEndStream();
+    }
     http2ReleaseResponseHeaderBlock(*stream);
+    return bodyPlan;
 }
 
 Http2SubmitResult Http2Connection::submitData(
     std::uint32_t streamId, std::string_view chunk, bool endStream) {
     auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset()) {
+    if (stream == nullptr || stream->isReset() || stream->localEndStream()) {
         return Http2SubmitResult::kClosed;
     }
     // If this stream still has a window-blocked body queued, appending preserves DATA
@@ -1379,6 +1389,7 @@ Http2SubmitResult Http2Connection::submitData(
             pending.bytes.append(chunk.data(), chunk.size());
             if (endStream) {
                 pending.endStream = true;
+                stream->markLocalEndStream();
             }
             return Http2SubmitResult::kBlocked;
         }
@@ -1386,6 +1397,7 @@ Http2SubmitResult Http2Connection::submitData(
     if (chunk.empty()) {
         if (endStream) {
             appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
+            stream->markLocalEndStream();
         }
         return Http2SubmitResult::kOk;
     }
@@ -1395,7 +1407,13 @@ Http2SubmitResult Http2Connection::submitData(
         remainder.append(chunk.data() + consumed, chunk.size() - consumed);
         pendingSends_.push_back(
             Http2PendingSend{streamId, std::move(remainder), 0, endStream, std::pmr::string(resource_)});
+        if (endStream) {
+            stream->markLocalEndStream();
+        }
         return Http2SubmitResult::kBlocked;
+    }
+    if (endStream) {
+        stream->markLocalEndStream();
     }
     return Http2SubmitResult::kOk;
 }
@@ -1414,11 +1432,22 @@ void Http2Connection::submitWebSocketHandshake(
     http2ReleaseResponseHeaderBlock(*stream);
 }
 
-void Http2Connection::submitTrailers(std::uint32_t streamId, std::string_view headerBlock) {
+void Http2Connection::addResponseTrailer(
+    std::uint32_t streamId, std::string_view name, std::string_view value) {
     auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset() || headerBlock.empty()) {
+    if (stream == nullptr || stream->isReset() || stream->localEndStream()) {
         return;
     }
+    appendHttp2ResponseTrailer(*stream, name, value);
+}
+
+bool Http2Connection::submitResponseTrailers(std::uint32_t streamId) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset() || stream->localEndStream() ||
+        stream->responseTrailerBlock().empty()) {
+        return false;
+    }
+    auto& headerBlock = stream->responseTrailerBlock();
     // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
     // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
     // from the body to the trailer (markSendWindowOpened emits it once the body drains).
@@ -1426,10 +1455,18 @@ void Http2Connection::submitTrailers(std::uint32_t streamId, std::string_view he
         if (pending.streamId == streamId) {
             pending.endStream = false;  // the trailer now carries END_STREAM
             pending.trailerBlock.assign(headerBlock.data(), headerBlock.size());
-            return;
+            http2ReleaseResponseTrailerBlock(*stream);
+            stream->markLocalEndStream();
+            return true;
         }
     }
-    appendResponseHeaderFrames(*stream, headerBlock, /*endStream=*/true);
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(headerBlock.data(), headerBlock.size()),
+        /*endStream=*/true);
+    http2ReleaseResponseTrailerBlock(*stream);
+    stream->markLocalEndStream();
+    return true;
 }
 
 void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCode) {

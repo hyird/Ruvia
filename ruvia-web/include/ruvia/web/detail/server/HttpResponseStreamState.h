@@ -1,10 +1,8 @@
 #pragma once
 
-#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/HttpResponse.h"
 
 #include <stdexcept>
-#include <string_view>
 
 namespace ruvia {
 
@@ -22,8 +20,8 @@ public:
         return ended_;
     }
 
-    [[nodiscard]] bool bodyForbidden() const noexcept {
-        return bodyForbidden_;
+    [[nodiscard]] bool bodySuppressed() const noexcept {
+        return bodySuppressed_;
     }
 
     using StreamingHeadThunk = HttpResponse (*)(Context&);
@@ -43,8 +41,8 @@ public:
         return streamingHead_(*context_);
     }
 
-    void markCommitted(bool bodyForbidden) noexcept {
-        bodyForbidden_ = bodyForbidden;
+    void markCommitted(bool bodySuppressed) noexcept {
+        bodySuppressed_ = bodySuppressed;
         committed_ = true;
     }
 
@@ -56,30 +54,24 @@ public:
         if (ended_) {
             throw std::logic_error("response stream is already ended");
         }
-        if (bodyForbidden_) {
-            throw std::logic_error("response status does not allow a stream body");
+        if (bodySuppressed_) {
+            throw std::logic_error("response does not allow a stream body");
         }
     }
 
-    void ensureTrailerAllowed(std::string_view name, std::string_view value) const {
-        ensureTrailerOpen();
-        if (!responseTrailerFieldValid(name, value)) {
-            throw std::invalid_argument("invalid response trailer field");
-        }
-    }
-
-private:
     void ensureTrailerOpen() const {
         if (ended_) {
             throw std::logic_error("response stream is already ended");
         }
     }
 
+private:
+
     Context* context_{nullptr};
     StreamingHeadThunk streamingHead_{nullptr};
     bool committed_{false};
     bool ended_{false};
-    bool bodyForbidden_{false};
+    bool bodySuppressed_{false};
 };
 
 }  // namespace detail

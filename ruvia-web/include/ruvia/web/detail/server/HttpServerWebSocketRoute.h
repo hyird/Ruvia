@@ -10,7 +10,7 @@
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -42,7 +42,6 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             parsed.request,
             requestMemory,
             HttpErrorInfo(400, {}, "invalid websocket upgrade"),
-            true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;

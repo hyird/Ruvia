@@ -69,3 +69,11 @@ struct HttpStatusEntry final {
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+[[nodiscard]] inline std::string_view httpStatusText(std::uint16_t statusCode) noexcept {
+    return detail::httpDefaultStatusText(statusCode);
+}
+
+}  // namespace ruvia

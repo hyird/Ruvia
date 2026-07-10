@@ -9,7 +9,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
-    const ContextServices baseRouteServices(&databases_, &redis_, rateLimiter_);
     std::pmr::string remoteAddress(memory_.allocator<char>());
     std::error_code remoteEc;
     const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
@@ -22,6 +21,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     WorkSetReturn workSetReturn(workSetPool_, workSet);
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
+    const auto baseRouteServices = ContextServices(&databases_, &redis_, rateLimiter_)
+        .withTransport(remoteAddress, clientCertificate, !kPlainTcp);
 
     for (;;) {
         scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
@@ -99,11 +100,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             parser.parseHeaders(bufferView, parsed, headerSearchOffset);
             HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
             if (parsed.status == HttpParseStatus::kComplete) {
-                HttpRequestAccess::setTransport(
-                    parsed.request,
-                    remoteAddress,
-                    clientCertificate,
-                    !std::is_same_v<Stream, TcpSocket>);
                 // Reset phase so clientHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingPayload on their own; the
                 // streaming/websocket paths set their own phases below; the
@@ -118,7 +114,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             parsed.request,
                             requestMemory,
                             HttpErrorInfo(400, {}, "missing Host header"),
-                            true,
                             baseRouteServices);
                         http1MarkConnectionClose(response);
                     } else {
@@ -168,7 +163,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         parsed.request,
                         requestMemory,
                         HttpErrorInfo(429, {}, "rate limit exceeded"),
-                        true,
                         baseRouteServices);
                     setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
                     markConnectionCloseAfterWrite(response, closeAfterWrite);
@@ -181,7 +175,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             parsed.request,
                             requestMemory,
                             HttpErrorInfo(413, {}, "request body is too large"),
-                            true,
                             baseRouteServices);
                         markConnectionCloseAfterWrite(response, closeAfterWrite);
                         break;
@@ -218,7 +211,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         parsed.request,
                         requestMemory,
                         HttpErrorInfo(413, {}, "request body is too large"),
-                        true,
                         baseRouteServices);
                     markConnectionCloseAfterWrite(response, closeAfterWrite);
                     break;
@@ -326,9 +318,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     parsed.request,
                     requestMemory,
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
-                    true,
                     baseRouteServices);
-                closeAfterWrite = true;
+                markConnectionCloseAfterWrite(response, closeAfterWrite);
                 break;
             }
 
@@ -342,9 +333,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     parsed.request,
                     requestMemory,
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
-                    true,
                     baseRouteServices);
-                closeAfterWrite = true;
+                markConnectionCloseAfterWrite(response, closeAfterWrite);
                 break;
             }
 
@@ -365,34 +355,22 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
         if (!responseStreamDispatched) {
             std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
-            if (responseHasStreamBody(response)) {
-                // A normal route returned a streaming body: stream it here
-                // instead of buffering. HTTP/1.0 is close-delimited, so it cannot be kept alive.
-                const bool http11 = parsed.request.httpVersion() == "HTTP/1.1";
-                if (!http11) {
-                    keepAlive = false;
-                }
-                const bool skipBody = parsed.request.method() == HttpMethod::kHead;
-                co_await writeStreamingResponse(
-                    stream, responseHead, scannerEntry, response, http11, skipBody, ec);
-            } else {
-                const auto responsePreparation = prepareBufferedHttpResponse(
-                    parsed.request,
-                    parsed.responseCoding,
-                    response,
-                    options_,
-                    compressionScratch);
-                co_await writeResponse(
-                    stream,
-                    memory_,
-                    &responseHead,
-                    &fileChunk,
-                    response,
-                    responsePreparation.skipBody,
-                    ec);
-                if (responsePreparation.bodyBorrowsCompressionScratch) {
-                    clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
-                }
+            const auto responsePreparation = prepareBufferedHttpResponse(
+                parsed.request,
+                parsed.responseCoding,
+                response,
+                options_,
+                compressionScratch);
+            co_await writeResponse(
+                stream,
+                memory_,
+                &responseHead,
+                &fileChunk,
+                response,
+                responsePreparation.writePlan(),
+                ec);
+            if (responsePreparation.bodyBorrowsCompressionScratch()) {
+                clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
             }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(

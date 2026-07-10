@@ -5,6 +5,7 @@
 #include "ruvia/web/detail/server/HttpResponseStreamSink.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
@@ -66,24 +67,10 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     HttpResponse& response,
     bool& keepAlive,
     std::size_t& requestCount) {
-    keepAlive = http1ShouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
-    // RFC 9112 6.1: only an HTTP/1.1 client may be sent chunked framing. An HTTP/1.0
-    // stream is delimited by the connection close instead -- no Transfer-Encoding and
-    // no chunk framing -- which then forces the connection shut once the body ends.
-    const bool isHttp11 = parsed.request.httpVersion() == "HTTP/1.1";
-    const auto framing = isHttp11
-        ? ResponseStreamFraming::kHttp1Chunked
-        : ResponseStreamFraming::kHttp1CloseDelimited;
-    // The streamed head is written before recordCompletedRequest finalizes the
-    // connection lifetime below, so decide it now and let the head announce
-    // Connection: close for a response that will be the connection's last. This
-    // matches the post-dispatch verdict exactly: the connection closes iff it is
-    // not kept alive, is an HTTP/1.0 (close-delimited) stream, or the per-connection
-    // request limit is reached by this request (recordCompletedRequest increments
-    // requestCount then applies the same requestLimitReached check).
-    const bool connectionWillClose =
-        !keepAlive || !isHttp11 ||
-        requestLimitReached(requestCount + 1, options.keepaliveRequests);
+    const auto streamPlan = http1PlanResponseStream(
+        parsed,
+        requestLimitReached(requestCount + 1, options.keepaliveRequests));
+    keepAlive = streamPlan.requestCanPersist();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = routeResolution.route();
     ResponseSink responseSink(
@@ -92,8 +79,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         responseHead,
         scannerEntry,
         route.responseMode(),
-        framing,
-        connectionWillClose);
+        streamPlan);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
     auto result = co_await dispatchResponseStreamWith(
@@ -103,7 +89,6 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         routeResolution,
         requestMemory,
         baseRouteServices,
-        /*closeConnectionOnError=*/true,
         /*peerAborted=*/[]() noexcept { return false; });
 
     if (result.aborted()) {
@@ -112,6 +97,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     if (result.failedBeforeCommit()) {
         response = result.takeResponse();
         keepAlive = false;
+        http1MarkConnectionClose(response);
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
@@ -122,14 +108,12 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             keepAlive,
             requestCount,
             options.keepaliveRequests,
-            http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()));
+            streamPlan.needsKeepAliveSignal());
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
-    // A close-delimited (HTTP/1.0) stream is terminated by the connection close, so
-    // it can never be kept alive -- the head already announced Connection: close.
-    if (!isHttp11) {
+    if (streamPlan.connectionWillClose()) {
         keepAlive = false;
     }
     recordCompletedRequest(

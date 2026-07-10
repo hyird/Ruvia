@@ -67,14 +67,12 @@ private:
     std::size_t contentLength_;
     bool chunked_;
     std::size_t maxBodyBytes_;
-    HttpChunkDecoder chunkDecoder_;
+    HttpChunkedBodyDecoder chunkDecoder_;
     ConnectionScanner::Entry& scannerEntry_;
     std::size_t readCursor_{0};
     std::size_t pendingCompactUntil_{0};
-    std::size_t trailerSearchOffset_{0};
     std::size_t deliveredBytes_{0};
     bool finished_{false};
-    bool readingTrailers_{false};
     bool sendContinue_{false};
     bool continueSent_{false};
 };

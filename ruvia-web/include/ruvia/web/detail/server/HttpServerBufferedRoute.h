@@ -74,7 +74,6 @@ Task<void> dispatchHttpBufferedBodyRoute(
         parsed.request,
         routeResolution,
         requestMemory,
-        true,
         bodyState.withLoader(baseRouteServices));
 
     completeSuccessfulHttpBodyRoute(

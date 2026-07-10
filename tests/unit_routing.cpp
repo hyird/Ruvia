@@ -18,6 +18,7 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/AsioAwait.h"
@@ -627,6 +628,11 @@ ruvia::Task<ruvia::HttpResponse> throwsGenericHandler(void*, ruvia::Context&) {
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
 }
 
+ruvia::Task<ruvia::HttpResponse> throwsProtocolErrorHandler(void*, ruvia::Context&) {
+    throw ruvia::HttpProtocolError(413, "request body is too large");
+    co_return ruvia::HttpResponse(std::pmr::get_default_resource());  // unreachable
+}
+
 ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
     co_return context.body("ok");
 }
@@ -638,6 +644,7 @@ struct DispatchResult final {
     std::uint16_t status{0};
     std::string body;
     std::string allow;
+    std::string connection;
 };
 
 DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
@@ -647,6 +654,8 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     result.body.assign(body.data(), body.size());
     const auto allow = response.header("Allow");
     result.allow.assign(allow.data(), allow.size());
+    const auto connection = response.header("Connection");
+    result.connection.assign(connection.data(), connection.size());
     return result;
 }
 
@@ -679,11 +688,19 @@ DispatchResult dispatchOne(RouteHandler handler, HttpMethod method, std::string_
 }  // namespace
 
 RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
-    // A thrown HttpError surfaces with its own status; any other exception is a 500.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x").status,
-                   std::uint16_t{403});
+    // Application and protocol errors retain their status; unknown failures map
+    // to 500. Router never injects HTTP/1 Connection policy into any response.
+    const auto application = dispatchOne(
+        RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x");
+    RUVIA_CHECK_EQ(application.status, std::uint16_t{403});
+    RUVIA_CHECK(application.connection.empty());
+    const auto protocol = dispatchOne(
+        RouteHandler(nullptr, &throwsProtocolErrorHandler), HttpMethod::kGet, "/x");
+    RUVIA_CHECK_EQ(protocol.status, std::uint16_t{413});
+    RUVIA_CHECK(protocol.connection.empty());
     const auto generic = dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x");
     RUVIA_CHECK_EQ(generic.status, std::uint16_t{500});
+    RUVIA_CHECK(generic.connection.empty());
     // The unexpected exception's message must NOT leak into the response body: a
     // library error (SQL text, paths) could otherwise be disclosed to the client.
     RUVIA_CHECK(generic.body.find("boom") == std::string::npos);

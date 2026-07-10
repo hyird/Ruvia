@@ -32,7 +32,7 @@ inline void applyRequestLimit(bool& keepAlive, std::size_t requestCount, std::si
 }
 
 inline void markConnectionCloseAfterWrite(HttpResponse& response, bool& closeAfterWrite) {
-    http1MarkConnectionClose(response);
+    (void)http1FinalizeResponseConnection(response, false, false);
     closeAfterWrite = true;
 }
 
@@ -50,12 +50,8 @@ inline void finalizeBufferedRouteResponse(
     std::size_t& requestCount,
     std::size_t maxRequests,
     bool needsKeepAliveSignal) {
-    if (http1ResponseWantsClose(response)) {
-        keepAlive = false;
-    }
     recordCompletedRequest(keepAlive, requestCount, maxRequests);
-    http1MarkConnectionCloseIfNeeded(response, keepAlive);
-    http1MarkConnectionKeepAliveIfNeeded(response, keepAlive, needsKeepAliveSignal);
+    keepAlive = http1FinalizeResponseConnection(response, keepAlive, needsKeepAliveSignal);
 }
 
 inline void finalizeBodyRouteResponse(
@@ -65,14 +61,13 @@ inline void finalizeBodyRouteResponse(
     std::size_t maxRequests,
     bool requestBodyComplete,
     bool needsKeepAliveSignal) {
-    if (http1ResponseWantsClose(response) || !requestBodyComplete) {
+    if (!requestBodyComplete) {
         keepAlive = false;
     }
     recordCompletedRequest(keepAlive, requestCount, maxRequests);
     // Fix borrowed response views before callers restore pipeline bytes.
     materializeResponseBody(response);
-    http1MarkConnectionCloseIfNeeded(response, keepAlive);
-    http1MarkConnectionKeepAliveIfNeeded(response, keepAlive, needsKeepAliveSignal);
+    keepAlive = http1FinalizeResponseConnection(response, keepAlive, needsKeepAliveSignal);
 }
 
 }  // namespace ruvia::detail

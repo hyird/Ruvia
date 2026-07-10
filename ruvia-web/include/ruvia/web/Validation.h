@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/Error.h"
-#include "ruvia/http/JsonUtils.h"
+#include "ruvia/web/Error.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/core/memory/PmrResource.h"

@@ -153,8 +153,8 @@ private:
 // is a predicate consulted after the handler returns so a transport that can be
 // reset out from under the handler (HTTP/2, where the reset flag is a bit-field)
 // can report kAbortedByPeer; HTTP/1.1 passes a constant-false predicate, which
-// folds away. closeConnectionOnError governs the error response produced when
-// the handler throws before committing any bytes.
+// folds away. Connection persistence remains a transport concern after this
+// helper returns a buffered pre-commit error response.
 template <typename Sink, typename PeerAborted>
 Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     Sink& sink,
@@ -163,7 +163,6 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     const RouteResolution& resolution,
     RequestMemory& requestMemory,
     ContextServices services,
-    bool closeConnectionOnError,
     PeerAborted peerAborted) {
     auto responseStream = makeResponseStreamWriter(sink);
 
@@ -189,7 +188,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
             co_return ResponseStreamDispatchResult::abortedAfterCommit(std::move(response));
         }
         response = co_await routes.handleException(
-            request, requestMemory, exception, closeConnectionOnError, services);
+            request, requestMemory, exception, services);
         co_return ResponseStreamDispatchResult::failedBeforeCommit(std::move(response));
     }
     co_return ResponseStreamDispatchResult::buffered(std::move(response));

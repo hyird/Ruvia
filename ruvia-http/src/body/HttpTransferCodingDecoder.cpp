@@ -4,12 +4,12 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/Error.h"
+#include "ruvia/http/HttpProtocolError.h"
 
 namespace ruvia::detail {
 
 void throwRequestBodyTooLarge() {
-    throw HttpError(413, "payload_too_large", "request body is too large");
+    throw HttpProtocolError(413, "request body is too large");
 }
 
 TransferCodingDecoder::TransferCodingDecoder(

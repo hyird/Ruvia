@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 
 namespace {

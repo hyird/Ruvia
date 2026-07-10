@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -19,6 +20,14 @@ inline constexpr std::string_view kHttp2UpgradeResponsePrefix =
     "Connection: Upgrade\r\n"
     "Upgrade: h2c\r\n"
     "Server: ruvia\r\n";
+inline constexpr std::string_view kHttp2UpgradeResponseTerminator = "\r\n";
+
+template <typename Visitor>
+inline void forEachHttp2UpgradeResponsePart(Visitor&& visitor) {
+    visitor(kHttp2UpgradeResponsePrefix);
+    visitor(cachedDateHeader());
+    visitor(kHttp2UpgradeResponseTerminator);
+}
 
 struct Http2UpgradeRequest final {
     std::pmr::string settingsPayload;

@@ -11,7 +11,7 @@
 // Backpressure: a window-blocked submit parks on the stream's signal until the
 // session's reader reports the core drained the remainder (takeUnblockedStreams), so a
 // slow consumer stalls the producer instead of growing the out-buffer without bound.
-// Trailers are HPACK-collected and emitted as the final HEADERS (END_STREAM) frame.
+// Trailers are submitted semantically to the HTTP core, which owns their protocol bytes.
 
 #include <chrono>
 #include <cstdint>
@@ -24,13 +24,11 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
-#include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -56,8 +54,6 @@ public:
           streamId_(streamId),
           mode_(mode),
           scratch_(resource),
-          trailers_(resource),
-          lowerName_(resource),
           executor_(executor),
           writeSignal_(writeSignal),
           streamSignal_(streamSignal) {}
@@ -101,17 +97,10 @@ public:
         }
     }
 
-    // RFC 9113 §8.1 trailers are queued before the stream ends and HPACK encoded into
-    // a header block flushed at end() as a trailing HEADERS frame carrying END_STREAM,
-    // in place of the empty END_STREAM DATA frame. Mirrors the retired coroutine sink.
+    // RFC 9113 §8.1 trailers are queued in the HTTP core before the stream ends.
     void addTrailer(std::string_view name, std::string_view value) {
-        state_.ensureTrailerAllowed(name, value);
-        lowerName_.clear();
-        lowerName_.reserve(name.size());
-        for (const char ch : name) {
-            lowerName_.push_back(static_cast<char>(httpAsciiToLower(static_cast<unsigned char>(ch))));
-        }
-        HpackEncoder::encodeHeader(trailers_, lowerName_, value);
+        state_.ensureTrailerOpen();
+        connection_.addResponseTrailer(streamId_, name, value);
     }
 
     Task<void> end() {
@@ -119,15 +108,12 @@ public:
             co_return;
         }
         co_await commit();
-        if (state_.bodyForbidden()) {
+        if (state_.bodySuppressed()) {
             state_.markEnded();
             co_return;
         }
-        if (trailers_.empty()) {
+        if (!connection_.submitResponseTrailers(streamId_)) {
             (void)connection_.submitData(streamId_, {}, /*endStream=*/true);
-        } else {
-            connection_.submitTrailers(
-                streamId_, std::string_view(trailers_.data(), trailers_.size()));
         }
         wakeWriter();
         state_.markEnded();
@@ -138,15 +124,13 @@ private:
         if (state_.committed()) {
             co_return;
         }
-        auto streamHead = prepareResponseStreamHead(
+        const auto bodyPlan = connection_.submitStreamingResponseHead(
+            streamId_,
             state_.streamingHead(),
-            responseStreamKindForRouteMode(mode_),
-            ResponseStreamFraming::kHttp2DataFrames);
-        state_.markCommitted(streamHead.bodyForbidden());
-        connection_.submitStreamingResponseHead(
-            streamId_, streamHead.response(), streamHead.bodyForbidden());
+            responseStreamKindForRouteMode(mode_));
+        state_.markCommitted(bodyPlan.bodySuppressed());
         wakeWriter();
-        if (state_.bodyForbidden()) {
+        if (state_.bodySuppressed()) {
             state_.markEnded();
         }
     }
@@ -179,8 +163,6 @@ private:
     ResponseBodyMode mode_;
     ResponseStreamState state_;
     std::pmr::string scratch_;
-    std::pmr::string trailers_;   // HPACK-encoded trailer block, flushed at end()
-    std::pmr::string lowerName_;
     Executor executor_;
     asio::steady_timer* writeSignal_{nullptr};
     Http2SansIoStreamSignal* streamSignal_{nullptr};

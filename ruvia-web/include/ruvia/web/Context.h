@@ -18,9 +18,10 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/Cookies.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/RouteModes.h"
@@ -229,10 +230,6 @@ public:
             return std::move(*parsed);
         }
 
-        [[nodiscard]] bool isSecure() const noexcept {
-            return secure_;
-        }
-
     private:
         friend class ContextRequest;
 
@@ -247,7 +244,6 @@ public:
         std::pmr::string path_;
         std::pmr::vector<Header> headers_;
         std::pmr::string body_;
-        bool secure_{false};
     };
 
     struct RequestFormField final {
@@ -1100,6 +1096,7 @@ private:
     friend const RequestNameValueList& detail::requestParamFields(const ContextRequest& request);
     friend std::string_view routePath(const Context& context) noexcept;
     friend std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context);
+    friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
     friend void detail::setValidatedBody(Context& context, ValidationTarget target, T&& body);
@@ -1434,136 +1431,7 @@ public:
         std::uint16_t statusCode,
         std::initializer_list<HttpHeaderView> headers) const = delete;
 
-    // Streaming body: the response body is pulled from a caller-supplied HttpBodyStream (a cache
-    // store, an async generator, a proxied upstream, ...) and streamed to the client -- HTTP/1.1
-    // chunked, HTTP/2 DATA -- from a normal route. The stream is moved in and owned by the response.
-    [[nodiscard]] HttpResponse body(
-        HttpBodyStream stream,
-        std::uint16_t statusCode = 200,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse body(
-        HttpBodyStream stream,
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    [[nodiscard]] HttpResponse body(HttpBodyStream stream, ResponseInit init) const;
-
     [[nodiscard]] HttpResponse body(std::span<const std::byte> body, ResponseInit init) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::string_view body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::string_view body,
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::string_view body,
-        std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(std::string_view body, ResponseInit init) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::nullptr_t,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::nullptr_t,
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::nullptr_t,
-        std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(std::nullptr_t, ResponseInit init) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::pmr::string& body,
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::pmr::string& body,
-        std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(std::pmr::string& body, ResponseInit init) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::span<const std::byte> body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::span<const std::byte> body,
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::span<const std::byte> body,
-        std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(std::span<const std::byte> body, ResponseInit init) const;
-
-    template <std::size_t N>
-    [[nodiscard]] HttpResponse newResponse(
-        const char (&body)[N],
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
-
-    template <std::size_t N>
-    [[nodiscard]] HttpResponse newResponse(
-        const char (&body)[N],
-        std::uint16_t statusCode,
-        std::span<const HttpHeaderView> headers) const;
-
-    template <std::size_t N>
-    [[nodiscard]] HttpResponse newResponse(
-        const char (&body)[N],
-        std::uint16_t statusCode,
-        std::initializer_list<HttpHeaderView> headers) const = delete;
-
-    template <std::size_t N>
-    [[nodiscard]] HttpResponse newResponse(const char (&body)[N], ResponseInit init) const;
-
-    [[nodiscard]] HttpResponse newResponse(
-        const std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::pmr::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(
-        const std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
-
-    [[nodiscard]] HttpResponse newResponse(
-        std::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
 
     [[nodiscard]] HttpResponse body(
         const std::pmr::string& body,
@@ -1915,6 +1783,8 @@ private:
 
     RequestMemory& memory_;
     const HttpRequest& request_;
+    std::string_view remoteAddress_;
+    std::string_view clientCertificateSubject_;
     std::string_view routePath_;
     HttpMethod routeMethod_{HttpMethod::kUnknown};
     const std::string_view* paramNames_{nullptr};
@@ -1952,6 +1822,7 @@ private:
     detail::ContextValueStore* values_{nullptr};
     HttpResponse* response_{nullptr};
     std::exception_ptr error_;
+    bool secure_ : 1 {false};
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     bool sessionRegenerate_ : 1 {false};
@@ -1983,7 +1854,7 @@ inline std::pmr::string ContextRequest::url() const {
         return result;
     }
 
-    result.append(raw().isSecure() ? "https://" : "http://");
+    result.append(context_->secure_ ? "https://" : "http://");
     result.append(host->data(), host->size());
     result.append(requestTarget.data(), requestTarget.size());
     return result;

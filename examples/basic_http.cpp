@@ -8,7 +8,7 @@
 
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
@@ -36,7 +36,7 @@ RUVIA_MODEL(UserResponse,
 );
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
-    return ruvia::makeErrorResponse(c, error, true, nullptr);
+    co_return c.error(error.status(), error.code(), error.message(), error.statusText());
 }
 
 std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
@@ -98,7 +98,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> inputs(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("remote=");
-        body.append(c.req().raw().remoteAddress());
+        body.append(getConnInfo(c).remote().address());
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");

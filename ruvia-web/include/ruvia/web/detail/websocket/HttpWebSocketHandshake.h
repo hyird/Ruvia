@@ -2,6 +2,7 @@
 
 #include <array>
 #include <asio/write.hpp>
+#include <span>
 #include <string_view>
 
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
@@ -23,28 +24,15 @@ Task<bool> writeWebSocketHandshake(
     const auto handshake = makeHttpWebSocketServerHandshake(request, flags, supportedSubprotocols);
     permessageDeflate = handshake.permessageDeflate;
 
-    // Default-constructed buffers are empty (0 bytes), so the unused tail
-    // entries write nothing and the present headers keep their order.
     std::array<asio::const_buffer, 10> buffers;
     std::size_t count = 0;
-    buffers[count++] = asio::buffer(kHttpWebSocketSwitchingProtocolsPrefix);
-    buffers[count++] = asio::buffer(handshake.accept);
-    buffers[count++] = asio::buffer(kHttpCrlf);
-    if (!handshake.subprotocol.empty()) {
-        buffers[count++] = asio::buffer(kHttpWebSocketSubprotocolHeaderPrefix);
-        buffers[count++] = asio::buffer(handshake.subprotocol);
-        buffers[count++] = asio::buffer(kHttpCrlf);
-    }
-    if (!handshake.extensions.empty()) {
-        buffers[count++] = asio::buffer(kHttpWebSocketExtensionsHeaderPrefix);
-        buffers[count++] = asio::buffer(handshake.extensions);
-        buffers[count++] = asio::buffer(kHttpCrlf);
-    }
-    buffers[count++] = asio::buffer(kHttpCrlf);
-    (void)count;
+    handshake.forEachResponsePart([&buffers, &count](std::string_view part) {
+        buffers[count++] = asio::buffer(part);
+    });
+    const auto activeBuffers = std::span<const asio::const_buffer>(buffers.data(), count);
 
-    const auto ec = co_await asyncError([&stream, &buffers](auto handler) mutable {
-        asio::async_write(stream, buffers, std::move(handler));
+    const auto ec = co_await asyncError([&stream, activeBuffers](auto handler) mutable {
+        asio::async_write(stream, activeBuffers, std::move(handler));
     });
     co_return !ec;
 }

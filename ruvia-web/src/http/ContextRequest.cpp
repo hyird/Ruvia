@@ -10,7 +10,7 @@
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Parser.h"
 
@@ -23,6 +23,13 @@
 #include <utility>
 
 namespace ruvia {
+
+ConnInfo getConnInfo(const Context& context) noexcept {
+    return ConnInfo(
+        context.remoteAddress_,
+        context.clientCertificateSubject_,
+        context.secure_);
+}
 
 namespace detail {
 
@@ -250,61 +257,6 @@ void compactParsedBodyFields(
     fields.erase(fields.begin() + write, fields.end());
 }
 
-[[nodiscard]] std::pmr::vector<MultipartPart> parseMultipartPartsFromBody(
-    std::string_view requestBody,
-    std::string_view boundaryValue,
-    std::pmr::memory_resource* resource) {
-    std::pmr::vector<MultipartPart> parts(resource);
-    auto cursor = detail::httpFindMultipartBoundaryLine(requestBody, boundaryValue);
-    if (cursor == std::string_view::npos) {
-        throw std::invalid_argument("invalid multipart body");
-    }
-
-    cursor += detail::httpMultipartBoundaryLineSize(boundaryValue);
-    for (;;) {
-        if (requestBody.substr(cursor, 2) == "--") {
-            break;
-        }
-        if (requestBody.substr(cursor, 2) != "\r\n") {
-            throw std::invalid_argument("invalid multipart body");
-        }
-        cursor += 2;
-
-        const auto headersEnd = requestBody.find("\r\n\r\n", cursor);
-        if (headersEnd == std::string_view::npos) {
-            throw std::invalid_argument("invalid multipart body");
-        }
-
-        const auto headerBlock = requestBody.substr(cursor, headersEnd - cursor);
-        detail::HttpMultipartPartHeaders partHeaders;
-        switch (detail::httpParseMultipartPartHeaders(headerBlock, partHeaders)) {
-            case detail::HttpMultipartPartHeaderStatus::kOk:
-                break;
-            case detail::HttpMultipartPartHeaderStatus::kInvalidDisposition:
-                throw std::invalid_argument("invalid multipart content disposition");
-            case detail::HttpMultipartPartHeaderStatus::kMissingName:
-                throw std::invalid_argument("invalid multipart field name");
-        }
-
-        cursor = headersEnd + 4;
-        const auto nextDelimiterPrefix = detail::httpFindMultipartBoundaryPrefix(requestBody, boundaryValue, cursor);
-        if (nextDelimiterPrefix == std::string_view::npos) {
-            throw std::invalid_argument("invalid multipart body");
-        }
-
-        parts.push_back(detail::MultipartPartAccess::make(
-            partHeaders.name,
-            partHeaders.filename,
-            partHeaders.contentType,
-            requestBody.substr(cursor, nextDelimiterPrefix - cursor),
-            resource));
-
-        cursor = nextDelimiterPrefix + detail::httpMultipartBoundaryPrefixSize(boundaryValue);
-    }
-
-    return parts;
-}
-
 [[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
     std::string_view requestBody,
     std::pmr::memory_resource* resource,
@@ -350,7 +302,7 @@ void compactParsedBodyFields(
     std::pmr::memory_resource* resource,
     ContextRequest::ParseBodyOptions options,
     ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) {
-    auto parts = parseMultipartPartsFromBody(requestBody, boundaryValue, resource);
+    auto parts = parseMultipartBody(requestBody, boundaryValue, resource);
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(parts.size());
     for (const auto& part : parts) {
@@ -771,7 +723,6 @@ Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
     }
     const auto requestBody = co_await text();
     clone.body_.assign(requestBody.data(), requestBody.size());
-    clone.secure_ = raw().isSecure();
     co_return std::move(clone);
 }
 
@@ -784,7 +735,7 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundaryValue = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return parseMultipartPartsFromBody(requestBody, boundaryValue, resource());
+    co_return parseMultipartBody(requestBody, boundaryValue, resource());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(

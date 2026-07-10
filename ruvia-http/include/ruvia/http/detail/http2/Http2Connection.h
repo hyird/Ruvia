@@ -37,6 +37,8 @@
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/http2/Http2StreamTable.h"
+#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
 
@@ -115,7 +117,7 @@ struct Http2PendingSend final {
     bool endStream{false};
     // A trailer HEADERS block queued behind a window-blocked body: it must go out AFTER
     // the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place of it. Set
-    // by submitTrailers when the stream still has a blocked remainder; emitted by
+    // by submitResponseTrailers when the stream still has a blocked remainder; emitted by
     // markSendWindowOpened once the body fully drains.
     std::pmr::string trailerBlock;
 };
@@ -151,13 +153,15 @@ public:
     [[nodiscard]] bool wantsWrite() const noexcept { return outOffset_ < outBuffer_.size(); }
 
     // Submit a response for `streamId`. Head first, then data chunks, then end.
-    void submitResponseHead(std::uint32_t streamId, const HttpResponse& response, bool bodyForbidden);
+    [[nodiscard]] HttpBufferedResponseWritePlan submitResponseHead(
+        std::uint32_t streamId, const HttpResponse& response);
     // Submit a STREAMING response head: emit the HEADERS block with NO auto
     // Content-Length (the body length is unknown), leaving the stream open for
-    // subsequent submitData chunks unless bodyForbidden (then END_STREAM on the head).
+    // subsequent submitData chunks unless the method/status suppresses a body (then
+    // END_STREAM is carried by the head).
     // The owner then streams the body with submitData(..., endStream) at the end.
-    void submitStreamingResponseHead(
-        std::uint32_t streamId, const HttpResponse& head, bool bodyForbidden);
+    [[nodiscard]] HttpResponseBodyPlan submitStreamingResponseHead(
+        std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind);
     [[nodiscard]] Http2SubmitResult submitData(std::uint32_t streamId, std::string_view chunk, bool endStream);
     // RFC 8441 Extended CONNECT: emit the WebSocket handshake response HEADERS (200 +
     // optional sec-websocket-protocol, NO END_STREAM) so the stream stays open as the
@@ -165,12 +169,14 @@ public:
     // coroutine session's writeHttp2WebSocketHandshake byte-for-byte.
     void submitWebSocketHandshake(
         std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
-    // Emit an HPACK-encoded trailer block as the stream's final HEADERS (END_STREAM),
-    // in place of the empty END_STREAM DATA frame (RFC 9113 §8.1). If the stream still
-    // has a window-blocked DATA remainder, the trailer is queued behind it and emitted
-    // once that DATA drains (so it never jumps ahead of the body); otherwise it goes out
-    // immediately.
-    void submitTrailers(std::uint32_t streamId, std::string_view headerBlock);
+    // Queue one semantic response trailer. The protocol core validates the field,
+    // lowercases its name for HTTP/2, and owns HPACK encoding/storage.
+    void addResponseTrailer(
+        std::uint32_t streamId, std::string_view name, std::string_view value);
+    // Emit queued response trailers as the stream's final HEADERS (END_STREAM), in
+    // place of an empty END_STREAM DATA frame (RFC 9113 §8.1). If DATA is window-
+    // blocked, the trailer block stays behind it. Returns false when no trailers exist.
+    [[nodiscard]] bool submitResponseTrailers(std::uint32_t streamId);
     void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
 
     // After WINDOW_UPDATE/SETTINGS opened windows, the owner calls this so blocked

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/JsonUtils.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 #include "ruvia/web/detail/model/Traits.h"
 
 #include <charconv>

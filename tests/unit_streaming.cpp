@@ -265,20 +265,20 @@ RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
     RUVIA_CHECK(bodyAfterEnd);
     bool trailerAfterEnd = false;
     try {
-        open.ensureTrailerAllowed("X-Trailer", "v");
+        open.ensureTrailerOpen();
     } catch (const std::logic_error&) {
         trailerAfterEnd = true;
     }
     RUVIA_CHECK(trailerAfterEnd);
 
-    // A body-forbidden status (e.g. 204/304) still rejects a body chunk.
-    ResponseStreamState forbidden;
-    forbidden.markCommitted(true);
-    bool bodyForbidden = false;
+    // A suppressed body (e.g. HEAD, 204 or 304) still rejects a body chunk.
+    ResponseStreamState suppressed;
+    suppressed.markCommitted(true);
+    bool bodyRejected = false;
     try {
-        forbidden.ensureBodyAllowed();
+        suppressed.ensureBodyAllowed();
     } catch (const std::logic_error&) {
-        bodyForbidden = true;
+        bodyRejected = true;
     }
-    RUVIA_CHECK(bodyForbidden);
+    RUVIA_CHECK(bodyRejected);
 }

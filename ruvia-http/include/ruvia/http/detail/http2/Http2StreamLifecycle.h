@@ -24,6 +24,10 @@ public:
         return peerEndStream_;
     }
 
+    [[nodiscard]] bool localEndStream() const noexcept {
+        return localEndStream_;
+    }
+
     [[nodiscard]] bool queued() const noexcept {
         return queued_;
     }
@@ -46,12 +50,17 @@ public:
     void markClosed(Http2StreamCloseSource source) noexcept {
         reset_ = true;
         peerEndStream_ = true;
+        localEndStream_ = true;
         bodyEnded_ = true;
         closeSource_ = source;
     }
 
     void markPeerEndStream() noexcept {
         peerEndStream_ = true;
+    }
+
+    void markLocalEndStream() noexcept {
+        localEndStream_ = true;
     }
 
     void markBodyEnded() noexcept {
@@ -85,6 +94,7 @@ public:
 
 private:
     bool peerEndStream_ : 1 {false};
+    bool localEndStream_ : 1 {false};
     bool bodyEnded_ : 1 {false};
     bool queued_ : 1 {false};
     bool dispatchStarted_ : 1 {false};

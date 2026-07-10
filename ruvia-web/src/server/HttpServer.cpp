@@ -12,7 +12,7 @@
 #include "ruvia/web/detail/server/HttpServerBufferedRoute.h"
 #include "ruvia/web/detail/server/HttpServerSessionUtils.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
@@ -23,7 +23,7 @@ using TcpSocket = asio::ip::tcp::socket;
 
 // Extracts the verified peer (client) certificate subject DN into `out`, or
 // leaves it empty when no client certificate was presented. Used to surface
-// mutual-TLS identity to handlers via HttpRequest::clientCertificate().
+// mutual-TLS identity to handlers via getConnInfo(context).
 inline void extractTlsClientCertificate(SSL* ssl, std::pmr::string& out) {
     out.clear();
     X509* certificate = SSL_get_peer_certificate(ssl);

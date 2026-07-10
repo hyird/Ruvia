@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <string_view>
 #include <system_error>
@@ -42,15 +41,12 @@ public:
         co_return true;
     }
 
-    [[nodiscard]] Task<std::error_code> writeFrame(
-        std::string_view header,
-        std::string_view payload,
+    [[nodiscard]] Task<std::error_code> writeBytes(
+        std::string_view bytes,
         bool /*endStream*/) {
-        const std::array<asio::const_buffer, 2> buffers{
-            asio::buffer(header.data(), header.size()),
-            asio::buffer(payload.data(), payload.size())};
-        co_return co_await asyncError([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, std::move(handler));
+        const auto buffer = asio::buffer(bytes.data(), bytes.size());
+        co_return co_await asyncError([this, buffer](auto handler) mutable {
+            asio::async_write(stream_, buffer, std::move(handler));
         });
     }
 

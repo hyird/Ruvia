@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
@@ -39,19 +39,16 @@ public:
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        bool closeConnectionOnError,
         ContextServices services) const = 0;
     virtual Task<HttpResponse> handleError(
         const HttpRequest& request,
         RequestMemory& memory,
         HttpErrorInfo error,
-        bool closeConnection,
         ContextServices services) const = 0;
     virtual Task<HttpResponse> handleException(
         const HttpRequest& request,
         RequestMemory& memory,
         std::exception_ptr exception,
-        bool closeConnection,
         ContextServices services) const = 0;
     virtual Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,

@@ -110,10 +110,10 @@ inline Task<void> completeFailedHttpBodyRoute(
         parsed.request,
         requestMemory,
         exception,
-        true,
         exceptionServices);
     materializeResponseBody(response);
     keepAlive = false;
+    http1MarkConnectionClose(response);
     scannerEntry.touch();
 }
 

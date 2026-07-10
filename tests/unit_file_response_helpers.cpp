@@ -9,17 +9,20 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpByteRange.h"
+#include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/http/detail/HttpEntityTag.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
 
 namespace {
 
-using ruvia::detail::httpGuessContentType;
+using ruvia::detail::guessStaticFileContentType;
 using ruvia::detail::HttpRangeOutcome;
 using ruvia::detail::httpParseByteRange;
-using ruvia::detail::httpParseUnsigned;
+using ruvia::detail::httpParseByteRangeUnsigned;
 
 std::string_view guess(const char* name) {
-    return httpGuessContentType(std::filesystem::path(name));
+    return guessStaticFileContentType(std::filesystem::path(name));
 }
 
 }  // namespace
@@ -52,20 +55,20 @@ RUVIA_TEST(content_type_guessing) {
 }
 
 RUVIA_TEST(parse_unsigned_accepts_and_rejects) {
-    RUVIA_CHECK_EQ(httpParseUnsigned("0").value(), std::uint64_t{0});
-    RUVIA_CHECK_EQ(httpParseUnsigned("42").value(), std::uint64_t{42});
-    RUVIA_CHECK_EQ(httpParseUnsigned("007").value(), std::uint64_t{7});  // leading zeros allowed
-    RUVIA_CHECK_EQ(httpParseUnsigned("18446744073709551615").value(),
+    RUVIA_CHECK_EQ(httpParseByteRangeUnsigned("0").value(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(httpParseByteRangeUnsigned("42").value(), std::uint64_t{42});
+    RUVIA_CHECK_EQ(httpParseByteRangeUnsigned("007").value(), std::uint64_t{7});
+    RUVIA_CHECK_EQ(httpParseByteRangeUnsigned("18446744073709551615").value(),
                    std::numeric_limits<std::uint64_t>::max());
 
     // Rejections return nullopt: empty, overflow (not wrapped), a sign, leading
     // whitespace, and trailing non-digits.
-    RUVIA_CHECK(!httpParseUnsigned("").has_value());
-    RUVIA_CHECK(!httpParseUnsigned("18446744073709551616").has_value());  // > UINT64_MAX
-    RUVIA_CHECK(!httpParseUnsigned("+5").has_value());
-    RUVIA_CHECK(!httpParseUnsigned("-5").has_value());
-    RUVIA_CHECK(!httpParseUnsigned(" 5").has_value());
-    RUVIA_CHECK(!httpParseUnsigned("5x").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned("").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned("18446744073709551616").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned("+5").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned("-5").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned(" 5").has_value());
+    RUVIA_CHECK(!httpParseByteRangeUnsigned("5x").has_value());
 }
 
 RUVIA_TEST(byte_range_bounded_and_open_ended) {
@@ -244,28 +247,28 @@ RUVIA_TEST(http_trim_weak_etag_prefix) {
 }
 
 RUVIA_TEST(http_extension_equals_is_case_insensitive) {
-    using ruvia::detail::httpExtensionEquals;
-    RUVIA_CHECK(httpExtensionEquals(std::string_view("html"), "html"));
-    RUVIA_CHECK(httpExtensionEquals(std::string_view("HTML"), "html"));  // extension case-folded
-    RUVIA_CHECK(httpExtensionEquals(std::string_view("Json"), "json"));
-    RUVIA_CHECK(httpExtensionEquals(std::string_view(""), ""));
-    RUVIA_CHECK(!httpExtensionEquals(std::string_view("htm"), "html"));   // length differs
-    RUVIA_CHECK(!httpExtensionEquals(std::string_view("jpeg"), "json"));  // content differs
+    using ruvia::detail::staticFileExtensionEquals;
+    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("html"), "html"));
+    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("HTML"), "html"));
+    RUVIA_CHECK(staticFileExtensionEquals(std::string_view("Json"), "json"));
+    RUVIA_CHECK(staticFileExtensionEquals(std::string_view(""), ""));
+    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("htm"), "html"));
+    RUVIA_CHECK(!staticFileExtensionEquals(std::string_view("jpeg"), "json"));
 }
 
 RUVIA_TEST(http_append_unsigned_decimal) {
-    using ruvia::detail::httpAppendUnsigned;
+    using ruvia::detail::appendStaticFileUnsigned;
     std::pmr::string output(std::pmr::get_default_resource());
-    httpAppendUnsigned(output, 0);
+    appendStaticFileUnsigned(output, 0);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("0"));
     output.clear();
-    httpAppendUnsigned(output, 12345);
+    appendStaticFileUnsigned(output, 12345);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("12345"));
     // Appends onto existing content rather than replacing it.
-    httpAppendUnsigned(output, 67);
+    appendStaticFileUnsigned(output, 67);
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("1234567"));
     // The 64-bit maximum.
     output.clear();
-    httpAppendUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
+    appendStaticFileUnsigned(output, (std::numeric_limits<std::uint64_t>::max)());
     RUVIA_CHECK_EQ(std::string_view(output), std::string_view("18446744073709551615"));
 }

@@ -9,6 +9,11 @@ execute_process(
 if(NOT _install_result EQUAL 0)
     message(FATAL_ERROR "Ruvia package install failed: ${_install_result}")
 endif()
+string(CONCAT _removed_response_stream_header
+    "${_install_prefix}/include/ruvia/http/HttpBody" "Stream.h")
+if(EXISTS "${_removed_response_stream_header}")
+    message(FATAL_ERROR "removed dynamic response-body stream header was installed")
+endif()
 
 set(_configure_command
     "@CMAKE_COMMAND@"

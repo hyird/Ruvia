@@ -10,7 +10,7 @@
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -53,7 +53,6 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
             parsed.request,
             requestMemory,
             HttpErrorInfo(400, {}, "invalid http2 upgrade"),
-            true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return Http2UpgradeRouteResult::kWriteBufferedResponse;
@@ -63,7 +62,6 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
             parsed.request,
             requestMemory,
             HttpErrorInfo(413, {}, "request body is too large"),
-            true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return Http2UpgradeRouteResult::kWriteBufferedResponse;
@@ -104,7 +102,6 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
             parsed.request,
             requestMemory,
             upgradeBodyException,
-            true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return Http2UpgradeRouteResult::kWriteBufferedResponse;
@@ -121,7 +118,6 @@ Task<Http2UpgradeRouteResult> dispatchHttp2UpgradeRoute(
                 parsed.status == HttpParseStatus::kError
                     ? httpParseErrorMessage(parsed.error)
                     : "incomplete http2 upgrade body"),
-            true,
             baseRouteServices);
         markConnectionCloseAfterWrite(response, closeAfterWrite);
         co_return Http2UpgradeRouteResult::kWriteBufferedResponse;

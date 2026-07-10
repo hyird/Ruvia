@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/HttpServerOptions.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -17,6 +18,6 @@ bool compressResponseBodyIfAccepted(
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
     std::pmr::string& compressionScratch,
-    bool skipBody = false);
+    const HttpResponseBodyPlan& bodyPlan);
 
 }  // namespace ruvia::detail

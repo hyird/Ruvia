@@ -2,6 +2,8 @@
 
 #include "ruvia/web/ErrorHandlers.h"
 
+#include <string_view>
+
 namespace ruvia {
 
 class BodyReader;
@@ -63,6 +65,18 @@ public:
         return responseStream_;
     }
 
+    [[nodiscard]] std::string_view remoteAddress() const noexcept {
+        return remoteAddress_;
+    }
+
+    [[nodiscard]] std::string_view clientCertificateSubject() const noexcept {
+        return clientCertificateSubject_;
+    }
+
+    [[nodiscard]] bool secure() const noexcept {
+        return secure_;
+    }
+
     [[nodiscard]] ContextServices withBodyReader(BodyReader& value) const noexcept {
         auto services = *this;
         services.bodyReader_ = &value;
@@ -103,6 +117,19 @@ public:
         return services;
     }
 
+    // Views borrow connection-owned storage and remain valid for every Context
+    // created while that connection is dispatched.
+    [[nodiscard]] ContextServices withTransport(
+        std::string_view remoteAddress,
+        std::string_view clientCertificateSubject,
+        bool secure) const noexcept {
+        auto services = *this;
+        services.remoteAddress_ = remoteAddress;
+        services.clientCertificateSubject_ = clientCertificateSubject;
+        services.secure_ = secure;
+        return services;
+    }
+
 private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
@@ -114,6 +141,9 @@ private:
     RequestBodyLoader* bodyLoader_{nullptr};
     WebSocket* webSocket_{nullptr};
     ResponseStreamWriter* responseStream_{nullptr};
+    std::string_view remoteAddress_;
+    std::string_view clientCertificateSubject_;
+    bool secure_{false};
 };
 
 }  // namespace detail

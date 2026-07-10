@@ -1,8 +1,9 @@
 #include "ruvia/web/detail/StaticFilesInternal.h"
 
-#include "ruvia/http/detail/FileResponseHelpers.h"
-#include "ruvia/http/detail/FileResponseResource.h"
+#include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -167,7 +168,7 @@ std::pmr::string contentTypeFor(
         return std::pmr::string(mime->contentType, resource);
     }
 
-    const auto guessed = detail::httpGuessContentType(path);
+    const auto guessed = detail::guessStaticFileContentType(path);
     if (guessed != std::string_view("application/octet-stream") || options.defaultContentType.empty()) {
         return std::pmr::string(guessed, resource);
     }
@@ -175,7 +176,7 @@ std::pmr::string contentTypeFor(
 }
 
 [[nodiscard]] std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter> makeStaticRootState() {
-    auto* const resource = detail::fileResponseResource();
+    auto* const resource = detail::processResource();
     return std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter>(
         detail::constructPmrObject<detail::StaticRootState>(resource, resource));
 }
@@ -297,7 +298,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         state.directories.push_back({});
     }
 
-    auto* const upstream = detail::fileResponseResource();
+    auto* const upstream = detail::processResource();
     for (std::filesystem::recursive_directory_iterator iter(canonicalRoot, ec), end; !ec && iter != end; iter.increment(ec)) {
         const auto& filePath = iter->path();
         const auto status = iter->symlink_status(ec);
@@ -324,10 +325,11 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         if (!std::filesystem::is_regular_file(status)) {
             continue;
         }
-        const auto extension = detail::httpLowerFileExtension(filePath, upstream);
+        const auto extension = detail::lowerStaticFileExtension(filePath, upstream);
         bool typeAllowed = fileTypeAllowed(extension, options);
         if (!typeAllowed && isPrecompressedSidecarExtension(extension)) {
-            typeAllowed = fileTypeAllowed(detail::httpLowerFileExtension(filePath.stem(), upstream), options);
+            typeAllowed = fileTypeAllowed(
+                detail::lowerStaticFileExtension(filePath.stem(), upstream), options);
         }
         if (!typeAllowed) {
             continue;
@@ -350,13 +352,13 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
         entry.size = static_cast<std::uint64_t>(size);
         entry.modified = modified;
         if (enableValidators) {
-            entry.etag = detail::httpMakeFileEtag(
+            entry.etag = detail::makeStaticFileEtag(
                 upstream,
                 static_cast<std::uint64_t>(size),
                 modified);
             entry.lastModified = detail::httpFormatDate(
                 upstream,
-                detail::httpFileTimeToTimeT(modified));
+                detail::staticFileTimeToTimeT(modified));
         }
         state.entries.push_back(std::move(entry));
     }
@@ -370,7 +372,7 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
 StaticRoot::~StaticRoot() = default;
 
 void detail::StaticRootStateDeleter::operator()(StaticRootState* state) const noexcept {
-    destroyPmrObject(state, detail::fileResponseResource());
+    destroyPmrObject(state, detail::processResource());
 }
 
 std::filesystem::path StaticRoot::path() const {

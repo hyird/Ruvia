@@ -1,16 +1,20 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/HttpBodyFramer.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/http/HttpProtocolError.h"
 
 namespace {
 
-using ruvia::HttpError;
+using ruvia::HttpProtocolError;
 using ruvia::detail::ChunkDelimiterStatus;
+using ruvia::detail::HttpChunkDecodeEventKind;
 using ruvia::detail::HttpChunkDecoder;
+using ruvia::detail::HttpChunkedBodyDecoder;
 
 bool sizeLineThrows(HttpChunkDecoder& decoder, std::string_view line) {
     std::size_t size = 0;
@@ -107,8 +111,81 @@ RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
         for (int i = 0; i < 100; ++i) {
             (void)decoder.parseSizeLine("0", size);  // each consumes framing bytes
         }
-    } catch (const HttpError&) {
+    } catch (const HttpProtocolError&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
+    HttpChunkedBodyDecoder decoder(1024);
+    const std::string_view wire =
+        "5\r\nhello\r\n"
+        "6;ext=yes\r\n world\r\n"
+        "0\r\nX-Trace: abc\r\n\r\nNEXT";
+
+    std::size_t consumed = 0;
+    std::string body;
+    for (;;) {
+        const auto event = decoder.decode(wire.substr(consumed));
+        body.append(event.body);
+        consumed += event.consumedBytes;
+        if (event.kind == HttpChunkDecodeEventKind::kComplete) {
+            break;
+        }
+        RUVIA_CHECK(event.kind == HttpChunkDecodeEventKind::kBody);
+    }
+
+    RUVIA_CHECK_EQ(body, std::string("hello world"));
+    RUVIA_CHECK_EQ(wire.substr(consumed), std::string_view("NEXT"));
+}
+
+RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
+    HttpChunkedBodyDecoder decoder(1024);
+    const std::string wire = "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
+    std::string pending;
+    std::string body;
+    bool complete = false;
+
+    for (const char byte : wire) {
+        pending.push_back(byte);
+        for (;;) {
+            const auto event = decoder.decode(pending);
+            body.append(event.body);
+            if (event.consumedBytes != 0) {
+                pending.erase(0, event.consumedBytes);
+            }
+            if (event.kind == HttpChunkDecodeEventKind::kComplete) {
+                complete = true;
+                break;
+            }
+            if (event.kind == HttpChunkDecodeEventKind::kNeedMore) {
+                break;
+            }
+        }
+    }
+
+    RUVIA_CHECK(complete);
+    RUVIA_CHECK_EQ(body, std::string("abcde"));
+    RUVIA_CHECK(pending.empty());
+}
+
+RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
+    bool badDelimiter = false;
+    try {
+        HttpChunkedBodyDecoder decoder(1024);
+        (void)decoder.decode("1\r\nxXY");
+    } catch (const std::invalid_argument&) {
+        badDelimiter = true;
+    }
+    RUVIA_CHECK(badDelimiter);
+
+    bool badTrailer = false;
+    try {
+        HttpChunkedBodyDecoder decoder(1024);
+        (void)decoder.decode("0\r\nContent-Length: 1\r\n\r\n");
+    } catch (const std::invalid_argument&) {
+        badTrailer = true;
+    }
+    RUVIA_CHECK(badTrailer);
 }

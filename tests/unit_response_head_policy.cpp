@@ -1,9 +1,13 @@
 #include "test_harness.h"
 
 #include <cstdint>
+#include <memory_resource>
 
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpTypes.h"
 
 namespace {
 
@@ -12,6 +16,35 @@ using ruvia::detail::responseHasForbiddenBodyFramingHeader;
 using ruvia::detail::responseWritePolicy;
 
 }  // namespace
+
+RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::HttpResponse response(&resource);
+    response.status(200);
+    response.setBodyCopy("hello");
+
+    const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpMethod::kGet, response);
+    RUVIA_CHECK(getPlan.statusAllowsBody());
+    RUVIA_CHECK(!getPlan.bodySuppressed());
+    RUVIA_CHECK(getPlan.sendBody());
+    RUVIA_CHECK_EQ(getPlan.contentLength(), static_cast<std::uint64_t>(5));
+
+    const auto headPlan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpMethod::kHead, response);
+    RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
+    RUVIA_CHECK(headPlan.bodySuppressed());
+    RUVIA_CHECK(!headPlan.sendBody());
+    RUVIA_CHECK_EQ(headPlan.contentLength(), static_cast<std::uint64_t>(5));
+
+    response.status(204);
+    const auto noContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpMethod::kGet, response);
+    RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
+    RUVIA_CHECK(noContentPlan.bodySuppressed());
+    RUVIA_CHECK(!noContentPlan.sendBody());
+    RUVIA_CHECK_EQ(noContentPlan.contentLength(), static_cast<std::uint64_t>(0));
+}
 
 RUVIA_TEST(response_policy_normal_status_allows_everything) {
     for (std::uint16_t status : {std::uint16_t{200}, std::uint16_t{206},

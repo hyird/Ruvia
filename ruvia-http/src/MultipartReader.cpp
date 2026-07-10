@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/MultipartReaderInternal.h"
 #include "ruvia/http/detail/MultipartParsing.h"
+#include "ruvia/http/detail/HttpCommonInternal.h"
 #include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
 
@@ -21,6 +22,60 @@ MultipartParser::MultipartParser(std::string_view boundary, std::pmr::memory_res
       currentFilename_(resource_),
       currentContentType_(resource_) {
     detail::httpAssignMultipartBoundaryMarkers(boundaryLine_, boundaryPrefix_, boundary);
+}
+
+std::pmr::vector<MultipartPart> parseMultipartBody(
+    std::string_view body,
+    std::string_view boundary,
+    std::pmr::memory_resource* resource) {
+    resource = detail::httpPmrResourceOrDefault(resource);
+    std::pmr::vector<MultipartPart> parts(resource);
+    auto cursor = detail::httpFindMultipartBoundaryLine(body, boundary);
+    if (cursor == std::string_view::npos) {
+        throw std::invalid_argument("invalid multipart body");
+    }
+
+    cursor += detail::httpMultipartBoundaryLineSize(boundary);
+    for (;;) {
+        if (body.substr(cursor, 2) == "--") {
+            break;
+        }
+        if (body.substr(cursor, 2) != "\r\n") {
+            throw std::invalid_argument("invalid multipart body");
+        }
+        cursor += 2;
+
+        const auto headersEnd = body.find("\r\n\r\n", cursor);
+        if (headersEnd == std::string_view::npos) {
+            throw std::invalid_argument("invalid multipart body");
+        }
+
+        detail::HttpMultipartPartHeaders partHeaders;
+        switch (detail::httpParseMultipartPartHeaders(
+            body.substr(cursor, headersEnd - cursor), partHeaders)) {
+            case detail::HttpMultipartPartHeaderStatus::kOk:
+                break;
+            case detail::HttpMultipartPartHeaderStatus::kInvalidDisposition:
+                throw std::invalid_argument("invalid multipart content disposition");
+            case detail::HttpMultipartPartHeaderStatus::kMissingName:
+                throw std::invalid_argument("invalid multipart field name");
+        }
+
+        cursor = headersEnd + 4;
+        const auto nextDelimiter = detail::httpFindMultipartBoundaryPrefix(body, boundary, cursor);
+        if (nextDelimiter == std::string_view::npos) {
+            throw std::invalid_argument("invalid multipart body");
+        }
+
+        parts.push_back(detail::MultipartPartAccess::make(
+            partHeaders.name,
+            partHeaders.filename,
+            partHeaders.contentType,
+            body.substr(cursor, nextDelimiter - cursor),
+            resource));
+        cursor = nextDelimiter + detail::httpMultipartBoundaryPrefixSize(boundary);
+    }
+    return parts;
 }
 
 std::string_view MultipartParser::bufferView() const noexcept {

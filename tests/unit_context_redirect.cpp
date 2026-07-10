@@ -23,6 +23,7 @@ using ruvia::HttpRequest;
 using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
+using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::responseBodyBytes;
 
@@ -37,6 +38,32 @@ using ruvia::detail::responseBodyBytes;
     auto context = ContextAccess::make(memory, request)
 
 }  // namespace
+
+RUVIA_TEST(context_connection_info_is_adapter_owned) {
+    WorkerMemory worker;
+    RequestMemory memory(worker);
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setResource(request, memory.resource());
+    HttpRequestAccess::setTarget(request, "/secure");
+    HttpRequestAccess::setPath(request, "/secure");
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Host", "example.test"},
+        HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
+
+    const auto services = ContextServices{}.withTransport(
+        "203.0.113.7",
+        "/CN=client",
+        true);
+    auto context = ContextAccess::make(memory, request, services);
+    const auto info = ruvia::getConnInfo(context);
+
+    RUVIA_CHECK_EQ(info.remote().address(), std::string_view("203.0.113.7"));
+    RUVIA_CHECK_EQ(info.clientCertificateSubject(), std::string_view("/CN=client"));
+    RUVIA_CHECK(info.secure());
+    RUVIA_CHECK(context.req().url() == std::string_view("https://example.test/secure"));
+}
 
 RUVIA_TEST(context_redirect_sets_verbatim_ascii_location_and_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
