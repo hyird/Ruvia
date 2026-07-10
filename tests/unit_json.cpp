@@ -4,9 +4,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/json/JsonNumber.h"
-#include "ruvia/http/detail/json/JsonSkip.h"
-#include "ruvia/http/detail/json/JsonString.h"
+#include "ruvia/web/detail/json/JsonNumber.h"
+#include "ruvia/web/detail/json/JsonSkip.h"
+#include "ruvia/web/detail/json/JsonString.h"
 
 namespace {
 

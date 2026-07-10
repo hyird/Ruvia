@@ -18,15 +18,15 @@
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/detail/http/HttpBodyStreamAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {
 
 // Writes a response whose body is a pull-based HttpBodyStream (BodyKind::kStream): a normal route
 // can return such a response and it is streamed here -- HTTP/1.1 with chunked framing, HTTP/1.0
-// close-delimited. This is what a reverse proxy (Context::client().proxy) returns. keep-alive / Connection
+// close-delimited. keep-alive / Connection
 // were already finalized on `response` by finalizeBufferedRouteResponse before this runs.
 template <typename Stream, typename ScannerEntry>
 Task<void> writeStreamingResponse(

@@ -2,7 +2,7 @@
 
 #ifdef RUVIA_ENABLE_MARIADB
 
-#include "ruvia/db/DbTypes.h"
+#include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 
 namespace ruvia::detail {

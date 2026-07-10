@@ -1,23 +1,22 @@
-#include <ruvia/app/App.h>
-#include <ruvia/app/AppHook.h>
-#include <ruvia/http/Controller.h>
-#include <ruvia/http/HttpClientRuntime.h>
-#include <ruvia/http/HttpServerOptions.h>
-#include <ruvia/http/MiddlewareRuntime.h>
-#include <ruvia/http/Model.h>
-#include <ruvia/http/RouteModes.h>
-#include <ruvia/http/detail/ContextValues.h>
-#include <ruvia/http/detail/ValidatedValues.h>
-#include <ruvia/http/detail/model/Parser.h>
+#include <ruvia/web/App.h>
+#include <ruvia/web/AppHook.h>
+#include <ruvia/web/Controller.h>
+#include <ruvia/web/HttpServerOptions.h>
+#include <ruvia/web/MiddlewareRuntime.h>
+#include <ruvia/web/Model.h>
+#include <ruvia/web/RouteModes.h>
+#include <ruvia/web/detail/ContextValues.h>
+#include <ruvia/web/detail/ValidatedValues.h>
+#include <ruvia/web/detail/model/Parser.h>
 
 #ifdef RUVIA_ENABLE_JWT
-#include <ruvia/auth/Jwt.h>
+#include <ruvia/web/auth/Jwt.h>
 #endif
 #ifdef RUVIA_ENABLE_MARIADB
-#include <ruvia/db/Db.h>
+#include <ruvia/web/db/Db.h>
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include <ruvia/redis/Redis.h>
+#include <ruvia/web/redis/Redis.h>
 #endif
 
 int main() {

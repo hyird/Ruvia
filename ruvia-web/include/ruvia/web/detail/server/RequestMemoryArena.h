@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <cstddef>
 #include <optional>

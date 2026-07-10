@@ -6,11 +6,11 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
-#include "ruvia/app/Task.h"
-#include "ruvia/http/Context.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>
 #include <charconv>

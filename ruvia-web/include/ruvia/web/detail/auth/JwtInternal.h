@@ -1,13 +1,13 @@
 #pragma once
 
-#include "ruvia/auth/Jwt.h"
+#include "ruvia/web/auth/Jwt.h"
 
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

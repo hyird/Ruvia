@@ -6,7 +6,8 @@ namespace ruvia::detail {
 
 struct HttpResolvedPmrResourceTag final {};
 
-// A parallel version lives in ruvia-core/include/ruvia/memory/PmrResource.h
+// The core target has an independent runtime memory-resource adapter; HTTP keeps
+// this protocol-local version so the standalone target never depends on core.
 // (pmrResourceOrDefault + ResolvedPmrResourceTag). The two are NOT redundant and
 // must NOT be merged: this http version falls back to std::pmr::get_default_
 // resource() because ruvia-http must stay core-independent, while the core

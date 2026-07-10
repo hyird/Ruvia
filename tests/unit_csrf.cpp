@@ -16,10 +16,10 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/Context.h"
-#include "ruvia/http/Csrf.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/Csrf.h"
 #include "ruvia/http/HttpCommon.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

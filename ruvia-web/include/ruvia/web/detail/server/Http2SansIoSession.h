@@ -71,12 +71,12 @@
 #include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/http/HttpServerOptions.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {
 
@@ -93,7 +93,6 @@ struct Http2SansIoUpgradeSeed final {
 struct Http2SansIoSessionEnv final {
     DbRegistry* databases{nullptr};
     RedisRegistry* redis{nullptr};
-    HttpClientRegistry* httpClients{nullptr};
     RateLimiter* rateLimiter{nullptr};
     const HttpServerOptions* options{nullptr};        // null -> default options
     ConnectionScanner::Entry* scannerEntry{nullptr};  // null -> unlinked local entry
@@ -259,7 +258,7 @@ Task<void> runHttp2SansIoSession(
         const auto policy = responseWritePolicy(response.status());
         const bool sendBody = policy.bodyAllowed() && !skipBody;
         if (responseHasStreamBody(response)) {
-            // A normal route returned a streaming body (e.g. Context::client().proxy): HEADERS
+            // A normal route returned a streaming body: HEADERS
             // without a content-length, then DATA pulled from the source; a mid-body
             // failure aborts the stream (RFC 9113 §8.1).
             connection.submitStreamingResponseHead(streamId, response, !sendBody);
@@ -404,7 +403,7 @@ Task<void> runHttp2SansIoSession(
             co_return;
         }
         const ContextServices baseServices(
-            env.databases, env.redis, env.httpClients, env.rateLimiter);
+            env.databases, env.redis, env.rateLimiter);
 
         HttpRequest request = HttpRequestAccess::make();
         if (!Http2RequestBuilder::build(*streamState, request, requestMemory.resource())) {
@@ -496,7 +495,7 @@ Task<void> runHttp2SansIoSession(
                 HttpErrorInfo(400, {}, "invalid http2 websocket request"),
                 false, baseServices);
         } else if (resolution.found() && resolution.usesResponseStream()) {
-            // Streaming route (Context::client().proxy / SSE): drive the shared streaming
+            // Streaming route (for example SSE): drive the shared streaming
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
                 connection, streamId, resolution.responseMode(), requestMemory.resource(),

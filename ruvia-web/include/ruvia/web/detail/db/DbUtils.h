@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/db/DbValueAccess.h"
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 #include <cstdint>
 #include <memory_resource>
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/HttpNumberFormat.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

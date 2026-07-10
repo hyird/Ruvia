@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <string_view>
 

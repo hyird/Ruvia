@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/ErrorHandlers.h"
+#include "ruvia/web/ErrorHandlers.h"
 
 namespace ruvia {
 
@@ -11,7 +11,6 @@ class WebSocket;
 namespace detail {
 
 class DbRegistry;
-class HttpClientRegistry;
 class RedisRegistry;
 class RateLimiter;
 class RequestBodyLoader;
@@ -23,11 +22,9 @@ public:
     constexpr ContextServices(
         DbRegistry* db,
         RedisRegistry* redis,
-        HttpClientRegistry* httpClients,
         RateLimiter* rateLimiter = nullptr) noexcept
         : db_(db),
           redis_(redis),
-          httpClients_(httpClients),
           rateLimiter_(rateLimiter) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -36,10 +33,6 @@ public:
 
     [[nodiscard]] RedisRegistry* redis() const noexcept {
         return redis_;
-    }
-
-    [[nodiscard]] HttpClientRegistry* httpClients() const noexcept {
-        return httpClients_;
     }
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
@@ -113,7 +106,6 @@ public:
 private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
-    HttpClientRegistry* httpClients_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};

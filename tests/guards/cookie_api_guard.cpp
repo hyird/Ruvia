@@ -3,7 +3,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 
 #include "ruvia/http/HttpParser.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>
 #include <chrono>

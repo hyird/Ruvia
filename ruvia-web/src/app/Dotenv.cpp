@@ -1,4 +1,4 @@
-#include "ruvia/app/Dotenv.h"
+#include "ruvia/web/Dotenv.h"
 
 #include "ruvia/web/detail/app/DotenvInternal.h"
 
@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 namespace ruvia {
 namespace {

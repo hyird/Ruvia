@@ -13,22 +13,21 @@
 #include <vector>
 
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/http/Context.h"
-#include "ruvia/http/detail/CallableRef.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteStreamResult.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/ErrorHandlers.h"
-#include "ruvia/http/Next.h"
-#include "ruvia/http/WebSocket.h"
-#include "ruvia/memory/PmrResource.h"
-#include "ruvia/router/Router.h"
+#include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/Next.h"
+#include "ruvia/web/WebSocket.h"
+#include "ruvia/core/memory/PmrResource.h"
+#include "ruvia/web/Router.h"
 
 namespace ruvia::detail {
 
 class DbRegistry;
-class HttpClientRegistry;
 class RedisRegistry;
 class RouterImpl;
 

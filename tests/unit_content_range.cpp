@@ -13,12 +13,12 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/StaticFiles.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/StaticFiles.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

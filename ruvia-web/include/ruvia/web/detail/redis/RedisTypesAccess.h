@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/redis/RedisTypes.h"
+#include "ruvia/web/redis/RedisTypes.h"
 
 #include <cstdint>
 #include <memory_resource>

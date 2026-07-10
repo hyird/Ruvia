@@ -7,9 +7,9 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/app/App.h"
-#include "ruvia/db/Db.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/db/Db.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 

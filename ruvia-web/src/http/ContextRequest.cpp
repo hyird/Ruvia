@@ -1,4 +1,4 @@
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 
 #include "ruvia/web/detail/CookieSignature.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -12,7 +12,7 @@
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/UrlEncoding.h"
-#include "ruvia/http/detail/model/Parser.h"
+#include "ruvia/web/detail/model/Parser.h"
 
 #include <algorithm>
 #include <memory_resource>

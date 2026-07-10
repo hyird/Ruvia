@@ -1,8 +1,8 @@
 #include "ruvia/web/detail/auth/JwtInternal.h"
 
 #include "ruvia/http/detail/HttpNumberFormat.h"
-#include "ruvia/http/detail/json/JsonObjectFields.h"
-#include "ruvia/http/detail/json/JsonString.h"
+#include "ruvia/web/detail/json/JsonObjectFields.h"
+#include "ruvia/web/detail/json/JsonString.h"
 
 #include <charconv>
 #include <optional>

@@ -1,12 +1,12 @@
-#include "ruvia/http/ControllerDescriptors.h"
+#include "ruvia/web/ControllerDescriptors.h"
 
 #include <memory_resource>
 #include <mutex>
 #include <utility>
 
-#include "ruvia/memory/MemoryPool.h"
-#include "ruvia/memory/PmrObject.h"
-#include "ruvia/memory/ProcessResource.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/core/memory/ProcessResource.h"
 
 namespace ruvia::detail {
 namespace {

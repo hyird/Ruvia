@@ -149,7 +149,6 @@ HttpServer::HttpServer(
     : HttpServer(
           std::move(endpoint), routes, databases,
           std::span<const RedisDefinition>{},
-          std::span<const HttpClientDefinition>{},
           std::move(options),
           rateLimiter) {}
 
@@ -158,20 +157,6 @@ HttpServer::HttpServer(
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
-    HttpServerOptions options,
-    RateLimiter* rateLimiter)
-    : HttpServer(
-          std::move(endpoint), routes, databases, redis,
-          std::span<const HttpClientDefinition>{},
-          std::move(options),
-          rateLimiter) {}
-
-HttpServer::HttpServer(
-    TcpEndpoint endpoint,
-    const RouteTable& routes,
-    std::span<const DbDefinition> databases,
-    std::span<const RedisDefinition> redis,
-    std::span<const HttpClientDefinition> httpClients,
     HttpServerOptions options,
     RateLimiter* rateLimiter)
     // One worker thread runs all I/O on this context; cross-thread access is
@@ -187,7 +172,6 @@ HttpServer::HttpServer(
       options_(validatedHttpServerOptions(std::move(options))),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
-      httpClients_(ioContext_, memory_.resource(), httpClients),
       rateLimiter_(rateLimiter),
       connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
@@ -201,14 +185,6 @@ HttpServer::HttpServer(
             static_cast<RedisRegistry*>(target)->scanDeadlines();
         });
     }
-    // Register unconditionally, NOT only when static clients exist: a server with zero
-    // static clients still creates backends at runtime via Context::client().proxy(config) /
-    // addClient, and those need scanDeadlines to enforce timeouts and to reap retired
-    // backends. An empty-registry scan is a cheap no-op. (ConnectionScanner runs
-    // whenever any worker scanner is registered.)
-    connectionScanner_.setWorkerScanner(&httpClients_, [](void* target) noexcept {
-        static_cast<HttpClientRegistry*>(target)->scanDeadlines();
-    });
 }
 
 HttpServer::~HttpServer() {
@@ -260,20 +236,6 @@ void HttpServer::join() {
 TcpEndpoint HttpServer::localEndpoint() const {
     return endpoint_;
 }
-void HttpServer::addHttpClient(std::string_view alias, HttpClientConfig config) {
-    asio::post(
-        ioContext_,
-        [this, alias = std::string(alias), config = std::move(config)]() mutable {
-            httpClients_.addClient(alias, config);
-        });
-}
-
-void HttpServer::removeHttpClient(std::string_view alias) {
-    asio::post(ioContext_, [this, alias = std::string(alias)]() {
-        httpClients_.removeClient(alias);
-    });
-}
-
 void HttpServer::configureAcceptor() {
     std::error_code ec;
 
@@ -398,7 +360,6 @@ void HttpServer::forceCloseAll() noexcept {
     connectionScanner_.closeAll();
     databases_.closeNow();
     redis_.closeNow();
-    httpClients_.closeNow();
 }
 
 void HttpServer::resetStartupState() {
@@ -449,9 +410,6 @@ Task<void> HttpServer::runWorker() {
         }
         if (!redis_.empty()) {
             co_await redis_.connect();
-        }
-        if (!httpClients_.empty()) {
-            co_await httpClients_.connect();
         }
         completeStartup();
         co_await acceptLoop();

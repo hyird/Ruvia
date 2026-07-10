@@ -2,7 +2,7 @@
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/redis/RedisTypes.h"
+#include "ruvia/web/redis/RedisTypes.h"
 #include "ruvia/web/detail/app/ConfigValidation.h"
 
 namespace ruvia::detail {

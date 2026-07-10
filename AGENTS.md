@@ -51,9 +51,17 @@ tests/
   src/
 ```
 
+三个 target 的公开头和安装命名根严格一一对应：`ruvia-core` 只能拥有并安装
+`include/ruvia/core/**`，`ruvia-http` 只能拥有并安装 `include/ruvia/http/**`，
+`ruvia-web` 只能拥有并安装 `include/ruvia/web/**`。禁止在本 target 下创建或安装到
+另一个 target 的命名根，也禁止在 CMake source/header 列表中直接加入另一个 target
+目录里的文件。
+
 跨 target 复用的编译期契约头必须放在所属 target 的 `include/ruvia/<target>/detail/`
 （HTTP 使用 `include/ruvia/http/detail/`），通过 target include interface 使用。禁止任何
-target、示例或测试把另一个 target 的 `src/` 加入 include path。
+target、示例或测试把另一个 target 的 `src/` 加入 include path，也禁止通过相对或绝对
+物理路径包含另一个 target 的源码或私有头。target 之间只能通过 `target_link_libraries`
+传播的公开 include interface 使用依赖方已安装的头。
 
 `src/` 下最多保留一层有业务含义的分类目录，例如 `server/`、`http2/`、`websocket/`、
 `client/`。不要再引入 `src/net/...`、`src/*/core/...` 这类重复层级；`ruvia-core/src/`
@@ -98,7 +106,7 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path。
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 zero-copy parser/framer primitives、WebSocket sans-I/O 核心 `WsConnection`。
 - multipart/SSE/content-encoding 等 wire-format 和协议语义实现；runtime reader/writer facade 留在 `ruvia-web`。
-- 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或外部 runtime 驱动）。
+- 纯协议 primitive（零 core、零 asio、零 socket；server I/O runtime 由 `ruvia-web` 驱动，client role 只由外部 runtime 驱动）。
 
 禁止包含：
 
@@ -212,7 +220,7 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path。
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`
   - `RUVIA_ENABLE_JWT=ON`
-- outbound HTTP client 的协议模型和协议/策略半部是 `ruvia-http` 能力（响应解析、重定向规则、内容解码、配置校验，全部 sans-I/O）；与 server 同构地把 asio/TLS 运行时 driver 和 Web 代理 facade 放在上层：`ruvia-web/src/client/` 与 `HttpClientRuntime.h`（HttpClientPool / Http2ClientSession / HttpClientRegistry / `ProxyOptions`，经 `Context::client()`（`c.client().fetch/fetchStream/proxy`）使用，无构建开关）。
+- outbound HTTP client 只保留在 `ruvia-http` 的底层 sans-I/O API（`HttpOrigin`、请求/响应模型、origin/authority 校验、响应解析、重定向规则、内容解码和 HTTP/2 client role 协议状态），不得包含证书文件、连接池或运行时 timeout 配置。`ruvia-web` 不提供 client socket/TLS runtime、连接池、`fetch`、`proxy`、client 注册或反向代理集成；需要出站 HTTP 的应用自行用外部 I/O runtime 驱动 `ruvia-http` 协议 API。
 - 下游推荐：
 
 ```cmake

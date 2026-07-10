@@ -5,10 +5,10 @@
 
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/SecurityHeaders.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/SecurityHeaders.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

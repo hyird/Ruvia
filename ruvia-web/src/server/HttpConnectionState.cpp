@@ -7,7 +7,7 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 namespace ruvia::detail {
 namespace {

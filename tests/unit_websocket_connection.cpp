@@ -12,7 +12,7 @@
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

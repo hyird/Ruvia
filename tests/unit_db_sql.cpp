@@ -13,7 +13,7 @@
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbSql.h"
-#include "ruvia/db/DbTypes.h"
+#include "ruvia/web/db/DbTypes.h"
 
 namespace {
 

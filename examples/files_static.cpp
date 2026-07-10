@@ -1,9 +1,9 @@
 #include <filesystem>
 #include <memory>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
-#include "ruvia/http/StaticFiles.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
+#include "ruvia/web/StaticFiles.h"
 
 namespace {
 

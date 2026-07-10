@@ -1,5 +1,5 @@
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 #include <type_traits>
 #include <utility>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpBodyStream.h"
 
 #include <string_view>

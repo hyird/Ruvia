@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/redis/Redis.h"
+#include "ruvia/web/redis/Redis.h"
 
 #ifndef RUVIA_ENABLE_REDIS
 
@@ -49,7 +49,7 @@ public:
 #include <string_view>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/detail/PoolWaiterQueue.h"
 
 struct redisReader;

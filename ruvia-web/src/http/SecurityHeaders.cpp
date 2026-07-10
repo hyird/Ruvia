@@ -1,4 +1,4 @@
-#include "ruvia/http/SecurityHeaders.h"
+#include "ruvia/web/SecurityHeaders.h"
 
 namespace ruvia {
 namespace {

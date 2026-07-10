@@ -9,11 +9,11 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/Context.h"
-#include "ruvia/http/ContextModel.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/ContextModel.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

@@ -86,7 +86,7 @@ template <typename Options>
 }
 
 [[nodiscard]] inline bool httpClientAuthorityMatchesOrigin(
-    const HttpClientConfig& config,
+    const HttpOrigin& origin,
     std::string_view authority,
     std::uint16_t defaultPort) noexcept {
     if (authority.find('@') != std::string_view::npos) {
@@ -130,11 +130,11 @@ template <typename Options>
         port = static_cast<std::uint16_t>(parsed);
     }
 
-    return port == config.port && httpAsciiEqualsIgnoreCase(host, std::string_view(config.host));
+    return port == origin.port && httpAsciiEqualsIgnoreCase(host, std::string_view(origin.host));
 }
 
 [[nodiscard]] inline bool resolveHttpClientSameOriginRedirect(
-    const HttpClientConfig& config,
+    const HttpOrigin& origin,
     std::string_view location,
     std::pmr::string& outPath) {
     location = httpTrimOws(location);
@@ -159,7 +159,7 @@ template <typename Options>
             if (!wantsTls && !httpAsciiEqualsIgnoreCase(scheme, "http")) {
                 return false;
             }
-            if (wantsTls != config.tls) {
+            if (wantsTls != origin.tls) {
                 return false;
             }
             afterScheme = location.substr(schemeEnd + 3);
@@ -169,7 +169,7 @@ template <typename Options>
         const auto authority = authorityEnd == std::string_view::npos
             ? afterScheme
             : afterScheme.substr(0, authorityEnd);
-        if (!httpClientAuthorityMatchesOrigin(config, authority, config.tls ? 443 : 80)) {
+        if (!httpClientAuthorityMatchesOrigin(origin, authority, origin.tls ? 443 : 80)) {
             return false;
         }
         path = authorityEnd == std::string_view::npos

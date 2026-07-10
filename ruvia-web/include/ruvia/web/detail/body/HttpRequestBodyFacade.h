@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ruvia/app/Task.h"
-#include "ruvia/http/Streaming.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/Streaming.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 

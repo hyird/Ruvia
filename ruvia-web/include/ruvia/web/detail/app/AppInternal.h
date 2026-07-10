@@ -1,19 +1,18 @@
 #pragma once
 
-#include "ruvia/app/App.h"
+#include "ruvia/web/App.h"
 
 #include <mutex>
 #include <optional>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
-#include "ruvia/router/Router.h"
+#include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/web/Router.h"
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/DotenvInternal.h"
-#include "ruvia/detail/NativePath.h"
-#include "ruvia/http/ControllerDescriptors.h"
+#include "ruvia/core/detail/NativePath.h"
+#include "ruvia/web/ControllerDescriptors.h"
 #include "ruvia/web/detail/db/DbInternal.h"
-#include "ruvia/web/detail/client/HttpClientInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 
 namespace ruvia::detail {
@@ -50,8 +49,6 @@ struct AppState final {
 #ifdef RUVIA_ENABLE_REDIS
     std::pmr::vector<RedisDefinition> redis{appResource()};
 #endif
-    std::pmr::vector<HttpClientDefinition> httpClients{appResource()};
-
     Env env;
     ControllerStore controllerLifetimes;
     std::unique_ptr<AppRuntimeGraph, PmrObjectDeleter<AppRuntimeGraph>> runtime;

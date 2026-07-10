@@ -22,10 +22,10 @@
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 
 namespace {

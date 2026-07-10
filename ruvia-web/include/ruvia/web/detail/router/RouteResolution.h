@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/RouteModes.h"
+#include "ruvia/web/RouteModes.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
 // Lightweight route-resolution result types.

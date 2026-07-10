@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/db/DbMigration.h"
+#include "ruvia/web/db/DbMigration.h"
 
 #include <cstddef>
 #include <span>

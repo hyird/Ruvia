@@ -1,10 +1,4 @@
 set(RUVIA_WEB_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolLifecycle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientPoolSlots.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http2ClientSession.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1StreamSource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
@@ -22,7 +16,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Health.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpRuntimeFacades.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpClientContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/RateLimit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Streaming.cpp
@@ -135,69 +128,53 @@ endif()
 
 ruvia_install_target(ruvia-web web)
 
+# All Web-owned public and contract headers share one physical ownership root.
 ruvia_install_public_header_tree(web include/ruvia/web/detail)
-# web owns the ruvia/http/detail/{json,model,...} contract subtree; install it as a
-# TREE so a newly added detail header cannot be silently dropped from the package (a
-# forgotten explicit entry breaks downstream find_package only in the installed form).
-ruvia_install_public_header_tree(web include/ruvia/http/detail)
 
 ruvia_install_public_headers(web
-    include/ruvia/app/App.h
-    include/ruvia/app/AppHook.h
-    include/ruvia/app/Dotenv.h
-    include/ruvia/app/RateLimitRule.h
-    include/ruvia/http/StaticFiles.h
-    include/ruvia/http/Context.h
-    include/ruvia/http/Context.inl
-    include/ruvia/http/ContextModel.h
-    include/ruvia/http/Controller.h
-    include/ruvia/http/ControllerDescriptors.h
-    include/ruvia/http/ControllerRuntime.h
-    include/ruvia/http/ControllerTypes.h
-    include/ruvia/http/Csrf.h
-    include/ruvia/http/ErrorHandlers.h
-    include/ruvia/http/Health.h
-    include/ruvia/http/HttpClientRuntime.h
-    include/ruvia/http/HttpServerOptions.h
-    include/ruvia/http/MiddlewareDescriptor.h
-    include/ruvia/http/MiddlewareRuntime.h
-    include/ruvia/http/Model.h
-    include/ruvia/http/ModelJson.h
-    include/ruvia/http/ModelObject.h
-    include/ruvia/http/ModelTypes.h
-    include/ruvia/http/MultipartReader.h
-    include/ruvia/http/Next.h
-    include/ruvia/http/RateLimit.h
-    include/ruvia/http/RouteModes.h
-    include/ruvia/http/SecurityHeaders.h
-    include/ruvia/http/Session.h
-    include/ruvia/http/Streaming.h
-    include/ruvia/http/Validation.h
-    include/ruvia/http/ValidationTypes.h
-    include/ruvia/http/WebSocket.h
-    include/ruvia/router/Router.h
+    include/ruvia/web/App.h
+    include/ruvia/web/AppHook.h
+    include/ruvia/web/Dotenv.h
+    include/ruvia/web/RateLimitRule.h
+    include/ruvia/web/StaticFiles.h
+    include/ruvia/web/Context.h
+    include/ruvia/web/Context.inl
+    include/ruvia/web/ContextModel.h
+    include/ruvia/web/Controller.h
+    include/ruvia/web/ControllerDescriptors.h
+    include/ruvia/web/ControllerRuntime.h
+    include/ruvia/web/ControllerTypes.h
+    include/ruvia/web/Csrf.h
+    include/ruvia/web/ErrorHandlers.h
+    include/ruvia/web/Health.h
+    include/ruvia/web/HttpServerOptions.h
+    include/ruvia/web/MiddlewareDescriptor.h
+    include/ruvia/web/MiddlewareRuntime.h
+    include/ruvia/web/Model.h
+    include/ruvia/web/ModelJson.h
+    include/ruvia/web/ModelObject.h
+    include/ruvia/web/ModelTypes.h
+    include/ruvia/web/MultipartReader.h
+    include/ruvia/web/Next.h
+    include/ruvia/web/RateLimit.h
+    include/ruvia/web/RouteModes.h
+    include/ruvia/web/SecurityHeaders.h
+    include/ruvia/web/Session.h
+    include/ruvia/web/Streaming.h
+    include/ruvia/web/Validation.h
+    include/ruvia/web/ValidationTypes.h
+    include/ruvia/web/WebSocket.h
+    include/ruvia/web/Router.h
 )
 
 if(RUVIA_ENABLE_MARIADB)
-    install(
-        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/db
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ruvia
-        COMPONENT web
-    )
+    ruvia_install_public_header_tree(web include/ruvia/web/db)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
-    install(
-        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/redis
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ruvia
-        COMPONENT web
-    )
+    ruvia_install_public_header_tree(web include/ruvia/web/redis)
 endif()
 
 if(RUVIA_ENABLE_JWT)
-    install(
-        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ruvia/auth
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ruvia
-        COMPONENT web
-    )
+    ruvia_install_public_header_tree(web include/ruvia/web/auth)
 endif()

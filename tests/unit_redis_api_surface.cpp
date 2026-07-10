@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/redis/RedisHandle.h"
+#include "ruvia/web/redis/RedisHandle.h"
 
 namespace {
 

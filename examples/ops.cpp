@@ -1,10 +1,10 @@
 #include <string_view>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
-#include "ruvia/http/Health.h"
-#include "ruvia/http/RateLimit.h"
-#include "ruvia/http/SecurityHeaders.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
+#include "ruvia/web/Health.h"
+#include "ruvia/web/RateLimit.h"
+#include "ruvia/web/SecurityHeaders.h"
 
 class OpsController final : public ruvia::Controller<OpsController> {
 public:

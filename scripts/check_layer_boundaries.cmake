@@ -10,13 +10,19 @@ set(RULE_ASIO "#[ \t]*include[ \t]*[<\"]asio|asio::")
 set(RULE_FILE_IO
     "#[ \t]*include[ \t]*[<\"](fstream|fcntl\\.h|unistd\\.h|io\\.h)|ifstream|ofstream|::open[ \t]*\\(|::CreateFile")
 set(RULE_HTTP_FRAMEWORK_INCLUDE
-    "#[ \t]*include[ \t]*\"ruvia/(app/|core/|memory/|detail/|router/|http/Context\\.(h|inl))")
+    "#[ \t]*include[ \t]*\"ruvia/(app/|core/|memory/|detail/|router/|web/)")
 set(RULE_HTTP_CORE_LINK "ruvia::core|ruvia-core")
 set(RULE_CORE_PROTOCOL "ruvia/http/|Http[A-Z]|WebSocket|websocket")
 set(RULE_PUBLIC_SRC_INCLUDE "BUILD_INTERFACE:[^>\r\n]*[/\\\\]src")
 set(RULE_CROSS_TARGET_SRC "ruvia-(core|http|web)[/\\\\]src")
+set(RULE_CROSS_TARGET_PHYSICAL_INCLUDE
+    "#[ \t]*include[ \t]*[<\"][^>\"]*ruvia-(core|http|web)[/\\\\](src|include)[/\\\\]")
 set(RULE_WEB_CODEC
     "#[ \t]*include[ \t]*[<\"](zlib|zstd|brotli)|deflateInit|inflateInit|Brotli[A-Z]|ZSTD_")
+set(RULE_WEB_HTTP_CLIENT
+    "HttpClient(Runtime|Pool|Registry|Backend|Config|Definition)|Http2ClientSession|ContextClient|FetchResponse(Stream)?|FetchOptions|ProxyOptions|RequestBodyStream|useHttpClient|addHttpClient|removeHttpClient")
+set(RULE_HTTP_CLIENT_RUNTIME_CONFIG
+    "HttpClientConfig|tlsOptions|caFile|insecureSkipVerify|certificateChainFile|privateKeyFile|privateKeyPassword|sniHost|poolSizePerWorker|proxyConnectTimeout|proxyReadTimeout|proxySendTimeout|acquireTimeout|maxResponseBodyBytes|milliseconds[ \t]+timeout")
 set(RULE_SCANNER_SEMANTICS
     "http|websocket|client_header|client_body|send_timeout|keepalive")
 set(RULE_HTTP1_CONNECTION "Http1Connection")
@@ -60,7 +66,13 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         "$<BUILD_INTERFACE:C:/repo/ruvia-http/src>")
     expect_match("cross-target private source include" "${RULE_CROSS_TARGET_SRC}"
         "target_include_directories(ruvia-web PRIVATE C:/repo/ruvia-http/src)")
+    expect_match("cross-target physical header include" "${RULE_CROSS_TARGET_PHYSICAL_INCLUDE}"
+        "#include \"../../../ruvia-http/src/HttpParserInternal.h\"")
     expect_match("codec in web" "${RULE_WEB_CODEC}" "#include <zlib.h>")
+    expect_match("outbound HTTP client runtime in web" "${RULE_WEB_HTTP_CLIENT}"
+        "class HttpClientPool {};")
+    expect_match("runtime-only HTTP client config" "${RULE_HTTP_CLIENT_RUNTIME_CONFIG}"
+        "std::size_t poolSizePerWorker{4};")
     expect_match("protocol semantics in core scanner" "${RULE_SCANNER_SEMANTICS}"
         "client_header_timeout")
     expect_match("parallel HTTP/1 state machine" "${RULE_HTTP1_CONNECTION}"
@@ -74,7 +86,7 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         message(FATAL_ERROR
             "boundary self-test FAIL: private example include was not detected")
     endif()
-    example_has_private_include("#include \"ruvia/http/Context.h\"" public_example)
+    example_has_private_include("#include \"ruvia/web/Context.h\"" public_example)
     if(public_example)
         message(FATAL_ERROR
             "boundary self-test FAIL: public example include was rejected")
@@ -139,10 +151,47 @@ foreach(required_doc IN ITEMS README.md AGENTS.md)
             "${required_doc} is required; otherwise checks would be vacuous")
     endif()
 endforeach()
+
+function(check_target_header_ownership target expected_namespace)
+    set(include_root "${RUVIA_ROOT}/${target}/include/ruvia")
+    if(NOT IS_DIRECTORY "${include_root}")
+        boundary_error("target include root is missing" "${target}/include/ruvia")
+        return()
+    endif()
+
+    file(GLOB namespace_entries RELATIVE "${include_root}" "${include_root}/*")
+    foreach(entry IN LISTS namespace_entries)
+        if(NOT entry STREQUAL expected_namespace)
+            boundary_error("target public headers escape their namespace"
+                "${target}/include/ruvia/${entry} is outside ruvia/${expected_namespace}")
+        endif()
+    endforeach()
+
+    file(READ "${RUVIA_ROOT}/${target}/CMakeLists.txt" target_cmake)
+    string(REGEX MATCHALL "include/ruvia/[A-Za-z0-9_-]+" installed_header_roots "${target_cmake}")
+    foreach(header_root IN LISTS installed_header_roots)
+        if(NOT header_root STREQUAL "include/ruvia/${expected_namespace}")
+            boundary_error("target install list uses another namespace"
+                "${target}/CMakeLists.txt: ${header_root}")
+        endif()
+    endforeach()
+endfunction()
+
+check_target_header_ownership(ruvia-core core)
+check_target_header_ownership(ruvia-http http)
+check_target_header_ownership(ruvia-web web)
+
 if(IS_DIRECTORY "${RUVIA_ROOT}/ruvia-edge")
     boundary_error("ruvia-edge must remain fully removed" "ruvia-edge/ exists")
 endif()
-
+foreach(forbidden_web_client_path IN ITEMS
+    "ruvia-web/src/client"
+    "ruvia-web/include/ruvia/web/detail/client")
+    if(EXISTS "${RUVIA_ROOT}/${forbidden_web_client_path}")
+        boundary_error("ruvia-web outbound client runtime must remain removed"
+            "${forbidden_web_client_path} exists")
+    endif()
+endforeach()
 file(GLOB_RECURSE HTTP_SOURCE LIST_DIRECTORIES FALSE
     "${RUVIA_ROOT}/ruvia-http/*.h"
     "${RUVIA_ROOT}/ruvia-http/*.cpp"
@@ -179,6 +228,9 @@ check_files_no_match("ruvia-http must not perform OS file I/O (sans-I/O protocol
     "${RULE_FILE_IO}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not include core/web headers"
     "${RULE_HTTP_FRAMEWORK_INCLUDE}" ${HTTP_SOURCE})
+check_files_no_match("ruvia-http client models must not contain runtime configuration"
+    "${RULE_HTTP_CLIENT_RUNTIME_CONFIG}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClientTypes.h")
 check_files_no_match("ruvia-http must not link/name ruvia-core in CMake"
     "${RULE_HTTP_CORE_LINK}" "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt")
 check_files_no_match("ruvia-core must not contain HTTP/WebSocket semantics"
@@ -195,8 +247,13 @@ check_files_no_match("targets must not include another target's private src tree
     "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt"
     "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt"
     "${RUVIA_ROOT}/tests/CMakeLists.txt")
+check_files_no_match("targets must not include another target by physical path"
+    "${RULE_CROSS_TARGET_PHYSICAL_INCLUDE}"
+    ${CORE_SOURCE} ${HTTP_SOURCE} ${WEB_SOURCE})
 check_files_no_match("ruvia-web must not implement content/transfer coding"
     "${RULE_WEB_CODEC}" ${WEB_SOURCE})
+check_files_no_match("ruvia-web must not provide an outbound HTTP client runtime"
+    "${RULE_WEB_HTTP_CLIENT}" ${WEB_SOURCE})
 check_files_no_lower_match("core connection scanner contains protocol/product semantics"
     "${RULE_SCANNER_SEMANTICS}"
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/ConnectionScanner.h"

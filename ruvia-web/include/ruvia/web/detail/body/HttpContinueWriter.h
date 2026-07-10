@@ -3,7 +3,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 
 namespace ruvia::detail {

@@ -14,8 +14,8 @@
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
-#include "ruvia/http/Streaming.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/Streaming.h"
 
 namespace {
 

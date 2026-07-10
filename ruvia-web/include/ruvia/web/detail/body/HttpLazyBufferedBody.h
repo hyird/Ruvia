@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

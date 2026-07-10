@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/json/JsonObjectFields.h"
+#include "ruvia/web/detail/json/JsonObjectFields.h"
 
 namespace {
 

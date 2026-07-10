@@ -10,10 +10,10 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"
-#include "ruvia/app/RateLimitRule.h"
-#include "ruvia/http/Context.h"
-#include "ruvia/http/RateLimit.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/RateLimitRule.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/RateLimit.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 
@@ -49,7 +49,7 @@ RouteLimitResult runRouteLimit(RateLimiter& limiter, std::uintptr_t scope,
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
     HttpRequestAccess::setResource(request, memory.resource());
-    ContextServices services(nullptr, nullptr, nullptr, &limiter);
+    ContextServices services(nullptr, nullptr, &limiter);
     auto context = ContextAccess::make(memory, request, scope, services);
 
     RouteLimitResult r;

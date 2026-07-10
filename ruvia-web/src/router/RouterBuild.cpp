@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia {
 namespace {

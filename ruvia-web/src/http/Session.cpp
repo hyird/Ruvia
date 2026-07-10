@@ -1,11 +1,11 @@
 #include "ruvia/web/detail/http/SessionInternal.h"
 
-#include "ruvia/http/Session.h"
+#include "ruvia/web/Session.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/web/detail/http/CsrfInternal.h"
-#include "ruvia/redis/RedisHandle.h"
+#include "ruvia/web/redis/RedisHandle.h"
 
 #include <array>
 #include <chrono>

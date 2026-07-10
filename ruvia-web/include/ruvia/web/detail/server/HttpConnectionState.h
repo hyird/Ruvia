@@ -8,7 +8,7 @@
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {
 

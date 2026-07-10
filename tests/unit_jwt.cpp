@@ -7,7 +7,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/auth/Jwt.h"
+#include "ruvia/web/auth/Jwt.h"
 #include "ruvia/web/detail/auth/JwtInternal.h"
 
 namespace {

@@ -3,15 +3,15 @@
 #include <exception>
 #include <string_view>
 
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/ErrorHandlers.h"
+#include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/Streaming.h"
-#include "ruvia/http/WebSocket.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/Streaming.h"
+#include "ruvia/web/WebSocket.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteStreamResult.h"
