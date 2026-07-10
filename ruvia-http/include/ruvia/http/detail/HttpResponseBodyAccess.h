@@ -30,21 +30,6 @@ struct HttpResponseBodyAccess final {
         return response.bodySize();
     }
 
-    static void setStream(HttpResponse& response, HttpBodyStream body) noexcept {
-        response.setStreamBody(std::move(body));
-    }
-
-    [[nodiscard]] static bool hasStream(const HttpResponse& response) noexcept {
-        return response.hasStreamBody();
-    }
-
-    [[nodiscard]] static HttpBodyStream& stream(HttpResponse& response) noexcept {
-        return response.streamBody();
-    }
-
-    [[nodiscard]] static const HttpBodyStream& stream(const HttpResponse& response) noexcept {
-        return response.streamBody();
-    }
 };
 
 inline void setResponseBodyStaticView(HttpResponse& response, std::string_view value) noexcept {
@@ -65,14 +50,6 @@ inline void materializeResponseBody(HttpResponse& response) {
 
 [[nodiscard]] inline std::size_t responseBodySize(const HttpResponse& response) noexcept {
     return HttpResponseBodyAccess::size(response);
-}
-
-[[nodiscard]] inline bool responseHasStreamBody(const HttpResponse& response) noexcept {
-    return HttpResponseBodyAccess::hasStream(response);
-}
-
-inline void setResponseStreamBody(HttpResponse& response, HttpBodyStream body) noexcept {
-    HttpResponseBodyAccess::setStream(response, std::move(body));
 }
 
 }  // namespace ruvia::detail

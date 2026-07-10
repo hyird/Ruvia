@@ -18,7 +18,7 @@
 #include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteStreamResult.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
@@ -194,28 +194,23 @@ public:
         ContextServices services = {}) const;
     // Never throws: dispatches a resolved route and turns any failure -- a
     // handler exception (already handled inside dispatch) or one escaping the
-    // routing machinery itself -- into an error response. Both the HTTP/1.1 and
-    // HTTP/2 buffered paths funnel through this, so the dispatch→error-response
-    // policy lives in the routing layer rather than being re-implemented by each
-    // transport. closeConnectionOnError only governs the rare escaping-failure
-    // case (handler exceptions keep dispatch's own close semantics).
+    // routing machinery itself -- into an error response. It never decides
+    // connection persistence; the HTTP/1 driver finalizes that after request-body
+    // state is known, while HTTP/2 has no Connection header semantics.
     Task<HttpResponse> dispatchBuffered(
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        bool closeConnectionOnError,
         ContextServices services = {}) const;
     Task<HttpResponse> handleError(
         const HttpRequest& request,
         RequestMemory& memory,
         HttpErrorInfo error,
-        bool closeConnection,
         ContextServices services = {}) const;
     Task<HttpResponse> handleException(
         const HttpRequest& request,
         RequestMemory& memory,
         std::exception_ptr exception,
-        bool closeConnection,
         ContextServices services = {}) const;
     Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,
@@ -367,17 +362,14 @@ private:
         std::exception_ptr exception) const;
     [[nodiscard]] Task<HttpResponse> handleError(
         Context& context,
-        HttpErrorInfo error,
-        bool closeConnection) const;
+        HttpErrorInfo error) const;
     [[nodiscard]] Task<HttpResponse> handleNotFound(
         const HttpRequest& request,
         RequestMemory& memory,
-        bool closeConnection,
         ContextServices services) const;
     [[nodiscard]] Task<HttpResponse> handleException(
         Context& context,
-        std::exception_ptr exception,
-        bool closeConnection) const;
+        std::exception_ptr exception) const;
 
     std::pmr::memory_resource* resource_;
     std::pmr::vector<RouteEntry> routes_;

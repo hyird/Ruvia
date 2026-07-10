@@ -61,7 +61,6 @@ add_executable(ruvia_unit_tests
     unit_sansio_driver.cpp
     unit_static_response_headers.cpp
     unit_streaming.cpp
-    unit_response_stream_body.cpp
     unit_http_cache.cpp
     unit_vary_headers.cpp
     unit_content_range.cpp
@@ -84,6 +83,7 @@ add_executable(ruvia_unit_tests
     unit_http2_stream_request_data.cpp
     unit_http2_request_headers.cpp
     unit_http1_parser.cpp
+    unit_http1_chunked_framing.cpp
     unit_response_header_access.cpp
     unit_date_cache.cpp
     unit_error.cpp

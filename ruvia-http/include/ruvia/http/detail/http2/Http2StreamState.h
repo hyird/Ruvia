@@ -105,6 +105,14 @@ public:
         return headerBlocks_.response();
     }
 
+    [[nodiscard]] std::pmr::string& responseTrailerBlock() noexcept {
+        return headerBlocks_.responseTrailers();
+    }
+
+    [[nodiscard]] const std::pmr::string& responseTrailerBlock() const noexcept {
+        return headerBlocks_.responseTrailers();
+    }
+
     [[nodiscard]] bool setContentLength(std::size_t value) noexcept {
         return bodyAccounting_.setContentLength(value);
     }
@@ -153,6 +161,10 @@ public:
         return lifecycle_.peerEndStream();
     }
 
+    [[nodiscard]] bool localEndStream() const noexcept {
+        return lifecycle_.localEndStream();
+    }
+
     [[nodiscard]] bool queued() const noexcept {
         return lifecycle_.queued();
     }
@@ -175,6 +187,10 @@ public:
 
     void markPeerEndStream() noexcept {
         lifecycle_.markPeerEndStream();
+    }
+
+    void markLocalEndStream() noexcept {
+        lifecycle_.markLocalEndStream();
     }
 
     void markBodyEnded() noexcept {

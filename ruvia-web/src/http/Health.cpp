@@ -1,7 +1,7 @@
 #include "ruvia/web/Health.h"
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/JsonUtils.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 
 #include <memory_resource>
 

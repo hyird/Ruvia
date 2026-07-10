@@ -9,12 +9,12 @@
 #include <utility>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpDate.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/StaticFiles.h"
@@ -256,9 +256,12 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
         if (presetNoCache) {
             ContextAccess::setResponseHeader(context, "Cache-Control", "no-cache");
         }
+        auto response = ContextAccess::streamingHead(context);
         auto streamHead = prepareResponseStreamHead(
-            ContextAccess::streamingHead(context), ResponseStreamKind::kSse,
-            ResponseStreamFraming::kHttp1Chunked);
+            std::move(response),
+            ResponseStreamKind::kSse,
+            ResponseStreamFraming::kHttp1Chunked,
+            ruvia::detail::httpResponseBodyPlan(HttpMethod::kGet, 200));
         return std::string(streamHead.response().header("Cache-Control"));
     };
 
@@ -285,8 +288,12 @@ RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
         HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
+        auto response = ContextAccess::streamingHead(context);
         auto streamHead = prepareResponseStreamHead(
-            ContextAccess::streamingHead(context), ResponseStreamKind::kGeneric, framing,
+            std::move(response),
+            ResponseStreamKind::kGeneric,
+            framing,
+            ruvia::detail::httpResponseBodyPlan(HttpMethod::kGet, 200),
             connectionWillClose);
         return std::pair<std::string, std::string>(
             std::string(streamHead.response().header("Transfer-Encoding")),

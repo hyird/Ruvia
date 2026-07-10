@@ -1,7 +1,7 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
 
 namespace ruvia::detail {
 

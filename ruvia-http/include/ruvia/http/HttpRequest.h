@@ -49,21 +49,6 @@ public:
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept;
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
 
-    [[nodiscard]] std::string_view remoteAddress() const noexcept {
-        return remoteAddress_;
-    }
-
-    // The verified client certificate subject DN for a mutual-TLS connection,
-    // or empty when no client certificate was presented (or no TLS).
-    [[nodiscard]] std::string_view clientCertificate() const noexcept {
-        return clientCertificate_;
-    }
-
-    // True when the request arrived over a TLS connection (https / h2).
-    [[nodiscard]] bool isSecure() const noexcept {
-        return secure_;
-    }
-
 private:
     friend struct detail::HttpRequestAccess;
 
@@ -83,9 +68,6 @@ private:
     std::uint32_t cachedHeaderBits_{0};
     std::array<std::string_view, kCachedHeaderSlots> cachedHeaders_{};
     std::string_view body_;
-    std::string_view remoteAddress_;
-    std::string_view clientCertificate_;
-    bool secure_{false};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

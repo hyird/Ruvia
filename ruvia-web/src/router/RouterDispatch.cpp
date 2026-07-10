@@ -8,8 +8,10 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
+#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 namespace ruvia {
 namespace {
@@ -111,6 +113,8 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(error.info());
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
+    } catch (const HttpProtocolError& error) {
+        errorInfo.assign(HttpErrorInfo(error.status(), {}, error.what()));
     } catch (const std::invalid_argument& error) {
         // invalid_argument is the framework's own request-validation signal (bad
         // cookie/json/form); its message describes the request, so it is safe to
@@ -223,7 +227,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             (responseStream != nullptr && detail::StreamingAccess::committed(*responseStream))) {
             std::rethrow_exception(exception);
         }
-        auto response = co_await handleException(context, exception, true);
+        auto response = co_await handleException(context, exception);
         co_return StreamDispatchResult(
             std::move(response),
             RouteStreamDispatchOutcome::kBufferedResponse);
@@ -268,12 +272,12 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             }
 
             const auto error = HttpErrorInfo(405, {}, "method not allowed");
-            auto response = co_await handleError(request, memory, error, false, services);
+            auto response = co_await handleError(request, memory, error, services);
             setAllowHeader(response, resolution.allowedMethods());
             co_return response;
         }
 
-        co_return co_await handleNotFound(request, memory, false, services);
+        co_return co_await handleNotFound(request, memory, services);
     }
 
     auto context = makeRouteContext(
@@ -288,14 +292,13 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     } catch (...) {
         exception = std::current_exception();
     }
-    co_return co_await handleException(context, exception, true);
+    co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::dispatchBuffered(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
-    bool closeConnectionOnError,
     ContextServices services) const {
     std::exception_ptr exception;
     try {
@@ -303,61 +306,56 @@ Task<HttpResponse> detail::RouteTable::dispatchBuffered(
     } catch (...) {
         exception = std::current_exception();
     }
-    co_return co_await handleException(request, memory, exception, closeConnectionOnError, services);
+    co_return co_await handleException(request, memory, exception, services);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
     const HttpRequest& request,
     RequestMemory& memory,
     HttpErrorInfo error,
-    bool closeConnection,
     ContextServices services) const {
     if (errorHandler_ == nullptr) {
-        co_return makeErrorResponse(memory.resource(), error, closeConnection);
+        co_return makeDefaultErrorResponse(memory.resource(), error);
     }
 
     auto context = detail::ContextAccess::make(
         memory,
         request,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
-    co_return co_await handleError(context, error, closeConnection);
+    co_return co_await handleError(context, error);
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(
     const HttpRequest& request,
     RequestMemory& memory,
     std::exception_ptr exception,
-    bool closeConnection,
     ContextServices services) const {
     if (errorHandler_ == nullptr) {
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
-        co_return makeErrorResponse(memory.resource(), errorInfo.info, closeConnection);
+        co_return makeDefaultErrorResponse(memory.resource(), errorInfo.info);
     }
 
     auto context = detail::ContextAccess::make(
         memory,
         request,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
-    co_return co_await handleException(context, exception, closeConnection);
+    co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
     Context& context,
-    HttpErrorInfo error,
-    bool closeConnection) const {
-    return makeErrorResponse(context, error, closeConnection, errorHandler_);
+    HttpErrorInfo error) const {
+    return invokeErrorHandler(context, error, errorHandler_);
 }
 
 Task<HttpResponse> detail::RouteTable::handleNotFound(
     const HttpRequest& request,
     RequestMemory& memory,
-    bool closeConnection,
     ContextServices services) const {
     if (notFoundHandler_ == nullptr) {
-        co_return makeErrorResponse(
+        co_return makeDefaultErrorResponse(
             memory.resource(),
-            HttpErrorInfo(404, {}, "route not found"),
-            closeConnection);
+            HttpErrorInfo(404, {}, "route not found"));
     }
 
     auto context = detail::ContextAccess::make(
@@ -367,25 +365,20 @@ Task<HttpResponse> detail::RouteTable::handleNotFound(
 
     std::exception_ptr exception;
     try {
-        auto response = co_await notFoundHandler_(context);
-        if (closeConnection) {
-            detail::setResponseHeaderStableView(response, "Connection", "close");
-        }
-        co_return response;
+        co_return co_await notFoundHandler_(context);
     } catch (...) {
         exception = std::current_exception();
     }
-    co_return co_await handleException(context, exception, closeConnection);
+    co_return co_await handleException(context, exception);
 }
 
 Task<HttpResponse> detail::RouteTable::handleException(
     Context& context,
-    std::exception_ptr exception,
-    bool closeConnection) const {
+    std::exception_ptr exception) const {
     detail::ContextAccess::setError(context, exception);
     OwnedHttpErrorInfo errorInfo(context.resource(), exception);
 
-    co_return co_await handleError(context, errorInfo.info, closeConnection);
+    co_return co_await handleError(context, errorInfo.info);
 }
 
 }  // namespace ruvia

@@ -70,8 +70,6 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 
 根 `CMakeLists.txt` 只负责全局选项、依赖发现、package export、install helper 和 `add_subdirectory(...)`。不要再拆出额外的仓库内 `.cmake` 片段。
 
-本地构建目录只允许使用仓库根目录下的 `build/`。不要创建 `build-*`、`out/`、`cmake-build-*` 或其他临时构建目录；构建缓存或生成结果有问题时，直接删除 `build/` 后重新配置。
-
 本地工具目录 `.codex/`、`.claude/`、`.agents/`、`.codegraph/` 必须保持 ignored，不作为源码提交。
 
 ## Target 边界
@@ -102,17 +100,21 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 - HTTP method/status/header/request/response 类型。
 - HTTP/1 parser、chunk parser、request target parser。
 - cookie/cache/range/conditional request/content negotiation/header token 与 header value 通用 helper。
-- multipart/form/url encoding、SSE frame formatting、opaque body handle 与纯 parser。
+- multipart/form/url encoding、SSE frame formatting 与纯 parser。
 - WebSocket 协议 helper。
 - HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 zero-copy parser/framer primitives、WebSocket sans-I/O 核心 `WsConnection`。
 - multipart/SSE/content-encoding 等 wire-format 和协议语义实现；runtime reader/writer facade 留在 `ruvia-web`。
 - 纯协议 primitive（零 core、零 asio、零 socket；server I/O runtime 由 `ruvia-web` 驱动，client role 只由外部 runtime 驱动）。
+- 无分配的 `HttpProtocolError` 协议失败信号及其 HTTP status；不得携带 Web JSON error code/details。
 
 禁止包含：
 
 - App、Context、Controller、Router、route macro、middleware、Next。
 - Model/validation 宏。
 - DB、Redis、JWT、CSRF、Session、CORS、security headers、RateLimit 的 Web 集成。
+- `HttpErrorInfo`、`HttpError`、默认 JSON 错误 envelope、自定义 error handler 等应用错误模型。
+- 通用 JSON escape/serialization、模型 JSON writer、健康检查或校验错误 JSON。
+- 静态文件扩展名/MIME 推断、文件时间转换、文件 ETag 生成或 runtime 文件读缓冲。
 - origin/cache/purge/rule 等产品策略。
 
 ### ruvia-web
@@ -124,8 +126,10 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 - App 配置和启动。
 - Context、Controller、Router、middleware、Next、route macro。
 - HTTP server runtime、TLS、HTTP2 server、WebSocket route、response streaming。
-- Model、JSON/form parsing、validation middleware。
+- Model、JSON/form parsing/serialization、validation middleware。
+- `HttpErrorInfo`、`HttpError`、JSON 错误响应和自定义 error/not-found handler。
 - Session、CSRF、RateLimit、CORS、安全头、静态文件目录扫描/索引、AutoHTTPS redirect 等基于 HTTP 的 Web 应用能力。
+- 静态文件扩展名/MIME 推断、文件时间与 validator 元数据生成、runtime 文件读缓冲。
 - 可选 MariaDB、Redis、JWT 集成。
 
 `ruvia-web` 依赖 `ruvia::core` 和 `ruvia::http`，但不得把 Web-only API 下沉到 `ruvia-http`。
@@ -136,7 +140,7 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 
 `ruvia-web` 拥有 HTTP 之上的应用能力：App/Context/Router/middleware/controller、route validation、session、CSRF、JWT、rate limit、CORS 策略与中间件、安全头中间件、静态文件目录扫描/索引/产品配置、AutoHTTPS redirect、DB/Redis 集成、WebSocket route 绑定等。它们可以读写 HTTP header，但这不等于它们属于 HTTP 协议本体。
 
-边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议错误如何映射”，应放在 `ruvia-http`；如果代码决定“某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
+边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议失败对应哪个 HTTP status”，应放在 `ruvia-http`；如果代码决定“协议失败如何变成应用 error code/JSON envelope，或某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 必须在知道 request-body/keep-alive 状态后统一最终化连接语义。流式响应的 HTTP 版本、chunked/close-delimited framing、连接复用与响应信号必须由 `ruvia-http` 统一产出 `Http1ResponseStreamPlan`；`ruvia-web` 只能传入请求数上限等外部强制关闭策略并驱动该计划。响应方法/状态是否允许发送 body 必须由 `ruvia-http` 的 `HttpResponseBodyPlan` 统一决定，buffered 响应再由 `HttpBufferedResponseWritePlan` 绑定 representation length 与最终 send-body 结论；HTTP/1、HTTP/2 和 streaming 调用链不得在 `ruvia-web` 通过 `skipBody` 等松散布尔值重复判断。HEAD 保留对应 GET representation 的协商 metadata 和长度，但 HTTP/1 不发送 payload、HTTP/2 不发送 DATA。`Http2Connection` 必须记录本地 `END_STREAM`，之后的 `submitData()` 必须拒绝，不能依赖外部 runtime 自觉维持 stream lifecycle。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
 ## 性能原则
 
@@ -177,6 +181,7 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 - 禁止为了写出把 body 拼成完整 response 字符串。
 - 文件响应不全量读入内存；plain TCP 优先使用平台零拷贝路径。
 - response streaming 和 WebSocket 必须通过显式 route macro 注册。
+- 普通路由返回的 `HttpResponse` 只允许空、borrowed/owned bytes 或 file body；响应流必须走显式 streaming route 和 `ResponseStreamWriter`，不得增加动态或类型擦除的响应体旁路。
 
 ## 路由和中间件
 
@@ -197,6 +202,8 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 - streaming/WebSocket handler：`ruvia::Task<void> handler(ruvia::Context& c)`。
 - 公开协程返回类型统一是 `ruvia::Task<T>`，不要暴露 `asio::awaitable<T>`。
 - 读取请求统一走 `c.req()`。
+- socket/TLS 连接元数据统一通过 `getConnInfo(c)` 读取；`HttpRequest`、`ContextRequest` 和
+  `RawRequestClone` 不得保存或暴露 remote address、TLS 状态、客户端证书身份。
 - 设置响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)` 等。
 - 构造响应走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。
 - 公开 API 一个操作只保留一个名字，不新增别名。

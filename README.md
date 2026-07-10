@@ -7,8 +7,8 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | Directory | Target | Public alias | Purpose |
 | --- | --- | --- | --- |
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Runtime foundation: coroutine task type, Asio integration glue, PMR memory resources, mimalloc integration, and small runtime helpers. |
-| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero core/asio/socket runtime): HTTP message types, header token/value helpers, HTTP/1 parser + connection core, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, body framing/streams, multipart/SSE/content-encoding protocol helpers, cookie/cache/range/conditional/negotiation helpers, and the outbound client's protocol core. |
-| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full server-side web framework: App, Context, Controller, Router, middleware, model/validation, server I/O over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, and WebSocket routes), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
+| `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero core/asio/socket runtime): HTTP message types, header token/value helpers, HTTP/1 parser + connection core, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, request/response body framing and HTTP/2 stream state, multipart/SSE/content-encoding protocol helpers, cookie/cache/range/conditional/negotiation helpers, and the outbound client's protocol core. |
+| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full server-side web framework: App, Context, Controller, Router, middleware, model/validation, server I/O over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, and file read buffers), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots with MIME/validator metadata, AutoHTTPS redirect, DB, and Redis. |
 
 Dependency direction:
 
@@ -21,10 +21,26 @@ ruvia-web  -> ruvia-core + ruvia-http
 The boundary is decided by who owns the behavior, not by whether a file touches HTTP header names.
 
 - `ruvia-core` owns the runtime foundation: coroutine task machinery, Asio awaiter/driver glue, PMR resources, worker memory, connection scanning, and small runtime helpers.
-- `ruvia-http` owns HTTP itself and must not depend on `ruvia-core`: wire bytes, message shape, header syntax helpers, parser/framing rules, connection persistence, `Expect: 100-continue`, upgrade handshakes, HTTP/2 frames/settings/flow control, WebSocket frames, multipart/SSE/content-encoding protocol logic, and protocol errors.
-- `ruvia-web` owns the application framework built on HTTP: route dispatch, middleware, controllers, `Context`, validation, sessions, CSRF, JWT integration, CORS policy, security-header policy, rate limits, static-file indexing, AutoHTTPS redirect, DB/Redis integrations, and the socket/TLS/Asio runtime drivers that drive `ruvia-http`.
+- `ruvia-http` owns HTTP itself and must not depend on `ruvia-core`: wire bytes, message shape, header syntax helpers, parser/framing rules, connection persistence, `Expect: 100-continue`, upgrade handshakes, HTTP/2 frames/settings/flow control, WebSocket frames, multipart/SSE/content-encoding protocol logic, and allocation-free `HttpProtocolError` signals.
+- `ruvia-web` owns the application framework built on HTTP: route dispatch, middleware, controllers, `Context`, model/validation JSON serialization, `HttpError`/JSON application error responses, sessions, CSRF, JWT integration, CORS policy, security-header policy, rate limits, static-file indexing, AutoHTTPS redirect, DB/Redis integrations, and the socket/TLS/Asio runtime drivers that drive `ruvia-http`.
 
 If code decides how bytes are parsed, framed, serialized, kept alive, upgraded, or rejected by the HTTP/WebSocket/HTTP2 protocols, it belongs in `ruvia-http`. If code decides what the application product does with those protocol facts, it belongs in `ruvia-web`.
+
+Protocol primitives report status plus a static diagnostic through `HttpProtocolError`.
+`ruvia-web` translates that signal into its `HttpErrorInfo`/JSON envelope. Router and
+custom error handlers never set HTTP/1 connection persistence; the server runtime applies
+`Connection: close` only after it knows the request-body and keep-alive state.
+For streaming responses, `ruvia-http` returns one `Http1ResponseStreamPlan` that binds
+HTTP version, chunked versus close-delimited framing, persistence, and response signaling;
+`ruvia-web` contributes only an external force-close policy bit and drives the returned plan.
+Buffered and streaming body decisions are also HTTP-owned: `HttpResponseBodyPlan` combines
+the request method with the response status, while `HttpBufferedResponseWritePlan` adds the
+representation length and the final send-body verdict. HTTP/1 and HTTP/2 consume these same
+plans; `ruvia-web` must not recompute them with loose `skipBody` flags. In particular, a HEAD
+response keeps the GET representation metadata (including negotiated content coding and
+content length) but never emits payload bytes or HTTP/2 DATA frames. The HTTP/2 core records
+local `END_STREAM` for requests and responses and rejects later `submitData()` calls, so an
+external runtime cannot accidentally violate the stream lifecycle after the plan is applied.
 
 The root `CMakeLists.txt` only coordinates global options, dependency discovery, installation, package export, tests, and examples. Each library owns its own `CMakeLists.txt`, `include/`, and `src/` directory. There is no root-level source `include/`, `src/`, or `fuzz/` tree.
 
@@ -145,7 +161,19 @@ int main() {
 }
 ```
 
-Handlers are async-only and use `ruvia::Task<T>`. Request data is read through `c.req()`, and response helpers live on `Context`.
+Handlers are async-only and use `ruvia::Task<T>`. HTTP request data is read through
+`c.req()`, and response helpers live on `Context`. Adapter-owned connection metadata is
+kept out of the request model and queried with the Hono-like `ruvia::getConnInfo(c)`:
+
+```cpp
+const auto info = ruvia::getConnInfo(c);
+const auto peerAddress = info.remote().address();
+const bool tls = info.secure();
+const auto clientSubject = info.clientCertificateSubject();
+```
+
+The certificate value is the verified mutual-TLS peer subject DN, or empty when no
+client certificate was presented.
 
 ## Core API Shape
 
@@ -183,7 +211,7 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 `ruvia::http` is intended to be useful without the web framework or the Ruvia runtime foundation, in the nghttp2 class: a pure, core-free, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and connection semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core (`WebSocketProtocol.h`), HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding (`MultipartParser.h`), SSE formatting (`Sse.h`), content decoding, and opaque protocol body handles. You feed it bytes and drive its events from any runtime.
 
-It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
+It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Its `HttpRequest` represents the HTTP message only and therefore never stores peer addresses, TLS state, or client-certificate identity. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
 
 The outbound HTTP client surface is intentionally limited to the low-level, sans-I/O protocol API in `ruvia::http`: `HttpOrigin`, request/response models, response parsing, transfer/content decoding, redirect replay checks, and the HTTP/2 client-role protocol state. It contains no TLS file settings, pools, or runtime timeouts. `ruvia::web` does not provide a socket/TLS client runtime, `fetch`, or reverse-proxy integration; applications that need outbound HTTP drive the protocol API from their own I/O runtime.
 

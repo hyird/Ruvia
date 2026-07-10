@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpDate.h"
 
 namespace {
 

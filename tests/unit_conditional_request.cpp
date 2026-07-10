@@ -7,9 +7,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/http/detail/HttpImfFixdate.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
 
 namespace {
 
@@ -19,7 +21,7 @@ std::string formatDate(std::time_t time) {
 }
 
 std::string fileEtag(std::uint64_t size, std::filesystem::file_time_type::duration ticks) {
-    const auto out = ruvia::detail::httpMakeFileEtag(
+    const auto out = ruvia::detail::makeStaticFileEtag(
         std::pmr::get_default_resource(), size, std::filesystem::file_time_type{ticks});
     return std::string(out.data(), out.size());
 }

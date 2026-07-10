@@ -3,9 +3,12 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpByteRange.h"
+#include "ruvia/http/detail/HttpDate.h"
+#include "ruvia/http/detail/HttpEntityTag.h"
 #include "ruvia/web/detail/StaticFilesInternal.h"
-#include "ruvia/http/detail/StaticPathNormalization.h"
+#include "ruvia/web/detail/StaticFileMetadata.h"
+#include "ruvia/web/detail/StaticPathNormalization.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
@@ -141,9 +144,9 @@ template <typename ApplyResponseState>
     std::string_view lastModified;
     std::time_t modifiedSeconds{};
     if (enableValidators) {
-        modifiedSeconds = detail::httpFileTimeToTimeT(modified);
+        modifiedSeconds = detail::staticFileTimeToTimeT(modified);
         if (precomputedEtag.empty() || precomputedLastModified.empty()) {
-            etagStorage = detail::httpMakeFileEtag(context.resource(), size, modified);
+            etagStorage = detail::makeStaticFileEtag(context.resource(), size, modified);
             lastModifiedStorage = detail::httpFormatDate(context.resource(), modifiedSeconds);
             etag = etagStorage;
             lastModified = lastModifiedStorage;
@@ -156,7 +159,8 @@ template <typename ApplyResponseState>
     auto addFileHeaders = [&](HttpResponse& response) {
         detail::reserveResponseHeaders(response, kFileResponseHeaderReserve);
         if (contentType.empty()) {
-            detail::setResponseHeaderStableView(response, "Content-Type", detail::httpGuessContentType(*filePath.path));
+            detail::setResponseHeaderStableView(
+                response, "Content-Type", detail::guessStaticFileContentType(*filePath.path));
         } else {
             response.header("Content-Type", contentType);
         }

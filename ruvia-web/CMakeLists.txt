@@ -8,6 +8,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Controller.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
@@ -135,8 +136,10 @@ ruvia_install_public_headers(web
     include/ruvia/web/App.h
     include/ruvia/web/AppHook.h
     include/ruvia/web/Dotenv.h
+    include/ruvia/web/Error.h
     include/ruvia/web/RateLimitRule.h
     include/ruvia/web/StaticFiles.h
+    include/ruvia/web/ConnInfo.h
     include/ruvia/web/Context.h
     include/ruvia/web/Context.inl
     include/ruvia/web/ContextModel.h

@@ -46,7 +46,7 @@ private:
     char keyBuffer[kRateLimitKeyBufferBytes];
     const auto check = limiter->allowRoute(
         ContextAccess::routeRateLimitScope(context),
-        rateLimitKeyFor(context.req().raw().remoteAddress(), keyBuffer),
+        rateLimitKeyFor(getConnInfo(context).remote().address(), keyBuffer),
         options.rule);
     return RouteRateLimitCheck(check.allowed, check.resetAfterMs);
 }

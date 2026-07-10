@@ -3,7 +3,9 @@
 #include <cstdint>
 #include <cstring>
 #include <memory_resource>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
@@ -17,12 +19,16 @@ using ruvia::detail::Http2Event;
 using ruvia::detail::Http2FrameType;
 using ruvia::detail::HpackEncoder;
 
-// Encode a minimal valid GET request header block (HPACK literals) into `block`.
-void encodeGetRequest(std::pmr::string& block) {
-    HpackEncoder::encodeHeader(block, ":method", "GET");
+// Encode a minimal valid request header block (HPACK literals) into `block`.
+void encodeRequest(std::pmr::string& block, std::string_view method) {
+    HpackEncoder::encodeHeader(block, ":method", method);
     HpackEncoder::encodeHeader(block, ":scheme", "https");
     HpackEncoder::encodeHeader(block, ":path", "/");
     HpackEncoder::encodeHeader(block, ":authority", "example.com");
+}
+
+void encodeGetRequest(std::pmr::string& block) {
+    encodeRequest(block, "GET");
 }
 
 // Frame a HEADERS block on `streamId` with the given flags into a fed-ready buffer.
@@ -69,6 +75,21 @@ void handshakeWithWindow(Http2Connection& conn, std::uint32_t window) {
 void driveGetRequest(Http2Connection& conn, std::pmr::memory_resource* res) {
     std::pmr::string block(res);
     encodeGetRequest(block);
+    const auto h = headersFrame(
+        res, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(block.data(), block.size()));
+    (void)conn.feed(std::string_view(h.data(), h.size()));
+    while (conn.nextEvent().kind != Http2Event::Kind::kNone) {
+    }
+    conn.consumeOutput(conn.pendingOutput().size());
+}
+
+void driveRequest(
+    Http2Connection& conn,
+    std::pmr::memory_resource* res,
+    std::string_view method) {
+    std::pmr::string block(res);
+    encodeRequest(block, method);
     const auto h = headersFrame(
         res, 1, ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
         std::string_view(block.data(), block.size()));
@@ -413,7 +434,7 @@ RUVIA_TEST(http2_connection_submit_response_head_and_body) {
     ruvia::HttpResponse resp(&resource);
     resp.status(200);
     resp.setBodyCopy("hello");
-    (void)conn.submitResponseHead(1, resp, /*bodyForbidden=*/false);
+    (void)conn.submitResponseHead(1, resp);
 
     const auto head = conn.pendingOutput();
     const auto hd = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
@@ -431,6 +452,33 @@ RUVIA_TEST(http2_connection_submit_response_head_and_body) {
     RUVIA_CHECK((dd.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
 }
 
+// HEAD carries the representation metadata (including Content-Length) but the
+// protocol core terminates the stream on HEADERS and tells the runtime not to
+// submit DATA, even when the application response contains bytes.
+RUVIA_TEST(http2_connection_head_buffered_response_suppresses_data) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveRequest(conn, &resource, "HEAD");
+
+    ruvia::HttpResponse response(&resource);
+    response.status(200);
+    response.setBodyCopy("hello");
+    const auto writePlan = conn.submitResponseHead(1, response);
+
+    RUVIA_CHECK(writePlan.bodySuppressed());
+    RUVIA_CHECK(!writePlan.sendBody());
+    RUVIA_CHECK_EQ(writePlan.contentLength(), static_cast<std::uint64_t>(5));
+    const auto head = conn.pendingOutput();
+    const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
+    RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
+    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+    const auto beforeRejectedData = conn.pendingOutput().size();
+    RUVIA_CHECK(conn.submitData(1, "forbidden", true) == Http2SubmitResult::kClosed);
+    RUVIA_CHECK_EQ(conn.pendingOutput().size(), beforeRejectedData);
+}
+
 // submitStreamingResponseHead emits HEADERS with NO Content-Length and leaves the
 // stream open; subsequent submitData chunks stream the body, the last with END_STREAM.
 RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
@@ -441,7 +489,8 @@ RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
 
     ruvia::HttpResponse resp(&resource);
     resp.status(200);
-    (void)conn.submitStreamingResponseHead(1, resp, /*bodyForbidden=*/false);
+    (void)conn.submitStreamingResponseHead(
+        1, std::move(resp), ruvia::detail::ResponseStreamKind::kGeneric);
 
     const auto head = conn.pendingOutput();
     const auto hd = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
@@ -460,6 +509,31 @@ RUVIA_TEST(http2_connection_submit_streaming_response_head_and_chunks) {
     const auto d2 = ruvia::detail::http2ParseFrameHeader(body.substr(9 + 6, 9));
     RUVIA_CHECK_EQ(d2.type, static_cast<std::uint8_t>(Http2FrameType::kData));
     RUVIA_CHECK((d2.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+}
+
+// An explicitly registered streaming HEAD route still cannot emit a payload.
+// The method/status decision belongs to the HTTP/2 core, not the Web sink.
+RUVIA_TEST(http2_connection_head_streaming_response_ends_on_headers) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveRequest(conn, &resource, "HEAD");
+
+    ruvia::HttpResponse response(&resource);
+    response.status(200);
+    const auto bodyPlan = conn.submitStreamingResponseHead(
+        1, std::move(response), ruvia::detail::ResponseStreamKind::kGeneric);
+
+    RUVIA_CHECK(bodyPlan.statusAllowsBody());
+    RUVIA_CHECK(bodyPlan.bodySuppressed());
+    const auto head = conn.pendingOutput();
+    const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
+    RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
+    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndHeaders) != 0);
+    RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
+    const auto beforeRejectedData = conn.pendingOutput().size();
+    RUVIA_CHECK(conn.submitData(1, "forbidden", true) == Http2SubmitResult::kClosed);
+    RUVIA_CHECK_EQ(conn.pendingOutput().size(), beforeRejectedData);
 }
 
 // A body larger than the send window is partially sent and the remainder buffered
@@ -682,7 +756,7 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
             ruvia::HttpResponse response(&resource);
             response.status(200);
             response.setBodyCopy("pong");
-            (void)server.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
+            (void)server.submitResponseHead(event.streamId, response);
             (void)server.submitData(event.streamId, "pong", /*endStream=*/true);
         }
     };
@@ -703,6 +777,9 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
     RUVIA_CHECK_EQ(streamId, static_cast<std::uint32_t>(1));
     client.pinStream(streamId);
     (void)client.submitRequestHead(streamId, "GET", "http", "example.com", "/", {}, /*endStream=*/true);
+    const auto requestBytes = client.pendingOutput().size();
+    RUVIA_CHECK(client.submitData(streamId, "forbidden", true) == Http2SubmitResult::kClosed);
+    RUVIA_CHECK_EQ(client.pendingOutput().size(), requestBytes);
 
     for (int round = 0; round < 4; ++round) {
         shuttleOnce(client, server, onServerEvent);
@@ -741,7 +818,7 @@ RUVIA_TEST(http2_connection_client_role_post_round_trip) {
             ruvia::HttpResponse response(&resource);
             response.status(200);
             response.setBodyCopy(serverBody);
-            (void)server.submitResponseHead(event.streamId, response, false);
+            (void)server.submitResponseHead(event.streamId, response);
             (void)server.submitData(
                 event.streamId, std::string_view(serverBody.data(), serverBody.size()), true);
         }
@@ -912,7 +989,7 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
     ruvia::HttpResponse response(&resource);
     response.status(200);
     response.setBodyCopy("ok");
-    (void)conn.submitResponseHead(1, response, /*bodyForbidden=*/false);
+    (void)conn.submitResponseHead(1, response);
     RUVIA_CHECK(conn.submitData(1, "ok", true) == Http2SubmitResult::kOk);
     RUVIA_CHECK(conn.pendingOutput().size() > 9);  // response frames produced
     conn.consumeOutput(conn.pendingOutput().size());
@@ -1019,7 +1096,7 @@ RUVIA_TEST(http2_connection_server_trailers_without_end_stream_rejected) {
     RUVIA_CHECK(conn.stream(1) == nullptr);  // removed, not leaked
 }
 
-// submitTrailers queued behind a window-blocked body: the trailer HEADERS must be
+// Semantic response trailers queued behind a window-blocked body: the HEADERS must be
 // emitted AFTER the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place
 // of it -- never ahead of the body bytes.
 RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
@@ -1033,7 +1110,8 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     // window, so 4 bytes are deferred -> kBlocked.
     ruvia::HttpResponse head(&resource);
     head.status(200);
-    (void)conn.submitStreamingResponseHead(1, head, /*bodyForbidden=*/false);
+    (void)conn.submitStreamingResponseHead(
+        1, std::move(head), ruvia::detail::ResponseStreamKind::kGeneric);
     conn.consumeOutput(conn.pendingOutput().size());
     RUVIA_CHECK(conn.submitData(1, "AAAABBBB", /*endStream=*/false) == Http2SubmitResult::kBlocked);
 
@@ -1046,9 +1124,15 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     conn.consumeOutput(out.size());
 
     // Queue trailers while the remaining 4 bytes are still window-blocked.
-    std::pmr::string trailer(&resource);
-    HpackEncoder::encodeHeader(trailer, "x-checksum", "ok");
-    (void)conn.submitTrailers(1, std::string_view(trailer.data(), trailer.size()));
+    bool invalidTrailerRejected = false;
+    try {
+        conn.addResponseTrailer(1, "Content-Length", "8");
+    } catch (const std::invalid_argument&) {
+        invalidTrailerRejected = true;
+    }
+    RUVIA_CHECK(invalidTrailerRejected);
+    conn.addResponseTrailer(1, "X-Checksum", "ok");
+    RUVIA_CHECK(conn.submitResponseTrailers(1));
     RUVIA_CHECK(conn.pendingOutput().empty());  // nothing emitted yet (still blocked)
 
     // Peer WINDOW_UPDATE reopens the window: the deferred DATA drains, THEN the trailer
@@ -1068,6 +1152,9 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     const auto th = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
     RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
+    const auto trailerPayload = out.substr(9, th.length);
+    RUVIA_CHECK(trailerPayload.find("x-checksum") != std::string_view::npos);
+    RUVIA_CHECK(trailerPayload.find("X-Checksum") == std::string_view::npos);
 }
 
 // --- flood defense-in-depth budgets (GOAWAY ENHANCE_YOUR_CALM) -----------------

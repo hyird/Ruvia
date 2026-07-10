@@ -6,12 +6,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/HttpTypes.h"
-
 namespace ruvia {
 
-class HttpResponse;
-
+// Web application error metadata used by Context and custom error handlers.
+// The JSON error envelope is a framework product concern, not an HTTP protocol
+// primitive, so this type deliberately belongs to ruvia-web.
 class HttpErrorInfo final {
 public:
     constexpr HttpErrorInfo(
@@ -57,7 +56,7 @@ private:
 class HttpError final : public std::exception {
 public:
     HttpError(
-        std::uint16_t statusCode,
+        std::uint16_t status,
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {});
@@ -66,18 +65,12 @@ public:
     [[nodiscard]] HttpErrorInfo info() const noexcept;
 
 private:
-    std::uint16_t statusCode_{500};
+    std::uint16_t status_{500};
     std::pmr::string statusText_;
     std::pmr::string code_;
     std::pmr::string message_;
 };
 
-[[nodiscard]] std::string_view defaultStatusText(std::uint16_t statusCode) noexcept;
-[[nodiscard]] std::string_view defaultErrorCode(std::uint16_t statusCode) noexcept;
-
-[[nodiscard]] HttpResponse makeErrorResponse(
-    std::pmr::memory_resource* resource,
-    HttpErrorInfo error,
-    bool closeConnection = false);
+[[nodiscard]] std::string_view defaultErrorCode(std::uint16_t status) noexcept;
 
 }  // namespace ruvia

@@ -19,9 +19,12 @@
 #include "ruvia/web/db/DbQueryResult.h"
 #include "ruvia/web/db/DbTypes.h"
 #include "ruvia/web/Controller.h"
+#include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Csrf.h"
 #include "ruvia/http/HttpClient.h"
 #include "ruvia/http/HttpParser.h"
+#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/web/Error.h"
 #include "ruvia/web/RateLimit.h"
 #include "ruvia/web/Session.h"
 #include "ruvia/web/WebSocket.h"
@@ -154,7 +157,6 @@ concept HasRawRequestCloneCanonicalReadAccessors = requires(const T& request) {
     { request.blob() } -> std::same_as<ruvia::ContextRequest::RequestBlob>;
     { request.parseBody() } -> std::same_as<ruvia::ContextRequest::RequestFormData>;
     { request.formData() } -> std::same_as<ruvia::ContextRequest::RequestFormData>;
-    { request.isSecure() } -> std::same_as<bool>;
 };
 
 template <typename T>
@@ -260,6 +262,18 @@ concept HasRequestClientCertificateAlias = requires(const T& request) {
 template <typename T>
 concept HasRequestIsSecureAlias = requires(const T& request) {
     request.isSecure();
+};
+
+template <typename T>
+concept HasConnInfoCanonicalReadAccessors = requires(const T& info) {
+    { info.remote().address() } -> std::same_as<std::string_view>;
+    { info.clientCertificateSubject() } -> std::same_as<std::string_view>;
+    { info.secure() } -> std::same_as<bool>;
+};
+
+template <typename T>
+concept HasGetConnInfo = requires(const T& context) {
+    { ruvia::getConnInfo(context) } -> std::same_as<ruvia::ConnInfo>;
 };
 
 template <typename T>
@@ -518,7 +532,6 @@ concept HasModelBodyAccessor = requires(const T& model) {
 template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
     { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
-    { context.newResponse(body) } -> std::same_as<ruvia::HttpResponse>;
 };
 
 template <typename T>
@@ -527,8 +540,8 @@ concept HasStdStringResponseBody = requires(const T& context, std::string body) 
 };
 
 template <typename T>
-concept HasStdStringNewResponseBody = requires(const T& context, std::string body) {
-    context.newResponse(body);
+concept HasContextNewResponseAlias = requires(const T& context) {
+    context.newResponse(std::string_view{});
 };
 
 template <typename T>
@@ -582,7 +595,6 @@ concept HasResponseHeaderInitInitializerListConstructor = requires {
 template <typename T>
 concept HasContextDirectHeaderInitializerList = requires(const T& context) {
     context.body(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
-    context.newResponse(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
     context.text(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
     context.html(std::string_view{}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
     context.json(std::uint32_t{1}, std::uint16_t{200}, std::initializer_list<ruvia::HttpHeaderView>{});
@@ -1493,6 +1505,7 @@ static_assert(!HasRawRequestCloneQueryStringAlias<ruvia::ContextRequest::RawRequ
 static_assert(!HasRawRequestCloneHttpVersionAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRawRequestCloneRemoteAddressAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRawRequestCloneClientCertificateAlias<ruvia::ContextRequest::RawRequestClone>);
+static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRequestMethodEnumAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestTargetAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestHeadersAlias<ruvia::ContextRequest>);
@@ -1506,6 +1519,9 @@ static_assert(!HasRequestDecodedPathAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
+static_assert(HasConnInfoCanonicalReadAccessors<ruvia::ConnInfo>);
+static_assert(HasGetConnInfo<ruvia::Context>);
+static_assert(!std::is_default_constructible_v<ruvia::ConnInfo>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::PathValue>);
 static_assert(!HasFormValueTextAlias<ruvia::ContextRequest::RequestFormData::Value>);
@@ -1568,8 +1584,16 @@ static_assert(std::is_trivially_copyable_v<ruvia::ContextRequest::RequestFormDat
 static_assert(HasFormValueZeroAllocationAccessors<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(HasFormValueZeroAllocationAccessors<ruvia::ContextRequest::RequestFormData::PathValue>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpRequest>);
+static_assert(std::derived_from<ruvia::HttpProtocolError, std::exception>);
+static_assert(std::is_nothrow_constructible_v<
+    ruvia::HttpProtocolError,
+    std::uint16_t,
+    std::string_view>);
 static_assert(HasHttpRequestQueryGetter<ruvia::HttpRequest>);
 static_assert(!HasHttpRequestDecodedPathAlias<ruvia::HttpRequest>);
+static_assert(!HasRequestRemoteAddressAlias<ruvia::HttpRequest>);
+static_assert(!HasRequestClientCertificateAlias<ruvia::HttpRequest>);
+static_assert(!HasRequestIsSecureAlias<ruvia::HttpRequest>);
 static_assert(!HasFormDataGetAllAlias<ruvia::ContextRequest::RequestFormData>);
 static_assert(!HasFormDataValuesAllAlias<ruvia::ContextRequest::RequestFormData>);
 static_assert(!HasFormDataNamedValuesAllocator<ruvia::ContextRequest::RequestFormData>);
@@ -1618,7 +1642,7 @@ static_assert(!HasModelBodyAccessor<ClonePayload>);
 static_assert(!std::is_constructible_v<ClonePayload, ruvia::RequestObject>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
-static_assert(!HasStdStringNewResponseBody<ruvia::Context>);
+static_assert(!HasContextNewResponseAlias<ruvia::Context>);
 static_assert(!HasContextSetHeaderAlias<ruvia::Context>);
 static_assert(!HasResponseSetHeaderAlias<ruvia::HttpResponse>);
 static_assert(HasResponseHeaderSetter<ruvia::HttpResponse>);
@@ -2268,7 +2292,7 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> nullBody(ruvia::Context& c) {
         constexpr ruvia::HttpHeaderView headers[] = {{"X-Null-Body", "true"}};
-        co_return c.newResponse(
+        co_return c.body(
             nullptr,
             202,
             headers);
@@ -2280,7 +2304,7 @@ private:
             std::byte{0x41},
             std::byte{0xff}};
         constexpr ruvia::HttpHeaderView headers[] = {{"X-Binary-Body", "true"}};
-        co_return c.newResponse(
+        co_return c.body(
             std::span<const std::byte>(bytes),
             206,
             headers);
@@ -2798,7 +2822,7 @@ public:
     RUVIA_ROUTES_BEGIN
     RUVIA_GET("/res-slot-merge", responseSlotMerge);
     RUVIA_GET("/res-setter-headers", responseSetterHeaders);
-    RUVIA_GET("/new-response", newResponseBody);
+    RUVIA_GET("/body-response", bodyResponse);
     RUVIA_ROUTES_END
 
 private:
@@ -2817,11 +2841,11 @@ private:
         co_return std::move(c.res());
     }
 
-    ruvia::Task<ruvia::HttpResponse> newResponseBody(ruvia::Context& c) {
-        c.header("X-New-Prepared", "true");
-        const ruvia::HttpHeaderView headers[] = {{"X-New-Response", "true"}};
-        co_return c.newResponse(
-            "new response\n",
+    ruvia::Task<ruvia::HttpResponse> bodyResponse(ruvia::Context& c) {
+        c.header("X-Body-Prepared", "true");
+        const ruvia::HttpHeaderView headers[] = {{"X-Body-Response", "true"}};
+        co_return c.body(
+            "body response\n",
             ruvia::Context::ResponseInit{
                 .status = 201,
                 .headers = headers});

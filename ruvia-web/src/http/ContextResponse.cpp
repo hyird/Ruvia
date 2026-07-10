@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/Hex.h"
+#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <array>
 #include <charconv>
@@ -684,105 +685,6 @@ HttpResponse Context::body(std::span<const std::byte> body, ResponseInit init) c
     return response;
 }
 
-HttpResponse Context::body(
-    HttpBodyStream stream,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
-    HttpResponse response(resource());
-    detail::setResponseStreamBody(response, std::move(stream));
-    applyResponseState(response, statusCode, statusText);
-    return response;
-}
-
-HttpResponse Context::body(
-    HttpBodyStream stream,
-    std::uint16_t statusCode,
-    std::span<const HttpHeaderView> headers) const {
-    HttpResponse response(resource());
-    detail::setResponseStreamBody(response, std::move(stream));
-    applyResponseState(response, statusCode, {}, headers);
-    return response;
-}
-
-HttpResponse Context::body(HttpBodyStream stream, ResponseInit init) const {
-    HttpResponse response(resource());
-    detail::setResponseStreamBody(response, std::move(stream));
-    applyResponseState(response, init.status, init.statusText, init.headers);
-    return response;
-}
-
-HttpResponse Context::newResponse(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
-    return this->body(body, statusCode, statusText);
-}
-
-HttpResponse Context::newResponse(
-    std::string_view body,
-    std::uint16_t statusCode,
-    std::span<const HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(std::string_view body, ResponseInit init) const {
-    return this->body(body, init);
-}
-
-HttpResponse Context::newResponse(
-    std::nullptr_t,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
-    return this->body(nullptr, statusCode, statusText);
-}
-
-HttpResponse Context::newResponse(
-    std::nullptr_t,
-    std::uint16_t statusCode,
-    std::span<const HttpHeaderView> headers) const {
-    return this->body(nullptr, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(std::nullptr_t, ResponseInit init) const {
-    return this->body(nullptr, init);
-}
-
-HttpResponse Context::newResponse(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
-    return this->body(body, statusCode, statusText);
-}
-
-HttpResponse Context::newResponse(
-    std::pmr::string& body,
-    std::uint16_t statusCode,
-    std::span<const HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(std::pmr::string& body, ResponseInit init) const {
-    return this->body(body, init);
-}
-
-HttpResponse Context::newResponse(
-    std::span<const std::byte> body,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
-    return this->body(body, statusCode, statusText);
-}
-
-HttpResponse Context::newResponse(
-    std::span<const std::byte> body,
-    std::uint16_t statusCode,
-    std::span<const HttpHeaderView> headers) const {
-    return this->body(body, statusCode, headers);
-}
-
-HttpResponse Context::newResponse(std::span<const std::byte> body, ResponseInit init) const {
-    return this->body(body, init);
-}
-
 HttpResponse Context::text(
     std::string_view body,
     std::uint16_t statusCode,
@@ -973,7 +875,7 @@ HttpResponse Context::error(
     std::string_view code,
     std::string_view message,
     std::string_view statusText) const {
-    auto response = makeErrorResponse(
+    auto response = detail::makeDefaultErrorResponse(
         resource(),
         HttpErrorInfo(statusCode, code, message, statusText));
     applyResponseState(response, statusCode, statusText);
@@ -985,11 +887,9 @@ Task<HttpResponse> Context::notFound() {
         co_return co_await notFoundHandler_(*this);
     }
 
-    auto response = co_await makeErrorResponse(
-        *this,
-        HttpErrorInfo(404, {}, "route not found"),
-        false,
-        nullptr);
+    auto response = detail::makeDefaultErrorResponse(
+        resource(),
+        HttpErrorInfo(404, {}, "route not found"));
     applyResponseState(response, 404, {});
     co_return response;
 }

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 
@@ -16,7 +17,9 @@ using ruvia::detail::contentLengthExceedsLimit;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::HttpServerParser;
 using ruvia::detail::http1ShouldKeepAlive;
+using ruvia::detail::http1PlanResponseStream;
 using ruvia::detail::http1WantsContinue;
+using ruvia::detail::ResponseStreamFraming;
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {
     std::pmr::string location(std::pmr::get_default_resource());
@@ -60,6 +63,40 @@ RUVIA_TEST(request_state_wants_continue) {
     // misread the interim 100 as the final response.
     RUVIA_CHECK(!http1WantsContinue(parser.parse(
         "POST / HTTP/1.0\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 0\r\n\r\n")));
+}
+
+RUVIA_TEST(http1_response_stream_plan_owns_version_body_and_persistence_semantics) {
+    HttpServerParser parser;
+
+    const auto http11 = http1PlanResponseStream(
+        parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n"),
+        /*closeForServerPolicy=*/false);
+    RUVIA_CHECK(http11.framing() == ResponseStreamFraming::kHttp1Chunked);
+    RUVIA_CHECK(http11.requestCanPersist());
+    RUVIA_CHECK(!http11.connectionWillClose());
+    RUVIA_CHECK(!http11.needsKeepAliveSignal());
+
+    const auto limitedHttp11 = http1PlanResponseStream(
+        parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n"),
+        /*closeForServerPolicy=*/true);
+    RUVIA_CHECK(limitedHttp11.framing() == ResponseStreamFraming::kHttp1Chunked);
+    RUVIA_CHECK(limitedHttp11.requestCanPersist());
+    RUVIA_CHECK(limitedHttp11.connectionWillClose());
+
+    const auto requestBodyPending = http1PlanResponseStream(
+        parser.parse("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\n"),
+        /*closeForServerPolicy=*/false);
+    RUVIA_CHECK(requestBodyPending.framing() == ResponseStreamFraming::kHttp1Chunked);
+    RUVIA_CHECK(!requestBodyPending.requestCanPersist());
+    RUVIA_CHECK(requestBodyPending.connectionWillClose());
+
+    const auto http10KeepAlive = http1PlanResponseStream(
+        parser.parse("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"),
+        /*closeForServerPolicy=*/false);
+    RUVIA_CHECK(http10KeepAlive.framing() == ResponseStreamFraming::kHttp1CloseDelimited);
+    RUVIA_CHECK(http10KeepAlive.requestCanPersist());
+    RUVIA_CHECK(http10KeepAlive.connectionWillClose());
+    RUVIA_CHECK(http10KeepAlive.needsKeepAliveSignal());
 }
 
 RUVIA_TEST(auto_https_host_without_explicit_port_strips_port_bracket_aware) {

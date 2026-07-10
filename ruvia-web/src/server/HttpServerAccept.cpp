@@ -4,7 +4,9 @@
 #include "ruvia/web/detail/server/HttpServerSessionUtils.h"
 #include "ruvia/core/detail/AsioAwait.h"
 
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
+#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
@@ -64,12 +66,14 @@ Task<void> HttpServer::acceptLoop() {
                 limitMemoryStorage,
                 memory_,
                 std::span<std::byte>(limitArenaBuffer.data(), limitArenaBuffer.size()));
-            auto response = makeErrorResponse(
+            auto response = makeDefaultErrorResponse(
                 limitMemory.resource(),
-                HttpErrorInfo(429),
-                true);
+                HttpErrorInfo(429));
+            http1MarkConnectionClose(response);
             std::error_code writeEc;
-            co_await writeResponse(socket, memory_, nullptr, nullptr, response, false, writeEc);
+            const auto writePlan = httpBufferedResponseWritePlan(HttpMethod::kGet, response);
+            co_await writeResponse(
+                socket, memory_, nullptr, nullptr, response, writePlan, writeEc);
             closeSocket(socket);
             continue;
         }

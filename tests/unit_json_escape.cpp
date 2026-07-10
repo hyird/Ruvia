@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "ruvia/http/JsonUtils.h"
+#include "ruvia/web/detail/json/JsonEscape.h"
 
 namespace {
 

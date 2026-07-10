@@ -14,6 +14,7 @@ RUVIA_TEST(stream_lifecycle_initial_and_reset_source) {
     RUVIA_CHECK(!lifecycle.reset());
     RUVIA_CHECK(!lifecycle.bodyEnded());
     RUVIA_CHECK(!lifecycle.peerEndStream());
+    RUVIA_CHECK(!lifecycle.localEndStream());
     RUVIA_CHECK(!lifecycle.queued());
     RUVIA_CHECK(!lifecycle.dispatchStarted());
     RUVIA_CHECK(lifecycle.closeSource() == Http2StreamCloseSource::kNone);
@@ -31,8 +32,18 @@ RUVIA_TEST(stream_lifecycle_mark_closed_sets_all_end_flags) {
     lifecycle.markClosed(Http2StreamCloseSource::kPeer);
     RUVIA_CHECK(lifecycle.reset());
     RUVIA_CHECK(lifecycle.peerEndStream());
+    RUVIA_CHECK(lifecycle.localEndStream());
     RUVIA_CHECK(lifecycle.bodyEnded());
     RUVIA_CHECK(lifecycle.closeSource() == Http2StreamCloseSource::kPeer);
+}
+
+RUVIA_TEST(stream_lifecycle_tracks_local_end_independently) {
+    Http2StreamLifecycle lifecycle;
+    lifecycle.markLocalEndStream();
+    RUVIA_CHECK(lifecycle.localEndStream());
+    RUVIA_CHECK(!lifecycle.peerEndStream());
+    RUVIA_CHECK(!lifecycle.bodyEnded());
+    RUVIA_CHECK(!lifecycle.reset());
 }
 
 RUVIA_TEST(stream_lifecycle_queue_then_dispatch) {

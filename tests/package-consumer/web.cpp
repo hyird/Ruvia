@@ -1,6 +1,10 @@
+#include <string_view>
+
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
+#include <ruvia/web/ConnInfo.h>
 #include <ruvia/web/Controller.h>
+#include <ruvia/web/Error.h>
 #include <ruvia/web/HttpServerOptions.h>
 #include <ruvia/web/MiddlewareRuntime.h>
 #include <ruvia/web/Model.h>
@@ -19,7 +23,15 @@
 #include <ruvia/web/redis/Redis.h>
 #endif
 
+std::string_view peerAddress(const ruvia::Context& context) {
+    return ruvia::getConnInfo(context).remote().address();
+}
+
 int main() {
+    const ruvia::HttpErrorInfo error(500);
+    if (error.status() != 500) {
+        return 2;
+    }
     ruvia::app().setHttpListenPort(8080);
     return 0;
 }

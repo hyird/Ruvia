@@ -189,7 +189,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                         ruvia::HttpResponse response(&resource);
                         response.status(200);
                         response.setBodyCopy("pong");
-                        (void)c.submitResponseHead(event.streamId, response, /*bodyForbidden=*/false);
+                        (void)c.submitResponseHead(event.streamId, response);
                         (void)c.submitData(event.streamId, "pong", /*endStream=*/true);
                     }
                 }

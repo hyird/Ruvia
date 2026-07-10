@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/NativePath.h"
 #include "ruvia/http/detail/PmrResource.h"
@@ -178,12 +177,8 @@ private:
         kBorrowed,
         kStaticBorrowed,
         kOwned,
-        kFile,
-        kStream
+        kFile
     };
-    // A streaming response body is a pull-based opaque handle. A runtime driver can
-    // stream it as h1 chunked bytes or h2 DATA without materializing the whole body.
-    using StreamBody = HttpBodyStream;
     class FileBody final {
     public:
         using NativePathChar = detail::HttpNativePathChar;
@@ -259,10 +254,6 @@ private:
     [[nodiscard]] std::size_t bodySize() const noexcept;
     [[nodiscard]] bool hasFileBody() const noexcept;
     [[nodiscard]] const FileBody& fileBody() const;
-    void setStreamBody(StreamBody body) noexcept;
-    [[nodiscard]] bool hasStreamBody() const noexcept;
-    [[nodiscard]] StreamBody& streamBody() noexcept;
-    [[nodiscard]] const StreamBody& streamBody() const noexcept;
     [[nodiscard]] std::string_view knownHeaderValue(std::uint32_t bit) const noexcept;
     [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept;
     [[nodiscard]] const HttpResponseHeader* findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept;
@@ -278,7 +269,6 @@ private:
     std::string_view bodyView_;
     BodyKind bodyKind_{BodyKind::kEmpty};
     std::optional<FileBody> fileBody_;
-    std::optional<StreamBody> streamBody_;
 };
 
 inline const HttpResponseHeaders& HttpResponse::headers() noexcept {

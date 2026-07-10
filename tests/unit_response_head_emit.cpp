@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 
 namespace {
@@ -63,6 +64,26 @@ RUVIA_TEST(finalize_buffered_response_signals_keep_alive_only_for_http10) {
     // A non-kept-alive response is closed regardless of version.
     RUVIA_CHECK_EQ(finalize("HTTP/1.0", false), std::string("close"));
     RUVIA_CHECK_EQ(finalize("HTTP/1.1", false), std::string("close"));
+}
+
+RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
+    using ruvia::detail::http1FinalizeResponseConnection;
+
+    HttpResponse http10(std::pmr::new_delete_resource());
+    RUVIA_CHECK(http1FinalizeResponseConnection(
+        http10, /*keepAlive=*/true, /*needsKeepAliveSignal=*/true));
+    RUVIA_CHECK_EQ(std::string(http10.header("Connection")), std::string("keep-alive"));
+
+    HttpResponse applicationClose(std::pmr::new_delete_resource());
+    applicationClose.header("Connection", "close");
+    RUVIA_CHECK(!http1FinalizeResponseConnection(
+        applicationClose, /*keepAlive=*/true, /*needsKeepAliveSignal=*/false));
+    RUVIA_CHECK_EQ(std::string(applicationClose.header("Connection")), std::string("close"));
+
+    HttpResponse runtimeClose(std::pmr::new_delete_resource());
+    RUVIA_CHECK(!http1FinalizeResponseConnection(
+        runtimeClose, /*keepAlive=*/false, /*needsKeepAliveSignal=*/false));
+    RUVIA_CHECK_EQ(std::string(runtimeClose.header("Connection")), std::string("close"));
 }
 
 RUVIA_TEST(response_head_emits_well_formed_normal) {

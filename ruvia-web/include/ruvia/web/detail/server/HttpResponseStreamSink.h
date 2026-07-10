@@ -4,6 +4,8 @@
 
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
+#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/Task.h"
@@ -13,11 +15,9 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <memory_resource>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -36,16 +36,14 @@ public:
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
         ResponseBodyMode mode,
-        ResponseStreamFraming framing,
-        bool connectionWillClose) noexcept
+        Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
           head_(head),
           scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
           mode_(mode),
-          framing_(framing),
-          connectionWillClose_(connectionWillClose) {}
+          plan_(plan) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -79,17 +77,16 @@ private:
             co_return;
         }
 
-        auto streamHead = prepareResponseStreamHead(
+        auto streamHead = prepareHttp1ResponseStreamHead(
             state_.streamingHead(),
             responseStreamKindForRouteMode(mode_),
-            framing_,
-            connectionWillClose_);
+            plan_);
 
         head_.reset();
         appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
-        state_.markCommitted(streamHead.bodyForbidden());
+        state_.markCommitted(streamHead.bodySuppressed());
         auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
             asio::async_write(stream_, asio::buffer(headView), std::move(handler));
         });
@@ -118,7 +115,7 @@ private:
         co_await commit();
         state_.ensureBodyAllowed();
 
-        if (framing_ == ResponseStreamFraming::kHttp1CloseDelimited) {
+        if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
             const auto rawEc = co_await asyncError([this, chunk](auto handler) mutable {
@@ -132,18 +129,11 @@ private:
             co_return;
         }
 
-        std::array<char, 32> sizeBuffer;
-        const auto [ptr, ec] = std::to_chars(sizeBuffer.data(), sizeBuffer.data() + sizeBuffer.size(), chunk.size(), 16);
-        if (ec != std::errc{}) {
-            throw std::logic_error("failed to format response stream chunk size");
-        }
-        const auto size = std::string_view(sizeBuffer.data(), static_cast<std::size_t>(ptr - sizeBuffer.data()));
-        constexpr std::string_view crlf = "\r\n";
-        const std::array<asio::const_buffer, 4> buffers{
-            asio::buffer(size),
-            asio::buffer(crlf),
+        const Http1ChunkHeader chunkHeader(chunk.size());
+        const std::array<asio::const_buffer, 3> buffers{
+            asio::buffer(chunkHeader.view()),
             asio::buffer(chunk),
-            asio::buffer(crlf)};
+            asio::buffer(kHttp1ChunkDataTerminator)};
         const auto writeEc = co_await asyncError([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
         });
@@ -155,14 +145,10 @@ private:
     }
 
     // RFC 9110 Section 6.5 trailers are queued before the stream ends and
-    // flushed here as chunked trailer fields. The value was validated for
-    // CR/LF/NUL on entry, so it is safe to write verbatim.
+    // flushed here as chunked trailer fields by the HTTP-owned serializer.
     void addTrailer(std::string_view name, std::string_view value) {
-        state_.ensureTrailerAllowed(name, value);
-        trailers_.append(name.data(), name.size());
-        trailers_.append(": ");
-        trailers_.append(value.data(), value.size());
-        trailers_.append("\r\n");
+        state_.ensureTrailerOpen();
+        appendHttp1TrailerField(trailers_, name, value);
     }
 
     Task<void> end() {
@@ -170,11 +156,11 @@ private:
             co_return;
         }
         co_await commit();
-        if (state_.bodyForbidden()) {
+        if (state_.bodySuppressed()) {
             state_.markEnded();
             co_return;
         }
-        if (framing_ == ResponseStreamFraming::kHttp1CloseDelimited) {
+        if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No last-chunk terminator: the connection close delimits the body.
             // Trailers require chunked framing (RFC 9110 6.5), which a close-
             // delimited HTTP/1.0 response cannot carry, so any queued trailer is
@@ -183,14 +169,12 @@ private:
             co_return;
         }
 
-        // Last-chunk, then the (possibly empty) trailer section, then the
-        // closing CRLF. With no trailers this is exactly "0\r\n\r\n".
-        constexpr std::string_view lastChunk = "0\r\n";
-        constexpr std::string_view crlf = "\r\n";
+        // The protocol primitive owns the last-chunk and trailer-section delimiters;
+        // this runtime layer only submits their byte views to the socket.
         const std::array<asio::const_buffer, 3> buffers{
-            asio::buffer(lastChunk),
+            asio::buffer(kHttp1LastChunkPrefix),
             asio::buffer(trailers_),
-            asio::buffer(crlf)};
+            asio::buffer(kHttp1TrailerSectionTerminator)};
         const auto ec = co_await asyncError([this, &buffers](auto handler) mutable {
             asio::async_write(stream_, buffers, std::move(handler));
         });
@@ -208,8 +192,7 @@ private:
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
-    ResponseStreamFraming framing_;
-    bool connectionWillClose_;
+    Http1ResponseStreamPlan plan_;
     ResponseStreamState state_;
     bool aborted_{false};
 };

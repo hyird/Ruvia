@@ -1,9 +1,11 @@
 #include "test_harness.h"
 
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/http/detail/HttpRequestFlags.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -153,4 +155,35 @@ RUVIA_TEST(ws_valid_request_requires_all_conditions) {
         "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
         "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: YWJj\r\n\r\n");
     RUVIA_CHECK(!isValidWebSocketRequest(badKey, flags));
+}
+
+RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
+    const auto request = parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Protocol: chat, superchat\r\n"
+        "\r\n");
+    auto flags = validHandshakeFlags();
+    flags.secWebSocketProtocolCount = 1;
+    const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(
+        request, flags, "chat");
+
+    std::string response;
+    handshake.forEachResponsePart([&response](std::string_view part) {
+        response.append(part);
+    });
+    RUVIA_CHECK_EQ(
+        response,
+        std::string(
+            "HTTP/1.1 101 Switching Protocols\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
+            "Sec-WebSocket-Protocol: chat\r\n"
+            "\r\n"));
+    RUVIA_CHECK(!handshake.permessageDeflate);
 }

@@ -1,44 +1,36 @@
-#include "ruvia/http/detail/HttpErrorNormalize.h"
-#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/detail/http/HttpErrorNormalize.h"
+#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <exception>
 
 namespace ruvia {
 
-Task<HttpResponse> makeErrorResponse(
+Task<HttpResponse> detail::invokeErrorHandler(
     Context& context,
     HttpErrorInfo error,
-    bool closeConnection,
     HttpErrorHandler handler) {
-    error = detail::normalizeHttpErrorInfo(error);
+    error = normalizeHttpErrorInfo(error);
 
     if (handler != nullptr) {
         try {
-            auto response = co_await handler(context, error);
-            if (closeConnection) {
-                detail::setResponseHeaderStableView(response, "Connection", "close");
-            }
-            co_return response;
+            co_return co_await handler(context, error);
         } catch (const HttpError& nested) {
-            co_return makeErrorResponse(context.resource(), nested.info(), closeConnection);
+            co_return makeDefaultErrorResponse(context.resource(), nested.info());
         } catch (const std::exception&) {
             // The error handler itself threw; keep transport output deterministic
             // and avoid echoing exception detail to the client.
-            co_return makeErrorResponse(
+            co_return makeDefaultErrorResponse(
                 context.resource(),
-                HttpErrorInfo(500, "error_handler_failed", "error handler failed"),
-                closeConnection);
+                HttpErrorInfo(500, "error_handler_failed", "error handler failed"));
         } catch (...) {
-            co_return makeErrorResponse(
+            co_return makeDefaultErrorResponse(
                 context.resource(),
-                HttpErrorInfo(500, "error_handler_failed", "error handler failed"),
-                closeConnection);
+                HttpErrorInfo(500, "error_handler_failed", "error handler failed"));
         }
     }
 
-    co_return makeErrorResponse(context.resource(), error, closeConnection);
+    co_return makeDefaultErrorResponse(context.resource(), error);
 }
 
 }  // namespace ruvia

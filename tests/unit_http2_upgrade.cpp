@@ -72,3 +72,21 @@ RUVIA_TEST(http2_base64url_decode_rejects_bad_input) {
     (void)decode("A===", ok);
     RUVIA_CHECK(!ok);
 }
+
+RUVIA_TEST(http2_upgrade_response_serialization_is_http_owned) {
+    std::string response;
+    std::size_t parts = 0;
+    ruvia::detail::forEachHttp2UpgradeResponsePart(
+        [&response, &parts](std::string_view part) {
+            response.append(part);
+            ++parts;
+        });
+    RUVIA_CHECK_EQ(parts, std::size_t{3});
+    RUVIA_CHECK(response.starts_with(
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: h2c\r\n"
+        "Server: ruvia\r\n"
+        "Date: "));
+    RUVIA_CHECK(response.ends_with("\r\n\r\n"));
+}

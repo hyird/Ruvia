@@ -1,5 +1,4 @@
 add_library(ruvia-http
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp
@@ -10,7 +9,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeadersStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseKnownHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MultipartReader.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/Streaming.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Sse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpHeaderBlockParser.cpp
@@ -58,8 +57,7 @@ ruvia_install_target(ruvia-http http)
 
 ruvia_install_public_headers(http
     include/ruvia/http/Cookies.h
-    include/ruvia/http/Error.h
-    include/ruvia/http/HttpBodyStream.h
+    include/ruvia/http/HttpProtocolError.h
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpClientTypes.h
@@ -71,7 +69,6 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpResponse.h
     include/ruvia/http/HttpStatus.h
     include/ruvia/http/HttpTypes.h
-    include/ruvia/http/JsonUtils.h
     include/ruvia/http/MultipartParser.h
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h

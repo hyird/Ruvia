@@ -1,7 +1,8 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/Error.h"
+#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <exception>
 #include <memory>
@@ -18,7 +19,7 @@ void storeRepeatedNextError(Context& context) {
         std::make_exception_ptr(std::logic_error("next() called multiple times")));
     detail::ContextAccess::setResponse(
         context,
-        makeErrorResponse(
+        detail::makeDefaultErrorResponse(
             context.resource(),
             HttpErrorInfo(500, "next_called_multiple_times", "next() called multiple times")));
 }
@@ -70,7 +71,7 @@ Task<HttpResponse> detail::RouteTable::invokeRouteWithMiddleware(
         co_return detail::ContextAccess::takeResponse(context);
     }
     if (auto exception = context.error()) {
-        co_return co_await handleException(context, exception, true);
+        co_return co_await handleException(context, exception);
     }
     throw std::logic_error("context is not finalized; middleware must set a response or await next()");
 }
@@ -180,10 +181,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State st
 Task<void> detail::RouteTable::storeMiddlewareExceptionResponse(
     Context& context,
     std::exception_ptr exception) const {
-    auto response = co_await handleException(
-        context,
-        exception,
-        true);
+    auto response = co_await handleException(context, exception);
     detail::ContextAccess::setResponse(context, std::move(response));
 }
 

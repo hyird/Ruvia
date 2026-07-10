@@ -87,17 +87,13 @@ bool compressResponseBodyIfAccepted(
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
     std::pmr::string& compressionScratch,
-    bool skipBody) {
-    if (skipBody || !options.enabled) {
+    const HttpResponseBodyPlan& bodyPlan) {
+    if (!bodyPlan.statusAllowsBody() || !options.enabled) {
         return false;
     }
 
     const auto statusCode = response.status();
-    if (statusCode < 200 ||
-        statusCode == 206 ||
-        statusCode == 204 ||
-        statusCode == 205 ||
-        statusCode == 304) {
+    if (statusCode == 206 || statusCode == 205) {
         return false;
     }
 

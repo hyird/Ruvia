@@ -60,7 +60,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
             // The session id is only known after the handler ran, so the
             // cookie goes straight onto the already-built response rather
             // than through the context (whose headers were applied earlier).
-            detail::appendSessionCookieHeader(response, c.resource(), id, c.req().raw().isSecure());
+            detail::appendSessionCookieHeader(response, c.resource(), id, getConnInfo(c).secure());
         }
         std::pmr::string key(c.resource());
         key.append("sess:");

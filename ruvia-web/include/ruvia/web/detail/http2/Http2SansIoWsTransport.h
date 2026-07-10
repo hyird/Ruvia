@@ -59,7 +59,7 @@ struct Http2SansIoStreamSignal final {
 
 // WebSocket transport (RFC 8441 Extended CONNECT) over the sans-I/O core. Mirrors the
 // coroutine Http2WebSocketTransport: readMore pops tunnel DATA from the stream's body
-// queue (the coroutine's readBodyChunk), writeFrame submits DATA through the core (a
+// queue (the coroutine's readBodyChunk), writeBytes submits DATA through the core (a
 // window-blocked remainder is queued in-order inside the core) and wakes the writer.
 template <typename Executor>
 class Http2SansIoWsTransport final {
@@ -100,14 +100,10 @@ public:
         }
     }
 
-    [[nodiscard]] Task<std::error_code> writeFrame(
-        std::string_view header,
-        std::string_view payload,
+    [[nodiscard]] Task<std::error_code> writeBytes(
+        std::string_view bytes,
         bool endStream) {
-        auto result = connection_->submitData(streamId_, header, payload.empty() && endStream);
-        if (!payload.empty()) {
-            result = connection_->submitData(streamId_, payload, endStream);
-        }
+        const auto result = connection_->submitData(streamId_, bytes, endStream);
         writeSignal_->cancel();
         if (result == Http2SubmitResult::kClosed) {
             co_return std::make_error_code(std::errc::connection_reset);

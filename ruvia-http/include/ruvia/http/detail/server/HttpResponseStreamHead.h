@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
@@ -29,35 +30,34 @@ enum class ResponseStreamKind : std::uint8_t {
 
 class ResponseStreamHead final {
 public:
-    ResponseStreamHead(HttpResponse response, ResponseWritePolicy policy, bool bodyForbidden)
+    ResponseStreamHead(HttpResponse response, HttpResponseBodyPlan bodyPlan)
         : response_(std::move(response)),
-          policy_(policy),
-          bodyForbidden_(bodyForbidden) {}
+          bodyPlan_(bodyPlan) {}
 
     [[nodiscard]] HttpResponse& response() noexcept {
         return response_;
     }
 
     [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
-        return policy_;
+        return bodyPlan_.policy();
     }
 
-    [[nodiscard]] bool bodyForbidden() const noexcept {
-        return bodyForbidden_;
+    [[nodiscard]] bool bodySuppressed() const noexcept {
+        return bodyPlan_.bodySuppressed();
     }
 
 private:
     HttpResponse response_;
-    ResponseWritePolicy policy_;
-    bool bodyForbidden_{false};
+    HttpResponseBodyPlan bodyPlan_;
 };
 
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
     HttpResponse response,
     ResponseStreamKind kind,
     ResponseStreamFraming framing,
+    HttpResponseBodyPlan bodyPlan,
     bool connectionWillClose = false) {
-    const auto policy = responseWritePolicy(response.status());
+    const auto& policy = bodyPlan.policy();
     const bool needsSseContentType =
         kind == ResponseStreamKind::kSse &&
         !responseHasKnownHeader(response, kResponseHeaderContentType);
@@ -111,7 +111,7 @@ private:
         setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 
-    return ResponseStreamHead(std::move(response), policy, !policy.bodyAllowed());
+    return ResponseStreamHead(std::move(response), bodyPlan);
 }
 
 }  // namespace ruvia::detail

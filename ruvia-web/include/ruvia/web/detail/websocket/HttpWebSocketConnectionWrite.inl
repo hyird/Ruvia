@@ -119,9 +119,9 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow(bool endStream) {
     while (protocol_.wantsWrite()) {
         const auto output = protocol_.pendingOutput();
-        const auto ec = co_await transport_.writeFrame(output, {}, endStream);
+        const auto ec = co_await transport_.writeBytes(output, endStream);
         if (ec) {
-            throw std::invalid_argument("failed to write websocket frame");
+            throw std::invalid_argument("failed to write websocket bytes");
         }
         protocol_.consumeOutput(output.size());
         scannerEntry_.touch();

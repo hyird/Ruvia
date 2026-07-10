@@ -30,8 +30,7 @@ namespace ruvia::detail {
 // policy, which supplies the three transport-specific operations:
 //   asio-executor executor() const;
 //   Task<bool> readMore(std::pmr::string& buffer);  // append >=1 byte, false on EOF
-//   Task<std::error_code> writeFrame(std::string_view header,
-//                                    std::string_view payload, bool endStream);
+//   Task<std::error_code> writeBytes(std::string_view bytes, bool endStream);
 template <typename Transport>
 class WebSocketConnection final {
 public:

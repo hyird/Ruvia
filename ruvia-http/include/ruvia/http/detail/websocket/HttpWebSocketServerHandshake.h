@@ -25,6 +25,24 @@ struct HttpWebSocketServerHandshake final {
     std::string_view subprotocol;
     std::string_view extensions;
     bool permessageDeflate{false};
+
+    template <typename Visitor>
+    void forEachResponsePart(Visitor&& visitor) const {
+        visitor(kHttpWebSocketSwitchingProtocolsPrefix);
+        visitor(std::string_view(accept.data(), accept.size()));
+        visitor(kHttpCrlf);
+        if (!subprotocol.empty()) {
+            visitor(kHttpWebSocketSubprotocolHeaderPrefix);
+            visitor(subprotocol);
+            visitor(kHttpCrlf);
+        }
+        if (!extensions.empty()) {
+            visitor(kHttpWebSocketExtensionsHeaderPrefix);
+            visitor(extensions);
+            visitor(kHttpCrlf);
+        }
+        visitor(kHttpCrlf);
+    }
 };
 
 [[nodiscard]] inline HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(

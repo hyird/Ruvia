@@ -169,7 +169,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
         std::byte{0x41},
         std::byte{0xff}};
     constexpr ruvia::HttpHeaderView headers[] = {{"X-Bin", "1"}};
-    auto response = context.newResponse(
+    auto response = context.body(
         std::span<const std::byte>(bytes),
         206,
         headers);

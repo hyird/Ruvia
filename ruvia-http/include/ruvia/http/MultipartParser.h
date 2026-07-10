@@ -1,10 +1,13 @@
 #pragma once
 
+#include "ruvia/http/HttpCommon.h"
+
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ruvia {
 
@@ -114,5 +117,12 @@ private:
     bool partBegin_{false};
     bool firstBoundary_{true};
 };
+
+// Parses a complete multipart/form-data body without I/O. Returned part bodies
+// and content types borrow `body`; decoded name/filename values own PMR storage.
+[[nodiscard]] std::pmr::vector<MultipartPart> parseMultipartBody(
+    std::string_view body,
+    std::string_view boundary,
+    std::pmr::memory_resource* resource = nullptr);
 
 }  // namespace ruvia
