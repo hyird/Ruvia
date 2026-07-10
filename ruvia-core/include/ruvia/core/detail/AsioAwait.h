@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
 

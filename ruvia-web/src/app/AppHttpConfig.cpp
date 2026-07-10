@@ -1,5 +1,5 @@
 #include "ruvia/web/detail/app/AppConfigMutation.h"
-#include "ruvia/detail/NativePath.h"
+#include "ruvia/core/detail/NativePath.h"
 #include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 
 #include <stdexcept>

@@ -3,7 +3,7 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/detail/ConstantTime.h"
+#include "ruvia/core/detail/ConstantTime.h"
 
 namespace ruvia::detail {
 

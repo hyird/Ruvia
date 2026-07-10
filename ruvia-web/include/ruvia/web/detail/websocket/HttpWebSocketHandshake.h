@@ -6,7 +6,7 @@
 
 #include "ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
 

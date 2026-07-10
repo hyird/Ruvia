@@ -1,9 +1,7 @@
-#include "ruvia/http/HttpClientRuntime.h"
-#include "ruvia/http/Streaming.h"
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/web/Streaming.h"
+#include "ruvia/web/WebSocket.h"
 
-#include "ruvia/app/Task.h"
-#include "ruvia/web/detail/http/HttpBodyStreamAccess.h"
+#include "ruvia/core/Task.h"
 
 namespace ruvia {
 
@@ -40,17 +38,6 @@ Task<void> SseWriter::sleep(std::chrono::milliseconds duration) {
 
 Task<void> SseWriter::end() {
     return writer_.end();
-}
-
-Task<std::string_view> RequestBodyStream::nextChunk() const {
-    if (nextChunk_ == nullptr) {
-        co_return std::string_view{};
-    }
-    co_return co_await nextChunk_(target_);
-}
-
-Task<std::string_view> FetchResponseStream::readChunk() {
-    return detail::HttpBodyStreamAccess::nextChunk(body_);
 }
 
 Task<std::optional<WebSocketMessage>> WebSocket::read() {

@@ -36,8 +36,8 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/App.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/App.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

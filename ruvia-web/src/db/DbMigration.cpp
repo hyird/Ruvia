@@ -2,7 +2,7 @@
 #include "ruvia/web/detail/db/DbConfigValidation.h"
 #include "ruvia/web/detail/db/DbMigrationValidation.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 #include "ruvia/core/detail/AsioAwait.h"
 

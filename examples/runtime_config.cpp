@@ -3,8 +3,8 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 

@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/model/Parser.h"
+#include "ruvia/web/detail/model/Parser.h"
 
 namespace {
 

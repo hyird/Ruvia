@@ -6,9 +6,9 @@
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/web/WebSocket.h"
 
 namespace ruvia::detail {
 

@@ -1,4 +1,4 @@
-#include "ruvia/version.h"
+#include "ruvia/core/version.h"
 
 namespace ruvia {
 

@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/json/JsonLex.h"
+#include "ruvia/web/detail/json/JsonLex.h"
 
 namespace {
 

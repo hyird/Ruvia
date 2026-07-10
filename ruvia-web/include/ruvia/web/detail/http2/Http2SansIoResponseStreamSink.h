@@ -31,7 +31,7 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
 

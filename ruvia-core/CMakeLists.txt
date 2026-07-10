@@ -23,16 +23,12 @@ target_link_libraries(ruvia-core
 ruvia_install_target(ruvia-core core)
 
 ruvia_install_public_headers(core
-    include/ruvia/version.h
-    include/ruvia/app/Task.h
-    include/ruvia/app/detail/TaskAwaiter.h
-    include/ruvia/app/detail/TaskPromise.h
-    include/ruvia/detail/ConstantTime.h
-    include/ruvia/detail/NativePath.h
-    include/ruvia/memory/MemoryPool.h
-    include/ruvia/memory/PmrObject.h
-    include/ruvia/memory/PmrResource.h
-    include/ruvia/memory/ProcessResource.h
+    include/ruvia/core/version.h
+    include/ruvia/core/Task.h
+    include/ruvia/core/memory/MemoryPool.h
+    include/ruvia/core/memory/PmrObject.h
+    include/ruvia/core/memory/PmrResource.h
+    include/ruvia/core/memory/ProcessResource.h
 )
 
 ruvia_install_public_header_tree(core include/ruvia/core/detail)

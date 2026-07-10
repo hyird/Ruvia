@@ -54,7 +54,6 @@ Task<void> HttpServer::handleHttp2Session(Stream& stream, TcpSocket& socket, std
         routes_,
         databases_,
         redis_,
-        httpClients_,
         options_,
         scannerEntry,
         remoteAddress,

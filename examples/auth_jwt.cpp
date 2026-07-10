@@ -1,9 +1,9 @@
 #include <chrono>
 #include <string_view>
 
-#include "ruvia/app/App.h"
-#include "ruvia/auth/Jwt.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/auth/Jwt.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 

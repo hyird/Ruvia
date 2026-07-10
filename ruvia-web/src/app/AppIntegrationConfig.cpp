@@ -6,7 +6,6 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #endif
-#include "ruvia/http/detail/client/HttpClientConfigValidation.h"
 
 #include <memory_resource>
 #include <stdexcept>
@@ -92,32 +91,4 @@ App& App::useRedis(std::string_view alias, RedisConfig config) {
         });
 }
 #endif
-App& App::useHttpClient(HttpClientConfig config) {
-    return useHttpClient("default", std::move(config));
-}
-
-App& App::useHttpClient(std::string_view alias, HttpClientConfig config) {
-    return detail::mutateStoppedApp(
-        *this,
-        *state_,
-        "cannot configure http client while app is running",
-        [&](detail::AppState& state) {
-            if (alias.empty()) {
-                throw std::invalid_argument("http client alias must not be empty");
-            }
-            detail::validateHttpClientConfig(config);
-
-            upsertDefinition(
-                state.httpClients,
-                alias,
-                config,
-                [](std::string_view storedAlias, HttpClientConfig&& storedConfig) {
-                    auto* resource = detail::appResource();
-                    return detail::HttpClientDefinition{
-                        std::pmr::string(storedAlias, resource),
-                        std::move(storedConfig)};
-                });
-        });
-}
-
 }  // namespace ruvia

@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/web/detail/app/AppAccess.h"
-#include "ruvia/http/HttpServerOptions.h"
+#include "ruvia/web/HttpServerOptions.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {

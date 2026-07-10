@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/HttpNumberFormat.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

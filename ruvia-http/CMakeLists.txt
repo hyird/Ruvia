@@ -44,8 +44,8 @@ ruvia_configure_library(ruvia-http)
 target_link_libraries(ruvia-http
     PUBLIC
         # Content/transfer coding only (gzip/deflate/brotli/zstd). NO OpenSSL: the pure
-        # protocol library does no TLS -- that moved to the web-layer client/server
-        # drivers -- and the WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
+        # protocol library does no TLS -- client transports are supplied externally and
+        # the server driver lives in web -- while WebSocket Sec-WebSocket-Accept SHA-1 is hand-rolled. Every
         # http consumer would otherwise pull OpenSSL in for nothing.
         ZLIB::ZLIB
         unofficial::brotli::brotlienc

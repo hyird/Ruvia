@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/app/App.h"
+#include "ruvia/web/App.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {

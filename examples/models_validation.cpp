@@ -4,8 +4,8 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 RUVIA_MODEL(ProfileRequest,
     RUVIA_FIELD(displayName, ruvia::String),

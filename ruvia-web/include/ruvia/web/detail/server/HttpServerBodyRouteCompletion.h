@@ -7,9 +7,9 @@
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <cstddef>
 #include <exception>

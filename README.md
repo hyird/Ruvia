@@ -8,7 +8,7 @@ Ruvia is a small C++23 HTTP/Web framework with explicit library boundaries. The 
 | --- | --- | --- | --- |
 | `ruvia-core/` | `ruvia-core` | `ruvia::core` | Runtime foundation: coroutine task type, Asio integration glue, PMR memory resources, mimalloc integration, and small runtime helpers. |
 | `ruvia-http/` | `ruvia-http` | `ruvia::http` | Pure sans-I/O protocol library (zero core/asio/socket runtime): HTTP message types, header token/value helpers, HTTP/1 parser + connection core, HTTP/2 connection core (server + client roles), WebSocket protocol core, HPACK, body framing/streams, multipart/SSE/content-encoding protocol helpers, cookie/cache/range/conditional/negotiation helpers, and the outbound client's protocol core. |
-| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full web framework: App, Context, Controller, Router, middleware, model/validation, server and outbound-client I/O drivers over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, WebSocket routes, `Context::client().fetch`/`proxy`), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
+| `ruvia-web/` | `ruvia-web` | `ruvia::web` | The full server-side web framework: App, Context, Controller, Router, middleware, model/validation, server I/O over the HTTP cores (Asio, TLS/ALPN, timeouts, streaming, and WebSocket routes), plus application policies such as session, CSRF/JWT, CORS, security headers, rate limits, static roots, AutoHTTPS redirect, DB, and Redis. |
 
 Dependency direction:
 
@@ -116,7 +116,7 @@ find_package(ruvia CONFIG REQUIRED COMPONENTS core)
 target_link_libraries(tool PRIVATE ruvia::core)
 
 find_package(ruvia CONFIG REQUIRED COMPONENTS http)
-target_link_libraries(proxy_tool PRIVATE ruvia::http)
+target_link_libraries(protocol_tool PRIVATE ruvia::http)
 ```
 
 When no component is requested, the package loads the built direct targets. New projects should still request the component they use explicitly.
@@ -124,8 +124,8 @@ When no component is requested, the package loads the built direct targets. New 
 ## Minimal Web App
 
 ```cpp
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 class HelloController final : public ruvia::Controller<HelloController> {
 public:
@@ -185,7 +185,7 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
 
-The outbound HTTP client follows the same split as the server: the protocol model and sans-I/O HTTP client core (response parsing, transfer/content decoding, generic redirect replay checks, `HttpClientTypes.h`, and HTTP/2 client protocol state) live in `ruvia::http`; the Asio/TLS runtime facade (`FetchOptions`, `RequestBodyStream`, `FetchResponseStream`, `ProxyOptions`) lives in `ruvia::web` via `HttpClientRuntime.h` and is used through the `Context::client()` facet (`c.client().fetch` / `.fetchStream` / `.proxy`).
+The outbound HTTP client surface is intentionally limited to the low-level, sans-I/O protocol API in `ruvia::http`: `HttpOrigin`, request/response models, response parsing, transfer/content decoding, redirect replay checks, and the HTTP/2 client-role protocol state. It contains no TLS file settings, pools, or runtime timeouts. `ruvia::web` does not provide a socket/TLS client runtime, `fetch`, or reverse-proxy integration; applications that need outbound HTTP drive the protocol API from their own I/O runtime.
 
 ## Build Options
 
@@ -200,7 +200,7 @@ The outbound HTTP client follows the same split as the server: the protocol mode
 | `RUVIA_ENABLE_REDIS` | `OFF` | Build Redis integration into `ruvia-web`. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Build JWT helpers into `ruvia-web`. |
 
-The outbound HTTP client protocol core is a `ruvia-http` capability (no build switch); its Asio/TLS runtime driver ships in `ruvia-web`, mirroring the server-side split.
+The outbound HTTP client protocol core is a `ruvia-http` capability with no separate build switch. Applications supply the transport implementation for outbound requests.
 
 CMake derives vcpkg manifest features from these switches before dependency
 installation. Optional MariaDB, Redis, and JWT switches require `RUVIA_BUILD_WEB=ON`.
@@ -212,24 +212,26 @@ installation. Optional MariaDB, Redis, and JWT switches require `RUVIA_BUILD_WEB
 |-- CMakeLists.txt
 |-- ruvia-core/
 |   |-- CMakeLists.txt
-|   |-- include/ruvia/core/detail/  # reusable runtime contracts
+|   |-- include/ruvia/core/         # core-only public/install namespace
 |   `-- src/                        # flat runtime implementations
 |-- ruvia-http/
 |   |-- CMakeLists.txt
-|   |-- include/ruvia/http/detail/  # protocol contracts by one domain layer
+|   |-- include/ruvia/http/         # HTTP-only public/install namespace
 |   `-- src/{client,http2,parser,server,websocket}/
 |-- ruvia-web/
 |   |-- CMakeLists.txt
-|   |-- include/ruvia/web/detail/   # framework-internal contracts
-|   `-- src/{app,client,http2,server,websocket,db,redis,router}/
+|   |-- include/ruvia/web/          # Web-only public/install namespace
+|   `-- src/{app,http2,server,websocket,db,redis,router}/
 |-- examples/
 |-- tests/
 `-- vcpkg.json
 ```
 
-Targets share implementation contracts only through their owning `include/.../detail`
-tree. No target adds another target's private `src/` directory to its include path;
-redundant `net/` and `*/core/` source layers are rejected by the boundary checker.
+Each target compiles files only from its own source directory and installs headers only
+under its matching `ruvia/core`, `ruvia/http`, or `ruvia/web` namespace. Targets share
+contracts only through the dependency target's installed include interface; physical
+cross-target source/private-header paths and mixed install roots are rejected at configure
+time and by the boundary checker.
 
 The only local build directory is `build/`. If CMake cache or generated files become suspicious, delete `build/` and configure again. Vcpkg installation trees, CodeGraph indexes, and local agent directories are ignored.
 

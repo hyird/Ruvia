@@ -15,7 +15,7 @@
 #include "ruvia/web/detail/redis/RedisHandleHelpers.h"
 #include "ruvia/web/detail/redis/RedisProtocol.h"
 #include "ruvia/web/detail/redis/RedisTypesAccess.h"
-#include "ruvia/redis/RedisTypes.h"
+#include "ruvia/web/redis/RedisTypes.h"
 
 namespace {
 

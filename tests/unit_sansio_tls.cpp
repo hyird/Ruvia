@@ -29,9 +29,9 @@
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/Context.h"
-#include "ruvia/memory/MemoryPool.h"
-#include "ruvia/router/Router.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/web/Router.h"
 
 namespace {
 

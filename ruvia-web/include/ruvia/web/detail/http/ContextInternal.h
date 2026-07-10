@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 
 #include <cstddef>
@@ -36,7 +36,6 @@ inline Context::Context(
       routeMiddlewareCount_(routeMiddlewareCount),
       db_(services.db()),
       redis_(services.redis()),
-      httpClients_(services.httpClients()),
       rateLimiter_(services.rateLimiter()),
       errorHandler_(services.errorHandler()),
       notFoundHandler_(services.notFoundHandler()),

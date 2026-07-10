@@ -25,7 +25,7 @@
 #include "ruvia/http/detail/http2/Http2BodyQueue.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {

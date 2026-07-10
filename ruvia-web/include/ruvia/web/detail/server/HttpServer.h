@@ -18,15 +18,14 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/app/App.h"
-#include "ruvia/app/Task.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/web/App.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
-#include "ruvia/web/detail/client/HttpClientInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
 
 namespace ruvia::detail {
@@ -51,14 +50,6 @@ public:
         std::span<const RedisDefinition> redis,
         HttpServerOptions options = {},
         RateLimiter* rateLimiter = nullptr);
-    HttpServer(
-        asio::ip::tcp::endpoint endpoint,
-        const RouteTable& routes,
-        std::span<const DbDefinition> databases,
-        std::span<const RedisDefinition> redis,
-        std::span<const HttpClientDefinition> httpClients,
-        HttpServerOptions options = {},
-        RateLimiter* rateLimiter = nullptr);
     ~HttpServer();
 
     HttpServer(const HttpServer&) = delete;
@@ -68,11 +59,6 @@ public:
     void stop();
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
-    // Post a runtime HTTP-client add/replace or remove onto this worker's io_context (safe to call
-    // from any thread; the registry is mutated on the worker thread).
-    void addHttpClient(std::string_view alias, HttpClientConfig config);
-    void removeHttpClient(std::string_view alias);
-
 private:
     void configureAcceptor();
     void configureTlsContext();
@@ -107,7 +93,6 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
-    HttpClientRegistry httpClients_;
     RateLimiter* rateLimiter_{nullptr};
     ConnectionScanner connectionScanner_;
     ConnectionWorkSetPool workSetPool_;

@@ -1,6 +1,6 @@
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 
-#include "ruvia/app/App.h"
+#include "ruvia/web/App.h"
 
 namespace ruvia {
 

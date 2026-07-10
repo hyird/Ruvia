@@ -17,10 +17,10 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/app/Task.h"
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/WebSocket.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

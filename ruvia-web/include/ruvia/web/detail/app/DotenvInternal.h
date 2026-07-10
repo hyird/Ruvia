@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/app/Dotenv.h"
+#include "ruvia/web/Dotenv.h"
 #include "ruvia/web/detail/app/AppResource.h"
 
 namespace ruvia::detail {

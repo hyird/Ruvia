@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/http/RouteModes.h"
+#include "ruvia/web/RouteModes.h"
 
 namespace ruvia::detail {
 

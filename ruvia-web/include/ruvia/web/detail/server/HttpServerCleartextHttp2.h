@@ -5,7 +5,7 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 
 #include <asio/buffer.hpp>
 #include <asio/ip/tcp.hpp>
@@ -62,7 +62,6 @@ Task<void> runHttp2ServerSession(
     const RouteTable& routes,
     DbRegistry& databases,
     RedisRegistry& redis,
-    HttpClientRegistry& httpClients,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
@@ -74,7 +73,6 @@ Task<void> runHttp2ServerSession(
     Http2SansIoSessionEnv env;
     env.databases = &databases;
     env.redis = &redis;
-    env.httpClients = &httpClients;
     env.rateLimiter = rateLimiter;
     env.options = &options;
     env.scannerEntry = &scannerEntry;
@@ -91,7 +89,6 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const RouteTable& routes,
     DbRegistry& databases,
     RedisRegistry& redis,
-    HttpClientRegistry& httpClients,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
@@ -111,7 +108,6 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             routes,
             databases,
             redis,
-            httpClients,
             options,
             scannerEntry,
             remoteAddress,
@@ -152,7 +148,6 @@ Task<void> runUpgradedHttp2ServerSession(
     const RouteTable& routes,
     DbRegistry& databases,
     RedisRegistry& redis,
-    HttpClientRegistry& httpClients,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
@@ -167,7 +162,6 @@ Task<void> runUpgradedHttp2ServerSession(
     Http2SansIoSessionEnv env;
     env.databases = &databases;
     env.redis = &redis;
-    env.httpClients = &httpClients;
     env.rateLimiter = rateLimiter;
     env.options = &options;
     env.scannerEntry = &scannerEntry;

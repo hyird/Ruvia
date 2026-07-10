@@ -2,8 +2,8 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/model/Traits.h"
-#include "ruvia/http/detail/model/RuleSupport.h"
+#include "ruvia/web/detail/model/Traits.h"
+#include "ruvia/web/detail/model/RuleSupport.h"
 
 namespace {
 

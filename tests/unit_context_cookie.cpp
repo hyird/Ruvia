@@ -12,9 +12,9 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/http/Context.h"
+#include "ruvia/web/Context.h"
 #include "ruvia/http/HttpCommon.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
 

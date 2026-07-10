@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/FileResponseHelpers.h"
 #include "ruvia/http/detail/FileResponseResource.h"
-#include "ruvia/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrObject.h"
 
 #include <algorithm>
 #include <cstddef>

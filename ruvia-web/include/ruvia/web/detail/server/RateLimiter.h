@@ -11,8 +11,8 @@
 #include <string_view>
 #include <thread>
 
-#include "ruvia/app/RateLimitRule.h"
-#include "ruvia/memory/PmrResource.h"
+#include "ruvia/web/RateLimitRule.h"
+#include "ruvia/core/memory/PmrResource.h"
 
 namespace ruvia::detail {
 

@@ -1,4 +1,4 @@
-#include "ruvia/http/Health.h"
+#include "ruvia/web/Health.h"
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/JsonUtils.h"

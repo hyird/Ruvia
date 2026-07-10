@@ -8,7 +8,7 @@
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 #include "ruvia/http/detail/HttpParserInternal.h"
-#include "ruvia/app/App.h"
+#include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {

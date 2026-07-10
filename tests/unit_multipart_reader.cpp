@@ -12,9 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/app/Task.h"
-#include "ruvia/http/MultipartReader.h"
-#include "ruvia/http/Streaming.h"
+#include "ruvia/core/Task.h"
+#include "ruvia/web/MultipartReader.h"
+#include "ruvia/web/Streaming.h"
 
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/AsioAwait.h"

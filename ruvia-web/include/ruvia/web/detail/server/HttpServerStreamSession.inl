@@ -9,7 +9,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
-    const ContextServices baseRouteServices(&databases_, &redis_, &httpClients_, rateLimiter_);
+    const ContextServices baseRouteServices(&databases_, &redis_, rateLimiter_);
     std::pmr::string remoteAddress(memory_.allocator<char>());
     std::error_code remoteEc;
     const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
@@ -80,7 +80,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         routes_,
                         databases_,
                         redis_,
-                        httpClients_,
                         options_,
                         scannerEntry,
                         remoteAddress,
@@ -144,7 +143,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             routes_,
                             databases_,
                             redis_,
-                            httpClients_,
                             options_,
                             remoteAddress,
                             rateLimiter_,
@@ -368,7 +366,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             if (responseHasStreamBody(response)) {
-                // A normal route returned a streaming body (e.g. Context::client().proxy): stream it here
+                // A normal route returned a streaming body: stream it here
                 // instead of buffering. HTTP/1.0 is close-delimited, so it cannot be kept alive.
                 const bool http11 = parsed.request.httpVersion() == "HTTP/1.1";
                 if (!http11) {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 #ifndef RUVIA_ENABLE_MARIADB
 
@@ -47,7 +47,7 @@ public:
 #include <string_view>
 #include <vector>
 
-#include "ruvia/memory/PmrObject.h"
+#include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/detail/PoolWaiterQueue.h"
 
 struct st_mysql;

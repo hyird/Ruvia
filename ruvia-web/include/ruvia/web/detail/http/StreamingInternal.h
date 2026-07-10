@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/Streaming.h"
+#include "ruvia/web/Streaming.h"
 
 #include <memory_resource>
 #include <optional>

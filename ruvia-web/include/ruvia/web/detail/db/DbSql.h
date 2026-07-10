@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 #include <memory_resource>
 #include <span>

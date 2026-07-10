@@ -5,7 +5,7 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 namespace {
 

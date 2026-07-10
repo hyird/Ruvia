@@ -1,4 +1,4 @@
-#include "ruvia/http/RateLimit.h"
+#include "ruvia/web/RateLimit.h"
 
 #include "ruvia/web/detail/http/ContextInternal.h"
 #include "ruvia/web/detail/server/RateLimitKey.h"

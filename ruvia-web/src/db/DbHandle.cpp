@@ -1,8 +1,8 @@
-#include "ruvia/db/Db.h"
+#include "ruvia/web/db/Db.h"
 
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/db/DbUtils.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <stdexcept>
 #include <utility>

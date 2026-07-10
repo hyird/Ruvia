@@ -4,7 +4,7 @@
 #include <exception>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
-#include "ruvia/app/App.h"
+#include "ruvia/web/App.h"
 
 namespace {
 

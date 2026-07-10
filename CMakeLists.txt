@@ -194,8 +194,27 @@ function(ruvia_install_target target component)
     )
 endfunction()
 
+function(ruvia_assert_component_header_path component relative_path)
+    set(_ruvia_expected_header_root "include/ruvia/${component}")
+    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
+        message(FATAL_ERROR
+            "${component} cannot install a header outside ${_ruvia_expected_header_root}: ${relative_path}")
+    endif()
+
+    set(_ruvia_header_root "${CMAKE_CURRENT_SOURCE_DIR}/${_ruvia_expected_header_root}")
+    set(_ruvia_header_path "${CMAKE_CURRENT_SOURCE_DIR}/${relative_path}")
+    cmake_path(NORMAL_PATH _ruvia_header_root OUTPUT_VARIABLE _ruvia_header_root_normalized)
+    cmake_path(IS_PREFIX _ruvia_header_root_normalized
+        "${_ruvia_header_path}" NORMALIZE _ruvia_header_is_owned)
+    if(NOT _ruvia_header_is_owned)
+        message(FATAL_ERROR
+            "${component} header path escapes its target directory: ${relative_path}")
+    endif()
+endfunction()
+
 function(ruvia_install_public_headers component)
     foreach(_ruvia_header ${ARGN})
+        ruvia_assert_component_header_path(${component} "${_ruvia_header}")
         get_filename_component(_ruvia_header_dir "${_ruvia_header}" DIRECTORY)
         file(
             RELATIVE_PATH
@@ -212,6 +231,7 @@ function(ruvia_install_public_headers component)
 endfunction()
 
 function(ruvia_install_public_header_tree component relative_dir)
+    ruvia_assert_component_header_path(${component} "${relative_dir}")
     file(
         RELATIVE_PATH
         _ruvia_header_tree_install_dir
@@ -228,6 +248,48 @@ function(ruvia_install_public_header_tree component relative_dir)
     )
 endfunction()
 
+function(ruvia_assert_target_file_ownership target)
+    get_target_property(_ruvia_target_source_dir ${target} SOURCE_DIR)
+    cmake_path(NORMAL_PATH _ruvia_target_source_dir OUTPUT_VARIABLE _ruvia_target_root)
+
+    get_target_property(_ruvia_target_sources ${target} SOURCES)
+    foreach(_ruvia_source IN LISTS _ruvia_target_sources)
+        if(_ruvia_source MATCHES "^\\$<")
+            continue()
+        endif()
+        if(IS_ABSOLUTE "${_ruvia_source}")
+            set(_ruvia_source_path "${_ruvia_source}")
+        else()
+            set(_ruvia_source_path "${_ruvia_target_source_dir}/${_ruvia_source}")
+        endif()
+        cmake_path(IS_PREFIX _ruvia_target_root
+            "${_ruvia_source_path}" NORMALIZE _ruvia_source_is_owned)
+        if(NOT _ruvia_source_is_owned)
+            message(FATAL_ERROR
+                "${target} cannot compile another target's source: ${_ruvia_source}")
+        endif()
+    endforeach()
+
+    get_target_property(_ruvia_target_include_dirs ${target} INCLUDE_DIRECTORIES)
+    foreach(_ruvia_include_dir IN LISTS _ruvia_target_include_dirs)
+        if(_ruvia_include_dir MATCHES "^\\$<INSTALL_INTERFACE:")
+            continue()
+        elseif(_ruvia_include_dir MATCHES "^\\$<BUILD_INTERFACE:(.*)>$")
+            set(_ruvia_include_path "${CMAKE_MATCH_1}")
+        elseif(_ruvia_include_dir MATCHES "^\\$<")
+            continue()
+        else()
+            set(_ruvia_include_path "${_ruvia_include_dir}")
+        endif()
+        cmake_path(IS_PREFIX _ruvia_target_root
+            "${_ruvia_include_path}" NORMALIZE _ruvia_include_is_owned)
+        if(NOT _ruvia_include_is_owned)
+            message(FATAL_ERROR
+                "${target} cannot add another target's private include directory: ${_ruvia_include_dir}")
+        endif()
+    endforeach()
+endfunction()
+
 set(RUVIA_BUILT_COMPONENTS)
 if(RUVIA_BUILD_CORE)
     add_subdirectory(ruvia-core)
@@ -242,6 +304,12 @@ if(RUVIA_BUILD_WEB)
     list(APPEND RUVIA_BUILT_COMPONENTS web)
 endif()
 string(JOIN "," RUVIA_BUILT_COMPONENTS_CSV ${RUVIA_BUILT_COMPONENTS})
+
+foreach(_ruvia_owned_target IN ITEMS ruvia-core ruvia-http ruvia-web)
+    if(TARGET ${_ruvia_owned_target})
+        ruvia_assert_target_file_ownership(${_ruvia_owned_target})
+    endif()
+endforeach()
 
 foreach(_ruvia_target IN ITEMS ruvia-core ruvia-http ruvia-web)
     if(TARGET ${_ruvia_target})

@@ -6,9 +6,9 @@
 
 #include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/http/Streaming.h"
+#include "ruvia/web/Streaming.h"
 
 namespace ruvia {
 class Context;  // only used as Context* in a type-erased bind thunk; web supplies the definition

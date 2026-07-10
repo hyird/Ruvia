@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/http/WebSocket.h"
+#include "ruvia/web/WebSocket.h"
 
 namespace ruvia::detail {
 

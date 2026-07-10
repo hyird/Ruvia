@@ -6,9 +6,9 @@
 #include "ruvia/core/detail/AsioAwait.h"
 
 #include "ruvia/http/detail/server/HttpFileChunkBuffer.h"
-#include "ruvia/app/Task.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <algorithm>
 #include <cstddef>

@@ -9,7 +9,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/http/Error.h"
-#include "ruvia/http/Validation.h"
+#include "ruvia/web/Validation.h"
 
 namespace ruvia {
 namespace {

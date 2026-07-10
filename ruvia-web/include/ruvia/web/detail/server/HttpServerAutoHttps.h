@@ -4,7 +4,7 @@
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/HttpTypes.h"
-#include "ruvia/memory/MemoryPool.h"
+#include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>
 #include <charconv>

@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/server/RateLimiter.h"
-#include "ruvia/app/RateLimitRule.h"
+#include "ruvia/web/RateLimitRule.h"
 
 namespace {
 

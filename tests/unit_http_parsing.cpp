@@ -15,7 +15,7 @@
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/Model.h"
+#include "ruvia/web/Model.h"
 
 namespace {
 
