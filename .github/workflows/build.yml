@@ -127,7 +127,6 @@ jobs:
             -DRUVIA_BUILD_WEB=OFF \
             -DRUVIA_BUILD_TESTS=ON \
             -DCMAKE_DISABLE_FIND_PACKAGE_asio=ON \
-            -DCMAKE_DISABLE_FIND_PACKAGE_Threads=ON \
             -DCMAKE_DISABLE_FIND_PACKAGE_mimalloc=ON \
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
