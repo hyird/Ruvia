@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace {

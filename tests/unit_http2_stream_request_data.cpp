@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "net/http2/Http2StreamRequestData.h"
+#include "ruvia/http/detail/http2/Http2StreamRequestData.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace {

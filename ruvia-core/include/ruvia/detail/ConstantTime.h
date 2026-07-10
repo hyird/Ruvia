@@ -6,7 +6,7 @@
 namespace ruvia::detail {
 
 // Length-checked, data-independent (constant-time) byte comparison for secrets
-// and authentication tags (cookie signatures, CSRF tokens, JWT MACs). It never
+// and authentication tags. It never
 // early-outs on the first differing byte, so the time taken does not leak how
 // far an attacker-supplied value matched the expected one. Unequal lengths are
 // reported immediately; that is not secret since these values are fixed-length.

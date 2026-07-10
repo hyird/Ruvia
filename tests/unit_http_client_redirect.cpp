@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "client/HttpClientRedirect.h"
+#include "ruvia/http/detail/client/HttpClientRedirect.h"
 #include "ruvia/http/HttpClientRuntime.h"
 
 namespace {

@@ -1,6 +1,6 @@
-#include "JwtInternal.h"
+#include "ruvia/web/detail/auth/JwtInternal.h"
 
-#include "detail/HttpNumberFormat.h"
+#include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/json/JsonObjectFields.h"
 #include "ruvia/http/detail/json/JsonString.h"
 

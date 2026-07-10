@@ -4,8 +4,8 @@
 #include <string>
 #include <string_view>
 
-#include "HttpParserInternal.h"
-#include "net/ws/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 

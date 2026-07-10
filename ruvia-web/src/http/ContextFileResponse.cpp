@@ -1,13 +1,13 @@
 #include "ruvia/http/Context.h"
 
-#include "HttpRequestInternal.h"
-#include "HttpResponseFileAccess.h"
-#include "HttpResponseHeaderState.h"
-#include "FileResponseHelpers.h"
-#include "StaticFilesInternal.h"
-#include "StaticPathNormalization.h"
-#include "HeaderAcceptUtils.h"
-#include "HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/web/detail/StaticFilesInternal.h"
+#include "ruvia/http/detail/StaticPathNormalization.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
 
 #include <cstddef>

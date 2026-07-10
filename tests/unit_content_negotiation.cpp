@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
 
 namespace {
 

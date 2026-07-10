@@ -1,4 +1,4 @@
-#include "JwtInternal.h"
+#include "ruvia/web/detail/auth/JwtInternal.h"
 
 #include "ruvia/detail/ConstantTime.h"
 

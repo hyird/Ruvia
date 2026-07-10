@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <limits>
 
-#include "net/http2/Http2StreamFlowControl.h"
+#include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
 
 namespace {
 

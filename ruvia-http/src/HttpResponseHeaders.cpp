@@ -1,7 +1,7 @@
 #include "ruvia/http/HttpResponse.h"
 
-#include "HttpResponseHeaderAccess.h"
-#include "HttpResponseStaticHeaders.h"
+#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/HttpResponseStaticHeaders.h"
 
 #include <cstdint>
 #include <cstring>

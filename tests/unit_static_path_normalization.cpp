@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "StaticPathNormalization.h"
+#include "ruvia/http/detail/StaticPathNormalization.h"
 #include "ruvia/http/Error.h"
 
 namespace {

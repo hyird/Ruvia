@@ -1,10 +1,9 @@
 
-#include "HttpClientPool.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 
 #include <asio/error.hpp>
 #include <asio/ssl/error.hpp>
 #include <algorithm>
-#include <charconv>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -13,9 +12,10 @@
 #include <system_error>
 #include <utility>
 
-#include "client/HttpClientAccess.h"
-#include "client/HttpClientDecodingStreamSource.h"
-#include "client/HttpClientStreamAccess.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
+#include "ruvia/web/detail/client/HttpClientDecodingStreamSource.h"
+#include "ruvia/web/detail/client/HttpClientStreamAccess.h"
+#include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {
@@ -65,7 +65,7 @@ public:
     }
     static void streamDestroy(void* self) noexcept {
         auto* source = static_cast<Http1StreamSource*>(self);
-        destroyHttpPmrObject(source, source->resource_);
+        destroyPmrObject(source, source->resource_);
     }
 
 private:
@@ -179,15 +179,8 @@ private:
         }
         if (chunkRemaining_ == 0) {
             const auto line = co_await readLine();
-            auto sizeToken = std::string_view(line);
-            if (const auto semi = sizeToken.find(';'); semi != std::string_view::npos) {
-                sizeToken = sizeToken.substr(0, semi);
-            }
-            sizeToken = httpTrimOws(sizeToken);
             std::size_t chunkSize = 0;
-            const auto [ptr, ec] = std::from_chars(
-                sizeToken.data(), sizeToken.data() + sizeToken.size(), chunkSize, 16);
-            if (sizeToken.empty() || ec != std::errc{} || ptr != sizeToken.data() + sizeToken.size()) {
+            if (!parseHttpChunkSize(line, chunkSize)) {
                 finish(false);
                 throw std::runtime_error("http client: malformed chunk size");
             }
@@ -263,6 +256,10 @@ private:
             const auto line = co_await readLine();
             if (line.empty()) {
                 co_return;
+            }
+            if (validateHttpChunkTrailers(line) != HttpChunkScanStatus::kComplete) {
+                finish(false);
+                throw std::runtime_error("http client: malformed chunk trailer");
             }
             total += line.size() + 2;
             if (total > kMaxTrailerBytes) {
@@ -341,7 +338,7 @@ Task<FetchResponseStream> HttpClientPool::fetchStream(
         framing = Http1StreamSource::Framing::kClose;
     }
 
-    auto* source = constructHttpPmrObject<Http1StreamSource>(
+    auto* source = constructPmrObject<Http1StreamSource>(
         requestResource, this, std::move(guard), framing, contentLength, head.closeAfterResponse,
         std::move(leftover), readTimeout, requestResource);
     HttpBodyStream body(source, &Http1StreamSource::streamNextChunk, &Http1StreamSource::streamDestroy);

@@ -33,7 +33,8 @@ The root `CMakeLists.txt` only coordinates global options, dependency discovery,
 - CMake 3.24 or newer.
 - C++23 compiler.
 - vcpkg.
-- Core manifest dependencies: `asio`, `mimalloc`, `openssl`, `zlib`, `brotli`, and `zstd`.
+- Component manifest dependencies: `core` uses `asio`/`mimalloc`, `http` uses
+  `zlib`/`brotli`/`zstd`, and `web` adds `openssl`.
 - Optional vcpkg features: `mariadb`, `redis`, `jwt`.
 
 On Windows, the root CMake file defaults `VCPKG_TARGET_TRIPLET` to `x64-windows-static` when it is not already set.
@@ -47,6 +48,27 @@ cmake -S . -B build `
   -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static
 cmake --build build --config Debug
+```
+
+Build only one standalone component (vcpkg installs only that component's
+dependency feature set):
+
+```powershell
+# core only
+cmake -S . -B build `
+  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+  -DRUVIA_BUILD_CORE=ON `
+  -DRUVIA_BUILD_HTTP=OFF `
+  -DRUVIA_BUILD_WEB=OFF
+
+# http only
+cmake -S . -B build `
+  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+  -DRUVIA_BUILD_CORE=OFF `
+  -DRUVIA_BUILD_HTTP=ON `
+  -DRUVIA_BUILD_WEB=OFF
 ```
 
 Build tests and examples:
@@ -69,8 +91,7 @@ cmake -S . -B build `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_ENABLE_MARIADB=ON `
   -DRUVIA_ENABLE_REDIS=ON `
-  -DRUVIA_ENABLE_JWT=ON `
-  -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt"
+  -DRUVIA_ENABLE_JWT=ON
 ```
 
 ## Install And Consume
@@ -164,6 +185,9 @@ The outbound HTTP client follows the same split as the server: the protocol mode
 
 | Option | Default | Meaning |
 | --- | --- | --- |
+| `RUVIA_BUILD_CORE` | `ON` | Build the standalone `ruvia-core` runtime target. |
+| `RUVIA_BUILD_HTTP` | `ON` | Build the standalone, core-free `ruvia-http` protocol target. |
+| `RUVIA_BUILD_WEB` | `ON` | Build `ruvia-web`; requires both core and HTTP targets. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit and smoke tests. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Build MariaDB-compatible DB integration into `ruvia-web`. |
@@ -172,6 +196,9 @@ The outbound HTTP client follows the same split as the server: the protocol mode
 
 The outbound HTTP client protocol core is a `ruvia-http` capability (no build switch); its Asio/TLS runtime driver ships in `ruvia-web`, mirroring the server-side split.
 
+CMake derives vcpkg manifest features from these switches before dependency
+installation. Optional MariaDB, Redis, and JWT switches require `RUVIA_BUILD_WEB=ON`.
+
 ## Repository Layout
 
 ```text
@@ -179,20 +206,24 @@ The outbound HTTP client protocol core is a `ruvia-http` capability (no build sw
 |-- CMakeLists.txt
 |-- ruvia-core/
 |   |-- CMakeLists.txt
-|   |-- include/
-|   `-- src/
+|   |-- include/ruvia/core/detail/  # reusable runtime contracts
+|   `-- src/                        # flat runtime implementations
 |-- ruvia-http/
 |   |-- CMakeLists.txt
-|   |-- include/
-|   `-- src/
+|   |-- include/ruvia/http/detail/  # protocol contracts by one domain layer
+|   `-- src/{client,http2,parser,server,websocket}/
 |-- ruvia-web/
 |   |-- CMakeLists.txt
-|   |-- include/
-|   `-- src/
+|   |-- include/ruvia/web/detail/   # framework-internal contracts
+|   `-- src/{app,client,http2,server,websocket,db,redis,router}/
 |-- examples/
 |-- tests/
 `-- vcpkg.json
 ```
+
+Targets share implementation contracts only through their owning `include/.../detail`
+tree. No target adds another target's private `src/` directory to its include path;
+redundant `net/` and `*/core/` source layers are rejected by the boundary checker.
 
 The only local build directory is `build/`. If CMake cache or generated files become suspicious, delete `build/` and configure again. Vcpkg installation trees, CodeGraph indexes, and local agent directories are ignored.
 

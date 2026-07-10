@@ -6,7 +6,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "net/http2/Http2FlowControl.h"
+#include "ruvia/http/detail/http2/Http2FlowControl.h"
 
 namespace {
 

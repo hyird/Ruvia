@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstddef>
 
-#include "PoolWaiterQueue.h"
+#include "ruvia/core/detail/PoolWaiterQueue.h"
 
 namespace {
 

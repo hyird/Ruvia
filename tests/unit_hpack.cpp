@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "net/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
 
 namespace {
 

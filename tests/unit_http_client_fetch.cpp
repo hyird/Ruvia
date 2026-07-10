@@ -30,12 +30,12 @@
 
 #include <zlib.h>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "client/HttpClientInternal.h"
-#include "client/HttpClientPool.h"
-#include "runtime/AsioAwait.h"
-#include "detail/HttpAsciiCase.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/client/HttpClientInternal.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/HttpClientRuntime.h"
 #include "ruvia/memory/MemoryPool.h"
 

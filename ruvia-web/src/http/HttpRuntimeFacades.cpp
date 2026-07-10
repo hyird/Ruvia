@@ -3,7 +3,7 @@
 #include "ruvia/http/WebSocket.h"
 
 #include "ruvia/app/Task.h"
-#include "HttpBodyStreamAccess.h"
+#include "ruvia/web/detail/http/HttpBodyStreamAccess.h"
 
 namespace ruvia {
 

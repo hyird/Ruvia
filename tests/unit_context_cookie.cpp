@@ -9,9 +9,9 @@
 #include <string>
 #include <string_view>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/memory/MemoryPool.h"

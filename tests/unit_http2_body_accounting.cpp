@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <limits>
 
-#include "net/http2/Http2StreamBodyAccounting.h"
+#include "ruvia/http/detail/http2/Http2StreamBodyAccounting.h"
 
 namespace {
 

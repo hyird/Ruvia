@@ -10,8 +10,8 @@
 #include <zlib.h>
 #include <zstd.h>
 
-#include "RequestBodyDecoding.h"
-#include "net/body/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 
 namespace {
 

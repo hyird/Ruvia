@@ -5,8 +5,8 @@
 #include <string>
 #include <string_view>
 
-#include "net/http2/Http2BodyQueue.h"
-#include "net/http2/Http2BodyState.h"
+#include "ruvia/http/detail/http2/Http2BodyQueue.h"
+#include "ruvia/http/detail/http2/Http2BodyState.h"
 
 namespace {
 

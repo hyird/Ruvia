@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "router/RouteResolution.h"
+#include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace {

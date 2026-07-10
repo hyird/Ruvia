@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "detail/HttpAsciiCase.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/ModelTypes.h"
 #include "ruvia/http/detail/HttpOws.h"
 #include "ruvia/http/detail/model/JsonParser.h"

@@ -3,8 +3,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "HttpRequestInternal.h"
-#include "net/http2/Http2RequestBuilder.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
 
 namespace {
 

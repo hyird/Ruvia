@@ -1,3 +1,4 @@
+if(RUVIA_BUILD_WEB)
 add_executable(ruvia_unit_tests
     test_main.cpp
     unit_encoding.cpp
@@ -53,10 +54,10 @@ add_executable(ruvia_unit_tests
     unit_http2_header_rules.cpp
     unit_response_trailers.cpp
     unit_http2_frame_payload.cpp
-    unit_http1_connection.cpp
     unit_sansio_tls.cpp
     unit_http2_connection.cpp
     unit_ws_connection.cpp
+    unit_websocket_connection.cpp
     unit_sansio_driver.cpp
     unit_static_response_headers.cpp
     unit_streaming.cpp
@@ -149,45 +150,64 @@ endif()
 
 target_link_libraries(ruvia_unit_tests PRIVATE ruvia::web)
 
-add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
-target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
-add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
-
-add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
-target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
-add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
-
-# Unit tests reach into target-owned internal detail headers in addition to
-# public include surfaces.
-target_include_directories(ruvia_unit_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/ruvia-core/src
-    ${CMAKE_SOURCE_DIR}/ruvia-core/include
-    ${CMAKE_SOURCE_DIR}/ruvia-web/include
-    ${CMAKE_SOURCE_DIR}/ruvia-http/src
-    ${CMAKE_SOURCE_DIR}/ruvia-http/src/net
-    ${CMAKE_SOURCE_DIR}/ruvia-http/include
-    ${CMAKE_SOURCE_DIR}/ruvia-web/src
-    ${CMAKE_SOURCE_DIR}/ruvia-web/src/http
-)
-
 if(MSVC)
     target_compile_options(ruvia_unit_tests PRIVATE /bigobj /FS)
 endif()
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
+endif()
+
+if(RUVIA_BUILD_CORE)
+    add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
+    target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
+    add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
+endif()
+
+if(RUVIA_BUILD_HTTP)
+    add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
+    target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
+    add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
+endif()
+
+if(RUVIA_BUILD_WEB)
+function(ruvia_add_internal_guard name source)
+    add_executable(${name} ${source})
+    target_link_libraries(${name} PRIVATE ruvia::web)
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /bigobj /FS)
+    endif()
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+ruvia_add_internal_guard(ruvia_guard_middleware_next guards/middleware_next_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_table_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
+endif()
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/verify_package_consumers.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
+    @ONLY)
+add_test(
+    NAME ruvia_package_consumers
+    COMMAND ${CMAKE_COMMAND}
+        -DRUVIA_CONFIG=$<CONFIG>
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down,
-# docs ownership). Runs on every test build so a violation fails fast;
-# rules: README.md and AGENTS.md
-if(UNIX)
-    add_custom_target(ruvia_check_boundaries ALL
-        COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Checking Ruvia layer boundaries"
-        VERBATIM)
-    add_test(NAME ruvia_check_boundaries
-        COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh)
-    add_test(NAME ruvia_check_boundaries_self_test
-        COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.sh --self-test)
-endif()
+# docs ownership). CMake script mode keeps the same rules portable across all
+# supported CI hosts and runs on every test build so violations fail fast.
+set(RUVIA_BOUNDARY_CHECK_SCRIPT
+    ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.cmake)
+add_custom_target(ruvia_check_boundaries ALL
+    COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Checking Ruvia layer boundaries"
+    VERBATIM)
+add_test(NAME ruvia_check_boundaries
+    COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT})
+add_test(NAME ruvia_check_boundaries_self_test
+    COMMAND ${CMAKE_COMMAND}
+        -DRUVIA_BOUNDARY_SELF_TEST=ON
+        -P ${RUVIA_BOUNDARY_CHECK_SCRIPT})

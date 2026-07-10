@@ -5,9 +5,9 @@
 #include <string>
 #include <string_view>
 
-#include "net/server/HttpConnectionState.h"
-#include "net/server/HttpServerConnectionGuards.h"
-#include "HttpParserInternal.h"
+#include "ruvia/web/detail/server/HttpConnectionState.h"
+#include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace {

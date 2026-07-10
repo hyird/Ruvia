@@ -23,12 +23,12 @@
 #include <string>
 #include <string_view>
 
-#include "net/http2/Http2FrameCodec.h"
-#include "net/http2/Http2Hpack.h"
-#include "net/server/HttpServerAlpn.h"
-#include "net/server/Http2SansIoSession.h"
-#include "router/RouterInternal.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/web/detail/server/HttpServerAlpn.h"
+#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/memory/MemoryPool.h"
 #include "ruvia/router/Router.h"

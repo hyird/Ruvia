@@ -1,6 +1,6 @@
 #pragma once
 
-#include "detail/HttpPmrObject.h"
+#include "ruvia/memory/PmrObject.h"
 
 #include <cstddef>
 #include <memory_resource>
@@ -53,7 +53,7 @@ public:
         using StoredT = std::remove_cvref_t<T>;
         static_assert(!std::is_reference_v<StoredT>, "Context values must be stored by value");
 
-        auto* stored = constructHttpPmrObject<StoredT>(resource_, std::forward<Args>(args)...);
+        auto* stored = constructPmrObject<StoredT>(resource_, std::forward<Args>(args)...);
         try {
             Entry next(resource_);
             next.name.assign(name.data(), name.size());
@@ -159,7 +159,7 @@ private:
 
     template <typename T>
     static void destroy(void* value, std::pmr::memory_resource* resource) noexcept {
-        destroyHttpPmrObject(static_cast<T*>(value), resource);
+        destroyPmrObject(static_cast<T*>(value), resource);
     }
 
     void clearValue(Entry& entry) noexcept {

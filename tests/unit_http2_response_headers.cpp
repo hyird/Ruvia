@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "net/http2/Http2Hpack.h"
-#include "net/http2/Http2ResponseHeaders.h"
-#include "net/http2/Http2StreamState.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
+#include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {

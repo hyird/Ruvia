@@ -1,4 +1,4 @@
-#include "AppConfigMutation.h"
+#include "ruvia/web/detail/app/AppConfigMutation.h"
 
 #include <stdexcept>
 #include <utility>

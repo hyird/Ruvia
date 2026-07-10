@@ -11,10 +11,10 @@
 
 #include <hiredis/hiredis.h>
 
-#include "redis/core/RedisConfigValidation.h"
-#include "redis/core/RedisHandleHelpers.h"
-#include "redis/core/RedisProtocol.h"
-#include "redis/core/RedisTypesAccess.h"
+#include "ruvia/web/detail/redis/RedisConfigValidation.h"
+#include "ruvia/web/detail/redis/RedisHandleHelpers.h"
+#include "ruvia/web/detail/redis/RedisProtocol.h"
+#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 #include "ruvia/redis/RedisTypes.h"
 
 namespace {

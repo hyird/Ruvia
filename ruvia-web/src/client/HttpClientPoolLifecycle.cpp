@@ -1,7 +1,7 @@
 
-#include "HttpClientPool.h"
-#include "client/HttpClientConfigValidation.h"
-#include "HttpClientTlsVerification.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/http/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/HttpClientTlsVerification.h"
 #include "ruvia/memory/PmrResource.h"
 
 #include <asio/ssl/context.hpp>
@@ -42,11 +42,11 @@ HttpClientPool::HttpClientPool(
     free_.reserve(n);
     try {
         for (std::size_t i = 0; i < n; ++i) {
-            auto* connection = constructHttpPmrObject<Connection>(resource_, ioContext_, resource_);
+            auto* connection = constructPmrObject<Connection>(resource_, ioContext_, resource_);
             try {
                 connections_.push_back(connection);
             } catch (...) {
-                destroyHttpPmrObject(connection, resource_);
+                destroyPmrObject(connection, resource_);
                 throw;
             }
             free_.push_back(i);
@@ -158,7 +158,7 @@ void HttpClientPool::closeConnection(Connection& conn) noexcept {
 }
 
 void HttpClientPool::destroyConnection(Connection* conn) noexcept {
-    destroyHttpPmrObject(conn, resource_);
+    destroyPmrObject(conn, resource_);
 }
 
 }  // namespace ruvia::detail

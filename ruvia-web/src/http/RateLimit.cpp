@@ -1,8 +1,8 @@
 #include "ruvia/http/RateLimit.h"
 
-#include "ContextInternal.h"
-#include "net/server/RateLimitKey.h"
-#include "net/server/RateLimiter.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/server/RateLimitKey.h"
+#include "ruvia/web/detail/server/RateLimiter.h"
 
 #include <charconv>
 #include <cstdint>

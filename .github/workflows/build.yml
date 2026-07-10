@@ -13,6 +13,9 @@ on:
       - "examples/**"
       - "tests/**"
       - "benchmarks/**"
+      - "scripts/**"
+      - "README.md"
+      - "AGENTS.md"
       - ".github/workflows/build.yml"
   pull_request:
     branches: [main]
@@ -25,6 +28,9 @@ on:
       - "examples/**"
       - "tests/**"
       - "benchmarks/**"
+      - "scripts/**"
+      - "README.md"
+      - "AGENTS.md"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -90,7 +96,6 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
-            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
@@ -98,6 +103,36 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
+
+      - name: Verify component-only builds
+        run: |
+          cmake -S . -B build/core-only -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_BUILD_CORE=ON \
+            -DRUVIA_BUILD_HTTP=OFF \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-brotli=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_zstd=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build build/core-only --config "$BUILD_TYPE"
+          ctest --test-dir build/core-only --output-on-failure --build-config "$BUILD_TYPE"
+
+          cmake -S . -B build/http-only -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_BUILD_CORE=OFF \
+            -DRUVIA_BUILD_HTTP=ON \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_asio=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_Threads=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_mimalloc=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build build/http-only --config "$BUILD_TYPE"
+          ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
 
   ubuntu_ubsan:
     name: Ubuntu UBSan
@@ -207,7 +242,6 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
             -DRUVIA_BUILD_TESTS=ON `
-            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
       - name: Build

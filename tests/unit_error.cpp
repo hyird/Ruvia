@@ -5,7 +5,7 @@
 
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpStatus.h"
-#include "net/body/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 
 namespace {
 

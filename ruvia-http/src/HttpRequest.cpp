@@ -1,8 +1,8 @@
 #include "ruvia/http/HttpRequest.h"
 
-#include "HttpRequestInternal.h"
-#include "parser/HttpParserSyntax.h"
-#include "HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/UrlEncoding.h"
 
 #include <system_error>

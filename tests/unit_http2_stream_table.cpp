@@ -5,7 +5,7 @@
 #include <memory_resource>
 #include <vector>
 
-#include "net/http2/Http2StreamTable.h"
+#include "ruvia/http/detail/http2/Http2StreamTable.h"
 
 namespace {
 

@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "net/server/HttpResponseTrailers.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 
 namespace {
 

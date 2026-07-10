@@ -3,7 +3,7 @@
 #include <chrono>
 #include <exception>
 
-#include "net/server/HttpServerOptionsValidation.h"
+#include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/app/App.h"
 
 namespace {

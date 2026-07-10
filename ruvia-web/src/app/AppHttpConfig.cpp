@@ -1,6 +1,6 @@
-#include "AppConfigMutation.h"
+#include "ruvia/web/detail/app/AppConfigMutation.h"
 #include "ruvia/detail/NativePath.h"
-#include "http/HttpCorsConfigValidation.h"
+#include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
 
 #include <stdexcept>
 #include <type_traits>

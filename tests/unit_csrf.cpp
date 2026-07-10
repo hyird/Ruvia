@@ -11,11 +11,11 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "CsrfInternal.h"
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "router/RouteTable.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/web/detail/http/CsrfInternal.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Csrf.h"
 #include "ruvia/http/HttpCommon.h"

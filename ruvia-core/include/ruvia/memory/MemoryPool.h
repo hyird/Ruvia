@@ -9,11 +9,10 @@
 
 namespace ruvia {
 
-// Default initial bump-block size for the per-request arena. The net layer sizes
-// its connection-private arena blocks (ConnectionWorkSet::arenaBlock for HTTP/1
-// and the per-request dispatch block for HTTP/2) to this same constant, so the
-// configured default and the compile-time blocks stay in lockstep: a request
-// whose arena allocations fit within it touches no heap at all.
+// Default initial bump-block size for a request arena. Runtime integrations size
+// their connection-private dispatch blocks to this same constant, so configured
+// defaults and compile-time blocks stay in lockstep: a request whose allocations
+// fit within it touches no heap at all.
 //
 // Configuring requestInitialBufferBytes larger than this constant stays correct
 // but spills the arena's first block to the worker resource on every request,
@@ -96,10 +95,8 @@ public:
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         auto* node = static_cast<CleanupNode*>(arena_.allocate(sizeof(CleanupNode), alignof(CleanupNode)));
-        // Construct the object directly in the request arena. This is the sole
-        // reason core once depended on detail::constructPmrObject; inlining the
-        // allocate/construct/rollback here keeps the pmr-object helper an
-        // http-only utility (ruvia-http/src/detail/HttpPmrObject.h).
+        // Construct directly in the request arena so the cleanup node and the
+        // object share one lifetime domain without an extra owning wrapper.
         auto* storage = arena_.allocate(sizeof(T), alignof(T));
         T* object;
         try {

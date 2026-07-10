@@ -1,6 +1,6 @@
 #include "ruvia/app/Dotenv.h"
 
-#include "DotenvInternal.h"
+#include "ruvia/web/detail/app/DotenvInternal.h"
 
 #include <algorithm>
 #include <fstream>
@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "detail/HttpAsciiCase.h"
-#include "detail/HttpPmrObject.h"
+#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
 namespace {
@@ -28,12 +28,12 @@ template <typename Variables>
 }  // namespace
 
 Env::Env()
-    : state_(detail::constructHttpPmrObject<detail::EnvState>(detail::appResource())) {}
+    : state_(detail::constructPmrObject<detail::EnvState>(detail::appResource())) {}
 
 Env::~Env() = default;
 
 void detail::EnvStateDeleter::operator()(EnvState* state) const noexcept {
-    destroyHttpPmrObject(state, detail::appResource());
+    destroyPmrObject(state, detail::appResource());
 }
 
 std::optional<std::string_view> Env::get(std::string_view name) const noexcept {

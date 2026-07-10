@@ -1,10 +1,10 @@
-#include "SessionInternal.h"
+#include "ruvia/web/detail/http/SessionInternal.h"
 
 #include "ruvia/http/Session.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "CsrfInternal.h"
+#include "ruvia/web/detail/http/CsrfInternal.h"
 #include "ruvia/redis/RedisHandle.h"
 
 #include <array>
@@ -53,7 +53,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
                 std::pmr::string oldKey(c.resource());
                 oldKey.append("sess:");
                 oldKey.append(id.data(), id.size());
-                co_await c.redis("default").del(oldKey);
+                (void)(co_await c.redis("default").del(oldKey));
             }
             detail::SessionAccess::setId(c, detail::generateCsrfToken(idBuffer));
             id = detail::SessionAccess::id(c);
@@ -67,7 +67,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
         key.append(id.data(), id.size());
         const auto data = detail::SessionAccess::data(c);
         if (data.empty()) {
-            co_await c.redis("default").del(key);
+            (void)(co_await c.redis("default").del(key));
         } else {
             co_await c.redis("default").setEx(key, std::chrono::seconds(86400), data);
         }

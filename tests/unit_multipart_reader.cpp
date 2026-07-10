@@ -16,8 +16,8 @@
 #include "ruvia/http/MultipartReader.h"
 #include "ruvia/http/Streaming.h"
 
-#include "net/body/HttpRequestBodyFacade.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
+#include "ruvia/core/detail/AsioAwait.h"
 
 namespace {
 

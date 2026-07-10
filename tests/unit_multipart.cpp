@@ -5,8 +5,8 @@
 #include <string>
 #include <string_view>
 
-#include "HttpCommonInternal.h"
-#include "MultipartParsing.h"
+#include "ruvia/http/detail/HttpCommonInternal.h"
+#include "ruvia/http/detail/MultipartParsing.h"
 
 // A boundary delimiter ends with CRLF (next part) or "--" (close). A lone '-'
 // after the boundary token is NOT a delimiter: "--<boundary>-x" must be skipped,

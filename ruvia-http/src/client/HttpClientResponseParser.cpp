@@ -1,13 +1,13 @@
 
-#include "HttpClientResponseParser.h"
+#include "ruvia/http/detail/client/HttpClientResponseParser.h"
 
 #include <charconv>
 #include <stdexcept>
 
-#include "HeaderTokenUtils.h"
-#include "RequestBodyDecoding.h"
-#include "parser/HttpParserSyntax.h"
-#include "HttpClientAccess.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {

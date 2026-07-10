@@ -6,10 +6,10 @@
 #include <string_view>
 
 #include "ruvia/http/HttpResponse.h"
-#include "net/server/HttpResponseHead.h"
-#include "net/server/HttpResponseHeadBuffer.h"
-#include "net/server/HttpResponseHeadPolicy.h"
-#include "net/server/HttpServerResponseState.h"
+#include "ruvia/http/detail/server/HttpResponseHead.h"
+#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/web/detail/server/HttpServerResponseState.h"
 
 namespace {
 

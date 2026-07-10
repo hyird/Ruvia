@@ -2,8 +2,8 @@
 
 #include <charconv>
 
-#include "HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
-#include "FileResponseHelpers.h"    // detail::httpParseHttpDate
+#include "ruvia/http/detail/HeaderTokenUtils.h"       // httpTrimOws, httpAsciiEqualsIgnoreCase
+#include "ruvia/http/detail/FileResponseHelpers.h"    // detail::httpParseHttpDate
 
 namespace ruvia {
 namespace {

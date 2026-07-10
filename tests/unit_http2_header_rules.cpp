@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-#include "net/http2/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/Http2HeaderRules.h"
 
 namespace {
 
