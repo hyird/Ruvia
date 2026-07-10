@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/Cookies.h"
-#include "CookieValidation.h"
+#include "ruvia/http/detail/CookieValidation.h"
 
 namespace {
 

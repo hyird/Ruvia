@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include "CookieSignature.h"
+#include "ruvia/web/detail/CookieSignature.h"
 
 namespace {
 

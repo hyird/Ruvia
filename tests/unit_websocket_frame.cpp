@@ -5,7 +5,7 @@
 #include <limits>
 #include <string>
 
-#include "net/ws/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
 namespace {

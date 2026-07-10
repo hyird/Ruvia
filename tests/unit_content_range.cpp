@@ -8,11 +8,11 @@
 #include <string_view>
 #include <utility>
 
-#include "http/ContextInternal.h"
-#include "FileResponseHelpers.h"
-#include "HttpRequestInternal.h"
-#include "HttpResponseHeaderState.h"
-#include "net/server/HttpResponseStreamHead.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/Error.h"
 #include "ruvia/http/HttpCommon.h"

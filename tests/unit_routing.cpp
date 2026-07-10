@@ -15,19 +15,19 @@
 #include <string_view>
 #include <vector>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "HttpResponseBodyAccess.h"
-#include "StreamingInternal.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/http/Streaming.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/MiddlewareRuntime.h"
 #include "ruvia/memory/MemoryPool.h"
 #include "ruvia/router/Router.h"
-#include "router/RouterInternal.h"
-#include "router/RouteResolution.h"
-#include "router/RouteTable.h"
+#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouteResolution.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 
 namespace {
 

@@ -1,4 +1,4 @@
-#include "StreamingInternal.h"
+#include "ruvia/web/detail/http/StreamingInternal.h"
 
 #include "ruvia/app/Task.h"
 

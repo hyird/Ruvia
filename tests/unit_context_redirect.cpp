@@ -6,9 +6,9 @@
 #include <span>
 #include <string_view>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/ContextModel.h"
 #include "ruvia/http/HttpCommon.h"

@@ -5,9 +5,9 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "http/HttpCors.h"
-#include "http/HttpCorsConfigValidation.h"
-#include "HttpParserInternal.h"
+#include "ruvia/web/detail/http/HttpCors.h"
+#include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/app/App.h"
 #include "ruvia/http/HttpResponse.h"
 

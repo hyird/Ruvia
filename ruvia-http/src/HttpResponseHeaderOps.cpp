@@ -1,10 +1,10 @@
 #include "ruvia/http/HttpResponse.h"
 
-#include "HttpResponseHeaderAccess.h"
-#include "HttpResponseHeaderBits.h"
-#include "HttpResponseKnownHeaders.h"
-#include "detail/HttpNumberFormat.h"
-#include "ResponseHeaderIndexCache.h"
+#include "ruvia/http/detail/HttpResponseHeaderAccess.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/HttpNumberFormat.h"
+#include "ruvia/http/detail/ResponseHeaderIndexCache.h"
 
 #include <charconv>
 #include <cstdint>

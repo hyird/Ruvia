@@ -1,7 +1,7 @@
-#include "HttpRequestTarget.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
-#include "HttpParserSyntax.h"
-#include "../HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
 
 #include <array>
 #include <charconv>

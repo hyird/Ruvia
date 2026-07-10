@@ -5,11 +5,11 @@
 #include <string>
 #include <string_view>
 
-#include "http/ContextInternal.h"
-#include "http/ContextServices.h"
-#include "HttpRequestInternal.h"
-#include "net/server/RateLimitDecision.h"
-#include "net/server/RateLimitKey.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/web/detail/server/RateLimitDecision.h"
+#include "ruvia/web/detail/server/RateLimitKey.h"
 #include "ruvia/app/RateLimitRule.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/RateLimit.h"

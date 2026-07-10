@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "net/http2/Http2ClosedStreams.h"
+#include "ruvia/http/detail/http2/Http2ClosedStreams.h"
 
 namespace {
 

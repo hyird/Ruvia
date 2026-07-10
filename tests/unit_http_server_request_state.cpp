@@ -5,9 +5,9 @@
 #include <memory_resource>
 #include <string>
 
-#include "HttpParserInternal.h"
-#include "net/server/HttpServerAutoHttps.h"
-#include "net/server/HttpServerRequestState.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/web/detail/server/HttpServerAutoHttps.h"
+#include "ruvia/web/detail/server/HttpServerRequestState.h"
 
 namespace {
 

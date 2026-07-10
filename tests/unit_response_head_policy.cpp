@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "net/server/HttpResponseHeadPolicy.h"
-#include "HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
 
 namespace {
 

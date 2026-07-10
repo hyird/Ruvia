@@ -51,6 +51,15 @@ tests/
   src/
 ```
 
+跨 target 复用的编译期契约头必须放在所属 target 的 `include/ruvia/<target>/detail/`
+（HTTP 使用 `include/ruvia/http/detail/`），通过 target include interface 使用。禁止任何
+target、示例或测试把另一个 target 的 `src/` 加入 include path。
+
+`src/` 下最多保留一层有业务含义的分类目录，例如 `server/`、`http2/`、`websocket/`、
+`client/`。不要再引入 `src/net/...`、`src/*/core/...` 这类重复层级；`ruvia-core/src/`
+保持扁平。三个 target 的 `src/` 都只保存实现和 target 自有 `pch.h`，契约头统一放在
+各自的 `include/.../detail/`。
+
 根 `CMakeLists.txt` 只负责全局选项、依赖发现、package export、install helper 和 `add_subdirectory(...)`。不要再拆出额外的仓库内 `.cmake` 片段。
 
 本地构建目录只允许使用仓库根目录下的 `build/`。不要创建 `build-*`、`out/`、`cmake-build-*` 或其他临时构建目录；构建缓存或生成结果有问题时，直接删除 `build/` 后重新配置。
@@ -87,7 +96,7 @@ tests/
 - cookie/cache/range/conditional request/content negotiation/header token 与 header value 通用 helper。
 - multipart/form/url encoding、SSE frame formatting、opaque body handle 与纯 parser。
 - WebSocket 协议 helper。
-- HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 sans-I/O 连接核心 `Http1Connection`、WebSocket sans-I/O 核心。
+- HTTP/2 sans-I/O 连接核心 `Http2Connection`（同一实现供 server 与 client 两种角色驱动）、HTTP/1 zero-copy parser/framer primitives、WebSocket sans-I/O 核心 `WsConnection`。
 - multipart/SSE/content-encoding 等 wire-format 和协议语义实现；runtime reader/writer facade 留在 `ruvia-web`。
 - 纯协议 primitive（零 core、零 asio、零 socket；client/server 的 I/O runtime 由 `ruvia-web` 或外部 runtime 驱动）。
 
@@ -197,6 +206,8 @@ tests/
 ## CMake 和安装
 
 - 默认构建 `ruvia-core`、`ruvia-http`、`ruvia-web`。
+- 可通过 `RUVIA_BUILD_CORE`、`RUVIA_BUILD_HTTP`、`RUVIA_BUILD_WEB` 选择构建组件；三者默认均为 `ON`。
+- `RUVIA_BUILD_WEB=ON` 要求同时启用 core 与 http；core-only/http-only 配置不得查找或安装未选择组件的依赖。
 - MariaDB、Redis、JWT 是严格 feature：
   - `RUVIA_ENABLE_MARIADB=ON`
   - `RUVIA_ENABLE_REDIS=ON`

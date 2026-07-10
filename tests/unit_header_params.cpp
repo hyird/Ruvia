@@ -4,7 +4,7 @@
 #include <optional>
 #include <string_view>
 
-#include "HeaderTokenUtils.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
 
 namespace {
 

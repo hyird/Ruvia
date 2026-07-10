@@ -4,7 +4,7 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ResponseHeaderUtils.h"
+#include "ruvia/http/detail/ResponseHeaderUtils.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {

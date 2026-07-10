@@ -1,6 +1,6 @@
 #include "test_harness.h"
 
-#include "net/http2/Http2StreamLifecycle.h"
+#include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
 
 namespace {
 

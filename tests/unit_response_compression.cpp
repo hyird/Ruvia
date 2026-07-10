@@ -11,9 +11,9 @@
 #include <zstd.h>
 
 #include "ruvia/http/HttpResponse.h"
-#include "net/server/HttpResponseCompression.h"
-#include "HeaderAcceptUtils.h"
-#include "HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/server/HttpResponseCompression.h"
+#include "ruvia/http/detail/HeaderAcceptUtils.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 
 namespace {
 

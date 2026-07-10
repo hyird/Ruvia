@@ -1,6 +1,6 @@
 #include "ruvia/http/Csrf.h"
 
-#include "CsrfInternal.h"
+#include "ruvia/web/detail/http/CsrfInternal.h"
 
 #include <array>
 #include <cstddef>

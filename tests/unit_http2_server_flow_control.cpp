@@ -21,21 +21,21 @@
 #include <string_view>
 #include <vector>
 
-#include "net/http2/Http2FrameCodec.h"
-#include "net/http2/Http2FrameTypes.h"
-#include "net/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
 // The umbrella include order mirrors the production instantiation TU, whose helpers
 // reference free-function helpers (ensureFileChunkBuffer, setRetryAfterSeconds, ...)
 // by non-dependent name — so those must be visible first. Mirror the exact include
 // order of the production instantiation TU (HttpServerAccept.cpp): HttpResponseWriter.h
 // then the HttpServerSessionUtils.h umbrella (which pulls in the session header).
-#include "HttpResponseFileAccess.h"
-#include "net/server/HttpResponseWriter.h"
-#include "net/server/HttpServerSessionUtils.h"
-#include "net/server/Http2SansIoSession.h"
-#include "net/server/ConnectionScanner.h"
-#include "router/RouteTable.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/http/detail/HttpResponseFileAccess.h"
+#include "ruvia/web/detail/server/HttpResponseWriter.h"
+#include "ruvia/web/detail/server/HttpServerSessionUtils.h"
+#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/app/App.h"
 #include "ruvia/memory/MemoryPool.h"
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/http/ValidationTypes.h"
-#include "detail/HttpPmrObject.h"
+#include "ruvia/memory/PmrObject.h"
 
 #include <array>
 #include <cstddef>
@@ -93,12 +93,12 @@ private:
 
     template <typename BodyT, typename ArgT>
     [[nodiscard]] static BodyT* allocate(ArgT&& body, std::pmr::memory_resource* resource) {
-        return constructHttpPmrObject<BodyT>(resource, std::forward<ArgT>(body));
+        return constructPmrObject<BodyT>(resource, std::forward<ArgT>(body));
     }
 
     template <typename T>
     static void destroy(void* value, std::pmr::memory_resource* resource) noexcept {
-        destroyHttpPmrObject(static_cast<T*>(value), resource);
+        destroyPmrObject(static_cast<T*>(value), resource);
     }
 
     static void clearValue(Entry& value) noexcept {

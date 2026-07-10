@@ -1,7 +1,7 @@
 
-#include "HttpClientInternal.h"
-#include "HttpClientPool.h"
-#include "Http2ClientSession.h"
+#include "ruvia/web/detail/client/HttpClientInternal.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/web/detail/client/Http2ClientSession.h"
 #include "ruvia/memory/PmrResource.h"
 
 #include <algorithm>
@@ -23,10 +23,10 @@ HttpClientBackendPtr makeHttpClientBackend(
     std::pmr::memory_resource* resource) {
     if (config.http2) {
         return HttpClientBackendPtr(
-            constructHttpPmrObject<Http2ClientSession>(resource, ioContext, config, resource));
+            constructPmrObject<Http2ClientSession>(resource, ioContext, config, resource));
     }
     return HttpClientBackendPtr(
-        constructHttpPmrObject<HttpClientPool>(resource, ioContext, config, resource));
+        constructPmrObject<HttpClientPool>(resource, ioContext, config, resource));
 }
 
 }  // namespace

@@ -1,5 +1,5 @@
 
-#include "Http2ClientSession.h"
+#include "ruvia/web/detail/client/Http2ClientSession.h"
 
 #include <asio/as_tuple.hpp>
 #include <asio/co_spawn.hpp>
@@ -19,16 +19,16 @@
 #include <stdexcept>
 #include <string>
 
-#include "runtime/AsioAwait.h"
-#include "HeaderTokenUtils.h"
-#include "parser/HttpRequestTarget.h"
-#include "client/HttpClientContentEncoding.h"
-#include "client/HttpClientConfigValidation.h"
-#include "client/HttpClientDecodingStreamSource.h"
-#include "client/HttpClientRedirect.h"
-#include "client/HttpClientResponseLimits.h"
-#include "HttpClientTlsVerification.h"
-#include "detail/HttpAsciiCase.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
+#include "ruvia/http/detail/client/HttpClientConfigValidation.h"
+#include "ruvia/web/detail/client/HttpClientDecodingStreamSource.h"
+#include "ruvia/http/detail/client/HttpClientRedirect.h"
+#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
+#include "ruvia/web/detail/client/HttpClientTlsVerification.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/memory/PmrResource.h"
@@ -105,7 +105,7 @@ Http2ClientSession::Http2ClientSession(
 
 Http2ClientSession::~Http2ClientSession() {
     for (auto& [id, stream] : streams_) {
-        destroyHttpPmrObject(stream, resource_);
+        destroyPmrObject(stream, resource_);
     }
     streams_.clear();
 }
@@ -220,7 +220,7 @@ Task<void> Http2ClientSession::doConnect() {
         }
 
         if (config_.tls) {
-            tlsStream_ = makeHttpPmrObject<TlsStream>(resource_, socket_, *sslContext_);
+            tlsStream_ = makePmrObject<TlsStream>(resource_, socket_, *sslContext_);
             // RFC 6066 SNI + RFC 6125 host-name verification, shared with the HTTP/1.1
             // pool via one owner; ALPN below is HTTP/2-specific.
             applyClientTlsIdentity(
@@ -525,7 +525,7 @@ void Http2ClientSession::destroyStream(std::uint32_t id) noexcept {
     conn_->releaseStreamWindow(id);
     conn_->unpinStream(id);
     streams_.erase(it);
-    destroyHttpPmrObject(stream, resource_);
+    destroyPmrObject(stream, resource_);
 }
 
 void Http2ClientSession::touchStreamDeadline(Stream& stream) noexcept {
@@ -674,7 +674,7 @@ public:
     }
     static void streamDestroy(void* self) noexcept {
         auto* source = static_cast<Http2StreamSource*>(self);
-        destroyHttpPmrObject(source, source->resource_);
+        destroyPmrObject(source, source->resource_);
     }
 
 private:
@@ -854,7 +854,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         conn_->deferStreamWindowRelease(id);  // consume-paced receive window (backpressure)
     }
 
-    Stream* stream = constructHttpPmrObject<Stream>(resource_, requestResource);
+    Stream* stream = constructPmrObject<Stream>(resource_, requestResource);
     stream->id = id;
     stream->streaming = streaming;
     stream->responseBodyAllowed = !httpAsciiEqualsIgnoreCase(method, "HEAD");
@@ -877,7 +877,7 @@ Task<Http2ClientSession::Stream*> Http2ClientSession::beginRequest(
         streams_.emplace(id, stream);
     } catch (...) {
         conn_->unpinStream(id);
-        destroyHttpPmrObject(stream, resource_);
+        destroyPmrObject(stream, resource_);
         throw;
     }
 
@@ -969,7 +969,7 @@ Task<FetchResponseStream> Http2ClientSession::fetchStream(
     }
 
     // The source pulls DATA by stream id; status + headers go to the FetchResponseStream directly.
-    auto* source = constructHttpPmrObject<Http2StreamSource>(requestResource, this, id, requestResource);
+    auto* source = constructPmrObject<Http2StreamSource>(requestResource, this, id, requestResource);
     HttpBodyStream body(source, &Http2StreamSource::streamNextChunk, &Http2StreamSource::streamDestroy);
     auto& responseHeaders = FetchResponseAccess::headers(stream->response);
     body = maybeWrapDecodingStreamSource(

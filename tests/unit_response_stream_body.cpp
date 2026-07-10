@@ -16,17 +16,17 @@
 #include <system_error>
 #include <vector>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
-#include "net/server/ConnectionScanner.h"
-#include "net/server/HttpResponseHeadBuffer.h"
-#include "net/server/HttpResponseWriter.h"
-#include "runtime/AsioAwait.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
+#include "ruvia/web/detail/server/HttpResponseWriter.h"
+#include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpBodyStream.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
-#include "HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 
 namespace {
 

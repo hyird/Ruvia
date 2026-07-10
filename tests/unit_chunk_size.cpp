@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace {
 

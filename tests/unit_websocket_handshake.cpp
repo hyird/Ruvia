@@ -2,9 +2,9 @@
 
 #include <string_view>
 
-#include "HttpParserInternal.h"
-#include "net/ws/HttpWebSocketUtils.h"
-#include "HttpRequestFlags.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/HttpRequestFlags.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace {

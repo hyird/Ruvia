@@ -1,6 +1,6 @@
-#include "JwtInternal.h"
+#include "ruvia/web/detail/auth/JwtInternal.h"
 
-#include "detail/HttpBase64Url.h"
+#include "ruvia/http/detail/HttpBase64Url.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -17,11 +17,11 @@ std::pmr::string jwtBase64UrlEncode(std::string_view input, std::pmr::memory_res
         bits += 8;
         while (bits >= 6) {
             bits -= 6;
-            out.push_back(kBase64UrlAlphabet[(buffer >> bits) & 0x3F]);
+            out.push_back(kHttpBase64UrlAlphabet[(buffer >> bits) & 0x3F]);
         }
     }
     if (bits > 0) {
-        out.push_back(kBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F]);
+        out.push_back(kHttpBase64UrlAlphabet[(buffer << (6 - bits)) & 0x3F]);
     }
     return out;
 }

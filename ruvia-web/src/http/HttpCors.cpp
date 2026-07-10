@@ -1,12 +1,12 @@
-#include "http/HttpCors.h"
+#include "ruvia/web/detail/http/HttpCors.h"
 
-#include "HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
 
-#include "ResponseHeaderUtils.h"
+#include "ruvia/http/detail/ResponseHeaderUtils.h"
 
 namespace ruvia::detail {
 namespace {

@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "ruvia/memory/MemoryPool.h"
-#include "detail/HttpPmrObject.h"
+#include "ruvia/memory/PmrObject.h"
 #include "ruvia/memory/ProcessResource.h"
 
 namespace ruvia::detail {
@@ -75,7 +75,7 @@ std::mutex& controllerRegistrarsMutex() {
 }  // namespace
 
 ControllerStore::ControllerStore()
-    : state_(constructHttpPmrObject<ControllerStoreState>(registrationResource())) {}
+    : state_(constructPmrObject<ControllerStoreState>(registrationResource())) {}
 
 ControllerStore::~ControllerStore() = default;
 
@@ -84,7 +84,7 @@ ControllerStore::ControllerStore(ControllerStore&&) noexcept = default;
 ControllerStore& ControllerStore::operator=(ControllerStore&&) noexcept = default;
 
 void ControllerStoreStateDeleter::operator()(ControllerStoreState* state) const noexcept {
-    destroyHttpPmrObject(state, registrationResource());
+    destroyPmrObject(state, registrationResource());
 }
 
 std::pmr::memory_resource* registrationResource() noexcept {

@@ -2,6 +2,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeaderOps.cpp
@@ -10,25 +11,25 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseKnownHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MultipartReader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Streaming.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpHeaderBlockParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserErrors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpDateCache.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHead.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseHeadBuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http1/Http1Connection.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2Connection.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2Hpack.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackDynamic.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackEncoder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/http2/Http2HpackHuffman.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketAccept.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketUtils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/HttpWebSocketValidation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/ws/WsConnection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpDateCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHead.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHeadBuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Connection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Hpack.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackDynamic.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackEncoder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackHuffman.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketAccept.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketValidation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/WsConnection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
 )
 add_library(ruvia::http ALIAS ruvia-http)
@@ -39,12 +40,6 @@ set_target_properties(ruvia-http PROPERTIES
 )
 
 ruvia_configure_library(ruvia-http)
-
-target_include_directories(ruvia-http
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/net>
-)
 
 target_link_libraries(ruvia-http
     PUBLIC
@@ -81,9 +76,6 @@ ruvia_install_public_headers(http
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h
     include/ruvia/http/WebSocketProtocol.h
-    include/ruvia/http/detail/Hex.h
-    include/ruvia/http/detail/HttpOws.h
-    include/ruvia/http/detail/NativePath.h
-    include/ruvia/http/detail/PmrResource.h
-    include/ruvia/http/detail/PmrString.h
 )
+
+ruvia_install_public_header_tree(http include/ruvia/http/detail)

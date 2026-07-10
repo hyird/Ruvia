@@ -1,5 +1,5 @@
 
-#include "HttpClientPool.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
 
 #include <asio/connect.hpp>
 #include <asio/ip/address.hpp>
@@ -9,20 +9,20 @@
 #include <openssl/ssl.h>
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <stdexcept>
 #include <string>
 #include <system_error>
 
-#include "runtime/AsioAwait.h"
-#include "HeaderTokenUtils.h"
-#include "client/HttpClientAccess.h"
-#include "client/HttpClientContentEncoding.h"
-#include "client/HttpClientRedirect.h"
-#include "client/HttpClientResponseLimits.h"
-#include "client/HttpClientResponseParser.h"
-#include "HttpClientTlsVerification.h"
-#include "detail/HttpAsciiCase.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
+#include "ruvia/http/detail/client/HttpClientRedirect.h"
+#include "ruvia/http/detail/client/HttpClientResponseLimits.h"
+#include "ruvia/http/detail/client/HttpClientResponseParser.h"
+#include "ruvia/web/detail/client/HttpClientTlsVerification.h"
+#include "ruvia/http/detail/parser/HttpChunkParser.h"
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -139,7 +139,7 @@ Task<void> HttpClientPool::connectOne(Connection& conn) {
         // to conn.rawSocket by reference (stable address), which now holds the fresh socket.
         conn.tlsStream.reset();
         using TlsStream = Connection::TlsStream;
-        conn.tlsStream = makeHttpPmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
+        conn.tlsStream = makePmrObject<TlsStream>(conn.resource, conn.rawSocket, *sslContext_);
         // RFC 6066 SNI + RFC 6125 host-name verification (verify_peer only checks the
         // chain), shared with the HTTP/2 path via one owner.
         applyClientTlsIdentity(
@@ -296,15 +296,8 @@ Task<void> HttpClientPool::readChunkedResponseBody(
 
     for (;;) {
         const auto sizeLine = co_await readLine(kMaxChunkLineBytes);
-        auto sizeToken = sizeLine;
-        if (const auto semi = sizeToken.find(';'); semi != std::string_view::npos) {
-            sizeToken = sizeToken.substr(0, semi);  // drop chunk extensions
-        }
-        sizeToken = httpTrimOws(sizeToken);
         std::size_t chunkSize = 0;
-        const auto [ptr, ec] = std::from_chars(
-            sizeToken.data(), sizeToken.data() + sizeToken.size(), chunkSize, 16);
-        if (sizeToken.empty() || ec != std::errc{} || ptr != sizeToken.data() + sizeToken.size()) {
+        if (!parseHttpChunkSize(sizeLine, chunkSize)) {
             closeConnection(conn);
             throw std::runtime_error("http client: malformed chunk size");
         }
@@ -316,6 +309,10 @@ Task<void> HttpClientPool::readChunkedResponseBody(
                 const auto trailer = co_await readLine(kMaxChunkLineBytes);
                 if (trailer.empty()) {
                     break;
+                }
+                if (validateHttpChunkTrailers(trailer) != HttpChunkScanStatus::kComplete) {
+                    closeConnection(conn);
+                    throw std::runtime_error("http client: malformed chunk trailer");
                 }
                 trailerBytes += trailer.size() + 2;
                 if (trailerBytes > kMaxTrailerBytes) {

@@ -1,7 +1,7 @@
 add_library(ruvia-core
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/memory/MemoryPool.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/memory/MimallocOverride.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/ConnectionScanner.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MemoryPool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MimallocOverride.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ConnectionScanner.cpp
 )
 add_library(ruvia::core ALIAS ruvia-core)
 
@@ -12,11 +12,6 @@ set_target_properties(ruvia-core PROPERTIES
 
 ruvia_configure_library(ruvia-core)
 ruvia_configure_runtime_library(ruvia-core)
-
-target_include_directories(ruvia-core
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-)
 
 target_link_libraries(ruvia-core
     PUBLIC
@@ -35,6 +30,9 @@ ruvia_install_public_headers(core
     include/ruvia/detail/ConstantTime.h
     include/ruvia/detail/NativePath.h
     include/ruvia/memory/MemoryPool.h
+    include/ruvia/memory/PmrObject.h
     include/ruvia/memory/PmrResource.h
     include/ruvia/memory/ProcessResource.h
 )
+
+ruvia_install_public_header_tree(core include/ruvia/core/detail)

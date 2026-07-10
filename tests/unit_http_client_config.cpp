@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "client/HttpClientConfigValidation.h"
+#include "ruvia/http/detail/client/HttpClientConfigValidation.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace {

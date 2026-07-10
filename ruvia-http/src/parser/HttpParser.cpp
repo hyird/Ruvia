@@ -1,11 +1,11 @@
-#include "../HttpParserInternal.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
 
 #include "ruvia/http/HttpParser.h"
 
-#include "../HttpRequestInternal.h"
-#include "HttpChunkParser.h"
-#include "HttpHeaderBlockParser.h"
-#include "HttpRequestTarget.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/parser/HttpChunkParser.h"
+#include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+#include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace ruvia::detail {

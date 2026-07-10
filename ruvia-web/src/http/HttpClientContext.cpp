@@ -7,12 +7,12 @@
 #include <asio/detached.hpp>
 
 #include "ruvia/http/Context.h"
-#include "runtime/AsioAwait.h"
-#include "HeaderTokenUtils.h"
-#include "HttpResponseBodyAccess.h"
-#include "client/HttpClientInternal.h"
-#include "client/HttpClientPool.h"
-#include "detail/HttpAsciiCase.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/client/HttpClientInternal.h"
+#include "ruvia/web/detail/client/HttpClientPool.h"
+#include "ruvia/http/detail/AsciiCase.h"
 
 namespace ruvia {
 

@@ -5,10 +5,10 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "net/http2/Http2Connection.h"
-#include "net/http2/Http2FrameCodec.h"
-#include "net/http2/Http2Hpack.h"
-#include "net/http2/Http2WindowUpdate.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2WindowUpdate.h"
 
 namespace {
 

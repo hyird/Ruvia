@@ -3,8 +3,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "http/ContextInternal.h"
-#include "HttpRequestInternal.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/SecurityHeaders.h"

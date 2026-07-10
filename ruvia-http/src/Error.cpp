@@ -1,8 +1,8 @@
 #include "ruvia/http/Error.h"
 
-#include "HttpResponseBodyAccess.h"
-#include "HttpErrorNormalize.h"
-#include "HttpResponseHeaderState.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpErrorNormalize.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/JsonUtils.h"
 
 namespace ruvia {

@@ -1,27 +1,42 @@
 {
   "name": "ruvia",
   "version-string": "0.0.6",
-  "dependencies": [
-    "asio",
-    "brotli",
-    {
-      "name": "mimalloc",
-      "features": [
-        "override"
-      ],
-      "platform": "!windows | !static"
-    },
-    {
-      "name": "mimalloc",
-      "platform": "windows & static"
-    },
-    "openssl",
-    "zlib",
-    "zstd"
+  "default-features": [
+    "runtime",
+    "protocol",
+    "framework"
   ],
   "features": {
-    "http-client": {
-      "description": "Build outbound HTTP client APIs."
+    "runtime": {
+      "description": "Dependencies for the ruvia-core runtime library.",
+      "dependencies": [
+        "asio",
+        {
+          "name": "mimalloc",
+          "features": [
+            "override"
+          ],
+          "platform": "!windows | !static"
+        },
+        {
+          "name": "mimalloc",
+          "platform": "windows & static"
+        }
+      ]
+    },
+    "protocol": {
+      "description": "Dependencies for the standalone ruvia-http protocol library.",
+      "dependencies": [
+        "brotli",
+        "zlib",
+        "zstd"
+      ]
+    },
+    "framework": {
+      "description": "Dependencies for the complete ruvia-web framework.",
+      "dependencies": [
+        "openssl"
+      ]
     },
     "jwt": {
       "description": "Build HMAC JWT helper APIs."

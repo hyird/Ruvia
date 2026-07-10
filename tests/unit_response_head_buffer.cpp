@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "net/server/HttpResponseHeadBuffer.h"
+#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 
 namespace {
 

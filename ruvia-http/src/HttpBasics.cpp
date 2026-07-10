@@ -1,6 +1,6 @@
 #include "ruvia/http/HttpCommon.h"
 
-#include "parser/HttpParserSyntax.h"
+#include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia {
 

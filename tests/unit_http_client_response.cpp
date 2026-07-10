@@ -3,10 +3,10 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "client/HttpClientContentEncoding.h"
-#include "client/HttpClientRedirect.h"
-#include "client/HttpClientAccess.h"
-#include "client/HttpClientResponseParser.h"
+#include "ruvia/http/detail/client/HttpClientContentEncoding.h"
+#include "ruvia/http/detail/client/HttpClientRedirect.h"
+#include "ruvia/http/detail/client/HttpClientAccess.h"
+#include "ruvia/http/detail/client/HttpClientResponseParser.h"
 
 namespace {
 

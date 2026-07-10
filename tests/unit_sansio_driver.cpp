@@ -22,22 +22,22 @@
 #include <filesystem>
 #include <fstream>
 
-#include "HttpResponseFileAccess.h"
-#include "HttpRequestInternal.h"
-#include "HttpResponseBodyAccess.h"
-#include "http/ContextServices.h"
-#include "net/http2/Http2Connection.h"
-#include "net/http2/Http2FrameCodec.h"
-#include "net/http2/Http2Hpack.h"
-#include "net/http2/Http2RequestBuilder.h"
-#include "net/http2/Http2WindowUpdate.h"
-#include "net/ws/HttpWebSocketPermessageDeflate.h"
-#include "net/server/Http2SansIoSession.h"
-#include "router/RouteResolution.h"
-#include "router/RouterInternal.h"
-#include "router/RouteTable.h"
-#include "runtime/AsioAwait.h"
-#include "runtime/SansIoDriver.h"
+#include "ruvia/http/detail/HttpResponseFileAccess.h"
+#include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2RequestBuilder.h"
+#include "ruvia/http/detail/http2/Http2WindowUpdate.h"
+#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
+#include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/router/RouteResolution.h"
+#include "ruvia/web/detail/router/RouterInternal.h"
+#include "ruvia/web/detail/router/RouteTable.h"
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/SansIoDriver.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/memory/MemoryPool.h"
@@ -760,7 +760,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
     RUVIA_CHECK(gotEndStream);
 }
 
-#include "client/Http2ClientSession.h"
+#include "ruvia/web/detail/client/Http2ClientSession.h"
 #include "ruvia/http/HttpClientRuntime.h"
 
 // The crown-jewel loopback: Ruvia's HTTP/2 CLIENT (Http2ClientSession, driven by the

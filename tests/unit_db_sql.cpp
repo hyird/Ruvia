@@ -10,9 +10,9 @@
 #include <string_view>
 #include <vector>
 
-#include "db/core/DbConfigValidation.h"
-#include "db/core/DbMigrationValidation.h"
-#include "db/core/DbSql.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbMigrationValidation.h"
+#include "ruvia/web/detail/db/DbSql.h"
 #include "ruvia/db/DbTypes.h"
 
 namespace {

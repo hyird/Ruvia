@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include "FileResponseHelpers.h"
+#include "ruvia/http/detail/FileResponseHelpers.h"
 
 namespace {
 

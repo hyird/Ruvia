@@ -9,7 +9,7 @@
 #include "ruvia/http/Context.h"
 #include "ruvia/http/detail/RegistrationResource.h"
 #include "ruvia/http/MiddlewareDescriptor.h"
-#include "detail/HttpPmrObject.h"
+#include "ruvia/memory/PmrObject.h"
 
 namespace ruvia {
 
@@ -60,12 +60,12 @@ template <typename MiddlewareT>
 
 template <typename MiddlewareT>
 [[nodiscard]] void* createMiddleware() {
-    return constructHttpPmrObject<MiddlewareT>(registrationResource());
+    return constructPmrObject<MiddlewareT>(registrationResource());
 }
 
 template <typename MiddlewareT>
 void destroyMiddleware(void* target) noexcept {
-    destroyHttpPmrObject(static_cast<MiddlewareT*>(target), registrationResource());
+    destroyPmrObject(static_cast<MiddlewareT*>(target), registrationResource());
 }
 
 template <typename MiddlewareT>

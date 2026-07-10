@@ -1,7 +1,7 @@
-#include "HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/HttpResponseKnownHeaders.h"
 
-#include "HeaderTokenUtils.h"
-#include "HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
 
 namespace ruvia::detail {
 namespace {

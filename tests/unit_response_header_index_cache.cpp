@@ -6,8 +6,8 @@
 #include <limits>
 #include <string_view>
 
-#include "ResponseHeaderIndexCache.h"
-#include "HttpResponseHeaderBits.h"
+#include "ruvia/http/detail/ResponseHeaderIndexCache.h"
+#include "ruvia/http/detail/HttpResponseHeaderBits.h"
 
 namespace {
 

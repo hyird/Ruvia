@@ -7,9 +7,9 @@
 #include <string>
 #include <string_view>
 
-#include "FileResponseHelpers.h"
-#include "HttpImfFixdate.h"
-#include "net/server/HttpDateCache.h"
+#include "ruvia/http/detail/FileResponseHelpers.h"
+#include "ruvia/http/detail/HttpImfFixdate.h"
+#include "ruvia/http/detail/server/HttpDateCache.h"
 
 namespace {
 

@@ -5,7 +5,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http2ClientSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1StreamSource.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/Dotenv.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
@@ -30,60 +29,60 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CookieSignature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/StaticFiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/HttpCors.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpResponseCompression.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseCompression.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/SecurityHeaders.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Session.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpFileZeroCopy.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpConnectionState.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServerAccept.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServerDocumentRoot.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/net/server/HttpServerLifecycle.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/Router.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterDynamicIndexBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterDynamicIndex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterIndex.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterIndexBuild.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterMiddlewareDispatch.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/core/RouterRegistration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpFileZeroCopy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpConnectionState.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerAccept.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerDocumentRoot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndexBuild.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDynamicIndex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndex.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterIndexBuild.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterMiddlewareDispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterRegistration.cpp
 )
 
 if(RUVIA_ENABLE_MARIADB)
     list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/Db.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbHandle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbMigration.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbMysqlRuntime.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbPoolIo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbPoolLifecycle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbPoolSlots.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbRegistry.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbSlotSocket.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbSql.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/core/DbTypes.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/Db.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbHandle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMigration.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbMysqlRuntime.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolIo.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolLifecycle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbPoolSlots.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbRegistry.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSlotSocket.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbSql.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/db/DbTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
     list(APPEND RUVIA_WEB_SOURCES
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/Redis.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisCommandArgs.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandleCommandOps.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandleAdvanced.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandleHashList.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandleHelpers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisHandleSetSorted.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisPipeline.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisPool.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisPoolIo.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisPoolLifecycle.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisPoolSlots.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisProtocol.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisReplyParsers.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisTransaction.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/core/RedisTypes.cpp)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/Redis.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisCommandArgs.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleCommandOps.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleAdvanced.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleHashList.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleHelpers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisHandleSetSorted.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPipeline.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPool.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolIo.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolLifecycle.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisPoolSlots.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisProtocol.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisReplyParsers.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisTransaction.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/redis/RedisTypes.cpp)
 endif()
 
 if(RUVIA_ENABLE_JWT)
@@ -105,13 +104,6 @@ set_target_properties(ruvia-web PROPERTIES
 
 ruvia_configure_library(ruvia-web)
 ruvia_configure_runtime_library(ruvia-web)
-
-target_include_directories(ruvia-web
-    PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/http
-)
 
 target_compile_definitions(ruvia-web PUBLIC RUVIA_ENABLE_WEB)
 
@@ -143,6 +135,8 @@ endif()
 
 ruvia_install_target(ruvia-web web)
 
+ruvia_install_public_header_tree(web include/ruvia/web/detail)
+
 ruvia_install_public_headers(web
     include/ruvia/app/App.h
     include/ruvia/app/AppHook.h
@@ -160,6 +154,7 @@ ruvia_install_public_headers(web
     include/ruvia/http/ErrorHandlers.h
     include/ruvia/http/Health.h
     include/ruvia/http/HttpClientRuntime.h
+    include/ruvia/http/HttpServerOptions.h
     include/ruvia/http/MiddlewareDescriptor.h
     include/ruvia/http/MiddlewareRuntime.h
     include/ruvia/http/Model.h

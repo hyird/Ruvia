@@ -5,8 +5,8 @@
 #include <optional>
 #include <string_view>
 
-#include "net/server/HttpDateCache.h"
-#include "FileResponseHelpers.h"
+#include "ruvia/http/detail/server/HttpDateCache.h"
+#include "ruvia/http/detail/FileResponseHelpers.h"
 
 namespace {
 

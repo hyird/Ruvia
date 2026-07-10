@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "app/DotenvInternal.h"
+#include "ruvia/web/detail/app/DotenvInternal.h"
 
 namespace {
 

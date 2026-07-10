@@ -1,12 +1,12 @@
-#include "AppConfigMutation.h"
+#include "ruvia/web/detail/app/AppConfigMutation.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
-#include "db/core/DbConfigValidation.h"
+#include "ruvia/web/detail/db/DbConfigValidation.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis/core/RedisConfigValidation.h"
+#include "ruvia/web/detail/redis/RedisConfigValidation.h"
 #endif
-#include "client/HttpClientConfigValidation.h"
+#include "ruvia/http/detail/client/HttpClientConfigValidation.h"
 
 #include <memory_resource>
 #include <stdexcept>

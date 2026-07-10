@@ -1,5 +1,5 @@
-#include "HttpErrorNormalize.h"
-#include "HttpResponseHeaderState.h"
+#include "ruvia/http/detail/HttpErrorNormalize.h"
+#include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/Context.h"
 #include "ruvia/http/ErrorHandlers.h"
 

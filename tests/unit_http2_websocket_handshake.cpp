@@ -3,8 +3,8 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "HttpParserInternal.h"
-#include "net/http2/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace {

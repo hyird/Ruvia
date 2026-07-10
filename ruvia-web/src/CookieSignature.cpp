@@ -1,6 +1,6 @@
-#include "CookieSignature.h"
+#include "ruvia/web/detail/CookieSignature.h"
 
-#include "Base64.h"
+#include "ruvia/core/detail/Base64.h"
 #include "ruvia/detail/ConstantTime.h"
 
 #include <openssl/evp.h>

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "HttpBodyFramer.h"
+#include "ruvia/http/detail/HttpBodyFramer.h"
 #include "ruvia/http/Error.h"
 
 namespace {
