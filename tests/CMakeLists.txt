@@ -171,6 +171,23 @@ if(RUVIA_BUILD_HTTP)
     add_executable(ruvia_smoke_http_target smoke_http_target.cpp)
     target_link_libraries(ruvia_smoke_http_target PRIVATE ruvia::http)
     add_test(NAME ruvia_smoke_http_target COMMAND ruvia_smoke_http_target)
+
+    # Compile the exhaustive public/detail HTTP contract once in the normal build.
+    # MSVC gets a focused regression guard for private parser construction: the
+    # complete concept matrix is disproportionately expensive in cl.exe and is
+    # already compiler-checked by the regular unit sources plus non-MSVC CI.
+    # The isolated package matrix below uses a small link smoke source on every host.
+    if(MSVC)
+        set(RUVIA_HTTP_API_CONTRACT_SOURCE guards/http_msvc_api_contract.cpp)
+    else()
+        set(RUVIA_HTTP_API_CONTRACT_SOURCE package-consumer/http.cpp)
+    endif()
+    add_executable(ruvia_guard_http_api_contract ${RUVIA_HTTP_API_CONTRACT_SOURCE})
+    target_link_libraries(ruvia_guard_http_api_contract PRIVATE ruvia::http)
+    if(MSVC)
+        target_compile_options(ruvia_guard_http_api_contract PRIVATE /bigobj /FS)
+    endif()
+    add_test(NAME ruvia_guard_http_api_contract COMMAND ruvia_guard_http_api_contract)
 endif()
 
 if(RUVIA_BUILD_WEB)
@@ -198,6 +215,7 @@ add_test(
     COMMAND ${CMAKE_COMMAND}
         -DRUVIA_CONFIG=$<CONFIG>
         -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake)
+set_tests_properties(ruvia_package_consumers PROPERTIES TIMEOUT 600)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down,
 # docs ownership). CMake script mode keeps the same rules portable across all
