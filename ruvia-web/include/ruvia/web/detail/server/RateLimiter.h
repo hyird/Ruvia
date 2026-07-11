@@ -27,12 +27,21 @@ struct RateLimitCheck final {
         .count();
 }
 
+struct SteadyRateLimiterClock final {
+    [[nodiscard]] static std::int64_t nowMs() noexcept {
+        return rateLimiterNowMs();
+    }
+};
+
 // Single-process shared fixed-window limiter. All worker threads hit the same
 // startup-allocated open-addressing table; request-path updates are atomic CAS
-// operations and never allocate or take a lock. Keys are (scope, remote IP).
-class RateLimiter final {
+// operations and never allocate or take a lock. The clock is a compile-time
+// policy so production pays no indirect-call cost while boundary-sensitive
+// tests can use deterministic time. Keys are (scope, remote IP).
+template <typename Clock>
+class BasicRateLimiter {
 public:
-    explicit RateLimiter(
+    explicit BasicRateLimiter(
         RateLimitRule appRule,
         std::pmr::memory_resource* resource = nullptr)
         : resource_(pmrResourceOrDefault(resource)),
@@ -40,7 +49,7 @@ public:
           slotCount_(nextPowerOfTwo(appRule_.slotCount)),
           slots_(allocateSlots(slotCount_)) {}
 
-    ~RateLimiter() {
+    ~BasicRateLimiter() {
         if (slots_ == nullptr) {
             return;
         }
@@ -51,8 +60,8 @@ public:
         allocator.deallocate(slots_, slotCount_);
     }
 
-    RateLimiter(const RateLimiter&) = delete;
-    RateLimiter& operator=(const RateLimiter&) = delete;
+    BasicRateLimiter(const BasicRateLimiter&) = delete;
+    BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
 
     [[nodiscard]] bool enabled() const noexcept {
         return appRule_.maxRequests > 0;
@@ -402,7 +411,7 @@ private:
             return RateLimitCheck{.allowed = !failClosed, .resetAfterMs = 1};
         }
 
-        const auto nowMs = rateLimiterNowMs();
+        const auto nowMs = Clock::nowMs();
         const auto resetAtMs = currentResetAtMs(nowMs, rule);
         const auto resetAfter = resetAfterMs(nowMs, resetAtMs);
         const auto hash = keyHash(scope, key);
@@ -471,6 +480,11 @@ private:
     RateLimitRule appRule_;
     std::size_t slotCount_;
     Slot* slots_{nullptr};
+};
+
+class RateLimiter final : public BasicRateLimiter<SteadyRateLimiterClock> {
+public:
+    using BasicRateLimiter<SteadyRateLimiterClock>::BasicRateLimiter;
 };
 
 }  // namespace ruvia::detail

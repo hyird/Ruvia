@@ -13,7 +13,22 @@
 namespace {
 
 using ruvia::RateLimitRule;
+using ruvia::detail::BasicRateLimiter;
 using ruvia::detail::RateLimiter;
+
+struct ManualRateLimiterClock final {
+    [[nodiscard]] static std::int64_t nowMs() noexcept {
+        return value.load(std::memory_order_relaxed);
+    }
+
+    static void set(std::int64_t nowMs) noexcept {
+        value.store(nowMs, std::memory_order_relaxed);
+    }
+
+    inline static std::atomic<std::int64_t> value{0};
+};
+
+using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
 
 // A window long enough that no reset happens during a test.
 RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {
@@ -57,10 +72,13 @@ RUVIA_TEST(rate_limiter_resets_after_window) {
     RateLimitRule rule;
     rule.maxRequests = 1;
     rule.window = std::chrono::milliseconds(20);
-    RateLimiter limiter(rule);
+    ManualRateLimiterClock::set(1'000);
+    ManualRateLimiter limiter(rule);
     RUVIA_CHECK(limiter.allowGlobal("k").allowed);
     RUVIA_CHECK(!limiter.allowGlobal("k").allowed);
-    std::this_thread::sleep_for(std::chrono::milliseconds(40));  // cross the window boundary
+    ManualRateLimiterClock::set(1'019);
+    RUVIA_CHECK(!limiter.allowGlobal("k").allowed);
+    ManualRateLimiterClock::set(1'020);
     RUVIA_CHECK(limiter.allowGlobal("k").allowed);  // new fixed window admits again
 }
 
@@ -104,12 +122,15 @@ RUVIA_TEST(rate_limiter_route_rule_owns_fail_policy) {
 }
 
 RUVIA_TEST(rate_limiter_route_rule_is_normalized) {
-    RateLimiter limiter(ruleWith(10));
+    ManualRateLimiterClock::set(5'000);
+    ManualRateLimiter limiter(ruleWith(10));
     RateLimitRule routeRule;
     routeRule.maxRequests = 1;
     routeRule.window = std::chrono::milliseconds(0);
     RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
     RUVIA_CHECK(!limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
+    ManualRateLimiterClock::set(5'001);
+    RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
 }
 
 // The core lock-free guarantee: under heavy contention on ONE key within a single

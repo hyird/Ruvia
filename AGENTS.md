@@ -693,6 +693,8 @@ HEADERS/END_STREAM 状态转换。
 - 请求期不要新增 mutex、rwlock、spinlock、共享原子计数争用、type-erasure、`shared_ptr` 分配或不必要拷贝。
 - 优先使用 per-worker 所有权、连接私有状态、启动期构建后只读数据。
 - 跨线程操作连接状态默认禁止；必须先设计明确的 worker mailbox 或 intrusive MPSC 边界。
+- 固定窗口、超时等时间边界测试必须使用编译期可注入时钟，禁止依赖 `sleep` 碰运气跨边界；
+  生产请求热路径不得因此引入函数指针、虚调用或 type-erasure。
 
 ## 线程和运行时
 

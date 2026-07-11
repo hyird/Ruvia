@@ -771,7 +771,9 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 - The HTTP/1 request path is allocation- and lock-free; HTTP/2 multiplexing adds one
   recycled coroutine frame and one virtual dispatch per stream.
 - The optional rate limiter is the one shared-atomic structure on the request path; it is
-  off by default, so per-request atomic cost is opt-in.
+  off by default, so per-request atomic cost is opt-in. Its monotonic clock is selected at
+  compile time, which keeps fixed-window boundary tests deterministic without adding an
+  indirect call or type erasure to the production hot path.
 - Two PMR pooling tiers back memory: a process-level mimalloc resource and a per-request
   monotonic arena. Per-worker isolation comes from an object pool plus mimalloc's
   thread-local heaps rather than a distinct PMR tier.
