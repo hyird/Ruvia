@@ -4,7 +4,6 @@
 #include <cstring>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpStatus.h"
@@ -14,10 +13,11 @@ namespace ruvia::detail {
 namespace {
 
 struct ResponseHeadFlags {
-    bool bodyAllowed{false};
+    HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
     bool emitChunkedTransferEncoding{false};
     bool autoContentLengthOwnedByWriter{false};
     bool explicitContentLengthAllowed{false};
+    std::uint64_t canonicalContentLength{0};
 };
 
 inline constexpr std::string_view kChunkedTransferEncodingHeader =
@@ -55,7 +55,10 @@ void emitResponseHead(
     std::string_view reasonPhrase,
     std::string_view dateHeader,
     ResponseHeadFlags flags) {
-    sink.append(std::string_view("HTTP/1.1 "));
+    sink.append(
+        flags.protocolVersion == HttpProtocolVersion::kHttp10
+            ? std::string_view("HTTP/1.0 ")
+            : std::string_view("HTTP/1.1 "));
     sink.appendUnsigned(response.status());
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
     sink.append(' ');
@@ -88,11 +91,7 @@ void emitResponseHead(
     }
     if (flags.autoContentLengthOwnedByWriter) {
         sink.append(std::string_view("Content-Length: "));
-        // HEAD metadata uses the selected representation size because its status
-        // still allows content. A status-level no-content policy that nevertheless
-        // owns framing (currently 205) must always declare the wire content length
-        // as zero, even if the application supplied a body that will be suppressed.
-        sink.appendUnsigned(flags.bodyAllowed ? responseBodySize(response) : 0);
+        sink.appendUnsigned(flags.canonicalContentLength);
         sink.append(std::string_view("\r\n"));
     }
     sink.append(std::string_view("\r\n"));
@@ -117,11 +116,19 @@ void appendResponseHead(
         !emitChunkedTransferEncoding &&
         !autoContentLengthOwnedByWriter &&
         (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
+    const auto* buffered = plan.buffered();
     const ResponseHeadFlags flags{
-        .bodyAllowed = policy.bodyAllowed(),
+        .protocolVersion = plan.protocolVersion(),
         .emitChunkedTransferEncoding = emitChunkedTransferEncoding,
         .autoContentLengthOwnedByWriter = autoContentLengthOwnedByWriter,
-        .explicitContentLengthAllowed = explicitContentLengthAllowed};
+        .explicitContentLengthAllowed = explicitContentLengthAllowed,
+        // Buffered HEAD metadata retains the selected representation length.
+        // A status-level no-content policy that still owns framing (205) is
+        // canonicalized to zero for both buffered and streaming heads.
+        .canonicalContentLength =
+            buffered != nullptr && policy.bodyAllowed()
+                ? buffered->contentLength()
+                : std::uint64_t{0}};
 
     const auto knownBits = responseKnownHeaderBits(response);
 

@@ -72,8 +72,17 @@ Task<void> HttpServer::acceptLoop() {
             http1MarkConnectionClose(response);
             std::error_code writeEc;
             const auto writePlan = httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response);
+            const auto responsePlan = http1BufferedResponsePlan(
+                writePlan,
+                Http1ServerConnectionPlan::http11Close());
             co_await writeResponse(
-                socket, memory_, nullptr, nullptr, response, writePlan, writeEc);
+                socket,
+                memory_,
+                nullptr,
+                nullptr,
+                response,
+                responsePlan,
+                writeEc);
             closeSocket(socket);
             continue;
         }

@@ -45,7 +45,8 @@ public:
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
           mode_(mode),
-          plan_(plan) {}
+          plan_(plan),
+          connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
@@ -220,7 +221,7 @@ private:
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
     Http1ResponseStreamPlan plan_;
-    Http1ServerConnectionPlan connectionPlan_{Http1ServerConnectionPlan::close()};
+    Http1ServerConnectionPlan connectionPlan_;
     ResponseStreamState state_;
     bool aborted_{false};
 };

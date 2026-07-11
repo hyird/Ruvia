@@ -34,7 +34,7 @@ void Http1ServerRequestParser::parseRequestHead(
     state.messageBytes = 0;
     state.requiredTotalBytes.reset();
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
-    state.connectionPlan = Http1ServerConnectionPlan::close();
+    state.connectionPlan = Http1ServerConnectionPlan::http11Close();
     state.responseCoding = HttpContentCoding::kNone;
     HttpRequestAccess::reset(state.request);
 
@@ -44,7 +44,7 @@ void Http1ServerRequestParser::parseRequestHead(
         state.error = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
-        state.connectionPlan = Http1ServerConnectionPlan::close();
+        state.connectionPlan = Http1ServerConnectionPlan::http11Close();
     };
 
     const auto headerBytes = findHttpHeaderEnd(buffer, headerSearchOffset);
@@ -152,8 +152,9 @@ void Http1ServerRequestParser::parseRequestHead(
     } else {
         state.bodyPlan = Http1RequestBodyPlan(expectations);
     }
-    state.connectionPlan = http1PlanRequestConnection(
-        protocolVersion, block.connectionOptions);
+    state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11
+        ? http1PlanHttp11RequestConnection(block.connectionOptions)
+        : http1PlanHttp10RequestConnection(block.connectionOptions);
     state.phase_ = Http1ServerRequestParsePhase::kRequestHeadReady;
 }
 
@@ -172,13 +173,14 @@ void Http1ServerRequestParser::parseMessageBody(
     }
 
     const auto fail = [&state](HttpParseError error) noexcept {
+        const auto connectionPlan = state.connectionPlan.requireClose();
         HttpRequestAccess::reset(state.request);
         state.phase_ = Http1ServerRequestParsePhase::kFailure;
         state.error = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
         state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
-        state.connectionPlan = Http1ServerConnectionPlan::close();
+        state.connectionPlan = connectionPlan;
     };
     const auto needMore = [&state](
         std::size_t headerBytes,

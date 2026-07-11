@@ -179,13 +179,26 @@ body、通知 EOF，并在 done 后消费协议语义上忽略的 epilogue，确
 
 边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议失败对应哪个 HTTP status”，应放在 `ruvia-http`；如果代码决定“协议失败如何变成应用 error code/JSON envelope，或某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 必须在知道 request-body/keep-alive 状态后统一最终化连接语义。流式响应在 handler 前由 `ruvia-http` 的 `Http1ResponseStreamPlan` 绑定 request connection plan、body 状态、chunked/close-delimited framing 和类型化的外部强制关闭策略；提交 response head 时必须再由 `PreparedHttp1ResponseStream` 合并 response 的 `Connection` 选项、规范化响应信号并产出最终 `Http1ServerConnectionPlan`。prepared 结果还必须携带唯一 `Http1ResponseHeadPlan`，其 framing 只能是 `Http1BufferedResponseHead`、`Http1ChunkedResponseStreamHead` 或 `Http1CloseDelimitedResponseStreamHead`；`appendResponseHead()` 只能接收该 plan，禁止恢复 `policy + suppressAutoContentLength` 标量入口。chunked alternative 由 writer 唯一生成 canonical `Transfer-Encoding: chunked`，不得保留应用自定义 transfer coding；body-open close-delimited alternative 必须过滤应用 `Transfer-Encoding` 与 `Content-Length`，HEAD/304 等 body-suppressed 响应可以保留 representation length metadata，但对 HTTP/1.0 仍不得发送 Transfer-Encoding。该边界遵守 [RFC 9112 §6.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.1) 与 [§6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3)。`ruvia-web` 只能驱动 prepared plan，不得把 pre-commit plan 的下界当成最终 socket 生命周期结论。method/status 的响应 content 语义必须由无分配 `HttpResponseContentSemantics` 唯一分类为 `HttpInformationalResponseContent`、`HttpProtocolSwitchResponseContent`、`HttpConnectTunnelResponseContent`、`HttpResponseWithoutContent` 或 `HttpResponseWithContent` alternative；HTTP/1 client、HTTP/2 client 和 `HttpResponseBodyPlan` 必须消费同一结果，禁止各自重写 HEAD/1xx/204/304/CONNECT 判断。发送侧再由 `HttpResponseBodyPlan` 绑定 status write policy，buffered 响应由 `HttpBufferedResponseWritePlan` 绑定 representation length 与最终 send-body 结论；HTTP/1、HTTP/2 和 streaming 调用链不得在 `ruvia-web` 通过 `skipBody` 等松散布尔值重复判断。HEAD 保留对应 GET representation 的协商 metadata 和长度，但 HTTP/1 不发送 payload、HTTP/2 不发送 DATA。`Http2Connection` 必须拥有完整的本地发送 phase：interim head 不关闭 initial-head phase，request/final response/WebSocket initial head 只能成功提交一次，DATA 只能在 body-open phase 提交。`submitData()` 的 `kQueued` 表示 core 已复制并接管未发送后缀，调用方不得重试同一输入；`kBackpressured` 表示本次零接管，调用方等待已排队数据 drain 后重试。已接管的终止信号与已经物化到输出缓冲的 `END_STREAM` 必须分别记录；任何本地或对端 reset/reject 都必须统一清理未物化 DATA、trailers 和 drain 通知。所有 inbound HEADERS field block 即使最终因 local reset、drain refusal 或 stream error 被丢弃，也必须连续接收同 stream 的 CONTINUATION，并在 detached scratch 中完整 HPACK 解码后才应用完成动作；owner 在 field block 中途关闭 live stream 时必须转移已累积的压缩字节。local RST 必须是本端在该 stream 的最后一帧，不得在 discarded block 完成后再次发送 RST；无法完成强制解压时必须使用 connection-level `COMPRESSION_ERROR`。RFC 9113 已废弃 priority tree，合法形状的 dependency/weight 只能忽略，不得再触发 stream 状态或 reset。`ruvia-web` 只能驱动这些类型化状态，不得自行复制 HTTP/2 head/data/terminal 判断。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
-HTTP/1 parser 必须先产出不可拆分的 `Http1ServerConnectionPlan`，把
-`Http1ConnectionDisposition` 与 HTTP/1.0 显式 `keep-alive`/HTTP/1.1 隐式持久化响应信号绑定；
+HTTP/1 的 final `Http1ResponseHeadPlan` 必须拥有准确的 HTTP/1.0/HTTP/1.1 status-line 版本；
+`appendResponseHead()` 只能从该 plan 序列化版本，HTTP/1.0 request 必须得到 `HTTP/1.0` response line，
+符合 [RFC 9110 §2.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-2.5)。buffered 输出必须组合为
+不可默认构造的 `Http1BufferedResponsePlan`，把 `HttpBufferedResponseWritePlan` 与 head plan 绑定；
+`Http1BufferedResponseHead::contentLength()` 必须与 write plan 的 representation length 相同，
+`ruvia-web` writer 不得分别接收后再重建版本或长度，禁止恢复独立的
+`http1BufferedResponseHeadPlan()` factory。
+
+HTTP/1 parser 必须先产出不可拆分的 `Http1ServerConnectionPlan`，把准确的
+`HttpProtocolVersion::kHttp10`/`kHttp11` 与 `Http1ConnectionDisposition` 直接绑定；只能用
+`http1PlanHttp10RequestConnection()` / `http1PlanHttp11RequestConnection()` 构造已解析请求，
+`http11Close()` 只允许用于尚无有效 request version 的错误响应。禁止恢复有损的
+`Http1ResponseConnectionSignal`、`responseSignal()` 或接受通用 `HttpProtocolVersion` 的
+`http1PlanRequestConnection()`；
 request、body reader、buffered、streaming 与 WebSocket failure 分支都只能传递或
 收紧同一个 plan。不得恢复 `http1RequestNeedsKeepAliveSignal`、`keepAlive`、`closeAfterWrite` 等
 并行标量或布尔值。请求 body 是否完整消费必须用 `Http1RequestBodyConsumption` 收紧 plan，外部
 request-limit 用 typed close policy 收紧 plan，应用响应的 `Connection: close` 则在最终化时收紧
-plan；任一路径都不得仅传 disposition 后再从 request version 重算 wire signal。
+plan；`requireClose()` 必须保留原版本，任一路径都不得仅传 disposition 后再重算 status-line 或
+Connection field。
 重复 `Connection` field line 必须作为同一个 list 检查；任一 `close` token 都收紧 plan 并把矛盾
 字段规范化为唯一 `Connection` field，通常为 `close`；若响应保留 `Upgrade` field，则必须为
 `close, Upgrade`，不能在关闭规范化时破坏 hop-by-hop 配对。HTTP/1.0 复用时，即使已有其他

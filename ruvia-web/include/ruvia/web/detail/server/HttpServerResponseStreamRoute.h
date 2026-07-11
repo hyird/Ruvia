@@ -98,7 +98,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         response = result.takeResponse();
         connectionPlan = http1FinalizeResponseConnection(
             response,
-            Http1ServerConnectionPlan::close());
+            streamPlan.requestConnectionPlan().requireClose());
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }

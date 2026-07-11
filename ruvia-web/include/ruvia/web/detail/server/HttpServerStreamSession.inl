@@ -64,7 +64,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             memory_,
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
-        auto connectionPlan = Http1ServerConnectionPlan::close();
+        auto connectionPlan = Http1ServerConnectionPlan::http11Close();
         bool responseStreamDispatched = false;
         bool bufferAlreadyCompacted = false;
         std::size_t consumedBytes = 0;
@@ -119,7 +119,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         HttpErrorInfo(417, {}, "unsupported Expect header"),
                         baseRouteServices);
                     connectionPlan = http1FinalizeResponseConnection(
-                        response, Http1ServerConnectionPlan::close());
+                        response, parsed.connectionPlan.requireClose());
                     break;
                 }
                 if (options_.autoHttps.enabled) {
@@ -138,7 +138,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     }
                     connectionPlan = http1FinalizeResponseConnection(
                         response,
-                        Http1ServerConnectionPlan::close());
+                        parsed.connectionPlan.requireClose());
                     scannerEntry.touch();
                     break;
                 }
@@ -153,7 +153,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         baseRouteServices);
                     setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
                     connectionPlan = http1FinalizeResponseConnection(
-                        response, Http1ServerConnectionPlan::close());
+                        response, parsed.connectionPlan.requireClose());
                     break;
                 }
                 if (!routeResolution.found()) {
@@ -167,7 +167,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             HttpErrorInfo(413, {}, "request body is too large"),
                             baseRouteServices);
                         connectionPlan = http1FinalizeResponseConnection(
-                            response, Http1ServerConnectionPlan::close());
+                            response, parsed.connectionPlan.requireClose());
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
@@ -191,7 +191,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         requestMemory,
                         baseRouteServices);
                     connectionPlan = http1FinalizeResponseConnection(
-                        response, Http1ServerConnectionPlan::close());
+                        response, parsed.connectionPlan.requireClose());
                     break;
                 }
 
@@ -206,7 +206,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         HttpErrorInfo(413, {}, "request body is too large"),
                         baseRouteServices);
                     connectionPlan = http1FinalizeResponseConnection(
-                        response, Http1ServerConnectionPlan::close());
+                        response, parsed.connectionPlan.requireClose());
                     break;
                 }
 
@@ -314,7 +314,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     baseRouteServices);
                 connectionPlan = http1FinalizeResponseConnection(
-                    response, Http1ServerConnectionPlan::close());
+                    response, parsed.connectionPlan.requireClose());
                 break;
             }
 
@@ -330,7 +330,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     baseRouteServices);
                 connectionPlan = http1FinalizeResponseConnection(
-                    response, Http1ServerConnectionPlan::close());
+                    response, parsed.connectionPlan.requireClose());
                 break;
             }
 
@@ -357,13 +357,16 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 response,
                 options_,
                 compressionScratch);
+            const auto responsePlan = http1BufferedResponsePlan(
+                responsePreparation.writePlan(),
+                connectionPlan);
             co_await writeResponse(
                 stream,
                 memory_,
                 &responseHead,
                 &fileChunk,
                 response,
-                responsePreparation.writePlan(),
+                responsePlan,
                 ec);
             if (responsePreparation.bodyBorrowsCompressionScratch()) {
                 clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);

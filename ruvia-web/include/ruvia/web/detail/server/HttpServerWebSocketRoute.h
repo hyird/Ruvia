@@ -45,7 +45,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             HttpErrorInfo(400, {}, "invalid websocket upgrade"),
             baseRouteServices);
         connectionPlan = http1FinalizeResponseConnection(
-            response, Http1ServerConnectionPlan::close());
+            response, parsed.connectionPlan.requireClose());
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
     bool permessageDeflate = false;

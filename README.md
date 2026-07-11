@@ -30,24 +30,35 @@ Protocol primitives report status plus a static diagnostic through `HttpProtocol
 `ruvia-web` translates that signal into its `HttpErrorInfo`/JSON envelope. Router and
 custom error handlers never set HTTP/1 connection persistence; the server runtime applies
 `Connection: close` only after it knows the request-body and keep-alive state.
-The HTTP/1 parser first returns one immutable `Http1ServerConnectionPlan`, which binds the
-`Http1ConnectionDisposition` to the response-side signal required by the request version:
-implicit persistence for HTTP/1.1 or explicit `Connection: keep-alive` for opted-in HTTP/1.0.
-Buffered, body-reader, streaming, and WebSocket-failure paths carry or tighten that same
-plan. Typed `Http1RequestBodyConsumption`, request-limit close policy, and an
-application `Connection: close` may only narrow it to close; no runtime branch passes a bare
-`needsKeepAliveSignal` bool or reconstructs the wire signal from the version string.
+The HTTP/1 parser first returns one immutable `Http1ServerConnectionPlan`, which binds the exact
+`HttpProtocolVersion` (`kHttp10` or `kHttp11`) directly to `Http1ConnectionDisposition`.
+Version-specific `http1PlanHttp10RequestConnection()` and
+`http1PlanHttp11RequestConnection()` factories cannot accidentally admit HTTP/2; the named
+`http11Close()` fallback is reserved for errors produced before a valid request version exists.
+Buffered, body-reader, streaming, and WebSocket-failure paths carry or tighten the parsed plan.
+Typed `Http1RequestBodyConsumption`, request-limit close policy, and an application
+`Connection: close` may only call `requireClose()`, which preserves the exact version; the former
+lossy `Http1ResponseConnectionSignal`, `responseSignal()`, and generic version factory do not
+exist.
 Repeated `Connection` field lines are evaluated as one list: any `close` token tightens the
 plan and the finalizer collapses contradictory fields to one `Connection: close`; an HTTP/1.0
 reuse verdict adds `keep-alive` even when another connection option was already present.
+The response finalizer consumes that exact version, and every `Http1ResponseHeadPlan` owns it
+through status-line serialization: an HTTP/1.0 request produces an `HTTP/1.0` response line while
+HTTP/1.1 remains `HTTP/1.1`, following
+[RFC 9110 Section 2.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-2.5).
 For streaming responses, `ruvia-http` first returns an `Http1ResponseStreamPlan` that binds
 the request connection plan, version/body state, candidate chunked versus close-delimited framing,
 and a typed external close policy. At head commit, `PreparedHttp1ResponseStream` also folds in
-the response method/status and `Connection` options, canonicalizes the wire signal, and returns
+the response method/status and `Connection` options, canonicalizes the Connection field, and returns
 the authoritative connection disposition. It also carries one exclusive `Http1ResponseHeadPlan`:
 `Http1BufferedResponseHead`, `Http1ChunkedResponseStreamHead`, or
 `Http1CloseDelimitedResponseStreamHead`. `appendResponseHead()` accepts only that plan; the former
-policy plus `suppressAutoContentLength` boolean entry no longer exists. The writer is the sole owner
+policy plus `suppressAutoContentLength` boolean entry no longer exists. Buffered output is passed as
+one `Http1BufferedResponsePlan`, inseparably pairing `HttpBufferedResponseWritePlan` with the head
+plan; `Http1BufferedResponseHead` owns the same canonical representation length used to decide body
+I/O, so Web cannot reconstruct version or length from loose inputs; the former standalone
+`http1BufferedResponseHeadPlan()` factory does not exist. The writer is the sole owner
 of canonical `Transfer-Encoding: chunked`, replacing any application framing declaration. A
 body-open close-delimited response filters both application `Transfer-Encoding` and
 `Content-Length`; a body-suppressed HEAD/304 response may retain representation-length metadata but
@@ -57,7 +68,7 @@ message-length rules in
 [Section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3). Thus an HTTP/1.0 body-allowed stream remains
 close-delimited, while a HEAD/204/205/304 response on an opted-in persistent connection is
 self-delimited and can be reused. The committed sink returns the complete connection plan, so
-its socket disposition cannot drift away from the response signal already emitted on the wire.
+its socket disposition cannot drift away from the version and Connection field already emitted.
 Streaming termination is also one HTTP-owned contract. `ResponseStreamCommitPlan` binds the
 body plan to the exact post-head phase (`body-open`, `trailers-only`, or `message-ended`) and
 the available trailer framing. Application code submits an optional complete trailer section

@@ -105,7 +105,7 @@ inline Task<Http1ServerConnectionPlan> completeFailedHttpBodyRoute(
     scannerEntry.touch();
     co_return http1FinalizeResponseConnection(
         response,
-        Http1ServerConnectionPlan::close());
+        parsed.connectionPlan.requireClose());
 }
 
 template <typename RestorePipeline>
