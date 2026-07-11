@@ -175,18 +175,35 @@ Http1ClientResponseParseError parseFailureError(
     return failure->error();
 }
 
-class RejectingMemoryResource final : public std::pmr::memory_resource {
-private:
-    void* do_allocate(std::size_t, std::size_t) override {
-        throw std::bad_alloc();
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    CountingMemoryResource() noexcept
+        : upstream_(std::pmr::get_default_resource()) {}
+
+    [[nodiscard]] std::size_t allocationCount() const noexcept {
+        return allocationCount_;
     }
 
-    void do_deallocate(void*, std::size_t, std::size_t) override {}
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocationCount_;
+        return upstream_->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        upstream_->deallocate(pointer, bytes, alignment);
+    }
 
     [[nodiscard]] bool do_is_equal(
         const std::pmr::memory_resource& other) const noexcept override {
         return this == &other;
     }
+
+    std::pmr::memory_resource* upstream_;
+    std::size_t allocationCount_{0};
 };
 
 template <typename T>
@@ -969,7 +986,7 @@ RUVIA_TEST(http_client_response_parser_owns_exact_head_boundary) {
 }
 
 RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
-    RejectingMemoryResource rejecting;
+    CountingMemoryResource counting;
     ruvia::HttpClientRequest request;
     request.method = "GET";
     std::array<char, 512> requestHead;
@@ -981,25 +998,23 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
         return;
     }
 
-    auto failureParser = Http1ClientResponseParser(*prepared, &rejecting);
+    auto failureParser = Http1ClientResponseParser(*prepared, &counting);
     const auto failure = failureParser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.kind() == Http1ClientResponseParseKind::kFailure);
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(
         failure.failure()->error() ==
         Http1ClientResponseParseError::kUnsupportedHttpVersion);
+    RUVIA_CHECK_EQ(counting.allocationCount(), std::size_t{0});
 
-    bool successAllocated = false;
-    try {
-        auto successParser = Http1ClientResponseParser(*prepared, &rejecting);
-        (void)successParser.parse(
-            "HTTP/1.1 200 OK\r\n"
-            "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"
-            "Content-Length: 0\r\n\r\n");
-    } catch (const std::bad_alloc&) {
-        successAllocated = true;
-    }
-    RUVIA_CHECK(successAllocated);
+    auto successParser = Http1ClientResponseParser(*prepared, &counting);
+    const auto success = successParser.parse(
+        "HTTP/1.1 200 OK\r\n"
+        "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(success.kind() == Http1ClientResponseParseKind::kParsed);
+    RUVIA_CHECK(success.parsed() != nullptr);
+    RUVIA_CHECK(counting.allocationCount() > 0);
 }
 
 RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
