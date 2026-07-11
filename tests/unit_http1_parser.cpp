@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -19,6 +20,24 @@ using ruvia::detail::Http1ServerRequestParsePhase;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpServerExpectationAction;
+
+const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(
+    const ruvia::detail::Http1RequestBodyPlan& plan) {
+    const auto* knownLength = plan.knownLength();
+    if (knownLength == nullptr) {
+        throw std::runtime_error("test expected known-length request framing");
+    }
+    return *knownLength;
+}
+
+const ruvia::detail::Http1ChunkedRequestBody& requireChunked(
+    const ruvia::detail::Http1RequestBodyPlan& plan) {
+    const auto* chunked = plan.chunked();
+    if (chunked == nullptr) {
+        throw std::runtime_error("test expected chunked request framing");
+    }
+    return *chunked;
+}
 
 }  // namespace
 
@@ -81,8 +100,9 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
     RUVIA_CHECK(fixed != nullptr);
     if (fixed != nullptr) {
         RUVIA_CHECK_EQ(fixed->request().path(), std::string_view("/fixed"));
-        RUVIA_CHECK(fixed->bodyPlan().hasContentLength());
-        RUVIA_CHECK_EQ(fixed->bodyPlan().contentLength(), std::size_t{5});
+        RUVIA_CHECK_EQ(
+            requireKnownLength(fixed->bodyPlan()).contentLength(),
+            std::size_t{5});
         RUVIA_CHECK_EQ(fixed->wireBody(), std::string_view("hello"));
         RUVIA_CHECK_EQ(fixed->consumedBytes(), contentLengthMessage.size());
     }
@@ -99,7 +119,7 @@ RUVIA_TEST(http1_public_parse_success_retains_the_exact_framed_body) {
     RUVIA_CHECK(chunkedResult.kind() == Http1RequestParseKind::kParsed);
     RUVIA_CHECK(chunked != nullptr);
     if (chunked != nullptr) {
-        RUVIA_CHECK(chunked->bodyPlan().isChunked());
+        RUVIA_CHECK(chunked->bodyPlan().chunked() != nullptr);
         RUVIA_CHECK_EQ(
             chunked->wireBody(),
             std::string_view("3\r\nabc\r\n0\r\nX-Checksum: ok\r\n\r\n"));
@@ -204,8 +224,9 @@ RUVIA_TEST(http1_parse_content_length_body) {
     RUVIA_CHECK(result.messageReady());
     RUVIA_CHECK_EQ(result.request.method(), std::string_view("POST"));
     RUVIA_CHECK(result.request.knownMethod() == HttpKnownMethod::kPost);
-    RUVIA_CHECK(result.bodyPlan.hasContentLength());
-    RUVIA_CHECK_EQ(result.bodyPlan.contentLength(), std::size_t{5});
+    RUVIA_CHECK_EQ(
+        requireKnownLength(result.bodyPlan).contentLength(),
+        std::size_t{5});
 }
 
 RUVIA_TEST(http1_parse_conflicting_content_length_rejected) {
@@ -225,8 +246,9 @@ RUVIA_TEST(http1_parse_content_length_combined_equal_values) {
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Content-Length: 5, 5\r\n\r\nhello");
     RUVIA_CHECK(result.messageReady());
-    RUVIA_CHECK(result.bodyPlan.hasContentLength());
-    RUVIA_CHECK_EQ(result.bodyPlan.contentLength(), std::size_t{5});
+    RUVIA_CHECK_EQ(
+        requireKnownLength(result.bodyPlan).contentLength(),
+        std::size_t{5});
 
     const auto conflict = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -258,8 +280,9 @@ RUVIA_TEST(http1_parse_identical_duplicate_content_length_accepted) {
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello");
     RUVIA_CHECK(result.messageReady());
-    RUVIA_CHECK(result.bodyPlan.hasContentLength());
-    RUVIA_CHECK_EQ(result.bodyPlan.contentLength(), std::size_t{5});
+    RUVIA_CHECK_EQ(
+        requireKnownLength(result.bodyPlan).contentLength(),
+        std::size_t{5});
 }
 
 RUVIA_TEST(http1_parse_content_length_with_transfer_encoding_rejected) {
@@ -317,8 +340,7 @@ RUVIA_TEST(http1_parse_chunked_body) {
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n");
     RUVIA_CHECK(result.messageReady());
-    RUVIA_CHECK(result.bodyPlan.isChunked());
-    RUVIA_CHECK(result.bodyPlan.transferCodings().empty());
+    RUVIA_CHECK(requireChunked(result.bodyPlan).transferCodings().empty());
 }
 
 RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
@@ -328,10 +350,10 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
         "Transfer-Encoding: gzip, chunked\r\n\r\n"
         "3\r\nraw\r\n0\r\n\r\n");
     RUVIA_CHECK(result.messageReady());
-    RUVIA_CHECK(result.bodyPlan.isChunked());
-    RUVIA_CHECK_EQ(result.bodyPlan.transferCodings().count, std::size_t{1});
+    const auto& chunked = requireChunked(result.bodyPlan);
+    RUVIA_CHECK_EQ(chunked.transferCodings().count, std::size_t{1});
     RUVIA_CHECK(
-        result.bodyPlan.transferCodings().values[0] ==
+        chunked.transferCodings().values[0] ==
         ruvia::detail::HttpTransferCoding::kGzip);
 }
 

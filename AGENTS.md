@@ -140,6 +140,20 @@ target、示例或测试把另一个 target 的 `src/` 加入 include path，也
 
 HTTP method 必须分成 wire token 与固定语义分类两层。RFC 9110 的 method 是可扩展且大小写敏感的 token；`HttpRequest::method()`、`ContextRequest::method()`、`RawRequestClone::method()` 与 `AccessLogRecord::method()` 必须保留 HTTP/1/HTTP/2 原始 token。`HttpKnownMethod` 和对应 `knownMethod()` 只用于框架已知的路由、body 与安全策略，`classifyHttpMethod()` 不承担语法校验，`isValidHttpMethodToken()` 也不得要求已知分类。`PROPFIND` 或 `get` 等合法未知 token 不是 HTTP/1 parse error，也不是 HTTP/2 stream protocol error；`ruvia-web` 必须通过正常 error handler 生成 501，只有不符合 token grammar 的 method 才按协议失败处理。RFC 8441 Extended CONNECT 在 request、clone 和 access log 中必须仍为 `CONNECT`；只有 WebSocket 选路允许 `Http2RequestBuilder::routeMethod()` 映射到 GET route，禁止改写原始 request method。
 
+单 byte-range 的解析、representation-size 归一化与 server ignore policy 只能走
+`resolveHttpByteRange()`，返回 `HttpByteRangeResolution` 的三个互斥 alternative：
+`HttpByteRangeIgnored` 与 `HttpByteRangeUnsatisfiable` 不得携带 offset/length，只有
+`HttpResolvedByteRange` 可以通过 `offset()`/`length()` 暴露非空、已 clamp 的切片。禁止恢复
+`HttpRangeOutcome + default HttpByteRange` tuple、公开构造任意零长度 range，或在 `ruvia-web`
+先用独立 comma helper 预扫再调用 resolver。依据
+[RFC 9110 §14.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1)，range-unit 大小写不敏感；
+依据 [§14.1.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.2)，超大合法十进制必须防止
+整数转换溢出并保持 huge start/last/suffix 的比较与 clamp 语义；依据
+[§14.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.2)，unknown unit 必须 ignore，当前
+single-range server 对 invalid/multipart set 与空 representation 统一选择允许的 ignore policy。
+`ruvia-web` 只能把 ignored、unsatisfiable、resolved 分别映射为完整 200、带 unsatisfied
+Content-Range 的 416、单切片 206，不得重写协议判断。
+
 multipart boundary 必须先构造成固定容量、拥有自身字节且符合 RFC 2046 1–70 字节 grammar 的
 `MultipartBoundary`；不得把裸 `string_view` 分别传给 buffered、streaming 和 Content-Type 调用链。
 Content-Type 提取必须返回 `HttpMultipartBoundaryParseResult` 的 boundary/failure 判别结果；part header
@@ -240,12 +254,19 @@ head 后原子接管非空 section，必须先验证全部字段及 Content-Leng
 状态，并以 `Http2ResponseTrailerSubmitStatus` 显式报告 closed、wrong phase、empty、invalid field
 或 incomplete length；`finishResponse()` 仍是终止帧顺序的唯一 owner。
 
-HTTP/1 parser 必须产出不可变的 `Http1RequestBodyPlan`，把 none、Content-Length、final
-chunked、chunked 前的一项 transfer coding 和 `Expect: 100-continue` 资格绑定为唯一请求体
-契约。plan 只能由 `none()`、`knownLength()`、`chunked()` 三个命名 alternative 构造，禁止恢复
-五个松散标量的 `http1PlanRequestBody(...)`。buffered/stream reader 与 WebSocket gate 只能接收该 plan，禁止
-恢复 `contentLength`、`chunked`、`transferCodings`、`sendContinue` 等松散构造参数或
-`http1WantsContinue` 并行判断。请求 `Transfer-Encoding` 必须以 chunked 结尾；允许一个受支持的
+HTTP/1 parser 必须产出不可变的 `Http1RequestBodyPlan`，其 framing 只能是
+`Http1RequestWithoutBody`、`Http1KnownLengthRequestBody` 或 `Http1ChunkedRequestBody`；缺少 framing
+与显式 `Content-Length: 0` 必须保持不同 alternative。只有 known-length alternative 可以暴露
+`contentLength()`，只有 chunked alternative 可以暴露 chunked 前的一项 transfer-coding 顺序；Expect
+状态是 plan 的共同 metadata，并从 active alternative 是否需要消费得出唯一 action。plan 的构造权必须
+private 给 `Http1ServerRequestParser`，安装消费者与 `ruvia-web` 不得手工构造、注入未经 wire parser
+验证的 coding count，或恢复 `Http1RequestBodyMode + contentLength + transferCodings` tuple、公开
+`none()`/`knownLength()`/`chunked()` factory、五个松散标量的 `http1PlanRequestBody(...)`。
+buffered/stream reader 与 WebSocket gate 只能接收该 plan，并按 active alternative 驱动；禁止读取非
+known-length 状态的假 0、非 chunked 状态的假空 coding，或恢复 `contentLength`、`chunked`、
+`transferCodings`、`sendContinue` 等松散构造参数及 `http1WantsContinue` 并行判断。alternative 划分必须
+遵循 [RFC 9112 §6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3) 的 ordered request framing。
+请求 `Transfer-Encoding` 必须以 chunked 结尾；允许一个受支持的
 gzip/deflate coding 位于 final chunked 前（例如 `gzip, chunked`），先去 chunk framing 再增量
 解码 transfer coding；未知 coding 映射 501，HTTP/1.0 Transfer-Encoding 拒绝。
 
@@ -327,10 +348,21 @@ failure 后再次 parse 必须类型化拒绝。它必须自己查找 CRLF CRLF�
 wire-format exception，也不得通过 response out-parameter 暴露半写入状态；只有整个 head 与 plan
 验证成功后才能物化 owning response，成功物化时的资源耗尽仍可抛出。
 
-parsed head 必须携带不可变的 `Http1ClientResponsePlan`，一次绑定 none、Content-Length、final
-chunked、close-delimited、opaque、transfer-coding 解码顺序和 `await final response`/reuse/close/
-CONNECT tunnel/Upgrade 连接结论；不得恢复 `responseMayHaveBody`、`hasTransferEncoding`、
-`isChunked`、`closeAfterResponse` 等平行字段。对 continue-gated request，plan 必须同时产出唯一
+parsed head 必须携带不可变、判别式的 `Http1ClientResponsePlan`，其 alternative 只能是
+`Http1ClientInformationalResponse`、`Http1ClientResponseWithoutContent`、
+`Http1ClientKnownLengthResponse`、`Http1ClientChunkedResponse`、
+`Http1ClientCloseDelimitedResponse`、`Http1ClientConnectTunnel` 或
+`Http1ClientProtocolUpgrade`。只有 known-length alternative 暴露 `contentLength()`，只有 chunked/
+close-delimited 暴露 transfer-coding 解码顺序，只有可自定界的 final response 暴露
+`Http1ClientResponsePersistence`；close-delimited 必须隐含 EOF consumption + close，informational/
+tunnel/upgrade 不得伪装成 body mode 或可复用 final response。parser 必须直接构造 alternative，禁止
+恢复 `Http1ClientResponseBodyMode + contentLength + transferCodings + connectionDisposition` tuple、
+`ResponsePlanData` mutable 中间态，或 `responseMayHaveBody`、`hasTransferEncoding`、`isChunked`、
+`closeAfterResponse` 等平行字段。alternative 划分必须遵循
+[RFC 9112 §6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3) 的 ordered message-length
+precedence；连接复用必须遵循
+[RFC 9112 §9.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.3)，只有完整消费可自定界 response
+后才允许 reuse。对 continue-gated request，plan 必须同时产出唯一
 `Http1ClientRequestContentSignal`：无关 1xx 为 none，100 为 continue，final/101 为 exchange-complete；
 不得让 runtime 从 status/header 重建 content gate。Upgrade 与 Expect 并存时，未先观察到
 100 Continue 的 101 必须拒绝；任何非空 request content 还必须由 runtime 在完整写出后调用
@@ -339,9 +371,10 @@ completed/already-complete/terminal，
 未完成 request content 时不得接受 101。redirect rewrite 也必须使用同一精确 method token 语义。
 body-allowed response 没有 Content-Length 且 final coding 不是 chunked 时必须 close-delimited；
 HTTP/1.0 默认关闭，仅响应显式 `Connection: keep-alive` 时允许复用；2xx CONNECT 忽略
-Content-Length/Transfer-Encoding 并转入 opaque tunnel。合法 `101 Switching Protocols` 只有在
+Content-Length/Transfer-Encoding 并产出 `Http1ClientConnectTunnel`。合法
+`101 Switching Protocols` 只有在
 request 与 response 都发送 `Connection: Upgrade`、response 选择了 request 已提供的 `Upgrade`
-协议且 101 不携带 Content-Length/Transfer-Encoding 时才转入 opaque upgrade；protocol name
+协议且 101 不携带 Content-Length/Transfer-Encoding 时才产出 `Http1ClientProtocolUpgrade`；protocol name
 大小写不敏感，protocol version token 必须精确匹配。客户端 framing 不得把 205 与 204 合并：
 RFC 9110 虽禁止 server 为 205 生成 content，但 RFC 9112 的 header-terminated 优先级只有
 HEAD/1xx/204/304；client 对 205 仍必须消费显式 Content-Length/chunked framing，无 framing 时必须

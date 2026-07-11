@@ -17,17 +17,62 @@
 namespace ruvia::detail {
 
 struct Http1ClientResponsePlanAccess final {
-    [[nodiscard]] static Http1ClientResponsePlan make(
-        Http1ClientResponseBodyMode mode,
-        std::size_t contentLength,
-        HttpTransferCodings transferCodings,
-        Http1ClientConnectionDisposition disposition,
+    [[nodiscard]] static Http1ClientResponsePlan informational(
         Http1ClientRequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
-            mode,
-            contentLength,
-            transferCodings,
-            disposition,
+            Http1ClientResponsePlan::State(Http1ClientInformationalResponse()),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan withoutContent(
+        Http1ClientResponsePersistence persistence,
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientResponseWithoutContent(persistence)),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan knownLength(
+        std::size_t contentLength,
+        Http1ClientResponsePersistence persistence,
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientKnownLengthResponse(contentLength, persistence)),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan chunked(
+        HttpTransferCodings transferCodings,
+        Http1ClientResponsePersistence persistence,
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientChunkedResponse(transferCodings, persistence)),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan closeDelimited(
+        HttpTransferCodings transferCodings,
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(
+                Http1ClientCloseDelimitedResponse(transferCodings)),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan connectTunnel(
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(Http1ClientConnectTunnel()),
+            requestContentSignal);
+    }
+
+    [[nodiscard]] static Http1ClientResponsePlan protocolUpgrade(
+        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        return Http1ClientResponsePlan(
+            Http1ClientResponsePlan::State(Http1ClientProtocolUpgrade()),
             requestContentSignal);
     }
 };
@@ -49,7 +94,7 @@ struct Http1ClientResponseParseResultAccess final {
         std::size_t consumedBytes) noexcept {
         return Http1ClientResponseParseResult(
             Http1ParsedClientResponseHead(
-                std::move(response), plan, consumedBytes));
+                std::move(response), std::move(plan), consumedBytes));
     }
 };
 
@@ -76,15 +121,9 @@ struct ParsedResponseHead final {
     detail::HttpTransferEncodingState transferEncoding;
 };
 
-struct ResponsePlanData final {
-    Http1ClientResponseBodyMode mode{Http1ClientResponseBodyMode::kNone};
-    std::size_t contentLength{0};
-    detail::HttpTransferCodings transferCodings;
-    Http1ClientConnectionDisposition disposition{
-        Http1ClientConnectionDisposition::kClose};
-    Http1ClientRequestContentSignal requestContentSignal{
-        Http1ClientRequestContentSignal::kNone};
-};
+using ResponsePlanningResult = std::variant<
+    Http1ClientResponsePlan,
+    Http1ClientResponseParseError>;
 
 [[nodiscard]] bool parseStatusLine(
     std::string_view statusLine,
@@ -198,19 +237,19 @@ struct ResponsePlanData final {
     return selectedProtocols.hasProtocol();
 }
 
-[[nodiscard]] Http1ClientConnectionDisposition persistentDisposition(
+[[nodiscard]] Http1ClientResponsePersistence responsePersistence(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response) noexcept {
     if (request.closePolicy() ==
             Http1ClientRequestClosePolicy::kCloseAfterResponse ||
         response.connectionOptions.close()) {
-        return Http1ClientConnectionDisposition::kClose;
+        return Http1ClientResponsePersistence::kClose;
     }
     if (response.protocolVersion == HttpProtocolVersion::kHttp11 ||
         response.connectionOptions.keepAlive()) {
-        return Http1ClientConnectionDisposition::kReuse;
+        return Http1ClientResponsePersistence::kReuse;
     }
-    return Http1ClientConnectionDisposition::kClose;
+    return Http1ClientResponsePersistence::kClose;
 }
 
 [[nodiscard]] bool parseResponseHeadFields(
@@ -335,13 +374,11 @@ struct ResponsePlanData final {
     return true;
 }
 
-[[nodiscard]] bool planResponse(
+[[nodiscard]] ResponsePlanningResult planResponse(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response,
     bool sawContinue,
-    bool requestContentComplete,
-    ResponsePlanData& plan,
-    Http1ClientResponseParseError& error) noexcept {
+    bool requestContentComplete) noexcept {
     const bool protocolSwitch = response.statusCode == 101;
     const bool informational = response.statusCode < 200 && !protocolSwitch;
     const bool connectTunnel = request.method() == "CONNECT" &&
@@ -352,12 +389,12 @@ struct ResponsePlanData final {
         response.statusCode != 304 &&
         !connectTunnel;
 
+    auto requestContentSignal = Http1ClientRequestContentSignal::kNone;
     if (request.expectsContinue()) {
         if (response.statusCode == 100) {
-            plan.requestContentSignal =
-                Http1ClientRequestContentSignal::kContinue;
+            requestContentSignal = Http1ClientRequestContentSignal::kContinue;
         } else if (protocolSwitch || response.statusCode >= 200) {
-            plan.requestContentSignal =
+            requestContentSignal =
                 Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
@@ -371,60 +408,55 @@ struct ResponsePlanData final {
                 response,
                 sawContinue,
                 requestContentComplete)) {
-            error = Http1ClientResponseParseError::kInvalidProtocolSwitch;
-            return false;
+            return Http1ClientResponseParseError::kInvalidProtocolSwitch;
         }
-        plan.mode = Http1ClientResponseBodyMode::kOpaque;
-        plan.disposition = Http1ClientConnectionDisposition::kUpgrade;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
+            requestContentSignal);
     }
     if (informational) {
-        plan.disposition =
-            Http1ClientConnectionDisposition::kAwaitFinalResponse;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::informational(
+            requestContentSignal);
     }
     if (connectTunnel) {
-        plan.mode = Http1ClientResponseBodyMode::kOpaque;
-        plan.disposition =
-            Http1ClientConnectionDisposition::kConnectTunnel;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::connectTunnel(
+            requestContentSignal);
     }
 
-    const auto persistent = persistentDisposition(request, response);
+    const auto persistence = responsePersistence(request, response);
     if (!framingFieldsApply) {
-        plan.disposition = persistent;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::withoutContent(
+            persistence,
+            requestContentSignal);
     }
 
     if (response.sawTransferEncoding) {
         if (response.contentLength.present()) {
-            error =
-                Http1ClientResponseParseError::kContentLengthAndTransferEncoding;
-            return false;
+            return Http1ClientResponseParseError::
+                kContentLengthAndTransferEncoding;
         }
-        plan.transferCodings = response.transferEncoding.codings();
         if (response.transferEncoding.finalChunked()) {
-            plan.mode = Http1ClientResponseBodyMode::kChunked;
-            plan.disposition = persistent;
-            return true;
+            return detail::Http1ClientResponsePlanAccess::chunked(
+                response.transferEncoding.codings(),
+                persistence,
+                requestContentSignal);
         }
-        plan.mode = Http1ClientResponseBodyMode::kCloseDelimited;
-        plan.disposition = Http1ClientConnectionDisposition::kClose;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::closeDelimited(
+            response.transferEncoding.codings(),
+            requestContentSignal);
     }
 
     if (response.contentLength.present()) {
-        plan.mode = Http1ClientResponseBodyMode::kContentLength;
-        plan.contentLength = response.contentLength.value();
-        plan.disposition = persistent;
-        return true;
+        return detail::Http1ClientResponsePlanAccess::knownLength(
+            response.contentLength.value(),
+            persistence,
+            requestContentSignal);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
-    plan.mode = Http1ClientResponseBodyMode::kCloseDelimited;
-    plan.disposition = Http1ClientConnectionDisposition::kClose;
-    return true;
+    return detail::Http1ClientResponsePlanAccess::closeDelimited(
+        {},
+        requestContentSignal);
 }
 
 }  // namespace
@@ -508,16 +540,16 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
         return fail(error);
     }
 
-    ResponsePlanData planData;
-    if (!planResponse(
-            request_,
-            parsed,
-            sawContinue_,
-            requestContentComplete_,
-            planData,
-            error)) {
-        return fail(error);
+    auto planning = planResponse(
+        request_,
+        parsed,
+        sawContinue_,
+        requestContentComplete_);
+    if (const auto* planningError =
+            std::get_if<Http1ClientResponseParseError>(&planning)) {
+        return fail(*planningError);
     }
+    auto plan = std::get<Http1ClientResponsePlan>(std::move(planning));
 
     // No owning response is observable until the entire head and its framing
     // plan have validated. Protocol failure therefore has no partially mutated
@@ -535,14 +567,8 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
             header.name(), header.value(), resource_));
     }
 
-    auto plan = detail::Http1ClientResponsePlanAccess::make(
-        planData.mode,
-        planData.contentLength,
-        planData.transferCodings,
-        planData.disposition,
-        planData.requestContentSignal);
     auto result = detail::Http1ClientResponseParseResultAccess::parsed(
-        std::move(response), plan, headerBytes);
+        std::move(response), std::move(plan), headerBytes);
     if (parsed.statusCode == 100) {
         sawContinue_ = true;
     }

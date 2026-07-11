@@ -19,7 +19,6 @@ using ruvia::detail::appendHttpsPort;
 using ruvia::detail::contentLengthExceedsLimit;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::Http1ConnectionDisposition;
-using ruvia::detail::Http1RequestBodyPlan;
 using ruvia::detail::Http1ResponseConnectionSignal;
 using ruvia::detail::Http1ServerClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
@@ -42,10 +41,15 @@ std::string withHttpsPort(std::string_view base, std::uint16_t port) {
 }  // namespace
 
 RUVIA_TEST(request_state_content_length_exceeds_limit) {
-    const auto over = Http1RequestBodyPlan::knownLength(101);
-    const auto exact = Http1RequestBodyPlan::knownLength(100);
-    const auto unlimited = Http1RequestBodyPlan::knownLength(1'000'000);
-    const auto chunked = Http1RequestBodyPlan::chunked();
+    Http1ServerRequestParser parser;
+    const auto over = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 101\r\n\r\n").bodyPlan;
+    const auto exact = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n").bodyPlan;
+    const auto unlimited = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n").bodyPlan;
+    const auto chunked = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n").bodyPlan;
     RUVIA_CHECK(contentLengthExceedsLimit(over, 100));
     RUVIA_CHECK(!contentLengthExceedsLimit(exact, 100));
     RUVIA_CHECK(!contentLengthExceedsLimit(unlimited, 0));

@@ -40,11 +40,15 @@ std::string_view StreamBodyReader<Stream>::initialPipelineRemainder() const noex
     if (initialBodyAndPipeline_.empty()) {
         return {};
     }
-    if (bodyPlan_.isChunked()) {
+    if (bodyPlan_.chunked() != nullptr) {
         return initialBodyAndPipeline_.substr(std::min(readCursor_, initialBodyAndPipeline_.size()));
     }
+    const auto* knownLength = bodyPlan_.knownLength();
+    if (knownLength == nullptr) {
+        return initialBodyAndPipeline_;
+    }
     const auto initialBodyBytes = std::min(
-        bodyPlan_.contentLength(),
+        knownLength->contentLength(),
         initialBodyAndPipeline_.size());
     return initialBodyAndPipeline_.substr(initialBodyBytes);
 }

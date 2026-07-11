@@ -62,7 +62,9 @@ set(RULE_STALE_HTTP1_CONNECTION_LIFETIME
 set(RULE_STALE_HTTP_CONNECTION_FIELD_STATE
     "HttpRequestFlags|httpUpdateConnectionFlags|Http1ResponseConnectionOptions")
 set(RULE_STALE_HTTP1_REQUEST_BODY_SPLIT
-    "(parsed|result)\\.(contentLength|chunked|transferCodings)|http1WantsContinue|contentLength_|chunked_|sendContinue_|HttpTransferCodings[ \t]+transferCodings|bool[ \t]+sendContinue|sawChunked[ \t]*&&[ \t]*block\\.transferCodings\\.count[ \t]*>[ \t]*0")
+    "(parsed|result)\\.(contentLength|chunked|transferCodings)|http1WantsContinue|sendContinue_|bool[ \t]+sendContinue|sawChunked[ \t]*&&[ \t]*block\\.transferCodings\\.count[ \t]*>[ \t]*0")
+set(RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE
+    "Http1RequestBodyMode|Http1RequestBodyPlan::(none|knownLength|chunked)[ \t]*[(]|bodyPlan_?[.](mode|hasContentLength|contentLength|isChunked|transferCodings)[ \t]*[(]|bodyPlan[(][)][.](mode|hasContentLength|contentLength|isChunked|transferCodings)[ \t]*[(]")
 set(RULE_STALE_SERVER_EXPECTATION_STATE
     "httpUpdateExpectContinueFlag|kExpectationFailed|http1PlanRequestBody|bool[ \t]+expectContinue|shouldSendContinue[ \t]*\\(|[.]expectsContinue[ \t]*\\(")
 set(RULE_STALE_HTTP_PROTOCOL_VERSION_STATE
@@ -75,6 +77,8 @@ set(RULE_HTTP2_REASON_PHRASE
     "httpReasonPhrase|reasonPhrase|statusText")
 set(RULE_STALE_HTTP1_CLIENT_RESPONSE_SPLIT
     "responseMayHaveBody|closeAfterResponse|hasTransferEncoding|hasContentEncoding|contentCoding|head\\.(hasContentLength|isChunked|contentLength|bodyOffset)[ \t]*([^A-Za-z0-9_(]|$)")
+set(RULE_STALE_HTTP1_CLIENT_RESPONSE_MODE_TUPLE
+    "Http1ClientResponseBodyMode|Http1ClientConnectionDisposition|ResponsePlanData|plan[(][)][.](mode|hasContentLength|contentLength|requiresBodyConsumption|selfDelimited|transferCodings|connectionDisposition|isCloseDelimited|isChunked|isOpaque|isConnectTunnel|isUpgrade)[ \t]*[(]")
 set(RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API
     "detail/(client/HttpClientResponseParser|http1/Http1ClientResponsePlan)[.]h|parseHttpClientResponseHead|class[ \t]+HttpClientResponseHead|[.]bodyOffset[ \t]*[(]|responseContext[ \t]*[(]|Http1ClientResponseParser[ \t]*[(][ \t]*[)]")
 set(RULE_STALE_HTTP1_CLIENT_REQUEST_SPLIT
@@ -132,6 +136,8 @@ set(RULE_STALE_HTTP1_SERVER_PARSE_PHASE
     "HttpParseStatus|HttpParseTypes[.]h|HttpServerParser|HttpServerParseResult|HttpParserInternal[.]h")
 set(RULE_STALE_HTTP1_CHUNK_RESULT
     "ruvia/http/detail/HttpBodyFramer[.]h|HttpChunkDecodeEvent(Kind)?|struct[ \t]+HttpChunkScanResult|HttpChunkScanStatus|(^|[^A-Za-z0-9_])HttpChunkedBodyDecoder([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])HttpChunkDecoder([^A-Za-z0-9_]|$)|(^|[^A-Za-z0-9_])ChunkDelimiterStatus([^A-Za-z0-9_]|$)|chunked[.](status|consumedBytes)")
+set(RULE_STALE_HTTP_BYTE_RANGE_RESULT
+    "HttpRangeOutcome|HttpByteRangeResult|httpParseByteRange(Unsigned)?|httpByteRangeSetHasMultiple|parsedRange[.](outcome|range)")
 set(RULE_SCANNER_SEMANTICS
     "http|websocket|client_header|client_body|send_timeout|keepalive")
 set(RULE_HTTP1_CONNECTION
@@ -312,6 +318,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("valid leading HTTP/1 transfer coding rejected"
         "${RULE_STALE_HTTP1_REQUEST_BODY_SPLIT}"
         "if (block.sawChunked && block.transferCodings.count > 0) return unsupported;")
+    expect_match("mode/payload HTTP/1 request-body tuple"
+        "${RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE}"
+        "if (bodyPlan.isChunked()) decode(bodyPlan.transferCodings());")
     expect_match("parser-owned Expect policy"
         "${RULE_STALE_SERVER_EXPECTATION_STATE}"
         "return HttpParseError::kExpectationFailed;")
@@ -345,6 +354,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("split HTTP/1 client response framing verdict"
         "${RULE_STALE_HTTP1_CLIENT_RESPONSE_SPLIT}"
         "if (head.isChunked && !head.closeAfterResponse) reuse();")
+    expect_match("mode/payload HTTP/1 client response tuple"
+        "${RULE_STALE_HTTP1_CLIENT_RESPONSE_MODE_TUPLE}"
+        "if (plan().mode() == Http1ClientResponseBodyMode::kContentLength) plan().contentLength();")
     expect_match("stale exception/out-parameter HTTP/1 client response parser"
         "${RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API}"
         "auto head = parseHttpClientResponseHead(context, bytes, response, resource);")
@@ -435,6 +447,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("stale HTTP/1 whole-message chunk status tuple"
         "${RULE_STALE_HTTP1_CHUNK_RESULT}"
         "struct HttpChunkScanResult { HttpChunkScanStatus status; };")
+    expect_match("stale HTTP byte-range outcome/payload tuple"
+        "${RULE_STALE_HTTP_BYTE_RANGE_RESULT}"
+        "struct HttpByteRangeResult { HttpRangeOutcome outcome; HttpByteRange range; };")
+    expect_match("stale split HTTP byte-range pre-scan"
+        "${RULE_STALE_HTTP_BYTE_RANGE_RESULT}"
+        "if (httpByteRangeSetHasMultiple(value)) return fullResponse();")
     expect_match("generic HTTP chunk decoder without protocol ownership"
         "${RULE_STALE_HTTP1_CHUNK_RESULT}"
         "HttpChunkedBodyDecoder decoder;")
@@ -800,6 +818,13 @@ check_files_no_match("loose or protocol-ambiguous HTTP/1 chunked result was rest
     ${WEB_SOURCE}
     "${RUVIA_ROOT}/ruvia-http/CMakeLists.txt"
     "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt")
+check_files_no_match("HTTP byte ranges must use one discriminated resolution"
+    "${RULE_STALE_HTTP_BYTE_RANGE_RESULT}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpByteRange.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_byte_range.cpp"
+    "${RUVIA_ROOT}/tests/unit_content_range.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("HTTP method wire tokens must not collapse back into a closed enum"
     "${RULE_STALE_HTTP_METHOD_DOMAIN}"
     ${EDGE_REFERENCE_SOURCE})
@@ -1003,6 +1028,92 @@ check_files_no_match("Context must expose only body() for raw response construct
     ${WEB_SOURCE}
     "${RUVIA_ROOT}/README.md"
     "${RUVIA_ROOT}/AGENTS.md")
+set(HTTP_BYTE_RANGE_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpByteRange.h")
+set(WEB_FILE_RESPONSE_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp")
+set(HTTP_BYTE_RANGE_TEST
+    "${RUVIA_ROOT}/tests/unit_http_byte_range.cpp")
+set(HTTP_CONTENT_RANGE_TEST
+    "${RUVIA_ROOT}/tests/unit_content_range.cpp")
+set(HTTP_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+foreach(byte_range_contract_file IN ITEMS
+        "${HTTP_BYTE_RANGE_HEADER}"
+        "${WEB_FILE_RESPONSE_SOURCE}"
+        "${HTTP_BYTE_RANGE_TEST}"
+        "${HTTP_CONTENT_RANGE_TEST}"
+        "${HTTP_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${byte_range_contract_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${byte_range_contract_file}")
+        boundary_error("HTTP byte-range resolution contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_BYTE_RANGE_HEADER}" AND
+   EXISTS "${WEB_FILE_RESPONSE_SOURCE}" AND
+   EXISTS "${HTTP_BYTE_RANGE_TEST}" AND
+   EXISTS "${HTTP_CONTENT_RANGE_TEST}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_BYTE_RANGE_HEADER}" http_byte_range_header)
+    file(READ "${WEB_FILE_RESPONSE_SOURCE}" web_file_response_source)
+    file(READ "${HTTP_BYTE_RANGE_TEST}" http_byte_range_test)
+    file(READ "${HTTP_CONTENT_RANGE_TEST}" http_content_range_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http_range_package_consumer)
+    if(NOT http_byte_range_header MATCHES "class HttpByteRangeIgnored final" OR
+       NOT http_byte_range_header MATCHES
+           "class HttpByteRangeUnsatisfiable final" OR
+       NOT http_byte_range_header MATCHES "class HttpResolvedByteRange final" OR
+       NOT http_byte_range_header MATCHES "class HttpByteRangeResolution final" OR
+       NOT http_byte_range_header MATCHES "using Value = std::variant" OR
+       NOT http_byte_range_header MATCHES "std::get_if<HttpByteRangeIgnored>" OR
+       NOT http_byte_range_header MATCHES
+           "std::get_if<HttpByteRangeUnsatisfiable>" OR
+       NOT http_byte_range_header MATCHES "std::get_if<HttpResolvedByteRange>" OR
+       NOT http_byte_range_header MATCHES "resolveHttpByteRange" OR
+       NOT http_byte_range_header MATCHES "httpAsciiEqualsIgnoreCase" OR
+       NOT http_byte_range_header MATCHES "std::errc::result_out_of_range" OR
+       NOT http_byte_range_header MATCHES "representationLength == 0" OR
+       NOT http_byte_range_header MATCHES "length_ == 0")
+        boundary_error("HTTP byte-range resolver lost its discriminated RFC contract"
+            "ignored/unsatisfiable outcomes must be payload-free; only one bounded nonempty range owns slicing coordinates")
+    endif()
+    if(NOT web_file_response_source MATCHES "resolveHttpByteRange" OR
+       NOT web_file_response_source MATCHES "rangeResolution[.]ignored[(][)]" OR
+       NOT web_file_response_source MATCHES
+           "rangeResolution[.]unsatisfiable[(][)]" OR
+       NOT web_file_response_source MATCHES "rangeResolution[.]resolved[(][)]" OR
+       NOT web_file_response_source MATCHES "resolved[.]offset[(][)]" OR
+       NOT web_file_response_source MATCHES "resolved[.]length[(][)]")
+        boundary_error("ruvia-web bypasses the HTTP byte-range resolution"
+            "file responses must map the three typed outcomes without reparsing Range")
+    endif()
+    if(NOT http_byte_range_test MATCHES
+           "byte_range_resolution_is_discriminated" OR
+       NOT http_byte_range_test MATCHES
+           "!std::default_initializable<HttpByteRangeResolution>" OR
+       NOT http_byte_range_test MATCHES
+           "!HasByteRangeOutcomeField<HttpByteRangeResolution>" OR
+       NOT http_byte_range_test MATCHES
+           "HasByteRangeOffsetAccessor<HttpResolvedByteRange>" OR
+       NOT http_byte_range_test MATCHES
+           "byte_range_unit_is_case_insensitive" OR
+       NOT http_byte_range_test MATCHES
+           "byte_range_huge_decimal_numerals_preserve_semantics" OR
+       NOT http_byte_range_test MATCHES
+           "byte_range_empty_representation_uses_ignore_policy" OR
+       NOT http_content_range_test MATCHES "Bytes=5-9" OR
+       NOT http_content_range_test MATCHES "empty[.]txt" OR
+       NOT http_range_package_consumer MATCHES "HttpByteRangeResolution" OR
+       NOT http_range_package_consumer MATCHES "!HasByteRangeOutcomeField" OR
+       NOT http_range_package_consumer MATCHES
+           "installedResolvedRange[.]resolved[(][)]->offset[(][)]" OR
+       NOT http_range_package_consumer MATCHES
+           "installedUnsatisfiableRange[.]unsatisfiable[(][)]")
+        boundary_error("HTTP byte-range resolution contract is under-tested"
+            "unit, Web integration, and installed-package consumers must pin exclusive outcomes and RFC numeric/unit edges")
+    endif()
+endif()
 check_files_no_match("ruvia-web response stream sink must not serialize HTTP/1 chunk/trailer bytes"
     "${RULE_WEB_HTTP1_STREAM_FRAMING_BYTES}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
@@ -1176,6 +1287,7 @@ check_files_no_match("HTTP connection fields must use the shared typed state"
     ${HTTP_SOURCE} ${WEB_SOURCE})
 check_files_no_match("HTTP/1 request-body framing must use one typed plan"
     "${RULE_STALE_HTTP1_REQUEST_BODY_SPLIT}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
     "${RUVIA_ROOT}/ruvia-http/src/parser/Http1RequestParser.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/parser/HttpHeaderBlockParser.cpp"
@@ -1191,6 +1303,21 @@ check_files_no_match("HTTP/1 request-body framing must use one typed plan"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerRequestState.h"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"
+    "${RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
+    "${RUVIA_ROOT}/ruvia-http/src/parser/Http1RequestParser.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReader.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderContentLength.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderPipeline.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerRequestState.h"
+    "${RUVIA_ROOT}/tests/unit_http1_parser.cpp"
+    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("server Expect semantics must use one cross-version typed state"
     "${RULE_STALE_SERVER_EXPECTATION_STATE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpParseError.h"
@@ -1238,6 +1365,14 @@ check_files_no_match("HTTP/1 client response framing must use one typed plan"
     "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
     "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+check_files_no_match("HTTP/1 client response plans must use exclusive alternatives"
+    "${RULE_STALE_HTTP1_CLIENT_RESPONSE_MODE_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
+    "${RUVIA_ROOT}/ruvia-http/src/client/HttpClientResponseParser.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    "${RUVIA_ROOT}/tests/smoke_http_target.cpp")
 check_files_no_match("HTTP/1 client response parsing must use the public discriminated API"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
@@ -2334,16 +2469,25 @@ if(NOT EXISTS "${HTTP1_REQUEST_BODY_PLAN}")
 else()
     file(READ "${HTTP1_REQUEST_BODY_PLAN}" http1_request_body_plan)
     if(NOT http1_request_body_plan MATCHES "class Http1RequestBodyPlan" OR
+       NOT http1_request_body_plan MATCHES "class Http1RequestWithoutBody final" OR
+       NOT http1_request_body_plan MATCHES "class Http1KnownLengthRequestBody final" OR
+       NOT http1_request_body_plan MATCHES "class Http1ChunkedRequestBody final" OR
+       NOT http1_request_body_plan MATCHES "using Framing = std::variant" OR
+       NOT http1_request_body_plan MATCHES "std::get_if<Http1RequestWithoutBody>" OR
+       NOT http1_request_body_plan MATCHES "std::get_if<Http1KnownLengthRequestBody>" OR
+       NOT http1_request_body_plan MATCHES "std::get_if<Http1ChunkedRequestBody>" OR
        NOT http1_request_body_plan MATCHES "requiresConsumption" OR
        NOT http1_request_body_plan MATCHES "Http1RequestBodyConsumption" OR
        NOT http1_request_body_plan MATCHES "transferCodings" OR
        NOT http1_request_body_plan MATCHES "HttpRequestExpectations" OR
        NOT http1_request_body_plan MATCHES "expectationAction" OR
-       NOT http1_request_body_plan MATCHES "Http1RequestBodyPlan[(][)] = delete" OR
-       NOT http1_request_body_plan MATCHES "knownLength" OR
-       NOT http1_request_body_plan MATCHES "chunked")
+       NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParseState" OR
+       NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParser" OR
+       NOT http1_request_body_plan MATCHES "makeWithoutBody" OR
+       NOT http1_request_body_plan MATCHES "makeKnownLength" OR
+       NOT http1_request_body_plan MATCHES "makeChunked")
         boundary_error("HTTP/1 request-body plan lost part of its typed contract"
-            "framing, transfer decode order, consumption, and 100-continue must stay bound")
+            "parser-only exclusive framing alternatives, transfer decode order, consumption, and 100-continue must stay bound")
     endif()
 endif()
 
@@ -2354,9 +2498,11 @@ set(WEB_HTTP1_BODY_READER_CORE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl")
 if(EXISTS "${HTTP1_SERVER_PARSER}")
     file(READ "${HTTP1_SERVER_PARSER}" http1_server_parser)
-    if(NOT http1_server_parser MATCHES "Http1RequestBodyPlan::chunked" OR
-       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::knownLength" OR
-       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::none" OR
+    if(NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeChunked" OR
+       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeKnownLength" OR
+       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeWithoutBody" OR
+       NOT http1_server_parser MATCHES "bodyPlan[.]chunked[(][)]" OR
+       NOT http1_server_parser MATCHES "bodyPlan[.]knownLength[(][)]" OR
        NOT http1_server_parser MATCHES "expectations[.]ignore100Continue")
         boundary_error("HTTP/1 parser bypasses the typed request-body plan"
             "Http1RequestParser.cpp must produce Http1RequestBodyPlan once after header validation")
@@ -2366,6 +2512,12 @@ if(EXISTS "${WEB_HTTP1_BODY_READER}" AND EXISTS "${WEB_HTTP1_BODY_READER_CORE}")
     file(READ "${WEB_HTTP1_BODY_READER}" web_http1_body_reader)
     file(READ "${WEB_HTTP1_BODY_READER_CORE}" web_http1_body_reader_core)
     if(NOT web_http1_body_reader MATCHES "Http1RequestBodyPlan[ \t]+bodyPlan" OR
+       NOT web_http1_body_reader MATCHES "readKnownLengthAll" OR
+       NOT web_http1_body_reader MATCHES "readKnownLength" OR
+       NOT web_http1_body_reader_core MATCHES "bodyPlan_[.]withoutBody[(][)]" OR
+       NOT web_http1_body_reader_core MATCHES "bodyPlan_[.]knownLength[(][)]" OR
+       NOT web_http1_body_reader_core MATCHES "bodyPlan_[.]chunked[(][)]" OR
+       NOT web_http1_body_reader_core MATCHES "chunked->transferCodings[(][)]" OR
        NOT web_http1_body_reader_core MATCHES "bodyPlan_\\.expectationAction" OR
        NOT web_http1_body_reader_core MATCHES "kSend100Continue")
         boundary_error("ruvia-web request-body reader bypasses the HTTP-owned plan"
@@ -2455,9 +2607,21 @@ set(HTTP1_REQUEST_BODY_TEST
 if(EXISTS "${HTTP1_REQUEST_BODY_TEST}")
     file(READ "${HTTP1_REQUEST_BODY_TEST}" http1_request_body_test)
     if(NOT http1_request_body_test MATCHES
-       "transfer_coded_chunked_request_plan_drives_decode_order")
-        boundary_error("HTTP/1 transfer-coding decode order is untested"
-            "tests must prove dechunking precedes the plan-owned transfer decoder")
+           "http1_request_body_plan_has_one_framing_truth" OR
+       NOT http1_request_body_test MATCHES
+           "transfer_coded_chunked_request_plan_drives_decode_order" OR
+       NOT http1_request_body_test MATCHES
+           "!HasPublicRequestBodyPlanFactories<Http1RequestBodyPlan>" OR
+       NOT http1_request_body_test MATCHES
+           "!HasRequestBodyMode<Http1RequestBodyPlan>" OR
+       NOT http1_request_body_test MATCHES
+           "HasRequestContentLength<ruvia::detail::Http1KnownLengthRequestBody>" OR
+       NOT http1_request_body_test MATCHES
+           "HasRequestTransferCodings<ruvia::detail::Http1ChunkedRequestBody>" OR
+       NOT http1_request_body_test MATCHES
+           "!std::default_initializable<Http1RequestBodyPlan>")
+        boundary_error("HTTP/1 request-body alternative ownership is under-tested"
+            "tests must prove parser-only construction, exclusive alternative payloads, explicit Content-Length: 0, and dechunk-before-transfer-decoding order")
     endif()
 endif()
 
@@ -2549,6 +2713,16 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
     file(READ "${HTTP1_CLIENT_API_SURFACE}" http1_client_api_surface)
     file(READ "${HTTP1_CLIENT_PACKAGE_CONSUMER}" http1_client_package_consumer)
     if(NOT http1_client_api_surface MATCHES
+           "HasHttp1RequestBodyPlanAlternatives<[\r\n \t]*ruvia::detail::Http1RequestBodyPlan>" OR
+       NOT http1_client_api_surface MATCHES
+           "!HasPublicHttp1RequestBodyPlanFactories<[\r\n \t]*ruvia::detail::Http1RequestBodyPlan>" OR
+       NOT http1_client_api_surface MATCHES
+           "HasHttp1RequestBodyContentLength<[\r\n \t]*ruvia::detail::Http1KnownLengthRequestBody>" OR
+       NOT http1_client_package_consumer MATCHES
+           "HasHttp1RequestBodyPlanAlternatives" OR
+       NOT http1_client_package_consumer MATCHES
+           "!HasPublicHttp1RequestBodyPlanFactories" OR
+       NOT http1_client_api_surface MATCHES
            "!HasRawHttpClientRequestBody<ruvia::HttpClientRequest>" OR
        NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientResponseContext<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
@@ -2558,13 +2732,21 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
            "!std::is_default_constructible_v<[\r\n \t]*ruvia::Http1ClientResponseParser>" OR
        NOT http1_client_api_surface MATCHES
            "!std::is_move_constructible_v<[\r\n \t]*ruvia::Http1ClientResponseParser>" OR
+       NOT http1_client_api_surface MATCHES
+           "HasHttp1ClientResponsePlanAlternatives<[\r\n \t]*ruvia::Http1ClientResponsePlan>" OR
+       NOT http1_client_api_surface MATCHES
+           "!HasStaleHttp1ClientResponseMode<[\r\n \t]*ruvia::Http1ClientResponsePlan>" OR
+       NOT http1_client_api_surface MATCHES
+           "!HasHttp1ClientResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWriter" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWirePolicy::expectContinue" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_package_consumer MATCHES "completeRequestContent" OR
+       NOT http1_client_package_consumer MATCHES "HasHttp1ClientResponsePlanAlternatives" OR
+       NOT http1_client_package_consumer MATCHES "Http1ClientProtocolUpgrade" OR
        http1_client_package_consumer MATCHES "responseContext[(][)]")
-        boundary_error("installed HTTP/1 client path can bypass request preparation"
-            "API surface must remove raw body/context reconstruction and package consumers must chain Prepared/content signals through one parser")
+        boundary_error("installed HTTP/1 API can bypass protocol preparation"
+            "API surface must remove raw server/client body, context, and framing tuples; package consumers must use parser-only request alternatives and chain Prepared/content signals through exclusive client response alternatives")
     endif()
 endif()
 
@@ -2592,11 +2774,18 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
     file(READ "${HTTP1_CLIENT_RESPONSE_PARSER}" http1_client_response_parser)
     if(NOT http1_client_response_parser_header MATCHES "Http1ClientRequestWriter[.]h" OR
        NOT http1_client_response_parser_header MATCHES "class Http1ClientResponsePlan final" OR
-       NOT http1_client_response_parser_header MATCHES "kCloseDelimited" OR
-       NOT http1_client_response_parser_header MATCHES "kOpaque" OR
-       NOT http1_client_response_parser_header MATCHES "kAwaitFinalResponse" OR
-       NOT http1_client_response_parser_header MATCHES "kConnectTunnel" OR
-       NOT http1_client_response_parser_header MATCHES "kUpgrade" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientInformationalResponse final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientResponseWithoutContent final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientKnownLengthResponse final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientChunkedResponse final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientCloseDelimitedResponse final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientConnectTunnel final" OR
+       NOT http1_client_response_parser_header MATCHES "class Http1ClientProtocolUpgrade final" OR
+       NOT http1_client_response_parser_header MATCHES "Http1ClientResponsePersistence" OR
+       NOT http1_client_response_parser_header MATCHES "knownLength[(][)]" OR
+       NOT http1_client_response_parser_header MATCHES "closeDelimited[(][)]" OR
+       NOT http1_client_response_parser_header MATCHES "connectTunnel[(][)]" OR
+       NOT http1_client_response_parser_header MATCHES "protocolUpgrade[(][)]" OR
        NOT http1_client_response_parser_header MATCHES "Http1ClientRequestContentSignal" OR
        NOT http1_client_response_parser_header MATCHES "requestContentSignal" OR
        NOT http1_client_response_parser_header MATCHES "Http1ClientRequestContentCompletionStatus" OR
@@ -2616,10 +2805,14 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
             "NeedMore, owning Parsed, typed Failure, exact head consumption, and one immutable plan must stay bound")
     endif()
     if(NOT http1_client_response_parser MATCHES "findHttpHeaderEnd" OR
-       NOT http1_client_response_parser MATCHES "Http1ClientResponseBodyMode::kCloseDelimited" OR
-       NOT http1_client_response_parser MATCHES "Http1ClientResponseBodyMode::kOpaque" OR
-       NOT http1_client_response_parser MATCHES "Http1ClientConnectionDisposition::kConnectTunnel" OR
-       NOT http1_client_response_parser MATCHES "Http1ClientConnectionDisposition::kUpgrade" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::withoutContent" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::knownLength" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::chunked" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::closeDelimited" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::connectTunnel" OR
+       NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::protocolUpgrade" OR
+       NOT http1_client_response_parser MATCHES "using ResponsePlanningResult = std::variant" OR
+       NOT http1_client_response_parser MATCHES "std::get_if<Http1ClientResponseParseError>" OR
        NOT http1_client_response_parser MATCHES "requestAllowsProtocolSwitch" OR
        NOT http1_client_response_parser MATCHES "request[.]expectsContinue[(][)] && !sawContinue" OR
        NOT http1_client_response_parser MATCHES "!requestContentComplete" OR
@@ -2735,6 +2928,8 @@ set(HTTP1_CLIENT_RESPONSE_TEST
 if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
     file(READ "${HTTP1_CLIENT_RESPONSE_TEST}" http1_client_response_test)
     if(NOT http1_client_response_test MATCHES
+           "http_client_response_plan_alternatives_are_exclusive" OR
+       NOT http1_client_response_test MATCHES
            "http_client_unframed_body_response_is_close_delimited" OR
        NOT http1_client_response_test MATCHES
            "http_client_successful_connect_transitions_to_tunnel" OR
@@ -2747,7 +2942,7 @@ if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
        NOT http1_client_response_test MATCHES
            "http_client_205_uses_normal_http1_message_framing" OR
        NOT http1_client_response_test MATCHES
-           "http_client_switching_protocols_is_a_typed_opaque_transition" OR
+           "http_client_switching_protocols_is_an_exclusive_upgrade_transition" OR
        NOT http1_client_response_test MATCHES
            "http_client_switching_protocols_requires_wire_agreement" OR
        NOT http1_client_response_test MATCHES
@@ -2761,9 +2956,21 @@ if(EXISTS "${HTTP1_CLIENT_RESPONSE_TEST}")
        NOT http1_client_response_test MATCHES
            "http_client_response_parser_owns_exact_head_boundary" OR
        NOT http1_client_response_test MATCHES
-           "http_client_response_parser_failure_is_typed_and_allocation_free")
+           "http_client_response_parser_failure_is_typed_and_allocation_free" OR
+       NOT http1_client_response_test MATCHES
+           "!HasResponsePlanMode<ruvia::Http1ClientResponsePlan>" OR
+       NOT http1_client_response_test MATCHES
+           "!HasResponseConnectionDisposition" OR
+       NOT http1_client_response_test MATCHES
+           "HasResponseContentLength<ruvia::Http1ClientKnownLengthResponse>" OR
+       NOT http1_client_response_test MATCHES
+           "HasResponseTransferCodings<ruvia::Http1ClientChunkedResponse>" OR
+       NOT http1_client_response_test MATCHES
+           "!HasResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
+       NOT http1_client_response_test MATCHES
+           "!std::is_default_constructible_v<ruvia::Http1ClientResponsePlan>")
         boundary_error("HTTP/1 client response plan invariants are under-tested"
-            "tests must pin tri-state/stateful parsing, Expect progress, transactional ownership, close delimiting, CONNECT, Upgrade agreement/order, transfer order, and full Content-Length lists")
+            "tests must pin exclusive framing/lifecycle payload ownership, tri-state/stateful parsing, Expect progress, transactional ownership, close delimiting, CONNECT, Upgrade agreement/order, transfer order, and full Content-Length lists")
     endif()
 endif()
 
@@ -2825,10 +3032,16 @@ foreach(boundary_doc IN ITEMS
             "${relative} must document the inseparable disposition and version signal")
     endif()
     if(NOT boundary_doc_content MATCHES "Http1RequestBodyPlan" OR
+       NOT boundary_doc_content MATCHES "Http1RequestWithoutBody" OR
+       NOT boundary_doc_content MATCHES "Http1KnownLengthRequestBody" OR
+       NOT boundary_doc_content MATCHES "Http1ChunkedRequestBody" OR
+       NOT boundary_doc_content MATCHES "Content-Length: 0" OR
+       NOT boundary_doc_content MATCHES "Http1ServerRequestParser" OR
+       NOT boundary_doc_content MATCHES "section-6[.]3" OR
        NOT boundary_doc_content MATCHES "gzip, chunked")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 request-body plan boundary is undocumented"
-            "${relative} must document the typed plan and final-chunked transfer-coding order")
+            "${relative} must document parser-only alternatives, payload ownership, explicit zero length, RFC framing, and final-chunked transfer-coding order")
     endif()
     if(NOT boundary_doc_content MATCHES "Http1ChunkedBodyDecoder" OR
        NOT boundary_doc_content MATCHES "Http1ChunkDecodeNeedMore" OR
@@ -2864,6 +3077,16 @@ foreach(boundary_doc IN ITEMS
        NOT boundary_doc_content MATCHES "consumedBytes" OR
        NOT boundary_doc_content MATCHES "101 Switching Protocols" OR
        NOT boundary_doc_content MATCHES "Http1ClientResponsePlan" OR
+       NOT boundary_doc_content MATCHES "Http1ClientInformationalResponse" OR
+       NOT boundary_doc_content MATCHES "Http1ClientResponseWithoutContent" OR
+       NOT boundary_doc_content MATCHES "Http1ClientKnownLengthResponse" OR
+       NOT boundary_doc_content MATCHES "Http1ClientChunkedResponse" OR
+       NOT boundary_doc_content MATCHES "Http1ClientCloseDelimitedResponse" OR
+       NOT boundary_doc_content MATCHES "Http1ClientConnectTunnel" OR
+       NOT boundary_doc_content MATCHES "Http1ClientProtocolUpgrade" OR
+       NOT boundary_doc_content MATCHES "Http1ClientResponsePersistence" OR
+       NOT boundary_doc_content MATCHES "section-6[.]3" OR
+       NOT boundary_doc_content MATCHES "section-9[.]3" OR
        NOT boundary_doc_content MATCHES "close-delimited" OR
        NOT boundary_doc_content MATCHES "Http1ClientRequestContentSignal" OR
        NOT boundary_doc_content MATCHES "Http1ClientRequestContentCompletionStatus" OR
@@ -2884,6 +3107,20 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("extensible HTTP method contract is undocumented"
             "${relative} must distinguish exact wire tokens, known semantics, Web 501, and WS route-only mapping")
+    endif()
+    if(NOT boundary_doc_content MATCHES "resolveHttpByteRange" OR
+       NOT boundary_doc_content MATCHES "HttpByteRangeResolution" OR
+       NOT boundary_doc_content MATCHES "HttpByteRangeIgnored" OR
+       NOT boundary_doc_content MATCHES "HttpByteRangeUnsatisfiable" OR
+       NOT boundary_doc_content MATCHES "HttpResolvedByteRange" OR
+       NOT boundary_doc_content MATCHES "section-14[.]1" OR
+       NOT boundary_doc_content MATCHES "section-14[.]1[.]2" OR
+       NOT boundary_doc_content MATCHES "section-14[.]2" OR
+       NOT boundary_doc_content MATCHES "416" OR
+       NOT boundary_doc_content MATCHES "206")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP byte-range resolution contract is undocumented"
+            "${relative} must document exclusive outcomes, overflow-safe resolution, and the RFC 200/416/206 mapping")
     endif()
     if(NOT boundary_doc_content MATCHES "HttpResponseBodyPlan" OR
        NOT boundary_doc_content MATCHES "HttpBufferedResponseWritePlan")

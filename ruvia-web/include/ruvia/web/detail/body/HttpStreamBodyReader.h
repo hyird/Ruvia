@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
@@ -36,7 +37,6 @@ public:
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes);
 
     [[nodiscard]] Task<std::optional<std::string_view>> read();
-    Task<std::string_view> readContentLengthAll(std::pmr::string& body);
     Task<std::string_view> readAll(std::pmr::string& body);
 
 private:
@@ -52,7 +52,11 @@ private:
     void resetPipelineState() noexcept;
     void materializeInitialRemainder();
     Task<void> readMore();
-    Task<std::optional<std::string_view>> readContentLength();
+    Task<std::string_view> readKnownLengthAll(
+        std::pmr::string& body,
+        std::size_t contentLength);
+    Task<std::optional<std::string_view>> readKnownLength(
+        std::size_t contentLength);
     Task<std::optional<std::string_view>> readChunked();
     Task<std::optional<std::string_view>> readTransferDecodedChunked();
     [[nodiscard]] bool exceedsLimit(std::size_t bytes) const noexcept;
