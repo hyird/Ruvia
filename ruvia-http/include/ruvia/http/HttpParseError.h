@@ -5,12 +5,6 @@
 
 namespace ruvia {
 
-enum class HttpParseStatus {
-    kComplete,
-    kIncomplete,
-    kError
-};
-
 enum class HttpParseError {
     kNone,
     kHeaderTooLarge,
@@ -18,8 +12,9 @@ enum class HttpParseError {
     kInvalidRequestLine,
     kUnsupportedHttpVersion,
     kInvalidRequestTarget,
-    kUnsupportedMethod,
     kInvalidHeader,
+    kInvalidConnection,
+    kInvalidUpgrade,
     kTooManyHeaders,
     kMissingHost,
     kInvalidHost,
@@ -27,7 +22,6 @@ enum class HttpParseError {
     kConflictingContentLength,
     kInvalidTransferEncoding,
     kUnsupportedTransferEncoding,
-    kExpectationFailed,
     kInvalidChunkSize,
     kChunkSizeOverflow,
     kInvalidChunkExtension,

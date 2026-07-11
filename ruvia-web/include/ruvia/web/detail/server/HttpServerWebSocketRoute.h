@@ -7,7 +7,7 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Error.h"
@@ -28,7 +28,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -36,14 +36,16 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     const HttpServerOptions& options,
     std::string_view pendingFrames,
     HttpResponse& response,
-    bool& closeAfterWrite) {
-    if (!isValidWebSocketRequest(parsed.request, parsed.flags) || parsed.contentLength != 0 || parsed.chunked) {
+    Http1ServerConnectionPlan& connectionPlan) {
+    if (!isValidWebSocketRequest(parsed.request) ||
+        parsed.bodyPlan.requiresConsumption()) {
         response = co_await routes.handleError(
             parsed.request,
             requestMemory,
             HttpErrorInfo(400, {}, "invalid websocket upgrade"),
             baseRouteServices);
-        markConnectionCloseAfterWrite(response, closeAfterWrite);
+        connectionPlan = http1FinalizeResponseConnection(
+            response, Http1ServerConnectionPlan::close());
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
     bool permessageDeflate = false;
@@ -51,7 +53,6 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     if (!(co_await writeWebSocketHandshake(
             stream,
             parsed.request,
-            parsed.flags,
             route.webSocketSubprotocols(),
             permessageDeflate))) {
         co_return HttpWebSocketRouteResult::kSessionFinished;
@@ -60,7 +61,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     SocketWebSocketConnection<Stream> webSocketConnection(
         WebSocketSocketTransport<Stream>{stream},
         scannerEntry,
-        route.webSocketHeartbeat(),
+        route.webSocketLifecycle(),
         options.maxWebSocketMessageBytes,
         memory.resource(),
         pendingFrames,

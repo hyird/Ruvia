@@ -3,93 +3,10 @@
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cstring>
-#include <system_error>
 
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] bool parseContentLength(std::string_view value, std::size_t& contentLength) noexcept {
-    value = httpTrimOws(value);
-    if (value.empty()) {
-        return false;
-    }
-
-    std::size_t parsed = 0;
-    const auto* begin = value.data();
-    const auto* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(begin, end, parsed);
-    if (ec != std::errc{} || ptr != end) {
-        return false;
-    }
-
-    contentLength = parsed;
-    return true;
-}
-
-enum class TransferEncodingParse {
-    kOk,
-    kMalformed,
-    kUnsupported
-};
-
-[[nodiscard]] TransferEncodingParse parseTransferEncoding(
-    std::string_view value,
-    ParsedRequestHeaderBlock& block) noexcept {
-    value = httpTrimOws(value);
-    if (value.empty()) {
-        return TransferEncodingParse::kMalformed;
-    }
-
-    auto result = TransferEncodingParse::kOk;
-    httpVisitCommaSeparatedQuotedItems(value, [&block, &result](std::string_view token) noexcept {
-        if (const auto semicolon = token.find(';'); semicolon != std::string_view::npos) {
-            if (!isValidHttpChunkExtension(token.substr(semicolon))) {
-                result = TransferEncodingParse::kMalformed;
-                return false;
-            }
-            token = httpTrimOws(token.substr(0, semicolon));
-        }
-        if (token.empty()) {
-            result = TransferEncodingParse::kMalformed;
-            return false;
-        }
-
-        if (block.sawChunked) {
-            result = TransferEncodingParse::kMalformed;
-            return false;
-        }
-
-        if (httpAsciiEqualsIgnoreCase(token, "chunked")) {
-            block.sawChunked = true;
-            block.sawTransferEncoding = true;
-        } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
-                   httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
-            if (block.transferCodings.count == kMaxTransferCodings) {
-                result = TransferEncodingParse::kUnsupported;
-                return false;
-            }
-            block.sawTransferEncoding = true;
-            block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kGzip;
-        } else if (httpAsciiEqualsIgnoreCase(token, "deflate")) {
-            if (block.transferCodings.count == kMaxTransferCodings) {
-                result = TransferEncodingParse::kUnsupported;
-                return false;
-            }
-            block.sawTransferEncoding = true;
-            block.transferCodings.values[block.transferCodings.count++] = HttpTransferCoding::kDeflate;
-        } else {
-            result = TransferEncodingParse::kUnsupported;
-            return false;
-        }
-        return true;
-    });
-    if (block.sawChunked && block.transferCodings.count > 0) {
-        return TransferEncodingParse::kUnsupported;
-    }
-    return result;
-}
 
 [[nodiscard]] HttpHeaderSlice makeSlice(std::size_t offset, std::size_t length) noexcept {
     return HttpHeaderSlice{
@@ -173,7 +90,7 @@ HttpParseError parseHttpHeaderBlock(
     cursor += 2;
 
     while (cursor < headersEnd) {
-        if (block.headerCount == kMaxRequestHeaders) {
+        if (block.headerCount == kMaxHttpHeaderFields) {
             return HttpParseError::kTooManyHeaders;
         }
 
@@ -205,69 +122,53 @@ HttpParseError parseHttpHeaderBlock(
         const auto kind = classifyRequestHeader(name);
         switch (kind) {
             case RequestHeaderKind::kHost:
-                if (block.flags.hasHost || !isValidHostHeader(value)) {
+                if (block.hostHeaderIndex >= 0 || !isValidHostHeader(value)) {
                     return HttpParseError::kInvalidHost;
                 }
-                block.flags.hasHost = true;
                 break;
             case RequestHeaderKind::kContentLength: {
-                std::size_t parsedContentLength = 0;
-                if (!parseContentLength(value, parsedContentLength)) {
-                    return HttpParseError::kInvalidContentLength;
+                switch (block.contentLength.parseField(value)) {
+                    case HttpContentLengthParseStatus::kOk:
+                        break;
+                    case HttpContentLengthParseStatus::kInvalid:
+                        return HttpParseError::kInvalidContentLength;
+                    case HttpContentLengthParseStatus::kConflicting:
+                        return HttpParseError::kConflictingContentLength;
                 }
-                if (block.sawContentLength && parsedContentLength != block.contentLength) {
-                    return HttpParseError::kConflictingContentLength;
-                }
-                block.sawContentLength = true;
-                block.contentLength = parsedContentLength;
                 break;
             }
             case RequestHeaderKind::kTransferEncoding: {
-                switch (parseTransferEncoding(value, block)) {
-                    case TransferEncodingParse::kOk:
+                switch (block.transferEncoding.parseField(value)) {
+                    case HttpTransferEncodingParseStatus::kOk:
                         break;
-                    case TransferEncodingParse::kMalformed:
+                    case HttpTransferEncodingParseStatus::kMalformed:
                         return HttpParseError::kInvalidTransferEncoding;
-                    case TransferEncodingParse::kUnsupported:
+                    case HttpTransferEncodingParseStatus::kUnsupported:
                         return HttpParseError::kUnsupportedTransferEncoding;
                 }
                 break;
             }
             case RequestHeaderKind::kConnection: {
-                auto connectionClose = block.flags.connectionClose;
-                auto connectionKeepAlive = block.flags.connectionKeepAlive;
-                auto upgrade = block.flags.upgrade;
-                httpUpdateConnectionFlags(
-                    value,
-                    connectionClose,
-                    connectionKeepAlive,
-                    upgrade);
-                block.flags.connectionClose = connectionClose;
-                block.flags.connectionKeepAlive = connectionKeepAlive;
-                block.flags.upgrade = upgrade;
+                if (block.connectionOptions.parseField(
+                        value,
+                        HttpFieldListRole::kRecipient) !=
+                    HttpFieldListParseStatus::kOk) {
+                    return HttpParseError::kInvalidConnection;
+                }
                 break;
             }
             case RequestHeaderKind::kExpect: {
-                auto expectContinue = block.flags.expectContinue;
-                if (!httpUpdateExpectContinueFlag(value, expectContinue)) {
-                    return HttpParseError::kExpectationFailed;
-                }
-                block.flags.expectContinue = expectContinue;
+                block.expectations.parseField(value);
                 break;
             }
-            case RequestHeaderKind::kSecWebSocketKey:
-                if (block.flags.secWebSocketKeyCount < 2) {
-                    ++block.flags.secWebSocketKeyCount;
-                }
-                break;
-            case RequestHeaderKind::kSecWebSocketVersion:
-                if (block.flags.secWebSocketVersionCount < 2) {
-                    ++block.flags.secWebSocketVersionCount;
-                }
-                break;
-            case RequestHeaderKind::kSecWebSocketProtocol:
-                if (block.flags.secWebSocketProtocolCount < 2) {
-                    ++block.flags.secWebSocketProtocolCount;
+            case RequestHeaderKind::kUpgrade:
+                if (block.upgradeProtocols.parseField(
+                        value,
+                        HttpFieldListRole::kRecipient,
+                        [](const HttpUpgradeProtocol&) noexcept {
+                            return true;
+                        }) != HttpFieldListParseStatus::kOk) {
+                    return HttpParseError::kInvalidUpgrade;
                 }
                 break;
             case RequestHeaderKind::kAcceptEncoding:
@@ -296,7 +197,9 @@ HttpParseError parseHttpHeaderBlock(
             case RequestHeaderKind::kAccessControlRequestHeaders:
             case RequestHeaderKind::kContentEncoding:
             case RequestHeaderKind::kCookie:
-            case RequestHeaderKind::kUpgrade:
+            case RequestHeaderKind::kSecWebSocketKey:
+            case RequestHeaderKind::kSecWebSocketProtocol:
+            case RequestHeaderKind::kSecWebSocketVersion:
             case RequestHeaderKind::kUserAgent:
                 break;
         }

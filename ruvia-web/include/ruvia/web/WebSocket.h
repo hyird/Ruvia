@@ -3,15 +3,26 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
+#include <chrono>
 #include <cstdint>
 #include <optional>
 #include <string_view>
 
 namespace ruvia {
 
+// Runtime-only liveness policy. Wire framing and close-handshake state remain in
+// ruvia-http; timers and transport abort policy belong to the Web runtime.
+struct WebSocketLifecycleOptions final {
+    std::chrono::milliseconds pingInterval{0};
+    std::chrono::milliseconds pongTimeout{0};
+    // A locally initiated Close waits for the peer Close before the underlying
+    // transport is ended. Zero disables this guard.
+    std::chrono::milliseconds closeHandshakeTimeout{std::chrono::seconds(5)};
+};
+
 struct WebSocketRouteOptions final {
     std::string_view subprotocols;
-    WebSocketHeartbeatOptions heartbeat{};
+    WebSocketLifecycleOptions lifecycle{};
 };
 
 namespace detail {

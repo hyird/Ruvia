@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -10,11 +11,14 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace {
 
 using ruvia::HttpResponse;
+using ruvia::HttpInterimResponseHead;
+using ruvia::detail::appendHttp2InterimResponseHeaders;
 using ruvia::detail::appendHttp2ResponseHeaders;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::Http2StreamState;
@@ -31,9 +35,27 @@ bool collect(void* target, std::string_view name, std::string_view value) {
 bool decodeResponseHeaders(
     const HttpResponse& response,
     std::uint64_t autoContentLength,
+    Collector& out,
+    bool emitAutoContentLength = true) {
+    Http2StreamState stream(1, std::pmr::get_default_resource());
+    if (appendHttp2ResponseHeaders(
+            stream, response, autoContentLength, emitAutoContentLength) !=
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kOk) {
+        return false;
+    }
+
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    return decoder.decode(stream.responseHeaderBlock(), &out, &collect).ok();
+}
+
+bool decodeInterimResponseHeaders(
+    const HttpInterimResponseHead& response,
     Collector& out) {
     Http2StreamState stream(1, std::pmr::get_default_resource());
-    appendHttp2ResponseHeaders(stream, response, autoContentLength);
+    if (appendHttp2InterimResponseHeaders(stream, response) !=
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kOk) {
+        return false;
+    }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
     return decoder.decode(stream.responseHeaderBlock(), &out, &collect).ok();
@@ -58,6 +80,74 @@ bool hasHeaderName(const Collector& headers, std::string_view name) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
+    const ruvia::HttpHeaderView fields[] = {
+        {"Link", "</style.css>; rel=preload"},
+        {"X-Hint", "warm"},
+    };
+    const HttpInterimResponseHead response(103, fields);
+
+    Collector headers;
+    RUVIA_CHECK(decodeInterimResponseHeaders(response, headers));
+    RUVIA_CHECK(hasHeader(headers, ":status", "103"));
+    RUVIA_CHECK(hasHeader(headers, "link", "</style.css>; rel=preload"));
+    RUVIA_CHECK(hasHeader(headers, "x-hint", "warm"));
+    // Protocol encoding is exact: product policy must add optional Server/Date
+    // explicitly instead of the generic HTTP core inventing fields.
+    RUVIA_CHECK(!hasHeaderName(headers, "server"));
+    RUVIA_CHECK(!hasHeaderName(headers, "date"));
+    RUVIA_CHECK(!hasHeaderName(headers, "content-length"));
+}
+
+RUVIA_TEST(http2_interim_response_header_rejection_is_transactional) {
+    Http2StreamState stream(1, std::pmr::get_default_resource());
+    const auto rejects = [&](std::span<const ruvia::HttpHeaderView> fields) {
+        stream.responseHeaderBlock().assign("sentinel");
+        const HttpInterimResponseHead response(103, fields);
+        const auto status = appendHttp2InterimResponseHeaders(stream, response);
+        const bool unchanged = stream.responseHeaderBlock() == "sentinel";
+        stream.responseHeaderBlock().clear();
+        return status ==
+                ruvia::detail::Http2ResponseHeaderEncodeStatus::kInvalidHeader &&
+            unchanged;
+    };
+
+    const ruvia::HttpHeaderView contentLength[] = {{"Content-Length", "0"}};
+    const ruvia::HttpHeaderView transferEncoding[] = {
+        {"Transfer-Encoding", "chunked"},
+    };
+    const ruvia::HttpHeaderView connection[] = {{"Connection", "close"}};
+    const ruvia::HttpHeaderView te[] = {{"TE", "trailers"}};
+    const ruvia::HttpHeaderView trailer[] = {{"Trailer", "X-Checksum"}};
+    const ruvia::HttpHeaderView malformed[] = {{"Bad Name", "value"}};
+    const ruvia::HttpHeaderView duplicateServer[] = {
+        {"Server", "one"},
+        {"server", "two"},
+    };
+    RUVIA_CHECK(rejects(contentLength));
+    RUVIA_CHECK(rejects(transferEncoding));
+    RUVIA_CHECK(rejects(connection));
+    RUVIA_CHECK(rejects(te));
+    RUVIA_CHECK(rejects(trailer));
+    RUVIA_CHECK(rejects(malformed));
+    RUVIA_CHECK(rejects(duplicateServer));
+}
+
+RUVIA_TEST(http2_response_headers_keep_server_product_policy_explicit) {
+    HttpResponse response(std::pmr::get_default_resource());
+
+    Collector defaults;
+    RUVIA_CHECK(decodeResponseHeaders(response, 0, defaults));
+    RUVIA_CHECK(!hasHeaderName(defaults, "server"));
+    // Date remains protocol-generated for a final 2xx origin response.
+    RUVIA_CHECK(hasHeaderName(defaults, "date"));
+
+    response.header("Server", "custom/1");
+    Collector explicitServer;
+    RUVIA_CHECK(decodeResponseHeaders(response, 0, explicitServer));
+    RUVIA_CHECK(hasHeader(explicitServer, "server", "custom/1"));
+}
 
 RUVIA_TEST(http2_response_headers_omit_content_length_for_204) {
     HttpResponse response(std::pmr::get_default_resource());
@@ -91,6 +181,22 @@ RUVIA_TEST(http2_response_headers_do_not_auto_content_length_for_304) {
     RUVIA_CHECK(!hasHeaderName(headers, "content-length"));
 }
 
+RUVIA_TEST(http2_response_headers_canonicalize_205_to_zero_length) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(205);
+    response.header("Content-Length", "12");
+
+    for (const bool emitBufferedLength : {false, true}) {
+        Collector headers;
+        RUVIA_CHECK(decodeResponseHeaders(
+            response, 99, headers, emitBufferedLength));
+        RUVIA_CHECK(hasHeader(headers, ":status", "205"));
+        RUVIA_CHECK(hasHeader(headers, "content-length", "0"));
+        RUVIA_CHECK(!hasHeader(headers, "content-length", "12"));
+        RUVIA_CHECK(!hasHeader(headers, "content-length", "99"));
+    }
+}
+
 RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
     // RFC 9113 8.1.1: a content-length that disagrees with the DATA payload length
     // is malformed and a conformant peer resets the stream. For a buffered 2xx the
@@ -108,6 +214,30 @@ RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
     RUVIA_CHECK(!hasHeader(headers, "content-length", "1000")); // the wrong user value is gone
 }
 
+RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) {
+    HttpResponse streaming(std::pmr::get_default_resource());
+    streaming.status(200);
+    streaming.header("Content-Length", "not-a-number");
+    Http2StreamState stream(1, std::pmr::get_default_resource());
+    RUVIA_CHECK(appendHttp2ResponseHeaders(
+        stream, streaming, 0, /*emitAutoContentLength=*/false) ==
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kInvalidContentLength);
+    RUVIA_CHECK(stream.responseHeaderBlock().empty());
+
+    // A buffered writer owns and canonicalizes the field, so an invalid caller
+    // value is filtered before it can make the message malformed.
+    Collector bufferedHeaders;
+    RUVIA_CHECK(decodeResponseHeaders(streaming, 5, bufferedHeaders));
+    RUVIA_CHECK(hasHeader(bufferedHeaders, "content-length", "5"));
+
+    HttpResponse notModified(std::pmr::get_default_resource());
+    notModified.status(304);
+    notModified.header("Content-Length", "5, 5");
+    RUVIA_CHECK(appendHttp2ResponseHeaders(stream, notModified, 0) ==
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kInvalidContentLength);
+    RUVIA_CHECK(stream.responseHeaderBlock().empty());
+}
+
 RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
     // RFC 7541 §7.1.3: Set-Cookie carries session credentials and must be emitted
     // as a never-indexed literal (0x10 prefix) so an intermediary never places it
@@ -117,7 +247,8 @@ RUVIA_TEST(http2_response_headers_set_cookie_uses_never_indexed_literal) {
     response.header("Set-Cookie", "sid=secret; HttpOnly");
 
     Http2StreamState stream(1, std::pmr::get_default_resource());
-    appendHttp2ResponseHeaders(stream, response, 0);
+    RUVIA_CHECK(appendHttp2ResponseHeaders(stream, response, 0) ==
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kOk);
     const auto& block = stream.responseHeaderBlock();
 
     // Byte 0 is the indexed :status 200 (0x88); Set-Cookie is the next field and
@@ -141,7 +272,8 @@ RUVIA_TEST(http2_response_headers_non_sensitive_uses_without_indexing) {
     response.header("Content-Type", "text/plain");
 
     Http2StreamState stream(1, std::pmr::get_default_resource());
-    appendHttp2ResponseHeaders(stream, response, 0);
+    RUVIA_CHECK(appendHttp2ResponseHeaders(stream, response, 0) ==
+        ruvia::detail::Http2ResponseHeaderEncodeStatus::kOk);
     const auto& block = stream.responseHeaderBlock();
 
     RUVIA_CHECK(block.size() >= 2);

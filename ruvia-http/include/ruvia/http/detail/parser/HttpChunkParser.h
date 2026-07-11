@@ -1,13 +1,15 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
+#include <optional>
 #include <string_view>
+#include <utility>
+#include <variant>
 
 namespace ruvia::detail {
 
-enum class HttpChunkScanStatus {
-    kComplete,
-    kIncomplete,
+enum class HttpChunkScanError : std::uint8_t {
     kInvalidSize,
     kSizeOverflow,
     kInvalidExtension,
@@ -16,13 +18,91 @@ enum class HttpChunkScanStatus {
     kTooLarge
 };
 
-struct HttpChunkScanResult {
-    HttpChunkScanStatus status{HttpChunkScanStatus::kIncomplete};
-    std::size_t consumedBytes{0};
+class HttpChunkScanNeedMore final {
+private:
+    friend class HttpChunkScanResult;
+    constexpr HttpChunkScanNeedMore() noexcept = default;
+};
+
+class HttpChunkScanComplete final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+private:
+    friend class HttpChunkScanResult;
+
+    explicit constexpr HttpChunkScanComplete(std::size_t consumedBytes) noexcept
+        : consumedBytes_(consumedBytes) {}
+
+    std::size_t consumedBytes_;
+};
+
+class HttpChunkScanFailure final {
+public:
+    [[nodiscard]] constexpr HttpChunkScanError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class HttpChunkScanResult;
+
+    explicit constexpr HttpChunkScanFailure(HttpChunkScanError error) noexcept
+        : error_(error) {}
+
+    HttpChunkScanError error_;
+};
+
+// Whole-message chunk framing has three mutually exclusive outcomes. Only a
+// complete result owns a consumed byte count; need-more and failure cannot
+// accidentally expose a plausible framing boundary.
+class HttpChunkScanResult final {
+public:
+    [[nodiscard]] const HttpChunkScanNeedMore* needMore() const noexcept {
+        return std::get_if<HttpChunkScanNeedMore>(&value_);
+    }
+
+    [[nodiscard]] const HttpChunkScanComplete* complete() const noexcept {
+        return std::get_if<HttpChunkScanComplete>(&value_);
+    }
+
+    [[nodiscard]] const HttpChunkScanFailure* failure() const noexcept {
+        return std::get_if<HttpChunkScanFailure>(&value_);
+    }
+
+private:
+    friend HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;
+
+    using Value = std::variant<
+        HttpChunkScanNeedMore,
+        HttpChunkScanComplete,
+        HttpChunkScanFailure>;
+
+    template <typename Result>
+    explicit HttpChunkScanResult(Result result) noexcept
+        : value_(std::move(result)) {}
+
+    [[nodiscard]] static HttpChunkScanResult makeNeedMore() noexcept {
+        return HttpChunkScanResult(HttpChunkScanNeedMore());
+    }
+
+    [[nodiscard]] static HttpChunkScanResult makeComplete(
+        std::size_t consumedBytes) noexcept {
+        return HttpChunkScanResult(HttpChunkScanComplete(consumedBytes));
+    }
+
+    [[nodiscard]] static HttpChunkScanResult makeFailure(
+        HttpChunkScanError error) noexcept {
+        return HttpChunkScanResult(HttpChunkScanFailure(error));
+    }
+
+    Value value_;
 };
 
 [[nodiscard]] bool parseHttpChunkSize(std::string_view value, std::size_t& size) noexcept;
-[[nodiscard]] HttpChunkScanStatus validateHttpChunkTrailers(std::string_view trailers) noexcept;
+[[nodiscard]] std::optional<HttpChunkScanError> validateHttpChunkTrailers(
+    std::string_view trailers) noexcept;
 [[nodiscard]] HttpChunkScanResult scanHttpChunkedBody(std::string_view body) noexcept;
 
 }  // namespace ruvia::detail

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
 
 #include <cstddef>
@@ -22,7 +23,7 @@ struct RequestValueGroupListAccess;
 
 }  // namespace detail
 
-enum class HttpMethod {
+enum class HttpKnownMethod {
     kGet,
     kPost,
     kPut,
@@ -34,16 +35,16 @@ enum class HttpMethod {
     kUnknown
 };
 
-inline constexpr HttpMethod Get = HttpMethod::kGet;
-inline constexpr HttpMethod Post = HttpMethod::kPost;
-inline constexpr HttpMethod Put = HttpMethod::kPut;
-inline constexpr HttpMethod Delete = HttpMethod::kDelete;
-inline constexpr HttpMethod Patch = HttpMethod::kPatch;
-inline constexpr HttpMethod Head = HttpMethod::kHead;
-inline constexpr HttpMethod Options = HttpMethod::kOptions;
-inline constexpr HttpMethod Connect = HttpMethod::kConnect;
+inline constexpr HttpKnownMethod Get = HttpKnownMethod::kGet;
+inline constexpr HttpKnownMethod Post = HttpKnownMethod::kPost;
+inline constexpr HttpKnownMethod Put = HttpKnownMethod::kPut;
+inline constexpr HttpKnownMethod Delete = HttpKnownMethod::kDelete;
+inline constexpr HttpKnownMethod Patch = HttpKnownMethod::kPatch;
+inline constexpr HttpKnownMethod Head = HttpKnownMethod::kHead;
+inline constexpr HttpKnownMethod Options = HttpKnownMethod::kOptions;
+inline constexpr HttpKnownMethod Connect = HttpKnownMethod::kConnect;
 
-inline constexpr std::size_t kMaxRequestHeaders = 64;
+inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 
 class HttpHeaderView final {
 public:
@@ -411,8 +412,11 @@ struct RequestValueGroupListAccess final {
 
 }  // namespace detail
 
-HttpMethod parseMethod(std::string_view method);
-std::string_view methodName(HttpMethod method);
+// HTTP methods are an extensible, case-sensitive token space. HttpKnownMethod is
+// only the framework's fixed semantic classification; it is never the wire value.
+[[nodiscard]] HttpKnownMethod classifyHttpMethod(std::string_view method) noexcept;
+[[nodiscard]] std::string_view knownHttpMethodToken(HttpKnownMethod method) noexcept;
+[[nodiscard]] bool isValidHttpMethodToken(std::string_view method) noexcept;
 [[nodiscard]] bool isValidHttpHeaderName(std::string_view name) noexcept;
 [[nodiscard]] bool isValidHttpHeaderValue(std::string_view value) noexcept;
 [[nodiscard]] bool isValidHttpStatusText(std::string_view value) noexcept;

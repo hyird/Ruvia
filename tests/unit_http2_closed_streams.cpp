@@ -7,8 +7,8 @@
 namespace {
 
 using ruvia::detail::Http2ClosedStreamHistory;
+using ruvia::detail::Http2LocalSettings;
 using ruvia::detail::Http2StreamCloseSource;
-using ruvia::detail::kHttp2LocalMaxConcurrentStreams;
 
 }  // namespace
 
@@ -32,7 +32,8 @@ RUVIA_TEST(closed_streams_ignores_zero_and_none_source) {
 
 RUVIA_TEST(closed_streams_evict_oldest_when_full) {
     Http2ClosedStreamHistory history;
-    const std::uint32_t limit = kHttp2LocalMaxConcurrentStreams * 4;  // kRecordLimit
+    const std::uint32_t limit =
+        Http2LocalSettings::kMaxConcurrentStreams * 4;  // kRecordLimit
     for (std::uint32_t id = 1; id <= limit; ++id) {
         history.remember(id, Http2StreamCloseSource::kLocal);
     }
@@ -53,7 +54,8 @@ RUVIA_TEST(closed_streams_eviction_survives_ring_buffer_wraparound) {
     // capacity and confirm FIFO eviction holds across the wrap: the first `limit`
     // ids are all gone, the most recent `limit` are all kept.
     Http2ClosedStreamHistory history;
-    const std::uint32_t limit = kHttp2LocalMaxConcurrentStreams * 4;  // kRecordLimit
+    const std::uint32_t limit =
+        Http2LocalSettings::kMaxConcurrentStreams * 4;  // kRecordLimit
     for (std::uint32_t id = 1; id <= 2 * limit; ++id) {
         history.remember(id, Http2StreamCloseSource::kLocal);
     }

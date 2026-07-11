@@ -1,10 +1,12 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <zstd.h>
@@ -20,8 +22,32 @@
 namespace {
 
 using ruvia::detail::HttpContentCoding;
-using ruvia::detail::HttpMultipartPartHeaderStatus;
+using ruvia::detail::HttpChunkScanComplete;
+using ruvia::detail::HttpChunkScanFailure;
+using ruvia::detail::HttpChunkScanNeedMore;
+using ruvia::detail::HttpChunkScanResult;
 using ruvia::detail::HttpMultipartPartHeaders;
+
+template <typename T>
+concept HasChunkScanConsumedBytes = requires(const T& result) {
+    { result.consumedBytes() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasChunkScanError = requires(const T& result) {
+    { result.error() } -> std::same_as<ruvia::detail::HttpChunkScanError>;
+};
+
+static_assert(std::same_as<
+    decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
+    HttpChunkScanResult>);
+static_assert(!std::default_initializable<HttpChunkScanResult>);
+static_assert(!HasChunkScanConsumedBytes<HttpChunkScanNeedMore>);
+static_assert(HasChunkScanConsumedBytes<HttpChunkScanComplete>);
+static_assert(!HasChunkScanConsumedBytes<HttpChunkScanFailure>);
+static_assert(!HasChunkScanError<HttpChunkScanNeedMore>);
+static_assert(!HasChunkScanError<HttpChunkScanComplete>);
+static_assert(HasChunkScanError<HttpChunkScanFailure>);
 
 template <typename T>
 concept HasCookiesAccessor = requires(const T& request) {
@@ -137,46 +163,58 @@ RUVIA_TEST(semicolon_params_quoted_uses_last_match) {
 }
 
 RUVIA_TEST(multipart_part_headers_quoted_name_with_semicolon) {
-    HttpMultipartPartHeaders headers;
     const std::string_view block =
         "Content-Disposition: form-data; name=\"a;b\"; filename=\"up;load.txt\"\r\n"
         "Content-Type: text/plain";
-    const auto status = ruvia::detail::httpParseMultipartPartHeaders(block, headers);
-    RUVIA_CHECK(status == HttpMultipartPartHeaderStatus::kOk);
-    RUVIA_CHECK_EQ(headers.name, std::string_view("a;b"));
-    RUVIA_CHECK_EQ(headers.filename, std::string_view("up;load.txt"));
-    RUVIA_CHECK_EQ(headers.contentType, std::string_view("text/plain"));
+    const auto result = ruvia::detail::httpParseMultipartPartHeaders(block);
+    const HttpMultipartPartHeaders* headers = result.headers();
+    RUVIA_CHECK(headers != nullptr);
+    if (headers != nullptr) {
+        RUVIA_CHECK_EQ(headers->name(), std::string_view("a;b"));
+        RUVIA_CHECK_EQ(headers->filename(), std::string_view("up;load.txt"));
+        RUVIA_CHECK_EQ(headers->contentType(), std::string_view("text/plain"));
+    }
 }
 
-RUVIA_TEST(multipart_boundary_quoted_with_semicolon) {
-    std::string_view boundary;
-    const std::string_view contentType = R"(multipart/form-data; boundary="a;b")";
-    const auto status = ruvia::detail::httpParseMultipartBoundary(contentType, boundary);
-    RUVIA_CHECK(status == ruvia::detail::HttpMultipartBoundaryStatus::kOk);
-    RUVIA_CHECK_EQ(boundary, std::string_view("a;b"));
+RUVIA_TEST(multipart_boundary_quoted_with_mime_special) {
+    const std::string_view contentType = R"(multipart/form-data; boundary="a:b")";
+    const auto result = ruvia::detail::httpParseMultipartBoundary(contentType);
+    RUVIA_CHECK(result.boundary() != nullptr);
+    RUVIA_CHECK_EQ(result.boundary()->value(), std::string_view("a:b"));
 }
 
 // --- Multipart boundary must be a full delimiter line, not a prefix ------
 RUVIA_TEST(multipart_boundary_prefix_requires_delimiter_terminator) {
-    using ruvia::detail::httpFindMultipartBoundaryPrefix;
+    using ruvia::detail::httpFindMultipartBodyDelimiter;
     // "abc" appears as a substring of "abcXYZ" in the body; that is NOT a delimiter (a delimiter
     // must be followed by CRLF or "--"). The scan must skip the false match and find the real one.
     const std::string_view body = "data\r\n--abcXYZ tail\r\n--abc\r\n";
-    RUVIA_CHECK_EQ(
-        httpFindMultipartBoundaryPrefix(body, "abc"),
-        body.find("\r\n--abc\r\n"));
+    const auto match = httpFindMultipartBodyDelimiter(
+        body, ruvia::MultipartBoundary("abc"), true);
+    const auto* part = match.part();
+    RUVIA_CHECK(part != nullptr);
+    if (part != nullptr) {
+        RUVIA_CHECK_EQ(part->offset(), body.find("\r\n--abc\r\n"));
+    }
 }
 
 RUVIA_TEST(multipart_boundary_line_requires_delimiter_terminator) {
-    using ruvia::detail::httpFindMultipartBoundaryLine;
-    // Same for the opening delimiter: "--abcXYZ" is not the boundary line; "--abc\r\n" is.
-    const std::string_view body = "--abcXYZ junk--abc\r\nrest";
-    RUVIA_CHECK_EQ(
-        httpFindMultipartBoundaryLine(body, "abc"),
-        body.find("--abc\r\n"));
+    using ruvia::detail::httpFindInitialMultipartDelimiter;
+    // Same for the opening delimiter. The real candidate begins a new line;
+    // the matching bytes embedded in preamble text are not eligible.
+    const std::string_view body = "--abcXYZ junk--abc\r\n\r\n--abc\r\nrest";
+    const auto match = httpFindInitialMultipartDelimiter(
+        body, ruvia::MultipartBoundary("abc"), true);
+    const auto* part = match.part();
+    RUVIA_CHECK(part != nullptr);
+    if (part != nullptr) {
+        RUVIA_CHECK_EQ(part->offset(), body.rfind("--abc\r\n"));
+    }
     // A close delimiter ("--abc--") is a valid terminator too.
     const std::string_view closing = "--abc--\r\n";
-    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine(closing, "abc"), std::size_t{0});
+    RUVIA_CHECK(
+        httpFindInitialMultipartDelimiter(
+            closing, ruvia::MultipartBoundary("abc"), true).close() != nullptr);
 }
 
 // --- zstd request-body decode: truncation must be rejected ---------------
@@ -227,11 +265,27 @@ RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
 
 // --- Chunk extension quoted-pair follows RFC quoted-string grammar -------
 RUVIA_TEST(chunk_extension_quoted_pair_allows_escaped_htab) {
-    using ruvia::detail::HttpChunkScanStatus;
     using ruvia::detail::scanHttpChunkedBody;
 
     const std::string_view body = "1;note=\"a\\\tb\"\r\nx\r\n0\r\n\r\n";
     const auto result = scanHttpChunkedBody(body);
-    RUVIA_CHECK(result.status == HttpChunkScanStatus::kComplete);
-    RUVIA_CHECK_EQ(result.consumedBytes, body.size());
+    RUVIA_CHECK(result.complete() != nullptr);
+    RUVIA_CHECK_EQ(result.complete()->consumedBytes(), body.size());
+    RUVIA_CHECK(result.needMore() == nullptr);
+    RUVIA_CHECK(result.failure() == nullptr);
+}
+
+RUVIA_TEST(chunk_scan_result_is_discriminated) {
+    const auto needMore = ruvia::detail::scanHttpChunkedBody("1\r\nx");
+    RUVIA_CHECK(needMore.needMore() != nullptr);
+    RUVIA_CHECK(needMore.complete() == nullptr);
+    RUVIA_CHECK(needMore.failure() == nullptr);
+
+    const auto failure = ruvia::detail::scanHttpChunkedBody("xyz\r\n");
+    RUVIA_CHECK(failure.failure() != nullptr);
+    RUVIA_CHECK(
+        failure.failure()->error() ==
+        ruvia::detail::HttpChunkScanError::kInvalidSize);
+    RUVIA_CHECK(failure.needMore() == nullptr);
+    RUVIA_CHECK(failure.complete() == nullptr);
 }

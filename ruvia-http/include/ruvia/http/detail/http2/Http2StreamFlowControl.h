@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <limits>
 
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/Http2LocalSettings.h"
 
 namespace ruvia::detail {
 
@@ -46,7 +46,8 @@ public:
 
 private:
     std::int32_t sendWindow_{kHttp2DefaultInitialWindowSize};
-    std::int32_t receiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
+    std::int32_t receiveWindow_{
+        static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
 };
 
 }  // namespace ruvia::detail

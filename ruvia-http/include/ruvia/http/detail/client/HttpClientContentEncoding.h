@@ -34,18 +34,18 @@ template <typename Headers>
 }
 
 [[nodiscard]] inline HttpContentCoding httpClientResponseContentCoding(
-    const FetchResponse& response) noexcept {
+    const HttpClientResponse& response) noexcept {
     return httpClientContentCodingOf(response.headers());
 }
 
 inline void decodeHttpClientResponseContentEncoding(
-    FetchResponse& response,
+    HttpClientResponse& response,
     std::size_t maxDecodedBytes) {
     const auto coding = httpClientResponseContentCoding(response);
     if (coding == HttpContentCoding::kNone || response.body().empty()) {
         return;
     }
-    auto& body = FetchResponseAccess::body(response);
+    auto& body = HttpClientResponseAccess::body(response);
     std::pmr::string decoded(body.get_allocator().resource());
     if (!decodeRequestContentEncoding(coding, body, decoded, maxDecodedBytes)) {
         throw std::runtime_error("http client: failed to decode response Content-Encoding");

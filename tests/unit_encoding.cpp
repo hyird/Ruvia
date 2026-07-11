@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/core/detail/Base64.h"
+#include "ruvia/core/detail/Base64Url.h"
 #include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/http/detail/Hex.h"
@@ -62,6 +63,22 @@ RUVIA_TEST(base64_binary_high_bytes) {
     ruvia::detail::encodeBase64(out.data(),
                                 std::span<const std::uint8_t>(bytes, sizeof(bytes)));
     RUVIA_CHECK_EQ(out, std::string("/wD/"));
+}
+
+RUVIA_TEST(base64url_alphabet_values) {
+    using ruvia::detail::decodeBase64UrlChar;
+    // RFC 4648 §5: A-Z, a-z, 0-9, '-', '_'.
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('A'), 0);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('Z'), 25);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('a'), 26);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('z'), 51);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('0'), 52);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('9'), 61);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('-'), 62);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('_'), 63);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('+'), -1);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('/'), -1);
+    RUVIA_CHECK_EQ(decodeBase64UrlChar('='), -1);
 }
 
 // --- Hex nibble ----------------------------------------------------------

@@ -20,7 +20,7 @@ namespace {
 
 using ruvia::HttpResponse;
 using ruvia::HttpServerOptions;
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::compressResponseBodyIfAccepted;
 using ruvia::detail::responseBodyBytes;
@@ -29,7 +29,7 @@ using Compression = HttpServerOptions::Compression;
 
 ruvia::detail::HttpResponseBodyPlan bodyPlanFor(
     const HttpResponse& response,
-    HttpMethod method = HttpMethod::kGet) {
+    HttpKnownMethod method = HttpKnownMethod::kGet) {
     return ruvia::detail::httpResponseBodyPlan(method, response.status());
 }
 
@@ -98,7 +98,7 @@ bool tryCompress(
     HttpResponse& response,
     Compression options,
     HttpContentCoding coding = HttpContentCoding::kGzip,
-    HttpMethod method = HttpMethod::kGet) {
+    HttpKnownMethod method = HttpKnownMethod::kGet) {
     std::pmr::string scratch(std::pmr::new_delete_resource());
     return compressResponseBodyIfAccepted(
         coding, response, options, scratch, bodyPlanFor(response, method));
@@ -233,9 +233,9 @@ RUVIA_TEST(compress_skips_when_disabled_or_none_but_preserves_head_metadata) {
             response,
             Compression{true, 16},
             HttpContentCoding::kGzip,
-            HttpMethod::kHead));
+            HttpKnownMethod::kHead));
         const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
-            HttpMethod::kHead, response);
+            HttpKnownMethod::kHead, response);
         RUVIA_CHECK(writePlan.bodySuppressed());
         RUVIA_CHECK(!writePlan.sendBody());
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));

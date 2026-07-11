@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <exception>
+#include <span>
 #include <utility>
 
 #include "ruvia/web/detail/router/RequestDispatcher.h"
@@ -22,8 +23,10 @@ Task<void> responseStreamWriteThunk(void* target, std::string_view chunk) {
 }
 
 template <typename Sink>
-Task<void> responseStreamEndThunk(void* target) {
-    co_await static_cast<Sink*>(target)->end();
+Task<void> responseStreamEndThunk(
+    void* target,
+    std::span<const HttpHeaderView> trailers) {
+    co_await static_cast<Sink*>(target)->end(trailers);
 }
 
 template <typename Sink>
@@ -34,11 +37,6 @@ Task<void> responseStreamSleepThunk(void* target, std::chrono::milliseconds dura
 template <typename Sink>
 bool responseStreamAbortedThunk(void* target) noexcept {
     return static_cast<Sink*>(target)->aborted();
-}
-
-template <typename Sink>
-void responseStreamAddTrailerThunk(void* target, std::string_view name, std::string_view value) {
-    static_cast<Sink*>(target)->addTrailer(name, value);
 }
 
 template <typename Sink>
@@ -66,7 +64,6 @@ template <typename Sink>
         &responseStreamSleepThunk<Sink>,
         &responseStreamBindContextThunk<Sink>,
         &responseStreamScratchThunk<Sink>,
-        &responseStreamAddTrailerThunk<Sink>,
         &responseStreamCommittedThunk<Sink>,
         &responseStreamAbortedThunk<Sink>);
 }

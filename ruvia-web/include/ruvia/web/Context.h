@@ -185,7 +185,11 @@ public:
         RawRequestClone& operator=(RawRequestClone&&) noexcept = default;
 
         [[nodiscard]] std::string_view method() const noexcept {
-            return methodName(method_);
+            return std::string_view(method_.data(), method_.size());
+        }
+
+        [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
+            return classifyHttpMethod(method());
         }
 
         [[nodiscard]] std::string_view url() const noexcept {
@@ -234,12 +238,13 @@ public:
         friend class ContextRequest;
 
         explicit RawRequestClone(std::pmr::memory_resource* resource)
-            : url_(resource),
+            : method_(resource),
+              url_(resource),
               path_(resource),
               headers_(resource),
               body_(resource) {}
 
-        HttpMethod method_{HttpMethod::kUnknown};
+        std::pmr::string method_;
         std::pmr::string url_;
         std::pmr::string path_;
         std::pmr::vector<Header> headers_;
@@ -1007,6 +1012,7 @@ public:
     [[nodiscard]] const HttpRequest& raw() const noexcept;
 
     [[nodiscard]] std::string_view method() const noexcept;
+    [[nodiscard]] HttpKnownMethod knownMethod() const noexcept;
     [[nodiscard]] std::pmr::string url() const;
     [[nodiscard]] std::string_view path() const noexcept;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
@@ -1115,7 +1121,7 @@ private:
         std::size_t paramCount,
         std::uintptr_t routeRateLimitScope,
         detail::ContextServices services,
-        HttpMethod routeMethod = HttpMethod::kUnknown,
+        HttpKnownMethod routeMethod = HttpKnownMethod::kUnknown,
         std::size_t routeMiddlewareCount = 0) noexcept;
 
 public:
@@ -1161,7 +1167,6 @@ public:
 
     struct ResponseInit final {
         std::uint16_t status{0};
-        std::string_view statusText{};
         ResponseHeaderInit headers{};
     };
 
@@ -1329,6 +1334,8 @@ public:
         return ConstVars(*this);
     }
 
+    // Route handlers construct one final response, so Context accepts only
+    // 200..599. Informational heads belong to a dedicated protocol submit path.
     void status(std::uint16_t statusCode);
 
     void header(std::string_view name, std::string_view value) {
@@ -1367,8 +1374,7 @@ public:
 
     [[nodiscard]] HttpResponse body(
         std::string_view body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse body(
         std::string_view body,
@@ -1384,8 +1390,7 @@ public:
 
     [[nodiscard]] HttpResponse body(
         std::nullptr_t,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse body(
         std::nullptr_t,
@@ -1401,8 +1406,7 @@ public:
 
     [[nodiscard]] HttpResponse body(
         std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse body(
         std::pmr::string& body,
@@ -1418,8 +1422,7 @@ public:
 
     [[nodiscard]] HttpResponse body(
         std::span<const std::byte> body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse body(
         std::span<const std::byte> body,
@@ -1435,34 +1438,28 @@ public:
 
     [[nodiscard]] HttpResponse body(
         const std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse body(
         std::pmr::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse body(
         std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse body(
         const std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse body(
         std::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse body(
         const char (&body)[N],
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse body(
@@ -1481,8 +1478,7 @@ public:
 
     [[nodiscard]] HttpResponse text(
         std::string_view body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse text(
         std::string_view body,
@@ -1498,8 +1494,7 @@ public:
 
     [[nodiscard]] HttpResponse text(
         std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse text(
         std::pmr::string& body,
@@ -1515,34 +1510,28 @@ public:
 
     [[nodiscard]] HttpResponse text(
         const std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse text(
         std::pmr::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse text(
         std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse text(
         const std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse text(
         std::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse text(
         const char (&body)[N],
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse text(
@@ -1562,8 +1551,7 @@ public:
     template <typename T>
     [[nodiscard]] HttpResponse json(
         const T& value,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     template <typename T>
     [[nodiscard]] HttpResponse json(
@@ -1582,8 +1570,7 @@ public:
 
     [[nodiscard]] HttpResponse html(
         std::string_view body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse html(
         std::string_view body,
@@ -1599,8 +1586,7 @@ public:
 
     [[nodiscard]] HttpResponse html(
         std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     [[nodiscard]] HttpResponse html(
         std::pmr::string& body,
@@ -1616,34 +1602,28 @@ public:
 
     [[nodiscard]] HttpResponse html(
         const std::pmr::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse html(
         std::pmr::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse html(
         std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse html(
         const std::string& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     [[nodiscard]] HttpResponse html(
         std::string&& body,
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const = delete;
+        std::uint16_t statusCode = 0) const = delete;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(
         const char (&body)[N],
-        std::uint16_t statusCode = 0,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 0) const;
 
     template <std::size_t N>
     [[nodiscard]] HttpResponse html(
@@ -1674,8 +1654,7 @@ public:
 
     [[nodiscard]] HttpResponse redirect(
         std::string_view location,
-        std::uint16_t statusCode = 302,
-        std::string_view statusText = {}) const;
+        std::uint16_t statusCode = 302) const;
 
     [[nodiscard]] HttpResponse file(
         const std::filesystem::path& path,
@@ -1716,7 +1695,7 @@ private:
     [[nodiscard]] const RequestNameValueList& requestCookies() const;
     [[nodiscard]] const std::pmr::vector<ContextRequest::MatchedRoute>& requestMatchedRoutes() const;
 
-    [[nodiscard]] std::string_view multipartBoundary() const;
+    [[nodiscard]] MultipartBoundary multipartBoundary() const;
 
     [[nodiscard]] bool requestContentTypeMatches(std::string_view expected) const noexcept;
 
@@ -1733,7 +1712,6 @@ private:
     void applyResponseState(
         HttpResponse& response,
         std::uint16_t statusCode,
-        std::string_view statusText,
         std::span<const HttpHeaderView> headers = {}) const;
 
     void applyExplicitResponseHeaders(
@@ -1742,13 +1720,11 @@ private:
 
     [[nodiscard]] HttpResponse textStaticView(
         std::string_view body,
-        std::uint16_t statusCode,
-        std::string_view statusText) const;
+        std::uint16_t statusCode) const;
 
     [[nodiscard]] HttpResponse jsonSerialized(
         std::pmr::string& body,
-        std::uint16_t statusCode,
-        std::string_view statusText) const;
+        std::uint16_t statusCode) const;
 
     [[nodiscard]] const RequestNameValueList& requestHeaders() const;
     [[nodiscard]] std::optional<std::string_view> requestHeader(std::string_view name) const;
@@ -1786,7 +1762,7 @@ private:
     std::string_view remoteAddress_;
     std::string_view clientCertificateSubject_;
     std::string_view routePath_;
-    HttpMethod routeMethod_{HttpMethod::kUnknown};
+    HttpKnownMethod routeMethod_{HttpKnownMethod::kUnknown};
     const std::string_view* paramNames_{nullptr};
     const std::string_view* paramValues_{nullptr};
     std::size_t paramCount_{0};
@@ -1837,7 +1813,11 @@ inline const HttpRequest& ContextRequest::raw() const noexcept {
 }
 
 inline std::string_view ContextRequest::method() const noexcept {
-    return methodName(raw().method());
+    return raw().method();
+}
+
+inline HttpKnownMethod ContextRequest::knownMethod() const noexcept {
+    return raw().knownMethod();
 }
 
 inline std::pmr::string ContextRequest::url() const {

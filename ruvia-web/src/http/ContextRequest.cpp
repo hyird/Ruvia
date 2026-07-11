@@ -298,11 +298,11 @@ void compactParsedBodyFields(
 
 [[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(
     std::string_view requestBody,
-    std::string_view boundaryValue,
+    MultipartBoundary boundary,
     std::pmr::memory_resource* resource,
     ContextRequest::ParseBodyOptions options,
     ContextRequest::RequestFormData::SingleValueSelection singleValueSelection) {
-    auto parts = parseMultipartBody(requestBody, boundaryValue, resource);
+    auto parts = parseMultipartBody(requestBody, std::move(boundary), resource);
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(parts.size());
     for (const auto& part : parts) {
@@ -339,16 +339,24 @@ void compactParsedBodyFields(
         return parseUrlEncodedFormBody(requestBody, resource, options, singleValueSelection);
     }
 
-    std::string_view boundary;
-    switch (detail::httpParseMultipartBoundary(contentType, boundary)) {
-        case detail::HttpMultipartBoundaryStatus::kOk:
-            return parseMultipartFormBody(requestBody, boundary, resource, options, singleValueSelection);
-        case detail::HttpMultipartBoundaryStatus::kInvalidContentType:
-            return ContextRequest::RequestFormData(resource, singleValueSelection);
-        case detail::HttpMultipartBoundaryStatus::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
+    const auto boundary = detail::httpParseMultipartBoundary(contentType);
+    if (const auto* parsed = boundary.boundary()) {
+        return parseMultipartFormBody(
+            requestBody,
+            *parsed,
+            resource,
+            options,
+            singleValueSelection);
     }
-    throw std::invalid_argument("invalid multipart boundary");
+    if (const auto* failure = boundary.failure()) {
+        switch (failure->error()) {
+        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
+            return ContextRequest::RequestFormData(resource, singleValueSelection);
+        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
+            throw std::invalid_argument("invalid multipart boundary");
+        }
+    }
+    throw std::logic_error("unexpected multipart boundary parse result");
 }
 
 }  // namespace
@@ -570,8 +578,8 @@ const RequestNameValueList& Context::requestCookies() const {
 const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRoutes() const {
     if (matchedRoutes_ == nullptr) {
         auto& routes = memory_.emplace<std::pmr::vector<ContextRequest::MatchedRoute>>(resource());
-        if (!routePath_.empty() && routeMethod_ != HttpMethod::kUnknown) {
-            const auto method = methodName(routeMethod_);
+        if (!routePath_.empty() && routeMethod_ != HttpKnownMethod::kUnknown) {
+            const auto method = knownHttpMethodToken(routeMethod_);
             routes.reserve(routeMiddlewareCount_ + 1);
             for (std::size_t i = 0; i < routeMiddlewareCount_; ++i) {
                 routes.push_back(ContextRequest::MatchedRoute{
@@ -712,7 +720,7 @@ std::optional<std::string_view> ContextRequest::signedCookie(
 
 Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
     RawRequestClone clone(context_->resource());
-    clone.method_ = raw().method();
+    clone.method_.assign(raw().method().data(), raw().method().size());
     const auto requestUrl = url();
     clone.url_.assign(requestUrl.data(), requestUrl.size());
     clone.path_.assign(raw().path().data(), raw().path().size());
@@ -733,9 +741,9 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 }
 
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
-    const auto boundaryValue = multipartBoundary();
+    const auto boundary = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return parseMultipartBody(requestBody, boundaryValue, resource());
+    co_return parseMultipartBody(requestBody, boundary, resource());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(
@@ -795,19 +803,21 @@ SseWriter Context::streamSSE() const {
     return SseWriter(stream());
 }
 
-std::string_view Context::multipartBoundary() const {
-    std::string_view boundary;
-    switch (detail::httpParseMultipartBoundary(
-        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType),
-        boundary)) {
-        case detail::HttpMultipartBoundaryStatus::kOk:
-            return boundary;
-        case detail::HttpMultipartBoundaryStatus::kInvalidContentType:
-            throw std::invalid_argument("invalid multipart content type");
-        case detail::HttpMultipartBoundaryStatus::kInvalidBoundary:
-            throw std::invalid_argument("invalid multipart boundary");
+MultipartBoundary Context::multipartBoundary() const {
+    const auto boundary = detail::httpParseMultipartBoundary(
+        detail::requestKnownHeader(request_, detail::RequestKnownHeader::kContentType));
+    if (const auto* parsed = boundary.boundary()) {
+        return *parsed;
     }
-    throw std::invalid_argument("invalid multipart boundary");
+    if (const auto* failure = boundary.failure()) {
+        switch (failure->error()) {
+        case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
+            throw std::invalid_argument("invalid multipart content type");
+        case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
+            throw std::invalid_argument("invalid multipart boundary");
+        }
+    }
+    throw std::logic_error("unexpected multipart boundary parse result");
 }
 
 }  // namespace ruvia

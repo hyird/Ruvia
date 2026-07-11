@@ -14,10 +14,12 @@ namespace ruvia::detail {
 
 class Http2RequestBuilder final {
 public:
-    [[nodiscard]] static HttpMethod requestMethod(const Http2StreamState& stream) noexcept {
+    // RFC 8441 WebSocket CONNECT binds to the framework's GET route shape, but this
+    // is route selection only. The HttpRequest built below preserves wire CONNECT.
+    [[nodiscard]] static HttpKnownMethod routeMethod(const Http2StreamState& stream) noexcept {
         return stream.extendedConnectWebSocket()
-            ? HttpMethod::kGet
-            : stream.requestMethod();
+            ? HttpKnownMethod::kGet
+            : stream.requestKnownMethod();
     }
 
     [[nodiscard]] static std::string_view requestTarget(const Http2StreamState& stream) noexcept {
@@ -36,8 +38,8 @@ public:
         std::pmr::memory_resource* resource) noexcept {
         HttpRequestAccess::reset(request);
         HttpRequestAccess::setResource(request, resource);
-        const auto method = requestMethod(stream);
-        if (method == HttpMethod::kUnknown) {
+        const auto method = stream.requestMethod();
+        if (method.empty()) {
             return false;
         }
         const auto target = requestTarget(stream);
@@ -49,14 +51,21 @@ public:
             targetParts = splitRequestTarget(target);
         } else {
             RequestTargetView targetView;
-            if (!parseRequestTarget(method, target, targetView)) {
+            // Extended CONNECT retains normal :scheme/:path target components. GET
+            // is used only to select the origin-form target grammar; it does not
+            // overwrite the wire method stored on HttpRequest.
+            const auto targetMethod = stream.extendedConnect()
+                ? HttpKnownMethod::kGet
+                : stream.requestKnownMethod();
+            if (!parseRequestTarget(targetMethod, target, targetView)) {
                 return false;
             }
             targetParts = RequestTargetParts{.path = targetView.path, .queryString = targetView.query};
         }
 
         HttpRequestAccess::setMethod(request, method);
-        HttpRequestAccess::setHttpVersion(request, "HTTP/2");
+        HttpRequestAccess::setProtocolVersion(
+            request, HttpProtocolVersion::kHttp2);
         HttpRequestAccess::setTarget(request, target);
         HttpRequestAccess::setPath(request, targetParts.path);
         HttpRequestAccess::setQueryString(request, targetParts.queryString);

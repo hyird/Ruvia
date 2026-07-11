@@ -25,7 +25,7 @@ public:
     }
 
 private:
-    friend HttpResponseBodyPlan httpResponseBodyPlan(HttpMethod, std::uint16_t) noexcept;
+    friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, std::uint16_t) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
     HttpResponseBodyPlan(ResponseWritePolicy policy, bool bodySuppressed) noexcept
@@ -36,12 +36,12 @@ private:
 };
 
 [[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
-    HttpMethod requestMethod,
+    HttpKnownMethod requestMethod,
     std::uint16_t statusCode) noexcept {
     const auto policy = responseWritePolicy(statusCode);
     return HttpResponseBodyPlan(
         policy,
-        !policy.bodyAllowed() || requestMethod == HttpMethod::kHead);
+        !policy.bodyAllowed() || requestMethod == HttpKnownMethod::kHead);
 }
 
 class HttpBufferedResponseWritePlan final {
@@ -96,7 +96,7 @@ private:
 }
 
 [[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
-    HttpMethod requestMethod,
+    HttpKnownMethod requestMethod,
     const HttpResponse& response) noexcept {
     return httpBufferedResponseWritePlan(
         httpResponseBodyPlan(requestMethod, response.status()),

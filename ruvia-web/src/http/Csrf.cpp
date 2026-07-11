@@ -32,10 +32,10 @@ std::string_view generateCsrfToken(std::span<char> buffer) noexcept {
 namespace ruvia {
 
 Task<void> CsrfProtection::handle(Context& c, Next& next) {
-    const auto method = c.req().method();
-    const bool safe = method == "GET" ||
-        method == "HEAD" ||
-        method == "OPTIONS";
+    const auto method = c.req().knownMethod();
+    const bool safe = method == HttpKnownMethod::kGet ||
+        method == HttpKnownMethod::kHead ||
+        method == HttpKnownMethod::kOptions;
     const auto cookie = c.req().cookie("XSRF-TOKEN");
     if (!safe) {
         const auto header = c.req().header("X-XSRF-TOKEN");

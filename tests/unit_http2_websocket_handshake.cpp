@@ -1,9 +1,12 @@
 #include "test_harness.h"
 
 #include <memory_resource>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -11,13 +14,42 @@ namespace {
 
 using ruvia::HttpRequest;
 using ruvia::detail::Http2StreamState;
-using ruvia::detail::HttpServerParser;
+using ruvia::detail::Http1ServerRequestParser;
+using ruvia::detail::HpackDecoder;
 using ruvia::detail::http2ChooseWebSocketSubprotocol;
+using ruvia::detail::http2EncodeWebSocketHandshakeHeaders;
 using ruvia::detail::http2IsValidWebSocketRequest;
 
+struct Collector final {
+    std::vector<std::pair<std::string, std::string>> headers;
+};
+
+bool collect(void* target, std::string_view name, std::string_view value) {
+    static_cast<Collector*>(target)->headers.emplace_back(name, value);
+    return true;
+}
+
+bool hasHeader(const Collector& fields, std::string_view name, std::string_view value) {
+    for (const auto& field : fields.headers) {
+        if (field.first == name && field.second == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasHeaderName(const Collector& fields, std::string_view name) {
+    for (const auto& field : fields.headers) {
+        if (field.first == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
 HttpRequest parseRequest(std::string_view rawRequest) {
-    HttpServerParser parser;
-    const auto parsed = parser.parse(rawRequest);
+    Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(rawRequest);
     return parsed.request;
 }
 
@@ -69,32 +101,49 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     const auto request = requestWithVersion();
 
     auto valid = makeStream();
-    valid.markExtendedConnectWebSocket();
-    valid.markWebSocketTunnel();
+    valid.setProtocol("websocket");
+    RUVIA_CHECK(valid.markExtendedConnectPending());
     RUVIA_CHECK(http2IsValidWebSocketRequest(valid, request));
 
-    // Missing the tunnel flag invalidates it.
-    auto noTunnel = makeStream();
-    noTunnel.markExtendedConnectWebSocket();
-    RUVIA_CHECK(!http2IsValidWebSocketRequest(noTunnel, request));
+    // A completed/rejected CONNECT is no longer an opening handshake.
+    auto openTunnel = makeStream();
+    openTunnel.setProtocol("websocket");
+    RUVIA_CHECK(openTunnel.markExtendedConnectPending());
+    RUVIA_CHECK(openTunnel.markConnectTunnelOpen());
+    RUVIA_CHECK(!http2IsValidWebSocketRequest(openTunnel, request));
 
     // Without the extended-CONNECT websocket marker (:method CONNECT +
     // :protocol websocket, RFC 8441) it is not a WebSocket handshake at all.
     auto noExtendedConnect = makeStream();
-    noExtendedConnect.markWebSocketTunnel();
     RUVIA_CHECK(!http2IsValidWebSocketRequest(noExtendedConnect, request));
 
     // A Content-Length must not be present on a WebSocket CONNECT.
     auto withContentLength = makeStream();
-    withContentLength.markExtendedConnectWebSocket();
-    withContentLength.markWebSocketTunnel();
+    withContentLength.setProtocol("websocket");
+    RUVIA_CHECK(withContentLength.markExtendedConnectPending());
     RUVIA_CHECK(withContentLength.setContentLength(5));
     RUVIA_CHECK(!http2IsValidWebSocketRequest(withContentLength, request));
 
     // The Sec-WebSocket-Version must be exactly 13.
     const auto badVersion = requestWithBadVersion();
     auto stream = makeStream();
-    stream.markExtendedConnectWebSocket();
-    stream.markWebSocketTunnel();
+    stream.setProtocol("websocket");
+    RUVIA_CHECK(stream.markExtendedConnectPending());
     RUVIA_CHECK(!http2IsValidWebSocketRequest(stream, badVersion));
+}
+
+RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
+    std::pmr::string block(std::pmr::get_default_resource());
+    http2EncodeWebSocketHandshakeHeaders(
+        block, "chat", "permessage-deflate");
+
+    Collector fields;
+    HpackDecoder decoder(std::pmr::get_default_resource());
+    RUVIA_CHECK(decoder.decode(block, &fields, &collect).ok());
+    RUVIA_CHECK(hasHeader(fields, ":status", "200"));
+    RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
+    RUVIA_CHECK(hasHeader(
+        fields, "sec-websocket-extensions", "permessage-deflate"));
+    RUVIA_CHECK(hasHeaderName(fields, "date"));
+    RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }

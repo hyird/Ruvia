@@ -1,4 +1,4 @@
-#include "ruvia/http/HttpParseTypes.h"
+#include "ruvia/http/HttpParseError.h"
 
 namespace ruvia {
 
@@ -16,10 +16,12 @@ std::string_view httpParseErrorMessage(HttpParseError error) noexcept {
             return "unsupported HTTP version";
         case HttpParseError::kInvalidRequestTarget:
             return "invalid request target";
-        case HttpParseError::kUnsupportedMethod:
-            return "unsupported request method";
         case HttpParseError::kInvalidHeader:
             return "invalid request header";
+        case HttpParseError::kInvalidConnection:
+            return "invalid Connection header";
+        case HttpParseError::kInvalidUpgrade:
+            return "invalid Upgrade header";
         case HttpParseError::kTooManyHeaders:
             return "too many request headers";
         case HttpParseError::kMissingHost:
@@ -33,8 +35,6 @@ std::string_view httpParseErrorMessage(HttpParseError error) noexcept {
             return "invalid Transfer-Encoding header";
         case HttpParseError::kUnsupportedTransferEncoding:
             return "unsupported transfer encoding";
-        case HttpParseError::kExpectationFailed:
-            return "unsupported Expect header";
         case HttpParseError::kInvalidChunkSize:
             return "invalid chunk size";
         case HttpParseError::kChunkSizeOverflow:
@@ -57,16 +57,15 @@ std::uint16_t httpParseErrorStatus(HttpParseError error) noexcept {
             return 431;
         case HttpParseError::kBodyTooLarge:
             return 413;
-        case HttpParseError::kUnsupportedMethod:
         case HttpParseError::kUnsupportedTransferEncoding:
             return 501;
         case HttpParseError::kUnsupportedHttpVersion:
             return 505;
-        case HttpParseError::kExpectationFailed:
-            return 417;
         case HttpParseError::kNone:
         case HttpParseError::kInvalidRequestLine:
         case HttpParseError::kInvalidHeader:
+        case HttpParseError::kInvalidConnection:
+        case HttpParseError::kInvalidUpgrade:
         case HttpParseError::kInvalidRequestTarget:
         case HttpParseError::kMissingHost:
         case HttpParseError::kInvalidHost:

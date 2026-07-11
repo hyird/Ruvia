@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -11,11 +12,20 @@
 #include <zstd.h>
 
 #include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
+#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 
 namespace {
 
 using ruvia::detail::HttpContentCoding;
+using ruvia::detail::Http1ChunkedBodyDecoder;
+using ruvia::detail::Http1RequestBodyPlan;
+using ruvia::detail::Http1RequestBodyMode;
+using ruvia::detail::Http1ServerRequestParser;
+using ruvia::detail::HttpRequestExpectations;
+using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
@@ -79,7 +89,58 @@ std::string decoded(HttpContentCoding coding, std::string_view input, std::size_
     return std::string(out.data(), out.size());
 }
 
+std::string chunked(std::string_view body) {
+    char size[2 * sizeof(std::size_t)];
+    const auto [end, ec] = std::to_chars(
+        size,
+        size + sizeof(size),
+        body.size(),
+        16);
+    if (ec != std::errc{}) {
+        return {};
+    }
+    std::string wire(size, end);
+    wire.append("\r\n");
+    wire.append(body);
+    wire.append("\r\n0\r\n\r\n");
+    return wire;
+}
+
 }  // namespace
+
+RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
+    const auto none = Http1RequestBodyPlan::none();
+    RUVIA_CHECK(none.mode() == Http1RequestBodyMode::kNone);
+    RUVIA_CHECK(!none.requiresConsumption());
+
+    HttpRequestExpectations expectations;
+    expectations.parseField("100-continue");
+    const auto emptyLength = Http1RequestBodyPlan::knownLength(
+        0, expectations);
+    RUVIA_CHECK(emptyLength.mode() == Http1RequestBodyMode::kContentLength);
+    RUVIA_CHECK(emptyLength.hasContentLength());
+    RUVIA_CHECK(!emptyLength.requiresConsumption());
+    RUVIA_CHECK(emptyLength.expectations().has100Continue());
+    RUVIA_CHECK(
+        emptyLength.expectationAction() ==
+        HttpServerExpectationAction::kNone);
+
+    HttpTransferCodings codings{};
+    codings.values[0] = HttpTransferCoding::kGzip;
+    codings.count = 1;
+    const auto compressedChunked = Http1RequestBodyPlan::chunked(
+        codings, expectations);
+    RUVIA_CHECK(compressedChunked.mode() == Http1RequestBodyMode::kChunked);
+    RUVIA_CHECK(compressedChunked.isChunked());
+    RUVIA_CHECK(!compressedChunked.hasContentLength());
+    RUVIA_CHECK(compressedChunked.requiresConsumption());
+    RUVIA_CHECK(
+        compressedChunked.expectationAction() ==
+        HttpServerExpectationAction::kSend100Continue);
+    RUVIA_CHECK_EQ(
+        compressedChunked.transferCodings().count,
+        std::size_t{1});
+}
 
 RUVIA_TEST(request_content_coding_mapping) {
     RUVIA_CHECK(requestContentCoding("gzip") == HttpContentCoding::kGzip);
@@ -161,6 +222,54 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     decoder.decodeAppend(gz, output);
     decoder.finish();
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
+}
+
+RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
+    const std::string plain =
+        "RFC 9112 transfer coding followed by final chunked framing";
+    const std::string gz = gzipCompress(plain);
+    const std::string wireBody = chunked(gz);
+    RUVIA_CHECK(!gz.empty());
+    RUVIA_CHECK(!wireBody.empty());
+
+    Http1ServerRequestParser parser;
+    const std::string rawRequest =
+        std::string(
+            "POST / HTTP/1.1\r\nHost: x\r\n"
+            "Transfer-Encoding: gzip, chunked\r\n\r\n") +
+        wireBody;
+    const auto parsed = parser.parseMessage(rawRequest);
+    RUVIA_CHECK(parsed.messageReady());
+    RUVIA_CHECK(parsed.bodyPlan.isChunked());
+    RUVIA_CHECK_EQ(parsed.bodyPlan.transferCodings().count, std::size_t{1});
+
+    auto* resource = std::pmr::get_default_resource();
+    Http1ChunkedBodyDecoder chunks(1u << 20);
+    TransferCodingDecoder transfer(
+        parsed.bodyPlan.transferCodings(),
+        std::pmr::polymorphic_allocator<char>(resource),
+        1u << 20);
+    std::pmr::string output(resource);
+    std::string_view pending(wireBody);
+    bool complete = false;
+    while (!complete) {
+        const auto result = chunks.decode(pending);
+        RUVIA_CHECK(result.needMore() == nullptr);
+        if (result.needMore() != nullptr) {
+            break;
+        }
+        if (const auto* bodyChunk = result.bodyChunk()) {
+            transfer.decodeAppend(bodyChunk->bytes(), output);
+        } else if (result.complete() != nullptr) {
+            complete = true;
+        }
+        pending.remove_prefix(result.consumedBytes());
+    }
+    RUVIA_CHECK(complete);
+    transfer.finish();
+    RUVIA_CHECK_EQ(
+        std::string_view(output.data(), output.size()),
+        std::string_view(plain));
 }
 
 RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {

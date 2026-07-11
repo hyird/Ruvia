@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/detail/HttpResponseKnownHeaders.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/ResponseHeaderIndexCache.h"
 
@@ -16,7 +17,7 @@
 namespace ruvia {
 namespace {
 
-inline constexpr std::size_t kAllowHeaderMethodSlots = static_cast<std::size_t>(HttpMethod::kOptions) + 1;
+inline constexpr std::size_t kAllowHeaderMethodSlots = static_cast<std::size_t>(HttpKnownMethod::kOptions) + 1;
 
 void writeUnsignedHeaderValue(HttpResponseHeader& header, std::uint64_t value) {
     auto* const begin = detail::responseHeaderValueBegin(header);
@@ -38,6 +39,30 @@ void appendHeaderValueUnsigned(char*& cursor, char* end, std::uint64_t value) {
         throw std::logic_error("failed to format HTTP response header value");
     }
     cursor = ptr;
+}
+
+void validateConnectionControlField(
+    std::string_view name,
+    std::string_view value) {
+    if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
+        detail::HttpConnectionOptions options;
+        if (options.parseField(
+                value,
+                detail::HttpFieldListRole::kSender) !=
+            detail::HttpFieldListParseStatus::kOk) {
+            throw std::invalid_argument("invalid HTTP Connection header");
+        }
+    } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
+        detail::HttpUpgradeProtocols protocols;
+        if (protocols.parseField(
+                value,
+                detail::HttpFieldListRole::kSender,
+                [](const detail::HttpUpgradeProtocol&) noexcept {
+                    return true;
+                }) != detail::HttpFieldListParseStatus::kOk) {
+            throw std::invalid_argument("invalid HTTP Upgrade header");
+        }
+    }
 }
 
 void writeContentRangeHeaderValue(
@@ -79,7 +104,7 @@ void writeContentRangeUnsatisfiedHeaderValue(HttpResponseHeader& header, std::ui
         if ((methodMask & (1U << i)) == 0) {
             continue;
         }
-        size += methodName(static_cast<HttpMethod>(i)).size();
+        size += knownHttpMethodToken(static_cast<HttpKnownMethod>(i)).size();
         ++count;
     }
     return count > 1 ? size + (count - 1) * 2 : size;
@@ -97,7 +122,7 @@ void writeAllowHeaderValue(HttpResponseHeader& header, std::uint32_t methodMask)
             appendHeaderValueLiteral(cursor, ", ");
         }
         first = false;
-        appendHeaderValueLiteral(cursor, methodName(static_cast<HttpMethod>(i)));
+        appendHeaderValueLiteral(cursor, knownHttpMethodToken(static_cast<HttpKnownMethod>(i)));
     }
     if (cursor != end) {
         throw std::logic_error("failed to format HTTP Allow header");
@@ -186,6 +211,7 @@ void HttpResponse::header(std::string_view key, std::string_view value, HeaderOp
     if (!isValidHttpHeaderValue(value)) {
         throw std::invalid_argument("invalid HTTP header value");
     }
+    validateConnectionControlField(key, value);
     const auto knownBit = detail::classifyResponseHeaderName(key);
     if (options.append) {
         if (detail::responseHeaderAppendForbidden(knownBit)) {

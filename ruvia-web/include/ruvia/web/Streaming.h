@@ -1,12 +1,14 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/Sse.h"
 #include "ruvia/web/detail/CallableRef.h"
 
 #include <chrono>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -57,22 +59,22 @@ public:
         return aborted_(target_);
     }
 
-    Task<void> end();
-
-    void addTrailer(std::string_view name, std::string_view value) {
-        addTrailer_(target_, name, value);
-    }
+    /// Atomically terminates the stream with an optional trailer section.
+    /// The header views only need to remain valid until the returned task completes.
+    /// A non-empty section is never silently dropped when the selected HTTP
+    /// version/method/status cannot represent trailers. If the stream is still
+    /// uncommitted, that rejection occurs before the response head is emitted.
+    Task<void> end(std::span<const HttpHeaderView> trailers = {});
 
 private:
     friend struct detail::StreamingAccess;
 
     using Write = Task<void> (*)(void*, std::string_view);
-    using End = Task<void> (*)(void*);
+    using End = Task<void> (*)(void*, std::span<const HttpHeaderView>);
     using Sleep = Task<void> (*)(void*, std::chrono::milliseconds);
     using StreamingHeadThunk = HttpResponse (*)(Context&);
     using BindContext = void (*)(void*, Context*, StreamingHeadThunk) noexcept;
     using Scratch = std::pmr::string& (*)(void*) noexcept;
-    using AddTrailer = void (*)(void*, std::string_view, std::string_view);
     using Committed = bool (*)(void*) noexcept;
     using Aborted = bool (*)(void*) noexcept;
 
@@ -83,7 +85,6 @@ private:
         Sleep sleep,
         BindContext bindContext,
         Scratch scratch,
-        AddTrailer addTrailer,
         Committed committed,
         Aborted aborted) noexcept
         : target_(target),
@@ -92,7 +93,6 @@ private:
           sleep_(sleep),
           bindContext_(bindContext),
           scratch_(scratch),
-          addTrailer_(addTrailer),
           committed_(committed),
           aborted_(aborted) {}
 
@@ -114,7 +114,6 @@ private:
     Sleep sleep_;
     BindContext bindContext_;
     Scratch scratch_;
-    AddTrailer addTrailer_;
     Committed committed_;
     Aborted aborted_;
 };
@@ -129,11 +128,7 @@ public:
         return writer_.aborted();
     }
 
-    void addTrailer(std::string_view name, std::string_view value) {
-        writer_.addTrailer(name, value);
-    }
-
-    Task<void> end();
+    Task<void> end(std::span<const HttpHeaderView> trailers = {});
 
 private:
     friend class Context;

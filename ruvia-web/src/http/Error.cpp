@@ -60,7 +60,8 @@ void appendErrorBody(std::pmr::string& body, HttpErrorInfo error) {
 
 [[nodiscard]] bool isDefaultErrorBodyCandidate(HttpErrorInfo error) noexcept {
     return error.detailsJson().empty() &&
-        error.statusText() == httpStatusText(error.status()) &&
+        !httpReasonPhrase(error.status()).empty() &&
+        error.statusText() == httpReasonPhrase(error.status()) &&
         error.code() == defaultErrorCode(error.status()) &&
         error.message() == error.statusText();
 }
@@ -116,7 +117,7 @@ HttpResponse detail::makeDefaultErrorResponse(
 
     HttpResponse response(resource);
     reserveResponseHeaders(response, 1);
-    response.status(error.status(), error.statusText());
+    response.status(error.status());
     setResponseHeaderStableView(response, "Content-Type", "application/json");
 
     if (isDefaultErrorBodyCandidate(error)) {

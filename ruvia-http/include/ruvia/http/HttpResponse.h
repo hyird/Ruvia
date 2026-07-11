@@ -156,11 +156,12 @@ public:
     explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] std::uint16_t status() const noexcept;
-    [[nodiscard]] std::string_view statusText() const noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
-    void status(std::uint16_t statusCode, std::string_view statusText = {});
+    // A generic HttpResponse is always final (200..599). Interim 1xx progress
+    // messages use HttpInterimResponseHead; 101 uses a dedicated protocol driver.
+    void status(std::uint16_t statusCode);
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, HeaderOptions options);
     void header(std::string_view key, std::nullopt_t);
@@ -263,7 +264,6 @@ private:
     std::uint16_t statusCode_{200};
     std::uint32_t knownHeaderBits_{0};
     std::array<std::int16_t, kKnownHeaderCount> knownHeaderIndexes_{};
-    std::pmr::string statusText_;
     HttpResponseHeaders headers_;
     std::pmr::string body_;
     std::string_view bodyView_;

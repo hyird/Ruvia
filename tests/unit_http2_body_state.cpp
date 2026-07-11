@@ -94,9 +94,10 @@ RUVIA_TEST(h2_account_data_body_content_length_exceeded) {
                 Http2BodyAccountingResult::kContentLengthExceeded);
 }
 
-RUVIA_TEST(h2_account_data_body_websocket_tunnel_bypasses_limits) {
+RUVIA_TEST(h2_account_data_body_open_connect_tunnel_bypasses_limits) {
     auto stream = makeStream();
-    stream.markWebSocketTunnel();
+    RUVIA_CHECK(stream.markStandardConnectPending());
+    RUVIA_CHECK(stream.markConnectTunnelOpen());
     // A tiny limit, but a tunnel bypasses request-body accounting entirely.
     RUVIA_CHECK(http2AccountDataBody(stream, 100000, 1, 1) == Http2BodyAccountingResult::kOk);
     RUVIA_CHECK(http2BodyLengthComplete(stream));  // a tunnel is always length-complete

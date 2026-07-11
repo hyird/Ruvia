@@ -7,7 +7,7 @@
 
 #include "ruvia/web/detail/http/HttpCors.h"
 #include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/App.h"
 #include "ruvia/http/HttpResponse.h"
 
@@ -89,7 +89,7 @@ namespace {
 
 using ruvia::HttpResponse;
 using ruvia::HttpServerOptions;
-using ruvia::detail::HttpServerParser;
+using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::applyCorsHeaders;
 
 HttpServerOptions::Cors corsOptions(bool enabled, std::string_view allowOrigin, bool credentials) {
@@ -103,8 +103,8 @@ HttpServerOptions::Cors corsOptions(bool enabled, std::string_view allowOrigin, 
 }  // namespace
 
 RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
-    HttpServerParser parser;
-    const auto result = parser.parse(
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
     HttpResponse response(std::pmr::new_delete_resource());
     applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", false));
@@ -118,8 +118,8 @@ RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
 }
 
 RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
-    HttpServerParser parser;
-    const auto result = parser.parse(
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://any.example\r\n\r\n");
     HttpResponse response(std::pmr::new_delete_resource());
     applyCorsHeaders(result.request, response, corsOptions(true, "*", false));
@@ -131,8 +131,8 @@ RUVIA_TEST(cors_runtime_wildcard_has_no_vary_origin) {
 RUVIA_TEST(cors_runtime_credentials_require_specific_origin) {
     // Specific origin + credentials -> Access-Control-Allow-Credentials: true.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse(
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", true));
@@ -141,8 +141,8 @@ RUVIA_TEST(cors_runtime_credentials_require_specific_origin) {
     // Defense in depth: even if a wildcard+credentials config slipped past validation,
     // the runtime must never emit credentials alongside a wildcard origin.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse(
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         applyCorsHeaders(result.request, response, corsOptions(true, "*", true));
@@ -153,16 +153,16 @@ RUVIA_TEST(cors_runtime_credentials_require_specific_origin) {
 RUVIA_TEST(cors_runtime_skips_non_cors_and_disabled) {
     // No Origin header -> not a CORS request -> no CORS headers emitted.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         applyCorsHeaders(result.request, response, corsOptions(true, "https://app.example", false));
         RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
     }
     // Disabled CORS -> no headers even when an Origin is present.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse(
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         applyCorsHeaders(result.request, response, corsOptions(false, "https://app.example", false));
@@ -171,8 +171,8 @@ RUVIA_TEST(cors_runtime_skips_non_cors_and_disabled) {
 }
 
 RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
-    HttpServerParser parser;
-    const auto result = parser.parse(
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
         "Access-Control-Request-Method: POST\r\n"
         "Access-Control-Request-Headers: X-Custom\r\n\r\n");
@@ -193,8 +193,8 @@ RUVIA_TEST(cors_preflight_reflects_methods_and_requested_headers) {
 }
 
 RUVIA_TEST(cors_preflight_prefers_configured_allow_headers) {
-    HttpServerParser parser;
-    const auto result = parser.parse(
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
         "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
         "Access-Control-Request-Method: POST\r\n"
         "Access-Control-Request-Headers: X-Requested\r\n\r\n");
@@ -216,8 +216,8 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
     // exposeHeaders did -- so a regression dropping it would silently break
     // cross-origin header access.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse(
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
             "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());
         auto cors = corsOptions(true, "https://app.example", false);
@@ -229,8 +229,8 @@ RUVIA_TEST(cors_runtime_exposes_configured_headers_on_simple_response) {
     // Expose-Headers is meaningless on a preflight response and must NOT be
     // emitted there: the preflight path returns before the expose-headers branch.
     {
-        HttpServerParser parser;
-        const auto result = parser.parse(
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(
             "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
             "Access-Control-Request-Method: POST\r\n\r\n");
         HttpResponse response(std::pmr::new_delete_resource());

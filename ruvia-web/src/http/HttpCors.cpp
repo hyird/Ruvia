@@ -56,7 +56,7 @@ void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const 
         setResponseHeaderStableView(response, "Access-Control-Allow-Credentials", "true");
     }
 
-    const bool preflight = request.method() == HttpMethod::kOptions &&
+    const bool preflight = request.knownMethod() == HttpKnownMethod::kOptions &&
         !requestKnownHeader(request, RequestKnownHeader::kAccessControlRequestMethod).empty();
     if (preflight) {
         if (const auto allow = responseKnownHeader(response, kResponseHeaderAllow); !allow.empty()) {

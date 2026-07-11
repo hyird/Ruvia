@@ -86,7 +86,7 @@ void detail::RouteTable::buildAllowedMethodMask() noexcept {
             }
         }
     }
-    allowedMethodMask_ |= 1U << methodIndex(HttpMethod::kOptions);
+    allowedMethodMask_ |= 1U << methodIndex(HttpKnownMethod::kOptions);
 }
 
 void detail::RouteTable::insertRadix(RadixNode& node, std::string_view path, const RouteEntry& route) {

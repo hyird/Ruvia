@@ -20,7 +20,7 @@ enum class ResponseStreamFraming : std::uint8_t {
     // the body is delimited by the connection close (RFC 9112 6.3), so it also
     // announces Connection: close and the session shuts the socket afterwards.
     kHttp1CloseDelimited,
-    kHttp2DataFrames
+    kHttp2Frames
 };
 
 enum class ResponseStreamKind : std::uint8_t {
@@ -28,27 +28,118 @@ enum class ResponseStreamKind : std::uint8_t {
     kSse
 };
 
-class ResponseStreamHead final {
-public:
-    ResponseStreamHead(HttpResponse response, HttpResponseBodyPlan bodyPlan)
-        : response_(std::move(response)),
-          bodyPlan_(bodyPlan) {}
+// A trailer section is terminal message metadata, not an independently queued
+// side channel. The caller declares whether this head commit is reserving a
+// terminal trailer section so HTTP/2 can keep a content-forbidden response open
+// for trailing HEADERS while HTTP/1 rejects an unavailable representation before
+// emitting the response head.
+enum class ResponseTrailerIntent : std::uint8_t {
+    kNone,
+    kPresent
+};
 
-    [[nodiscard]] HttpResponse& response() noexcept {
-        return response_;
+enum class ResponseStreamTrailerFraming : std::uint8_t {
+    kUnavailable,
+    kHttp1Chunked,
+    kHttp2TrailingHeaders
+};
+
+// Authoritative phase immediately after the initial response head is submitted.
+// kTrailersOnly is intentionally distinct from kBodyOpen: HTTP/2 may carry a
+// trailer section after a HEAD/204-style response without allowing any DATA.
+enum class ResponseStreamHeadDisposition : std::uint8_t {
+    kBodyOpen,
+    kTrailersOnly,
+    kMessageEnded
+};
+
+class ResponseStreamCommitPlan final {
+public:
+    [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
+        return bodyPlan_;
     }
 
     [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
         return bodyPlan_.policy();
     }
 
-    [[nodiscard]] bool bodySuppressed() const noexcept {
-        return bodyPlan_.bodySuppressed();
+    [[nodiscard]] ResponseStreamTrailerFraming trailerFraming() const noexcept {
+        return trailerFraming_;
+    }
+
+    [[nodiscard]] ResponseStreamHeadDisposition headDisposition() const noexcept {
+        return headDisposition_;
+    }
+
+private:
+    friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
+        ResponseStreamFraming,
+        HttpResponseBodyPlan,
+        ResponseTrailerIntent) noexcept;
+
+    ResponseStreamCommitPlan(
+        HttpResponseBodyPlan bodyPlan,
+        ResponseStreamTrailerFraming trailerFraming,
+        ResponseStreamHeadDisposition headDisposition) noexcept
+        : bodyPlan_(bodyPlan),
+          trailerFraming_(trailerFraming),
+          headDisposition_(headDisposition) {}
+
+    HttpResponseBodyPlan bodyPlan_;
+    ResponseStreamTrailerFraming trailerFraming_{ResponseStreamTrailerFraming::kUnavailable};
+    ResponseStreamHeadDisposition headDisposition_{ResponseStreamHeadDisposition::kMessageEnded};
+};
+
+[[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
+    ResponseStreamFraming framing,
+    HttpResponseBodyPlan bodyPlan,
+    ResponseTrailerIntent trailerIntent) noexcept {
+    if (framing == ResponseStreamFraming::kHttp2Frames) {
+        return ResponseStreamCommitPlan(
+            bodyPlan,
+            ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
+            bodyPlan.bodySuppressed()
+                ? (trailerIntent == ResponseTrailerIntent::kPresent
+                      ? ResponseStreamHeadDisposition::kTrailersOnly
+                      : ResponseStreamHeadDisposition::kMessageEnded)
+                : ResponseStreamHeadDisposition::kBodyOpen);
+    }
+
+    return ResponseStreamCommitPlan(
+        bodyPlan,
+        framing == ResponseStreamFraming::kHttp1Chunked && !bodyPlan.bodySuppressed()
+            ? ResponseStreamTrailerFraming::kHttp1Chunked
+            : ResponseStreamTrailerFraming::kUnavailable,
+        bodyPlan.bodySuppressed()
+            ? ResponseStreamHeadDisposition::kMessageEnded
+            : ResponseStreamHeadDisposition::kBodyOpen);
+}
+
+class ResponseStreamHead final {
+public:
+    ResponseStreamHead(HttpResponse response, ResponseStreamCommitPlan commitPlan)
+        : response_(std::move(response)),
+          commitPlan_(commitPlan) {}
+
+    [[nodiscard]] HttpResponse& response() noexcept {
+        return response_;
+    }
+
+    [[nodiscard]] const HttpResponse& response() const noexcept {
+        return response_;
+    }
+
+    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
+        return commitPlan_.policy();
+    }
+
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+        return commitPlan_;
     }
 
 private:
     HttpResponse response_;
-    HttpResponseBodyPlan bodyPlan_;
+    ResponseStreamCommitPlan commitPlan_;
 };
 
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
@@ -56,7 +147,9 @@ private:
     ResponseStreamKind kind,
     ResponseStreamFraming framing,
     HttpResponseBodyPlan bodyPlan,
-    bool connectionWillClose = false) {
+    ResponseTrailerIntent trailerIntent) {
+    const auto commitPlan = httpResponseStreamCommitPlan(
+        framing, bodyPlan, trailerIntent);
     const auto& policy = bodyPlan.policy();
     const bool needsSseContentType =
         kind == ResponseStreamKind::kSse &&
@@ -67,27 +160,12 @@ private:
         !responseHasKnownHeader(response, kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
         kind == ResponseStreamKind::kSse &&
-        (framing == ResponseStreamFraming::kHttp2DataFrames || policy.transferEncodingAllowed()) &&
+        (framing == ResponseStreamFraming::kHttp2Frames || policy.transferEncodingAllowed()) &&
         !responseHasKnownHeader(response, kResponseHeaderCacheControl);
-    // The stream head is written before the session finalizes the connection
-    // lifetime, so the caller passes its keep-alive verdict (connectionWillClose,
-    // which already folds in the request-limit flip recordCompletedRequest applies
-    // afterward). Announce Connection: close whenever this H1 response will be the
-    // connection's last -- mirroring the buffered path's markConnectionCloseIfNeeded
-    // -- so a client never reuses a socket the session is about to shut. A close-
-    // delimited stream always closes (that close IS its framing). HTTP/2 must never
-    // carry a connection-specific header (RFC 9113 8.2.2). The handler's own
-    // Connection header, if any, wins.
-    const bool needsConnectionClose =
-        framing != ResponseStreamFraming::kHttp2DataFrames &&
-        (framing == ResponseStreamFraming::kHttp1CloseDelimited || connectionWillClose) &&
-        !responseHasKnownHeader(response, kResponseHeaderConnection);
-
     const auto additionalHeaders =
         static_cast<std::size_t>(needsSseContentType) +
         static_cast<std::size_t>(needsHttp1Chunked) +
-        static_cast<std::size_t>(needsSseCacheControl) +
-        static_cast<std::size_t>(needsConnectionClose);
+        static_cast<std::size_t>(needsSseCacheControl);
     if (additionalHeaders != 0) {
         reserveResponseHeaders(response, response.headers().size() + additionalHeaders);
     }
@@ -97,9 +175,6 @@ private:
     }
     if (framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed()) {
         setResponseHeaderStableView(response, "Transfer-Encoding", "chunked");
-    }
-    if (needsConnectionClose) {
-        setResponseHeaderStableView(response, "Connection", "close");
     }
     if (needsSseCacheControl) {
         // Gate on the guard that was already computed for the reserve count above,
@@ -111,7 +186,7 @@ private:
         setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 
-    return ResponseStreamHead(std::move(response), bodyPlan);
+    return ResponseStreamHead(std::move(response), commitPlan);
 }
 
 }  // namespace ruvia::detail

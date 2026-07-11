@@ -186,7 +186,7 @@ endif()
 function(ruvia_install_target target component)
     install(
         TARGETS ${target}
-        EXPORT ruviaTargets
+        EXPORT ruvia_${component}_targets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT ${component} NAMELINK_COMPONENT ${component}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT ${component}
@@ -343,7 +343,32 @@ include(CMakeFindDependencyMacro)
 set(RUVIA_ENABLE_MARIADB @RUVIA_ENABLE_MARIADB@)
 set(RUVIA_ENABLE_REDIS @RUVIA_ENABLE_REDIS@)
 set(RUVIA_ENABLE_JWT @RUVIA_ENABLE_JWT@)
-set(ruvia_AVAILABLE_COMPONENTS "@RUVIA_BUILT_COMPONENTS@")
+
+# Discover what is actually present in this install prefix. A build may contain
+# every target while a component-scoped install deliberately copies only one
+# export set, so build-time options are not an honest package inventory.
+set(_ruvia_package_components "@RUVIA_BUILT_COMPONENTS@")
+set(ruvia_AVAILABLE_COMPONENTS)
+foreach(_ruvia_component IN LISTS _ruvia_package_components)
+    set(ruvia_${_ruvia_component}_FOUND FALSE)
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/ruvia-${_ruvia_component}-targets.cmake")
+        set(_ruvia_${_ruvia_component}_installed TRUE)
+    else()
+        set(_ruvia_${_ruvia_component}_installed FALSE)
+    endif()
+endforeach()
+
+if(_ruvia_core_installed)
+    list(APPEND ruvia_AVAILABLE_COMPONENTS core)
+endif()
+if(_ruvia_http_installed)
+    list(APPEND ruvia_AVAILABLE_COMPONENTS http)
+endif()
+# web's exported link interface names both lower targets. Do not advertise an
+# unusable partial web install as an available component.
+if(_ruvia_web_installed AND _ruvia_core_installed AND _ruvia_http_installed)
+    list(APPEND ruvia_AVAILABLE_COMPONENTS web)
+endif()
 
 set(_ruvia_requested_components ${ruvia_FIND_COMPONENTS})
 if(NOT _ruvia_requested_components)
@@ -351,23 +376,18 @@ if(NOT _ruvia_requested_components)
 endif()
 
 set(ruvia_FOUND TRUE)
+set(_ruvia_components_to_load)
 foreach(_ruvia_component IN LISTS _ruvia_requested_components)
-    if(NOT _ruvia_component IN_LIST ruvia_AVAILABLE_COMPONENTS)
-        set(ruvia_${_ruvia_component}_FOUND FALSE)
-        set(ruvia_FOUND FALSE)
-        set(ruvia_NOT_FOUND_MESSAGE
-            "Requested component '${_ruvia_component}' is not installed; available components: ${ruvia_AVAILABLE_COMPONENTS}")
+    if(_ruvia_component IN_LIST ruvia_AVAILABLE_COMPONENTS)
+        list(APPEND _ruvia_components_to_load ${_ruvia_component})
     endif()
 endforeach()
-if(NOT ruvia_FOUND)
-    return()
-endif()
 
 set(_ruvia_needs_core FALSE)
 set(_ruvia_needs_http FALSE)
 set(_ruvia_needs_web FALSE)
 
-foreach(_ruvia_component IN LISTS _ruvia_requested_components)
+foreach(_ruvia_component IN LISTS _ruvia_components_to_load)
     if(_ruvia_component STREQUAL "core")
         set(_ruvia_needs_core TRUE)
     elseif(_ruvia_component STREQUAL "http")
@@ -380,38 +400,65 @@ foreach(_ruvia_component IN LISTS _ruvia_requested_components)
 endforeach()
 
 if(_ruvia_needs_core)
-    find_dependency(mimalloc CONFIG REQUIRED)
-    find_dependency(asio CONFIG REQUIRED)
-    find_dependency(Threads REQUIRED)
+    find_dependency(mimalloc CONFIG)
+    find_dependency(asio CONFIG)
+    find_dependency(Threads)
 endif()
 
 if(_ruvia_needs_http)
-    find_dependency(ZLIB REQUIRED)
-    find_dependency(unofficial-brotli CONFIG REQUIRED)
-    find_dependency(zstd CONFIG REQUIRED)
+    find_dependency(ZLIB)
+    find_dependency(unofficial-brotli CONFIG)
+    find_dependency(zstd CONFIG)
 endif()
 
 if(_ruvia_needs_web)
-    find_dependency(OpenSSL REQUIRED)
+    find_dependency(OpenSSL)
 endif()
 
 if(_ruvia_needs_web AND RUVIA_ENABLE_MARIADB)
-    find_dependency(unofficial-libmariadb CONFIG REQUIRED)
+    find_dependency(unofficial-libmariadb CONFIG)
 endif()
 
 if(_ruvia_needs_web AND RUVIA_ENABLE_REDIS)
-    find_dependency(hiredis CONFIG REQUIRED)
+    find_dependency(hiredis CONFIG)
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/ruviaTargets.cmake")
+if(_ruvia_needs_core)
+    include("${CMAKE_CURRENT_LIST_DIR}/ruvia-core-targets.cmake")
+endif()
+if(_ruvia_needs_http)
+    include("${CMAKE_CURRENT_LIST_DIR}/ruvia-http-targets.cmake")
+endif()
+if(_ruvia_needs_web)
+    include("${CMAKE_CURRENT_LIST_DIR}/ruvia-web-targets.cmake")
+endif()
 
-foreach(_ruvia_component IN LISTS _ruvia_requested_components)
+foreach(_ruvia_component IN ITEMS core http web)
     if(TARGET ruvia::${_ruvia_component})
         set(ruvia_${_ruvia_component}_FOUND TRUE)
-    else()
-        set(ruvia_${_ruvia_component}_FOUND FALSE)
     endif()
 endforeach()
+
+set(_ruvia_missing_required_components)
+foreach(_ruvia_component IN LISTS ruvia_FIND_COMPONENTS)
+    if(ruvia_FIND_REQUIRED_${_ruvia_component} AND
+       NOT ruvia_${_ruvia_component}_FOUND)
+        list(APPEND _ruvia_missing_required_components ${_ruvia_component})
+    endif()
+endforeach()
+if(_ruvia_missing_required_components)
+    set(ruvia_FOUND FALSE)
+    string(JOIN ", " _ruvia_missing_required_text ${_ruvia_missing_required_components})
+    string(JOIN ", " _ruvia_available_text ${ruvia_AVAILABLE_COMPONENTS})
+    if(_ruvia_available_text STREQUAL "")
+        set(_ruvia_available_text "none")
+    endif()
+    set(ruvia_NOT_FOUND_MESSAGE
+        "Required component(s) not installed: ${_ruvia_missing_required_text}; available components: ${_ruvia_available_text}")
+elseif(NOT ruvia_FIND_COMPONENTS AND NOT ruvia_AVAILABLE_COMPONENTS)
+    set(ruvia_FOUND FALSE)
+    set(ruvia_NOT_FOUND_MESSAGE "No usable Ruvia component is installed in this prefix")
+endif()
 ]=])
 
 string(CONFIGURE "${_ruvia_config}" _ruvia_config @ONLY)
@@ -423,10 +470,9 @@ write_basic_package_version_file(
     COMPATIBILITY SameMajorVersion
 )
 
-# The package config + generated targets export are the find_package() glue shared by
-# every component. Tag them with a dedicated Development component so a component-scoped
-# install (cmake --install --component ...) can pull them deliberately instead of
-# silently omitting them (a full install still ships them, as it installs all components).
+# The package config/version files are shared find_package() glue. Component-scoped
+# installs pull Development deliberately; each target export stays with the target's
+# own component so a partial prefix never imports libraries that were not installed.
 install(
     FILES
         ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
@@ -435,10 +481,12 @@ install(
     COMPONENT Development
 )
 
-install(
-    EXPORT ruviaTargets
-    FILE ruviaTargets.cmake
-    NAMESPACE ruvia::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
-    COMPONENT Development
-)
+foreach(_ruvia_component IN LISTS RUVIA_BUILT_COMPONENTS)
+    install(
+        EXPORT ruvia_${_ruvia_component}_targets
+        FILE ruvia-${_ruvia_component}-targets.cmake
+        NAMESPACE ruvia::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
+        COMPONENT ${_ruvia_component}
+    )
+endforeach()

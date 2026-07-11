@@ -7,7 +7,7 @@
 namespace {
 
 using ruvia::detail::Http2ReadyQueue;
-using ruvia::detail::kHttp2LocalMaxConcurrentStreams;
+using ruvia::detail::Http2LocalSettings;
 
 }  // namespace
 
@@ -26,7 +26,7 @@ RUVIA_TEST(ready_queue_fifo_order) {
 
 RUVIA_TEST(ready_queue_capacity_and_reuse) {
     Http2ReadyQueue queue;
-    const std::uint32_t capacity = kHttp2LocalMaxConcurrentStreams;
+    const std::uint32_t capacity = Http2LocalSettings::kMaxConcurrentStreams;
     for (std::uint32_t id = 1; id <= capacity; ++id) {
         RUVIA_CHECK(queue.push(id));
     }
@@ -40,7 +40,7 @@ RUVIA_TEST(ready_queue_capacity_and_reuse) {
 
 RUVIA_TEST(ready_queue_push_reclaims_prefix_when_physically_full) {
     Http2ReadyQueue queue;
-    const std::uint32_t capacity = kHttp2LocalMaxConcurrentStreams;
+    const std::uint32_t capacity = Http2LocalSettings::kMaxConcurrentStreams;
     for (std::uint32_t id = 1; id <= capacity; ++id) {
         RUVIA_CHECK(queue.push(id));
     }

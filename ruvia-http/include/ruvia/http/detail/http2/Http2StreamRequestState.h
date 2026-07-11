@@ -6,25 +6,12 @@ namespace ruvia::detail {
 
 class Http2StreamRequestState final {
 public:
-    [[nodiscard]] bool hasMethod() const noexcept {
-        return hasMethod_;
-    }
-
-    void markMethod() noexcept {
-        hasMethod_ = true;
-    }
-
     [[nodiscard]] bool hasProtocol() const noexcept {
         return hasProtocol_;
     }
 
-    [[nodiscard]] bool protocolIsWebSocket() const noexcept {
-        return protocolIsWebSocket_;
-    }
-
-    void setProtocol(bool isWebSocket) noexcept {
+    void markProtocol() noexcept {
         hasProtocol_ = true;
-        protocolIsWebSocket_ = isWebSocket;
     }
 
     [[nodiscard]] bool hasScheme() const noexcept {
@@ -96,30 +83,6 @@ public:
         headersDecoded_ = true;
     }
 
-    [[nodiscard]] bool standardConnect() const noexcept {
-        return standardConnect_;
-    }
-
-    void markStandardConnect() noexcept {
-        standardConnect_ = true;
-    }
-
-    [[nodiscard]] bool extendedConnectWebSocket() const noexcept {
-        return extendedConnectWebSocket_;
-    }
-
-    void markExtendedConnectWebSocket() noexcept {
-        extendedConnectWebSocket_ = true;
-    }
-
-    [[nodiscard]] bool webSocketTunnel() const noexcept {
-        return webSocketTunnel_;
-    }
-
-    void markWebSocketTunnel() noexcept {
-        webSocketTunnel_ = true;
-    }
-
     // Client role: the decoded response :status for a stream this endpoint opened,
     // and how many 1xx interim heads preceded the final one (bounded by the owner).
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {
@@ -139,9 +102,7 @@ public:
     }
 
 private:
-    bool hasMethod_ : 1 {false};
     bool hasProtocol_ : 1 {false};
-    bool protocolIsWebSocket_ : 1 {false};
     bool hasScheme_ : 1 {false};
     bool hasAuthority_ : 1 {false};
     bool hasPath_ : 1 {false};
@@ -149,9 +110,6 @@ private:
     bool hasCookie_ : 1 {false};
     bool regularHeaderSeen_ : 1 {false};
     bool headersDecoded_ : 1 {false};
-    bool standardConnect_ : 1 {false};
-    bool extendedConnectWebSocket_ : 1 {false};
-    bool webSocketTunnel_ : 1 {false};
     std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
     std::uint16_t responseStatus_{0};

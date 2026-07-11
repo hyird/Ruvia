@@ -20,6 +20,7 @@ namespace {
 
 using ruvia::Context;
 using ruvia::HttpHeaderView;
+using ruvia::HttpKnownMethod;
 using ruvia::HttpRequest;
 using ruvia::RequestMemory;
 using ruvia::WorkerMemory;
@@ -31,6 +32,20 @@ asio::awaitable<void> cloneHeaderValue(ruvia::Context& context, std::string& out
     auto clone = co_await ruvia::detail::taskAsAwaitable(ruvia::cloneRawRequest(context.req()));
     const auto value = clone.header("X-Trace");
     output.assign(value.data(), value.size());
+}
+
+struct CloneMethodObservation final {
+    std::string method;
+    HttpKnownMethod knownMethod{HttpKnownMethod::kGet};
+};
+
+asio::awaitable<void> cloneMethod(
+    ruvia::Context& context,
+    CloneMethodObservation& observation) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(
+        ruvia::cloneRawRequest(context.req()));
+    observation.method.assign(clone.method().data(), clone.method().size());
+    observation.knownMethod = clone.knownMethod();
 }
 
 asio::awaitable<void> cloneParseProtoBody(ruvia::Context& context, bool& safeOk, bool& protoDropped) {
@@ -231,7 +246,7 @@ RUVIA_TEST(context_request_param_single_lookup_decodes_without_materializing_par
         names,
         values,
         std::size(names),
-        ruvia::HttpMethod::kGet,
+        ruvia::HttpKnownMethod::kGet,
         0,
         0);
 
@@ -258,6 +273,25 @@ RUVIA_TEST(raw_request_clone_header_lookup_uses_last_match) {
     io.run();
 
     RUVIA_CHECK_EQ(header, std::string("second"));
+}
+
+RUVIA_TEST(raw_request_clone_owns_exact_extension_method_token) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "PROPFIND");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context io;
+    CloneMethodObservation observation;
+    asio::co_spawn(io, cloneMethod(context, observation), asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(observation.method, std::string("PROPFIND"));
+    RUVIA_CHECK(observation.knownMethod == HttpKnownMethod::kUnknown);
 }
 
 RUVIA_TEST(context_clone_parse_body_drops_prototype_pollution_keys) {

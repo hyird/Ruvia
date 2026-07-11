@@ -141,7 +141,7 @@ std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlew
     return frames;
 }
 
-void detail::RouterImpl::validateRouteTarget(HttpMethod method, std::string_view path) const {
+void detail::RouterImpl::validateRouteTarget(HttpKnownMethod method, std::string_view path) const {
     if (!RouteTable::isRoutableMethod(method)) {
         throw std::invalid_argument("route method must be routable");
     }

@@ -18,6 +18,8 @@
 #include <chrono>
 #include <cstddef>
 #include <memory_resource>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -49,14 +51,16 @@ public:
 
     [[nodiscard]] bool aborted() const noexcept { return aborted_; }
 
+    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
+        return connectionPlan_;
+    }
+
     template <typename Sink>
     friend Task<void> responseStreamWriteThunk(void*, std::string_view);
     template <typename Sink>
-    friend Task<void> responseStreamEndThunk(void*);
+    friend Task<void> responseStreamEndThunk(void*, std::span<const HttpHeaderView>);
     template <typename Sink>
     friend Task<void> responseStreamSleepThunk(void*, std::chrono::milliseconds);
-    template <typename Sink>
-    friend void responseStreamAddTrailerThunk(void*, std::string_view, std::string_view);
     template <typename Sink>
     friend void responseStreamBindContextThunk(void*, Context*, ResponseStreamState::StreamingHeadThunk) noexcept;
     template <typename Sink>
@@ -72,21 +76,32 @@ private:
         return scratch_;
     }
 
-    Task<void> commit() {
+    Task<void> commit(ResponseTrailerIntent trailerIntent) {
         if (state_.committed()) {
+            if (trailerIntent == ResponseTrailerIntent::kPresent) {
+                state_.ensureTrailersAllowed(
+                    ResponseStreamTrailerFraming::kHttp1Chunked);
+            }
             co_return;
         }
 
         auto streamHead = prepareHttp1ResponseStreamHead(
             state_.streamingHead(),
             responseStreamKindForRouteMode(mode_),
-            plan_);
+            plan_,
+            trailerIntent);
+        if (trailerIntent == ResponseTrailerIntent::kPresent &&
+            streamHead.commitPlan().trailerFraming() !=
+                ResponseStreamTrailerFraming::kHttp1Chunked) {
+            throw std::logic_error("response framing does not support trailers");
+        }
+        connectionPlan_ = streamHead.connectionPlan();
 
         head_.reset();
         appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
-        state_.markCommitted(streamHead.bodySuppressed());
+        state_.markCommitted(streamHead.commitPlan());
         auto ec = co_await asyncError([this, headView = head_.view()](auto handler) mutable {
             asio::async_write(stream_, asio::buffer(headView), std::move(handler));
         });
@@ -112,7 +127,7 @@ private:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit();
+        co_await commit(ResponseTrailerIntent::kNone);
         state_.ensureBodyAllowed();
 
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
@@ -144,27 +159,36 @@ private:
         scannerEntry_.touch();
     }
 
-    // RFC 9110 Section 6.5 trailers are queued before the stream ends and
-    // flushed here as chunked trailer fields by the HTTP-owned serializer.
-    void addTrailer(std::string_view name, std::string_view value) {
-        state_.ensureTrailerOpen();
-        appendHttp1TrailerField(trailers_, name, value);
-    }
-
-    Task<void> end() {
+    Task<void> end(std::span<const HttpHeaderView> trailers) {
         if (state_.ended()) {
+            if (!trailers.empty()) {
+                throw std::logic_error("response stream is already ended");
+            }
             co_return;
         }
-        co_await commit();
-        if (state_.bodySuppressed()) {
-            state_.markEnded();
+
+        const auto trailerIntent = trailers.empty()
+            ? ResponseTrailerIntent::kNone
+            : ResponseTrailerIntent::kPresent;
+        if (!trailers.empty()) {
+            if (!responseTrailerSectionValid(trailers)) {
+                throw std::invalid_argument("invalid response trailer section");
+            }
+            clearPmrStringRetainingSmall(trailers_);
+            for (const auto& trailer : trailers) {
+                appendHttp1TrailerField(
+                    trailers_, trailer.name(), trailer.value());
+            }
+        } else {
+            clearPmrStringRetainingSmall(trailers_);
+        }
+
+        co_await commit(trailerIntent);
+        if (state_.ended()) {
             co_return;
         }
         if (plan_.framing() == ResponseStreamFraming::kHttp1CloseDelimited) {
             // No last-chunk terminator: the connection close delimits the body.
-            // Trailers require chunked framing (RFC 9110 6.5), which a close-
-            // delimited HTTP/1.0 response cannot carry, so any queued trailer is
-            // undeliverable and dropped here.
             state_.markEnded();
             co_return;
         }
@@ -193,6 +217,7 @@ private:
     ScannerEntry& scannerEntry_;
     ResponseBodyMode mode_;
     Http1ResponseStreamPlan plan_;
+    Http1ServerConnectionPlan connectionPlan_{Http1ServerConnectionPlan::close()};
     ResponseStreamState state_;
     bool aborted_{false};
 };

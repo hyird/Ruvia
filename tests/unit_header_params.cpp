@@ -2,44 +2,69 @@
 
 #include <array>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpExpectations.h"
 
 namespace {
 
 using ruvia::detail::httpFindSemicolonParameterIgnoreCase;
 using ruvia::detail::httpFindSemicolonParameterQuotedIgnoreCase;
-using ruvia::detail::httpUpdateConnectionFlags;
-using ruvia::detail::httpUpdateExpectContinueFlag;
+using ruvia::detail::HttpConnectionOptions;
+using ruvia::detail::HttpFieldListParseStatus;
+using ruvia::detail::HttpFieldListRole;
+using ruvia::detail::HttpRequestContentIndication;
+using ruvia::detail::HttpRequestExpectations;
+using ruvia::detail::HttpServerExpectationAction;
 
-// {close, keepAlive, upgrade} after parsing a Connection header value.
-std::array<bool, 3> connectionFlags(std::string_view value) {
-    bool close = false;
-    bool keepAlive = false;
-    bool upgrade = false;
-    httpUpdateConnectionFlags(value, close, keepAlive, upgrade);
-    return {close, keepAlive, upgrade};
+// {close, keepAlive, upgrade, te} after recipient-side parsing.
+std::array<bool, 4> connectionOptions(std::string_view value) {
+    HttpConnectionOptions options;
+    if (options.parseField(value, HttpFieldListRole::kRecipient) !=
+        HttpFieldListParseStatus::kOk) {
+        throw std::runtime_error("test expected valid Connection options");
+    }
+    return {
+        options.close(),
+        options.keepAlive(),
+        options.upgrade(),
+        options.te()};
 }
 
 }  // namespace
 
-RUVIA_TEST(expect_continue_flag) {
-    bool flag = false;
-    RUVIA_CHECK(httpUpdateExpectContinueFlag("100-continue", flag));
-    RUVIA_CHECK(flag);
+RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
+    HttpRequestExpectations expectations;
+    expectations.parseField(" , 100-continue, , 100-Continue, ");
+    expectations.parseField(" 100-CONTINUE ");
 
-    // Case-insensitive and OWS-tolerant.
-    bool flag2 = false;
-    RUVIA_CHECK(httpUpdateExpectContinueFlag("  100-Continue  ", flag2));
-    RUVIA_CHECK(flag2);
+    RUVIA_CHECK(expectations.has100Continue());
+    RUVIA_CHECK(!expectations.hasUnsupported());
+    RUVIA_CHECK(
+        expectations.serverAction(HttpRequestContentIndication::kNone) ==
+        HttpServerExpectationAction::kNone);
+    RUVIA_CHECK(
+        expectations.serverAction(HttpRequestContentIndication::kWillFollow) ==
+        HttpServerExpectationAction::kSend100Continue);
+}
 
-    // Anything else leaves the flag untouched.
-    bool flag3 = false;
-    RUVIA_CHECK(!httpUpdateExpectContinueFlag("100-continue-extra", flag3));
-    RUVIA_CHECK(!flag3);
-    RUVIA_CHECK(!httpUpdateExpectContinueFlag("other", flag3));
-    RUVIA_CHECK(!flag3);
+RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
+    HttpRequestExpectations expectations;
+    expectations.parseField("100-continue");
+    expectations.parseField(R"(custom="a,b")");
+
+    RUVIA_CHECK(expectations.has100Continue());
+    RUVIA_CHECK(expectations.hasUnsupported());
+    RUVIA_CHECK(
+        expectations.serverAction(HttpRequestContentIndication::kWillFollow) ==
+        HttpServerExpectationAction::kUnsupported);
+
+    expectations.ignore100Continue();
+    RUVIA_CHECK(!expectations.has100Continue());
+    RUVIA_CHECK(expectations.hasUnsupported());
 }
 
 RUVIA_TEST(find_semicolon_parameter_quoted_ignore_case) {
@@ -132,29 +157,54 @@ RUVIA_TEST(find_semicolon_parameter_is_case_sensitive_and_whole_name) {
     RUVIA_CHECK(!httpFindSemicolonParameter("sidx=evil", "sid").has_value());
 }
 
-RUVIA_TEST(connection_flags_parses_tokens_case_insensitively) {
-    using Arr = std::array<bool, 3>;  // {close, keepAlive, upgrade}
+RUVIA_TEST(connection_options_parse_tokens_case_insensitively) {
+    using Arr = std::array<bool, 4>;  // {close, keepAlive, upgrade, te}
 
     // Single tokens, matched case-insensitively.
-    RUVIA_CHECK((connectionFlags("close") == Arr{true, false, false}));
-    RUVIA_CHECK((connectionFlags("CLOSE") == Arr{true, false, false}));
-    RUVIA_CHECK((connectionFlags("keep-alive") == Arr{false, true, false}));
-    RUVIA_CHECK((connectionFlags("Keep-Alive") == Arr{false, true, false}));
-    RUVIA_CHECK((connectionFlags("Upgrade") == Arr{false, false, true}));
-    RUVIA_CHECK((connectionFlags("UPGRADE") == Arr{false, false, true}));
+    RUVIA_CHECK((connectionOptions("close") == Arr{true, false, false, false}));
+    RUVIA_CHECK((connectionOptions("CLOSE") == Arr{true, false, false, false}));
+    RUVIA_CHECK((connectionOptions("keep-alive") == Arr{false, true, false, false}));
+    RUVIA_CHECK((connectionOptions("Keep-Alive") == Arr{false, true, false, false}));
+    RUVIA_CHECK((connectionOptions("Upgrade") == Arr{false, false, true, false}));
+    RUVIA_CHECK((connectionOptions("UPGRADE") == Arr{false, false, true, false}));
 
     // A comma list sets each recognised token; OWS around tokens is trimmed.
-    RUVIA_CHECK((connectionFlags("keep-alive, Upgrade") == Arr{false, true, true}));
-    RUVIA_CHECK((connectionFlags("close , upgrade") == Arr{true, false, true}));
-    RUVIA_CHECK((connectionFlags("close, keep-alive, upgrade") == Arr{true, true, true}));
+    RUVIA_CHECK((connectionOptions("keep-alive, Upgrade") == Arr{false, true, true, false}));
+    RUVIA_CHECK((connectionOptions("close , upgrade") == Arr{true, false, true, false}));
+    RUVIA_CHECK((connectionOptions("close, keep-alive, upgrade") == Arr{true, true, true, false}));
 
     // Empty list items (leading / trailing / doubled comma) are skipped, not fatal.
-    RUVIA_CHECK((connectionFlags(",close") == Arr{true, false, false}));
-    RUVIA_CHECK((connectionFlags("close,") == Arr{true, false, false}));
-    RUVIA_CHECK((connectionFlags("keep-alive,,upgrade") == Arr{false, true, true}));
+    RUVIA_CHECK((connectionOptions(",close") == Arr{true, false, false, false}));
+    RUVIA_CHECK((connectionOptions("close,") == Arr{true, false, false, false}));
+    RUVIA_CHECK((connectionOptions("keep-alive,,upgrade") == Arr{false, true, true, false}));
 
     // Unrecognised tokens are ignored; a recognised neighbour still registers.
-    RUVIA_CHECK((connectionFlags("TE, close") == Arr{true, false, false}));
-    RUVIA_CHECK((connectionFlags("x-foo") == Arr{false, false, false}));
-    RUVIA_CHECK((connectionFlags("") == Arr{false, false, false}));
+    RUVIA_CHECK((connectionOptions("TE, close") == Arr{true, false, false, true}));
+    RUVIA_CHECK((connectionOptions("x-foo") == Arr{false, false, false, false}));
+    RUVIA_CHECK((connectionOptions("") == Arr{false, false, false, false}));
+}
+
+RUVIA_TEST(connection_options_enforce_sender_and_recipient_list_roles) {
+    for (const auto value : {",close", "close,", "close,,Upgrade", ""}) {
+        HttpConnectionOptions sender;
+        RUVIA_CHECK(
+            sender.parseField(value, HttpFieldListRole::kSender) ==
+            HttpFieldListParseStatus::kMalformed);
+    }
+
+    HttpConnectionOptions repeated;
+    RUVIA_CHECK(
+        repeated.parseField("keep-alive", HttpFieldListRole::kSender) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(
+        repeated.parseField("TE, Upgrade", HttpFieldListRole::kSender) ==
+        HttpFieldListParseStatus::kOk);
+    RUVIA_CHECK(repeated.keepAlive());
+    RUVIA_CHECK(repeated.te());
+    RUVIA_CHECK(repeated.upgrade());
+
+    HttpConnectionOptions malformed;
+    RUVIA_CHECK(
+        malformed.parseField("close;param", HttpFieldListRole::kRecipient) ==
+        HttpFieldListParseStatus::kMalformed);
 }

@@ -12,6 +12,7 @@ namespace {
 
 using ruvia::detail::Http2FrameType;
 using ruvia::detail::Http2HeaderContinuation;
+using ruvia::detail::Http2HeaderBlockKind;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::http2AppendHeaderBlock;
 using ruvia::detail::http2ResetHeaderBlock;
@@ -66,9 +67,9 @@ RUVIA_TEST(header_continuation_state_machine_enforces_same_stream_only) {
     RUVIA_CHECK(cont.expectsFrameType(frameType(Http2FrameType::kContinuation)));
     RUVIA_CHECK(!cont.matches(1));
 
-    // Mid header block (RFC 7540 6.10): only a CONTINUATION on the SAME stream may
+    // Mid field block (RFC 9113 §6.10): only a CONTINUATION on the SAME stream may
     // follow -- no other frame type, no other stream, never stream 0.
-    cont.start(5, /*trailers=*/false);
+    cont.start(5, Http2HeaderBlockKind::kInitial);
     RUVIA_CHECK(cont.active());
     RUVIA_CHECK(cont.matches(5));
     RUVIA_CHECK(!cont.matches(3));
@@ -77,18 +78,24 @@ RUVIA_TEST(header_continuation_state_machine_enforces_same_stream_only) {
     RUVIA_CHECK(!cont.expectsFrameType(frameType(Http2FrameType::kData)));
     RUVIA_CHECK(!cont.expectsFrameType(frameType(Http2FrameType::kHeaders)));
 
-    // finishWasTrailers reports the block kind and clears the state (initial headers).
-    RUVIA_CHECK(!cont.finishWasTrailers());
+    // finishKind reports the block kind and clears the state.
+    RUVIA_CHECK(cont.kind() == Http2HeaderBlockKind::kInitial);
+    RUVIA_CHECK(cont.finishKind() == Http2HeaderBlockKind::kInitial);
     RUVIA_CHECK(!cont.active());
     RUVIA_CHECK(cont.expectsFrameType(frameType(Http2FrameType::kData)));  // idle again
 
-    // A trailer header block is flagged as such by finishWasTrailers.
-    cont.start(7, /*trailers=*/true);
-    RUVIA_CHECK(cont.finishWasTrailers());
+    cont.start(7, Http2HeaderBlockKind::kTrailers);
+    RUVIA_CHECK(cont.finishKind() == Http2HeaderBlockKind::kTrailers);
     RUVIA_CHECK(!cont.active());
 
+    // Discarded blocks remain distinguishable while enforcing the same atomic
+    // CONTINUATION sequence.
+    cont.start(11, Http2HeaderBlockKind::kDiscarded);
+    RUVIA_CHECK(cont.kind() == Http2HeaderBlockKind::kDiscarded);
+    RUVIA_CHECK(cont.finishKind() == Http2HeaderBlockKind::kDiscarded);
+
     // reset() also clears an in-progress block.
-    cont.start(9, false);
+    cont.start(9, Http2HeaderBlockKind::kInitial);
     RUVIA_CHECK(cont.active());
     cont.reset();
     RUVIA_CHECK(!cont.active());

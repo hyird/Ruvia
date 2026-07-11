@@ -29,6 +29,7 @@ inline void recordHttpAccess(
                             .count();
     const AccessLogRecord record = AccessLogRecordAccess::make(
         request.method(),
+        request.knownMethod(),
         request.path(),
         remoteAddress,
         status,

@@ -17,24 +17,24 @@ constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
         route.bodyMode(),
         route.responseMode(),
         route.webSocketSubprotocols(),
-        route.webSocketHeartbeat()};
+        route.webSocketLifecycle()};
 }
 
 }  // namespace
 
 detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request, RouteMatch& match) const noexcept {
-    return resolve(request.method(), request.path(), match);
+    return resolve(request.knownMethod(), request.path(), match);
 }
 
 detail::RouteResolution detail::RouteTable::resolve(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path,
     RouteMatch& match) const noexcept {
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
     // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the
     // wildcard node. Leave it unresolved so dispatch emits the server-wide response.
-    if (method == HttpMethod::kOptions && path == "*") {
+    if (method == HttpKnownMethod::kOptions && path == "*") {
         return RouteResolution{};
     }
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
@@ -48,22 +48,22 @@ detail::RouteResolution detail::RouteTable::resolve(
 
     auto methodMask = allowedMethods(path, method);
     if (methodMask != 0) {
-        methodMask |= 1U << methodIndex(HttpMethod::kOptions);
+        methodMask |= 1U << methodIndex(HttpKnownMethod::kOptions);
         return RouteResolution::methodNotAllowed(methodMask);
     }
 
     return RouteResolution{};
 }
 
-std::size_t detail::RouteTable::methodIndex(HttpMethod method) noexcept {
+std::size_t detail::RouteTable::methodIndex(HttpKnownMethod method) noexcept {
     return static_cast<std::size_t>(method);
 }
 
-bool detail::RouteTable::isRoutableMethod(HttpMethod method) noexcept {
+bool detail::RouteTable::isRoutableMethod(HttpKnownMethod method) noexcept {
     return methodIndex(method) < kRoutableMethodCount;
 }
 
-std::uint64_t detail::RouteTable::routeHash(HttpMethod method, std::string_view path, std::uint64_t seed) noexcept {
+std::uint64_t detail::RouteTable::routeHash(HttpKnownMethod method, std::string_view path, std::uint64_t seed) noexcept {
     auto hash = kFnvOffset ^ seed;
     hash ^= static_cast<std::uint64_t>(method);
     hash *= kFnvPrime;
@@ -117,7 +117,7 @@ const detail::RouteEntry* detail::RouteTable::findRadixNode(
 }
 
 const detail::RouteEntry* detail::RouteTable::findStaticRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path) const noexcept {
     if (!isRoutableMethod(method)) {
         return nullptr;
@@ -139,7 +139,7 @@ const detail::RouteEntry* detail::RouteTable::findStaticRoute(
     return nullptr;
 }
 
-const detail::RouteEntry* detail::RouteTable::findPerfect(HttpMethod method, std::string_view path) const noexcept {
+const detail::RouteEntry* detail::RouteTable::findPerfect(HttpKnownMethod method, std::string_view path) const noexcept {
     if (exactSlots_.empty()) {
         return nullptr;
     }
@@ -153,11 +153,11 @@ const detail::RouteEntry* detail::RouteTable::findPerfect(HttpMethod method, std
     return nullptr;
 }
 
-const detail::RouteEntry* detail::RouteTable::findRadix(HttpMethod method, std::string_view path) const noexcept {
+const detail::RouteEntry* detail::RouteTable::findRadix(HttpKnownMethod method, std::string_view path) const noexcept {
     return findRadixNode(radixRoots_[methodIndex(method)], path);
 }
 
-std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept {
+std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept {
     std::uint32_t mask = 0;
     auto candidateMask = staticMethodMask_ | dynamicMethodMask_;
     // Keep OPTIONS in the candidate mask: a path whose only registered method is
@@ -171,7 +171,7 @@ std::uint32_t detail::RouteTable::allowedMethods(std::string_view path, HttpMeth
 
     while (candidateMask != 0) {
         const auto i = static_cast<std::size_t>(std::countr_zero(candidateMask));
-        const auto method = static_cast<HttpMethod>(i);
+        const auto method = static_cast<HttpKnownMethod>(i);
         const auto methodBit = 1U << i;
         candidateMask &= ~methodBit;
 

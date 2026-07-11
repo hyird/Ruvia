@@ -5,7 +5,7 @@
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -30,23 +30,17 @@ struct HttpLazyBufferedBodyRouteState final {
         std::pmr::polymorphic_allocator<char> workerAllocator,
         std::pmr::memory_resource* requestResource,
         std::string_view bodyAndPipeline,
-        std::size_t contentLength,
-        bool chunked,
-        HttpTransferCodings transferCodings,
+        Http1RequestBodyPlan bodyPlan,
         std::size_t maxBodyBytes,
-        ConnectionScanner::Entry& scannerEntry,
-        bool sendContinue) {
+        ConnectionScanner::Entry& scannerEntry) {
         body.emplace(
             stream,
             workerAllocator,
             requestResource,
             bodyAndPipeline,
-            contentLength,
-            chunked,
-            transferCodings,
+            bodyPlan,
             maxBodyBytes,
-            scannerEntry,
-            sendContinue);
+            scannerEntry);
         emplaceRequestBodyLoaderFacade(loader, *body);
     }
 
@@ -54,8 +48,8 @@ struct HttpLazyBufferedBodyRouteState final {
         return services.withBodyLoader(*loader);
     }
 
-    [[nodiscard]] bool consumed() const noexcept {
-        return body->consumed();
+    [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {
+        return body->consumption();
     }
 
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
@@ -70,7 +64,7 @@ inline void prepareHttpLazyBufferedBodyRoute(
     WorkerMemory& memory,
     RequestMemory& requestMemory,
     std::string_view bodyAndPipeline,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry) {
     state.emplace(
@@ -78,72 +72,68 @@ inline void prepareHttpLazyBufferedBodyRoute(
         memory.allocator<char>(),
         requestMemory.resource(),
         bodyAndPipeline,
-        parsed.contentLength,
-        parsed.chunked,
-        parsed.transferCodings,
+        parsed.bodyPlan,
         options.maxBufferedBodyBytes,
-        scannerEntry,
-        (parsed.contentLength > 0 || parsed.chunked) && http1WantsContinue(parsed));
+        scannerEntry);
 }
 
 [[nodiscard]] inline std::string_view beginHttpBodyRoute(
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const std::pmr::string& readBuffer,
     std::size_t usedBytes,
-    bool& keepAlive,
+    Http1ServerConnectionPlan& connectionPlan,
     std::size_t& consumedBytes) noexcept {
     consumedBytes = parsed.headerBytes;
-    keepAlive = http1ShouldKeepAlive(parsed);
+    connectionPlan = parsed.connectionPlan;
     return std::string_view(readBuffer.data() + parsed.headerBytes, usedBytes - parsed.headerBytes);
 }
 
-inline Task<void> completeFailedHttpBodyRoute(
+inline Task<Http1ServerConnectionPlan> completeFailedHttpBodyRoute(
     ConnectionScanner::Entry& scannerEntry,
     std::exception_ptr exception,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const RouteTable& routes,
     RequestMemory& requestMemory,
     ContextServices exceptionServices,
-    HttpResponse& response,
-    bool& keepAlive) {
+    HttpResponse& response) {
     response = co_await routes.handleException(
         parsed.request,
         requestMemory,
         exception,
         exceptionServices);
     materializeResponseBody(response);
-    keepAlive = false;
-    http1MarkConnectionClose(response);
     scannerEntry.touch();
+    co_return http1FinalizeResponseConnection(
+        response,
+        Http1ServerConnectionPlan::close());
 }
 
 template <typename RestorePipeline>
-inline void completeSuccessfulHttpBodyRoute(
+[[nodiscard]] inline Http1ServerConnectionPlan completeSuccessfulHttpBodyRoute(
     ConnectionScanner::Entry& scannerEntry,
     HttpResponse& response,
-    bool& keepAlive,
+    Http1ServerConnectionPlan connectionPlan,
     std::size_t& requestCount,
     std::size_t keepaliveRequests,
-    bool requestBodyComplete,
-    bool needsKeepAliveSignal,
+    Http1RequestBodyConsumption bodyConsumption,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     std::size_t& consumedBytes,
     bool& bufferAlreadyCompacted,
     RestorePipeline restorePipeline) {
-    finalizeBodyRouteResponse(
+    connectionPlan = finalizeBodyRouteResponse(
         response,
-        keepAlive,
+        connectionPlan,
         requestCount,
         keepaliveRequests,
-        requestBodyComplete,
-        needsKeepAliveSignal);
-    if (keepAlive) {
+        bodyConsumption);
+    if (connectionPlan.disposition() == Http1ConnectionDisposition::kReuse) {
         restorePipeline(readBuffer, usedBytes);
         consumedBytes = 0;
         bufferAlreadyCompacted = true;
     }
     scannerEntry.touch();
+    return connectionPlan;
 }
 
 }  // namespace ruvia::detail

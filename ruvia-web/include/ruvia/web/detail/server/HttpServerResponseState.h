@@ -25,49 +25,45 @@ inline bool requestLimitReached(std::size_t requestCount, std::size_t maxRequest
     return maxRequests != 0 && requestCount >= maxRequests;
 }
 
-inline void applyRequestLimit(bool& keepAlive, std::size_t requestCount, std::size_t maxRequests) noexcept {
-    if (requestLimitReached(requestCount, maxRequests)) {
-        keepAlive = false;
-    }
-}
-
-inline void markConnectionCloseAfterWrite(HttpResponse& response, bool& closeAfterWrite) {
-    (void)http1FinalizeResponseConnection(response, false, false);
-    closeAfterWrite = true;
-}
-
-inline void recordCompletedRequest(
-    bool& keepAlive,
-    std::size_t& requestCount,
+[[nodiscard]] inline Http1ServerConnectionPlan applyRequestLimit(
+    Http1ServerConnectionPlan connectionPlan,
+    std::size_t requestCount,
     std::size_t maxRequests) noexcept {
+    return requestLimitReached(requestCount, maxRequests)
+        ? connectionPlan.requireClose()
+        : connectionPlan;
+}
+
+[[nodiscard]] inline Http1ServerClosePolicy nextHttp1ResponseClosePolicy(
+    std::size_t completedRequests,
+    std::size_t maxRequests) noexcept {
+    return maxRequests != 0 && completedRequests >= maxRequests - 1
+        ? Http1ServerClosePolicy::kCloseAfterResponse
+        : Http1ServerClosePolicy::kAllowReuse;
+}
+
+[[nodiscard]] inline Http1ServerConnectionPlan finalizeBufferedRouteResponse(
+    HttpResponse& response,
+    Http1ServerConnectionPlan connectionPlan,
+    std::size_t& requestCount,
+    std::size_t maxRequests) {
     ++requestCount;
-    applyRequestLimit(keepAlive, requestCount, maxRequests);
+    connectionPlan = applyRequestLimit(connectionPlan, requestCount, maxRequests);
+    return http1FinalizeResponseConnection(response, connectionPlan);
 }
 
-inline void finalizeBufferedRouteResponse(
+[[nodiscard]] inline Http1ServerConnectionPlan finalizeBodyRouteResponse(
     HttpResponse& response,
-    bool& keepAlive,
+    Http1ServerConnectionPlan connectionPlan,
     std::size_t& requestCount,
     std::size_t maxRequests,
-    bool needsKeepAliveSignal) {
-    recordCompletedRequest(keepAlive, requestCount, maxRequests);
-    keepAlive = http1FinalizeResponseConnection(response, keepAlive, needsKeepAliveSignal);
-}
-
-inline void finalizeBodyRouteResponse(
-    HttpResponse& response,
-    bool& keepAlive,
-    std::size_t& requestCount,
-    std::size_t maxRequests,
-    bool requestBodyComplete,
-    bool needsKeepAliveSignal) {
-    if (!requestBodyComplete) {
-        keepAlive = false;
-    }
-    recordCompletedRequest(keepAlive, requestCount, maxRequests);
+    Http1RequestBodyConsumption bodyConsumption) {
+    connectionPlan = http1ApplyRequestBodyConsumption(connectionPlan, bodyConsumption);
+    ++requestCount;
+    connectionPlan = applyRequestLimit(connectionPlan, requestCount, maxRequests);
     // Fix borrowed response views before callers restore pipeline bytes.
     materializeResponseBody(response);
-    keepAlive = http1FinalizeResponseConnection(response, keepAlive, needsKeepAliveSignal);
+    return http1FinalizeResponseConnection(response, connectionPlan);
 }
 
 }  // namespace ruvia::detail

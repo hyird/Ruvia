@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpRequestFlags.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
@@ -47,13 +46,13 @@ struct HttpWebSocketServerHandshake final {
 
 [[nodiscard]] inline HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(
     const HttpRequest& request,
-    const HttpRequestFlags& flags,
     std::string_view supportedSubprotocols) noexcept {
     HttpWebSocketServerHandshake handshake;
     encodeWebSocketAccept(
         handshake.accept,
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey));
-    handshake.subprotocol = chooseWebSocketSubprotocol(request, flags, supportedSubprotocols);
+    handshake.subprotocol = chooseWebSocketSubprotocol(
+        request, supportedSubprotocols);
     const auto deflate = webSocketNegotiatePermessageDeflate(request);
     handshake.permessageDeflate = deflate.enabled;
     handshake.extensions = webSocketDeflateResponseExtensions(deflate);

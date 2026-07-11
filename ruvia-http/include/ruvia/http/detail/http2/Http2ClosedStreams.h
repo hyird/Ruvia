@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
 
 namespace ruvia::detail {
@@ -41,7 +41,8 @@ public:
     }
 
 private:
-    static constexpr std::size_t kRecordLimit = kHttp2LocalMaxConcurrentStreams * 4;
+    static constexpr std::size_t kRecordLimit =
+        Http2LocalSettings::kMaxConcurrentStreams * 4;
 
     struct ClosedStreamRecord final {
         std::uint32_t id{0};

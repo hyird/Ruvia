@@ -8,7 +8,7 @@
 
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/RouteModes.h"
-#include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/web/WebSocket.h"
 
 // Lightweight route-resolution result types.
 
@@ -55,7 +55,7 @@ struct RouteDisposition final {
     RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
     ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
     std::string_view webSocketSubprotocols{};
-    WebSocketHeartbeatOptions webSocketHeartbeat{};
+    WebSocketLifecycleOptions webSocketLifecycle{};
 };
 
 struct RouteResolution final {
@@ -129,8 +129,8 @@ struct RouteResolution final {
     [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
         return disposition_.webSocketSubprotocols;
     }
-    [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
-        return disposition_.webSocketHeartbeat;
+    [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
+        return disposition_.webSocketLifecycle;
     }
 
 private:

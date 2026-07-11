@@ -15,7 +15,6 @@ struct StreamingAccess final {
     using StreamSleep = ResponseStreamWriter::Sleep;
     using StreamBindContext = ResponseStreamWriter::BindContext;
     using StreamScratch = ResponseStreamWriter::Scratch;
-    using StreamAddTrailer = ResponseStreamWriter::AddTrailer;
     using StreamCommitted = ResponseStreamWriter::Committed;
     using StreamAborted = ResponseStreamWriter::Aborted;
 
@@ -33,11 +32,10 @@ struct StreamingAccess final {
         StreamSleep sleep,
         StreamBindContext bindContext,
         StreamScratch scratch,
-        StreamAddTrailer addTrailer,
         StreamCommitted committed,
         StreamAborted aborted) noexcept {
         return ResponseStreamWriter(
-            target, write, end, sleep, bindContext, scratch, addTrailer, committed, aborted);
+            target, write, end, sleep, bindContext, scratch, committed, aborted);
     }
 
     [[nodiscard]] static SseWriter makeSseWriter(ResponseStreamWriter& writer) noexcept {

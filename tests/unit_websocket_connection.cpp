@@ -1,10 +1,12 @@
 #include "test_harness.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 #include <asio.hpp>
 
@@ -21,7 +23,45 @@ using ruvia::WebSocketOpcode;
 using ruvia::detail::ConnectionScanner;
 using ruvia::detail::SocketWebSocketConnection;
 using ruvia::detail::WebSocketDeflate;
+using ruvia::detail::WebSocketConnection;
 using ruvia::detail::WebSocketSocketTransport;
+using ruvia::detail::WsTransportDisposition;
+
+struct RecordingTransportState final {
+    bool aborted{false};
+    std::size_t writes{0};
+    WsTransportDisposition lastDisposition{WsTransportDisposition::kKeepOpen};
+};
+
+class RecordingTransport final {
+public:
+    RecordingTransport(asio::io_context& io, RecordingTransportState& state) noexcept
+        : io_(&io), state_(&state) {}
+
+    [[nodiscard]] auto executor() const noexcept {
+        return io_->get_executor();
+    }
+
+    [[nodiscard]] ruvia::Task<bool> readMore(std::pmr::string&) {
+        co_return false;
+    }
+
+    [[nodiscard]] ruvia::Task<std::error_code> writeBytes(
+        std::string_view,
+        WsTransportDisposition disposition) {
+        ++state_->writes;
+        state_->lastDisposition = disposition;
+        co_return std::error_code{};
+    }
+
+    void abort() noexcept {
+        state_->aborted = true;
+    }
+
+private:
+    asio::io_context* io_;
+    RecordingTransportState* state_;
+};
 
 std::string maskedFrame(
     std::uint8_t opcode,
@@ -57,6 +97,36 @@ asio::awaitable<std::string> readShortServerFrame(tcp::socket& socket) {
 
 }  // namespace
 
+// Periodic liveness failure aborts the WebSocket transport itself and returns false
+// to ConnectionScanner. For an RFC 8441 adapter that means RST_STREAM(CANCEL), so one
+// silent tunnel cannot tear down unrelated streams on the multiplexed connection.
+RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
+    asio::io_context io;
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    ruvia::WebSocketLifecycleOptions lifecycle;
+    lifecycle.pingInterval = std::chrono::milliseconds(1);
+    lifecycle.pongTimeout = std::chrono::milliseconds(1);
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        lifecycle,
+        1024,
+        memory.resource());
+
+    RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10));
+    io.run();
+    RUVIA_CHECK_EQ(state.writes, std::size_t{1});
+    RUVIA_CHECK(state.lastDisposition == WsTransportDisposition::kKeepOpen);
+
+    // No Pong arrived and its deadline elapsed. The callback still tells the
+    // scanner not to close the owning socket because abort() already targeted this
+    // transport.
+    RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12));
+    RUVIA_CHECK(state.aborted);
+}
+
 // HTTP/1 upgraded-byte-stream bridge: Ping is answered by the protocol core,
 // fragmented Text is reassembled, the application echo is serialized by the
 // same core, and the normal Close is emitted on the socket transport.
@@ -68,6 +138,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
     bool gotPong = false;
     bool gotEcho = false;
     bool gotClose = false;
+    bool serverCloseCompleted = false;
 
     asio::co_spawn(
         io,
@@ -88,6 +159,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
                     connection.write(message->opcode(), message->payload()));
             }
             co_await ruvia::detail::taskAsAwaitable(connection.close(1000, {}));
+            serverCloseCompleted = true;
         },
         asio::detached);
 
@@ -110,6 +182,10 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
             gotClose = close.size() >= 4 && static_cast<unsigned char>(close[0]) == 0x88 &&
                 static_cast<unsigned char>(close[2]) == 0x03 &&
                 static_cast<unsigned char>(close[3]) == 0xE8;
+            if (gotClose) {
+                const auto reply = maskedFrame(0x8, std::string_view("\x03\xE8", 2));
+                co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
+            }
         },
         asio::detached);
 
@@ -118,6 +194,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
     RUVIA_CHECK(gotPong);
     RUVIA_CHECK(gotEcho);
     RUVIA_CHECK(gotClose);
+    RUVIA_CHECK(serverCloseCompleted);
 }
 
 // Negotiated permessage-deflate crosses the actual socket bridge in both

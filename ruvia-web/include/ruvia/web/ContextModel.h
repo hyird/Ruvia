@@ -50,11 +50,10 @@ Task<T> ContextRequest::form() const {
 template <typename T>
 inline HttpResponse Context::json(
     const T& value,
-    std::uint16_t statusCode,
-    std::string_view statusText) const {
+    std::uint16_t statusCode) const {
     std::pmr::string body(allocator<char>());
     appendJson(body, value);
-    return jsonSerialized(body, statusCode, statusText);
+    return jsonSerialized(body, statusCode);
 }
 
 template <typename T>
@@ -69,7 +68,7 @@ inline HttpResponse Context::json(
 
 template <typename T>
 inline HttpResponse Context::json(const T& value, ResponseInit init) const {
-    auto response = json(value, init.status, init.statusText);
+    auto response = json(value, init.status);
     applyExplicitResponseHeaders(response, init.headers);
     return response;
 }

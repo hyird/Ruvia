@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "ruvia/http/detail/http2/Http2FrameTypes.h"
+#include "ruvia/http/detail/http2/Http2LocalSettings.h"
 
 namespace ruvia::detail {
 
@@ -74,7 +74,7 @@ private:
         size_ = remaining;
     }
 
-    std::array<std::uint32_t, kHttp2LocalMaxConcurrentStreams> streamIds_{};
+    std::array<std::uint32_t, Http2LocalSettings::kMaxConcurrentStreams> streamIds_{};
     std::size_t size_{0};
     std::size_t offset_{0};
 };

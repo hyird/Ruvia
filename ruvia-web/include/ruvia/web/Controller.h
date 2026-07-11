@@ -10,30 +10,30 @@
 namespace ruvia::detail {
 
 // Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
-inline constexpr HttpMethod kRuviaAllRouteMethods[] = {
+inline constexpr HttpKnownMethod kRuviaAllRouteMethods[] = {
     Get, Post, Put, Patch, Delete, Options};
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the
 // parenthesized list as a constructor call.
 class RuviaMethodList final {
 public:
-    template <std::same_as<HttpMethod>... Methods>
+    template <std::same_as<HttpKnownMethod>... Methods>
     constexpr explicit RuviaMethodList(Methods... methods) noexcept
         : methods_{methods...},
           count_(sizeof...(Methods)) {
         static_assert(sizeof...(Methods) > 0, "RUVIA_ON requires at least one method");
     }
 
-    [[nodiscard]] constexpr const HttpMethod* begin() const noexcept {
+    [[nodiscard]] constexpr const HttpKnownMethod* begin() const noexcept {
         return methods_;
     }
 
-    [[nodiscard]] constexpr const HttpMethod* end() const noexcept {
+    [[nodiscard]] constexpr const HttpKnownMethod* end() const noexcept {
         return methods_ + count_;
     }
 
 private:
-    HttpMethod methods_[9]{};
+    HttpKnownMethod methods_[9]{};
     std::size_t count_{0};
 };
 

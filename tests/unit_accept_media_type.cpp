@@ -127,7 +127,7 @@ RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         const auto slot = HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kAccept);
         for (const auto line : acceptLines) {

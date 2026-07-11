@@ -1,22 +1,56 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
-#include "ruvia/http/detail/HttpBodyFramer.h"
+#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/HttpProtocolError.h"
 
 namespace {
 
 using ruvia::HttpProtocolError;
-using ruvia::detail::ChunkDelimiterStatus;
-using ruvia::detail::HttpChunkDecodeEventKind;
-using ruvia::detail::HttpChunkDecoder;
-using ruvia::detail::HttpChunkedBodyDecoder;
+using ruvia::detail::Http1ChunkDecodeBodyChunk;
+using ruvia::detail::Http1ChunkDecodeComplete;
+using ruvia::detail::Http1ChunkDecodeNeedMore;
+using ruvia::detail::Http1ChunkDecodeResult;
+using ruvia::detail::Http1ChunkDecoder;
+using ruvia::detail::Http1ChunkDelimiterStatus;
+using ruvia::detail::Http1ChunkedBodyDecoder;
 
-bool sizeLineThrows(HttpChunkDecoder& decoder, std::string_view line) {
+template <typename T>
+concept HasLooseHttp1ChunkDecodeFields = requires(T& result) {
+    result.kind = 0;
+    result.body = std::string_view{};
+    result.consumedBytes = std::size_t{};
+};
+
+template <typename T>
+concept HasChunkBytes = requires(const T& result) {
+    { result.bytes() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasConsumedBytes = requires(const T& result) {
+    { result.consumedBytes() } -> std::same_as<std::size_t>;
+};
+
+static_assert(std::same_as<
+    decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})),
+    Http1ChunkDecodeResult>);
+static_assert(!std::default_initializable<Http1ChunkDecodeResult>);
+static_assert(!HasLooseHttp1ChunkDecodeFields<Http1ChunkDecodeResult>);
+static_assert(HasConsumedBytes<Http1ChunkDecodeNeedMore>);
+static_assert(HasConsumedBytes<Http1ChunkDecodeBodyChunk>);
+static_assert(HasConsumedBytes<Http1ChunkDecodeComplete>);
+static_assert(!HasChunkBytes<Http1ChunkDecodeNeedMore>);
+static_assert(HasChunkBytes<Http1ChunkDecodeBodyChunk>);
+static_assert(!HasChunkBytes<Http1ChunkDecodeComplete>);
+
+bool sizeLineThrows(Http1ChunkDecoder& decoder, std::string_view line) {
     std::size_t size = 0;
     try {
         (void)decoder.parseSizeLine(line, size);
@@ -29,7 +63,7 @@ bool sizeLineThrows(HttpChunkDecoder& decoder, std::string_view line) {
 }  // namespace
 
 RUVIA_TEST(chunk_decoder_basic_two_chunk_flow) {
-    HttpChunkDecoder decoder(1000);
+    Http1ChunkDecoder decoder(1000);
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("5", size));  // non-final chunk
     RUVIA_CHECK_EQ(size, std::size_t{5});
@@ -44,7 +78,7 @@ RUVIA_TEST(chunk_decoder_basic_two_chunk_flow) {
 }
 
 RUVIA_TEST(chunk_decoder_hex_size_and_partial_consume) {
-    HttpChunkDecoder decoder(0);  // 0 == unlimited
+    Http1ChunkDecoder decoder(0);  // 0 == unlimited
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("1a", size));  // 0x1a
     RUVIA_CHECK_EQ(size, std::size_t{26});
@@ -56,27 +90,27 @@ RUVIA_TEST(chunk_decoder_hex_size_and_partial_consume) {
 }
 
 RUVIA_TEST(chunk_decoder_check_delimiter) {
-    HttpChunkDecoder decoder(0);
-    RUVIA_CHECK(decoder.checkDelimiter("\r\n") == ChunkDelimiterStatus::kOk);
-    RUVIA_CHECK(decoder.checkDelimiter("\r\nmore") == ChunkDelimiterStatus::kOk);
-    RUVIA_CHECK(decoder.checkDelimiter("X") == ChunkDelimiterStatus::kNeedMore);   // fewer than 2 bytes
-    RUVIA_CHECK(decoder.checkDelimiter("XY") == ChunkDelimiterStatus::kInvalid);   // not CRLF
-    RUVIA_CHECK(decoder.checkDelimiter("\nX") == ChunkDelimiterStatus::kInvalid);
+    Http1ChunkDecoder decoder(0);
+    RUVIA_CHECK(decoder.checkDelimiter("\r\n") == Http1ChunkDelimiterStatus::kOk);
+    RUVIA_CHECK(decoder.checkDelimiter("\r\nmore") == Http1ChunkDelimiterStatus::kOk);
+    RUVIA_CHECK(decoder.checkDelimiter("X") == Http1ChunkDelimiterStatus::kNeedMore);   // fewer than 2 bytes
+    RUVIA_CHECK(decoder.checkDelimiter("XY") == Http1ChunkDelimiterStatus::kInvalid);   // not CRLF
+    RUVIA_CHECK(decoder.checkDelimiter("\nX") == Http1ChunkDelimiterStatus::kInvalid);
 }
 
 RUVIA_TEST(chunk_decoder_rejects_invalid_size_line) {
-    HttpChunkDecoder decoder(0);
+    Http1ChunkDecoder decoder(0);
     RUVIA_CHECK(sizeLineThrows(decoder, "xyz"));
     RUVIA_CHECK(sizeLineThrows(decoder, ""));
 }
 
 RUVIA_TEST(chunk_decoder_single_chunk_over_limit_rejected) {
-    HttpChunkDecoder decoder(10);
+    Http1ChunkDecoder decoder(10);
     RUVIA_CHECK(sizeLineThrows(decoder, "b"));  // 0xb = 11 > 10 -> 413
 }
 
 RUVIA_TEST(chunk_decoder_accumulated_body_over_limit_rejected) {
-    HttpChunkDecoder decoder(10);
+    Http1ChunkDecoder decoder(10);
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("8", size));  // 8 <= 10
     decoder.consumeBodyBytes(8);
@@ -94,7 +128,7 @@ RUVIA_TEST(chunk_decoder_rejects_decoded_size_integer_overflow) {
     // a small one must trip 413 rather than wrap. (32-bit size_t cannot express a
     // 64-bit near-max literal, which parseSizeLine rejects earlier, so guard it.)
     if constexpr (sizeof(std::size_t) >= 8) {
-        HttpChunkDecoder decoder(0);  // unlimited
+        Http1ChunkDecoder decoder(0);  // unlimited
         std::size_t size = 0;
         RUVIA_CHECK(decoder.parseSizeLine("fffffffffffffff0", size));  // SIZE_MAX - 15
         RUVIA_CHECK(sizeLineThrows(decoder, "20"));  // +0x20 overflows the total -> 413
@@ -104,7 +138,7 @@ RUVIA_TEST(chunk_decoder_rejects_decoded_size_integer_overflow) {
 RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
     // With a tiny limit, the accumulated size-line + CRLF framing overhead alone
     // must eventually trip the 413 guard even for zero-length chunks.
-    HttpChunkDecoder decoder(4);
+    Http1ChunkDecoder decoder(4);
     std::size_t size = 0;
     bool threw = false;
     try {
@@ -118,7 +152,7 @@ RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
 }
 
 RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
-    HttpChunkedBodyDecoder decoder(1024);
+    Http1ChunkedBodyDecoder decoder(1024);
     const std::string_view wire =
         "5\r\nhello\r\n"
         "6;ext=yes\r\n world\r\n"
@@ -127,13 +161,17 @@ RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
     std::size_t consumed = 0;
     std::string body;
     for (;;) {
-        const auto event = decoder.decode(wire.substr(consumed));
-        body.append(event.body);
-        consumed += event.consumedBytes;
-        if (event.kind == HttpChunkDecodeEventKind::kComplete) {
+        const auto result = decoder.decode(wire.substr(consumed));
+        consumed += result.consumedBytes();
+        if (const auto* bodyChunk = result.bodyChunk()) {
+            body.append(bodyChunk->bytes());
+            continue;
+        }
+        if (result.complete() != nullptr) {
             break;
         }
-        RUVIA_CHECK(event.kind == HttpChunkDecodeEventKind::kBody);
+        RUVIA_CHECK(result.needMore() == nullptr);
+        break;
     }
 
     RUVIA_CHECK_EQ(body, std::string("hello world"));
@@ -141,7 +179,7 @@ RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
 }
 
 RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
-    HttpChunkedBodyDecoder decoder(1024);
+    Http1ChunkedBodyDecoder decoder(1024);
     const std::string wire = "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
     std::string pending;
     std::string body;
@@ -150,16 +188,18 @@ RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
     for (const char byte : wire) {
         pending.push_back(byte);
         for (;;) {
-            const auto event = decoder.decode(pending);
-            body.append(event.body);
-            if (event.consumedBytes != 0) {
-                pending.erase(0, event.consumedBytes);
+            const auto result = decoder.decode(pending);
+            if (const auto* bodyChunk = result.bodyChunk()) {
+                body.append(bodyChunk->bytes());
             }
-            if (event.kind == HttpChunkDecodeEventKind::kComplete) {
+            if (result.consumedBytes() != 0) {
+                pending.erase(0, result.consumedBytes());
+            }
+            if (result.complete() != nullptr) {
                 complete = true;
                 break;
             }
-            if (event.kind == HttpChunkDecodeEventKind::kNeedMore) {
+            if (result.needMore() != nullptr) {
                 break;
             }
         }
@@ -173,7 +213,7 @@ RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
 RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     bool badDelimiter = false;
     try {
-        HttpChunkedBodyDecoder decoder(1024);
+        Http1ChunkedBodyDecoder decoder(1024);
         (void)decoder.decode("1\r\nxXY");
     } catch (const std::invalid_argument&) {
         badDelimiter = true;
@@ -182,7 +222,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 
     bool badTrailer = false;
     try {
-        HttpChunkedBodyDecoder decoder(1024);
+        Http1ChunkedBodyDecoder decoder(1024);
         (void)decoder.decode("0\r\nContent-Length: 1\r\n\r\n");
     } catch (const std::invalid_argument&) {
         badTrailer = true;

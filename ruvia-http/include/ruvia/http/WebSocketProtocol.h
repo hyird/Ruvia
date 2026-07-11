@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <cstdint>
 #include <string_view>
 
@@ -51,11 +50,6 @@ private:
 
     WebSocketOpcode opcode_{WebSocketOpcode::kText};
     std::string_view payload_;
-};
-
-struct WebSocketHeartbeatOptions final {
-    std::chrono::milliseconds pingInterval{0};
-    std::chrono::milliseconds pongTimeout{0};
 };
 
 }  // namespace ruvia

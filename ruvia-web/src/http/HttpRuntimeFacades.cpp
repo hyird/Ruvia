@@ -28,16 +28,16 @@ Task<void> ResponseStreamWriter::sleep(std::chrono::milliseconds duration) {
     return sleep_(target_, duration);
 }
 
-Task<void> ResponseStreamWriter::end() {
-    return end_(target_);
+Task<void> ResponseStreamWriter::end(std::span<const HttpHeaderView> trailers) {
+    return end_(target_, trailers);
 }
 
 Task<void> SseWriter::sleep(std::chrono::milliseconds duration) {
     return writer_.sleep(duration);
 }
 
-Task<void> SseWriter::end() {
-    return writer_.end();
+Task<void> SseWriter::end(std::span<const HttpHeaderView> trailers) {
+    return writer_.end(trailers);
 }
 
 Task<std::optional<WebSocketMessage>> WebSocket::read() {

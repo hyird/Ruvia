@@ -3,7 +3,7 @@
 #include "ruvia/web/detail/body/HttpRequestBody.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -23,7 +23,7 @@ Task<void> dispatchHttpStreamBodyRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -32,11 +32,16 @@ Task<void> dispatchHttpStreamBodyRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     HttpResponse& response,
-    bool& keepAlive,
+    Http1ServerConnectionPlan& connectionPlan,
     std::size_t& requestCount,
     std::size_t& consumedBytes,
     bool& bufferAlreadyCompacted) {
-    const auto bodyAndPipeline = beginHttpBodyRoute(parsed, readBuffer, usedBytes, keepAlive, consumedBytes);
+    const auto bodyAndPipeline = beginHttpBodyRoute(
+        parsed,
+        readBuffer,
+        usedBytes,
+        connectionPlan,
+        consumedBytes);
 
     std::exception_ptr exception;
     std::optional<StreamBodyReader<Stream>> streamReader;
@@ -46,12 +51,9 @@ Task<void> dispatchHttpStreamBodyRoute(
             stream,
             memory.allocator<char>(),
             bodyAndPipeline,
-            parsed.contentLength,
-            parsed.chunked,
-            parsed.transferCodings,
+            parsed.bodyPlan,
             options.maxStreamBodyBytes,
-            scannerEntry,
-            (parsed.contentLength > 0 || parsed.chunked) && http1WantsContinue(parsed));
+            scannerEntry);
         emplaceBodyReaderFacade(bodyReader, *streamReader);
         response = co_await routes.dispatch(
             parsed.request,
@@ -67,26 +69,24 @@ Task<void> dispatchHttpStreamBodyRoute(
         if (bodyReader) {
             exceptionServices = exceptionServices.withBodyReader(*bodyReader);
         }
-        co_await completeFailedHttpBodyRoute(
+        connectionPlan = co_await completeFailedHttpBodyRoute(
             scannerEntry,
             exception,
             parsed,
             routes,
             requestMemory,
             exceptionServices,
-            response,
-            keepAlive);
+            response);
         co_return;
     }
 
-    completeSuccessfulHttpBodyRoute(
+    connectionPlan = completeSuccessfulHttpBodyRoute(
         scannerEntry,
         response,
-        keepAlive,
+        connectionPlan,
         requestCount,
         options.keepaliveRequests,
-        streamReader->finished(),
-        http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()),
+        streamReader->consumption(),
         readBuffer,
         usedBytes,
         consumedBytes,

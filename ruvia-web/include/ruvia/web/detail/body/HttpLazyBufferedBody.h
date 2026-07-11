@@ -13,27 +13,20 @@ public:
         std::pmr::polymorphic_allocator<char> workerAllocator,
         std::pmr::memory_resource* requestResource,
         std::string_view initialBodyAndPipeline,
-        std::size_t contentLength,
-        bool chunked,
-        HttpTransferCodings transferCodings,
+        Http1RequestBodyPlan bodyPlan,
         std::size_t maxBodyBytes,
-        ConnectionScanner::Entry& scannerEntry,
-        bool sendContinue)
+        ConnectionScanner::Entry& scannerEntry)
         : reader_(
               stream,
               workerAllocator,
               initialBodyAndPipeline,
-              contentLength,
-              chunked,
-              transferCodings,
+              bodyPlan,
               maxBodyBytes,
-              scannerEntry,
-              sendContinue),
-          body_(pmrResourceOrDefault(requestResource)),
-          hasBody_(contentLength > 0 || chunked || !transferCodings.empty()) {}
+              scannerEntry),
+          body_(pmrResourceOrDefault(requestResource)) {}
 
-    [[nodiscard]] bool consumed() const noexcept {
-        return !hasBody_ || reader_.finished();
+    [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept {
+        return reader_.consumption();
     }
 
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes) {
@@ -60,7 +53,6 @@ private:
     StreamBodyReader<Stream> reader_;
     std::pmr::string body_;
     std::string_view bodyView_;
-    bool hasBody_{false};
     bool read_{false};
 };
 

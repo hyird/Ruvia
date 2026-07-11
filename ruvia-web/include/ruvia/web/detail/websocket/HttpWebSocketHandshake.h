@@ -18,10 +18,10 @@ template <typename Stream>
 Task<bool> writeWebSocketHandshake(
     Stream& stream,
     const HttpRequest& request,
-    const HttpRequestFlags& flags,
     std::string_view supportedSubprotocols,
     bool& permessageDeflate) {
-    const auto handshake = makeHttpWebSocketServerHandshake(request, flags, supportedSubprotocols);
+    const auto handshake = makeHttpWebSocketServerHandshake(
+        request, supportedSubprotocols);
     permessageDeflate = handshake.permessageDeflate;
 
     std::array<asio::const_buffer, 10> buffers;

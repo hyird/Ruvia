@@ -1,8 +1,12 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
@@ -10,8 +14,49 @@ namespace {
 
 using ruvia::WebSocketOpcode;
 using ruvia::detail::WsConnection;
+using ruvia::detail::WsClosePhase;
+using ruvia::detail::WsCloseEvent;
 using ruvia::detail::WsEvent;
-using ruvia::detail::WsFeedStatus;
+using ruvia::detail::WsEventKind;
+using ruvia::detail::WsMessageEvent;
+using ruvia::detail::WsProtocolErrorEvent;
+using ruvia::detail::WsTransportDisposition;
+
+template <typename T>
+concept HasLooseWsEventFields = requires(T& event) {
+    event.kind = WsEventKind::kMessage;
+    event.opcode = WebSocketOpcode::kText;
+    event.payload = std::string_view{};
+    event.closeCode = std::uint16_t{};
+};
+
+template <typename T>
+concept HasWsCloseCode = requires(const T& event) {
+    { event.closeCode() } -> std::same_as<std::uint16_t>;
+};
+
+template <typename T>
+concept HasWsPayload = requires(const T& event) {
+    { event.payload() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasWsReason = requires(const T& event) {
+    { event.reason() } -> std::same_as<std::string_view>;
+};
+
+static_assert(std::same_as<
+    decltype(std::declval<WsConnection&>().poll()),
+    std::optional<WsEvent>>);
+static_assert(!std::default_initializable<WsEvent>);
+static_assert(!HasLooseWsEventFields<WsEvent>);
+static_assert(!HasWsCloseCode<WsMessageEvent>);
+static_assert(HasWsCloseCode<WsCloseEvent>);
+static_assert(HasWsCloseCode<WsProtocolErrorEvent>);
+static_assert(HasWsPayload<WsMessageEvent>);
+static_assert(!HasWsPayload<WsCloseEvent>);
+static_assert(HasWsReason<WsCloseEvent>);
+static_assert(!HasWsReason<WsProtocolErrorEvent>);
 
 // Build a masked client->server frame (RFC 6455 §5.1): FIN/opcode byte, MASK bit + a
 // short length (<=125 for tests), a 4-byte mask, then the masked payload.
@@ -29,32 +74,35 @@ std::pmr::string maskedFrame(
     return f;
 }
 
-WsFeedStatus feedBytes(
+std::optional<WsEvent> pollBytes(
     WsConnection& connection,
     std::pmr::string& input,
     std::string_view bytes) {
     input.append(bytes.data(), bytes.size());
-    return connection.feed();
+    return connection.poll();
 }
 
 }  // namespace
 
-// A single masked Text frame is delivered as one complete kMessage event, unmasked.
-RUVIA_TEST(ws_connection_delivers_text_message) {
+// A single masked Text frame is delivered as one complete typed event, unmasked.
+RUVIA_TEST(ws_connection_event_is_optional_and_discriminated) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
     WsConnection conn(input);
 
     const auto f = maskedFrame(&resource, 0x1, "hi");
-    const auto status = feedBytes(conn, input, std::string_view(f.data(), f.size()));
-    RUVIA_CHECK(status == WsFeedStatus::kOk);
-
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
-    RUVIA_CHECK(e.opcode == WebSocketOpcode::kText);
-    RUVIA_CHECK(e.payload == std::string_view("hi"));
-    RUVIA_CHECK(e.payload.data() == input.data() + 6);  // header + mask, no delivery copy
-    RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kNone);
+    const auto e = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(e.has_value());
+    RUVIA_CHECK(e->kind() == WsEventKind::kMessage);
+    RUVIA_CHECK(e->ping() == nullptr);
+    RUVIA_CHECK(e->close() == nullptr);
+    const auto* message = e->message();
+    RUVIA_CHECK(message != nullptr);
+    RUVIA_CHECK(message->opcode() == WebSocketOpcode::kText);
+    RUVIA_CHECK(message->payload() == std::string_view("hi"));
+    RUVIA_CHECK(
+        message->payload().data() == input.data() + 6);  // header + mask, no copy
+    RUVIA_CHECK(!conn.poll().has_value());
 }
 
 // A Ping is surfaced as kPing AND auto-answered with an unmasked Pong echoing the data.
@@ -64,21 +112,37 @@ RUVIA_TEST(ws_connection_auto_pongs_ping) {
     WsConnection conn(input);
 
     const auto f = maskedFrame(&resource, 0x9, "pp");
-    (void)feedBytes(conn, input, std::string_view(f.data(), f.size()));
+    const auto e = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(e->kind() == WsEventKind::kPing);
+    RUVIA_CHECK(e->ping()->payload() == std::string_view("pp"));
+    RUVIA_CHECK(e->message() == nullptr);
 
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kPing);
-    RUVIA_CHECK(e.payload == std::string_view("pp"));
-
-    const auto out = conn.pendingOutput();
+    const auto plan = conn.outputPlan();
+    const auto out = plan.bytes();
+    RUVIA_CHECK(plan.disposition() == WsTransportDisposition::kKeepOpen);
     RUVIA_CHECK_EQ(out.size(), static_cast<std::size_t>(4));
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x8A));  // FIN|Pong
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[1]), static_cast<unsigned char>(2));      // unmasked len
     RUVIA_CHECK(out.substr(2) == std::string_view("pp"));
 }
 
-// A peer Close yields kClose (with the parsed code), an echoed Close frame, and marks
-// the connection closing.
+// Pong is observational only: its payload is typed separately and it queues no output.
+RUVIA_TEST(ws_connection_surfaces_pong_payload) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+
+    const auto frame = maskedFrame(&resource, 0xA, "ack");
+    const auto event = pollBytes(
+        conn, input, std::string_view(frame.data(), frame.size()));
+    RUVIA_CHECK(event->kind() == WsEventKind::kPong);
+    RUVIA_CHECK(event->pong()->payload() == "ack");
+    RUVIA_CHECK(event->ping() == nullptr);
+    RUVIA_CHECK(conn.outputPlan().bytes().empty());
+}
+
+// A peer Close yields kClose (with the parsed code), an echoed Close frame, and one
+// atomic output plan that ends the underlying transport after those bytes.
 RUVIA_TEST(ws_connection_echoes_close) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
@@ -87,16 +151,42 @@ RUVIA_TEST(ws_connection_echoes_close) {
     std::pmr::string body(&resource);
     body.push_back(static_cast<char>(0x03));  // 1000 = normal closure
     body.push_back(static_cast<char>(0xE8));
+    body.append("bye");
     const auto f = maskedFrame(&resource, 0x8, std::string_view(body.data(), body.size()));
-    (void)feedBytes(conn, input, std::string_view(f.data(), f.size()));
+    const auto e = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(e->kind() == WsEventKind::kClose);
+    RUVIA_CHECK_EQ(e->close()->closeCode(), static_cast<std::uint16_t>(1000));
+    RUVIA_CHECK(e->close()->reason() == "bye");
+    RUVIA_CHECK(e->protocolError() == nullptr);
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kFinalCloseQueued);
 
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kClose);
-    RUVIA_CHECK_EQ(e.closeCode, static_cast<std::uint16_t>(1000));
-    RUVIA_CHECK(conn.closing());
-
-    const auto out = conn.pendingOutput();
+    const auto plan = conn.outputPlan();
+    const auto out = plan.bytes();
+    RUVIA_CHECK(plan.endsTransport());
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x88));  // FIN|Close
+    conn.consumeOutput(out.size());
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kTransportEndReady);
+    conn.commitTransportEnd();
+    RUVIA_CHECK(conn.closed());
+}
+
+// RFC 6455 uses 1005 locally to report an absent status; it is not present in
+// the echoed wire payload and is not confused with a synthetic normal close.
+RUVIA_TEST(ws_connection_close_without_status_reports_1005) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+
+    const auto frame = maskedFrame(&resource, 0x8, {});
+    const auto event = pollBytes(
+        conn, input, std::string_view(frame.data(), frame.size()));
+    RUVIA_CHECK(event->close() != nullptr);
+    RUVIA_CHECK_EQ(event->close()->closeCode(), std::uint16_t{1005});
+    RUVIA_CHECK(event->close()->reason().empty());
+    const auto output = conn.outputPlan().bytes();
+    RUVIA_CHECK_EQ(output.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[0]), 0x88U);
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(output[1]), 0U);
 }
 
 // A fragmented Text message (first frame FIN=0, continuation FIN=1) reassembles into
@@ -111,12 +201,9 @@ RUVIA_TEST(ws_connection_reassembles_fragmented_message) {
     std::pmr::string both(&resource);
     both.append(f1.data(), f1.size());
     both.append(f2.data(), f2.size());
-    (void)feedBytes(conn, input, std::string_view(both.data(), both.size()));
-
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
-    RUVIA_CHECK(e.payload == std::string_view("abcd"));
-    RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kNone);
+    const auto e = pollBytes(conn, input, std::string_view(both.data(), both.size()));
+    RUVIA_CHECK(e->message()->payload() == std::string_view("abcd"));
+    RUVIA_CHECK(!conn.poll().has_value());
 }
 
 // An unmasked frame violates RFC 6455 §5.1: the core queues a Close and reports the
@@ -131,12 +218,14 @@ RUVIA_TEST(ws_connection_rejects_unmasked_frame) {
     f.push_back(static_cast<char>(0x81));  // FIN|Text
     f.push_back(static_cast<char>(2));     // no mask bit, len 2
     f.append("hi", 2);
-    (void)feedBytes(conn, input, std::string_view(f.data(), f.size()));
-
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kProtocolError);
-    RUVIA_CHECK(conn.closing());
-    const auto out = conn.pendingOutput();
+    const auto e = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(e->kind() == WsEventKind::kProtocolError);
+    RUVIA_CHECK_EQ(e->protocolError()->closeCode(), std::uint16_t{1002});
+    RUVIA_CHECK(e->message() == nullptr);
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kFinalCloseQueued);
+    const auto plan = conn.outputPlan();
+    const auto out = plan.bytes();
+    RUVIA_CHECK(plan.endsTransport());
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x88));  // Close
 }
 
@@ -147,7 +236,7 @@ RUVIA_TEST(ws_connection_submit_message_encodes_unmasked_frame) {
     WsConnection conn(input);
 
     (void)conn.submitMessage(WebSocketOpcode::kText, "hello");
-    const auto out = conn.pendingOutput();
+    const auto out = conn.outputPlan().bytes();
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[0]), static_cast<unsigned char>(0x81));  // FIN|Text
     RUVIA_CHECK_EQ(static_cast<unsigned char>(out[1]), static_cast<unsigned char>(5));      // unmasked len
     RUVIA_CHECK(out.substr(2) == std::string_view("hello"));
@@ -161,14 +250,13 @@ RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
     WsConnection conn(input);
 
     const auto f = maskedFrame(&resource, 0x1, "split");
-    (void)feedBytes(conn, input, std::string_view(f.data(), 3));  // header only, no full payload
-    RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kNone);
-    RUVIA_CHECK(!conn.closing());
+    RUVIA_CHECK(
+        !pollBytes(conn, input, std::string_view(f.data(), 3)).has_value());
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kOpen);
 
-    (void)feedBytes(conn, input, std::string_view(f.data() + 3, f.size() - 3));  // remainder
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
-    RUVIA_CHECK(e.payload == std::string_view("split"));
+    const auto e = pollBytes(
+        conn, input, std::string_view(f.data() + 3, f.size() - 3));  // remainder
+    RUVIA_CHECK(e->message()->payload() == std::string_view("split"));
 }
 
 // With permessage-deflate negotiated, an RSV1 (compressed) message is inflated and
@@ -186,11 +274,8 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
     const auto f = maskedFrame(
         &resource, 0x1, std::string_view(compressed.data(), compressed.size()),
         /*fin=*/true, /*rsv1=*/true);
-    (void)feedBytes(conn, input, std::string_view(f.data(), f.size()));
-
-    const auto e = conn.nextEvent();
-    RUVIA_CHECK(e.kind == WsEvent::Kind::kMessage);
-    RUVIA_CHECK(e.payload == std::string_view("hello hello hello"));
+    const auto e = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(e->message()->payload() == std::string_view("hello hello hello"));
 }
 
 // With permessage-deflate on, submitMessage compresses a shrinkable payload and sets
@@ -203,7 +288,7 @@ RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     const std::pmr::string repetitive(200, 'a', &resource);
     (void)conn.submitMessage(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size()));
 
-    const auto out = conn.pendingOutput();
+    const auto out = conn.outputPlan().bytes();
     RUVIA_CHECK((static_cast<unsigned char>(out[0]) & 0x40U) != 0);  // RSV1 (compressed)
     RUVIA_CHECK((static_cast<unsigned char>(out[0]) & 0x0FU) == 0x1);  // Text opcode
     RUVIA_CHECK(out.size() < repetitive.size());                      // actually smaller
@@ -216,8 +301,77 @@ RUVIA_TEST(ws_connection_rejects_rsv1_without_deflate) {
     WsConnection conn(input);  // no deflate
 
     const auto f = maskedFrame(&resource, 0x1, "x", /*fin=*/true, /*rsv1=*/true);
-    (void)feedBytes(conn, input, std::string_view(f.data(), f.size()));
+    const auto event = pollBytes(conn, input, std::string_view(f.data(), f.size()));
+    RUVIA_CHECK(event->protocolError() != nullptr);
+    RUVIA_CHECK(conn.outputPlan().endsTransport());
+}
 
-    RUVIA_CHECK(conn.nextEvent().kind == WsEvent::Kind::kProtocolError);
-    RUVIA_CHECK(conn.closing());
+// A locally initiated Close is not transport EOF. Its bytes are flushed while the
+// transport remains open; application data is then ignored until the peer Close
+// completes the handshake and produces the terminal transport plan.
+RUVIA_TEST(ws_connection_local_close_waits_for_peer_close) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+
+    conn.submitClose(1000, "bye");
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kLocalCloseQueued);
+    auto plan = conn.outputPlan();
+    RUVIA_CHECK(!plan.endsTransport());
+    RUVIA_CHECK_EQ(static_cast<unsigned char>(plan.bytes()[0]), 0x88U);
+    conn.consumeOutput(plan.bytes().size());
+    RUVIA_CHECK(conn.closePhase() == WsClosePhase::kAwaitingPeerClose);
+
+    std::pmr::string closePayload(&resource);
+    closePayload.push_back(static_cast<char>(0x03));
+    closePayload.push_back(static_cast<char>(0xE8));
+    const auto ignoredText = maskedFrame(&resource, 0x1, "late");
+    const auto peerClose = maskedFrame(
+        &resource, 0x8, std::string_view(closePayload.data(), closePayload.size()));
+    std::pmr::string inbound(&resource);
+    inbound.append(ignoredText.data(), ignoredText.size());
+    inbound.append(peerClose.data(), peerClose.size());
+
+    const auto event = pollBytes(conn, input, std::string_view(inbound.data(), inbound.size()));
+    RUVIA_CHECK(event->close() != nullptr);
+    RUVIA_CHECK_EQ(event->close()->closeCode(), std::uint16_t{1000});
+    plan = conn.outputPlan();
+    RUVIA_CHECK(plan.bytes().empty());  // local Close was already sent; no duplicate
+    RUVIA_CHECK(plan.endsTransport());
+    conn.commitTransportEnd();
+    RUVIA_CHECK(conn.closed());
+}
+
+// A transport EOF is not rewritten into a synthetic normal WebSocket Close. It
+// discards any queued WS bytes and asks only for transport termination.
+RUVIA_TEST(ws_connection_transport_eof_discards_unsent_close) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+
+    conn.submitClose(1000, {});
+    RUVIA_CHECK(!conn.outputPlan().bytes().empty());
+    conn.notifyTransportEof();
+    const auto plan = conn.outputPlan();
+    RUVIA_CHECK(plan.bytes().empty());
+    RUVIA_CHECK(plan.endsTransport());
+    const auto event = conn.poll();
+    RUVIA_CHECK(event->kind() == WsEventKind::kTransportEnd);
+    RUVIA_CHECK(event->transportEnd() != nullptr);
+    RUVIA_CHECK(event->close() == nullptr);
+}
+
+RUVIA_TEST(ws_connection_rejects_application_frames_after_close) {
+    std::pmr::monotonic_buffer_resource resource;
+    std::pmr::string input(&resource);
+    WsConnection conn(input);
+    conn.submitClose(1000, {});
+
+    bool threw = false;
+    try {
+        conn.submitMessage(WebSocketOpcode::kText, "late");
+    } catch (const std::logic_error&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
 }

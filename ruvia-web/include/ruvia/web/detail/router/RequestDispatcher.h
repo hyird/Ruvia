@@ -28,7 +28,7 @@ public:
     [[nodiscard]] virtual RouteResolution resolve(
         const HttpRequest& request, RouteMatch& match) const noexcept = 0;
     [[nodiscard]] virtual RouteResolution resolve(
-        HttpMethod method, std::string_view path, RouteMatch& match) const noexcept = 0;
+        HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept = 0;
 
     virtual Task<HttpResponse> dispatch(
         const HttpRequest& request,

@@ -32,7 +32,7 @@ public:
     }
 
     [[nodiscard]] bool full() const noexcept {
-        return count_ == kMaxRequestHeaders;
+        return count_ == kMaxHttpHeaderFields;
     }
 
     [[nodiscard]] Http2StoredHeaderView at(std::size_t index) const noexcept {
@@ -78,7 +78,7 @@ public:
             inlineFields_[count_] = field;
         } else {
             if (overflowFields_.empty()) {
-                overflowFields_.reserve(kMaxRequestHeaders - kInlineHeaderFields);
+                overflowFields_.reserve(kMaxHttpHeaderFields - kInlineHeaderFields);
             }
             overflowFields_.push_back(field);
         }

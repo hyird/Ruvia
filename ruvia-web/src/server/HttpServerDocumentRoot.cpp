@@ -12,7 +12,7 @@ std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
     if (root == nullptr) {
         return std::nullopt;
     }
-    if (request.method() != HttpMethod::kGet) {
+    if (request.knownMethod() != HttpKnownMethod::kGet) {
         return std::nullopt;
     }
 

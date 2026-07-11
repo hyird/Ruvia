@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpTypes.h"
 
@@ -93,16 +94,63 @@ namespace {
 
 }  // namespace
 
-bool isValidWebSocketRequest(const HttpRequest& request, const HttpRequestFlags& flags) noexcept {
-    return request.method() == HttpMethod::kGet &&
-        request.httpVersion() == "HTTP/1.1" &&
-        webSocketHeaderEquals(requestKnownHeader(request, RequestKnownHeader::kUpgrade), "websocket") &&
-        requestKnownHeader(request, RequestKnownHeader::kContentLength).empty() &&
-        flags.upgrade &&
-        flags.secWebSocketKeyCount == 1 &&
-        flags.secWebSocketVersionCount == 1 &&
-        webSocketHeaderEquals(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion), "13") &&
-        decodeWebSocketKey(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey)).has_value();
+bool isValidWebSocketRequest(const HttpRequest& request) noexcept {
+    HttpConnectionOptions connectionOptions;
+    HttpUpgradeProtocols upgradeProtocols;
+    std::string_view key;
+    std::string_view version;
+    std::size_t keyCount = 0;
+    std::size_t versionCount = 0;
+    bool webSocketUpgrade = false;
+    bool hasContentLength = false;
+
+    for (const auto& header : request.headers()) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
+            if (connectionOptions.parseField(
+                    header.value(),
+                    HttpFieldListRole::kRecipient) !=
+                HttpFieldListParseStatus::kOk) {
+                return false;
+            }
+        } else if (httpAsciiEqualsIgnoreCase(header.name(), "Upgrade")) {
+            if (upgradeProtocols.parseField(
+                    header.value(),
+                    HttpFieldListRole::kRecipient,
+                    [&webSocketUpgrade](
+                        const HttpUpgradeProtocol& protocol) noexcept {
+                        if (protocol.version.empty() &&
+                            httpAsciiEqualsIgnoreCase(
+                                protocol.name, "websocket")) {
+                            webSocketUpgrade = true;
+                        }
+                        return true;
+                    }) != HttpFieldListParseStatus::kOk) {
+                return false;
+            }
+        } else if (httpAsciiEqualsIgnoreCase(
+                       header.name(), "Sec-WebSocket-Key")) {
+            key = header.value();
+            ++keyCount;
+        } else if (httpAsciiEqualsIgnoreCase(
+                       header.name(), "Sec-WebSocket-Version")) {
+            version = header.value();
+            ++versionCount;
+        } else if (httpAsciiEqualsIgnoreCase(
+                       header.name(), "Content-Length")) {
+            hasContentLength = true;
+        }
+    }
+
+    return request.knownMethod() == HttpKnownMethod::kGet &&
+        request.protocolVersion() == HttpProtocolVersion::kHttp11 &&
+        connectionOptions.upgrade() &&
+        upgradeProtocols.hasProtocol() &&
+        webSocketUpgrade &&
+        !hasContentLength &&
+        keyCount == 1 &&
+        versionCount == 1 &&
+        webSocketHeaderEquals(version, "13") &&
+        decodeWebSocketKey(key).has_value();
 }
 
 bool isValidWebSocketCloseCode(std::uint16_t code) noexcept {
@@ -171,25 +219,27 @@ std::size_t encodeWebSocketClosePayload(
     return reason.size() + 2;
 }
 
-void validateWebSocketClosePayload(std::string_view payload) {
+std::optional<WebSocketProtocolFailure>
+webSocketClosePayloadFailure(std::string_view payload) noexcept {
     // Incoming Close frame (RFC 6455 §5.5.1). A malformed frame is a protocol
     // error (close 1002); an otherwise-valid frame whose reason is not valid
     // UTF-8 is invalid payload data (close 1007, §8.1).
     if (payload.size() == 1) {
-        throw WebSocketProtocolError(1002, "invalid websocket close payload");
+        return WebSocketProtocolFailure::kProtocolError;
     }
     if (payload.size() < 2) {
-        return;
+        return std::nullopt;
     }
     const auto code = static_cast<std::uint16_t>(
         (static_cast<unsigned char>(payload[0]) << 8) |
         static_cast<unsigned char>(payload[1]));
     if (!isValidWebSocketCloseCode(code)) {
-        throw WebSocketProtocolError(1002, "invalid websocket close code");
+        return WebSocketProtocolFailure::kProtocolError;
     }
     if (!isValidUtf8(payload.substr(2))) {
-        throw WebSocketProtocolError(1007, "invalid websocket close reason");
+        return WebSocketProtocolFailure::kInvalidPayloadData;
     }
+    return std::nullopt;
 }
 
 }  // namespace ruvia::detail

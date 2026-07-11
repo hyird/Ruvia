@@ -6,7 +6,7 @@
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -58,19 +58,19 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     WorkerMemory& memory,
     ResponseHeadBuffer& responseHead,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
     ContextServices baseRouteServices,
     const HttpServerOptions& options,
     HttpResponse& response,
-    bool& keepAlive,
+    Http1ServerConnectionPlan& connectionPlan,
     std::size_t& requestCount) {
     const auto streamPlan = http1PlanResponseStream(
         parsed,
-        requestLimitReached(requestCount + 1, options.keepaliveRequests));
-    keepAlive = streamPlan.requestCanPersist();
+        nextHttp1ResponseClosePolicy(requestCount, options.keepaliveRequests));
+    connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = routeResolution.route();
     ResponseSink responseSink(
@@ -96,31 +96,30 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     }
     if (result.failedBeforeCommit()) {
         response = result.takeResponse();
-        keepAlive = false;
-        http1MarkConnectionClose(response);
+        connectionPlan = http1FinalizeResponseConnection(
+            response,
+            Http1ServerConnectionPlan::close());
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
     if (result.buffered()) {
         response = result.takeResponse();
-        finalizeBufferedRouteResponse(
+        connectionPlan = finalizeBufferedRouteResponse(
             response,
-            keepAlive,
+            connectionPlan,
             requestCount,
-            options.keepaliveRequests,
-            streamPlan.needsKeepAliveSignal());
+            options.keepaliveRequests);
         scannerEntry.touch();
         co_return HttpResponseStreamRouteResult::writeBufferedResponse();
     }
 
-    if (streamPlan.connectionWillClose()) {
-        keepAlive = false;
-    }
-    recordCompletedRequest(
-        keepAlive,
-        requestCount,
-        options.keepaliveRequests);
-    if (!keepAlive) {
+    // The pre-commit close policy already included this completed request in the
+    // plan. After bytes are committed, the prepared sink disposition is the only
+    // lifecycle verdict; recomputing the limit here could close without having sent
+    // the matching Connection signal.
+    ++requestCount;
+    connectionPlan = responseSink.connectionPlan();
+    if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose) {
         co_return HttpResponseStreamRouteResult::sessionFinished();
     }
     co_return HttpResponseStreamRouteResult::streamDispatched();

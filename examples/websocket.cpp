@@ -10,9 +10,10 @@ public:
     RUVIA_ROUTES_BEGIN
     const auto chatOptions = ruvia::WebSocketRouteOptions{
         .subprotocols = "chat.v1",
-        .heartbeat = {
+        .lifecycle = {
             .pingInterval = std::chrono::seconds(30),
             .pongTimeout = std::chrono::seconds(10),
+            .closeHandshakeTimeout = std::chrono::seconds(5),
         },
     };
     RUVIA_GET_WS("/echo", echo);

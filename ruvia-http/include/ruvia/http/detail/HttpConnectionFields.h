@@ -1,0 +1,209 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <string_view>
+
+#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/detail/AsciiCase.h"
+#include "ruvia/http/detail/HttpOws.h"
+
+namespace ruvia::detail {
+
+// RFC 9110 section 5.6.1 deliberately gives senders and recipients different
+// list obligations: senders cannot generate empty members, while recipients
+// must ignore a reasonable number of them. The HTTP/1 head-size limit bounds
+// recipient work, so the tolerant path remains allocation-free and O(head).
+enum class HttpFieldListRole : std::uint8_t {
+    kRecipient,
+    kSender
+};
+
+enum class HttpFieldListParseStatus : std::uint8_t {
+    kOk,
+    kMalformed,
+    kRejected
+};
+
+enum class HttpConnectionOption : std::uint8_t {
+    kClose = 1U << 0,
+    kKeepAlive = 1U << 1,
+    kUpgrade = 1U << 2,
+    kTe = 1U << 3
+};
+
+// Incremental parser for the logical Connection field value. Repeated field
+// lines extend the same state, so a caller cannot accidentally let a later
+// occurrence erase an earlier close/Upgrade/TE signal.
+class HttpConnectionOptions final {
+public:
+    [[nodiscard]] HttpFieldListParseStatus parseField(
+        std::string_view fieldValue,
+        HttpFieldListRole role) noexcept {
+        auto parsedBits = bits_;
+        std::size_t start = 0;
+        while (start <= fieldValue.size()) {
+            const auto comma = fieldValue.find(',', start);
+            const auto end = comma == std::string_view::npos
+                ? fieldValue.size()
+                : comma;
+            const auto option = httpTrimOws(
+                fieldValue.substr(start, end - start));
+            if (option.empty()) {
+                // An explicitly present but empty Connection field is useless
+                // and cannot be safely extended by a later generated option;
+                // the strict writer contract therefore rejects it as well as
+                // leading, trailing, and interior empty members.
+                if (role == HttpFieldListRole::kSender) {
+                    return HttpFieldListParseStatus::kMalformed;
+                }
+            } else {
+                if (!isValidHttpHeaderName(option)) {
+                    return HttpFieldListParseStatus::kMalformed;
+                }
+                if (httpAsciiEqualsIgnoreCase(option, "close")) {
+                    parsedBits |= bit(HttpConnectionOption::kClose);
+                } else if (httpAsciiEqualsIgnoreCase(option, "keep-alive")) {
+                    parsedBits |= bit(HttpConnectionOption::kKeepAlive);
+                } else if (httpAsciiEqualsIgnoreCase(option, "Upgrade")) {
+                    parsedBits |= bit(HttpConnectionOption::kUpgrade);
+                } else if (httpAsciiEqualsIgnoreCase(option, "TE")) {
+                    parsedBits |= bit(HttpConnectionOption::kTe);
+                }
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+
+        bits_ = parsedBits;
+        fieldPresent_ = true;
+        return HttpFieldListParseStatus::kOk;
+    }
+
+    [[nodiscard]] bool hasField() const noexcept {
+        return fieldPresent_;
+    }
+
+    [[nodiscard]] bool contains(HttpConnectionOption option) const noexcept {
+        return (bits_ & bit(option)) != 0;
+    }
+
+    [[nodiscard]] bool close() const noexcept {
+        return contains(HttpConnectionOption::kClose);
+    }
+
+    [[nodiscard]] bool keepAlive() const noexcept {
+        return contains(HttpConnectionOption::kKeepAlive);
+    }
+
+    [[nodiscard]] bool upgrade() const noexcept {
+        return contains(HttpConnectionOption::kUpgrade);
+    }
+
+    [[nodiscard]] bool te() const noexcept {
+        return contains(HttpConnectionOption::kTe);
+    }
+
+private:
+    [[nodiscard]] static constexpr std::uint8_t bit(
+        HttpConnectionOption option) noexcept {
+        return static_cast<std::uint8_t>(option);
+    }
+
+    std::uint8_t bits_{0};
+    bool fieldPresent_{false};
+};
+
+struct HttpUpgradeProtocol final {
+    std::string_view name;
+    std::string_view version;
+};
+
+[[nodiscard]] inline bool httpParseUpgradeProtocol(
+    std::string_view value,
+    HttpUpgradeProtocol& output) noexcept {
+    const auto slash = value.find('/');
+    const auto name = slash == std::string_view::npos
+        ? value
+        : value.substr(0, slash);
+    const auto version = slash == std::string_view::npos
+        ? std::string_view{}
+        : value.substr(slash + 1);
+    if (!isValidHttpHeaderName(name) ||
+        (slash != std::string_view::npos &&
+         (!isValidHttpHeaderName(version) ||
+          version.find('/') != std::string_view::npos))) {
+        return false;
+    }
+    output = HttpUpgradeProtocol{.name = name, .version = version};
+    return true;
+}
+
+[[nodiscard]] inline bool httpUpgradeProtocolEquals(
+    const HttpUpgradeProtocol& left,
+    const HttpUpgradeProtocol& right) noexcept {
+    // RFC 9110 section 7.8: protocol-name is case-insensitive, while an
+    // optional protocol-version remains an exact token.
+    return httpAsciiEqualsIgnoreCase(left.name, right.name) &&
+        left.version == right.version;
+}
+
+// Incremental Upgrade list parser. It owns repeated-field/list syntax, while
+// the visitor owns policy such as whether a selected protocol was offered.
+class HttpUpgradeProtocols final {
+public:
+    template <typename Visitor>
+    [[nodiscard]] HttpFieldListParseStatus parseField(
+        std::string_view fieldValue,
+        HttpFieldListRole role,
+        Visitor&& visitor) noexcept {
+        bool parsedProtocol = false;
+        std::size_t start = 0;
+        while (start <= fieldValue.size()) {
+            const auto comma = fieldValue.find(',', start);
+            const auto end = comma == std::string_view::npos
+                ? fieldValue.size()
+                : comma;
+            const auto item = httpTrimOws(
+                fieldValue.substr(start, end - start));
+            if (item.empty()) {
+                if (role == HttpFieldListRole::kSender) {
+                    return HttpFieldListParseStatus::kMalformed;
+                }
+            } else {
+                HttpUpgradeProtocol protocol;
+                if (!httpParseUpgradeProtocol(item, protocol)) {
+                    return HttpFieldListParseStatus::kMalformed;
+                }
+                if (!visitor(protocol)) {
+                    return HttpFieldListParseStatus::kRejected;
+                }
+                parsedProtocol = true;
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+
+        fieldPresent_ = true;
+        hasProtocol_ = hasProtocol_ || parsedProtocol;
+        return HttpFieldListParseStatus::kOk;
+    }
+
+    [[nodiscard]] bool hasField() const noexcept {
+        return fieldPresent_;
+    }
+
+    [[nodiscard]] bool hasProtocol() const noexcept {
+        return hasProtocol_;
+    }
+
+private:
+    bool fieldPresent_{false};
+    bool hasProtocol_{false};
+};
+
+}  // namespace ruvia::detail

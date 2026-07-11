@@ -153,7 +153,7 @@ bool detail::RouteTable::splitSegmentStrict(
 }
 
 const detail::RouteEntry* detail::RouteTable::findDynamicRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path,
     RouteMatch& match) const noexcept {
     match.clear();
@@ -166,7 +166,7 @@ const detail::RouteEntry* detail::RouteTable::findDynamicRoute(
 }
 
 const detail::RouteEntry* detail::RouteTable::findDynamic(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path,
     RouteMatch& match) const noexcept {
     match.clear();

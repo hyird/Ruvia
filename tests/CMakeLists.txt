@@ -34,12 +34,14 @@ add_executable(ruvia_unit_tests
     unit_hpack.cpp
     unit_http2_frame.cpp
     unit_http2_settings.cpp
+    unit_http2_local_settings.cpp
     unit_http2_stream_flow.cpp
     unit_http2_payload.cpp
     unit_http2_closed_streams.cpp
     unit_http2_stream_table.cpp
-    unit_http2_upgrade.cpp
     unit_http2_body_accounting.cpp
+    unit_http2_local_content_state.cpp
+    unit_http2_connect.cpp
     unit_http2_ready_queue.cpp
     unit_http2_body_queue.cpp
     unit_websocket_assembler.cpp
@@ -63,6 +65,7 @@ add_executable(ruvia_unit_tests
     unit_streaming.cpp
     unit_http_cache.cpp
     unit_vary_headers.cpp
+    unit_http_byte_range.cpp
     unit_content_range.cpp
     unit_static_path_normalization.cpp
     unit_websocket_utils.cpp
@@ -90,6 +93,7 @@ add_executable(ruvia_unit_tests
     unit_error_response.cpp
     unit_validator.cpp
     unit_http_response.cpp
+    unit_http1_interim_response.cpp
     unit_parser_validation.cpp
     unit_http2_flow_control.cpp
     unit_http2_server_flow_control.cpp
@@ -117,6 +121,7 @@ add_executable(ruvia_unit_tests
     unit_http2_payload_slice.cpp
     unit_http2_response_headers.cpp
     unit_http2_websocket_handshake.cpp
+    unit_http_client_request.cpp
     unit_http_client_response.cpp
     unit_http_origin.cpp
     unit_http_client_redirect.cpp

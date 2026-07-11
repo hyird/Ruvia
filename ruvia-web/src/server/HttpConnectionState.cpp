@@ -42,7 +42,7 @@ void ConnectionWorkSet::resetForReuse() {
     trimReadBufferStorage(readBuffer, 0);
     responseHead.reset();
     clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
-    // parsed is fully overwritten by the next parseHeaders(); fileChunk/parser
+    // parsed is fully overwritten by the next parseHead(); fileChunk/parser
     // carry no cross-request state worth clearing.
 }
 
@@ -124,9 +124,9 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
     }
 }
 
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpServerParseResult& parsed) {
-    if (parsed.consumedBytes > readBuffer.size()) {
-        resizePmrStringForOverwrite(readBuffer, parsed.consumedBytes);
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const Http1ServerRequestParseState& parsed) {
+    if (parsed.requiredTotalBytes && *parsed.requiredTotalBytes > readBuffer.size()) {
+        resizePmrStringForOverwrite(readBuffer, *parsed.requiredTotalBytes);
         return;
     }
 

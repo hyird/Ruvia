@@ -11,23 +11,29 @@
 //
 // Design mirrors nghttp2's mem_recv / mem_send: feed() ~ nghttp2_session_mem_recv,
 // pendingOutput()/consumeOutput() ~ nghttp2_session_mem_send. Flow-control back
-// pressure is expressed with defer/resume (submitData may return kBlocked; the
-// caller resumes blocked streams via pumpWritable after WINDOW_UPDATE/SETTINGS),
-// not with coroutine suspension.
+// pressure has explicit ownership: submitData either accepts the full input (possibly
+// copying a deferred suffix) or accepts none until the prior queued input drains.
+// Final response Content-Length uses the same ownership boundary: accepted bytes are
+// counted once for the whole input, committed bytes advance only when DATA is framed,
+// and a mismatch is rejected before output/window/state mutation.
 //
 // All protocol primitives it builds on (frame codec, HPACK, stream state, flow
 // control, input buffer, settings) are already pure and reused as-is.
 
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/detail/http2/Http2ClosedStreams.h"
+#include "ruvia/http/detail/http2/Http2Event.h"
 #include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
@@ -35,108 +41,347 @@
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2PeerSettings.h"
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
+#include "ruvia/http/detail/http2/Http2RequestContent.h"
+#include "ruvia/http/detail/http2/Http2Role.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/http2/Http2StreamTable.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 
-struct HttpServerParseResult;  // h1 parse result seeding an h2c-upgraded stream
-
-// Which side of the connection this endpoint is. A server accepts peer-initiated odd
-// streams and answers them; a client opens odd streams itself and decodes RESPONSE
-// heads (:status) off them. One state machine serves both roles (the frame codec,
-// HPACK, flow control and lifecycle are identical); only stream-id admission rules
-// and header-block semantics switch on the role.
-enum class Http2Role : std::uint8_t {
-    kServer,
-    kClient,
-};
-
-// Protocol-only configuration (NOT server policy). Server policy such as timeouts,
-// CORS, rate limiting and access logging lives in ruvia-web, never here.
-struct Http2CoreConfig final {
-    // These three seed the flow-control / framing ACCOUNTING and MUST match the values
-    // advertised in the local connection preface SETTINGS (queueLocalSettings). They
-    // default to exactly the advertised constants; only override them together with a
-    // matching custom SETTINGS frame, or accounting will diverge from the wire.
-    std::uint32_t maxFrameSize{kHttp2DefaultMaxFrameSize};
-    std::uint32_t initialSendWindow{kHttp2DefaultInitialWindowSize};
-    std::uint32_t initialReceiveWindow{kHttp2LocalInitialWindowSize};
-    // DoS-protection body caps (protocol-level, nghttp2-style; NOT server policy).
+// Protocol-core message limits. Wire-level SETTINGS are deliberately absent: local
+// receive constraints come only from Http2LocalSettings, while send constraints come
+// only from the peer SETTINGS/WINDOW_UPDATE state.
+struct Http2ConnectionLimits final {
+    // DoS-protection body caps (nghttp2-style; the owner selects route body mode).
     std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};      // 0 = unlimited
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
 };
 
-enum class Http2FeedStatus : std::uint8_t {
-    kOk,        // consumed some bytes, may have emitted events
-    kNeedMore,  // buffered a partial frame; feed more bytes
-    kError,     // protocol error; connection should GOAWAY/close (bytes in output)
+// feed() has all-or-nothing ownership for each supplied span; it never partially
+// consumes caller input. The result itself therefore carries the complete state
+// instead of pairing a status with a redundant byte count.
+enum class Http2FeedResult : std::uint8_t {
+    // The exact span remains caller-owned and retryable after beginConnection().
+    kConnectionNotStarted,
+    // The exact span remains caller-owned and retryable after nextEvent() drains.
+    kEventsPending,
+    // The whole span was accepted and no partial preface/frame remains buffered.
+    kAccepted,
+    // The whole span was accepted; a partial preface/frame awaits another span.
+    kNeedInput,
+    // The connection is terminal. The current span must be dropped, never retried;
+    // GOAWAY/other final bytes can still be present in pendingOutput().
+    kProtocolFailure,
 };
 
-struct Http2FeedResult final {
-    std::size_t consumed{0};
-    Http2FeedStatus status{Http2FeedStatus::kNeedMore};
+enum class Http2EndStream : std::uint8_t {
+    kKeepOpen,
+    kEndStream
 };
 
-// Events pulled by the core's owner to drive handlers. Direction-neutral: the peer
-// "message" is the request when this endpoint is the server, the response when it is
-// the client.
-struct Http2Event final {
-    enum class Kind : std::uint8_t {
-        kNone,
-        kMessageHead,       // the peer's full message head decoded on `streamId`
-        kMessageBodyChunk,  // inbound DATA for `streamId` (view valid until next feed)
-        kMessageEnd,        // END_STREAM seen for `streamId`
-        kStreamClosed,      // `streamId` aborted (peer RST or local protocol reject)
-        kGoaway,            // peer sent GOAWAY; `streamId` = its last-processed id
-    };
-    Kind kind{Kind::kNone};
-    std::uint32_t streamId{0};
-    std::string_view bytes{};  // for kMessageBodyChunk
+[[nodiscard]] constexpr bool http2EndsStream(Http2EndStream value) noexcept {
+    return value == Http2EndStream::kEndStream;
+}
+
+// Initial-head/control submission status. kClosed is an expected race with a
+// reset peer; kInvalidState is a caller contract violation and emits no bytes.
+enum class Http2SubmitStatus : std::uint8_t {
+    kAccepted,
+    kClosed,
+    kInvalidState,
+    // The stream phase is valid, but the submitted HTTP message metadata cannot
+    // be serialized as a conformant message (currently an invalid content-length).
+    kInvalidMessage,
+    // Extended CONNECT was requested before the peer advertised RFC 8441 support.
+    kPeerCapabilityUnavailable
 };
 
-// Result of submitting response DATA: kBlocked means flow-control window is closed;
-// the caller keeps the source and retries after pumpWritable().
-enum class Http2SubmitResult : std::uint8_t {
-    kOk,
-    kBlocked,
-    kClosed,  // stream is gone (reset/closed); drop the response
+// Opening a client request is one transaction: semantic validation and peer/local
+// capacity checks happen before the core allocates a stream ID or emits HPACK bytes.
+// Success is not an enum member because only success owns a real request stream.
+enum class Http2RequestHeadSubmitError : std::uint8_t {
+    kInvalidState,              // this connection is not in client role
+    kConnectionNotStarted,      // beginConnection() has not queued the client preface
+    kConnectionUnavailable,     // connection error, peer GOAWAY, or stream-ID exhaustion
+    kPeerStreamLimitReached,    // peer SETTINGS_MAX_CONCURRENT_STREAMS is exhausted
+    kLocalStreamCapacityReached,
+    kPeerCapabilityUnavailable, // Extended CONNECT was not advertised by the peer
+    kInvalidMessage
 };
+
+class Http2RequestHeadSubmitResult;
+
+// A successfully submitted HEADERS transaction. The stream ID exists only in this
+// alternative; failure can never expose connection-control stream zero as a sentinel.
+class Http2SubmittedRequestHead final {
+public:
+    [[nodiscard]] constexpr std::uint32_t streamId() const noexcept {
+        return streamId_;
+    }
+
+private:
+    friend class Http2RequestHeadSubmitResult;
+
+    explicit constexpr Http2SubmittedRequestHead(
+        std::uint32_t streamId) noexcept
+        : streamId_(streamId) {
+        if (streamId_ == 0 || streamId_ > 0x7fffffffU || (streamId_ & 1U) == 0) {
+            std::terminate();
+        }
+    }
+
+    std::uint32_t streamId_;
+};
+
+class Http2RequestHeadSubmitFailure final {
+public:
+    [[nodiscard]] constexpr Http2RequestHeadSubmitError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class Http2RequestHeadSubmitResult;
+
+    explicit constexpr Http2RequestHeadSubmitFailure(
+        Http2RequestHeadSubmitError error) noexcept
+        : error_(error) {}
+
+    Http2RequestHeadSubmitError error_;
+};
+
+// Exactly one alternative is observable: submitted() owns a nonzero request stream
+// ID, while failure() owns the refusal reason. There is no accepted status paired
+// with a default stream ID and no top-level streamId() accessor.
+class Http2RequestHeadSubmitResult final {
+public:
+    [[nodiscard]] constexpr const Http2SubmittedRequestHead*
+    submitted() const noexcept {
+        return std::get_if<Http2SubmittedRequestHead>(&value_);
+    }
+
+    [[nodiscard]] constexpr const Http2RequestHeadSubmitFailure*
+    failure() const noexcept {
+        return std::get_if<Http2RequestHeadSubmitFailure>(&value_);
+    }
+
+private:
+    friend class Http2Connection;
+
+    using Value = std::variant<
+        Http2SubmittedRequestHead,
+        Http2RequestHeadSubmitFailure>;
+
+    template <typename Alternative>
+    explicit constexpr Http2RequestHeadSubmitResult(
+        Alternative alternative) noexcept
+        : value_(alternative) {}
+
+    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult
+    makeSubmitted(std::uint32_t streamId) noexcept {
+        return Http2RequestHeadSubmitResult(
+            Http2SubmittedRequestHead(streamId));
+    }
+
+    [[nodiscard]] static constexpr Http2RequestHeadSubmitResult
+    makeFailure(Http2RequestHeadSubmitError error) noexcept {
+        return Http2RequestHeadSubmitResult(
+            Http2RequestHeadSubmitFailure(error));
+    }
+
+    Value value_;
+};
+
+// DATA ownership is explicit:
+// - kAccepted: the whole input was accepted and no deferred remainder exists.
+// - kQueued: the whole input was accepted; the core copied the unsent suffix and
+//   will drain it automatically. The caller MUST NOT submit that input again.
+// - kBackpressured: an older queued submission still owns the stream; this call
+//   accepted zero bytes, so the caller retains and retries this input after drain.
+enum class Http2DataSubmitStatus : std::uint8_t {
+    kAccepted,
+    kQueued,
+    kBackpressured,
+    // The stream disappeared or was reset; the caller drops the input.
+    kClosed,
+    // The stream exists but its local message is not in the body-open phase.
+    kInvalidState,
+    // The whole input is rejected before any frame/window/counter mutation.
+    kContentLengthExceeded,
+    // END_STREAM was requested before the declared content length would be met.
+    kContentLengthIncomplete
+};
+
+enum class Http2FinishSubmitStatus : std::uint8_t {
+    kAccepted,
+    kQueued,
+    // The stream disappeared or was reset while its owner was finishing it.
+    kClosed,
+    // The stream is not in an open response body/trailers phase, or a
+    // trailers-only response has no submitted terminal section.
+    kInvalidState,
+    // The response remains body-open so the caller can submit the missing bytes.
+    kContentLengthIncomplete
+};
+
+// One trailer section is submitted atomically after the final response head.
+// Unlike the former per-field void API, every refusal is observable and invalid
+// input cannot leave a partially encoded field block attached to the stream.
+enum class Http2ResponseTrailerSubmitStatus : std::uint8_t {
+    kAccepted,
+    kClosed,
+    kInvalidState,
+    kEmpty,
+    kInvalidField,
+    // No trailer bytes are retained; the owner may submit the missing DATA and
+    // retry the same section.
+    kContentLengthIncomplete
+};
+
+// A final response HEADERS transaction either commits one body/stream plan or
+// rejects the submission without exposing a plan that was never committed.
+enum class Http2ResponseHeadSubmitError : std::uint8_t {
+    kClosed,
+    kInvalidState,
+    kInvalidMessage,
+};
+
+template <typename Plan>
+class Http2ResponseHeadSubmitResult;
+
+template <typename Plan>
+class Http2SubmittedResponseHead final {
+public:
+    [[nodiscard]] const Plan& plan() const noexcept {
+        return plan_;
+    }
+
+private:
+    template <typename>
+    friend class Http2ResponseHeadSubmitResult;
+
+    explicit Http2SubmittedResponseHead(Plan plan)
+        : plan_(std::move(plan)) {}
+
+    Plan plan_;
+};
+
+class Http2ResponseHeadSubmitFailure final {
+public:
+    [[nodiscard]] constexpr Http2ResponseHeadSubmitError error() const noexcept {
+        return error_;
+    }
+
+private:
+    template <typename>
+    friend class Http2ResponseHeadSubmitResult;
+
+    explicit constexpr Http2ResponseHeadSubmitFailure(
+        Http2ResponseHeadSubmitError error) noexcept
+        : error_(error) {}
+
+    Http2ResponseHeadSubmitError error_;
+};
+
+// Only submitted() owns the plan that now governs DATA/END_STREAM. A failure
+// owns only its refusal reason, so callers cannot observe body metadata from a
+// rejected HEADERS transaction or forget to check a parallel status first.
+template <typename Plan>
+class Http2ResponseHeadSubmitResult final {
+public:
+    using Submitted = Http2SubmittedResponseHead<Plan>;
+
+    [[nodiscard]] const Submitted* submitted() const noexcept {
+        return std::get_if<Submitted>(&value_);
+    }
+
+    [[nodiscard]] constexpr const Http2ResponseHeadSubmitFailure*
+    failure() const noexcept {
+        return std::get_if<Http2ResponseHeadSubmitFailure>(&value_);
+    }
+
+private:
+    friend class Http2Connection;
+
+    using Value = std::variant<Submitted, Http2ResponseHeadSubmitFailure>;
+
+    template <typename Alternative>
+    explicit Http2ResponseHeadSubmitResult(Alternative alternative)
+        : value_(std::move(alternative)) {}
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeSubmitted(Plan plan) {
+        return Http2ResponseHeadSubmitResult(
+            Submitted(std::move(plan)));
+    }
+
+    [[nodiscard]] static Http2ResponseHeadSubmitResult
+    makeFailure(Http2ResponseHeadSubmitError error) {
+        return Http2ResponseHeadSubmitResult(
+            Http2ResponseHeadSubmitFailure(error));
+    }
+
+    Value value_;
+};
+
+using Http2SubmittedBufferedResponseHead =
+    Http2SubmittedResponseHead<HttpBufferedResponseWritePlan>;
+using Http2SubmittedStreamingResponseHead =
+    Http2SubmittedResponseHead<ResponseStreamCommitPlan>;
+using Http2BufferedResponseHeadSubmitResult =
+    Http2ResponseHeadSubmitResult<HttpBufferedResponseWritePlan>;
+using Http2StreamingResponseHeadSubmitResult =
+    Http2ResponseHeadSubmitResult<ResponseStreamCommitPlan>;
 
 // A response body the send window could not fully drain: the core keeps the unsent
 // remainder and flushes it as WINDOW_UPDATE/SETTINGS reopen the window (nghttp2-style
-// deferred data). One per blocked stream.
+// deferred data). At most one queued submission exists per stream.
 struct Http2PendingSend final {
     std::uint32_t streamId{0};
     std::pmr::string bytes;
     std::size_t offset{0};
-    bool endStream{false};
-    // A trailer HEADERS block queued behind a window-blocked body: it must go out AFTER
+    Http2EndStream endStream{Http2EndStream::kKeepOpen};
+    // A trailer HEADERS block queued behind flow-control-deferred DATA: it must go out AFTER
     // the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place of it. Set
-    // by submitResponseTrailers when the stream still has a blocked remainder; emitted by
-    // markSendWindowOpened once the body fully drains.
+    // by finishResponse while a remainder is queued; emitted by markSendWindowOpened
+    // once the body fully drains.
     std::pmr::string trailerBlock;
 };
 
 class Http2Connection final {
+    // One role-aware receive phase owns connection startup. Keeping this as one enum
+    // prevents combinations such as "started but not awaiting magic or SETTINGS".
+    enum class PrefacePhase : std::uint8_t {
+        kNotStarted,
+        kAwaitingClientMagic,
+        kAwaitingPeerSettings,
+        kReady
+    };
+
 public:
     explicit Http2Connection(
         std::pmr::memory_resource* resource,
-        Http2CoreConfig config = {},
-        Http2Role role = Http2Role::kServer);
+        Http2Role role = Http2Role::kServer,
+        Http2ConnectionLimits limits = {});
 
     [[nodiscard]] Http2Role role() const noexcept { return role_; }
 
     // --- inbound ---------------------------------------------------------------
-    // Feed raw bytes read from the peer; advances the protocol. Returns bytes
-    // consumed + status. Emitted events are pulled with nextEvent().
+    // Feed raw bytes read from the peer; advances the protocol. Before
+    // beginConnection(), kConnectionNotStarted retains the exact input for retry.
+    // Calling while events remain returns kEventsPending with the same retained-input
+    // guarantee; drain nextEvent() first. kAccepted and kNeedInput both accept the
+    // whole input, with the latter buffering a partial preface/frame. kProtocolFailure
+    // is terminal, so that input must be dropped. Every accepted call can emit events,
+    // which must be drained before the next input is offered.
     [[nodiscard]] Http2FeedResult feed(std::string_view in);
-    // Pull the next protocol event, or Kind::kNone when drained.
-    [[nodiscard]] Http2Event nextEvent();
+    // Pull the next protocol event. nullopt means the queue is drained; every
+    // materialized event contains exactly one typed payload.
+    [[nodiscard]] std::optional<Http2Event> nextEvent();
 
     // Access an assembled request head / stream for the owner to build an HttpRequest.
     [[nodiscard]] Http2StreamState* stream(std::uint32_t streamId) noexcept;
@@ -152,89 +397,117 @@ public:
     void takeOutput(std::pmr::string& into);
     [[nodiscard]] bool wantsWrite() const noexcept { return outOffset_ < outBuffer_.size(); }
 
-    // Submit a response for `streamId`. Head first, then data chunks, then end.
-    [[nodiscard]] HttpBufferedResponseWritePlan submitResponseHead(
+    // Submit a final response for `streamId`. Head first, then data chunks, then
+    // end. Informational status codes and HTTP/2-unrepresentable control semantics
+    // (notably 426, whose mandatory Upgrade field is forbidden here) are rejected
+    // transactionally before HPACK or stream state changes.
+    [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(
         std::uint32_t streamId, const HttpResponse& response);
-    // Submit a STREAMING response head: emit the HEADERS block with NO auto
-    // Content-Length (the body length is unknown), leaving the stream open for
-    // subsequent submitData chunks unless the method/status suppresses a body (then
-    // END_STREAM is carried by the head).
-    // The owner then streams the body with submitData(..., endStream) at the end.
-    [[nodiscard]] HttpResponseBodyPlan submitStreamingResponseHead(
-        std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind);
-    [[nodiscard]] Http2SubmitResult submitData(std::uint32_t streamId, std::string_view chunk, bool endStream);
+    // Submit a STREAMING response head: no Content-Length is generated automatically;
+    // an explicit value is strictly parsed and binds all later DATA. With no explicit
+    // value the body is unbounded. The stream stays open for subsequent submitData
+    // chunks unless the method/status suppresses a body. A declared trailer section
+    // keeps an HTTP/2 content-forbidden response open in a trailers-only phase; without
+    // one, END_STREAM is carried by the initial HEADERS. The owner then streams DATA
+    // (when allowed) and terminates through finishResponse().
+    [[nodiscard]] Http2StreamingResponseHeadSubmitResult submitStreamingResponseHead(
+        std::uint32_t streamId,
+        HttpResponse head,
+        ResponseStreamKind kind,
+        ResponseTrailerIntent trailerIntent);
+    [[nodiscard]] Http2DataSubmitStatus submitData(
+        std::uint32_t streamId,
+        std::string_view chunk,
+        Http2EndStream endStream);
+    // Submit a typed interim 1xx head. HttpInterimResponseHead excludes 101 and
+    // cannot carry content; the initial-head phase remains open for the required
+    // final response. Invalid HTTP/2 fields reject transactionally.
+    [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
+        std::uint32_t streamId, const HttpInterimResponseHead& response);
     // RFC 8441 Extended CONNECT: emit the WebSocket handshake response HEADERS (200 +
     // optional sec-websocket-protocol, NO END_STREAM) so the stream stays open as the
     // tunnel; the owner then exchanges WebSocket frames via submitData. Mirrors the
     // coroutine session's writeHttp2WebSocketHandshake byte-for-byte.
-    void submitWebSocketHandshake(
+    [[nodiscard]] Http2SubmitStatus submitWebSocketHandshake(
         std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
-    // Queue one semantic response trailer. The protocol core validates the field,
-    // lowercases its name for HTTP/2, and owns HPACK encoding/storage.
-    void addResponseTrailer(
-        std::uint32_t streamId, std::string_view name, std::string_view value);
-    // Emit queued response trailers as the stream's final HEADERS (END_STREAM), in
-    // place of an empty END_STREAM DATA frame (RFC 9113 §8.1). If DATA is window-
-    // blocked, the trailer block stays behind it. Returns false when no trailers exist.
-    [[nodiscard]] bool submitResponseTrailers(std::uint32_t streamId);
-    void submitReset(std::uint32_t streamId, std::uint32_t errorCode);
+    // Accept a pending standard or extended CONNECT with a successful final response.
+    // The head must be bodyless and contain neither Content-Length nor
+    // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
+    [[nodiscard]] Http2SubmitStatus submitConnectResponseHead(
+        std::uint32_t streamId, const HttpResponse& response);
+    // Submit the complete terminal response trailer section. The final response head
+    // must already be open, the span must be non-empty, and no prior trailer section
+    // may exist. The core validates every field before HPACK encoding any of them.
+    [[nodiscard]] Http2ResponseTrailerSubmitStatus submitResponseTrailerSection(
+        std::uint32_t streamId,
+        std::span<const HttpHeaderView> trailers);
+    // Finish a response exactly once. An incomplete declared Content-Length is rejected
+    // without changing the body-open phase. Queued trailers become terminal HEADERS;
+    // otherwise an empty DATA(END_STREAM) is emitted. A flow-control-blocked body keeps
+    // this terminal marker queued behind it once the full length is core-owned.
+    [[nodiscard]] Http2FinishSubmitStatus finishResponse(std::uint32_t streamId);
+    [[nodiscard]] Http2SubmitStatus submitReset(
+        std::uint32_t streamId, Http2ErrorCode error);
 
-    // After WINDOW_UPDATE/SETTINGS opened windows, the owner calls this so blocked
-    // streams get another chance; the owner then re-submits their deferred sources.
-    // Returns the streams that just unblocked (owner resumes their handlers).
-    [[nodiscard]] std::span<const std::uint32_t> takeUnblockedStreams() noexcept;
+    // Returns streams whose core-owned DATA remainder just fully drained after a
+    // WINDOW_UPDATE/SETTINGS change. Their owner may now submit the next source chunk.
+    [[nodiscard]] std::span<const std::uint32_t> takeDrainedDataStreams() noexcept;
 
     // --- lifecycle / timeout ---------------------------------------------------
-    // (Inactivity-timeout phase selection is the I/O layer's job; it keys off
-    // headerBlockInProgress() -- see the web session's scanner-phase mapping.)
-    [[nodiscard]] bool closing() const noexcept { return closing_; }
-    void beginGoaway(std::uint32_t errorCode);
+    // A local connection error is terminal: its GOAWAY has been queued and the I/O
+    // owner must close the transport after flushing it. Graceful local/peer GOAWAY is
+    // deliberately absent from this value; those connections keep established streams
+    // alive while draining.
+    [[nodiscard]] std::optional<Http2ErrorCode> connectionError() const noexcept {
+        return connectionError_;
+    }
 
-    // Graceful drain (server shutdown): advertise GOAWAY(NO_ERROR) at the current last
-    // stream id and keep serving streams already accepted; HEADERS for a stream above
-    // the advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent.
+    // Graceful local drain: advertise GOAWAY(NO_ERROR) at the current last peer stream
+    // id and keep serving streams already accepted; HEADERS for a stream above the
+    // advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent. Receiving a
+    // valid peer GOAWAY enters this state through the same path so shutdown is bilateral.
     void beginDrain();
     [[nodiscard]] bool draining() const noexcept { return draining_; }
-
-    // h2c upgrade (RFC 7540 §3.2): apply the HTTP2-Settings payload as the peer's
-    // initial SETTINGS, seed stream 1 from the parsed upgraded h1 request (emitting its
-    // kMessageHead/kMessageEnd events), queue local SETTINGS + the upgrade SETTINGS
-    // ACK, and expect the client preface next. Returns false with GOAWAY bytes queued
-    // (and closing() set) when the payload or upgraded request is invalid.
-    [[nodiscard]] bool beginUpgraded(
-        const HttpServerParseResult& parsed, std::string_view settingsPayload, std::string_view body);
 
     // True while a HEADERS block is still being assembled (awaiting CONTINUATION); the
     // I/O layer maps this to its tight header-read inactivity timeout.
     [[nodiscard]] bool headerBlockInProgress() const noexcept { return headerContinuation_.active(); }
 
-    // Emit connection preface SETTINGS (call once after construction). Bytes land in
-    // the outbound buffer.
-    void queueLocalSettings();
-
-    // Server mode: require the 24-byte client connection preface (RFC 9113 §3.4) before
-    // the first frame. Call once after construction; feed() consumes + validates it.
-    void expectClientPreface() noexcept { awaitingClientPreface_ = true; }
+    // Begin the role-specific HTTP/2 connection preface exactly once. Client role
+    // queues the 24-byte magic plus SETTINGS; server role queues SETTINGS and makes
+    // feed() require the peer magic before its first frame. In both roles the first
+    // peer frame must then be a non-ACK SETTINGS frame. Both append the matching
+    // connection WINDOW_UPDATE. Repeated calls are idempotent.
+    void beginConnection();
 
     // --- client role -------------------------------------------------------------
-    // Emit the 24-byte client connection preface + our SETTINGS (+ the connection
-    // WINDOW_UPDATE opening the receive window). Call once after construction.
-    void queueClientPreface();
-    // Open the next locally-initiated (odd) stream; returns its id, or 0 when the id
-    // space is exhausted / the connection is closing / the stream table is full.
-    // Concurrency slots (peer SETTINGS_MAX_CONCURRENT_STREAMS) are the OWNER's policy.
-    [[nodiscard]] std::uint32_t openLocalStream();
-    // Encode + queue the request HEADERS block for a stream returned by
-    // openLocalStream. Headers must already be lowercase + validated (owner policy);
-    // endStream marks a body-less request. The body then flows via submitData.
-    void submitRequestHead(
-        std::uint32_t streamId,
+    // Validate, open the next odd stream, and queue a regular request HEADERS block as
+    // one transaction. Failure consumes neither a stream ID nor a peer concurrency
+    // slot. `content` is the sole Content-Length/END_STREAM contract; later content
+    // flows via submitData(result.submitted()->streamId(), ...).
+    // CONNECT has different pseudo-header and tunnel semantics and is deliberately
+    // rejected here; it uses the dedicated CONNECT submission path.
+    [[nodiscard]] Http2RequestHeadSubmitResult submitRegularRequestHead(
         std::string_view method,
         std::string_view scheme,
         std::string_view authority,
         std::string_view path,
         std::span<const HttpHeaderView> headers,
-        bool endStream);
+        Http2RequestContent content);
+    // Standard CONNECT uses only :method and an authority-form :authority. Its
+    // initial HEADERS never ends the stream; DATA is gated until a final 2xx response.
+    [[nodiscard]] Http2RequestHeadSubmitResult submitConnectRequestHead(
+        std::string_view authority,
+        std::span<const HttpHeaderView> headers = {});
+    // RFC 8441 Extended CONNECT. The peer must first advertise
+    // SETTINGS_ENABLE_CONNECT_PROTOCOL=1. :protocol is a protocol-name token and the
+    // ordinary target pseudo-headers are generated by the core.
+    [[nodiscard]] Http2RequestHeadSubmitResult submitExtendedConnectRequestHead(
+        std::string_view protocol,
+        std::string_view scheme,
+        std::string_view authority,
+        std::string_view path,
+        std::span<const HttpHeaderView> headers = {});
     // Streaming response consumers: bank this stream's DATA receive-window credit as
     // debt instead of re-advertising per frame (call before the response arrives)...
     void deferStreamWindowRelease(std::uint32_t streamId);
@@ -244,11 +517,19 @@ public:
     void releaseStreamWindow(std::uint32_t streamId);
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
-    [[nodiscard]] bool hasBlockedSend(std::uint32_t streamId) const noexcept;
-    [[nodiscard]] std::uint32_t peerMaxConcurrentStreams() const noexcept;
+    [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;
+    // RFC 8441 capability only. A dedicated CONNECT/tunnel submission API must still
+    // own pseudo-header shape and tunnel lifecycle; regular requests never infer it.
+    [[nodiscard]] bool peerExtendedConnectEnabled() const noexcept {
+        return role_ == Http2Role::kClient && peerSettings_.enableConnectProtocol();
+    }
     // Peer handshake / lifecycle observability for client drivers.
-    [[nodiscard]] bool receivedPeerSettings() const noexcept { return receivedFirstSettings_; }
-    [[nodiscard]] bool peerGoaway() const noexcept { return peerGoaway_; }
+    [[nodiscard]] bool receivedPeerSettings() const noexcept {
+        return prefacePhase_ == PrefacePhase::kReady;
+    }
+    [[nodiscard]] std::optional<Http2PeerGoaway> peerGoaway() const noexcept {
+        return peerGoaway_;
+    }
 
     // Concurrent dispatch support: a request/response built from a stream holds VIEWS
     // into that stream's decoded storage, so the stream must outlive an in-flight
@@ -270,23 +551,24 @@ private:
     void appendGoaway(Http2ErrorCode error, std::string_view debug = {});
     void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
-    // Seed stream 1 from the parsed h1 request of an h2c upgrade (RFC 7540 §3.2).
-    [[nodiscard]] bool seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body);
-
-    // sans-I/O replacement for resumeSendWindowWaiters: a WINDOW_UPDATE/SETTINGS that
-    // opened the send window drains buffered response bodies (pendingSends_) into the
-    // outbound buffer; a stream whose body fully drains is reported via unblockedStreams_
-    // so the owner can pull the next chunk of a streaming source. No coroutine resume.
+    // A WINDOW_UPDATE/SETTINGS change drains core-owned DATA remainders into the
+    // outbound buffer. A stream whose remainder fully drains is reported through
+    // drainedDataStreams_ so the owner can pull its next source chunk.
     void markSendWindowOpened();
 
     // Emit a response header block as HEADERS + CONTINUATION frames (atomic sequence,
     // RFC 9113 §6.10) into the outbound buffer, ending the stream when endStream is set.
     void appendResponseHeaderFrames(
-        Http2StreamState& stream, std::string_view headerBlock, bool endStream);
+        Http2StreamState& stream,
+        std::string_view headerBlock,
+        Http2EndStream endStream);
     // Emit DATA frames for data.substr(offset) while the send window allows, returning
     // the new offset (== data.size() when fully sent). Consumes send-window credit.
     [[nodiscard]] std::size_t sendDataUpToWindow(
-        Http2StreamState& stream, std::string_view data, std::size_t offset, bool endStream);
+        Http2StreamState& stream,
+        std::string_view data,
+        std::size_t offset,
+        Http2EndStream endStream);
 
     // Consume complete frames from `buffer` starting at `offset` (advanced past each
     // consumed frame; a trailing partial frame is left for the caller). Returns false on
@@ -294,21 +576,22 @@ private:
     // caller's bytes) and slow (parse the buffered input_) paths.
     [[nodiscard]] bool consumeFrames(std::string_view buffer, std::size_t& offset);
     // Synchronous per-frame dispatch (ported 1:1 from processFrame/*; returns false
-    // on a fatal protocol error, having appended GOAWAY and set closing_).
+    // on a fatal protocol error, having appended GOAWAY and set connectionError_).
     [[nodiscard]] bool processFrame(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processSettings(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPing(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processWindowUpdate(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processRstStream(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processPriority(const Http2FrameHeader& header, std::string_view payload);
+    [[nodiscard]] bool processGoaway(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processHeaders(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processTrailerHeaders(
-        Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload);
+        Http2StreamState& stream, const Http2FrameHeader& header, std::string_view fragment);
     [[nodiscard]] bool processContinuation(const Http2FrameHeader& header, std::string_view payload);
     [[nodiscard]] bool processData(const Http2FrameHeader& header, std::string_view payload);
-    // A DATA frame we must discard while keeping the connection: hand the peer its
-    // connection flow-control credit back (WINDOW_UPDATE) so its send window recovers.
-    void dropDataFrame(std::size_t flowBytes, bool windowConsumed);
+    // Release a successfully debited DATA payload that protocol semantics discard.
+    // Only connection credit survives because the stream is closed/being abandoned.
+    void releaseDroppedDataConnectionWindow(std::int32_t flowBytes);
     [[nodiscard]] bool applySettingsPayload(std::string_view payload);
 
     // HPACK header-block decode (all pure; ported 1:1 from the coroutine session but
@@ -326,6 +609,7 @@ private:
     // id or an odd id we have not opened yet).
     [[nodiscard]] bool isIdleStreamId(std::uint32_t streamId) const noexcept;
     [[nodiscard]] HeaderDecodeStatus decodeRefusedHeaderBlock(Http2StreamState& stream);
+    [[nodiscard]] HeaderDecodeStatus decodeDiscardedHeaderBlock(Http2StreamState& stream);
     [[nodiscard]] HeaderDecodeStatus finishTrailerBlock(Http2StreamState& stream);
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
     // else RST_STREAMs the stream and survives (returns true).
@@ -334,18 +618,55 @@ private:
     // (and kMessageEnd when the peer already ended the stream) for the owner to dispatch.
     void emitRequestHeaders(Http2StreamState& stream);
 
+    // A stream error or a locally-sent RST does not permit skipping a HEADERS block:
+    // HPACK is connection-scoped, so every fragment must be accumulated and decoded.
+    // The detached scratch prevents discarded fields from mutating a live/reset stream;
+    // `DiscardedHeaderAction` is applied only after END_HEADERS.
+    enum class DiscardedHeaderAction : std::uint8_t {
+        kIgnore,
+        kResetProtocolError,
+        kResetStreamClosed,
+        kRefuseStream
+    };
+    [[nodiscard]] bool startDiscardedHeaderBlock(
+        const Http2FrameHeader& header,
+        std::string_view fragment,
+        DiscardedHeaderAction action);
+    [[nodiscard]] bool finishDiscardedHeaderBlock();
+    void detachActiveHeaderBlock(Http2StreamState& stream);
+
     [[nodiscard]] Http2StreamState* findStream(std::uint32_t streamId) noexcept;
     [[nodiscard]] Http2StreamState* createStream(std::uint32_t streamId);
+    [[nodiscard]] std::optional<Http2RequestHeadSubmitError>
+    localRequestAdmissionError() const noexcept;
+    [[nodiscard]] Http2StreamState* admitLocalRequestStream();
+    void activateLocalRequestStream(Http2StreamState& stream) noexcept;
+    void releaseLocalRequestStreamIfClosed(Http2StreamState& stream) noexcept;
+    void releaseLocalRequestStream(Http2StreamState& stream) noexcept;
     [[nodiscard]] bool isPinned(std::uint32_t streamId) const noexcept;
 
     // Close a stream: drop it from the ready queue, mark closed, emit kStreamClosed
     // (so the owner cancels any handler), remove it, and remember it as closed.
-    void closeStream(std::uint32_t streamId, Http2StreamCloseSource source);
+    enum class CloseNotification : std::uint8_t {
+        kEmitEvent,
+        kOwnerAlreadyKnows
+    };
+    bool closeStreamImpl(
+        std::uint32_t streamId,
+        Http2StreamCloseSource source,
+        Http2ErrorCode error,
+        CloseNotification notification);
+    bool closeStream(
+        std::uint32_t streamId,
+        Http2StreamCloseSource source,
+        Http2ErrorCode error);
+    bool closeStreamByOwner(std::uint32_t streamId);
+    void discardDeferredStreamState(std::uint32_t streamId);
     // Return a stream's banked receive-window debt to the connection window on removal.
     void flushWindowDebt(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
-    Http2CoreConfig config_;
+    Http2ConnectionLimits limits_;
 
     // inbound byte buffer (reused across feeds; inputOffset_ = consumed cursor)
     std::pmr::string input_;
@@ -362,7 +683,8 @@ private:
     HpackDecoder decoder_;
     Http2HeaderContinuation headerContinuation_;
     Http2PeerSettings peerSettings_;
-    std::optional<Http2StreamState> refusedHeaderStream_;
+    std::optional<Http2StreamState> discardedHeaderStream_;
+    DiscardedHeaderAction discardedHeaderAction_{DiscardedHeaderAction::kIgnore};
 
     // event queue drained by nextEvent()
     std::pmr::vector<Http2Event> events_;
@@ -370,24 +692,25 @@ private:
 
     // flow-control-deferred response bodies + streams that just fully drained
     std::pmr::vector<Http2PendingSend> pendingSends_;
-    std::pmr::vector<std::uint32_t> unblockedStreams_;
-    std::pmr::vector<std::uint32_t> takenUnblockedStreams_;  // takeUnblockedStreams double buffer
+    std::pmr::vector<std::uint32_t> drainedDataStreams_;
+    std::pmr::vector<std::uint32_t> takenDrainedDataStreams_;  // double buffer for returned spans
 
     // streams with an in-flight handler; closeStream keeps these alive (see pinStream)
     std::pmr::vector<std::uint32_t> pinnedStreams_;
 
-    std::uint32_t localMaxFrameSize_{kHttp2DefaultMaxFrameSize};
+    std::uint32_t localMaxFrameSize_{Http2LocalSettings::kMaxFrameSize};
     std::uint32_t lastStreamId_{0};
     bool draining_{false};
     std::uint32_t goawayLastStreamId_{0};
     Http2Role role_{Http2Role::kServer};
     std::uint32_t nextLocalStreamId_{1};  // client role: next odd stream id to open
-    bool peerGoaway_{false};
+    std::uint32_t activeLocalRequestStreams_{0};
+    std::optional<Http2PeerGoaway> peerGoaway_;
     std::int32_t connectionSendWindow_{kHttp2DefaultInitialWindowSize};
-    std::int32_t connectionReceiveWindow_{static_cast<std::int32_t>(kHttp2LocalInitialWindowSize)};
-    bool receivedFirstSettings_{false};
-    bool awaitingClientPreface_{false};
-    bool closing_{false};
+    std::int32_t connectionReceiveWindow_{
+        static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)};
+    PrefacePhase prefacePhase_{PrefacePhase::kNotStarted};
+    std::optional<Http2ErrorCode> connectionError_;
 
     // Defense-in-depth flood budgets (see Http2Connection.cpp). No clock in the core, so
     // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).

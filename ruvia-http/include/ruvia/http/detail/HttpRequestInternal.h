@@ -68,11 +68,12 @@ struct HttpRequestAccess final {
     }
 
     static void reset(HttpRequest& request) noexcept {
-        request.method_ = HttpMethod::kUnknown;
+        request.method_ = {};
+        request.knownMethod_ = HttpKnownMethod::kUnknown;
         request.target_ = {};
         request.path_ = {};
         request.queryString_ = {};
-        request.httpVersion_ = "HTTP/1.1";
+        request.protocolVersion_ = HttpProtocolVersion::kHttp11;
         request.headerCount_ = 0;
         request.cachedHeaderBits_ = 0;
         request.body_ = {};
@@ -83,8 +84,9 @@ struct HttpRequestAccess final {
         request.resource_ = resource;
     }
 
-    static void setMethod(HttpRequest& request, HttpMethod method) noexcept {
+    static void setMethod(HttpRequest& request, std::string_view method) noexcept {
         request.method_ = method;
+        request.knownMethod_ = classifyHttpMethod(method);
     }
 
     static void setTarget(HttpRequest& request, std::string_view target) noexcept {
@@ -99,12 +101,14 @@ struct HttpRequestAccess final {
         request.queryString_ = queryString;
     }
 
-    static void setHttpVersion(HttpRequest& request, std::string_view httpVersion) noexcept {
-        request.httpVersion_ = httpVersion;
+    static void setProtocolVersion(
+        HttpRequest& request,
+        HttpProtocolVersion protocolVersion) noexcept {
+        request.protocolVersion_ = protocolVersion;
     }
 
     static bool addHeader(HttpRequest& request, HttpHeaderView header) noexcept {
-        if (request.headerCount_ == kMaxRequestHeaders) {
+        if (request.headerCount_ == kMaxHttpHeaderFields) {
             return false;
         }
         request.headers_[request.headerCount_++] = header;

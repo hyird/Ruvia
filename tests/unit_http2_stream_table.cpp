@@ -10,7 +10,7 @@
 namespace {
 
 using ruvia::detail::Http2StreamTable;
-using ruvia::detail::kHttp2LocalMaxConcurrentStreams;
+using ruvia::detail::Http2LocalSettings;
 
 }  // namespace
 
@@ -37,7 +37,7 @@ RUVIA_TEST(stream_table_create_find_remove) {
 
 RUVIA_TEST(stream_table_enforces_max_concurrent) {
     Http2StreamTable table(std::pmr::get_default_resource());
-    const std::uint32_t limit = kHttp2LocalMaxConcurrentStreams;
+    const std::uint32_t limit = Http2LocalSettings::kMaxConcurrentStreams;
     for (std::uint32_t id = 1; id <= limit; ++id) {
         RUVIA_CHECK(table.create(id, 65535) != nullptr);
     }

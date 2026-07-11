@@ -3,7 +3,7 @@
 #include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/HttpParseError.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 
@@ -31,6 +31,35 @@ enum class CleartextHttp2DispatchResult {
     kContinueReadLoop,
     kSessionFinished
 };
+
+// Runtime policy for bytes that reached the HTTP/1 parser but do not look like
+// an HTTP request line. A real HTTP-version token receives the protocol error;
+// obvious non-HTTP traffic is dropped without reflecting an error response.
+[[nodiscard]] inline bool shouldDropInvalidCleartextHttp1Input(
+    std::string_view buffer,
+    HttpParseError error) noexcept {
+    if (error != HttpParseError::kInvalidRequestLine &&
+        error != HttpParseError::kUnsupportedHttpVersion) {
+        return false;
+    }
+
+    const auto lineEnd = buffer.find("\r\n");
+    if (lineEnd == std::string_view::npos) {
+        return false;
+    }
+
+    auto line = buffer.substr(0, lineEnd);
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+        line.remove_suffix(1);
+    }
+
+    const auto versionStart = line.find_last_of(" \t");
+    if (versionStart == std::string_view::npos || versionStart + 1 >= line.size()) {
+        return false;
+    }
+    const auto version = line.substr(versionStart + 1);
+    return version.size() < 5 || version.substr(0, 5) != "HTTP/";
+}
 
 [[nodiscard]] inline CleartextHttp2Probe probeCleartextHttp2Preface(
     std::string_view current,
@@ -136,39 +165,6 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     }
 
     co_return CleartextHttp2DispatchResult::kSessionFinished;
-}
-
-// Entry point for an h2c-upgraded connection (RFC 7540 §3.2): the parsed h1 request
-// seeds stream 1, then the sans-I/O session takes over the connection.
-template <typename Stream>
-Task<void> runUpgradedHttp2ServerSession(
-    Stream& stream,
-    asio::ip::tcp::socket& socket,
-    WorkerMemory& memory,
-    const RouteTable& routes,
-    DbRegistry& databases,
-    RedisRegistry& redis,
-    const HttpServerOptions& options,
-    ConnectionScanner::Entry& scannerEntry,
-    std::string_view remoteAddress,
-    RateLimiter* rateLimiter,
-    const HttpServerParseResult& parsed,
-    std::string_view settingsPayload,
-    std::string_view body,
-    std::string_view initialBytes,
-    const std::atomic_bool* serverStarted = nullptr) {
-    (void)socket;
-    const Http2SansIoUpgradeSeed seed{&parsed, settingsPayload, body};
-    Http2SansIoSessionEnv env;
-    env.databases = &databases;
-    env.redis = &redis;
-    env.rateLimiter = rateLimiter;
-    env.options = &options;
-    env.scannerEntry = &scannerEntry;
-    env.clientCertificate = {};
-    env.serverStarted = serverStarted;
-    env.upgrade = &seed;
-    co_await runHttp2SansIoSession(stream, routes, memory, remoteAddress, env, initialBytes);
 }
 
 }  // namespace ruvia::detail

@@ -220,7 +220,8 @@ template <typename ApplyResponseState>
 
     const auto contextRequest = context.req();
     const auto& request = contextRequest.raw();
-    if (request.method() == HttpMethod::kGet || request.method() == HttpMethod::kHead) {
+    if (request.knownMethod() == HttpKnownMethod::kGet ||
+        request.knownMethod() == HttpKnownMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
         if (enableValidators && !ifMatchAllows(conditional.ifMatch, etag)) {
             throw HttpError(412, "precondition_failed", "file precondition failed");
@@ -248,10 +249,6 @@ template <typename ApplyResponseState>
         }
 
         if (enableRanges && !conditional.range.empty()) {
-            if (detail::httpByteRangeSetHasMultiple(conditional.range)) {
-                return makeFullFileResponse(0);
-            }
-
             // RFC 9110 13.1.5: honor the Range only if a present If-Range matches
             // the current representation. When validators are disabled this root
             // exposes no ETag/Last-Modified, so an If-Range can never be confirmed
@@ -265,13 +262,14 @@ template <typename ApplyResponseState>
                 return makeFullFileResponse(0);
             }
 
-            const auto parsedRange = detail::httpParseByteRange(conditional.range, size);
-            if (parsedRange.outcome == detail::HttpRangeOutcome::kIgnore) {
-                // Unknown unit or malformed range: RFC 9110 §14.2 -- ignore it and
-                // serve the full representation rather than a spurious 416.
+            const auto rangeResolution = detail::resolveHttpByteRange(
+                conditional.range, size);
+            if (rangeResolution.ignored()) {
+                // Unknown units, invalid/unsupported sets, and ranges over an
+                // empty representation follow the RFC 9110 §14.2 ignore policy.
                 return makeFullFileResponse(0);
             }
-            if (parsedRange.outcome == detail::HttpRangeOutcome::kUnsatisfiable) {
+            if (rangeResolution.unsatisfiable()) {
                 HttpResponse response(context.resource());
                 detail::setResponseContentRangeUnsatisfied(response, size);
                 addFileHeaders(response);
@@ -279,11 +277,12 @@ template <typename ApplyResponseState>
                 return response;
             }
 
-            const auto [offset, length] = parsedRange.range;
+            const auto& resolved = *rangeResolution.resolved();
             HttpResponse response(context.resource());
             addFileHeaders(response);
-            detail::setResponseContentRange(response, offset, length, size);
-            setFileBody(response, offset, length);
+            detail::setResponseContentRange(
+                response, resolved.offset(), resolved.length(), size);
+            setFileBody(response, resolved.offset(), resolved.length());
             applyResponseState(response, 206);
             return response;
         }

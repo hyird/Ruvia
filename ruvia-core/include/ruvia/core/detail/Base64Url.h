@@ -4,10 +4,10 @@
 
 namespace ruvia::detail {
 
-inline constexpr std::string_view kHttpBase64UrlAlphabet =
+inline constexpr std::string_view kBase64UrlAlphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-[[nodiscard]] inline int httpDecodeBase64UrlChar(char ch) noexcept {
+[[nodiscard]] inline int decodeBase64UrlChar(char ch) noexcept {
     if (ch >= 'A' && ch <= 'Z') {
         return ch - 'A';
     }

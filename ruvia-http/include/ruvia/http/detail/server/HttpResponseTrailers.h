@@ -2,7 +2,9 @@
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
+#include "ruvia/http/HttpCommon.h"
 
+#include <span>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -116,6 +118,19 @@ namespace ruvia::detail {
     return isValidResponseTrailerName(name) &&
         !isForbiddenResponseTrailerName(name) &&
         isValidResponseTrailerValue(value);
+}
+
+// Validate a complete trailer section before any encoder mutates protocol state.
+// This gives HTTP/1 and HTTP/2 the same all-fields-or-none semantic contract for
+// invalid input; allocation failure can still propagate normally.
+[[nodiscard]] inline bool responseTrailerSectionValid(
+    std::span<const HttpHeaderView> trailers) noexcept {
+    for (const auto& trailer : trailers) {
+        if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace ruvia::detail

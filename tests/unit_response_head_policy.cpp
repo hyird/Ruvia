@@ -24,14 +24,14 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     response.setBodyCopy("hello");
 
     const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(
-        ruvia::HttpMethod::kGet, response);
+        ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(getPlan.statusAllowsBody());
     RUVIA_CHECK(!getPlan.bodySuppressed());
     RUVIA_CHECK(getPlan.sendBody());
     RUVIA_CHECK_EQ(getPlan.contentLength(), static_cast<std::uint64_t>(5));
 
     const auto headPlan = ruvia::detail::httpBufferedResponseWritePlan(
-        ruvia::HttpMethod::kHead, response);
+        ruvia::HttpKnownMethod::kHead, response);
     RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(headPlan.bodySuppressed());
     RUVIA_CHECK(!headPlan.sendBody());
@@ -39,11 +39,19 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     response.status(204);
     const auto noContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
-        ruvia::HttpMethod::kGet, response);
+        ruvia::HttpKnownMethod::kGet, response);
     RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(noContentPlan.bodySuppressed());
     RUVIA_CHECK(!noContentPlan.sendBody());
     RUVIA_CHECK_EQ(noContentPlan.contentLength(), static_cast<std::uint64_t>(0));
+
+    response.status(205);
+    const auto resetContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpKnownMethod::kGet, response);
+    RUVIA_CHECK(!resetContentPlan.bodyPlan().statusAllowsBody());
+    RUVIA_CHECK(resetContentPlan.bodySuppressed());
+    RUVIA_CHECK(!resetContentPlan.sendBody());
+    RUVIA_CHECK_EQ(resetContentPlan.contentLength(), static_cast<std::uint64_t>(0));
 }
 
 RUVIA_TEST(response_policy_normal_status_allows_everything) {
@@ -70,15 +78,15 @@ RUVIA_TEST(response_policy_bodyless_statuses_forbid_all_framing) {
     }
 }
 
-RUVIA_TEST(response_policy_reset_content_carries_framing) {
-    // 205 (Reset Content) is NOT in RFC 9112 §6.3 rule 1, so it must declare its
-    // (empty) body length: it uses the normal policy and receives an auto
-    // Content-Length: 0 rather than being read until connection close.
+RUVIA_TEST(response_policy_reset_content_owns_zero_length_framing) {
+    // RFC 9110 §15.3.6 forbids content in 205. HTTP/1 does not infer a zero
+    // length from that status, so the writer owns one canonical Content-Length:
+    // 0 and rejects both caller-owned length and transfer coding declarations.
     const auto policy = responseWritePolicy(205);
-    RUVIA_CHECK(policy.bodyAllowed());
+    RUVIA_CHECK(!policy.bodyAllowed());
     RUVIA_CHECK(policy.autoContentLengthAllowed());
-    RUVIA_CHECK(policy.explicitContentLengthAllowed());
-    RUVIA_CHECK(policy.transferEncodingAllowed());
+    RUVIA_CHECK(!policy.explicitContentLengthAllowed());
+    RUVIA_CHECK(!policy.transferEncodingAllowed());
 }
 
 RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
@@ -133,6 +141,14 @@ RUVIA_TEST(response_has_forbidden_framing_header_over_bitmask) {
         kResponseHeaderTransferEncoding,
         noContent.explicitContentLengthAllowed(),
         noContent.transferEncodingAllowed()));
+
+    // 205 is bodyless but self-delimited with a writer-owned Content-Length: 0;
+    // both caller-provided framing fields are therefore filtered.
+    const auto resetContent = responseWritePolicy(205);
+    RUVIA_CHECK(responseHasForbiddenBodyFramingHeader(
+        kResponseHeaderContentLength | kResponseHeaderTransferEncoding,
+        resetContent.explicitContentLengthAllowed(),
+        resetContent.transferEncodingAllowed()));
 
     // A normal (200) policy forbids nothing, and a bitmask without framing bits
     // is never forbidden.

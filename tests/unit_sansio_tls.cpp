@@ -144,7 +144,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
             impl.registerRoute(
-                ruvia::HttpMethod::kGet,
+                ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ping", std::pmr::get_default_resource()),
                 ruvia::detail::RouteHandler(nullptr, &tlsPongHandler),
                 ruvia::detail::RequestBodyMode::kBuffered,

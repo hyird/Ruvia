@@ -1,10 +1,11 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
-#include "ruvia/http/HttpParseTypes.h"
+#include "ruvia/http/HttpParseError.h"
 
 namespace {
 
@@ -17,7 +18,7 @@ struct Parsed final {
     HttpParseError error;
     bool hasHost;
     bool sawChunked;
-    bool sawContentLength;
+    bool hasContentLength;
     std::size_t contentLength;
     std::size_t transferCodingCount;
     ruvia::detail::HttpTransferCoding firstTransferCoding;
@@ -27,8 +28,10 @@ Parsed parse(std::string_view head) {
     ParsedRequestHeaderBlock block{};
     const auto headerBytes = findHttpHeaderEnd(head, 0);
     const auto error = parseHttpHeaderBlock(head, headerBytes, block);
-    return {error, block.flags.hasHost, block.sawChunked, block.sawContentLength, block.contentLength,
-            block.transferCodings.count, block.transferCodings.values[0]};
+    return {error, block.hostHeaderIndex >= 0, block.transferEncoding.finalChunked(),
+            block.contentLength.present(), block.contentLength.value(),
+            block.transferEncoding.codings().count,
+            block.transferEncoding.codings().values[0]};
 }
 
 }  // namespace
@@ -37,7 +40,7 @@ RUVIA_TEST(header_block_parses_valid_request) {
     const auto result = parse("GET / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\n");
     RUVIA_CHECK(result.error == HttpParseError::kNone);
     RUVIA_CHECK(result.hasHost);
-    RUVIA_CHECK(result.sawContentLength);
+    RUVIA_CHECK(result.hasContentLength);
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
 }
 
@@ -56,6 +59,18 @@ RUVIA_TEST(header_block_allows_repeated_equal_content_length) {
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
 }
 
+RUVIA_TEST(header_block_allows_combined_equal_content_length) {
+    const auto result = parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\n");
+    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(result.hasContentLength);
+    RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
+
+    const auto conflict = parse(
+        "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 6\r\n\r\n");
+    RUVIA_CHECK(conflict.error == HttpParseError::kConflictingContentLength);
+}
+
 RUVIA_TEST(header_block_rejects_invalid_content_length) {
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n").error ==
                 HttpParseError::kInvalidContentLength);
@@ -69,6 +84,26 @@ RUVIA_TEST(header_block_rejects_duplicate_host) {
     // A duplicate Host header is ambiguous (host confusion) and must be rejected.
     const auto result = parse("GET / HTTP/1.1\r\nHost: a.com\r\nHost: b.com\r\n\r\n");
     RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
+}
+
+RUVIA_TEST(header_block_uses_recipient_connection_and_upgrade_list_rules) {
+    const auto tolerant = parse(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "Connection: , keep-alive,\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: , custom/1, websocket,\r\n\r\n");
+    RUVIA_CHECK(tolerant.error == HttpParseError::kNone);
+
+    RUVIA_CHECK(
+        parse(
+            "GET / HTTP/1.1\r\nHost: x\r\n"
+            "Connection: close;invalid\r\n\r\n")
+            .error == HttpParseError::kInvalidConnection);
+    RUVIA_CHECK(
+        parse(
+            "GET / HTTP/1.1\r\nHost: x\r\n"
+            "Upgrade: websocket/\r\n\r\n")
+            .error == HttpParseError::kInvalidUpgrade);
 }
 
 RUVIA_TEST(header_block_rejects_duplicate_content_type) {
@@ -130,26 +165,42 @@ RUVIA_TEST(header_block_accepts_transfer_encoding_chunked) {
     RUVIA_CHECK(result.sawChunked);
 }
 
-RUVIA_TEST(header_block_accepts_transfer_encoding_quoted_comma_parameter) {
-    const auto result = parse(
-        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked;note=\"a,b\"\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kNone);
-    RUVIA_CHECK(result.sawChunked);
+RUVIA_TEST(header_block_rejects_transfer_coding_parameters) {
+    for (const auto value : {
+             std::string_view("chunked;note=\"a,b\""),
+             std::string_view("gzip;level=9, chunked")}) {
+        const auto result = parse(
+            std::string("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: ") +
+            std::string(value) + "\r\n\r\n");
+        RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
+    }
 }
 
-RUVIA_TEST(header_block_transfer_coding_combined_with_chunked_is_rejected) {
-    // Despite the HttpTransferCoding.h comment ("one request transfer-coding is
-    // allowed before final chunked framing"), the parser REJECTS a coding combined
-    // with chunked: "gzip, chunked" is unsupported, only bare "chunked" is accepted.
-    // Pin the real, conservative behavior (a coding+chunked would require staging a
-    // decoded body, which this framing deliberately avoids).
-    RUVIA_CHECK(parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n").error ==
-                HttpParseError::kUnsupportedTransferEncoding);
+RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
+    // RFC 9112 §6.1 explicitly defines gzip, chunked: the content is compressed
+    // first and chunked last for message framing.
+    const auto gzipChunked = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Transfer-Encoding: gzip, chunked\r\n\r\n");
+    RUVIA_CHECK(gzipChunked.error == HttpParseError::kNone);
+    RUVIA_CHECK(gzipChunked.sawChunked);
+    RUVIA_CHECK_EQ(gzipChunked.transferCodingCount, std::size_t{1});
+    RUVIA_CHECK(
+        gzipChunked.firstTransferCoding ==
+        ruvia::detail::HttpTransferCoding::kGzip);
 
-    // At the header-block layer a lone non-chunked coding parses and IS recorded in
-    // transferCodings (the population path). It is the request-level parser that
-    // then rejects any Transfer-Encoding whose final coding isn't chunked, so a
-    // non-empty transferCodings never actually survives to an accepted request.
+    const auto split = parse(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Transfer-Encoding: deflate\r\nTransfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(split.error == HttpParseError::kNone);
+    RUVIA_CHECK(split.sawChunked);
+    RUVIA_CHECK_EQ(split.transferCodingCount, std::size_t{1});
+    RUVIA_CHECK(
+        split.firstTransferCoding ==
+        ruvia::detail::HttpTransferCoding::kDeflate);
+
+    // A lone non-chunked coding is recorded here, then rejected by the request-level
+    // body planner because request Transfer-Encoding requires final chunked framing.
     const auto lone = parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
     RUVIA_CHECK(lone.error == HttpParseError::kNone);
     RUVIA_CHECK(!lone.sawChunked);

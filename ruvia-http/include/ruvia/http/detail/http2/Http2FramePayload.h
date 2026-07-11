@@ -8,7 +8,7 @@
 
 namespace ruvia::detail {
 
-// Single owner of the DATA/HEADERS payload framing per RFC 7540 §6.1/§6.2:
+// Single owner of the DATA/HEADERS payload framing per RFC 9113 §6.1/§6.2:
 // strip the optional Pad Length prefix and trailing padding, and (HEADERS only,
 // when `allowPriority`) skip the 5-byte priority field, optionally returning its
 // stream dependency. `content` is set to the surviving fragment. Returns false on

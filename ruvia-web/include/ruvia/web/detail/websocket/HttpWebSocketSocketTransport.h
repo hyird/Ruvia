@@ -8,6 +8,7 @@
 
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/detail/SocketUtils.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
 
@@ -43,11 +44,22 @@ public:
 
     [[nodiscard]] Task<std::error_code> writeBytes(
         std::string_view bytes,
-        bool /*endStream*/) {
+        WsTransportDisposition /*disposition*/) {
+        if (bytes.empty()) {
+            co_return std::error_code{};
+        }
         const auto buffer = asio::buffer(bytes.data(), bytes.size());
         co_return co_await asyncError([this, buffer](auto handler) mutable {
             asio::async_write(stream_, buffer, std::move(handler));
         });
+    }
+
+    void abort() noexcept {
+        if constexpr (requires(Stream& value) { value.next_layer(); }) {
+            closeSocket(stream_.next_layer());
+        } else {
+            closeSocket(stream_);
+        }
     }
 
 private:

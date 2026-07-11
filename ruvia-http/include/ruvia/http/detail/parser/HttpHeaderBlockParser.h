@@ -1,12 +1,14 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpRequestFlags.h"
-#include "ruvia/http/detail/HttpTransferCoding.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/HttpContentLength.h"
+#include "ruvia/http/detail/HttpExpectations.h"
+#include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/HttpLimits.h"
-#include "ruvia/http/HttpParseTypes.h"
+#include "ruvia/http/HttpParseError.h"
 
 #include <array>
 #include <cstddef>
@@ -40,19 +42,18 @@ struct ParsedRequestHeaderBlock {
     HttpHeaderSlice method;
     HttpHeaderSlice target;
     HttpHeaderSlice version;
-    std::array<ParsedRequestHeaderSlot, kMaxRequestHeaders> headers;
+    std::array<ParsedRequestHeaderSlot, kMaxHttpHeaderFields> headers;
     std::size_t headerCount{0};
     KnownRequestHeaderIndex hostHeaderIndex{-1};
-    HttpRequestFlags flags;
-    std::size_t contentLength{0};
+    HttpConnectionOptions connectionOptions;
+    HttpUpgradeProtocols upgradeProtocols;
+    HttpContentLengthState contentLength;
     std::uint32_t seenHeaderBits{0};
-    bool sawContentLength{false};
-    bool sawChunked{false};
-    bool sawTransferEncoding{false};
     HttpAcceptedEncodingQuality gzipEncoding;
     HttpAcceptedEncodingQuality brotliEncoding;
     HttpAcceptedEncodingQuality zstdEncoding;
-    HttpTransferCodings transferCodings;
+    HttpTransferEncodingState transferEncoding;
+    HttpRequestExpectations expectations;
 };
 
 [[nodiscard]] std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset) noexcept;
