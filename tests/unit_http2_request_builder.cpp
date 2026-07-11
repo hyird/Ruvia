@@ -107,7 +107,7 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
     auto stream = makeStream();
     stream.assignRequestMethod("CONNECT");
     stream.assignRequestAuthority("proxy.example:443");
-    RUVIA_CHECK(stream.markStandardConnectPending());
+    RUVIA_CHECK(stream.beginStandardConnect());
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
     RUVIA_CHECK_EQ(
@@ -129,7 +129,7 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_retains_connect_method) {
     stream.setProtocol("connect-udp");
     stream.assignRequestAuthority("masque.example");
     stream.assignRequestPath("/.well-known/masque/udp?target=origin.example");
-    RUVIA_CHECK(stream.markExtendedConnectPending());
+    RUVIA_CHECK(stream.beginExtendedConnect());
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
     RUVIA_CHECK(Http2RequestBuilder::build(
@@ -149,7 +149,7 @@ RUVIA_TEST(h2_request_builder_websocket_extended_connect_maps_only_route_method)
     stream.setProtocol("WebSocket");
     stream.assignRequestAuthority("ws.example");
     stream.assignRequestPath("/chat");
-    RUVIA_CHECK(stream.markExtendedConnectPending());
+    RUVIA_CHECK(stream.beginExtendedConnect());
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kGet);
     RUVIA_CHECK(Http2RequestBuilder::build(

@@ -28,6 +28,8 @@
 #include <ruvia/http/detail/http2/Http2Connection.h>
 #include <ruvia/http/detail/http2/Http2Event.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
+#include <ruvia/http/detail/http2/Http2RemoteContentState.h>
+#include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
@@ -309,6 +311,69 @@ concept HasStaleHttp2StreamLocalContentForwarders = requires(const T& stream) {
     stream.localContentLengthComplete();
 };
 
+template <typename T>
+concept HasHttp2RemoteContentAlternatives = requires(const T& content) {
+    { content.withoutLength() } ->
+        std::same_as<const ruvia::detail::Http2RemoteContentWithoutLength*>;
+    { content.knownLength() } ->
+        std::same_as<const ruvia::detail::Http2RemoteContentKnownLength*>;
+};
+
+template <typename T>
+concept HasHttp2RemoteDeclaredLength = requires(const T& content) {
+    { content.declaredLength() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasStaleHttp2RemoteContentTuple = requires(const T& content) {
+    content.hasContentLength();
+    content.contentLength();
+};
+
+template <typename T>
+concept HasStaleHttp2StreamRemoteContentForwarders = requires(
+    const T& stream) {
+    stream.hasContentLength();
+    stream.contentLength();
+    stream.receivedBodyBytes();
+    stream.receivedBodyExceedsContentLength();
+    stream.bodyLengthComplete();
+};
+
+template <typename T>
+concept HasHttp2TunnelAlternatives = requires(const T& state) {
+    { state.notConnect() } ->
+        std::same_as<const ruvia::detail::Http2NotConnect*>;
+    { state.pending() } ->
+        std::same_as<const ruvia::detail::Http2ConnectPending*>;
+    { state.open() } ->
+        std::same_as<const ruvia::detail::Http2TunnelOpen*>;
+    { state.rejected() } ->
+        std::same_as<const ruvia::detail::Http2ConnectRejected*>;
+};
+
+template <typename T>
+concept HasHttp2ConnectForm = requires(const T& state) {
+    { state.form() } -> std::same_as<ruvia::detail::Http2ConnectForm>;
+};
+
+template <typename T>
+concept HasStaleHttp2TunnelKindPhase = requires(const T& state) {
+    state.kind();
+    state.phase();
+};
+
+template <typename T>
+concept HasStaleHttp2StreamTunnelForwarders = requires(const T& stream) {
+    stream.standardConnect();
+    stream.extendedConnect();
+    stream.extendedConnectWebSocket();
+    stream.connectRequest();
+    stream.connectPending();
+    stream.tunnelOpen();
+    stream.connectRejected();
+};
+
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
@@ -393,6 +458,58 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .localContent()),
     const ruvia::detail::Http2LocalContentState&>);
+static_assert(HasHttp2RemoteContentAlternatives<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(!HasStaleHttp2RemoteContentTuple<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(!HasHttp2RemoteDeclaredLength<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(!HasHttp2RemoteDeclaredLength<
+    ruvia::detail::Http2RemoteContentWithoutLength>);
+static_assert(HasHttp2RemoteDeclaredLength<
+    ruvia::detail::Http2RemoteContentKnownLength>);
+static_assert(std::default_initializable<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteContentWithoutLength>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteContentKnownLength>);
+static_assert(!HasStaleHttp2StreamRemoteContentForwarders<
+    ruvia::detail::Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .remoteContent()),
+    const ruvia::detail::Http2RemoteContentState&>);
+static_assert(HasHttp2TunnelAlternatives<
+    ruvia::detail::Http2TunnelState>);
+static_assert(!HasStaleHttp2TunnelKindPhase<
+    ruvia::detail::Http2TunnelState>);
+static_assert(!HasHttp2ConnectForm<
+    ruvia::detail::Http2TunnelState>);
+static_assert(!HasHttp2ConnectForm<
+    ruvia::detail::Http2NotConnect>);
+static_assert(HasHttp2ConnectForm<
+    ruvia::detail::Http2ConnectPending>);
+static_assert(!HasHttp2ConnectForm<
+    ruvia::detail::Http2TunnelOpen>);
+static_assert(!HasHttp2ConnectForm<
+    ruvia::detail::Http2ConnectRejected>);
+static_assert(std::default_initializable<
+    ruvia::detail::Http2TunnelState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2NotConnect>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2ConnectPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2TunnelOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2ConnectRejected>);
+static_assert(!HasStaleHttp2StreamTunnelForwarders<
+    ruvia::detail::Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .tunnel()),
+    const ruvia::detail::Http2TunnelState&>);
 
 template <typename T>
 concept HasHttp1RequestBodyPlanAlternatives = requires(const T& plan) {
@@ -893,6 +1010,36 @@ static_assert(HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTargetFailure>);
 
 int main() {
+    ruvia::detail::Http2TunnelState tunnel;
+    if (tunnel.notConnect() == nullptr || tunnel.pending() != nullptr ||
+        !tunnel.begin(ruvia::detail::Http2ConnectForm::kExtended) ||
+        tunnel.notConnect() != nullptr || tunnel.pending() == nullptr ||
+        tunnel.pending()->form() !=
+            ruvia::detail::Http2ConnectForm::kExtended ||
+        !tunnel.accept() || tunnel.pending() != nullptr ||
+        tunnel.open() == nullptr || tunnel.rejected() != nullptr) {
+        return 37;
+    }
+
+    ruvia::detail::Http2RemoteContentState remoteContent;
+    if (remoteContent.withoutLength() == nullptr ||
+        remoteContent.knownLength() != nullptr ||
+        remoteContent.receivedBytes() != 0 ||
+        !remoteContent.declareKnownLength(3) ||
+        remoteContent.knownLength() == nullptr ||
+        remoteContent.knownLength()->declaredLength() != 3 ||
+        remoteContent.checkAccept(2) !=
+            ruvia::detail::Http2RemoteContentCheck::kAccepted) {
+        return 36;
+    }
+    remoteContent.accept(2);
+    if (remoteContent.terminalLengthValid() ||
+        remoteContent.checkAccept(2) !=
+            ruvia::detail::Http2RemoteContentCheck::kDeclaredLengthExceeded ||
+        remoteContent.receivedBytes() != 2) {
+        return 36;
+    }
+
     const auto outboundOrigin = ruvia::HttpOrigin::https("example.test");
     ruvia::HttpClientRequest outboundRequest;
     outboundRequest.method = "POST";
@@ -1322,7 +1469,16 @@ int main() {
 
     const auto connect = h2.submitConnectRequestHead("example.test:443");
     const auto* submittedConnect = connect.submitted();
+    const auto* connectStream = submittedConnect == nullptr
+        ? nullptr
+        : h2.stream(submittedConnect->streamId());
+    const auto* pendingConnect = connectStream == nullptr
+        ? nullptr
+        : connectStream->tunnel().pending();
     if (submittedConnect == nullptr || connect.failure() != nullptr ||
+        pendingConnect == nullptr ||
+        pendingConnect->form() !=
+            ruvia::detail::Http2ConnectForm::kStandard ||
         h2.submitData(
             submittedConnect->streamId(),
             "too early",

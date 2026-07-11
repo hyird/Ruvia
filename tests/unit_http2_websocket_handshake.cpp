@@ -102,14 +102,14 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
 
     auto valid = makeStream();
     valid.setProtocol("websocket");
-    RUVIA_CHECK(valid.markExtendedConnectPending());
+    RUVIA_CHECK(valid.beginExtendedConnect());
     RUVIA_CHECK(http2IsValidWebSocketRequest(valid, request));
 
     // A completed/rejected CONNECT is no longer an opening handshake.
     auto openTunnel = makeStream();
     openTunnel.setProtocol("websocket");
-    RUVIA_CHECK(openTunnel.markExtendedConnectPending());
-    RUVIA_CHECK(openTunnel.markConnectTunnelOpen());
+    RUVIA_CHECK(openTunnel.beginExtendedConnect());
+    RUVIA_CHECK(openTunnel.acceptConnect());
     RUVIA_CHECK(!http2IsValidWebSocketRequest(openTunnel, request));
 
     // Without the extended-CONNECT websocket marker (:method CONNECT +
@@ -120,15 +120,15 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
     // A Content-Length must not be present on a WebSocket CONNECT.
     auto withContentLength = makeStream();
     withContentLength.setProtocol("websocket");
-    RUVIA_CHECK(withContentLength.markExtendedConnectPending());
-    RUVIA_CHECK(withContentLength.setContentLength(5));
+    RUVIA_CHECK(withContentLength.beginExtendedConnect());
+    RUVIA_CHECK(withContentLength.declareRemoteContentLength(5));
     RUVIA_CHECK(!http2IsValidWebSocketRequest(withContentLength, request));
 
     // The Sec-WebSocket-Version must be exactly 13.
     const auto badVersion = requestWithBadVersion();
     auto stream = makeStream();
     stream.setProtocol("websocket");
-    RUVIA_CHECK(stream.markExtendedConnectPending());
+    RUVIA_CHECK(stream.beginExtendedConnect());
     RUVIA_CHECK(!http2IsValidWebSocketRequest(stream, badVersion));
 }
 

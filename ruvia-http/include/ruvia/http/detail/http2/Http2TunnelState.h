@@ -1,66 +1,119 @@
 #pragma once
 
 #include <cstdint>
+#include <variant>
 
 namespace ruvia::detail {
 
-enum class Http2ConnectKind : std::uint8_t {
-    kNone,
+enum class Http2ConnectForm : std::uint8_t {
     kStandard,
     kExtended
 };
 
-enum class Http2TunnelPhase : std::uint8_t {
-    kNone,
-    kAwaitingResponse,
-    kOpen,
-    kRejected
+class Http2TunnelState;
+
+class Http2NotConnect final {
+private:
+    friend class Http2TunnelState;
+
+    constexpr Http2NotConnect() noexcept = default;
 };
 
-// CONNECT has no request content. Only a successful final response changes the
-// following DATA into opaque tunnel bytes, so this state is deliberately separate
-// from request/response Content-Length accounting.
+// The CONNECT form matters while validating/dispatching the request and choosing
+// its dedicated acceptance path. After a final response, :protocol on the retained
+// request state is the authoritative Extended CONNECT signal; rejected responses
+// resume ordinary HTTP response-body semantics. Consequently, only pending owns a
+// form payload.
+class Http2ConnectPending final {
+public:
+    [[nodiscard]] constexpr Http2ConnectForm form() const noexcept {
+        return form_;
+    }
+
+private:
+    friend class Http2TunnelState;
+
+    explicit constexpr Http2ConnectPending(Http2ConnectForm form) noexcept
+        : form_(form) {}
+
+    Http2ConnectForm form_;
+};
+
+class Http2TunnelOpen final {
+private:
+    friend class Http2TunnelState;
+
+    constexpr Http2TunnelOpen() noexcept = default;
+};
+
+class Http2ConnectRejected final {
+private:
+    friend class Http2TunnelState;
+
+    constexpr Http2ConnectRejected() noexcept = default;
+};
+
+// CONNECT is exactly one of four protocol phases. This representation cannot form
+// the former kind=None/phase=Open or kind=Extended/phase=None combinations.
 class Http2TunnelState final {
 public:
-    [[nodiscard]] bool begin(Http2ConnectKind kind) noexcept {
-        if (kind == Http2ConnectKind::kNone || isConnect()) {
+    constexpr Http2TunnelState() noexcept
+        : state_(Http2NotConnect()) {}
+
+    [[nodiscard]] bool begin(Http2ConnectForm form) noexcept {
+        if ((form != Http2ConnectForm::kStandard &&
+             form != Http2ConnectForm::kExtended) ||
+            notConnect() == nullptr) {
             return false;
         }
-        kind_ = kind;
-        phase_ = Http2TunnelPhase::kAwaitingResponse;
+        state_ = State(Http2ConnectPending(form));
         return true;
     }
 
-    [[nodiscard]] Http2ConnectKind kind() const noexcept { return kind_; }
-    [[nodiscard]] Http2TunnelPhase phase() const noexcept { return phase_; }
-    [[nodiscard]] bool isConnect() const noexcept { return kind_ != Http2ConnectKind::kNone; }
-    [[nodiscard]] bool standard() const noexcept { return kind_ == Http2ConnectKind::kStandard; }
-    [[nodiscard]] bool extended() const noexcept { return kind_ == Http2ConnectKind::kExtended; }
-    [[nodiscard]] bool awaitingResponse() const noexcept {
-        return phase_ == Http2TunnelPhase::kAwaitingResponse;
-    }
-    [[nodiscard]] bool open() const noexcept { return phase_ == Http2TunnelPhase::kOpen; }
-    [[nodiscard]] bool rejected() const noexcept { return phase_ == Http2TunnelPhase::kRejected; }
-
     [[nodiscard]] bool accept() noexcept {
-        if (!awaitingResponse()) {
+        if (pending() == nullptr) {
             return false;
         }
-        phase_ = Http2TunnelPhase::kOpen;
+        state_ = State(Http2TunnelOpen());
         return true;
     }
 
     [[nodiscard]] bool reject() noexcept {
-        if (!awaitingResponse()) {
+        if (pending() == nullptr) {
             return false;
         }
-        phase_ = Http2TunnelPhase::kRejected;
+        state_ = State(Http2ConnectRejected());
         return true;
     }
 
+    [[nodiscard]] constexpr const Http2NotConnect*
+    notConnect() const noexcept {
+        return std::get_if<Http2NotConnect>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http2ConnectPending*
+    pending() const noexcept {
+        return std::get_if<Http2ConnectPending>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http2TunnelOpen*
+    open() const noexcept {
+        return std::get_if<Http2TunnelOpen>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http2ConnectRejected*
+    rejected() const noexcept {
+        return std::get_if<Http2ConnectRejected>(&state_);
+    }
+
 private:
-    Http2ConnectKind kind_{Http2ConnectKind::kNone};
-    Http2TunnelPhase phase_{Http2TunnelPhase::kNone};
+    using State = std::variant<
+        Http2NotConnect,
+        Http2ConnectPending,
+        Http2TunnelOpen,
+        Http2ConnectRejected>;
+
+    State state_;
 };
 
 }  // namespace ruvia::detail

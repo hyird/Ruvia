@@ -145,7 +145,7 @@ struct Http2HeaderDecodeContext final {
         if (ec != std::errc{} || ptr != value.data() + value.size()) {
             return false;
         }
-        if (!stream.setContentLength(parsed)) {
+        if (!stream.declareRemoteContentLength(parsed)) {
             return false;
         }
     }

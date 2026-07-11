@@ -428,7 +428,8 @@ Task<void> runHttp2SansIoSession(
 
         std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
         std::optional<BodyReader> bodyReaderStorage;
-        if (streamState->usesStreamRequestBody() && !streamState->connectRequest()) {
+        if (streamState->usesStreamRequestBody() &&
+            streamState->tunnel().pending() == nullptr) {
             if (!streamState->requestBodyEmpty()) {
                 // An END_STREAM-on-HEADERS request can already have a buffered chunk
                 // before dispatch; hand it to the reader first.
@@ -570,7 +571,8 @@ Task<void> runHttp2SansIoSession(
             return;
         }
         streamState.setBodyMode(httpRequestBodyModeForRoute(resolution.bodyMode()));
-        if (streamState.extendedConnectWebSocket() && resolution.isWebSocketResponse()) {
+        if (http2IsPendingWebSocketConnect(streamState) &&
+            resolution.isWebSocketResponse()) {
             streamState.setBodyMode(HttpRequestBodyMode::kStream);
         }
     };
@@ -623,7 +625,8 @@ Task<void> runHttp2SansIoSession(
                         continue;
                     }
                 }
-                const bool connectRequest = streamState->connectRequest();
+                const bool connectRequest =
+                    streamState->tunnel().pending() != nullptr;
                 const bool streamingBody = !connectRequest &&
                     streamState->usesStreamRequestBody() && !streamState->bodyEnded();
                 if (expectationAction ==

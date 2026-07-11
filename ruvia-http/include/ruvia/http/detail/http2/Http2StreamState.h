@@ -9,7 +9,7 @@
 
 #include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
-#include "ruvia/http/detail/http2/Http2StreamBodyAccounting.h"
+#include "ruvia/http/detail/http2/Http2RemoteContentState.h"
 #include "ruvia/http/detail/http2/Http2StreamBodyQueue.h"
 #include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
 #include "ruvia/http/detail/http2/Http2StreamHeaderBlocks.h"
@@ -26,7 +26,7 @@ namespace ruvia::detail {
 
 class Http2StreamState final {
     std::uint32_t id_{0};
-    Http2StreamBodyAccounting bodyAccounting_;
+    Http2RemoteContentState remoteContent_;
     Http2LocalContentState localContent_;
     Http2StreamLifecycle lifecycle_;
     Http2StreamBodyQueue bodyQueue_;
@@ -120,40 +120,22 @@ public:
         return headerBlocks_.responseTrailers();
     }
 
-    [[nodiscard]] bool setContentLength(std::size_t value) noexcept {
-        return bodyAccounting_.setContentLength(value);
+    [[nodiscard]] bool declareRemoteContentLength(
+        std::size_t value) noexcept {
+        return remoteContent_.declareKnownLength(value);
     }
 
-    [[nodiscard]] bool hasContentLength() const noexcept {
-        return bodyAccounting_.hasContentLength();
+    [[nodiscard]] Http2RemoteContentCheck checkRemoteContentAccept(
+        std::size_t bytes) const noexcept {
+        return remoteContent_.checkAccept(bytes);
     }
 
-    [[nodiscard]] std::size_t contentLength() const noexcept {
-        return bodyAccounting_.contentLength();
+    void acceptRemoteContent(std::size_t bytes) noexcept {
+        remoteContent_.accept(bytes);
     }
 
-    void setReceivedBodyBytes(std::size_t value) noexcept {
-        bodyAccounting_.setReceivedBytes(value);
-    }
-
-    [[nodiscard]] bool addReceivedBodyBytes(std::size_t value) noexcept {
-        return bodyAccounting_.addReceivedBytes(value);
-    }
-
-    [[nodiscard]] std::size_t receivedBodyBytes() const noexcept {
-        return bodyAccounting_.receivedBytes();
-    }
-
-    [[nodiscard]] bool receivedBodyExceedsContentLength() const noexcept {
-        return bodyAccounting_.exceedsContentLength();
-    }
-
-    [[nodiscard]] bool bufferedBodyExceedsContentLength() const noexcept {
-        return hasContentLength() && requestBodySize() > contentLength();
-    }
-
-    [[nodiscard]] bool bodyLengthComplete() const noexcept {
-        return bodyAccounting_.lengthComplete();
+    [[nodiscard]] const Http2RemoteContentState& remoteContent() const noexcept {
+        return remoteContent_;
     }
 
     void beginLocalContentForbidden() noexcept {
@@ -550,52 +532,24 @@ public:
         requestState_.markHeadersDecoded();
     }
 
-    [[nodiscard]] bool standardConnect() const noexcept {
-        return tunnelState_.standard();
+    [[nodiscard]] bool beginStandardConnect() noexcept {
+        return tunnelState_.begin(Http2ConnectForm::kStandard);
     }
 
-    [[nodiscard]] bool extendedConnect() const noexcept {
-        return tunnelState_.extended();
+    [[nodiscard]] bool beginExtendedConnect() noexcept {
+        return tunnelState_.begin(Http2ConnectForm::kExtended);
     }
 
-    [[nodiscard]] bool extendedConnectWebSocket() const noexcept {
-        return extendedConnect() && protocolIsWebSocket();
-    }
-
-    [[nodiscard]] bool webSocketTunnel() const noexcept {
-        return tunnelOpen() && extendedConnectWebSocket();
-    }
-
-    [[nodiscard]] bool connectRequest() const noexcept {
-        return tunnelState_.isConnect();
-    }
-
-    [[nodiscard]] bool connectPending() const noexcept {
-        return tunnelState_.awaitingResponse();
-    }
-
-    [[nodiscard]] bool tunnelOpen() const noexcept {
-        return tunnelState_.open();
-    }
-
-    [[nodiscard]] bool connectRejected() const noexcept {
-        return tunnelState_.rejected();
-    }
-
-    [[nodiscard]] bool markStandardConnectPending() noexcept {
-        return tunnelState_.begin(Http2ConnectKind::kStandard);
-    }
-
-    [[nodiscard]] bool markExtendedConnectPending() noexcept {
-        return tunnelState_.begin(Http2ConnectKind::kExtended);
-    }
-
-    [[nodiscard]] bool markConnectTunnelOpen() noexcept {
+    [[nodiscard]] bool acceptConnect() noexcept {
         return tunnelState_.accept();
     }
 
-    [[nodiscard]] bool markConnectRejected() noexcept {
+    [[nodiscard]] bool rejectConnect() noexcept {
         return tunnelState_.reject();
+    }
+
+    [[nodiscard]] const Http2TunnelState& tunnel() const noexcept {
+        return tunnelState_;
     }
 
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {

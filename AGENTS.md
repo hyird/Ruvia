@@ -554,6 +554,21 @@ buffer 时才推进 committed；`kBackpressured`、
 accepted。HEAD/204/205/304 的 Content-Length 是无内容或 representation metadata，不得变成
 DATA 长度契约；WebSocket/CONNECT tunnel 保持 unbounded。
 
+HTTP/2 对端发来的 message content 必须由独立、无分配的 `Http2RemoteContentState` 统一记账。
+state 只能是 `Http2RemoteContentWithoutLength` 或 `Http2RemoteContentKnownLength` 两个互斥
+alternative 之一，只有 known-length 可以暴露 `declaredLength()`；禁止恢复
+`Http2StreamBodyAccounting`、`hasContentLength + contentLength` tuple、缺失长度的假 0，或在
+`Http2StreamState` 转发 presence/length/received/completion accessor。stream 只暴露一个 const
+`remoteContent()` view。第一个 DATA byte accepted 后不得再切换为 known-length；late declaration
+必须失败并保持原 alternative。所有非 tunnel DATA 必须走 transactional check-then-accept：
+`kCounterOverflow`、`kDeclaredLengthExceeded` 必须保持 `receivedBytes()` 不变，只有 `kAccepted`
+才能提交计数；完整 DATA payload（含 Pad Length/padding）的 connection/stream flow-control 记账仍按
+[RFC 9113 §6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1) 先执行。initial HEADERS、
+DATA 与 trailing HEADERS 的 END_STREAM 必须共用 `http2RemoteContentTerminalValid()`；client role 对
+HEAD/204/304 的无内容/representation-length 例外必须一致，不能因由 trailers 终止就把合法
+Content-Length 判为缺失 DATA。其余已声明长度严格遵守
+[RFC 9113 §8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的 DATA payload 总和。
+
 HTTP/2 client role 的普通请求头只能走 `submitRegularRequestHead()`，并以无分配值类型
 `Http2RequestContent` 在 `none()`、`knownLength(n)`、`streaming()` 三种契约中显式选择。
 三者必须分别产出 `Http2RequestWithoutContent`、`Http2KnownLengthRequestContent`、
@@ -591,6 +606,19 @@ DATA；server 也只能在 `beginConnection()` 已幂等启动本地 capability 
 对端 FIN 后的 DATA、connected stream 上的非 DATA/management frame、CONNECT trailers 和
 成功响应的 Content-Length/Transfer-Encoding 都由 `ruvia-http` 统一拒绝或按 RFC 忽略。
 `peerExtendedConnectEnabled()` 只允许查询能力，不是提交旁路。
+
+每个 stream 的 CONNECT 进度必须由无分配的 `Http2TunnelState` 独占，state 只能是
+`Http2NotConnect`、`Http2ConnectPending`、`Http2TunnelOpen`、`Http2ConnectRejected` 四个互斥
+alternative 之一。只有 pending 可以通过 `Http2ConnectForm` 暴露 standard/extended form；open
+与 rejected 必须无 payload，Extended CONNECT 在之后由已校验并保留的 `:protocol` 表达。禁止恢复
+`Http2ConnectKind + Http2TunnelPhase` 笛卡尔积、kind/phase accessor、独立 CONNECT boolean marker，
+或在 `Http2StreamState` 转发 standard/extended/pending/open/rejected accessor；stream 只能暴露一个
+const `tunnel()` view。`beginStandardConnect()`/`beginExtendedConnect()` 只能从 not-connect 进入
+pending，只有 pending 能 `acceptConnect()` 或 `rejectConnect()`。该状态机必须遵循
+[RFC 9113 §8.5](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.5) 的 2xx 后 tunnel DATA 与
+connected-stream frame 限制，以及
+[RFC 8441 §4](https://www.rfc-editor.org/rfc/rfc8441.html#section-4) 的 `:protocol` Extended CONNECT
+契约。
 
 HTTP/2 final response head 的提交结果必须与 request head 一样使用判别联合：
 `submitResponseHead()` 返回 `Http2BufferedResponseHeadSubmitResult`，

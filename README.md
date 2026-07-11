@@ -361,8 +361,26 @@ Overrun and premature END_STREAM are rejected before output/window mutation,
 before HPACK output. This follows HTTP/2's HEADERS-then-DATA message order and terminal END_STREAM in
 [RFC 9113 Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), plus its exact
 Content-Length/DATA requirement in
-[Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1). Client-role regular request
-heads use `Http2RequestContent` as the single framing contract. `none()`, `knownLength(n)`, and
+[Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1).
+
+Peer-sent message content is accounted independently by `Http2RemoteContentState`. It is exactly
+one of `Http2RemoteContentWithoutLength` or `Http2RemoteContentKnownLength`; only the latter exposes
+`declaredLength()`, so an absent field cannot be observed as a fake zero. `Http2StreamState` exposes
+one const `remoteContent()` view instead of forwarding presence, length, and received-byte fields.
+The declaration transition is closed after the first accepted DATA byte; a late declaration fails
+without replacing the active alternative.
+Every non-tunnel DATA payload follows a transactional check-then-accept path:
+`Http2RemoteContentCheck::kCounterOverflow` and `kDeclaredLengthExceeded` leave `receivedBytes()`
+unchanged, while only `kAccepted` advances it. Flow control still counts the complete DATA frame
+payload, including padding, before message semantics are applied as required by
+[RFC 9113 Section 6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1). Initial HEADERS,
+DATA, and trailing HEADERS share `http2RemoteContentTerminalValid()` when END_STREAM arrives,
+including the RFC-defined HEAD/204/304 no-content exceptions, so a HEAD representation length is not mistaken for
+missing DATA merely because trailers terminate the message. The exact declared-length check follows
+[RFC 9113 Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1).
+
+Client-role regular request heads use `Http2RequestContent` as the single framing contract.
+`none()`, `knownLength(n)`, and
 `streaming()` create `Http2RequestWithoutContent`, `Http2KnownLengthRequestContent`, and
 `Http2StreamingRequestContent` alternatives; only the known-length alternative exposes
 `length()`. They deterministically select canonical Content-Length, HEADERS END_STREAM, and the
@@ -764,7 +782,18 @@ preallocate idle streams or duplicate that gate. Callers branch on `submitted()`
 only `Http2SubmittedRequestHead` has `streamId()`, and only
 `Http2RequestHeadSubmitFailure` has `error()`. Extended CONNECT is additionally gated by
 `peerExtendedConnectEnabled()`, and neither CONNECT form permits tunnel DATA before a successful
-response. `beginConnection()` idempotently emits the role-correct preface and advertises the local
+response. Per-stream CONNECT progress is one allocation-free `Http2TunnelState`, exactly one of
+`Http2NotConnect`, `Http2ConnectPending`, `Http2TunnelOpen`, or `Http2ConnectRejected`. Only the
+pending alternative exposes `Http2ConnectForm`; after acceptance the retained `:protocol` is the
+authoritative Extended CONNECT signal, while rejection resumes ordinary HTTP response semantics.
+There is no independent kind/phase product and `Http2StreamState` exposes only one const `tunnel()`
+view instead of forwarding phase/form booleans. `beginStandardConnect()` or
+`beginExtendedConnect()` can transition only from not-connect, and only pending can be accepted or
+rejected. This models the 2xx-to-tunnel boundary and connected-stream frame restrictions in
+[RFC 9113 Section 8.5](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.5), plus Extended CONNECT's
+`:protocol` contract in
+[RFC 8441 Section 4](https://www.rfc-editor.org/rfc/rfc8441.html#section-4).
+`beginConnection()` idempotently emits the role-correct preface and advertises the local
 `Http2LocalSettings`; `feed()` is a zero-consumption retry boundary until startup, and the peer
 preface completes only on an initial non-ACK SETTINGS frame. Inbound GOAWAY closes every unprocessed
 higher-numbered request inside the core and reports it through `Http2RequestUnprocessedEvent`;

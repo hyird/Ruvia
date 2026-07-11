@@ -154,7 +154,7 @@ set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
-    "markWebSocketTunnel|kWebSocketTunnel|standardConnect_|extendedConnectWebSocket_|webSocketTunnel_")
+    "markWebSocketTunnel|kWebSocketTunnel|standardConnect_|extendedConnectWebSocket_|webSocketTunnel_|Http2ConnectKind|Http2TunnelPhase|(standardConnect|extendedConnect|extendedConnectWebSocket|webSocketTunnel|connectRequest|connectPending|tunnelOpen|connectRejected|markStandardConnectPending|markExtendedConnectPending|markConnectTunnelOpen|markConnectRejected)[ \t]*[(]")
 set(RULE_STALE_H2_PREFACE_API
     "Http2CoreConfig|queueLocalSettings|queueClientPreface|expectClientPreface|initialSendWindow|initialReceiveWindow|receivedFirstSettings_|connectionStarted_|awaitingClientPreface_")
 set(RULE_STALE_H2_CLIENT_STREAM_API
@@ -175,6 +175,8 @@ set(RULE_STALE_H2_DATA_FLOW_ACCOUNTING
     "Http2ReceiveWindowResult|http2ConsumeReceiveWindows|http2RestoreReceiveWindows|dropDataFrame|windowConsumed")
 set(RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE
     "Http2LocalContentMode|localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)[ \t]*[(]")
+set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
+    "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
     "205 [(]Reset Content[)] deliberately falls through|response_policy_reset_content_carries_framing")
 set(RULE_STALE_DEPENDENCY
@@ -474,6 +476,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("mode/payload HTTP/2 local-content tuple"
         "${RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE}"
         "if (stream.localContentMode() == Http2LocalContentMode::kKnownLength) stream.localContentDeclaredLength();")
+    expect_match("presence/value HTTP/2 remote-content tuple"
+        "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
+        "if (stream.hasContentLength()) stream.contentLength();")
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
@@ -484,6 +489,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         "if (dependency == header.streamId) appendRstStream(streamId, error);")
     expect_match("stale HTTP/2 CONNECT marker state" "${RULE_STALE_H2_CONNECT_STATE}"
         "stream.markWebSocketTunnel();")
+    expect_match("kind/phase HTTP/2 CONNECT product state"
+        "${RULE_STALE_H2_CONNECT_STATE}"
+        "enum class Http2TunnelPhase { kNone, kAwaitingResponse, kOpen };" )
     expect_match("stale HTTP/2 preface/config API" "${RULE_STALE_H2_PREFACE_API}"
         "config.initialSendWindow = 1048576;")
     expect_match("stale HTTP/2 two-stage client stream API"
@@ -1448,6 +1456,14 @@ check_files_no_match("HTTP/2 local content accounting must use exclusive alterna
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+check_files_no_match("HTTP/2 remote content accounting must use exclusive alternatives"
+    "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestHeaders.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 check_files_no_match("response trailers must remain one terminal section"
     "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -1470,10 +1486,14 @@ check_files_no_match("HTTP/2 must not restore split discard state or deprecated 
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2HeaderContinuation.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
-check_files_no_match("HTTP/2 CONNECT must not restore independent boolean tunnel markers"
+check_files_no_match("HTTP/2 CONNECT must use exclusive tunnel alternatives"
     "${RULE_STALE_H2_CONNECT_STATE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2TunnelState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestBuilder.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 check_files_no_match("HTTP/2 must not restore split preface APIs or wire/accounting knobs"
@@ -1837,6 +1857,14 @@ set(HTTP2_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 set(HTTP2_LOCAL_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h")
+set(HTTP2_REMOTE_CONTENT_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h")
+set(HTTP2_STALE_BODY_ACCOUNTING
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
+set(HTTP2_BODY_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h")
+set(HTTP2_REQUEST_HEADERS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestHeaders.h")
 set(HTTP2_STREAM_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
 set(HTTP2_REQUEST_CONTENT
@@ -1881,6 +1909,45 @@ else()
             "unset, forbidden, unbounded, and known-length must be exclusive and only known-length may own a declared length")
     endif()
 endif()
+if(EXISTS "${HTTP2_STALE_BODY_ACCOUNTING}")
+    boundary_error("stale HTTP/2 body accounting header was restored"
+        "peer content must be represented only by Http2RemoteContentState.h")
+elseif(NOT EXISTS "${HTTP2_REMOTE_CONTENT_STATE}")
+    boundary_error("HTTP/2 remote content state is missing"
+        "Http2RemoteContentState.h must own peer Content-Length and DATA accounting")
+elseif(NOT EXISTS "${HTTP2_BODY_STATE}" OR
+       NOT EXISTS "${HTTP2_REQUEST_HEADERS}" OR
+       NOT EXISTS "${HTTP2_STREAM_STATE}")
+    boundary_error("HTTP/2 remote content call chain is incomplete"
+        "header decode, DATA preflight, and stream state must consume one remote-content contract")
+else()
+    file(READ "${HTTP2_REMOTE_CONTENT_STATE}" http2_remote_content_state)
+    file(READ "${HTTP2_BODY_STATE}" http2_body_state)
+    file(READ "${HTTP2_REQUEST_HEADERS}" http2_request_headers)
+    file(READ "${HTTP2_STREAM_STATE}" http2_remote_stream_state)
+    if(NOT http2_remote_content_state MATCHES
+           "class Http2RemoteContentWithoutLength final" OR
+       NOT http2_remote_content_state MATCHES
+           "class Http2RemoteContentKnownLength final" OR
+       NOT http2_remote_content_state MATCHES "using Content = std::variant" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<Http2RemoteContentWithoutLength>" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<Http2RemoteContentKnownLength>" OR
+       NOT http2_remote_content_state MATCHES "kCounterOverflow" OR
+       NOT http2_remote_content_state MATCHES "kDeclaredLengthExceeded" OR
+       NOT http2_remote_content_state MATCHES "terminalLengthValid" OR
+       NOT http2_remote_stream_state MATCHES
+           "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+       NOT http2_body_state MATCHES "checkRemoteContentAccept" OR
+       NOT http2_body_state MATCHES "acceptRemoteContent" OR
+       NOT http2_body_state MATCHES
+           "Http2RemoteContentCheck::kDeclaredLengthExceeded" OR
+       NOT http2_request_headers MATCHES "declareRemoteContentLength")
+        boundary_error("HTTP/2 remote content accounting lost its discriminated transaction"
+            "absent and known lengths must be exclusive, DATA must preflight before commit, and only known length may own a value")
+    endif()
+endif()
 if(NOT EXISTS "${HTTP2_REQUEST_CONTENT}")
     boundary_error("HTTP/2 request content contract is missing"
         "Http2RequestContent.h must own regular request Content-Length/END_STREAM selection")
@@ -1907,7 +1974,42 @@ else()
 endif()
 if(NOT EXISTS "${HTTP2_TUNNEL_STATE}")
     boundary_error("HTTP/2 CONNECT tunnel state is missing"
-        "Http2TunnelState.h must own standard/extended pending, open, and rejected phases")
+        "Http2TunnelState.h must own pending, open, and rejected phases")
+else()
+    file(READ "${HTTP2_TUNNEL_STATE}" http2_tunnel_state)
+    file(READ "${HTTP2_STREAM_STATE}" http2_tunnel_stream_state)
+    file(READ "${HTTP2_BODY_STATE}" http2_tunnel_body_state)
+    file(READ
+        "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestBuilder.h"
+        http2_tunnel_request_builder)
+    file(READ
+        "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+        http2_tunnel_websocket_handshake)
+    if(NOT http2_tunnel_state MATCHES "enum class Http2ConnectForm" OR
+       NOT http2_tunnel_state MATCHES "class Http2NotConnect final" OR
+       NOT http2_tunnel_state MATCHES "class Http2ConnectPending final" OR
+       NOT http2_tunnel_state MATCHES "class Http2TunnelOpen final" OR
+       NOT http2_tunnel_state MATCHES "class Http2ConnectRejected final" OR
+       NOT http2_tunnel_state MATCHES "using State = std::variant" OR
+       NOT http2_tunnel_state MATCHES "std::get_if<Http2NotConnect>" OR
+       NOT http2_tunnel_state MATCHES "std::get_if<Http2ConnectPending>" OR
+       NOT http2_tunnel_state MATCHES "std::get_if<Http2TunnelOpen>" OR
+       NOT http2_tunnel_state MATCHES "std::get_if<Http2ConnectRejected>" OR
+       NOT http2_tunnel_state MATCHES
+           "form != Http2ConnectForm::kStandard" OR
+       NOT http2_tunnel_state MATCHES
+           "form != Http2ConnectForm::kExtended" OR
+       NOT http2_tunnel_stream_state MATCHES
+           "const Http2TunnelState& tunnel[(][)] const noexcept" OR
+       NOT http2_tunnel_body_state MATCHES
+           "tunnel[(][)][.]open[(][)] != nullptr" OR
+       NOT http2_tunnel_request_builder MATCHES
+           "tunnel[(][)][.]pending[(][)]" OR
+       NOT http2_tunnel_websocket_handshake MATCHES
+           "http2IsPendingWebSocketConnect")
+        boundary_error("HTTP/2 CONNECT tunnel state lost exclusive alternatives"
+            "only pending may own standard/extended form; open and rejected must be payload-free phases exposed through one const tunnel view")
+    endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SETTINGS}")
     boundary_error("HTTP/2 local SETTINGS contract is missing"
@@ -1981,6 +2083,22 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
         boundary_error("HTTP/2 response Content-Length bypasses stream-owned accounting"
             "head, DATA emission, deferred drain, and finish must share local content state")
     endif()
+    if(NOT http2_connection_source MATCHES "declareRemoteContentLength" OR
+       NOT http2_connection_source MATCHES
+           "remoteContent[(][)][.]knownLength[(][)]" OR
+       NOT http2_connection_source MATCHES
+           "http2RemoteContentTerminalValid[(]")
+        boundary_error("HTTP/2 inbound Content-Length bypasses remote content state"
+            "response-head decode, CONNECT validation, and terminal HEADERS must share the peer-content contract")
+    endif()
+    string(REGEX MATCHALL "http2RemoteContentTerminalValid[(]"
+        http2_remote_terminal_call_sites "${http2_connection_source}")
+    list(LENGTH http2_remote_terminal_call_sites
+        http2_remote_terminal_call_site_count)
+    if(http2_remote_terminal_call_site_count LESS 3)
+        boundary_error("HTTP/2 END_STREAM paths split remote length validation"
+            "initial HEADERS, DATA, and trailing HEADERS must all call http2RemoteContentTerminalValid")
+    endif()
     if(NOT http2_connection_source MATCHES "submitRegularRequestHead" OR
        NOT http2_connection_source MATCHES "content[.]withoutContent" OR
        NOT http2_connection_source MATCHES "content[.]knownLengthContent" OR
@@ -2008,13 +2126,20 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
     if(NOT http2_connection_source MATCHES "submitConnectRequestHead" OR
        NOT http2_connection_source MATCHES "submitExtendedConnectRequestHead" OR
        NOT http2_connection_source MATCHES "submitConnectResponseHead" OR
+       NOT http2_connection_source MATCHES "beginStandardConnect" OR
+       NOT http2_connection_source MATCHES "beginExtendedConnect" OR
+       NOT http2_connection_source MATCHES "acceptConnect" OR
+       NOT http2_connection_source MATCHES "rejectConnect" OR
+       NOT http2_connection_source MATCHES
+           "tunnel[(][)][.]pending[(][)]" OR
+       NOT http2_connection_source MATCHES "tunnel[(][)][.]open[(][)]" OR
        NOT http2_connection_source MATCHES "Http2Event::tunnelData" OR
        NOT http2_connection_source MATCHES "Http2Event::tunnelEnd" OR
        NOT http2_connection_source MATCHES
            "prefacePhase_ != PrefacePhase::kReady" OR
        NOT http2_connection_source MATCHES "stream->peerEndStream\(\)")
         boundary_error("HTTP/2 CONNECT bypasses the shared tunnel lifecycle"
-            "dedicated request/response heads, tunnel events, and peer half-close enforcement must remain core-owned")
+            "typed pending/open/rejected transitions, dedicated heads, tunnel events, and peer half-close enforcement must remain core-owned")
     endif()
     if(NOT http2_connection_source MATCHES "Http2Connection::beginConnection" OR
        NOT http2_connection_source MATCHES "Http2LocalSettings::kFrameBytes" OR
@@ -2153,6 +2278,12 @@ set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/unit_http2_peer_settings.cpp")
 set(HTTP2_LOCAL_CONTENT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_local_content_state.cpp")
+set(HTTP2_REMOTE_CONTENT_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_remote_content_state.cpp")
+set(HTTP2_BODY_STATE_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_body_state.cpp")
+set(HTTP2_CONNECT_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(NOT EXISTS "${HTTP2_PEER_SETTINGS_TEST}")
     boundary_error("HTTP/2 peer SETTINGS result contract is untested"
@@ -2198,6 +2329,87 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "invalidSetting[.]failure[(][)]->error[(][)]")
         boundary_error("HTTP/2 peer SETTINGS result contract is under-tested"
             "unit and installed-package consumers must pin payload-free application, delta-only change, and error-only failure")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_CONNECT_TEST}")
+    boundary_error("HTTP/2 CONNECT tunnel alternatives are untested"
+        "unit_http2_connect.cpp must pin phase and form ownership")
+elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_CONNECT_TEST}" http2_tunnel_test)
+    file(READ "${HTTP2_EVENT_TEST}" http2_tunnel_connection_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_tunnel_package_test)
+    if(NOT http2_tunnel_test MATCHES
+           "http2_tunnel_state_alternatives_own_valid_transitions" OR
+       NOT http2_tunnel_test MATCHES
+           "HasConnectForm<Http2ConnectPending>" OR
+       NOT http2_tunnel_test MATCHES
+           "!HasStaleTunnelKindPhase<Http2TunnelState>" OR
+       NOT http2_tunnel_test MATCHES
+           "static_cast<Http2ConnectForm>[(]0xFF[)]" OR
+       NOT http2_tunnel_test MATCHES "state[.]notConnect[(][)]" OR
+       NOT http2_tunnel_test MATCHES "state[.]pending[(][)]" OR
+       NOT http2_tunnel_test MATCHES "state[.]open[(][)]" OR
+       NOT http2_tunnel_test MATCHES "rejected[.]rejected[(][)]" OR
+       NOT http2_tunnel_connection_test MATCHES
+           "!HasStaleTunnelForwarders<Http2StreamState>" OR
+       NOT http2_tunnel_package_test MATCHES
+           "HasHttp2TunnelAlternatives" OR
+       NOT http2_tunnel_package_test MATCHES
+           "!HasStaleHttp2TunnelKindPhase" OR
+       NOT http2_tunnel_package_test MATCHES
+           "!HasStaleHttp2StreamTunnelForwarders" OR
+       NOT http2_tunnel_package_test MATCHES
+           "HasHttp2ConnectForm" OR
+       NOT http2_tunnel_package_test MATCHES
+           "tunnel[.]pending[(][)]->form[(][)]")
+        boundary_error("HTTP/2 CONNECT tunnel alternative ownership is under-tested"
+            "unit and installed consumers must reject kind/phase products and inspect form only on pending")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_REMOTE_CONTENT_TEST}" OR
+   NOT EXISTS "${HTTP2_BODY_STATE_TEST}")
+    boundary_error("HTTP/2 remote content alternatives are untested"
+        "unit tests must pin typed length ownership and transactional DATA acceptance")
+elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_REMOTE_CONTENT_TEST}" http2_remote_content_test)
+    file(READ "${HTTP2_BODY_STATE_TEST}" http2_remote_body_state_test)
+    file(READ "${HTTP2_EVENT_TEST}" http2_remote_connection_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_remote_package_test)
+    if(NOT http2_remote_content_test MATCHES
+           "http2_remote_content_length_alternatives_are_explicit" OR
+       NOT http2_remote_content_test MATCHES
+           "http2_remote_content_acceptance_is_transactional" OR
+       NOT http2_remote_content_test MATCHES
+           "http2_remote_content_counter_overflow_is_transactional" OR
+       NOT http2_remote_content_test MATCHES
+           "http2_remote_content_rejects_late_length_declaration" OR
+       NOT http2_remote_content_test MATCHES
+           "HasDeclaredLength<Http2RemoteContentKnownLength>" OR
+       NOT http2_remote_content_test MATCHES
+           "!HasStaleLengthTuple<Http2RemoteContentState>" OR
+       NOT http2_remote_content_test MATCHES
+           "Http2RemoteContentCheck::kCounterOverflow" OR
+       NOT http2_remote_content_test MATCHES
+           "Http2RemoteContentCheck::kDeclaredLengthExceeded" OR
+       NOT http2_remote_body_state_test MATCHES
+           "Http2BodyAccountingResult::kContentLengthExceeded" OR
+       NOT http2_remote_body_state_test MATCHES
+           "remoteContent[(][)][.]receivedBytes[(][)]" OR
+       NOT http2_remote_body_state_test MATCHES
+           "h2_remote_content_terminal_validation_shares_no_content_exemptions" OR
+       NOT http2_remote_body_state_test MATCHES
+           "http2RemoteContentTerminalValid" OR
+       NOT http2_remote_connection_test MATCHES "remoteKnownLength" OR
+       NOT http2_remote_connection_test MATCHES
+           "http2_connection_client_head_representation_length_survives_trailer_terminal" OR
+       NOT http2_remote_package_test MATCHES
+           "HasHttp2RemoteContentAlternatives" OR
+       NOT http2_remote_package_test MATCHES
+           "!HasStaleHttp2RemoteContentTuple" OR
+       NOT http2_remote_package_test MATCHES
+           "!HasStaleHttp2StreamRemoteContentForwarders")
+        boundary_error("HTTP/2 remote content ownership is under-tested"
+            "unit and installed consumers must reject fake lengths/forwarders and prove failed DATA leaves accounting unchanged")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_TEST}")
@@ -3360,6 +3572,20 @@ foreach(boundary_doc IN ITEMS
         boundary_error("HTTP/2 outbound Content-Length contract is undocumented"
             "${relative} must document exclusive local-content states, pre-head rejection, payload ownership, and accepted versus committed DATA")
     endif()
+    if(NOT boundary_doc_content MATCHES "Http2RemoteContentState" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteContentWithoutLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteContentKnownLength" OR
+       NOT boundary_doc_content MATCHES "remoteContent[(][)]" OR
+       NOT boundary_doc_content MATCHES "kCounterOverflow" OR
+       NOT boundary_doc_content MATCHES "kDeclaredLengthExceeded" OR
+       NOT boundary_doc_content MATCHES "transaction" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1[.]1")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP/2 inbound Content-Length contract is undocumented"
+            "${relative} must document exclusive peer-content alternatives and transactional DATA accounting")
+    endif()
     if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
        NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR
        NOT boundary_doc_content MATCHES
@@ -3401,10 +3627,19 @@ foreach(boundary_doc IN ITEMS
     if(NOT boundary_doc_content MATCHES "submitConnectRequestHead" OR
        NOT boundary_doc_content MATCHES "submitExtendedConnectRequestHead" OR
        NOT boundary_doc_content MATCHES "kTunnelData" OR
-       NOT boundary_doc_content MATCHES "kTunnelEnd")
+       NOT boundary_doc_content MATCHES "kTunnelEnd" OR
+       NOT boundary_doc_content MATCHES "Http2TunnelState" OR
+       NOT boundary_doc_content MATCHES "Http2NotConnect" OR
+       NOT boundary_doc_content MATCHES "Http2ConnectPending" OR
+       NOT boundary_doc_content MATCHES "Http2TunnelOpen" OR
+       NOT boundary_doc_content MATCHES "Http2ConnectRejected" OR
+       NOT boundary_doc_content MATCHES "Http2ConnectForm" OR
+       NOT boundary_doc_content MATCHES "tunnel[(][)]" OR
+       NOT boundary_doc_content MATCHES "section-8[.]5" OR
+       NOT boundary_doc_content MATCHES "rfc8441[.]html#section-4")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 CONNECT lifecycle is undocumented"
-            "${relative} must document dedicated heads, tunnel events, and half-close ownership")
+            "${relative} must document exclusive tunnel states, pending-only form, dedicated heads, events, and half-close ownership")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2LocalSettings" OR
        NOT boundary_doc_content MATCHES "Http2ConnectionLimits" OR

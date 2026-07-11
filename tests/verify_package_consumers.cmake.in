@@ -656,6 +656,79 @@ if(_installed_http2_local_content MATCHES "Http2LocalContentMode" OR
        "localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)")
     message(FATAL_ERROR "installed HTTP/2 local content accounting retained a mode/fake-length split")
 endif()
+set(_installed_http2_remote_content_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2RemoteContentState.h")
+set(_installed_http2_stale_body_accounting_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
+set(_installed_http2_body_state_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2BodyState.h")
+if(EXISTS "${_installed_http2_stale_body_accounting_path}")
+    message(FATAL_ERROR "installed package retained the stale HTTP/2 body-accounting header")
+endif()
+if(NOT EXISTS "${_installed_http2_remote_content_path}" OR
+   NOT EXISTS "${_installed_http2_body_state_path}")
+    message(FATAL_ERROR "installed HTTP/2 remote content state is missing")
+endif()
+file(READ "${_installed_http2_remote_content_path}"
+    _installed_http2_remote_content)
+file(READ "${_installed_http2_body_state_path}"
+    _installed_http2_body_state)
+if(_installed_http2_remote_content MATCHES
+       "Http2StreamBodyAccounting|hasContentLength|contentLength[(][)]" OR
+   NOT _installed_http2_remote_content MATCHES
+       "class Http2RemoteContentWithoutLength final" OR
+   NOT _installed_http2_remote_content MATCHES
+       "class Http2RemoteContentKnownLength final" OR
+   NOT _installed_http2_remote_content MATCHES "using Content = std::variant" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<Http2RemoteContentWithoutLength>" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<Http2RemoteContentKnownLength>" OR
+   NOT _installed_http2_remote_content MATCHES "kCounterOverflow" OR
+   NOT _installed_http2_remote_content MATCHES "kDeclaredLengthExceeded" OR
+   NOT _installed_http2_remote_content MATCHES "terminalLengthValid" OR
+   NOT _installed_http2_body_state MATCHES
+       "http2RemoteContentTerminalValid" OR
+   NOT _installed_http2_body_state MATCHES "Http2Role role" OR
+   NOT _installed_http2_stream_state MATCHES
+       "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+   _installed_http2_stream_state MATCHES
+       "(hasContentLength|contentLength|receivedBodyBytes|receivedBodyExceedsContentLength|bodyLengthComplete)[(]")
+    message(FATAL_ERROR "installed HTTP/2 remote content accounting retained a presence/value tuple or forwarding accessors")
+endif()
+set(_installed_http2_tunnel_state_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2TunnelState.h")
+if(NOT EXISTS "${_installed_http2_tunnel_state_path}")
+    message(FATAL_ERROR "installed HTTP/2 tunnel state is missing")
+endif()
+file(READ "${_installed_http2_tunnel_state_path}"
+    _installed_http2_tunnel_state)
+if(_installed_http2_tunnel_state MATCHES
+       "Http2ConnectKind|Http2TunnelPhase|kind_|phase_" OR
+   NOT _installed_http2_tunnel_state MATCHES "enum class Http2ConnectForm" OR
+   NOT _installed_http2_tunnel_state MATCHES "class Http2NotConnect final" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "class Http2ConnectPending final" OR
+   NOT _installed_http2_tunnel_state MATCHES "class Http2TunnelOpen final" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "class Http2ConnectRejected final" OR
+   NOT _installed_http2_tunnel_state MATCHES "using State = std::variant" OR
+   NOT _installed_http2_tunnel_state MATCHES "std::get_if<Http2NotConnect>" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "std::get_if<Http2ConnectPending>" OR
+   NOT _installed_http2_tunnel_state MATCHES "std::get_if<Http2TunnelOpen>" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "std::get_if<Http2ConnectRejected>" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "form != Http2ConnectForm::kStandard" OR
+   NOT _installed_http2_tunnel_state MATCHES
+       "form != Http2ConnectForm::kExtended" OR
+   NOT _installed_http2_stream_state MATCHES
+       "const Http2TunnelState& tunnel[(][)] const noexcept" OR
+   _installed_http2_stream_state MATCHES
+       "(standardConnect|extendedConnect|extendedConnectWebSocket|connectRequest|connectPending|tunnelOpen|connectRejected)[(]")
+    message(FATAL_ERROR "installed HTTP/2 tunnel state retained a kind/phase product or stream forwarding accessors")
+endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
     _installed_http_authority)
 if(NOT _installed_http_authority MATCHES "enum class HttpAuthorityPortKind" OR
