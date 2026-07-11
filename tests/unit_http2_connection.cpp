@@ -20,6 +20,7 @@
 namespace {
 
 using ruvia::detail::Http2Connection;
+using ruvia::detail::Http2ConnectForm;
 using ruvia::detail::Http2DataSubmitStatus;
 using ruvia::detail::Http2EndStream;
 using ruvia::detail::Http2ErrorCode;
@@ -45,6 +46,7 @@ using ruvia::detail::Http2SubmittedRequestHead;
 using ruvia::detail::Http2SubmittedStreamingResponseHead;
 using ruvia::detail::Http2SubmitStatus;
 using ruvia::detail::Http2StreamState;
+using ruvia::detail::Http2TunnelState;
 using ruvia::detail::ResponseStreamHeadDisposition;
 using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::ResponseTrailerIntent;
@@ -134,6 +136,18 @@ concept HasStaleLocalContentForwarders = requires(const T& stream) {
     stream.localContentLengthComplete();
 };
 
+template <typename T>
+concept HasStaleTunnelForwarders = requires(const T& stream) {
+    stream.standardConnect();
+    stream.extendedConnect();
+    stream.extendedConnectWebSocket();
+    stream.webSocketTunnel();
+    stream.connectRequest();
+    stream.connectPending();
+    stream.tunnelOpen();
+    stream.connectRejected();
+};
+
 static_assert(!HasRequestContentMode<Http2RequestContent>);
 static_assert(!HasRequestContentLength<Http2RequestContent>);
 static_assert(!HasRequestContentLength<
@@ -153,6 +167,10 @@ static_assert(!HasStaleLocalContentForwarders<Http2StreamState>);
 static_assert(std::same_as<
     decltype(std::declval<const Http2StreamState&>().localContent()),
     const Http2LocalContentState&>);
+static_assert(!HasStaleTunnelForwarders<Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http2StreamState&>().tunnel()),
+    const Http2TunnelState&>);
 
 static_assert(std::same_as<
     decltype(std::declval<Http2Connection&>().nextEvent()),
@@ -2732,7 +2750,10 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
 
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->extendedConnectWebSocket());
+    const auto* pending = stream->tunnel().pending();
+    RUVIA_CHECK(pending != nullptr);
+    RUVIA_CHECK(pending->form() == Http2ConnectForm::kExtended);
+    RUVIA_CHECK(stream->protocolIsWebSocket());
 
     // Owner route policy admitted a WebSocket route: answer 200 and open the tunnel.
     conn.consumeOutput(conn.pendingOutput().size());
@@ -2860,7 +2881,10 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
     // content-length was decoded into the stream (auto CL from the server head).
-    RUVIA_CHECK(stream->hasContentLength());
+    const auto* remoteKnownLength = stream->remoteContent().knownLength();
+    RUVIA_CHECK(remoteKnownLength != nullptr);
+    RUVIA_CHECK_EQ(
+        remoteKnownLength->declaredLength(), std::size_t{4});
     client.unpinStream(streamId);
     RUVIA_CHECK(client.stream(streamId) == nullptr);
 }
@@ -2985,6 +3009,65 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
     RUVIA_CHECK_EQ(stream->responseStatus(), static_cast<std::uint16_t>(200));
     RUVIA_CHECK_EQ(static_cast<int>(stream->interimResponseCount()), 1);
     RUVIA_CHECK(!client.connectionError().has_value());
+}
+
+// A HEAD response's Content-Length is representation metadata, not a DATA
+// contract. The same exemption must apply when trailing HEADERS, rather than the
+// initial response HEADERS, carries END_STREAM.
+RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_terminal) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "HEAD", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.pinStream(streamId);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "200");
+    HpackEncoder::encodeHeader(response, "content-length", "10");
+    const auto responseHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(responseHead.data(), responseHead.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.nextEvent().value().kind() ==
+        Http2EventKind::kMessageHead);
+    RUVIA_CHECK(!client.nextEvent().has_value());
+    const auto* stream = client.stream(streamId);
+    RUVIA_CHECK(stream != nullptr);
+    const auto* known = stream->remoteContent().knownLength();
+    RUVIA_CHECK(known != nullptr);
+    RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
+    RUVIA_CHECK_EQ(stream->remoteContent().receivedBytes(), std::size_t{0});
+
+    std::pmr::string trailers(&resource);
+    HpackEncoder::encodeHeader(trailers, "server-timing", "db;dur=4");
+    const auto trailerHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(trailers.data(), trailers.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(trailerHead.data(), trailerHead.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.nextEvent().value().kind() ==
+        Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!client.nextEvent().has_value());
+    RUVIA_CHECK(!client.connectionError().has_value());
+    RUVIA_CHECK(client.pendingOutput().empty());
+    RUVIA_CHECK(client.stream(streamId)->peerEndStream());
+
+    client.unpinStream(streamId);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
 }
 
 // Client role protocol errors: HEADERS on an odd stream never opened is a connection

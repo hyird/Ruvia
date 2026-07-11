@@ -1,21 +1,27 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2TunnelState.h"
+#include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 
 namespace {
 
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
 using ruvia::detail::Http2Connection;
+using ruvia::detail::Http2ConnectForm;
+using ruvia::detail::Http2ConnectPending;
+using ruvia::detail::Http2ConnectRejected;
 using ruvia::detail::Http2DataSubmitStatus;
 using ruvia::detail::Http2EndStream;
 using ruvia::detail::Http2ErrorCode;
@@ -26,6 +32,34 @@ using ruvia::detail::Http2RequestHeadSubmitError;
 using ruvia::detail::Http2RequestHeadSubmitResult;
 using ruvia::detail::Http2Role;
 using ruvia::detail::Http2SubmitStatus;
+using ruvia::detail::Http2NotConnect;
+using ruvia::detail::Http2StreamState;
+using ruvia::detail::Http2TunnelOpen;
+using ruvia::detail::Http2TunnelState;
+using ruvia::detail::http2IsPendingWebSocketConnect;
+
+template <typename T>
+concept HasConnectForm = requires(const T& state) {
+    { state.form() } -> std::same_as<Http2ConnectForm>;
+};
+
+template <typename T>
+concept HasStaleTunnelKindPhase = requires(const T& state) {
+    state.kind();
+    state.phase();
+};
+
+static_assert(std::default_initializable<Http2TunnelState>);
+static_assert(!std::default_initializable<Http2NotConnect>);
+static_assert(!std::default_initializable<Http2ConnectPending>);
+static_assert(!std::default_initializable<Http2TunnelOpen>);
+static_assert(!std::default_initializable<Http2ConnectRejected>);
+static_assert(!HasConnectForm<Http2TunnelState>);
+static_assert(!HasConnectForm<Http2NotConnect>);
+static_assert(HasConnectForm<Http2ConnectPending>);
+static_assert(!HasConnectForm<Http2TunnelOpen>);
+static_assert(!HasConnectForm<Http2ConnectRejected>);
+static_assert(!HasStaleTunnelKindPhase<Http2TunnelState>);
 
 std::uint32_t submittedRequestStreamId(
     const Http2RequestHeadSubmitResult& result) {
@@ -182,28 +216,40 @@ HeaderObservation decodeSingleHeaderFrame(
 
 }  // namespace
 
-RUVIA_TEST(http2_tunnel_state_has_single_pending_to_terminal_transition) {
-    ruvia::detail::Http2TunnelState state;
-    RUVIA_CHECK(!state.isConnect());
+RUVIA_TEST(http2_tunnel_state_alternatives_own_valid_transitions) {
+    Http2TunnelState state;
+    RUVIA_CHECK(state.notConnect() != nullptr);
+    RUVIA_CHECK(state.pending() == nullptr);
+    RUVIA_CHECK(state.open() == nullptr);
+    RUVIA_CHECK(state.rejected() == nullptr);
     RUVIA_CHECK(!state.accept());
     RUVIA_CHECK(!state.reject());
+    RUVIA_CHECK(!state.begin(static_cast<Http2ConnectForm>(0xFF)));
+    RUVIA_CHECK(state.notConnect() != nullptr);
 
-    RUVIA_CHECK(state.begin(ruvia::detail::Http2ConnectKind::kStandard));
-    RUVIA_CHECK(state.standard());
-    RUVIA_CHECK(state.awaitingResponse());
+    RUVIA_CHECK(state.begin(Http2ConnectForm::kStandard));
+    RUVIA_CHECK(state.notConnect() == nullptr);
+    RUVIA_CHECK(state.pending() != nullptr);
+    RUVIA_CHECK(state.pending()->form() == Http2ConnectForm::kStandard);
+    RUVIA_CHECK(state.open() == nullptr);
+    RUVIA_CHECK(state.rejected() == nullptr);
+    RUVIA_CHECK(!state.begin(Http2ConnectForm::kExtended));
     RUVIA_CHECK(state.accept());
-    RUVIA_CHECK(state.open());
+    RUVIA_CHECK(state.pending() == nullptr);
+    RUVIA_CHECK(state.open() != nullptr);
+    RUVIA_CHECK(state.rejected() == nullptr);
     RUVIA_CHECK(!state.accept());
     RUVIA_CHECK(!state.reject());
+    RUVIA_CHECK(!state.begin(Http2ConnectForm::kExtended));
 
-    RUVIA_CHECK(!state.begin(ruvia::detail::Http2ConnectKind::kExtended));
-
-    ruvia::detail::Http2TunnelState rejected;
-    RUVIA_CHECK(rejected.begin(ruvia::detail::Http2ConnectKind::kExtended));
-    RUVIA_CHECK(rejected.extended());
-    RUVIA_CHECK(rejected.awaitingResponse());
+    Http2TunnelState rejected;
+    RUVIA_CHECK(rejected.begin(Http2ConnectForm::kExtended));
+    RUVIA_CHECK(rejected.pending() != nullptr);
+    RUVIA_CHECK(rejected.pending()->form() == Http2ConnectForm::kExtended);
     RUVIA_CHECK(rejected.reject());
-    RUVIA_CHECK(rejected.rejected());
+    RUVIA_CHECK(rejected.pending() == nullptr);
+    RUVIA_CHECK(rejected.open() == nullptr);
+    RUVIA_CHECK(rejected.rejected() != nullptr);
     RUVIA_CHECK(!rejected.accept());
 }
 
@@ -250,8 +296,9 @@ RUVIA_TEST(http2_connect_client_standard_head_owns_shape_and_gates_data) {
 
     const auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->standardConnect());
-    RUVIA_CHECK(stream->connectPending());
+    const auto* pending = stream->tunnel().pending();
+    RUVIA_CHECK(pending != nullptr);
+    RUVIA_CHECK(pending->form() == Http2ConnectForm::kStandard);
     RUVIA_CHECK(!stream->localBodyOpen());
     RUVIA_CHECK(stream->localContent().forbidden() != nullptr);
     RUVIA_CHECK(client.submitData(streamId, "early", Http2EndStream::kKeepOpen) ==
@@ -300,7 +347,10 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     RUVIA_CHECK_EQ(observed.scheme, std::string("https"));
     RUVIA_CHECK_EQ(observed.authority, std::string("example.test"));
     RUVIA_CHECK_EQ(observed.path, std::string("/masque"));
-    RUVIA_CHECK(client.stream(genericStream)->extendedConnect());
+    const auto* genericPending =
+        client.stream(genericStream)->tunnel().pending();
+    RUVIA_CHECK(genericPending != nullptr);
+    RUVIA_CHECK(genericPending->form() == Http2ConnectForm::kExtended);
     RUVIA_CHECK_EQ(
         client.stream(genericStream)->requestProtocol(), std::string_view("connect-udp"));
     client.consumeOutput(out.size());
@@ -320,7 +370,8 @@ RUVIA_TEST(http2_connect_client_extended_head_requires_setting_and_protocol_cont
     RUVIA_CHECK(websocket.submitted() != nullptr);
     const auto websocketStream = submittedRequestStreamId(websocket);
     RUVIA_CHECK_EQ(websocketStream, std::uint32_t{3});
-    RUVIA_CHECK(client.stream(websocketStream)->extendedConnectWebSocket());
+    RUVIA_CHECK(http2IsPendingWebSocketConnect(
+        *client.stream(websocketStream)));
 }
 
 RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close) {
@@ -334,8 +385,9 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(!server.nextEvent().has_value());
     auto* stream = server.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->standardConnect());
-    RUVIA_CHECK(stream->connectPending());
+    const auto* pending = stream->tunnel().pending();
+    RUVIA_CHECK(pending != nullptr);
+    RUVIA_CHECK(pending->form() == Http2ConnectForm::kStandard);
 
     ruvia::HttpResponse invalidBody(&resource);
     invalidBody.status(200);
@@ -348,7 +400,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidLength) ==
         Http2SubmitStatus::kInvalidMessage);
     RUVIA_CHECK(server.pendingOutput().empty());
-    RUVIA_CHECK(stream->connectPending());
+    RUVIA_CHECK(stream->tunnel().pending() != nullptr);
 
     ruvia::HttpResponse accepted(&resource);
     accepted.status(200);
@@ -362,7 +414,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK_EQ(observed.status, std::string("200"));
     RUVIA_CHECK_EQ(observed.contentLengthCount, std::size_t{0});
     server.consumeOutput(responseBytes.size());
-    RUVIA_CHECK(stream->tunnelOpen());
+    RUVIA_CHECK(stream->tunnel().open() != nullptr);
     RUVIA_CHECK(stream->localBodyOpen());
 
     const auto peerData = frame(&resource, Http2FrameType::kData, 0, 1, "peer");
@@ -427,8 +479,8 @@ RUVIA_TEST(http2_connect_client_success_ignores_length_and_uses_tunnel_events) {
     RUVIA_CHECK(!client.nextEvent().has_value());
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->tunnelOpen());
-    RUVIA_CHECK(!stream->hasContentLength());
+    RUVIA_CHECK(stream->tunnel().open() != nullptr);
+    RUVIA_CHECK(stream->remoteContent().withoutLength() != nullptr);
     RUVIA_CHECK(stream->localBodyOpen());
 
     const auto data = frame(
@@ -479,7 +531,7 @@ RUVIA_TEST(http2_connect_client_rejection_closes_request_half_and_decodes_respon
 
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->connectRejected());
+    RUVIA_CHECK(stream->tunnel().rejected() != nullptr);
     RUVIA_CHECK(stream->localEndStreamCommitted());
     RUVIA_CHECK(!stream->localBodyOpen());
     RUVIA_CHECK(client.submitData(streamId, "tunnel?", Http2EndStream::kKeepOpen) ==
@@ -636,9 +688,10 @@ RUVIA_TEST(http2_connect_server_retains_generic_extended_protocol) {
     RUVIA_CHECK(!server.nextEvent().has_value());
     const auto* stream = server.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->extendedConnect());
-    RUVIA_CHECK(!stream->extendedConnectWebSocket());
-    RUVIA_CHECK(stream->connectPending());
+    const auto* pending = stream->tunnel().pending();
+    RUVIA_CHECK(pending != nullptr);
+    RUVIA_CHECK(pending->form() == Http2ConnectForm::kExtended);
+    RUVIA_CHECK(!http2IsPendingWebSocketConnect(*stream));
     RUVIA_CHECK_EQ(stream->requestProtocol(), std::string_view("connect-udp"));
     RUVIA_CHECK_EQ(stream->requestPath(), std::string_view("/.well-known/masque/udp"));
 }

@@ -943,7 +943,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
             Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
     }
     const auto streamId = stream->id();
-    (void)stream->markStandardConnectPending();
+    (void)stream->beginStandardConnect();
 
     auto& block = stream->responseHeaderBlock();
     block.clear();
@@ -1000,7 +1000,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
             Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
     }
     const auto streamId = stream->id();
-    (void)stream->markExtendedConnectPending();
+    (void)stream->beginExtendedConnect();
 
     auto& block = stream->responseHeaderBlock();
     block.clear();
@@ -1046,29 +1046,26 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             !stream.hasScheme() ||
             !stream.hasPath() ||
             !stream.hasAuthority() ||
-            stream.hasContentLength()) {
+            stream.remoteContent().knownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        if (!stream.markExtendedConnectPending()) {
+        if (!stream.beginExtendedConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
     } else if (stream.requestKnownMethod() == HttpKnownMethod::kConnect) {
         RequestTargetView connectTarget;
         if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath() ||
-            stream.hasContentLength() ||
+            stream.remoteContent().knownLength() != nullptr ||
             !parseRequestTarget(
                 HttpKnownMethod::kConnect,
                 stream.requestAuthority(),
                 connectTarget)) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        if (!stream.markStandardConnectPending()) {
+        if (!stream.beginStandardConnect()) {
             return HeaderDecodeStatus::kProtocolError;
         }
     } else if (!stream.hasScheme() || !stream.hasPath()) {
-        return HeaderDecodeStatus::kProtocolError;
-    }
-    if (stream.bufferedBodyExceedsContentLength()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     stream.markHeadersDecoded();
@@ -1124,7 +1121,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return true;  // interim head: validate only, never stored
     }
     const auto kind = classifyRequestHeader(name);
-    const bool successfulConnect = stream.connectPending() &&
+    const bool successfulConnect = stream.tunnel().pending() != nullptr &&
         context->status >= 200 && context->status < 300;
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
@@ -1142,7 +1139,7 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         if (ec != std::errc{} || ptr != value.data() + value.size()) {
             return false;
         }
-        if (!stream.setContentLength(parsed)) {
+        if (!stream.declareRemoteContentLength(parsed)) {
             return false;
         }
     }
@@ -1178,13 +1175,13 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kOk;
     }
     stream.setResponseStatus(context.status);
-    if (stream.connectPending()) {
+    if (stream.tunnel().pending() != nullptr) {
         if (context.status >= 200 && context.status < 300) {
-            (void)stream.markConnectTunnelOpen();
+            (void)stream.acceptConnect();
             stream.beginLocalContentUnbounded();
             (void)stream.openLocalConnectTunnel();
         } else {
-            (void)stream.markConnectRejected();
+            (void)stream.rejectConnect();
             appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, stream.id(), {});
             (void)stream.rejectLocalConnect();
         }
@@ -1296,7 +1293,7 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream)
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
-    if (!stream.bodyLengthComplete()) {
+    if (!http2RemoteContentTerminalValid(stream, role_)) {
         return HeaderDecodeStatus::kProtocolError;
     }
     stream.markPeerEndStream();
@@ -1329,10 +1326,8 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // satisfied -- reject it here so both END_STREAM routes stay consistent. Client
     // role: HEAD responses and 204/304 are exempt (their content-length describes the
     // body a GET would have had, RFC 9110 §8.6).
-    const bool lengthExempt = role_ == Http2Role::kClient &&
-        (stream.requestKnownMethod() == HttpKnownMethod::kHead ||
-         stream.responseStatus() == 204 || stream.responseStatus() == 304);
-    if (stream.peerEndStream() && !lengthExempt && !http2BodyLengthComplete(stream)) {
+    if (stream.peerEndStream() &&
+        !http2RemoteContentTerminalValid(stream, role_)) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
         closeStream(
             stream.id(),
@@ -1341,14 +1336,16 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
         return;
     }
     events_.push_back(Http2Event::messageHead(stream.id()));
-    if (role_ == Http2Role::kServer && stream.connectRequest()) {
+    if (role_ == Http2Role::kServer &&
+        stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but the peer's wire half remains open for
         // tunnel DATA after a successful response. Route/accept decisions start from
         // kMessageHead; kMessageEnd would incorrectly imply END_STREAM was received.
         stream.markBodyEnded();
         return;
     }
-    if (role_ == Http2Role::kClient && stream.tunnelOpen()) {
+    if (role_ == Http2Role::kClient &&
+        stream.tunnel().open() != nullptr) {
         if (stream.peerEndStream()) {
             stream.markBodyEnded();
             events_.push_back(Http2Event::tunnelEnd(stream.id()));
@@ -1395,8 +1392,9 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
             // minimally processed and discarded. Do not send a second RST.
             discardedAction = DiscardedHeaderAction::kIgnore;
         } else if (existing->headersDecoded() &&
-                   (existing->tunnelOpen() ||
-                    (role_ == Http2Role::kServer && existing->connectPending()))) {
+                   (existing->tunnel().open() != nullptr ||
+                    (role_ == Http2Role::kServer &&
+                     existing->tunnel().pending() != nullptr))) {
             // CONNECT has no request trailers, and an accepted connected stream only
             // permits DATA/RST_STREAM/WINDOW_UPDATE/PRIORITY. Decode the complete
             // field block for HPACK synchronization, then reset this stream.
@@ -1640,7 +1638,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
-    if (role_ == Http2Role::kServer && stream->connectPending()) {
+    if (role_ == Http2Role::kServer &&
+        stream->tunnel().pending() != nullptr) {
         appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
         closeStream(
             header.streamId,
@@ -1649,7 +1648,7 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
-    const bool tunnelData = stream->tunnelOpen();
+    const bool tunnelData = stream->tunnel().open() != nullptr;
     if (!tunnelData && stream->bodyEnded()) {
         appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
         closeStream(
@@ -1721,7 +1720,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         ? Http2Event::tunnelData(header.streamId, data)
         : Http2Event::messageBodyChunk(header.streamId, data));
     if ((header.flags & kHttp2FlagEndStream) != 0) {
-        if (!tunnelData && !http2BodyLengthComplete(*stream)) {
+        if (!tunnelData &&
+            !http2RemoteContentTerminalValid(*stream, role_)) {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
             closeStream(
                 header.streamId,
@@ -1774,7 +1774,8 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
         default:
             if (header.streamId != 0) {
                 if (auto* stream = findStream(header.streamId);
-                    stream != nullptr && stream->tunnelOpen()) {
+                    stream != nullptr &&
+                    stream->tunnel().open() != nullptr) {
                     // RFC 9113 8.5 narrows connected streams to DATA and the three
                     // stream-management frame types, even though unknown frames are
                     // normally ignored elsewhere.
@@ -1937,7 +1938,7 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     }
     const bool successfulConnect =
         response.status() >= 200 && response.status() < 300 &&
-        stream->connectPending();
+        stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
         !stream->canSubmitLocalHead() || successfulConnect) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
@@ -1975,8 +1976,8 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     stream->markLocalHeadSubmitted(
         Http2LocalMessageKind::kResponse,
         http2EndsStream(endStream));
-    if (stream->connectPending()) {
-        (void)stream->markConnectRejected();
+    if (stream->tunnel().pending() != nullptr) {
+        (void)stream->rejectConnect();
     }
     http2ReleaseResponseHeaderBlock(*stream);
     return Http2BufferedResponseHeadSubmitResult::makeSubmitted(
@@ -1995,7 +1996,7 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
     }
     const bool successfulConnect =
         head.status() >= 200 && head.status() < 300 &&
-        stream->connectPending();
+        stream->tunnel().pending() != nullptr;
     if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
         !stream->canSubmitLocalHead() || successfulConnect) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
@@ -2054,8 +2055,8 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
             Http2LocalMessageKind::kResponse,
             http2EndsStream(endStream));
     }
-    if (stream->connectPending()) {
-        (void)stream->markConnectRejected();
+    if (stream->tunnel().pending() != nullptr) {
+        (void)stream->rejectConnect();
     }
     http2ReleaseResponseHeaderBlock(*stream);
     return Http2StreamingResponseHeadSubmitResult::makeSubmitted(commitPlan);
@@ -2177,7 +2178,8 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
         return Http2SubmitStatus::kClosed;
     }
     if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
-        !stream->canSubmitLocalHead() || !stream->connectPending() ||
+        !stream->canSubmitLocalHead() ||
+        stream->tunnel().pending() == nullptr ||
         !stream->responseTrailerBlock().empty()) {
         return Http2SubmitStatus::kInvalidState;
     }
@@ -2195,7 +2197,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
             stream->responseHeaderBlock().data(),
             stream->responseHeaderBlock().size()),
         Http2EndStream::kKeepOpen);
-    (void)stream->markConnectTunnelOpen();
+    (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
     stream->markLocalHeadSubmitted(
         Http2LocalMessageKind::kConnectTunnel,
@@ -2215,7 +2217,7 @@ Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
     }
     if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
         !stream->canSubmitLocalHead() ||
-        !stream->extendedConnectWebSocket() || !stream->connectPending() ||
+        !http2IsPendingWebSocketConnect(*stream) ||
         !stream->responseTrailerBlock().empty()) {
         return Http2SubmitStatus::kInvalidState;
     }
@@ -2224,7 +2226,7 @@ Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
         Http2EndStream::kKeepOpen);
-    (void)stream->markConnectTunnelOpen();
+    (void)stream->acceptConnect();
     stream->beginLocalContentUnbounded();
     stream->markLocalHeadSubmitted(
         Http2LocalMessageKind::kConnectTunnel,

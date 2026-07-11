@@ -22,12 +22,19 @@ namespace ruvia::detail {
     });
 }
 
+[[nodiscard]] inline bool http2IsPendingWebSocketConnect(
+    const Http2StreamState& stream) noexcept {
+    const auto* pending = stream.tunnel().pending();
+    return pending != nullptr &&
+        pending->form() == Http2ConnectForm::kExtended &&
+        stream.protocolIsWebSocket();
+}
+
 [[nodiscard]] inline bool http2IsValidWebSocketRequest(
     const Http2StreamState& stream,
     const HttpRequest& request) noexcept {
-    return stream.extendedConnectWebSocket() &&
-        stream.connectPending() &&
-        !stream.hasContentLength() &&
+    return http2IsPendingWebSocketConnect(stream) &&
+        stream.remoteContent().withoutLength() != nullptr &&
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
 }
 

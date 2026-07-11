@@ -40,7 +40,7 @@ add_executable(ruvia_unit_tests
     unit_http2_payload.cpp
     unit_http2_closed_streams.cpp
     unit_http2_stream_table.cpp
-    unit_http2_body_accounting.cpp
+    unit_http2_remote_content_state.cpp
     unit_http2_local_content_state.cpp
     unit_http2_connect.cpp
     unit_http2_ready_queue.cpp
