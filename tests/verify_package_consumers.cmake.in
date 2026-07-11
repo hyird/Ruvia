@@ -700,6 +700,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     file(READ "${_installed_http2_web_runtime_path}"
         _installed_http2_web_runtime)
     if(NOT _installed_http2_web_runtime MATCHES
+           "class Http2SansIoStreamSignal final" OR
+       NOT _installed_http2_web_runtime MATCHES
            "class Http2SansIoBodyQueue final" OR
        NOT _installed_http2_web_runtime MATCHES
            "class Http2RequestBodyRuntime final" OR
@@ -709,9 +711,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "Http2RequestBodyStoreResult" OR
        NOT _installed_http2_web_runtime MATCHES "RequestBodyMode" OR
        NOT _installed_http2_web_runtime MATCHES "kModeNotSelected" OR
+       NOT _installed_http2_web_runtime MATCHES "modeSelected" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "std::optional<Http2SansIoStreamSignal>" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "friend class Http2SansIoStreamRuntimeTable" OR
+       NOT _installed_http2_web_runtime MATCHES "beginDispatch" OR
+       NOT _installed_http2_web_runtime MATCHES "dispatchedCount" OR
+       NOT _installed_http2_web_runtime MATCHES "void forEach" OR
        NOT _installed_http2_web_runtime MATCHES "streamingBacklogLimit")
         message(FATAL_ERROR
-            "installed Web package lost route-owned HTTP/2 body storage and limits")
+            "installed Web package lost unified HTTP/2 route/body/signal runtime ownership")
     endif()
 endif()
 if(NOT EXISTS "${_installed_http2_remote_content_path}")

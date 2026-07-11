@@ -113,6 +113,8 @@ set(RULE_STALE_FINAL_RESPONSE_CONTROL_TUPLE
     "HttpFinalResponseControlStatus|HttpUpgradeProtocols[ 	]+upgradeProtocols[ 	]*=[ 	]*[{][}]")
 set(RULE_HTTP2_WEB_RUNTIME_IN_CORE
     "#[ 	]*include[ 	]*[<\"]coroutine|std::coroutine_handle|HttpRequestBodyMode|Http2StreamBody(Policy|Queue)|Http2ConnectionLimits|deferStreamWindowRelease|releaseStreamWindow|responseCompressionScratch|requestBody(View|Size|Empty)|enqueueBufferedRequestBodyChunk|queuedBodyBytes")
+set(RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE
+    "streamSignals|make_unique<Http2SansIoStreamSignal>|std::vector[<]std::pair[<]std::uint32_t|inFlight")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -433,6 +435,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("Web request-body runtime leaked into HTTP/2 core"
         "${RULE_HTTP2_WEB_RUNTIME_IN_CORE}"
         "std::coroutine_handle<> bodyWaiter; HttpRequestBodyMode bodyMode;")
+    expect_match("parallel HTTP/2 Web dispatch ownership"
+        "${RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE}"
+        "std::vector streamSignals; int inFlight;")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -3306,8 +3311,8 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_WEB_STREAM_RUNTIME_TEST}")
-    boundary_error("Web-owned HTTP/2 request body runtime is untested"
-        "unit_http2_sansio_stream_runtime.cpp must pin route-selected storage, limits, FIFO queueing, and stable per-stream ownership")
+    boundary_error("Web-owned HTTP/2 stream runtime is untested"
+        "unit_http2_sansio_stream_runtime.cpp must pin route/body storage, dispatch leases, concurrent wakeups, and stable per-stream ownership")
 else()
     file(READ "${HTTP2_WEB_STREAM_RUNTIME_TEST}"
         http2_web_stream_runtime_test)
@@ -3318,9 +3323,15 @@ else()
        NOT http2_web_stream_runtime_test MATCHES
            "http2_web_request_body_runtime_enforces_total_and_backlog_limits" OR
        NOT http2_web_stream_runtime_test MATCHES
-           "http2_web_stream_runtime_table_keeps_active_storage_stable")
-        boundary_error("Web-owned HTTP/2 request body runtime is under-tested"
-            "FIFO/backlog accounting, one-time route mode, total limits, and stable active storage must remain explicit")
+           "http2_web_stream_runtime_table_keeps_active_storage_stable" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_stream_runtime_table_owns_dispatch_signal_and_lease" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_stream_runtime_keeps_overflow_signal_reference_stable")
+        boundary_error("Web-owned HTTP/2 stream runtime is under-tested"
+            "FIFO/backlog accounting, stable storage, table-owned dispatch leases, and concurrent signal waiters must remain explicit")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_TEST}")
@@ -3573,14 +3584,21 @@ set(WEB_HTTP2_STREAM_RUNTIME
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 set(WEB_HTTP2_WS_TRANSPORT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
+set(WEB_HTTP2_RESPONSE_STREAM_SINK
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
 if(NOT EXISTS "${WEB_HTTP2_STREAM_RUNTIME}" OR
-   NOT EXISTS "${WEB_HTTP2_WS_TRANSPORT}")
-    boundary_error("Web-owned HTTP/2 request-body runtime is missing"
-        "stable per-stream body storage and asynchronous queue consumers must live under ruvia-web/include/ruvia/web/detail/http2")
+   NOT EXISTS "${WEB_HTTP2_WS_TRANSPORT}" OR
+   NOT EXISTS "${WEB_HTTP2_RESPONSE_STREAM_SINK}")
+    boundary_error("Web-owned HTTP/2 stream runtime is missing"
+        "stable per-stream route/body/signal storage and asynchronous consumers must live under ruvia-web/include/ruvia/web/detail/http2")
 else()
     file(READ "${WEB_HTTP2_STREAM_RUNTIME}" web_http2_stream_runtime)
     file(READ "${WEB_HTTP2_WS_TRANSPORT}" web_http2_ws_transport)
+    file(READ "${WEB_HTTP2_RESPONSE_STREAM_SINK}"
+        web_http2_response_stream_sink)
     if(NOT web_http2_stream_runtime MATCHES
+           "class Http2SansIoStreamSignal final" OR
+       NOT web_http2_stream_runtime MATCHES
            "class Http2SansIoBodyQueue final" OR
        NOT web_http2_stream_runtime MATCHES
            "class Http2RequestBodyRuntime final" OR
@@ -3588,13 +3606,27 @@ else()
            "class Http2SansIoStreamRuntimeTable final" OR
        NOT web_http2_stream_runtime MATCHES "RequestBodyMode" OR
        NOT web_http2_stream_runtime MATCHES "kModeNotSelected" OR
+       NOT web_http2_stream_runtime MATCHES "modeSelected" OR
        NOT web_http2_stream_runtime MATCHES "streamingBacklogLimit" OR
+       NOT web_http2_stream_runtime MATCHES
+           "std::optional<Http2SansIoStreamSignal>" OR
+       NOT web_http2_stream_runtime MATCHES
+           "friend class Http2SansIoStreamRuntimeTable" OR
+       NOT web_http2_stream_runtime MATCHES "beginDispatch" OR
+       NOT web_http2_stream_runtime MATCHES "dispatchedCount" OR
+       NOT web_http2_stream_runtime MATCHES "void forEach" OR
        NOT web_http2_stream_runtime MATCHES "makePmrObject" OR
        NOT web_http2_ws_transport MATCHES "releaseReceivedData" OR
+       NOT web_http2_ws_transport MATCHES "Http2SansIoStreamSignal&" OR
+       NOT web_http2_response_stream_sink MATCHES
+           "Http2SansIoStreamSignal&" OR
+       web_http2_ws_transport MATCHES "Http2SansIoStreamSignal[*]" OR
+       web_http2_response_stream_sink MATCHES
+           "Http2SansIoStreamSignal[*]" OR
        web_http2_ws_transport MATCHES
-           "Http2BodyQueue|Http2StreamBodyQueue")
-        boundary_error("HTTP/2 Web body runtime lost its ownership boundary"
-            "route-selected storage, PMR-stable stream state, Web queues, and consume-time receive-credit release must remain Web-owned")
+           "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final")
+        boundary_error("HTTP/2 Web stream runtime lost its ownership boundary"
+            "route-selected storage, PMR-stable stream state, dispatch signal/lease, Web queues, and consume-time receive-credit release must remain one Web-owned object")
     endif()
 endif()
 if(EXISTS "${HTTP2_REQUEST_BUILDER}")
@@ -3614,6 +3646,8 @@ set(WEB_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 if(EXISTS "${WEB_HTTP2_SESSION}")
     file(READ "${WEB_HTTP2_SESSION}" web_http2_session)
+    file(READ "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp"
+        web_http2_session_test)
     if(NOT web_http2_session MATCHES "event->tunnelData[(][)]" OR
        NOT web_http2_session MATCHES "event->tunnelEnd[(][)]")
         boundary_error("ruvia-web collapses tunnel bytes back into HTTP message content"
@@ -3635,10 +3669,21 @@ if(EXISTS "${WEB_HTTP2_SESSION}")
        NOT web_http2_session MATCHES "unmarkBufferedBodyCopied" OR
        NOT web_http2_session MATCHES "resetEventStream" OR
        NOT web_http2_session MATCHES "Owner-side reset" OR
+       NOT web_http2_session MATCHES
+           "streamRuntimes[.]beginDispatch" OR
+       NOT web_http2_session MATCHES
+           "streamRuntimes[.]dispatchedCount" OR
+       NOT web_http2_session MATCHES "streamRuntimes[.]size" OR
+       NOT web_http2_session MATCHES "streamRuntimes[.]forEach" OR
+       NOT web_http2_session MATCHES "http2SansIoInactivityPhase" OR
+       NOT web_http2_session_test MATCHES
+           "sansio_driver_h2_inactivity_phase_counts_predispatch_runtime" OR
+       web_http2_session MATCHES
+           "${RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE}" OR
        web_http2_session MATCHES
            "Http2ConnectionLimits|HttpRequestBodyMode|setBodyMode|usesStreamRequestBody")
         boundary_error("ruvia-web HTTP/2 session bypasses Web-owned body storage"
-            "message-head route selection must precede Web limits/storage, buffered event batches must release credit only after copying, owner resets must reclaim undispatched runtimes, and protocol streams must remain policy-free")
+            "one stable runtime must own route/body/signal/dispatch lease, admission must precede co_spawn, owner resets must reclaim undispatched runtimes, and protocol streams must remain policy-free")
     endif()
     if(NOT web_http2_session MATCHES "feedAndDrain" OR
        NOT web_http2_session MATCHES "Http2FeedResult::kEventsPending" OR
@@ -4685,6 +4730,12 @@ foreach(boundary_doc IN ITEMS
        NOT boundary_doc_content MATCHES "Http2SansIoStreamRuntimeTable" OR
        NOT boundary_doc_content MATCHES "Http2RequestBodyRuntime" OR
        NOT boundary_doc_content MATCHES "Http2SansIoBodyQueue" OR
+       NOT boundary_doc_content MATCHES "Http2SansIoStreamSignal" OR
+       NOT boundary_doc_content MATCHES "dispatchedCount" OR
+       NOT boundary_doc_content MATCHES "streamSignals" OR
+       NOT boundary_doc_content MATCHES "co_spawn" OR
+       NOT boundary_doc_content MATCHES "table-only" OR
+       NOT boundary_doc_content MATCHES "concurrent waiter" OR
        NOT boundary_doc_content MATCHES "RequestBodyMode" OR
        NOT boundary_doc_content MATCHES "kModeNotSelected" OR
        NOT boundary_doc_content MATCHES "Http2BodyState[.]h" OR
@@ -4694,7 +4745,7 @@ foreach(boundary_doc IN ITEMS
        NOT boundary_doc_content MATCHES "section-6[.]9[.]1")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 DATA runtime/flow-control boundary is undocumented"
-            "${relative} must pin owner-consumption credit release, removed HTTP runtime headers, Web PMR-stable route storage, same-feed event ordering, and RFC receiver-capacity semantics")
+            "${relative} must pin owner-consumption credit release, unified Web route/body/signal dispatch ownership, same-feed event ordering, and RFC receiver-capacity semantics")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
        NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR

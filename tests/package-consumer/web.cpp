@@ -1,9 +1,12 @@
 #include <chrono>
 #include <cstddef>
+#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include <asio/io_context.hpp>
 
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
@@ -31,6 +34,13 @@
 #include <ruvia/web/redis/Redis.h>
 #endif
 
+template <typename Runtime, typename Executor>
+concept HasDirectHttp2BeginDispatch = requires(
+    Runtime& runtime,
+    Executor executor) {
+    runtime.beginDispatch(executor);
+};
+
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -50,6 +60,9 @@ static_assert(std::is_same_v<
         std::size_t{},
         std::size_t{})),
     ruvia::detail::Http2RequestBodyStoreResult>);
+static_assert(!HasDirectHttp2BeginDispatch<
+    ruvia::detail::Http2SansIoStreamRuntime,
+    asio::io_context::executor_type>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -70,6 +83,24 @@ int main() {
             ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
         body.queue().pop() != "web-owned") {
         return 4;
+    }
+    asio::io_context io;
+    ruvia::detail::Http2SansIoStreamRuntimeTable runtimes(
+        std::pmr::get_default_resource());
+    auto* runtime = runtimes.ensure(1);
+    if (runtime == nullptr ||
+        !runtime->body().selectMode(
+            ruvia::detail::RequestBodyMode::kBuffered)) {
+        return 5;
+    }
+    auto* signal = runtimes.beginDispatch(1, io.get_executor());
+    if (signal == nullptr || runtimes.dispatchedCount() != 1) {
+        return 6;
+    }
+    signal->end();
+    if (!signal->ended() || !runtimes.remove(1) ||
+        runtimes.dispatchedCount() != 0) {
+        return 7;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

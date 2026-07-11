@@ -496,12 +496,25 @@ sent as consumed data frees that capacity.
 
 Buffered/streamed request storage is therefore Web runtime state, not HTTP/2 protocol state.
 `ruvia-web` owns a PMR-stable `Http2SansIoStreamRuntimeTable`; each entry owns one
-`Http2RequestBodyRuntime` and its `Http2SansIoBodyQueue`. The ordered message-head event selects the
-route's `RequestBodyMode` before later body events are stored—even when HEADERS and DATA arrived in
+`Http2RequestBodyRuntime`, its `Http2SansIoBodyQueue`, and the optional
+`Http2SansIoStreamSignal` that is also the stream's dispatch lease. The table increments
+`dispatchedCount()` synchronously before `co_spawn`; runtime-level admission is table-only, so no
+caller can create a signal while bypassing the aggregate lease, and admission is rejected until
+the request body mode is selected. Writer exit consumes that dispatch count; idle classification
+consumes the same table's `size()`, so a buffered body that has not reached
+dispatch is still treated as active payload work. Teardown wakeup and removal traverse that one
+runtime lifetime. There is no parallel
+default-heap `streamSignals` vector or per-signal `unique_ptr` allocation. Body readers,
+WebSocket transports, and response-stream sinks require a signal reference rather than accepting a
+nullable parallel state. The ordered message-head event selects the route's `RequestBodyMode`
+before later body events are stored—even when HEADERS and DATA arrived in
 one `feed()` span; storing before that one-time selection returns `kModeNotSelected`. Buffered
 events are copied and acknowledged after the complete event batch;
 streaming request and CONNECT tunnel events remain window-deferred until the handler drains its Web
-queue. Total and streaming-backlog product limits are applied there. Because an owner-side reset
+queue. A stream signal sets its timer deadline once: registering a concurrent waiter never changes
+the expiry or self-cancels an earlier waiter, while one wake cancels all registered waits so each
+consumer can re-check its own readiness. Total and streaming-backlog product limits are applied
+there. Because an owner-side reset
 does not echo a `kStreamClosed` event back to that owner, the session immediately removes an
 undispatched Web runtime on its reset path; a dispatched handler retains its runtime until handler
 cleanup. `Http2RequestBuilder` receives the resulting body view explicitly. Buffered-response

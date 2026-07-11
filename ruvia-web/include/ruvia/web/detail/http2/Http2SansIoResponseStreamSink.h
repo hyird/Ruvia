@@ -26,7 +26,7 @@
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
-#include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
+#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
@@ -50,8 +50,8 @@ public:
         ResponseBodyMode mode,
         std::pmr::memory_resource* resource,
         Executor executor,
-        asio::steady_timer* writeSignal = nullptr,
-        Http2SansIoStreamSignal* streamSignal = nullptr) noexcept
+        asio::steady_timer& writeSignal,
+        Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
           mode_(mode),
@@ -214,9 +214,8 @@ private:
     // this, output produced between inbound frames sits in the core's buffer until
     // the peer happens to send something (SSE over a quiet connection stalls).
     void wakeWriter() noexcept {
-        if (writeSignal_ != nullptr) {
-            writeSignal_->cancel();
-        }
+        asio::error_code ignored;
+        writeSignal_.cancel(ignored);
     }
 
     // Park until the reader reports the window-blocked remainder drained. A spurious
@@ -225,15 +224,15 @@ private:
     Task<bool> awaitSendWindow() {
         while (connection_.hasQueuedData(streamId_)) {
             auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isAborted() || streamSignal_ == nullptr ||
-                streamSignal_->ended) {
+            if (stream == nullptr || stream->isAborted() ||
+                streamSignal_.ended()) {
                 co_return false;
             }
-            co_await streamSignal_->wait();
+            co_await streamSignal_.wait();
         }
         auto* stream = connection_.stream(streamId_);
         co_return stream != nullptr && !stream->isAborted() &&
-            streamSignal_ != nullptr && !streamSignal_->ended;
+            !streamSignal_.ended();
     }
 
     Http2Connection& connection_;
@@ -242,8 +241,8 @@ private:
     ResponseStreamState state_;
     std::pmr::string scratch_;
     Executor executor_;
-    asio::steady_timer* writeSignal_{nullptr};
-    Http2SansIoStreamSignal* streamSignal_{nullptr};
+    asio::steady_timer& writeSignal_;
+    Http2SansIoStreamSignal& streamSignal_;
 };
 
 }  // namespace ruvia::detail
