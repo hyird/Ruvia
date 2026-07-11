@@ -29,12 +29,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <ios>
-#include <memory>
 #include <optional>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
@@ -92,6 +90,17 @@ struct Http2SansIoSessionEnv final {
     const std::atomic_bool* serverStarted{nullptr};   // false -> graceful GOAWAY drain
 };
 
+[[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
+    bool headerBlockInProgress,
+    std::size_t activeRuntimeCount) noexcept {
+    if (headerBlockInProgress) {
+        return ConnectionScanner::Phase::kReadingInitial;
+    }
+    return activeRuntimeCount == 0
+        ? ConnectionScanner::Phase::kIdle
+        : ConnectionScanner::Phase::kReadingPayload;
+}
+
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
     Stream& stream,
@@ -111,28 +120,20 @@ Task<void> runHttp2SansIoSession(
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
     asio::steady_timer writeSignal(executor);
-    int inFlight = 0;       // concurrent handlers not yet finished
     bool stopping = false;  // reader has finished (EOF/error/connection error)
     bool writeFailed = false;
     bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
     bool initialInputRetained = false;
 
     const auto wakeWriter = [&writeSignal]() noexcept {
-        writeSignal.cancel();  // wakes async_wait with operation_aborted
+        asio::error_code ignored;
+        writeSignal.cancel(ignored);  // wakes async_wait with operation_aborted
     };
 
-    // One wake signal per stream dispatched with async plumbing (WebSocket tunnel or
-    // streaming request body), owned here: created by the reader at admission, erased
-    // by the stream's handler task when it finishes.
-    std::vector<std::pair<std::uint32_t, std::unique_ptr<Http2SansIoStreamSignal>>> streamSignals;
-    const auto findSignal = [&streamSignals](std::uint32_t streamId) noexcept -> Http2SansIoStreamSignal* {
-        for (const auto& entry : streamSignals) {
-            if (entry.first == streamId) {
-                return entry.second.get();
-            }
-        }
-        return nullptr;
-    };
+    // One stable Web runtime owns every per-stream application concern: route
+    // resolution, request-body storage, the dispatch signal, and the dispatch lease.
+    // The table's dispatched count is established synchronously at admission, before
+    // co_spawn can schedule the handler, and is the writer/join source of truth.
     Http2SansIoStreamRuntimeTable streamRuntimes(worker.resource());
     const auto findStreamRuntime = [&streamRuntimes](
         std::uint32_t streamId) noexcept {
@@ -146,16 +147,23 @@ Task<void> runHttp2SansIoSession(
         std::uint32_t streamId) {
         (void)streamRuntimes.remove(streamId);
     };
+    const auto findSignal = [&streamRuntimes](
+        std::uint32_t streamId) noexcept -> Http2SansIoStreamSignal* {
+        auto* runtime = streamRuntimes.find(streamId);
+        return runtime != nullptr ? runtime->signal() : nullptr;
+    };
 
     // Single writer: serialize all outbound writes; sleep on writeSignal when idle.
     // The pending bytes are MOVED out before each write (takeOutput): concurrent
     // handlers keep submitting while async_write is in flight, and an append that
     // reallocated the core's buffer would dangle a pendingOutput() view mid-write.
     //
-    // CRITICAL: the writer's ONLY exit is `stopping && inFlight == 0`. A write error
+    // CRITICAL: the writer's ONLY exit is
+    // `stopping && dispatchedCount == 0`. A write error
     // sets writeFailed but keeps looping (draining and discarding output) until every
-    // in-flight handler has finished, because the session's teardown join treats the
-    // writer's exit as the handler join too -- exiting early with inFlight > 0 would
+    // admitted handler has finished, because the session's teardown join treats the
+    // writer's exit as the handler join too -- exiting while dispatchedCount is
+    // nonzero would
     // let the session destroy this frame's state under a still-suspended detached
     // handler (use-after-free). Once writeFailed, no bytes actually reach the socket.
     auto writerLoop = [&]() -> Task<void> {
@@ -181,7 +189,7 @@ Task<void> runHttp2SansIoSession(
                 // capacity for its whole lifetime (the h1 work-set trims the same way).
                 clearPmrStringRetainingSmall(writeScratch, 64 * 1024);
             }
-            if (stopping && inFlight == 0) {
+            if (stopping && streamRuntimes.dispatchedCount() == 0) {
                 co_return;  // nothing left to write and no more will be produced
             }
             writeSignal.expires_at((asio::steady_timer::time_point::max)());
@@ -208,7 +216,7 @@ Task<void> runHttp2SansIoSession(
             if (!connection.hasQueuedData(streamId)) {
                 co_return true;  // window reopened; the remainder drained
             }
-            if (signal == nullptr || signal->ended) {
+            if (signal == nullptr || signal->ended()) {
                 co_return false;
             }
             co_await signal->wait();
@@ -362,6 +370,14 @@ Task<void> runHttp2SansIoSession(
             wakeWriter();
             co_return;
         }
+        auto* streamSignal = streamRuntime->signal();
+        if (streamSignal == nullptr) {
+            (void)connection.submitReset(
+                streamId,
+                Http2ErrorCode::kInternalError);
+            wakeWriter();
+            co_return;
+        }
         const auto baseServices = ContextServices(
             env.databases, env.redis, env.rateLimiter)
             .withTransport(remoteAddress, env.clientCertificate, kTlsStream);
@@ -415,7 +431,7 @@ Task<void> runHttp2SansIoSession(
                 connection,
                 streamId,
                 streamRuntime->body().queue(),
-                findSignal(streamId),
+                *streamSignal,
                 writeSignal);
             emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
         }
@@ -437,10 +453,6 @@ Task<void> runHttp2SansIoSession(
                     co_return;
                 }
                 wakeWriter();  // flush the 200 before the first tunnel read suspends
-                auto* signal = findSignal(streamId);
-                if (signal == nullptr) {
-                    co_return;  // ws streams are admitted with a signal; defensive
-                }
                 // Each Extended-CONNECT tunnel registers its OWN heartbeat on the
                 // connection's scanner entry (Entry holds a small set of heartbeat
                 // slots, not one), so concurrent tunnels on this h2 connection do not
@@ -451,7 +463,7 @@ Task<void> runHttp2SansIoSession(
                         connection,
                         streamId,
                         streamRuntime->body().queue(),
-                        *signal,
+                        *streamSignal,
                         writeSignal,
                         executor),
                     scannerEntry,
@@ -474,7 +486,7 @@ Task<void> runHttp2SansIoSession(
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
                 connection, streamId, resolution.responseMode(), requestMemory.resource(),
-                executor, &writeSignal, findSignal(streamId));
+                executor, writeSignal, *streamSignal);
             auto result = co_await dispatchResponseStreamWith(
                 sink, routes, request, resolution, requestMemory, dispatchServices,
                 [&connection, streamId]() noexcept {
@@ -518,25 +530,21 @@ Task<void> runHttp2SansIoSession(
             options.accessLog, request, remoteAddress, response.status(), requestStart, true);
     };
 
-    // One concurrent handler: run the dispatch body, then release the stream's
-    // resources (signal, pin) and wake the writer so the session can make progress.
+    // One concurrent handler: admission already owns the table's dispatch lease.
+    // Run the dispatch body, then removing the runtime releases route/body/signal and
+    // the lease atomically before the protocol pin is released.
     auto dispatchOne = [&](std::uint32_t streamId) -> Task<void> {
-        ++inFlight;
         try {
             co_await dispatchOneInner(streamId);
         } catch (...) {
-            // Last-resort: a dispatch failure must not leak the pin/inFlight count.
+            // Last-resort: a dispatch failure must not leak the pin/dispatch lease.
             auto* live = connection.stream(streamId);
             if (live != nullptr && !live->isAborted()) {
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
             }
         }
-        std::erase_if(streamSignals, [streamId](const auto& entry) {
-            return entry.first == streamId;
-        });
         eraseStreamRuntime(streamId);
         connection.unpinStream(streamId);
-        --inFlight;
         wakeWriter();
         co_return;
     };
@@ -582,14 +590,16 @@ Task<void> runHttp2SansIoSession(
     // file or a stream body blocks on the send window exactly like a streaming route,
     // and without a signal its blocked submit could never be woken (truncation + hang).
     const auto admitStream = [&](std::uint32_t streamId) {
-        streamSignals.emplace_back(
-            streamId, std::make_unique<Http2SansIoStreamSignal>(executor));
+        if (streamRuntimes.beginDispatch(streamId, executor) == nullptr) {
+            return false;
+        }
         connection.pinStream(streamId);
         // Recycle the per-stream handler's coroutine frame (mirrors the h1 accept path);
         // under load the common request then does no extra heap work for the frame.
         asio::co_spawn(
             executor, taskAsAwaitable(dispatchOne(streamId)),
             asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        return true;
     };
 
     // Drain the core's event queue, admitting streams and routing body bytes.
@@ -682,7 +692,10 @@ Task<void> runHttp2SansIoSession(
                     // while the handler runs. Unsupported expectations also need an
                     // immediate 417: waiting for buffered content would deadlock a
                     // conforming client that is waiting for the expectation decision.
-                    admitStream(streamId);
+                    if (!admitStream(streamId)) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                    }
                 }
             } else if (const auto* bodyChunk = event->messageBodyChunk()) {
                 const auto streamId = bodyChunk->streamId();
@@ -712,9 +725,13 @@ Task<void> runHttp2SansIoSession(
                     continue;
                 }
                 if (streamRuntime->body().streaming()) {
-                    if (auto* signal = findSignal(streamId)) {
-                        signal->wake();
+                    auto* signal = streamRuntime->signal();
+                    if (signal == nullptr) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                        continue;
                     }
+                    signal->wake();
                 } else {
                     // Delay acknowledgement until the complete event batch has been
                     // copied. releaseReceivedData() returns all debt currently held
@@ -728,7 +745,9 @@ Task<void> runHttp2SansIoSession(
                 const auto streamId = tunnelData->streamId();
                 auto* streamState = connection.stream(streamId);
                 auto* streamRuntime = findStreamRuntime(streamId);
-                auto* signal = findSignal(streamId);
+                auto* signal = streamRuntime != nullptr
+                    ? streamRuntime->signal()
+                    : nullptr;
                 if (streamState == nullptr || streamRuntime == nullptr ||
                     signal == nullptr) {
                     if (streamState != nullptr) {
@@ -748,20 +767,26 @@ Task<void> runHttp2SansIoSession(
                 if (connection.stream(streamId) == nullptr) {
                     continue;
                 }
-                if (findStreamRuntime(streamId) == nullptr) {
+                auto* streamRuntime = findStreamRuntime(streamId);
+                if (streamRuntime == nullptr) {
                     resetEventStream(
                         streamId, Http2ErrorCode::kInternalError);
                     continue;
                 }
-                if (auto* signal = findSignal(streamId)) {
+                if (auto* signal = streamRuntime->signal()) {
                     signal->wake();  // remote END_STREAM was committed before this event
-                } else {
-                    admitStream(streamId);  // buffered request: dispatch at end
+                } else if (!admitStream(streamId)) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
                 }
             } else if (const auto* streamClosed = event->streamClosed()) {
                 const auto streamId = streamClosed->streamId();
                 unmarkBufferedBodyCopied(streamId);
-                if (auto* signal = findSignal(streamId)) {
+                auto* streamRuntime = findStreamRuntime(streamId);
+                auto* signal = streamRuntime != nullptr
+                    ? streamRuntime->signal()
+                    : nullptr;
+                if (signal != nullptr) {
                     signal->wake();  // stream is reset; blocked readers/writers see it
                 } else {
                     // The protocol core can erase an unpinned reset stream before
@@ -815,7 +840,8 @@ Task<void> runHttp2SansIoSession(
         executor, taskAsAwaitable(writerLoop()),
         [&writerFinished, &writerDone](std::exception_ptr) noexcept {
             writerDone = true;
-            writerFinished.cancel();
+            asio::error_code ignored;
+            writerFinished.cancel(ignored);
         });
 
     // Establish the feed contract: drain any startup events before initial input.
@@ -832,16 +858,13 @@ Task<void> runHttp2SansIoSession(
         std::array<char, 16384> readBuffer;
         for (;;) {
             // Pick the inactivity phase: mid-header-block -> the tight header timeout;
-            // nothing in flight (no admitted handler, no signalled tunnel/body stream)
+            // no active Web runtime (including a pre-dispatch buffered request body)
             // -> kIdle so a keep-alive connection between requests is governed by the
             // keepalive timeout, NOT client_body_timeout; otherwise a body/response is
             // in progress -> kReadingPayload. (WS tunnels carry their own heartbeat.)
-            scannerEntry.setPhase(
-                connection.headerBlockInProgress()
-                    ? ConnectionScanner::Phase::kReadingInitial
-                    : (inFlight == 0 && streamSignals.empty())
-                        ? ConnectionScanner::Phase::kIdle
-                        : ConnectionScanner::Phase::kReadingPayload);
+            scannerEntry.setPhase(http2SansIoInactivityPhase(
+                connection.headerBlockInProgress(),
+                streamRuntimes.size()));
             const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(
                 [&stream, &readBuffer](auto handler) mutable {
                     stream.async_read_some(
@@ -869,9 +892,11 @@ Task<void> runHttp2SansIoSession(
 
     // Reader done: every stream still waiting on inbound bytes or window space must
     // observe EOF now, or its handler (and thus the writer join below) waits forever.
-    for (const auto& entry : streamSignals) {
-        entry.second->end();
-    }
+    streamRuntimes.forEach([](Http2SansIoStreamRuntime& runtime) {
+        if (auto* signal = runtime.signal()) {
+            signal->end();
+        }
+    });
 
     // Let the writer drain the last output once every handler has finished, then join
     // it (handlers wake the writer as they complete, so joining the writer waits for

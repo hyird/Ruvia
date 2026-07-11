@@ -675,6 +675,15 @@ scratch 或 `Http2ConnectionLimits`；`Http2BodyState.h`、`Http2BodyQueue.h`、
 `ruvia-web` 必须用 PMR-stable `Http2SansIoStreamRuntimeTable`、`Http2RequestBodyRuntime` 与
 `Http2SansIoBodyQueue` 保存每个 active stream 的 route resolution 和 body；同一 `feed()` 内 HEADERS
 后紧跟的 DATA 也必须先按 message-head event 选择 Web `RequestBodyMode`，再应用 total/backlog limit。
+同一个 `Http2SansIoStreamRuntime` 还必须拥有 optional `Http2SansIoStreamSignal` 作为 dispatch lease；
+runtime-level `beginDispatch()` 必须是 table-only friend 操作，table 必须在 `co_spawn` 前同步增加
+`dispatchedCount()`，禁止绕过 aggregate lease；body mode 尚未 selected 时必须拒绝 admission。
+writer exit 只能看该 dispatch count，idle phase 必须看同一 table 的 `size()`，确保尚未 dispatch 的
+buffered body 仍属于 active payload。teardown wake 与
+runtime 删除只能遍历这一份生命周期。禁止恢复默认堆 `streamSignals` vector、per-signal `unique_ptr` 或另一个
+`inFlight` 标量；body reader、WebSocket transport 与 response-stream sink 必须接收非空 signal reference，
+不得重新暴露 nullable signal state。signal timer deadline 只能在构造时设置一次；注册 concurrent waiter
+不得修改 expiry 并误取消已有 waiter，一次 wake 必须唤醒全部已注册 wait 后分别重查 readiness。
 未完成一次性 mode selection 时，`store()` 必须返回 `kModeNotSelected`，不得静默采用 buffered 默认值。
 buffered event batch 完整复制后才能统一调用 `releaseReceivedData()`；stream request/CONNECT tunnel
 必须等 Web queue drain 后归还。`Http2RequestBuilder::build()` 只接收 Web owner 提供的 body view；

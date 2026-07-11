@@ -4,7 +4,11 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
-#include <vector>
+
+#include <asio/awaitable.hpp>
+#include <asio/co_spawn.hpp>
+#include <asio/detached.hpp>
+#include <asio/io_context.hpp>
 
 #include "ruvia/web/RouteModes.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
@@ -126,4 +130,108 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
     RUVIA_CHECK(table.find(1) == firstAddress);
     RUVIA_CHECK(!table.remove(19));
     RUVIA_CHECK(table.size() == 21);
+}
+
+RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
+    asio::io_context io;
+    std::pmr::monotonic_buffer_resource resource;
+    Http2SansIoStreamRuntimeTable table(&resource);
+
+    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    auto* runtime = table.ensure(1);
+    RUVIA_CHECK(runtime != nullptr);
+    if (runtime == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(!runtime->dispatched());
+    RUVIA_CHECK(runtime->signal() == nullptr);
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
+    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+
+    auto* signal = table.beginDispatch(1, io.get_executor());
+    RUVIA_CHECK(signal != nullptr);
+    RUVIA_CHECK(runtime->dispatched());
+    RUVIA_CHECK(runtime->signal() == signal);
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
+    RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
+
+    std::size_t visited = 0;
+    table.forEach([&](const auto& entry) {
+        ++visited;
+        RUVIA_CHECK(entry.streamId() == std::uint32_t{1});
+        RUVIA_CHECK(entry.dispatched());
+    });
+    RUVIA_CHECK_EQ(visited, std::size_t{1});
+
+    signal->wake();
+    RUVIA_CHECK(!signal->ended());
+    signal->end();
+    RUVIA_CHECK(signal->ended());
+    RUVIA_CHECK(table.remove(1));
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
+    RUVIA_CHECK_EQ(table.size(), std::size_t{0});
+}
+
+RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel) {
+    asio::io_context io;
+    std::pmr::monotonic_buffer_resource resource;
+    Http2SansIoStreamRuntimeTable table(&resource);
+    auto* runtime = table.ensure(1);
+    RUVIA_CHECK(runtime != nullptr);
+    if (runtime == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+    auto* signal = table.beginDispatch(1, io.get_executor());
+    RUVIA_CHECK(signal != nullptr);
+    if (signal == nullptr) {
+        return;
+    }
+
+    std::size_t wakeCount = 0;
+    const auto waitOnce = [&]() -> asio::awaitable<void> {
+        co_await ruvia::detail::taskAsAwaitable(signal->wait());
+        ++wakeCount;
+    };
+    asio::co_spawn(io, waitOnce(), asio::detached);
+    asio::co_spawn(io, waitOnce(), asio::detached);
+    (void)io.poll();
+    RUVIA_CHECK_EQ(wakeCount, std::size_t{0});
+
+    signal->wake();
+    io.restart();
+    io.run();
+    RUVIA_CHECK_EQ(wakeCount, std::size_t{2});
+}
+
+RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
+    asio::io_context io;
+    std::pmr::monotonic_buffer_resource resource;
+    Http2SansIoStreamRuntimeTable table(&resource);
+    for (std::uint32_t id = 1; id <= 33; id += 2) {
+        RUVIA_CHECK(table.ensure(id) != nullptr);
+    }
+    auto* runtime = table.find(33);
+    RUVIA_CHECK(runtime != nullptr);
+    if (runtime == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+    auto* signal = table.beginDispatch(33, io.get_executor());
+    RUVIA_CHECK(signal != nullptr);
+    const auto* runtimeAddress = runtime;
+
+    for (std::uint32_t id = 35; id <= 99; id += 2) {
+        RUVIA_CHECK(table.ensure(id) != nullptr);
+    }
+    RUVIA_CHECK(table.find(33) == runtimeAddress);
+    RUVIA_CHECK(table.find(33)->signal() == signal);
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
+    RUVIA_CHECK(table.remove(35));
+    RUVIA_CHECK(table.find(33) == runtimeAddress);
+    RUVIA_CHECK(table.find(33)->signal() == signal);
+    RUVIA_CHECK(table.remove(33));
+    RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
 }

@@ -12,6 +12,10 @@
 #include <utility>
 #include <vector>
 
+#include <asio/steady_timer.hpp>
+
+#include "ruvia/core/detail/AsioAwait.h"
+#include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -22,6 +26,45 @@
 namespace ruvia::detail {
 
 inline constexpr std::size_t kHttp2WebRetainedBodyChunkCapacity = 16;
+
+// The one asynchronous wake primitive owned by a dispatched Web stream. Body
+// readers and send-window-blocked writers share it and always re-check their own
+// readiness after wakeup, so cancellation is only a level-change notification.
+class Http2SansIoStreamSignal final {
+public:
+    template <typename Executor>
+    explicit Http2SansIoStreamSignal(const Executor& executor)
+        : timer_(executor) {
+        timer_.expires_at((asio::steady_timer::time_point::max)());
+    }
+
+    void wake() noexcept {
+        asio::error_code ignored;
+        timer_.cancel(ignored);
+    }
+
+    void end() noexcept {
+        ended_ = true;
+        wake();
+    }
+
+    [[nodiscard]] bool ended() const noexcept {
+        return ended_;
+    }
+
+    [[nodiscard]] Task<void> wait() {
+        if (ended_) {
+            co_return;
+        }
+        (void)co_await asyncError([this](auto handler) mutable {
+            timer_.async_wait(std::move(handler));
+        });
+    }
+
+private:
+    asio::steady_timer timer_;
+    bool ended_{false};
+};
 
 // Web-owned storage for body/tunnel bytes that have already crossed the
 // Http2Connection event boundary. The HTTP/2 core owns framing and flow-control
@@ -133,6 +176,10 @@ public:
         return mode_;
     }
 
+    [[nodiscard]] bool modeSelected() const noexcept {
+        return modeSelected_;
+    }
+
     [[nodiscard]] bool streaming() const noexcept {
         return mode_ == RequestBodyMode::kStream;
     }
@@ -235,17 +282,43 @@ public:
         return body_;
     }
 
+    [[nodiscard]] bool dispatched() const noexcept {
+        return dispatchSignal_.has_value();
+    }
+
+    [[nodiscard]] Http2SansIoStreamSignal* signal() noexcept {
+        return dispatchSignal_ ? &*dispatchSignal_ : nullptr;
+    }
+
+    [[nodiscard]] const Http2SansIoStreamSignal* signal() const noexcept {
+        return dispatchSignal_ ? &*dispatchSignal_ : nullptr;
+    }
+
 private:
+    friend class Http2SansIoStreamRuntimeTable;
+
+    template <typename Executor>
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        const Executor& executor) {
+        if (dispatchSignal_ || !body_.modeSelected()) {
+            return nullptr;
+        }
+        dispatchSignal_.emplace(executor);
+        return &*dispatchSignal_;
+    }
+
     std::uint32_t streamId_;
     RouteMatch routeScratch_;
     RouteResolution routeResolution_;
     Http2RequestBodyRuntime body_;
+    std::optional<Http2SansIoStreamSignal> dispatchSignal_;
 };
 
-// Stable per-stream Web runtime storage. The common multiplexing case uses
-// inline slots; overflow objects are PMR-owned and remain stable when the pointer
-// vector compacts, so HttpRequest body views cannot be invalidated by another
-// stream being admitted or erased.
+// Stable per-stream Web runtime storage. The common multiplexing case uses inline
+// slots; overflow objects are PMR-owned and remain stable when the pointer vector
+// compacts, so request body views and dispatch signal references cannot be invalidated
+// by another stream being admitted or erased. dispatchedCount_ is acquired before a
+// handler is scheduled and released only when that same runtime is removed.
 class Http2SansIoStreamRuntimeTable final {
 public:
     explicit Http2SansIoStreamRuntimeTable(
@@ -306,9 +379,25 @@ public:
         return result;
     }
 
+    template <typename Executor>
+    [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
+        std::uint32_t streamId,
+        const Executor& executor) {
+        auto* runtime = find(streamId);
+        if (runtime == nullptr) {
+            return nullptr;
+        }
+        auto* signal = runtime->beginDispatch(executor);
+        if (signal != nullptr) {
+            ++dispatchedCount_;
+        }
+        return signal;
+    }
+
     [[nodiscard]] bool remove(std::uint32_t streamId) noexcept {
         for (auto& slot : inline_) {
             if (slot && slot->streamId() == streamId) {
+                accountRemoval(*slot);
                 slot.reset();
                 --size_;
                 return true;
@@ -319,6 +408,7 @@ public:
                 overflow_[i]->streamId() != streamId) {
                 continue;
             }
+            accountRemoval(*overflow_[i]);
             if (i + 1 != overflow_.size()) {
                 overflow_[i] = std::move(overflow_.back());
             }
@@ -333,17 +423,43 @@ public:
         return size_;
     }
 
+    [[nodiscard]] std::size_t dispatchedCount() const noexcept {
+        return dispatchedCount_;
+    }
+
+    template <typename Callback>
+    void forEach(Callback&& callback) {
+        for (auto& slot : inline_) {
+            if (slot) {
+                callback(*slot);
+            }
+        }
+        for (auto& runtime : overflow_) {
+            if (runtime != nullptr) {
+                callback(*runtime);
+            }
+        }
+    }
+
 private:
     static constexpr std::size_t kInlineCapacity = 16;
     using OverflowRuntime = std::unique_ptr<
         Http2SansIoStreamRuntime,
         PmrObjectDeleter<Http2SansIoStreamRuntime>>;
 
+    void accountRemoval(
+        const Http2SansIoStreamRuntime& runtime) noexcept {
+        if (runtime.dispatched()) {
+            --dispatchedCount_;
+        }
+    }
+
     std::pmr::memory_resource* resource_;
     std::array<std::optional<Http2SansIoStreamRuntime>,
                kInlineCapacity> inline_{};
     std::pmr::vector<OverflowRuntime> overflow_;
     std::size_t size_{0};
+    std::size_t dispatchedCount_{0};
 };
 
 }  // namespace ruvia::detail

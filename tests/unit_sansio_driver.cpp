@@ -160,6 +160,19 @@ std::string frame(std::uint8_t type, std::uint8_t flags, std::uint32_t streamId,
 
 }  // namespace
 
+RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
+    using Phase = ruvia::detail::ConnectionScanner::Phase;
+    RUVIA_CHECK(
+        ruvia::detail::http2SansIoInactivityPhase(true, 0) ==
+        Phase::kReadingInitial);
+    RUVIA_CHECK(
+        ruvia::detail::http2SansIoInactivityPhase(false, 0) ==
+        Phase::kIdle);
+    RUVIA_CHECK(
+        ruvia::detail::http2SansIoInactivityPhase(false, 1) ==
+        Phase::kReadingPayload);
+}
+
 // End-to-end proof that the generic sans-I/O driver (ruvia-core) can back a real
 // HTTP/2 server over a real socket using ONLY the Http2Connection core: a synthetic
 // client sends a GET; the pump feeds the core, the onReadable callback dispatches a
