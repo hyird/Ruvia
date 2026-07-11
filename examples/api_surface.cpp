@@ -719,10 +719,17 @@ concept HasRawHttpClientRequestBody = requires(T& request) {
 };
 
 template <typename T>
-concept HasTypedHttpClientRequestContent = requires(T& request) {
-    { request.content.mode() } ->
-        std::same_as<ruvia::HttpClientRequestContentMode>;
-    { request.content.value() } -> std::same_as<std::string_view>;
+concept HasDiscriminatedHttpClientRequestContent = requires(T& request) {
+    { request.content.withoutContent() } ->
+        std::same_as<const ruvia::HttpClientRequestWithoutContent*>;
+    { request.content.borrowedBytes() } ->
+        std::same_as<const ruvia::HttpClientRequestBytes*>;
+};
+
+template <typename T>
+concept HasStaleHttpClientRequestContentTuple = requires(T& request) {
+    request.content.mode();
+    request.content.value();
 };
 
 template <typename T>
@@ -1516,9 +1523,18 @@ concept HasHttp1ClientRequestPrepareAccessors = requires(const T& result) {
 
 template <typename T>
 concept HasHttp1ClientPreparedContentPlan = requires(const T& prepared) {
-    { prepared.contentPlan().disposition() } ->
-        std::same_as<ruvia::Http1ClientRequestContentDisposition>;
-    { prepared.contentPlan().bytes() } -> std::same_as<std::string_view>;
+    { prepared.contentPlan().withoutContent() } ->
+        std::same_as<const ruvia::Http1ClientRequestWithoutContent*>;
+    { prepared.contentPlan().immediate() } ->
+        std::same_as<const ruvia::Http1ClientImmediateRequestContent*>;
+    { prepared.contentPlan().continueGated() } ->
+        std::same_as<const ruvia::Http1ClientContinueGatedRequestContent*>;
+};
+
+template <typename T>
+concept HasStaleHttp1ClientPreparedContentTuple = requires(const T& prepared) {
+    prepared.contentPlan().disposition();
+    prepared.contentPlan().bytes();
 };
 
 template <typename T>
@@ -1925,8 +1941,11 @@ static_assert(!HasHttpClientRequestHeaderVector<ruvia::HttpClientRequest>);
 static_assert(!HasHttpClientRequestInitializerListHeaders<ruvia::HttpClientRequest>);
 static_assert(HasHttpClientRequestTarget<ruvia::HttpClientRequest>);
 static_assert(!HasRawHttpClientRequestBody<ruvia::HttpClientRequest>);
-static_assert(HasTypedHttpClientRequestContent<ruvia::HttpClientRequest>);
+static_assert(HasDiscriminatedHttpClientRequestContent<ruvia::HttpClientRequest>);
+static_assert(!HasStaleHttpClientRequestContentTuple<ruvia::HttpClientRequest>);
 static_assert(!std::is_default_constructible_v<ruvia::HttpClientRequestContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestWithoutContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestBytes>);
 static_assert(HasHttpClientRequestContentBytesFactory<std::string&>);
 static_assert(!HasHttpClientRequestContentBytesFactory<std::string>);
 static_assert(!HasHttpClientRequestContentBytesFactory<std::pmr::string>);
@@ -2205,6 +2224,14 @@ static_assert(HasHttp1ClientRequestPrepareAccessors<
     ruvia::Http1ClientRequestPrepareResult>);
 static_assert(HasHttp1ClientPreparedContentPlan<
     ruvia::PreparedHttp1ClientRequest>);
+static_assert(!HasStaleHttp1ClientPreparedContentTuple<
+    ruvia::PreparedHttp1ClientRequest>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientRequestWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientImmediateRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientContinueGatedRequestContent>);
 static_assert(!HasStaleHttp1ClientResponseContext<
     ruvia::PreparedHttp1ClientRequest>);
 static_assert(!std::is_default_constructible_v<

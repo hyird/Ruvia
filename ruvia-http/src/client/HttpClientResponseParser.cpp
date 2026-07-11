@@ -203,11 +203,12 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] bool requestAllowsProtocolSwitch(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response,
+    bool continueGated,
     bool sawContinue,
     bool requestContentComplete) noexcept {
     if (request.closePolicy() ==
             Http1ClientRequestClosePolicy::kCloseAfterResponse ||
-        (request.expectsContinue() && !sawContinue) ||
+        (continueGated && !sawContinue) ||
         !requestContentComplete) {
         return false;
     }
@@ -377,6 +378,7 @@ using ResponsePlanningResult = std::variant<
 [[nodiscard]] ResponsePlanningResult planResponse(
     const detail::Http1ClientRequestContext& request,
     const ParsedResponseHead& response,
+    bool continueGated,
     bool sawContinue,
     bool requestContentComplete) noexcept {
     const bool protocolSwitch = response.statusCode == 101;
@@ -390,7 +392,7 @@ using ResponsePlanningResult = std::variant<
         !connectTunnel;
 
     auto requestContentSignal = Http1ClientRequestContentSignal::kNone;
-    if (request.expectsContinue()) {
+    if (continueGated) {
         if (response.statusCode == 100) {
             requestContentSignal = Http1ClientRequestContentSignal::kContinue;
         } else if (protocolSwitch || response.statusCode >= 200) {
@@ -406,6 +408,7 @@ using ResponsePlanningResult = std::variant<
             !requestAllowsProtocolSwitch(
                 request,
                 response,
+                continueGated,
                 sawContinue,
                 requestContentComplete)) {
             return Http1ClientResponseParseError::kInvalidProtocolSwitch;
@@ -543,6 +546,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     auto planning = planResponse(
         request_,
         parsed,
+        continueGated_,
         sawContinue_,
         requestContentComplete_);
     if (const auto* planningError =

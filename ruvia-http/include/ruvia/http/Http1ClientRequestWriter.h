@@ -61,12 +61,6 @@ private:
     Http1ClientRequestExpectation expectation_;
 };
 
-enum class Http1ClientRequestContentDisposition : std::uint8_t {
-    kNone,
-    kImmediate,
-    kContinueGated,
-};
-
 namespace detail {
 
 struct Http1ClientRequestPrepareResultAccess;
@@ -89,10 +83,6 @@ public:
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr bool expectsContinue() const noexcept {
-        return expectsContinue_;
-    }
-
     [[nodiscard]] constexpr const HttpConnectionOptions& connectionOptions() const noexcept {
         return connectionOptions_;
     }
@@ -104,33 +94,29 @@ private:
         std::string_view method,
         std::span<const HttpHeaderView> headers,
         HttpConnectionOptions connectionOptions,
-        Http1ClientRequestClosePolicy closePolicy,
-        bool expectsContinue) noexcept
+        Http1ClientRequestClosePolicy closePolicy) noexcept
         : method_(method),
           headers_(headers),
           connectionOptions_(connectionOptions),
-          closePolicy_(closePolicy),
-          expectsContinue_(expectsContinue) {}
+          closePolicy_(closePolicy) {}
 
     std::string_view method_;
     std::span<const HttpHeaderView> headers_;
     HttpConnectionOptions connectionOptions_;
     Http1ClientRequestClosePolicy closePolicy_;
-    bool expectsContinue_;
 };
 
 }  // namespace detail
 
-// Immutable outbound content contract. `kContinueGated` means the writer
-// generated Expect: 100-continue and the I/O owner must send the head separately;
-// it may release the bytes after 100 Continue or according to its finite wait
-// policy. `kImmediate` includes explicit empty content (Content-Length: 0).
-class Http1ClientRequestContentPlan final {
-public:
-    [[nodiscard]] constexpr Http1ClientRequestContentDisposition disposition() const noexcept {
-        return disposition_;
-    }
+class Http1ClientRequestWithoutContent final {
+private:
+    friend struct detail::Http1ClientRequestPrepareResultAccess;
 
+    constexpr Http1ClientRequestWithoutContent() noexcept = default;
+};
+
+class Http1ClientImmediateRequestContent final {
+public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {
         return bytes_;
     }
@@ -138,13 +124,72 @@ public:
 private:
     friend struct detail::Http1ClientRequestPrepareResultAccess;
 
-    constexpr Http1ClientRequestContentPlan(
-        Http1ClientRequestContentDisposition disposition,
+    explicit constexpr Http1ClientImmediateRequestContent(
         std::string_view bytes) noexcept
-        : bytes_(bytes), disposition_(disposition) {}
+        : bytes_(bytes) {}
 
     std::string_view bytes_;
-    Http1ClientRequestContentDisposition disposition_;
+};
+
+class Http1ClientContinueGatedRequestContent final {
+public:
+    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+        return bytes_;
+    }
+
+private:
+    friend struct detail::Http1ClientRequestPrepareResultAccess;
+
+    explicit constexpr Http1ClientContinueGatedRequestContent(
+        std::string_view bytes) noexcept
+        : bytes_(bytes) {}
+
+    std::string_view bytes_;
+};
+
+// Immutable outbound content contract. Continue-gated content means the writer
+// generated Expect: 100-continue and the I/O owner must send the head separately;
+// it may release those bytes after 100 Continue or according to its finite wait
+// policy. Immediate content includes explicit empty content (Content-Length: 0).
+// Payload exists only on the two alternatives that actually send content.
+class Http1ClientRequestContentPlan final {
+public:
+    [[nodiscard]] constexpr const Http1ClientRequestWithoutContent*
+    withoutContent() const noexcept {
+        return std::get_if<Http1ClientRequestWithoutContent>(&content_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientImmediateRequestContent*
+    immediate() const noexcept {
+        return std::get_if<Http1ClientImmediateRequestContent>(&content_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientContinueGatedRequestContent*
+    continueGated() const noexcept {
+        return std::get_if<Http1ClientContinueGatedRequestContent>(&content_);
+    }
+
+private:
+    friend struct detail::Http1ClientRequestPrepareResultAccess;
+
+    using Content = std::variant<
+        Http1ClientRequestWithoutContent,
+        Http1ClientImmediateRequestContent,
+        Http1ClientContinueGatedRequestContent>;
+
+    explicit constexpr Http1ClientRequestContentPlan(
+        Http1ClientRequestWithoutContent content) noexcept
+        : content_(content) {}
+
+    explicit constexpr Http1ClientRequestContentPlan(
+        Http1ClientImmediateRequestContent content) noexcept
+        : content_(content) {}
+
+    explicit constexpr Http1ClientRequestContentPlan(
+        Http1ClientContinueGatedRequestContent content) noexcept
+        : content_(content) {}
+
+    Content content_;
 };
 
 enum class Http1ClientRequestPrepareError : std::uint8_t {
@@ -189,9 +234,9 @@ private:
 };
 
 // Transactionally prepared scatter-gather request. `head()` points into the
-// caller-provided output buffer and `contentPlan().bytes()` points into the
-// request's borrowed content; those sources must remain alive and unchanged
-// until sent.
+// caller-provided output buffer and the active immediate/continue-gated
+// alternative points into the request's borrowed content; those sources must
+// remain alive and unchanged until sent.
 // The response context also borrows the request method/header table, which must
 // remain alive and unchanged until the corresponding final response head or
 // protocol-switch decision has been parsed.

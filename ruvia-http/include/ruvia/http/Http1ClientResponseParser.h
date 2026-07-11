@@ -384,7 +384,9 @@ public:
         std::pmr::memory_resource* resource = nullptr) noexcept
         : request_(request.responseContext_),
           resource_(resource),
-          requestContentComplete_(request.contentPlan_.bytes().empty()) {}
+          continueGated_(request.contentPlan_.continueGated() != nullptr),
+          requestContentComplete_(
+              requestContentStartsComplete(request.contentPlan_)) {}
 
     Http1ClientResponseParser(const Http1ClientResponseParser&) = delete;
     Http1ClientResponseParser& operator=(const Http1ClientResponseParser&) = delete;
@@ -398,6 +400,17 @@ public:
         std::string_view buffer);
 
 private:
+    [[nodiscard]] static constexpr bool requestContentStartsComplete(
+        const Http1ClientRequestContentPlan& plan) noexcept {
+        if (plan.withoutContent() != nullptr) {
+            return true;
+        }
+        if (const auto* immediate = plan.immediate()) {
+            return immediate->bytes().empty();
+        }
+        return false;
+    }
+
     enum class Phase : std::uint8_t {
         kAwaitResponse,
         kComplete,
@@ -407,6 +420,7 @@ private:
     detail::Http1ClientRequestContext request_;
     std::pmr::memory_resource* resource_;
     Phase phase_{Phase::kAwaitResponse};
+    bool continueGated_{false};
     bool sawContinue_{false};
     bool requestContentComplete_{false};
 };

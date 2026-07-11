@@ -22,7 +22,6 @@ using ruvia::detail::Http2ErrorCode;
 using ruvia::detail::Http2Event;
 using ruvia::detail::Http2EventKind;
 using ruvia::detail::Http2FrameType;
-using ruvia::detail::Http2LocalContentMode;
 using ruvia::detail::Http2RequestHeadSubmitError;
 using ruvia::detail::Http2RequestHeadSubmitResult;
 using ruvia::detail::Http2Role;
@@ -254,7 +253,7 @@ RUVIA_TEST(http2_connect_client_standard_head_owns_shape_and_gates_data) {
     RUVIA_CHECK(stream->standardConnect());
     RUVIA_CHECK(stream->connectPending());
     RUVIA_CHECK(!stream->localBodyOpen());
-    RUVIA_CHECK(stream->localContentMode() == Http2LocalContentMode::kForbidden);
+    RUVIA_CHECK(stream->localContent().forbidden() != nullptr);
     RUVIA_CHECK(client.submitData(streamId, "early", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kInvalidState);
 }

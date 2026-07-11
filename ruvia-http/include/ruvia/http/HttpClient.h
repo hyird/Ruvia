@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/http/HttpCommon.h"
@@ -120,24 +121,44 @@ private:
     std::pmr::string value_;
 };
 
-enum class HttpClientRequestContentMode : std::uint8_t {
-    kNone,
-    kBytes,
+class HttpClientRequestContent;
+
+class HttpClientRequestWithoutContent final {
+private:
+    friend class HttpClientRequestContent;
+
+    constexpr HttpClientRequestWithoutContent() noexcept = default;
+};
+
+class HttpClientRequestBytes final {
+public:
+    [[nodiscard]] constexpr std::string_view value() const noexcept {
+        return value_;
+    }
+
+private:
+    friend class HttpClientRequestContent;
+
+    explicit constexpr HttpClientRequestBytes(std::string_view value) noexcept
+        : value_(value) {}
+
+    std::string_view value_;
 };
 
 // Borrowed outbound request content. `none()` and `bytes("")` are deliberately
 // distinct: the latter asks an HTTP/1 writer to emit Content-Length: 0, while
-// the former sends no content framing field. The referenced bytes must remain
-// alive and unchanged until the external runtime finishes sending them.
+// the former sends no content framing field. Only the active bytes alternative
+// exposes a value. The referenced bytes must remain alive and unchanged until
+// the external runtime finishes sending them.
 class HttpClientRequestContent final {
 public:
     [[nodiscard]] static constexpr HttpClientRequestContent none() noexcept {
-        return HttpClientRequestContent(HttpClientRequestContentMode::kNone, {});
+        return HttpClientRequestContent(HttpClientRequestWithoutContent());
     }
 
     [[nodiscard]] static constexpr HttpClientRequestContent bytes(
         std::string_view value) noexcept {
-        return HttpClientRequestContent(HttpClientRequestContentMode::kBytes, value);
+        return HttpClientRequestContent(HttpClientRequestBytes(value));
     }
 
     template <typename Traits, typename Allocator>
@@ -148,22 +169,30 @@ public:
     static HttpClientRequestContent bytes(
         const std::basic_string<char, Traits, Allocator>&&) = delete;
 
-    [[nodiscard]] constexpr HttpClientRequestContentMode mode() const noexcept {
-        return mode_;
+    [[nodiscard]] constexpr const HttpClientRequestWithoutContent*
+    withoutContent() const noexcept {
+        return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
 
-    [[nodiscard]] constexpr std::string_view value() const noexcept {
-        return value_;
+    [[nodiscard]] constexpr const HttpClientRequestBytes*
+    borrowedBytes() const noexcept {
+        return std::get_if<HttpClientRequestBytes>(&content_);
     }
 
 private:
-    constexpr HttpClientRequestContent(
-        HttpClientRequestContentMode mode,
-        std::string_view value) noexcept
-        : value_(value), mode_(mode) {}
+    using Content = std::variant<
+        HttpClientRequestWithoutContent,
+        HttpClientRequestBytes>;
 
-    std::string_view value_;
-    HttpClientRequestContentMode mode_;
+    explicit constexpr HttpClientRequestContent(
+        HttpClientRequestWithoutContent content) noexcept
+        : content_(content) {}
+
+    explicit constexpr HttpClientRequestContent(
+        HttpClientRequestBytes content) noexcept
+        : content_(content) {}
+
+    Content content_;
 };
 
 struct HttpClientRequest {

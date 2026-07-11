@@ -220,6 +220,181 @@ concept HasHttpClientRedirectStatus = requires(const T& result) {
 };
 
 template <typename T>
+concept HasHttpClientRequestContentAlternatives = requires(const T& content) {
+    { content.withoutContent() } ->
+        std::same_as<const ruvia::HttpClientRequestWithoutContent*>;
+    { content.borrowedBytes() } ->
+        std::same_as<const ruvia::HttpClientRequestBytes*>;
+};
+
+template <typename T>
+concept HasStaleHttpClientContentMode = requires(const T& content) {
+    content.mode();
+};
+
+template <typename T>
+concept HasHttpClientRequestContentValue = requires(const T& content) {
+    { content.value() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasHttp1PreparedContentAlternatives = requires(const T& plan) {
+    { plan.withoutContent() } ->
+        std::same_as<const ruvia::Http1ClientRequestWithoutContent*>;
+    { plan.immediate() } ->
+        std::same_as<const ruvia::Http1ClientImmediateRequestContent*>;
+    { plan.continueGated() } ->
+        std::same_as<const ruvia::Http1ClientContinueGatedRequestContent*>;
+};
+
+template <typename T>
+concept HasHttp1PreparedContentDisposition = requires(const T& plan) {
+    plan.disposition();
+};
+
+template <typename T>
+concept HasHttp1PreparedContentBytes = requires(const T& content) {
+    { content.bytes() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasHttp2RequestContentAlternatives = requires(const T& content) {
+    { content.withoutContent() } ->
+        std::same_as<const ruvia::detail::Http2RequestWithoutContent*>;
+    { content.knownLengthContent() } ->
+        std::same_as<const ruvia::detail::Http2KnownLengthRequestContent*>;
+    { content.streamingContent() } ->
+        std::same_as<const ruvia::detail::Http2StreamingRequestContent*>;
+};
+
+template <typename T>
+concept HasStaleHttp2ContentMode = requires(const T& content) {
+    content.mode();
+};
+
+template <typename T>
+concept HasHttp2RequestContentLength = requires(const T& content) {
+    { content.length() } -> std::same_as<std::uint64_t>;
+};
+
+template <typename T>
+concept HasHttp2LocalContentAlternatives = requires(const T& content) {
+    { content.unset() } ->
+        std::same_as<const ruvia::detail::Http2LocalContentUnset*>;
+    { content.forbidden() } ->
+        std::same_as<const ruvia::detail::Http2LocalContentForbidden*>;
+    { content.unbounded() } ->
+        std::same_as<const ruvia::detail::Http2LocalContentUnbounded*>;
+    { content.knownLength() } ->
+        std::same_as<const ruvia::detail::Http2LocalContentKnownLength*>;
+};
+
+template <typename T>
+concept HasStaleHttp2LocalModeAccessor = requires(const T& content) {
+    content.mode();
+};
+
+template <typename T>
+concept HasHttp2LocalDeclaredLength = requires(const T& content) {
+    { content.declaredLength() } -> std::same_as<std::uint64_t>;
+};
+
+template <typename T>
+concept HasStaleHttp2StreamLocalContentForwarders = requires(const T& stream) {
+    stream.localContentMode();
+    stream.localContentHasKnownLength();
+    stream.localContentDeclaredLength();
+    stream.localContentAcceptedBytes();
+    stream.localContentCommittedBytes();
+    stream.localContentLengthComplete();
+};
+
+static_assert(HasHttpClientRequestContentAlternatives<
+    ruvia::HttpClientRequestContent>);
+static_assert(!HasStaleHttpClientContentMode<
+    ruvia::HttpClientRequestContent>);
+static_assert(!HasHttpClientRequestContentValue<
+    ruvia::HttpClientRequestContent>);
+static_assert(HasHttpClientRequestContentValue<
+    ruvia::HttpClientRequestBytes>);
+static_assert(!HasHttpClientRequestContentValue<
+    ruvia::HttpClientRequestWithoutContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::HttpClientRequestWithoutContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestBytes>);
+
+static_assert(HasHttp1PreparedContentAlternatives<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasHttp1PreparedContentDisposition<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasHttp1PreparedContentBytes<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasHttp1PreparedContentBytes<
+    ruvia::Http1ClientRequestWithoutContent>);
+static_assert(HasHttp1PreparedContentBytes<
+    ruvia::Http1ClientImmediateRequestContent>);
+static_assert(HasHttp1PreparedContentBytes<
+    ruvia::Http1ClientContinueGatedRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientRequestWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientImmediateRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientContinueGatedRequestContent>);
+
+static_assert(HasHttp2RequestContentAlternatives<
+    ruvia::detail::Http2RequestContent>);
+static_assert(!HasStaleHttp2ContentMode<
+    ruvia::detail::Http2RequestContent>);
+static_assert(!HasHttp2RequestContentLength<
+    ruvia::detail::Http2RequestContent>);
+static_assert(!HasHttp2RequestContentLength<
+    ruvia::detail::Http2RequestWithoutContent>);
+static_assert(HasHttp2RequestContentLength<
+    ruvia::detail::Http2KnownLengthRequestContent>);
+static_assert(!HasHttp2RequestContentLength<
+    ruvia::detail::Http2StreamingRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2KnownLengthRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2StreamingRequestContent>);
+static_assert(HasHttp2LocalContentAlternatives<
+    ruvia::detail::Http2LocalContentState>);
+static_assert(!HasStaleHttp2LocalModeAccessor<
+    ruvia::detail::Http2LocalContentState>);
+static_assert(!HasHttp2LocalDeclaredLength<
+    ruvia::detail::Http2LocalContentState>);
+static_assert(!HasHttp2LocalDeclaredLength<
+    ruvia::detail::Http2LocalContentUnset>);
+static_assert(!HasHttp2LocalDeclaredLength<
+    ruvia::detail::Http2LocalContentForbidden>);
+static_assert(!HasHttp2LocalDeclaredLength<
+    ruvia::detail::Http2LocalContentUnbounded>);
+static_assert(HasHttp2LocalDeclaredLength<
+    ruvia::detail::Http2LocalContentKnownLength>);
+static_assert(std::default_initializable<
+    ruvia::detail::Http2LocalContentState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalContentUnset>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalContentForbidden>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalContentUnbounded>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalContentKnownLength>);
+static_assert(!HasStaleHttp2StreamLocalContentForwarders<
+    ruvia::detail::Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .localContent()),
+    const ruvia::detail::Http2LocalContentState&>);
+
+template <typename T>
 concept HasHttp1RequestBodyPlanAlternatives = requires(const T& plan) {
     { plan.withoutBody() } ->
         std::same_as<const ruvia::detail::Http1RequestWithoutBody*>;
@@ -723,18 +898,25 @@ int main() {
     outboundRequest.method = "POST";
     outboundRequest.target = "/submit";
     outboundRequest.content = ruvia::HttpClientRequestContent::bytes("payload");
+    const auto* outboundBytes = outboundRequest.content.borrowedBytes();
+    if (outboundRequest.content.withoutContent() != nullptr ||
+        outboundBytes == nullptr || outboundBytes->value() != "payload") {
+        return 34;
+    }
     std::array<char, 512> outboundHeadBuffer;
     const auto outboundPrepared = ruvia::Http1ClientRequestWriter().prepare(
         outboundOrigin, outboundRequest, outboundHeadBuffer);
     const auto* outboundWire = outboundPrepared.prepared();
+    const auto* outboundImmediate = outboundWire == nullptr
+        ? nullptr
+        : outboundWire->contentPlan().immediate();
     if (outboundOrigin.scheme() != ruvia::HttpScheme::kHttps ||
         outboundOrigin.host() != "example.test" || outboundOrigin.port() != 443 ||
         outboundRequest.target != "/submit" || outboundWire == nullptr ||
         outboundWire->head().find("Content-Length: 7\r\n") ==
             std::string_view::npos ||
-        outboundWire->contentPlan().bytes() != "payload" ||
-        outboundWire->contentPlan().disposition() !=
-            ruvia::Http1ClientRequestContentDisposition::kImmediate) {
+        outboundImmediate == nullptr ||
+        outboundImmediate->bytes() != "payload") {
         return 17;
     }
     std::array<char, 512> expectHeadBuffer;
@@ -745,8 +927,7 @@ int main() {
         ruvia::Http1ClientRequestWirePolicy::expectContinue());
     const auto* expectWire = expectPrepared.prepared();
     if (expectWire == nullptr ||
-        expectWire->contentPlan().disposition() !=
-            ruvia::Http1ClientRequestContentDisposition::kContinueGated ||
+        expectWire->contentPlan().continueGated() == nullptr ||
         expectWire->head().find("Expect: 100-continue\r\n") ==
             std::string_view::npos) {
         return 25;
@@ -1101,13 +1282,24 @@ int main() {
     if (h2.connectionError().has_value()) {
         return 12;
     }
+    const auto h2WithoutContent = ruvia::detail::Http2RequestContent::none();
+    const auto h2ZeroLength =
+        ruvia::detail::Http2RequestContent::knownLength(0);
+    const auto h2Streaming = ruvia::detail::Http2RequestContent::streaming();
+    if (h2WithoutContent.withoutContent() == nullptr ||
+        h2WithoutContent.knownLengthContent() != nullptr ||
+        h2ZeroLength.knownLengthContent() == nullptr ||
+        h2ZeroLength.knownLengthContent()->length() != 0 ||
+        h2Streaming.streamingContent() == nullptr) {
+        return 35;
+    }
     const auto request = h2.submitRegularRequestHead(
         "PROPFIND",
         "https",
         "example.test",
         "/",
         {},
-        ruvia::detail::Http2RequestContent::none());
+        h2WithoutContent);
     const auto* submittedRequest = request.submitted();
     if (submittedRequest == nullptr || request.failure() != nullptr) {
         return 7;
@@ -1116,7 +1308,10 @@ int main() {
     const auto* extensionStream = h2.stream(streamId);
     if (extensionStream == nullptr ||
         extensionStream->requestMethod() != "PROPFIND" ||
-        extensionStream->requestKnownMethod() != ruvia::HttpKnownMethod::kUnknown) {
+        extensionStream->requestKnownMethod() != ruvia::HttpKnownMethod::kUnknown ||
+        extensionStream->localContent().forbidden() == nullptr ||
+        extensionStream->localContent().knownLength() != nullptr ||
+        extensionStream->localContent().acceptedBytes() != 0) {
         return 23;
     }
     if (h2.submitData(
