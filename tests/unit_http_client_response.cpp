@@ -21,7 +21,6 @@ namespace {
 
 using ruvia::HttpClientResponse;
 using ruvia::Http1ClientRequestClosePolicy;
-using ruvia::Http1ClientRequestContentDisposition;
 using ruvia::Http1ClientRequestContentCompletionStatus;
 using ruvia::Http1ClientRequestContentSignal;
 using ruvia::Http1ClientRequestWirePolicy;
@@ -484,9 +483,7 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     if (prepared == nullptr) {
         return;
     }
-    RUVIA_CHECK(
-        prepared->contentPlan().disposition() ==
-        Http1ClientRequestContentDisposition::kContinueGated);
+    RUVIA_CHECK(prepared->contentPlan().continueGated() != nullptr);
 
     Http1ClientResponseParser parser(*prepared);
     auto earlyHints = parser.parse("HTTP/1.1 103 Early Hints\r\n\r\n");

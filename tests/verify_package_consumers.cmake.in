@@ -218,12 +218,33 @@ if(NOT _installed_http1_client_request_writer_content MATCHES
    NOT _installed_http1_client_request_writer_content MATCHES
        "class Http1ClientRequestContentPlan final" OR
    NOT _installed_http1_client_request_writer_content MATCHES
-       "kContinueGated" OR
+       "class Http1ClientRequestWithoutContent final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientImmediateRequestContent final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientContinueGatedRequestContent final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "using Content = std::variant" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::get_if<Http1ClientRequestWithoutContent>" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::get_if<Http1ClientImmediateRequestContent>" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::get_if<Http1ClientContinueGatedRequestContent>" OR
    NOT _installed_http1_client_request_writer_content MATCHES
        "kExpectHeaderManagedByWriter" OR
    NOT _installed_http1_client_request_writer_content MATCHES
        "std::span<char> headBuffer")
     message(FATAL_ERROR "installed HTTP/1 client request writer lost its transactional public contract")
+endif()
+if(_installed_http1_client_request_writer_content MATCHES
+       "Http1ClientRequestContentDisposition" OR
+   _installed_http1_client_request_writer_content MATCHES "expectsContinue" OR
+   _installed_http1_client_request_writer_content MATCHES
+       "disposition[(][)] const noexcept" OR
+   _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestContentPlan[^}]*bytes[(][)]")
+    message(FATAL_ERROR "installed HTTP/1 client request writer retained a mode/payload content tuple")
 endif()
 if(_installed_http1_client_request_writer_content MATCHES
    "responseContext[ \\t\\r\\n]*\\([ \\t\\r\\n]*\\)")
@@ -556,11 +577,84 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
    NOT _installed_http_client MATCHES "class HttpOrigin final" OR
    NOT _installed_http_client MATCHES "basic_string<char, Traits, Allocator>&&" OR
    NOT _installed_http_client MATCHES "class HttpClientRequestContent final" OR
-   NOT _installed_http_client MATCHES "HttpClientRequestContentMode::kNone" OR
-   NOT _installed_http_client MATCHES "HttpClientRequestContentMode::kBytes" OR
+   NOT _installed_http_client MATCHES
+       "class HttpClientRequestWithoutContent final" OR
+   NOT _installed_http_client MATCHES "class HttpClientRequestBytes final" OR
+   NOT _installed_http_client MATCHES "using Content = std::variant" OR
+   NOT _installed_http_client MATCHES
+       "std::get_if<HttpClientRequestWithoutContent>" OR
+   NOT _installed_http_client MATCHES "std::get_if<HttpClientRequestBytes>" OR
+   NOT _installed_http_client MATCHES "borrowedBytes" OR
    NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
    NOT _installed_http_client MATCHES "class HttpClientResponse final")
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
+endif()
+if(_installed_http_client MATCHES "HttpClientRequestContentMode" OR
+   _installed_http_client MATCHES "HttpClientRequestContentMode[ \t]+mode_" OR
+   _installed_http_client MATCHES "mode[(][)] const noexcept")
+    message(FATAL_ERROR "installed outbound request content retained a mode/fake-value tuple")
+endif()
+set(_installed_http2_request_content_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2RequestContent.h")
+if(NOT EXISTS "${_installed_http2_request_content_path}")
+    message(FATAL_ERROR "installed HTTP/2 request-content contract is missing")
+endif()
+file(READ "${_installed_http2_request_content_path}"
+    _installed_http2_request_content)
+if(_installed_http2_request_content MATCHES "Http2RequestContentMode" OR
+   _installed_http2_request_content MATCHES "mode[(][)] const noexcept" OR
+   NOT _installed_http2_request_content MATCHES
+       "class Http2RequestWithoutContent final" OR
+   NOT _installed_http2_request_content MATCHES
+       "class Http2KnownLengthRequestContent final" OR
+   NOT _installed_http2_request_content MATCHES
+       "class Http2StreamingRequestContent final" OR
+   NOT _installed_http2_request_content MATCHES "using Content = std::variant" OR
+   NOT _installed_http2_request_content MATCHES
+       "std::get_if<Http2RequestWithoutContent>" OR
+   NOT _installed_http2_request_content MATCHES
+       "std::get_if<Http2KnownLengthRequestContent>" OR
+   NOT _installed_http2_request_content MATCHES
+       "std::get_if<Http2StreamingRequestContent>")
+    message(FATAL_ERROR "installed HTTP/2 request-content contract lost exclusive alternatives")
+endif()
+set(_installed_http2_local_content_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2LocalContentState.h")
+set(_installed_http2_stream_state_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h")
+if(NOT EXISTS "${_installed_http2_local_content_path}" OR
+   NOT EXISTS "${_installed_http2_stream_state_path}")
+    message(FATAL_ERROR "installed HTTP/2 local content accounting contract is missing")
+endif()
+file(READ "${_installed_http2_local_content_path}"
+    _installed_http2_local_content)
+file(READ "${_installed_http2_stream_state_path}"
+    _installed_http2_stream_state)
+if(_installed_http2_local_content MATCHES "Http2LocalContentMode" OR
+   _installed_http2_local_content MATCHES "mode[(][)] const noexcept" OR
+   NOT _installed_http2_local_content MATCHES
+       "class Http2LocalContentUnset final" OR
+   NOT _installed_http2_local_content MATCHES
+       "class Http2LocalContentForbidden final" OR
+   NOT _installed_http2_local_content MATCHES
+       "class Http2LocalContentUnbounded final" OR
+   NOT _installed_http2_local_content MATCHES
+       "class Http2LocalContentKnownLength final" OR
+   NOT _installed_http2_local_content MATCHES "using Content = std::variant" OR
+   NOT _installed_http2_local_content MATCHES
+       "std::get_if<Http2LocalContentUnset>" OR
+   NOT _installed_http2_local_content MATCHES
+       "std::get_if<Http2LocalContentForbidden>" OR
+   NOT _installed_http2_local_content MATCHES
+       "std::get_if<Http2LocalContentUnbounded>" OR
+   NOT _installed_http2_local_content MATCHES
+       "std::get_if<Http2LocalContentKnownLength>" OR
+   NOT _installed_http2_local_content MATCHES "kNotStarted" OR
+   NOT _installed_http2_stream_state MATCHES
+       "const Http2LocalContentState& localContent[(][)] const noexcept" OR
+   _installed_http2_stream_state MATCHES
+       "localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)")
+    message(FATAL_ERROR "installed HTTP/2 local content accounting retained a mode/fake-length split")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
     _installed_http_authority)

@@ -19,14 +19,12 @@ struct Http1ClientRequestPrepareResultAccess final {
         std::string_view method,
         std::span<const HttpHeaderView> headers,
         HttpConnectionOptions connectionOptions,
-        Http1ClientRequestClosePolicy closePolicy,
-        bool expectsContinue) noexcept {
+        Http1ClientRequestClosePolicy closePolicy) noexcept {
         return Http1ClientRequestContext(
             method,
             headers,
             connectionOptions,
-            closePolicy,
-            expectsContinue);
+            closePolicy);
     }
 
     [[nodiscard]] static constexpr Http1ClientRequestPrepareResult bufferTooSmall(
@@ -41,16 +39,41 @@ struct Http1ClientRequestPrepareResultAccess final {
             Http1ClientRequestPrepareFailure(error));
     }
 
-    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult prepared(
+    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult
+    preparedWithoutContent(
         std::string_view head,
-        Http1ClientRequestContentDisposition contentDisposition,
+        Http1ClientRequestContext responseContext) noexcept {
+        return Http1ClientRequestPrepareResult(
+            PreparedHttp1ClientRequest(
+                head,
+                Http1ClientRequestContentPlan(
+                    Http1ClientRequestWithoutContent()),
+                responseContext));
+    }
+
+    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult
+    preparedImmediateContent(
+        std::string_view head,
         std::string_view contentBytes,
         Http1ClientRequestContext responseContext) noexcept {
         return Http1ClientRequestPrepareResult(
             PreparedHttp1ClientRequest(
                 head,
                 Http1ClientRequestContentPlan(
-                    contentDisposition, contentBytes),
+                    Http1ClientImmediateRequestContent(contentBytes)),
+                responseContext));
+    }
+
+    [[nodiscard]] static constexpr Http1ClientRequestPrepareResult
+    preparedContinueGatedContent(
+        std::string_view head,
+        std::string_view contentBytes,
+        Http1ClientRequestContext responseContext) noexcept {
+        return Http1ClientRequestPrepareResult(
+            PreparedHttp1ClientRequest(
+                head,
+                Http1ClientRequestContentPlan(
+                    Http1ClientContinueGatedRequestContent(contentBytes)),
                 responseContext));
     }
 };
@@ -238,14 +261,15 @@ void appendHeaders(
     RequestHeaderFacts headerFacts;
     Http1ClientRequestPrepareError error =
         Http1ClientRequestPrepareError::kInvalidHeader;
-    const bool explicitContent =
-        content.mode() == HttpClientRequestContentMode::kBytes;
+    const auto* contentBytes = content.borrowedBytes();
+    const bool explicitContent = contentBytes != nullptr;
     if (!analyzeHeaders(headers, headerFacts, error)) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
     const bool expectContinue =
         policy.expectation() == Http1ClientRequestExpectation::k100Continue;
-    if (expectContinue && (!explicitContent || content.value().empty())) {
+    if (expectContinue &&
+        (!explicitContent || contentBytes->value().empty())) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kExpectationWithoutContent);
     }
@@ -253,7 +277,8 @@ void appendHeaders(
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kContentForbiddenForMethod);
     }
-    if (method == "OPTIONS" && !content.value().empty() &&
+    if (method == "OPTIONS" && explicitContent &&
+        !contentBytes->value().empty() &&
         !headerFacts.hasContentType) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(
             Http1ClientRequestPrepareError::kOptionsContentTypeRequired);
@@ -288,7 +313,7 @@ void appendHeaders(
         !addHeadBytes(headBytes, headerFacts.wireBytes) ||
         (explicitContent &&
          (!addHeadBytes(headBytes, kContentLengthPrefix.size()) ||
-          !addHeadBytes(headBytes, decimalDigits(content.value().size())) ||
+          !addHeadBytes(headBytes, decimalDigits(contentBytes->value().size())) ||
           !addHeadBytes(headBytes, kCrlf.size()))) ||
         (expectContinue && !addHeadBytes(headBytes, kExpectContinue.size())) ||
         (generateConnectionClose &&
@@ -317,7 +342,7 @@ void appendHeaders(
     appendHeaders(cursor, headers);
     if (explicitContent) {
         appendView(cursor, kContentLengthPrefix);
-        appendUnsigned(cursor, content.value().size());
+        appendUnsigned(cursor, contentBytes->value().size());
         appendView(cursor, kCrlf);
     }
     if (expectContinue) {
@@ -333,18 +358,18 @@ void appendHeaders(
             method,
             headers,
             headerFacts.connectionOptions,
-            effectiveClosePolicy,
-            expectContinue);
-    const auto contentDisposition = !explicitContent
-        ? Http1ClientRequestContentDisposition::kNone
-        : expectContinue
-            ? Http1ClientRequestContentDisposition::kContinueGated
-            : Http1ClientRequestContentDisposition::kImmediate;
-    return detail::Http1ClientRequestPrepareResultAccess::prepared(
-        std::string_view(headBuffer.data(), headBytes),
-        contentDisposition,
-        content.value(),
-        responseContext);
+            effectiveClosePolicy);
+    const auto head = std::string_view(headBuffer.data(), headBytes);
+    if (!explicitContent) {
+        return detail::Http1ClientRequestPrepareResultAccess::preparedWithoutContent(
+            head, responseContext);
+    }
+    if (expectContinue) {
+        return detail::Http1ClientRequestPrepareResultAccess::preparedContinueGatedContent(
+            head, contentBytes->value(), responseContext);
+    }
+    return detail::Http1ClientRequestPrepareResultAccess::preparedImmediateContent(
+        head, contentBytes->value(), responseContext);
 }
 
 }  // namespace

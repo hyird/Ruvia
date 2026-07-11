@@ -3,21 +3,55 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <variant>
 
 namespace ruvia::detail {
 
 // Local HTTP message content accounting is distinct from the peer-body accounting
 // stored on the same bidirectional stream. In particular, a server receives request
 // content while independently producing response content.
-enum class Http2LocalContentMode : std::uint8_t {
-    kUnset,
-    kForbidden,
-    kUnbounded,
-    kKnownLength
+class Http2LocalContentState;
+
+class Http2LocalContentUnset final {
+private:
+    friend class Http2LocalContentState;
+
+    constexpr Http2LocalContentUnset() noexcept = default;
+};
+
+class Http2LocalContentForbidden final {
+private:
+    friend class Http2LocalContentState;
+
+    constexpr Http2LocalContentForbidden() noexcept = default;
+};
+
+class Http2LocalContentUnbounded final {
+private:
+    friend class Http2LocalContentState;
+
+    constexpr Http2LocalContentUnbounded() noexcept = default;
+};
+
+class Http2LocalContentKnownLength final {
+public:
+    [[nodiscard]] constexpr std::uint64_t declaredLength() const noexcept {
+        return declaredLength_;
+    }
+
+private:
+    friend class Http2LocalContentState;
+
+    explicit constexpr Http2LocalContentKnownLength(
+        std::uint64_t declaredLength) noexcept
+        : declaredLength_(declaredLength) {}
+
+    std::uint64_t declaredLength_;
 };
 
 enum class Http2LocalContentCheck : std::uint8_t {
     kAccepted,
+    kNotStarted,
     kForbidden,
     kLengthExceeded,
     kLengthIncomplete
@@ -25,28 +59,39 @@ enum class Http2LocalContentCheck : std::uint8_t {
 
 class Http2LocalContentState final {
 public:
+    constexpr Http2LocalContentState() noexcept
+        : content_(Http2LocalContentUnset()) {}
+
     void beginForbidden() noexcept {
-        reset(Http2LocalContentMode::kForbidden, 0);
+        reset(Content(Http2LocalContentForbidden()));
     }
 
     void beginUnbounded() noexcept {
-        reset(Http2LocalContentMode::kUnbounded, 0);
+        reset(Content(Http2LocalContentUnbounded()));
     }
 
     void beginKnownLength(std::uint64_t length) noexcept {
-        reset(Http2LocalContentMode::kKnownLength, length);
+        reset(Content(Http2LocalContentKnownLength(length)));
     }
 
-    [[nodiscard]] Http2LocalContentMode mode() const noexcept {
-        return mode_;
+    [[nodiscard]] constexpr const Http2LocalContentUnset*
+    unset() const noexcept {
+        return std::get_if<Http2LocalContentUnset>(&content_);
     }
 
-    [[nodiscard]] bool hasKnownLength() const noexcept {
-        return mode_ == Http2LocalContentMode::kKnownLength;
+    [[nodiscard]] constexpr const Http2LocalContentForbidden*
+    forbidden() const noexcept {
+        return std::get_if<Http2LocalContentForbidden>(&content_);
     }
 
-    [[nodiscard]] std::uint64_t declaredLength() const noexcept {
-        return declaredLength_;
+    [[nodiscard]] constexpr const Http2LocalContentUnbounded*
+    unbounded() const noexcept {
+        return std::get_if<Http2LocalContentUnbounded>(&content_);
+    }
+
+    [[nodiscard]] constexpr const Http2LocalContentKnownLength*
+    knownLength() const noexcept {
+        return std::get_if<Http2LocalContentKnownLength>(&content_);
     }
 
     [[nodiscard]] std::uint64_t acceptedBytes() const noexcept {
@@ -63,7 +108,10 @@ public:
     [[nodiscard]] Http2LocalContentCheck checkAccept(
         std::size_t bytes,
         bool terminal) const noexcept {
-        if (mode_ == Http2LocalContentMode::kForbidden) {
+        if (unset() != nullptr) {
+            return Http2LocalContentCheck::kNotStarted;
+        }
+        if (forbidden() != nullptr) {
             return Http2LocalContentCheck::kForbidden;
         }
 
@@ -71,14 +119,16 @@ public:
         if (amount > std::numeric_limits<std::uint64_t>::max() - acceptedBytes_) {
             return Http2LocalContentCheck::kLengthExceeded;
         }
-        if (mode_ != Http2LocalContentMode::kKnownLength) {
+        const auto* knownLengthContent = knownLength();
+        if (knownLengthContent == nullptr) {
             return Http2LocalContentCheck::kAccepted;
         }
-        if (acceptedBytes_ > declaredLength_ ||
-            amount > declaredLength_ - acceptedBytes_) {
+        const auto declaredLength = knownLengthContent->declaredLength();
+        if (acceptedBytes_ > declaredLength ||
+            amount > declaredLength - acceptedBytes_) {
             return Http2LocalContentCheck::kLengthExceeded;
         }
-        if (terminal && acceptedBytes_ + amount != declaredLength_) {
+        if (terminal && acceptedBytes_ + amount != declaredLength) {
             return Http2LocalContentCheck::kLengthIncomplete;
         }
         return Http2LocalContentCheck::kAccepted;
@@ -96,22 +146,30 @@ public:
     }
 
     [[nodiscard]] bool lengthComplete() const noexcept {
-        return mode_ != Http2LocalContentMode::kKnownLength ||
-            acceptedBytes_ == declaredLength_;
+        if (unset() != nullptr) {
+            return false;
+        }
+        const auto* knownLengthContent = knownLength();
+        return knownLengthContent == nullptr ||
+            acceptedBytes_ == knownLengthContent->declaredLength();
     }
 
 private:
-    void reset(Http2LocalContentMode mode, std::uint64_t declaredLength) noexcept {
-        mode_ = mode;
-        declaredLength_ = declaredLength;
+    using Content = std::variant<
+        Http2LocalContentUnset,
+        Http2LocalContentForbidden,
+        Http2LocalContentUnbounded,
+        Http2LocalContentKnownLength>;
+
+    void reset(Content content) noexcept {
+        content_ = content;
         acceptedBytes_ = 0;
         committedBytes_ = 0;
     }
 
-    std::uint64_t declaredLength_{0};
+    Content content_;
     std::uint64_t acceptedBytes_{0};
     std::uint64_t committedBytes_{0};
-    Http2LocalContentMode mode_{Http2LocalContentMode::kUnset};
 };
 
 }  // namespace ruvia::detail

@@ -83,6 +83,8 @@ set(RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API
     "detail/(client/HttpClientResponseParser|http1/Http1ClientResponsePlan)[.]h|parseHttpClientResponseHead|class[ \t]+HttpClientResponseHead|[.]bodyOffset[ \t]*[(]|responseContext[ \t]*[(]|Http1ClientResponseParser[ \t]*[(][ \t]*[)]")
 set(RULE_STALE_HTTP1_CLIENT_REQUEST_SPLIT
     "request[.]body|std::string_view[ \t]+body[ \t]*[{]|serializeHttpClientRequest|bool[ \t]+hasRequestBody")
+set(RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE
+    "HttpClientRequestContentMode|Http1ClientRequestContentDisposition|Http2RequestContentMode")
 set(RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT
     "sawContentLength|parsedContentLength")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
@@ -171,6 +173,8 @@ set(RULE_STALE_H2_PEER_SETTING_APPLY_TUPLE
     "Http2PeerSettingsStatus|Http2PeerSettingsResult|http2PeerSettingsError(Code|Message)|result[.](status|initialWindowChanged|initialWindowDelta)([^A-Za-z0-9_]|$)")
 set(RULE_STALE_H2_DATA_FLOW_ACCOUNTING
     "Http2ReceiveWindowResult|http2ConsumeReceiveWindows|http2RestoreReceiveWindows|dropDataFrame|windowConsumed")
+set(RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE
+    "Http2LocalContentMode|localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
     "205 [(]Reset Content[)] deliberately falls through|response_policy_reset_content_carries_framing")
 set(RULE_STALE_DEPENDENCY
@@ -366,6 +370,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("split/manual HTTP/1 client request contract"
         "${RULE_STALE_HTTP1_CLIENT_REQUEST_SPLIT}"
         "request.body = payload;")
+    expect_match("mode/payload outbound request-content tuple"
+        "${RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE}"
+        "enum class Http2RequestContentMode { kNone, kKnownLength, kStreaming };")
     expect_match("split Content-Length parser state"
         "${RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT}"
         "bool sawContentLength = false;")
@@ -464,6 +471,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         "Http2ServerSession owns the socket")
     expect_match("stale HTTP/2 send API" "${RULE_STALE_H2_SEND_API}"
         "if (result == Http2SubmitResult::kBlocked) pumpWritable();")
+    expect_match("mode/payload HTTP/2 local-content tuple"
+        "${RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE}"
+        "if (stream.localContentMode() == Http2LocalContentMode::kKnownLength) stream.localContentDeclaredLength();")
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
@@ -974,8 +984,14 @@ if(NOT http_client_public_model MATCHES "enum class HttpScheme" OR
    NOT http_client_public_model MATCHES "class HttpOrigin final" OR
    NOT http_client_public_model MATCHES "basic_string<char, Traits, Allocator>&&" OR
    NOT http_client_public_model MATCHES "class HttpClientRequestContent final" OR
-   NOT http_client_public_model MATCHES "HttpClientRequestContentMode::kNone" OR
-   NOT http_client_public_model MATCHES "HttpClientRequestContentMode::kBytes" OR
+   NOT http_client_public_model MATCHES
+       "class HttpClientRequestWithoutContent final" OR
+   NOT http_client_public_model MATCHES "class HttpClientRequestBytes final" OR
+   NOT http_client_public_model MATCHES "using Content = std::variant" OR
+   NOT http_client_public_model MATCHES
+       "std::get_if<HttpClientRequestWithoutContent>" OR
+   NOT http_client_public_model MATCHES "std::get_if<HttpClientRequestBytes>" OR
+   NOT http_client_public_model MATCHES "borrowedBytes" OR
    NOT http_client_public_model MATCHES "class HttpClientResponse final" OR
    NOT http_client_public_model MATCHES "struct HttpClientRequest" OR
    NOT http_client_public_model MATCHES "std::string_view target" OR
@@ -1359,6 +1375,18 @@ check_files_no_match("HTTP/1 client requests must use one typed writer contract"
     "${RUVIA_ROOT}/tests/unit_http_client_redirect.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/tests/smoke_http_target.cpp")
+check_files_no_match("outbound request content must use exclusive alternatives"
+    "${RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientRequestWriter.h"
+    "${RUVIA_ROOT}/ruvia-http/src/client/Http1ClientRequestWriter.cpp"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestContent.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_client_request.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_client_response.cpp"
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("HTTP/1 client response framing must use one typed plan"
     "${RULE_STALE_HTTP1_CLIENT_RESPONSE_SPLIT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
@@ -1415,6 +1443,11 @@ check_files_no_match("HTTP/2 send path must not restore ambiguous retry ownershi
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h"
     "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
     "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+check_files_no_match("HTTP/2 local content accounting must use exclusive alternatives"
+    "${RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 check_files_no_match("response trailers must remain one terminal section"
     "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -1804,6 +1837,8 @@ set(HTTP2_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 set(HTTP2_LOCAL_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h")
+set(HTTP2_STREAM_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
 set(HTTP2_REQUEST_CONTENT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestContent.h")
 set(HTTP2_TUNNEL_STATE
@@ -1815,10 +1850,60 @@ set(HTTP2_PEER_SETTINGS
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_STATE}")
     boundary_error("HTTP/2 local content state is missing"
         "Http2LocalContentState.h must own outbound response length accounting")
+elseif(NOT EXISTS "${HTTP2_STREAM_STATE}")
+    boundary_error("HTTP/2 stream state is missing"
+        "Http2StreamState.h must expose the const local-content contract")
+else()
+    file(READ "${HTTP2_LOCAL_CONTENT_STATE}" http2_local_content_state)
+    file(READ "${HTTP2_STREAM_STATE}" http2_stream_state)
+    if(NOT http2_local_content_state MATCHES
+           "class Http2LocalContentUnset final" OR
+       NOT http2_local_content_state MATCHES
+           "class Http2LocalContentForbidden final" OR
+       NOT http2_local_content_state MATCHES
+           "class Http2LocalContentUnbounded final" OR
+       NOT http2_local_content_state MATCHES
+           "class Http2LocalContentKnownLength final" OR
+       NOT http2_local_content_state MATCHES "using Content = std::variant" OR
+       NOT http2_local_content_state MATCHES
+           "std::get_if<Http2LocalContentUnset>" OR
+       NOT http2_local_content_state MATCHES
+           "std::get_if<Http2LocalContentForbidden>" OR
+       NOT http2_local_content_state MATCHES
+           "std::get_if<Http2LocalContentUnbounded>" OR
+       NOT http2_local_content_state MATCHES
+           "std::get_if<Http2LocalContentKnownLength>" OR
+       NOT http2_local_content_state MATCHES "kNotStarted" OR
+       NOT http2_local_content_state MATCHES "if [(]unset[(][)] != nullptr[)]" OR
+       NOT http2_stream_state MATCHES
+           "const Http2LocalContentState& localContent[(][)] const noexcept")
+        boundary_error("HTTP/2 local content accounting lost its discriminated state"
+            "unset, forbidden, unbounded, and known-length must be exclusive and only known-length may own a declared length")
+    endif()
 endif()
 if(NOT EXISTS "${HTTP2_REQUEST_CONTENT}")
     boundary_error("HTTP/2 request content contract is missing"
         "Http2RequestContent.h must own regular request Content-Length/END_STREAM selection")
+else()
+    file(READ "${HTTP2_REQUEST_CONTENT}" http2_request_content)
+    if(NOT http2_request_content MATCHES
+           "class Http2RequestWithoutContent final" OR
+       NOT http2_request_content MATCHES
+           "class Http2KnownLengthRequestContent final" OR
+       NOT http2_request_content MATCHES
+           "class Http2StreamingRequestContent final" OR
+       NOT http2_request_content MATCHES "using Content = std::variant" OR
+       NOT http2_request_content MATCHES
+           "std::get_if<Http2RequestWithoutContent>" OR
+       NOT http2_request_content MATCHES
+           "std::get_if<Http2KnownLengthRequestContent>" OR
+       NOT http2_request_content MATCHES
+           "std::get_if<Http2StreamingRequestContent>" OR
+       NOT http2_request_content MATCHES "knownLengthContent" OR
+       NOT http2_request_content MATCHES "streamingContent")
+        boundary_error("HTTP/2 request content lost its exclusive alternatives"
+            "absent, known-length, and streaming contracts must own only their relevant payload")
+    endif()
 endif()
 if(NOT EXISTS "${HTTP2_TUNNEL_STATE}")
     boundary_error("HTTP/2 CONNECT tunnel state is missing"
@@ -1889,14 +1974,19 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
     if(NOT http2_connection_source MATCHES "checkLocalContentAccept" OR
        NOT http2_connection_source MATCHES "acceptLocalContent" OR
        NOT http2_connection_source MATCHES "commitLocalContent" OR
-       NOT http2_connection_source MATCHES "localContentLengthComplete")
+       NOT http2_connection_source MATCHES
+           "localContent[(][)][.]lengthComplete[(][)]" OR
+       NOT http2_connection_source MATCHES
+           "Http2LocalContentCheck::kNotStarted")
         boundary_error("HTTP/2 response Content-Length bypasses stream-owned accounting"
             "head, DATA emission, deferred drain, and finish must share local content state")
     endif()
     if(NOT http2_connection_source MATCHES "submitRegularRequestHead" OR
-       NOT http2_connection_source MATCHES "Http2RequestContentMode::kNone" OR
+       NOT http2_connection_source MATCHES "content[.]withoutContent" OR
+       NOT http2_connection_source MATCHES "content[.]knownLengthContent" OR
+       NOT http2_connection_source MATCHES "content[.]streamingContent" OR
        NOT http2_connection_source MATCHES "beginLocalContentKnownLength" OR
-       NOT http2_connection_source MATCHES "content\.length" OR
+       NOT http2_connection_source MATCHES "knownLengthContent->length" OR
        NOT http2_connection_source MATCHES "http2IsValidOutboundRegularRequestHead" OR
        NOT http2_connection_source MATCHES
            "method != \"CONNECT\" && isValidHttpMethodToken[(]method[)]")
@@ -2061,6 +2151,8 @@ endif()
 
 set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/unit_http2_peer_settings.cpp")
+set(HTTP2_LOCAL_CONTENT_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_local_content_state.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 if(NOT EXISTS "${HTTP2_PEER_SETTINGS_TEST}")
     boundary_error("HTTP/2 peer SETTINGS result contract is untested"
@@ -2108,9 +2200,59 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
             "unit and installed-package consumers must pin payload-free application, delta-only change, and error-only failure")
     endif()
 endif()
+if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_TEST}")
+    boundary_error("HTTP/2 local content alternatives are untested"
+        "unit_http2_local_content_state.cpp must pin state and payload ownership")
+elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_LOCAL_CONTENT_TEST}" http2_local_content_test)
+    file(READ "${HTTP2_EVENT_TEST}" http2_local_content_connection_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_local_content_package_test)
+    if(NOT http2_local_content_test MATCHES
+           "http2_local_content_known_length_preflight_is_transactional" OR
+       NOT http2_local_content_test MATCHES
+           "http2_local_content_alternatives_are_explicit" OR
+       NOT http2_local_content_test MATCHES
+           "!HasLocalContentMode<Http2LocalContentState>" OR
+       NOT http2_local_content_test MATCHES
+           "HasDeclaredLength<Http2LocalContentKnownLength>" OR
+       NOT http2_local_content_test MATCHES
+           "Http2LocalContentCheck::kNotStarted" OR
+       NOT http2_local_content_test MATCHES "!state[.]lengthComplete[(][)]" OR
+       NOT http2_local_content_connection_test MATCHES
+           "!HasStaleLocalContentForwarders<Http2StreamState>" OR
+       NOT http2_local_content_connection_test MATCHES
+           "requireLocalKnownLength" OR
+       NOT http2_local_content_package_test MATCHES
+           "HasHttp2LocalContentAlternatives" OR
+       NOT http2_local_content_package_test MATCHES
+           "!HasStaleHttp2LocalModeAccessor" OR
+       NOT http2_local_content_package_test MATCHES
+           "!HasStaleHttp2StreamLocalContentForwarders")
+        boundary_error("HTTP/2 local content alternative ownership is under-tested"
+            "unit and installed consumers must reject mode/fake-length access, pin unset rejection, and inspect counters through one const state")
+    endif()
+endif()
 if(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
     file(READ "${HTTP2_EVENT_TEST}" http2_event_test)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http_package_consumer)
+    if(NOT http2_event_test MATCHES
+           "http2_connection_request_content_alternatives_own_wire_framing" OR
+       NOT http2_event_test MATCHES
+           "!HasRequestContentMode<Http2RequestContent>" OR
+       NOT http2_event_test MATCHES
+           "HasRequestContentLength<[\r\n \t]*ruvia::detail::Http2KnownLengthRequestContent>" OR
+       NOT http2_event_test MATCHES "withoutContent[.]withoutContent" OR
+       NOT http2_event_test MATCHES "zeroLength[.]knownLengthContent" OR
+       NOT http2_event_test MATCHES "streaming[.]streamingContent" OR
+       NOT http_package_consumer MATCHES
+           "HasHttp2RequestContentAlternatives" OR
+       NOT http_package_consumer MATCHES
+           "!HasStaleHttp2ContentMode" OR
+       NOT http_package_consumer MATCHES
+           "HasHttp2RequestContentLength<[\r\n \t]*ruvia::detail::Http2KnownLengthRequestContent>")
+        boundary_error("HTTP/2 request-content alternatives are under-tested"
+            "unit and installed consumers must pin absent, explicit zero-length, and streaming payload ownership")
+    endif()
     if(NOT http2_event_test MATCHES
            "http2_connection_event_queue_is_optional_and_discriminated" OR
        NOT http2_event_test MATCHES
@@ -2644,7 +2786,18 @@ else()
            "class Http1ClientRequestWirePolicy final" OR
        NOT http1_client_request_writer_header MATCHES
            "class Http1ClientRequestContentPlan final" OR
-       NOT http1_client_request_writer_header MATCHES "kContinueGated" OR
+       NOT http1_client_request_writer_header MATCHES
+           "class Http1ClientRequestWithoutContent final" OR
+       NOT http1_client_request_writer_header MATCHES
+           "class Http1ClientImmediateRequestContent final" OR
+       NOT http1_client_request_writer_header MATCHES
+           "class Http1ClientContinueGatedRequestContent final" OR
+       NOT http1_client_request_writer_header MATCHES
+           "std::get_if<Http1ClientRequestWithoutContent>" OR
+       NOT http1_client_request_writer_header MATCHES
+           "std::get_if<Http1ClientImmediateRequestContent>" OR
+       NOT http1_client_request_writer_header MATCHES
+           "std::get_if<Http1ClientContinueGatedRequestContent>" OR
        NOT http1_client_request_writer_header MATCHES
            "class Http1ClientRequestBufferTooSmall final" OR
        NOT http1_client_request_writer_header MATCHES
@@ -2659,7 +2812,8 @@ else()
        NOT http1_client_request_writer_header MATCHES "prepareConnect" OR
        NOT http1_client_request_writer_header MATCHES
            "friend class Http1ClientResponseParser" OR
-       http1_client_request_writer_header MATCHES "responseContext[ \t]*[(][ \t]*[)]")
+       http1_client_request_writer_header MATCHES "responseContext[ \t]*[(][ \t]*[)]" OR
+       http1_client_request_writer_header MATCHES "expectsContinue")
         boundary_error("HTTP/1 client request writer lost its transactional contract"
             "buffer sizing, prepared content gate, typed failure, CONNECT, and Prepared-bound response state must remain one result")
     endif()
@@ -2673,6 +2827,11 @@ else()
        NOT http1_client_request_writer MATCHES "kMaxHttpHeaderFields" OR
        NOT http1_client_request_writer MATCHES "kExpectHeaderManagedByWriter" OR
        NOT http1_client_request_writer MATCHES "kExpectationWithoutContent" OR
+       NOT http1_client_request_writer MATCHES "content[.]borrowedBytes" OR
+       NOT http1_client_request_writer MATCHES "preparedWithoutContent" OR
+       NOT http1_client_request_writer MATCHES "preparedImmediateContent" OR
+       NOT http1_client_request_writer MATCHES
+           "preparedContinueGatedContent" OR
        NOT http1_client_request_writer MATCHES "method == \"TRACE\"" OR
        NOT http1_client_request_writer MATCHES "method == \"OPTIONS\"" OR
        NOT http1_client_request_writer MATCHES
@@ -2705,6 +2864,23 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
         boundary_error("HTTP/1 client request writer invariants are under-tested"
             "tests must pin content presence/gating, target forms, Host/framing/Expect ownership, buffer atomicity, method semantics, and Prepared-bound response state")
     endif()
+    if(NOT http1_client_request_test MATCHES
+           "!HasRequestContentMode<ruvia::HttpClientRequestContent>" OR
+       NOT http1_client_request_test MATCHES
+           "HasRequestContentValue<ruvia::HttpClientRequestBytes>" OR
+       NOT http1_client_request_test MATCHES
+           "!HasPreparedContentDisposition<[\r\n \t]*ruvia::Http1ClientRequestContentPlan>" OR
+       NOT http1_client_request_test MATCHES
+           "HasPreparedContentBytes<[\r\n \t]*ruvia::Http1ClientImmediateRequestContent>" OR
+       NOT http1_client_request_test MATCHES
+           "HasPreparedContentBytes<[\r\n \t]*ruvia::Http1ClientContinueGatedRequestContent>" OR
+       NOT http1_client_request_test MATCHES
+           "withoutContent[(][)][ 	]*==[ 	]*nullptr" OR
+       NOT http1_client_request_test MATCHES
+           "continueGated[(][)][ 	]*==[ 	]*nullptr")
+        boundary_error("HTTP/1 outbound request-content alternatives are under-tested"
+            "tests must reject plan-wide mode/payload access and prove absent, immediate-empty, and continue-gated exclusivity")
+    endif()
 endif()
 set(HTTP1_CLIENT_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
 set(HTTP1_CLIENT_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
@@ -2725,6 +2901,14 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "!HasRawHttpClientRequestBody<ruvia::HttpClientRequest>" OR
        NOT http1_client_api_surface MATCHES
+           "HasDiscriminatedHttpClientRequestContent<ruvia::HttpClientRequest>" OR
+       NOT http1_client_api_surface MATCHES
+           "!HasStaleHttpClientRequestContentTuple<ruvia::HttpClientRequest>" OR
+       NOT http1_client_api_surface MATCHES
+           "HasHttp1ClientPreparedContentPlan<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
+       NOT http1_client_api_surface MATCHES
+           "!HasStaleHttp1ClientPreparedContentTuple<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
+       NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientResponseContext<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
        NOT http1_client_api_surface MATCHES
            "std::is_constructible_v<[\r\n \t]*ruvia::Http1ClientResponseParser,[\r\n \t]*const ruvia::PreparedHttp1ClientRequest&>" OR
@@ -2739,6 +2923,10 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "!HasHttp1ClientResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWriter" OR
+       NOT http1_client_package_consumer MATCHES
+           "HasHttpClientRequestContentAlternatives" OR
+       NOT http1_client_package_consumer MATCHES
+           "HasHttp1PreparedContentAlternatives" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWirePolicy::expectContinue" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_package_consumer MATCHES "completeRequestContent" OR
@@ -2791,6 +2979,11 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "Http1ClientRequestContentCompletionStatus" OR
        NOT http1_client_response_parser_header MATCHES "completeRequestContent" OR
        NOT http1_client_response_parser_header MATCHES "const PreparedHttp1ClientRequest& request" OR
+       NOT http1_client_response_parser_header MATCHES
+           "request[.]contentPlan_[.]continueGated" OR
+       NOT http1_client_response_parser_header MATCHES "continueGated_" OR
+       NOT http1_client_response_parser_header MATCHES
+           "requestContentStartsComplete" OR
        NOT http1_client_response_parser_header MATCHES "enum class Phase" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeComplete" OR
        NOT http1_client_response_parser_header MATCHES "kExchangeFailed" OR
@@ -2814,7 +3007,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES "using ResponsePlanningResult = std::variant" OR
        NOT http1_client_response_parser MATCHES "std::get_if<Http1ClientResponseParseError>" OR
        NOT http1_client_response_parser MATCHES "requestAllowsProtocolSwitch" OR
-       NOT http1_client_response_parser MATCHES "request[.]expectsContinue[(][)] && !sawContinue" OR
+       NOT http1_client_response_parser MATCHES
+           "continueGated && !sawContinue" OR
        NOT http1_client_response_parser MATCHES "!requestContentComplete" OR
        NOT http1_client_response_parser MATCHES "requestContentComplete_ = true" OR
        NOT http1_client_response_parser MATCHES "sawContinue_ = true" OR
@@ -2825,6 +3019,7 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
            "request[.]closePolicy[(][)] ==[\r\n \t]*Http1ClientRequestClosePolicy::kCloseAfterResponse" OR
        NOT http1_client_response_parser MATCHES "contentLengthFieldPresent" OR
        NOT http1_client_response_parser MATCHES "request\\.method\\(\\)[ \t]*==[ \t]*\"CONNECT\"" OR
+       http1_client_response_parser MATCHES "request[.]expectsContinue" OR
        http1_client_response_parser MATCHES "throw[ \t]+std::runtime_error")
         boundary_error("HTTP/1 client response parser bypasses its typed plan"
             "head scanning, Prepared-bound informational/final state, content signals, RFC body precedence, persistence, CONNECT, and Upgrade must have one output without wire exceptions")
@@ -3057,14 +3252,22 @@ foreach(boundary_doc IN ITEMS
             "${relative} must pin RFC completion, incremental consumption, and whole-message alternative field ownership")
     endif()
     if(NOT boundary_doc_content MATCHES "HttpClientRequestContent" OR
+       NOT boundary_doc_content MATCHES "HttpClientRequestWithoutContent" OR
+       NOT boundary_doc_content MATCHES "HttpClientRequestBytes" OR
        NOT boundary_doc_content MATCHES "Http1ClientRequestWriter" OR
        NOT boundary_doc_content MATCHES "PreparedHttp1ClientRequest" OR
        NOT boundary_doc_content MATCHES "Http1ClientRequestWirePolicy" OR
        NOT boundary_doc_content MATCHES "Http1ClientRequestContentPlan" OR
+       NOT boundary_doc_content MATCHES "Http1ClientRequestWithoutContent" OR
+       NOT boundary_doc_content MATCHES
+           "Http1ClientImmediateRequestContent" OR
+       NOT boundary_doc_content MATCHES
+           "Http1ClientContinueGatedRequestContent" OR
        NOT boundary_doc_content MATCHES "continue-gated" OR
        NOT boundary_doc_content MATCHES "caller-provided" OR
        NOT boundary_doc_content MATCHES "prepareConnect" OR
        NOT boundary_doc_content MATCHES "Content-Length: 0" OR
+       NOT boundary_doc_content MATCHES "section-6[.]3" OR
        NOT boundary_doc_content MATCHES "Host")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 client request writer boundary is undocumented"
@@ -3143,18 +3346,33 @@ foreach(boundary_doc IN ITEMS
             "${relative} must describe HTTP-owned zero-length 205 framing")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2LocalContentState" OR
+       NOT boundary_doc_content MATCHES "Http2LocalContentUnset" OR
+       NOT boundary_doc_content MATCHES "Http2LocalContentForbidden" OR
+       NOT boundary_doc_content MATCHES "Http2LocalContentUnbounded" OR
+       NOT boundary_doc_content MATCHES "Http2LocalContentKnownLength" OR
+       NOT boundary_doc_content MATCHES "kNotStarted" OR
+       NOT boundary_doc_content MATCHES "localContent[(][)]" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
        NOT boundary_doc_content MATCHES "accepted" OR
        NOT boundary_doc_content MATCHES "committed")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 outbound Content-Length contract is undocumented"
-            "${relative} must distinguish accepted ownership from committed DATA")
+            "${relative} must document exclusive local-content states, pre-head rejection, payload ownership, and accepted versus committed DATA")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
+       NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR
+       NOT boundary_doc_content MATCHES
+           "Http2KnownLengthRequestContent" OR
+       NOT boundary_doc_content MATCHES
+           "Http2StreamingRequestContent" OR
        NOT boundary_doc_content MATCHES "submitRegularRequestHead" OR
        NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitResult" OR
        NOT boundary_doc_content MATCHES "Http2SubmittedRequestHead" OR
        NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitFailure" OR
        NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitError" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
        NOT boundary_doc_content MATCHES "section-5[.]1[.]1" OR
        NOT boundary_doc_content MATCHES "section-5[.]1[.]2" OR
        NOT boundary_doc_content MATCHES "section-6[.]5[.]2" OR

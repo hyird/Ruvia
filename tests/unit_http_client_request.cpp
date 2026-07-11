@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -14,7 +16,6 @@
 namespace {
 
 using ruvia::Http1ClientRequestClosePolicy;
-using ruvia::Http1ClientRequestContentDisposition;
 using ruvia::Http1ClientRequestPrepareError;
 using ruvia::Http1ClientRequestPrepareKind;
 using ruvia::Http1ClientRequestWirePolicy;
@@ -22,6 +23,50 @@ using ruvia::Http1ClientRequestWriter;
 using ruvia::HttpClientRequest;
 using ruvia::HttpClientRequestContent;
 using ruvia::HttpOrigin;
+
+template <typename T>
+concept HasRequestContentMode = requires(const T& content) {
+    content.mode();
+};
+
+template <typename T>
+concept HasRequestContentValue = requires(const T& content) {
+    { content.value() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasPreparedContentDisposition = requires(const T& plan) {
+    plan.disposition();
+};
+
+template <typename T>
+concept HasPreparedContentBytes = requires(const T& content) {
+    { content.bytes() } -> std::same_as<std::string_view>;
+};
+
+static_assert(!HasRequestContentMode<ruvia::HttpClientRequestContent>);
+static_assert(!HasRequestContentValue<ruvia::HttpClientRequestContent>);
+static_assert(!HasRequestContentValue<ruvia::HttpClientRequestWithoutContent>);
+static_assert(HasRequestContentValue<ruvia::HttpClientRequestBytes>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestWithoutContent>);
+static_assert(!std::default_initializable<ruvia::HttpClientRequestBytes>);
+static_assert(!HasPreparedContentDisposition<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasPreparedContentBytes<ruvia::Http1ClientRequestContentPlan>);
+static_assert(!HasPreparedContentBytes<ruvia::Http1ClientRequestWithoutContent>);
+static_assert(HasPreparedContentBytes<
+    ruvia::Http1ClientImmediateRequestContent>);
+static_assert(HasPreparedContentBytes<
+    ruvia::Http1ClientContinueGatedRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientRequestContentPlan>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientRequestWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientImmediateRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::Http1ClientContinueGatedRequestContent>);
 
 template <std::size_t N = 2048>
 struct PreparedFixture final {
@@ -78,22 +123,28 @@ RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) 
         "X-Test: one\r\n"
         "Content-Length: 7\r\n"
         "Expect: 100-continue\r\n\r\n");
-    RUVIA_CHECK(
-        prepared->contentPlan().disposition() ==
-        Http1ClientRequestContentDisposition::kContinueGated);
-    RUVIA_CHECK(prepared->contentPlan().bytes() == "payload");
+    const auto* gated = prepared->contentPlan().continueGated();
+    RUVIA_CHECK(gated != nullptr);
+    RUVIA_CHECK(prepared->contentPlan().withoutContent() == nullptr);
+    RUVIA_CHECK(prepared->contentPlan().immediate() == nullptr);
+    if (gated != nullptr) {
+        RUVIA_CHECK(gated->bytes() == "payload");
+    }
 }
 
 RUVIA_TEST(http1_client_request_content_distinguishes_absent_from_explicit_empty) {
     HttpClientRequest absent;
     absent.method = "GET";
+    RUVIA_CHECK(absent.content.withoutContent() != nullptr);
+    RUVIA_CHECK(absent.content.borrowedBytes() == nullptr);
     PreparedFixture absentFixture(HttpOrigin::https("example.test"), absent);
     const auto* absentPrepared = absentFixture.result.prepared();
     RUVIA_CHECK(absentPrepared != nullptr);
     if (absentPrepared != nullptr) {
         RUVIA_CHECK(
-            absentPrepared->contentPlan().disposition() ==
-            Http1ClientRequestContentDisposition::kNone);
+            absentPrepared->contentPlan().withoutContent() != nullptr);
+        RUVIA_CHECK(absentPrepared->contentPlan().immediate() == nullptr);
+        RUVIA_CHECK(absentPrepared->contentPlan().continueGated() == nullptr);
         RUVIA_CHECK(absentPrepared->head().find("Content-Length") ==
                     std::string_view::npos);
     }
@@ -101,14 +152,22 @@ RUVIA_TEST(http1_client_request_content_distinguishes_absent_from_explicit_empty
     HttpClientRequest empty;
     empty.method = "POST";
     empty.content = HttpClientRequestContent::bytes("");
+    RUVIA_CHECK(empty.content.withoutContent() == nullptr);
+    RUVIA_CHECK(empty.content.borrowedBytes() != nullptr);
+    if (const auto* bytes = empty.content.borrowedBytes()) {
+        RUVIA_CHECK(bytes->value().empty());
+    }
     PreparedFixture emptyFixture(HttpOrigin::https("example.test"), empty);
     const auto* emptyPrepared = emptyFixture.result.prepared();
     RUVIA_CHECK(emptyPrepared != nullptr);
     if (emptyPrepared != nullptr) {
-        RUVIA_CHECK(
-            emptyPrepared->contentPlan().disposition() ==
-            Http1ClientRequestContentDisposition::kImmediate);
-        RUVIA_CHECK(emptyPrepared->contentPlan().bytes().empty());
+        const auto* immediate = emptyPrepared->contentPlan().immediate();
+        RUVIA_CHECK(immediate != nullptr);
+        RUVIA_CHECK(emptyPrepared->contentPlan().withoutContent() == nullptr);
+        RUVIA_CHECK(emptyPrepared->contentPlan().continueGated() == nullptr);
+        if (immediate != nullptr) {
+            RUVIA_CHECK(immediate->bytes().empty());
+        }
         RUVIA_CHECK(emptyPrepared->head().find("Content-Length: 0\r\n") !=
                     std::string_view::npos);
     }
@@ -165,9 +224,7 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
             prepared->head() ==
             "CONNECT example.test:443 HTTP/1.1\r\n"
             "Host: example.test\r\n\r\n");
-        RUVIA_CHECK(
-            prepared->contentPlan().disposition() ==
-            Http1ClientRequestContentDisposition::kNone);
+        RUVIA_CHECK(prepared->contentPlan().withoutContent() != nullptr);
     }
 
     std::array<char, 512> ipv6Buffer;
@@ -303,8 +360,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
     RUVIA_CHECK(fixture.result.prepared() != nullptr);
     if (fixture.result.prepared() != nullptr) {
         RUVIA_CHECK(
-            fixture.result.prepared()->contentPlan().disposition() ==
-            Http1ClientRequestContentDisposition::kContinueGated);
+            fixture.result.prepared()->contentPlan().continueGated() != nullptr);
         RUVIA_CHECK(fixture.result.prepared()->head().find(
             "Expect: 100-continue\r\n") != std::string_view::npos);
     }

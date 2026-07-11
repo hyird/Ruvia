@@ -124,7 +124,13 @@ stream-framing, WebSocket, and final-response control consume the same enum. The
 removed, so no layer can compare an arbitrary or dangling version spelling.
 Outbound HTTP/1 request emission is now the matching public sans-I/O boundary.
 `HttpClientRequestContent::none()` is distinct from `bytes("")`: only the latter represents an
-explicit empty content message and causes `Content-Length: 0`. `Http1ClientRequestWriter` validates
+explicit empty content message and causes `Content-Length: 0`. The value is a discriminated union of
+`HttpClientRequestWithoutContent` and `HttpClientRequestBytes`; only the bytes alternative exposes
+`value()`, so an absent request cannot be mistaken for borrowed empty bytes. This follows the
+ordered request-framing rules in
+[RFC 9112 Section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3), where an absent
+Transfer-Encoding and Content-Length ends a request at the head while a present Content-Length
+defines its body length. `Http1ClientRequestWriter` validates
 the exact, case-sensitive method, direct-origin request target, every field, header count, and the
 method-specific TRACE/OPTIONS constraints before touching a caller-provided head buffer. It emits
 Host first from the typed `HttpOrigin` and owns the sole generated Content-Length, optional
@@ -140,12 +146,15 @@ cannot accidentally masquerade as CONNECT.
 
 Preparation returns buffer-too-small, `PreparedHttp1ClientRequest`, or typed failure without
 allocation or partial output. The prepared alternative exposes the head plus one immutable
-`Http1ClientRequestContentPlan`: none, immediate (including explicit empty content), or
-continue-gated. A continue-gated plan requires a separate head write; the external runtime may
+`Http1ClientRequestContentPlan`. Its exclusive alternatives are
+`Http1ClientRequestWithoutContent`, `Http1ClientImmediateRequestContent` (including explicit empty
+content), and `Http1ClientContinueGatedRequestContent`; only the latter two expose `bytes()`.
+A continue-gated plan requires a separate head write; the external runtime may
 release its borrowed content after 100 Continue or its own finite wait policy, without rescanning
 Expect. `Http1ClientResponseParser` can only be constructed from that Prepared value, so method,
 Upgrade offer, Expect gate, and effective close signal cannot be replaced with caller-reconstructed
-lookalike facts.
+lookalike facts. It derives the Expect exchange state from the continue-gated alternative; the
+private response context carries no duplicate `expectsContinue` flag.
 
 Outbound HTTP/1 response-head parsing is a public sans-I/O boundary. One stateful
 `Http1ClientResponseParser` is bound to one Prepared request and remains in use across every
@@ -341,13 +350,28 @@ one request/final-response/WebSocket head advances it, and DATA is accepted only
 body phase is open. `submitData()` also distinguishes `kQueued` (the core copied and owns the
 unsent suffix) from `kBackpressured` (the core accepted nothing, so the caller must retry after
 the prior submission drains). `Http2LocalContentState` binds a final response's declared
-`Content-Length` to the DATA bytes accepted by the core: overrun and premature END_STREAM are
-rejected before output/window mutation, `finishResponse()` refuses an incomplete exact body,
-and invalid preserved lengths reject the head before HPACK output. Client-role regular request
-heads use `Http2RequestContent` as the single framing contract: `none()`, `knownLength(n)`, and
-`streaming()` deterministically select canonical Content-Length, HEADERS END_STREAM, and the
-same stream-owned content state. A raw `content-length` field is rejected rather than becoming a
-second source of truth. Each request-head API performs validation, odd stream-ID allocation,
+`Content-Length` to the DATA bytes accepted by the core. Its state is exactly one of
+`Http2LocalContentUnset`, `Http2LocalContentForbidden`, `Http2LocalContentUnbounded`, or
+`Http2LocalContentKnownLength`; only the last alternative exposes `declaredLength()`. An unset
+message rejects DATA with `kNotStarted`, while forbidden content rejects every DATA submission.
+Accepted and committed byte counters remain common accounting, available through the stream's one
+const `localContent()` view instead of duplicated mode/length/counter forwarding accessors.
+Overrun and premature END_STREAM are rejected before output/window mutation,
+`finishResponse()` refuses an incomplete exact body, and invalid preserved lengths reject the head
+before HPACK output. This follows HTTP/2's HEADERS-then-DATA message order and terminal END_STREAM in
+[RFC 9113 Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), plus its exact
+Content-Length/DATA requirement in
+[Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1). Client-role regular request
+heads use `Http2RequestContent` as the single framing contract. `none()`, `knownLength(n)`, and
+`streaming()` create `Http2RequestWithoutContent`, `Http2KnownLengthRequestContent`, and
+`Http2StreamingRequestContent` alternatives; only the known-length alternative exposes
+`length()`. They deterministically select canonical Content-Length, HEADERS END_STREAM, and the
+same stream-owned content state without a mode-wide fake zero. A raw `content-length` field is
+rejected rather than becoming a second source of truth. This models
+[RFC 9113 Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), where HEADERS/DATA
+and the final END_STREAM delimit one message, and
+[Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1), where a present
+Content-Length must equal the DATA payload total. Each request-head API performs validation, odd stream-ID allocation,
 `SETTINGS_MAX_CONCURRENT_STREAMS` admission, and HEADERS emission as one transaction, returning
 one discriminated `Http2RequestHeadSubmitResult`. Its `Http2SubmittedRequestHead` alternative alone
 exposes the allocated nonzero stream ID; `Http2RequestHeadSubmitFailure` alone exposes a typed
@@ -730,8 +754,10 @@ path/query inheritance and dot-segment removal continue to follow
 undefined-versus-empty component distinction described by
 [RFC 3986 Section 5.3](https://www.rfc-editor.org/rfc/rfc3986.html#section-5.3).
 
-`Http2Connection::submitRegularRequestHead()` accepts a typed `Http2RequestContent` plan instead of
-an independent Content-Length/END_STREAM pair and deliberately rejects CONNECT. It and the dedicated
+`Http2Connection::submitRegularRequestHead()` accepts the three-alternative
+`Http2RequestContent` plan instead of an independent Content-Length/END_STREAM pair and deliberately
+rejects CONNECT. Only `Http2KnownLengthRequestContent` owns a length; absent and streaming content
+cannot expose a synthetic zero. It and the dedicated
 Standard/Extended CONNECT entries return `Http2RequestHeadSubmitResult`, atomically allocate their
 own stream, and enforce the peer's concurrent-stream limit inside the protocol core; owners never
 preallocate idle streams or duplicate that gate. Callers branch on `submitted()` or `failure()`:

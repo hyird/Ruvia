@@ -182,28 +182,8 @@ public:
         localContent_.commit(bytes);
     }
 
-    [[nodiscard]] Http2LocalContentMode localContentMode() const noexcept {
-        return localContent_.mode();
-    }
-
-    [[nodiscard]] bool localContentHasKnownLength() const noexcept {
-        return localContent_.hasKnownLength();
-    }
-
-    [[nodiscard]] std::uint64_t localContentDeclaredLength() const noexcept {
-        return localContent_.declaredLength();
-    }
-
-    [[nodiscard]] std::uint64_t localContentAcceptedBytes() const noexcept {
-        return localContent_.acceptedBytes();
-    }
-
-    [[nodiscard]] std::uint64_t localContentCommittedBytes() const noexcept {
-        return localContent_.committedBytes();
-    }
-
-    [[nodiscard]] bool localContentLengthComplete() const noexcept {
-        return localContent_.lengthComplete();
+    [[nodiscard]] const Http2LocalContentState& localContent() const noexcept {
+        return localContent_;
     }
 
     [[nodiscard]] bool isReset() const noexcept {

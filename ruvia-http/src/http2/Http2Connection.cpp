@@ -851,29 +851,31 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     Http2EndStream endStream = Http2EndStream::kKeepOpen;
     std::array<char, 20> lengthBuffer{};
     std::size_t lengthBytes = 0;
-    switch (content.mode()) {
-        case Http2RequestContentMode::kNone:
-            endStream = Http2EndStream::kEndStream;
-            break;
-        case Http2RequestContentMode::kKnownLength:
-            endStream = content.length() == 0
-                ? Http2EndStream::kEndStream
-                : Http2EndStream::kKeepOpen;
-            // 20 bytes always hold the canonical decimal form of uint64_t. Do this
-            // before mutating stream/HPACK state so every rejection is transactional.
-            if (const auto [end, ec] = std::to_chars(
-                    lengthBuffer.data(),
-                    lengthBuffer.data() + lengthBuffer.size(),
-                    content.length());
-                ec == std::errc{}) {
-                lengthBytes = static_cast<std::size_t>(end - lengthBuffer.data());
-            } else {
-                return Http2RequestHeadSubmitResult::makeFailure(
-                    Http2RequestHeadSubmitError::kInvalidMessage);
-            }
-            break;
-        case Http2RequestContentMode::kStreaming:
-            break;
+    const bool withoutContent = content.withoutContent() != nullptr;
+    const auto* knownLengthContent = content.knownLengthContent();
+    const bool streamingContent = content.streamingContent() != nullptr;
+    if (!withoutContent && knownLengthContent == nullptr && !streamingContent) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+    if (withoutContent) {
+        endStream = Http2EndStream::kEndStream;
+    } else if (knownLengthContent != nullptr) {
+        endStream = knownLengthContent->length() == 0
+            ? Http2EndStream::kEndStream
+            : Http2EndStream::kKeepOpen;
+        // 20 bytes always hold the canonical decimal form of uint64_t. Do this
+        // before mutating stream/HPACK state so every rejection is transactional.
+        if (const auto [end, ec] = std::to_chars(
+                lengthBuffer.data(),
+                lengthBuffer.data() + lengthBuffer.size(),
+                knownLengthContent->length());
+            ec == std::errc{}) {
+            lengthBytes = static_cast<std::size_t>(end - lengthBuffer.data());
+        } else {
+            return Http2RequestHeadSubmitResult::makeFailure(
+                Http2RequestHeadSubmitError::kInvalidMessage);
+        }
     }
 
     auto* stream = admitLocalRequestStream();
@@ -893,7 +895,7 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     for (const auto& header : headers) {
         HpackEncoder::encodeHeader(block, header.name(), header.value());
     }
-    if (content.mode() == Http2RequestContentMode::kKnownLength) {
+    if (knownLengthContent != nullptr) {
         HpackEncoder::encodeHeaderWithNameIndex(
             block,
             HpackStaticIndex::kContentLength,
@@ -901,16 +903,12 @@ Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     }
     appendResponseHeaderFrames(
         *stream, std::string_view(block.data(), block.size()), endStream);
-    switch (content.mode()) {
-        case Http2RequestContentMode::kNone:
-            stream->beginLocalContentForbidden();
-            break;
-        case Http2RequestContentMode::kKnownLength:
-            stream->beginLocalContentKnownLength(content.length());
-            break;
-        case Http2RequestContentMode::kStreaming:
-            stream->beginLocalContentUnbounded();
-            break;
+    if (withoutContent) {
+        stream->beginLocalContentForbidden();
+    } else if (knownLengthContent != nullptr) {
+        stream->beginLocalContentKnownLength(knownLengthContent->length());
+    } else if (streamingContent) {
+        stream->beginLocalContentUnbounded();
     }
     stream->markLocalHeadSubmitted(
         Http2LocalMessageKind::kRequest,
@@ -2115,6 +2113,7 @@ Http2DataSubmitStatus Http2Connection::submitData(
     switch (stream->checkLocalContentAccept(chunk.size(), http2EndsStream(endStream))) {
         case Http2LocalContentCheck::kAccepted:
             break;
+        case Http2LocalContentCheck::kNotStarted:
         case Http2LocalContentCheck::kForbidden:
             return Http2DataSubmitStatus::kInvalidState;
         case Http2LocalContentCheck::kLengthExceeded:
@@ -2256,7 +2255,7 @@ Http2ResponseTrailerSubmitStatus Http2Connection::submitResponseTrailerSection(
     if (!responseTrailerSectionValid(trailers)) {
         return Http2ResponseTrailerSubmitStatus::kInvalidField;
     }
-    if (!stream->localContentLengthComplete()) {
+    if (!stream->localContent().lengthComplete()) {
         return Http2ResponseTrailerSubmitStatus::kContentLengthIncomplete;
     }
 
@@ -2280,7 +2279,7 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(std::uint32_t streamId) 
         stream->localMessageKind() != Http2LocalMessageKind::kResponse) {
         return Http2FinishSubmitStatus::kInvalidState;
     }
-    if (!stream->localContentLengthComplete()) {
+    if (!stream->localContent().lengthComplete()) {
         return Http2FinishSubmitStatus::kContentLengthIncomplete;
     }
     auto& headerBlock = stream->responseTrailerBlock();

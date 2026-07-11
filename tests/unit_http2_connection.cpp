@@ -28,7 +28,8 @@ using ruvia::detail::Http2EventKind;
 using ruvia::detail::Http2FeedResult;
 using ruvia::detail::Http2FinishSubmitStatus;
 using ruvia::detail::Http2FrameType;
-using ruvia::detail::Http2LocalContentMode;
+using ruvia::detail::Http2LocalContentKnownLength;
+using ruvia::detail::Http2LocalContentState;
 using ruvia::detail::Http2LocalSettings;
 using ruvia::detail::Http2RequestContent;
 using ruvia::detail::Http2RequestHeadSubmitError;
@@ -43,6 +44,7 @@ using ruvia::detail::Http2SubmittedBufferedResponseHead;
 using ruvia::detail::Http2SubmittedRequestHead;
 using ruvia::detail::Http2SubmittedStreamingResponseHead;
 using ruvia::detail::Http2SubmitStatus;
+using ruvia::detail::Http2StreamState;
 using ruvia::detail::ResponseStreamHeadDisposition;
 using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::ResponseTrailerIntent;
@@ -111,6 +113,46 @@ template <typename T>
 concept HasResponseHeadErrorAccessor = requires(const T& result) {
     { result.error() } -> std::same_as<Http2ResponseHeadSubmitError>;
 };
+
+template <typename T>
+concept HasRequestContentMode = requires(const T& content) {
+    content.mode();
+};
+
+template <typename T>
+concept HasRequestContentLength = requires(const T& content) {
+    { content.length() } -> std::same_as<std::uint64_t>;
+};
+
+template <typename T>
+concept HasStaleLocalContentForwarders = requires(const T& stream) {
+    stream.localContentMode();
+    stream.localContentHasKnownLength();
+    stream.localContentDeclaredLength();
+    stream.localContentAcceptedBytes();
+    stream.localContentCommittedBytes();
+    stream.localContentLengthComplete();
+};
+
+static_assert(!HasRequestContentMode<Http2RequestContent>);
+static_assert(!HasRequestContentLength<Http2RequestContent>);
+static_assert(!HasRequestContentLength<
+    ruvia::detail::Http2RequestWithoutContent>);
+static_assert(HasRequestContentLength<
+    ruvia::detail::Http2KnownLengthRequestContent>);
+static_assert(!HasRequestContentLength<
+    ruvia::detail::Http2StreamingRequestContent>);
+static_assert(!std::default_initializable<Http2RequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RequestWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2KnownLengthRequestContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2StreamingRequestContent>);
+static_assert(!HasStaleLocalContentForwarders<Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http2StreamState&>().localContent()),
+    const Http2LocalContentState&>);
 
 static_assert(std::same_as<
     decltype(std::declval<Http2Connection&>().nextEvent()),
@@ -187,6 +229,14 @@ static_assert(!std::constructible_from<
 static_assert(!std::constructible_from<
     Http2ResponseHeadSubmitFailure,
     Http2ResponseHeadSubmitError>);
+
+const Http2LocalContentKnownLength& requireLocalKnownLength(
+    const Http2StreamState& stream) {
+    if (const auto* knownLength = stream.localContent().knownLength()) {
+        return *knownLength;
+    }
+    throw std::runtime_error("HTTP/2 local content is not known-length");
+}
 
 std::uint32_t submittedRequestStreamId(
     const Http2RequestHeadSubmitResult& result) {
@@ -1381,10 +1431,10 @@ RUVIA_TEST(http2_connection_buffered_response_length_is_transactional) {
 
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK(stream->localContentMode() == Http2LocalContentMode::kKnownLength);
-    RUVIA_CHECK_EQ(stream->localContentDeclaredLength(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{0});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(
+        requireLocalKnownLength(*stream).declaredLength(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{0});
 
     // All mismatches are rejected before output, flow-window, counters, or phase
     // change. The caller can correct the submission and continue the same stream.
@@ -1395,19 +1445,19 @@ RUVIA_TEST(http2_connection_buffered_response_length_is_transactional) {
     RUVIA_CHECK(conn.submitData(1, "sixsix", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kContentLengthExceeded);
     RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{0});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{0});
     RUVIA_CHECK(stream->localBodyOpen());
 
     RUVIA_CHECK(conn.submitData(1, "he", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kAccepted);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{2});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{2});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{2});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{2});
     RUVIA_CHECK(conn.submitData(1, "llo", Http2EndStream::kEndStream) ==
         Http2DataSubmitStatus::kAccepted);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{5});
-    RUVIA_CHECK(stream->localContentLengthComplete());
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
+    RUVIA_CHECK(stream->localContent().lengthComplete());
     RUVIA_CHECK(stream->localEndStreamCommitted());
 }
 
@@ -1513,15 +1563,33 @@ RUVIA_TEST(http2_connection_rejects_head_api_for_wrong_role) {
     RUVIA_CHECK(client.pendingOutput().empty());
 }
 
-RUVIA_TEST(http2_connection_request_content_modes_own_wire_framing) {
+RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
     std::pmr::monotonic_buffer_resource resource;
+
+    const auto withoutContent = Http2RequestContent::none();
+    RUVIA_CHECK(withoutContent.withoutContent() != nullptr);
+    RUVIA_CHECK(withoutContent.knownLengthContent() == nullptr);
+    RUVIA_CHECK(withoutContent.streamingContent() == nullptr);
+
+    const auto zeroLength = Http2RequestContent::knownLength(0);
+    RUVIA_CHECK(zeroLength.withoutContent() == nullptr);
+    RUVIA_CHECK(zeroLength.knownLengthContent() != nullptr);
+    RUVIA_CHECK(zeroLength.streamingContent() == nullptr);
+    if (const auto* knownLength = zeroLength.knownLengthContent()) {
+        RUVIA_CHECK_EQ(knownLength->length(), std::uint64_t{0});
+    }
+
+    const auto streaming = Http2RequestContent::streaming();
+    RUVIA_CHECK(streaming.withoutContent() == nullptr);
+    RUVIA_CHECK(streaming.knownLengthContent() == nullptr);
+    RUVIA_CHECK(streaming.streamingContent() != nullptr);
+
     const auto check = [&resource, &ruvia_ctx](
                            std::string_view method,
                            Http2RequestContent content,
                            bool expectEndStream,
                            std::string_view expectedContentLength,
-                           Http2LocalContentMode expectedMode,
-                           std::uint64_t expectedDeclaredLength) {
+                           auto&& verifyLocalContent) {
         Http2Connection client(
             &resource, ruvia::detail::Http2Role::kClient);
         beginClient(client);
@@ -1563,9 +1631,7 @@ RUVIA_TEST(http2_connection_request_content_modes_own_wire_framing) {
 
         const auto* stream = client.stream(streamId);
         RUVIA_CHECK(stream != nullptr);
-        RUVIA_CHECK(stream->localContentMode() == expectedMode);
-        RUVIA_CHECK_EQ(
-            stream->localContentDeclaredLength(), expectedDeclaredLength);
+        verifyLocalContent(stream->localContent());
         RUVIA_CHECK_EQ(stream->localEndStream(), expectEndStream);
     };
 
@@ -1574,29 +1640,45 @@ RUVIA_TEST(http2_connection_request_content_modes_own_wire_framing) {
         Http2RequestContent::none(),
         true,
         {},
-        Http2LocalContentMode::kForbidden,
-        0);
+        [&ruvia_ctx](const Http2LocalContentState& localContent) {
+            RUVIA_CHECK(localContent.forbidden() != nullptr);
+            RUVIA_CHECK(localContent.knownLength() == nullptr);
+        });
     check(
         "POST",
         Http2RequestContent::knownLength(0),
         true,
         "0",
-        Http2LocalContentMode::kKnownLength,
-        0);
+        [&ruvia_ctx](const Http2LocalContentState& localContent) {
+            const auto* knownLength = localContent.knownLength();
+            RUVIA_CHECK(knownLength != nullptr);
+            if (knownLength != nullptr) {
+                RUVIA_CHECK_EQ(
+                    knownLength->declaredLength(), std::uint64_t{0});
+            }
+        });
     check(
         "POST",
         Http2RequestContent::knownLength(5),
         false,
         "5",
-        Http2LocalContentMode::kKnownLength,
-        5);
+        [&ruvia_ctx](const Http2LocalContentState& localContent) {
+            const auto* knownLength = localContent.knownLength();
+            RUVIA_CHECK(knownLength != nullptr);
+            if (knownLength != nullptr) {
+                RUVIA_CHECK_EQ(
+                    knownLength->declaredLength(), std::uint64_t{5});
+            }
+        });
     check(
         "POST",
         Http2RequestContent::streaming(),
         false,
         {},
-        Http2LocalContentMode::kUnbounded,
-        0);
+        [&ruvia_ctx](const Http2LocalContentState& localContent) {
+            RUVIA_CHECK(localContent.unbounded() != nullptr);
+            RUVIA_CHECK(localContent.knownLength() == nullptr);
+        });
 }
 
 RUVIA_TEST(http2_connection_rejects_raw_request_content_length_transactionally) {
@@ -1736,8 +1818,8 @@ RUVIA_TEST(http2_connection_request_known_length_is_exact_and_transactional) {
     RUVIA_CHECK(client.submitData(streamId, "sixsix", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kContentLengthExceeded);
     RUVIA_CHECK(client.pendingOutput().empty());
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{0});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{0});
     RUVIA_CHECK(stream->localBodyOpen());
 
     RUVIA_CHECK(client.submitData(streamId, "he", Http2EndStream::kKeepOpen) ==
@@ -1747,8 +1829,8 @@ RUVIA_TEST(http2_connection_request_known_length_is_exact_and_transactional) {
     RUVIA_CHECK_EQ(data.type, static_cast<std::uint8_t>(Http2FrameType::kData));
     RUVIA_CHECK_EQ(data.length, static_cast<std::uint32_t>(2));
     RUVIA_CHECK((data.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{2});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{2});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{2});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{2});
     client.consumeOutput(out.size());
 
     RUVIA_CHECK(client.submitData(streamId, "llo", Http2EndStream::kEndStream) ==
@@ -1757,9 +1839,9 @@ RUVIA_TEST(http2_connection_request_known_length_is_exact_and_transactional) {
     data = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RUVIA_CHECK_EQ(data.length, static_cast<std::uint32_t>(3));
     RUVIA_CHECK((data.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{5});
-    RUVIA_CHECK(stream->localContentLengthComplete());
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
+    RUVIA_CHECK(stream->localContent().lengthComplete());
     RUVIA_CHECK(!stream->localBodyOpen());
     client.consumeOutput(out.size());
 
@@ -2034,7 +2116,7 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
         auto* stream = conn.stream(1);
         RUVIA_CHECK(stream != nullptr);
         RUVIA_CHECK(stream->canSubmitLocalHead());
-        RUVIA_CHECK(stream->localContentMode() == Http2LocalContentMode::kUnset);
+        RUVIA_CHECK(stream->localContent().unset() != nullptr);
     }
 
     // A valid retry still owns the initial-head transition.
@@ -2049,7 +2131,8 @@ RUVIA_TEST(http2_connection_streaming_rejects_invalid_content_length_before_head
             ResponseTrailerIntent::kNone)));
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->localContentDeclaredLength(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(
+        requireLocalKnownLength(*stream).declaredLength(), std::uint64_t{5});
 }
 
 RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exact) {
@@ -2076,7 +2159,7 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
     RUVIA_CHECK(conn.submitData(1, "toolong", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kContentLengthExceeded);
     RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{0});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{0});
 
     RUVIA_CHECK(conn.submitData(1, "hel", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kAccepted);
@@ -2110,8 +2193,8 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
     const auto frame = ruvia::detail::http2ParseFrameHeader(trailer.substr(0, 9));
     RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
     RUVIA_CHECK((frame.flags & ruvia::detail::kHttp2FlagEndStream) != 0);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
 }
 
 RUVIA_TEST(http2_connection_streaming_zero_content_length_stays_open_for_finish) {
@@ -2168,9 +2251,8 @@ RUVIA_TEST(http2_connection_head_streaming_response_ends_on_headers) {
     RUVIA_CHECK(
         submittedResponsePlan(headResult).headDisposition() ==
         ResponseStreamHeadDisposition::kMessageEnded);
-    RUVIA_CHECK(conn.stream(1)->localContentMode() ==
-        Http2LocalContentMode::kForbidden);
-    RUVIA_CHECK_EQ(conn.stream(1)->localContentDeclaredLength(), std::uint64_t{0});
+    RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
+    RUVIA_CHECK(conn.stream(1)->localContent().knownLength() == nullptr);
     const auto head = conn.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
     RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
@@ -2218,7 +2300,7 @@ RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(!stream->localBodyOpen());
     RUVIA_CHECK(stream->localTrailersOnly());
-    RUVIA_CHECK(stream->localContentMode() == Http2LocalContentMode::kForbidden);
+    RUVIA_CHECK(stream->localContent().forbidden() != nullptr);
     RUVIA_CHECK(conn.submitData(1, "forbidden", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kInvalidState);
     RUVIA_CHECK(conn.pendingOutput().empty());
@@ -2315,8 +2397,7 @@ RUVIA_TEST(http2_connection_reset_content_streaming_ends_on_headers) {
     RUVIA_CHECK(
         submittedResponsePlan(headResult).headDisposition() ==
         ResponseStreamHeadDisposition::kMessageEnded);
-    RUVIA_CHECK(conn.stream(1)->localContentMode() ==
-        Http2LocalContentMode::kForbidden);
+    RUVIA_CHECK(conn.stream(1)->localContent().forbidden() != nullptr);
     const auto head = conn.pendingOutput();
     const auto frame = ruvia::detail::http2ParseFrameHeader(head.substr(0, 9));
     RUVIA_CHECK_EQ(frame.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));
@@ -2355,9 +2436,10 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     RUVIA_CHECK(conn.hasQueuedData(1));
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->localContentDeclaredLength(), std::uint64_t{10});
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(
+        requireLocalKnownLength(*stream).declaredLength(), std::uint64_t{10});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{3});
 
     const auto out1 = conn.pendingOutput();
     const auto d1 = ruvia::detail::http2ParseFrameHeader(out1.substr(0, 9));
@@ -2368,8 +2450,8 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     RUVIA_CHECK(conn.submitData(1, "later", Http2EndStream::kEndStream) ==
         Http2DataSubmitStatus::kBackpressured);
     RUVIA_CHECK_EQ(conn.pendingOutput().size(), queuedBytes);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{3});
     conn.consumeOutput(out1.size());
 
     char wu[ruvia::detail::kHttp2WindowUpdateFrameBytes];
@@ -2386,12 +2468,12 @@ RUVIA_TEST(http2_connection_submit_data_blocks_then_drains_on_window) {
     RUVIA_CHECK_EQ(drained.size(), static_cast<std::size_t>(1));
     RUVIA_CHECK_EQ(drained[0], static_cast<std::uint32_t>(1));
     RUVIA_CHECK(!conn.hasQueuedData(1));
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
     RUVIA_CHECK(conn.submitData(1, "later", Http2EndStream::kEndStream) ==
         Http2DataSubmitStatus::kAccepted);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{10});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{10});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{10});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{10});
 }
 
 RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
@@ -2416,8 +2498,8 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
 
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{3});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{3});
     RUVIA_CHECK(conn.finishResponse(1) ==
         Http2FinishSubmitStatus::kContentLengthIncomplete);
     RUVIA_CHECK(stream->localBodyOpen());
@@ -2433,12 +2515,12 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
     RUVIA_CHECK_EQ(drainedFrame.type, static_cast<std::uint8_t>(Http2FrameType::kData));
     RUVIA_CHECK((drainedFrame.flags & ruvia::detail::kHttp2FlagEndStream) == 0);
     conn.consumeOutput(drainedOutput.size());
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{5});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{5});
 
     RUVIA_CHECK(conn.submitData(1, "678", Http2EndStream::kEndStream) ==
         Http2DataSubmitStatus::kAccepted);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{8});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{8});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{8});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
     RUVIA_CHECK(stream->localEndStreamCommitted());
 }
 
@@ -3577,8 +3659,8 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
         Http2DataSubmitStatus::kQueued);
     auto* stream = conn.stream(1);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->localContentAcceptedBytes(), std::uint64_t{8});
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{4});
+    RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{8});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{4});
 
     // First 4 bytes went out as DATA (no END_STREAM).
     auto out = conn.pendingOutput();
@@ -3620,7 +3702,7 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     const auto th = ruvia::detail::http2ParseFrameHeader(out.substr(0, 9));
     RUVIA_CHECK_EQ(th.type, static_cast<std::uint8_t>(Http2FrameType::kHeaders));  // trailer
     RUVIA_CHECK((th.flags & ruvia::detail::kHttp2FlagEndStream) != 0);  // END_STREAM here
-    RUVIA_CHECK_EQ(stream->localContentCommittedBytes(), std::uint64_t{8});
+    RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{8});
     const auto trailerPayload = out.substr(9, th.length);
     RUVIA_CHECK(trailerPayload.find("x-checksum") != std::string_view::npos);
     RUVIA_CHECK(trailerPayload.find("X-Checksum") == std::string_view::npos);

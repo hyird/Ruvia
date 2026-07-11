@@ -319,7 +319,12 @@ success 才能读取 request、唯一 `Http1RequestBodyPlan`、第一条消息�
 
 outbound HTTP/1 request 必须先把 content 建模为 `HttpClientRequestContent::none()` 或
 `bytes(...)`，禁止恢复无法区分 absent 与显式空 content 的裸 `request.body`；`bytes("")` 必须明确
-生成 `Content-Length: 0`，`none()` 不得生成 content framing。完整 wire 计划只能由公开、零分配的
+生成 `Content-Length: 0`，`none()` 不得生成 content framing。该值必须是
+`HttpClientRequestWithoutContent` 与 `HttpClientRequestBytes` 的判别联合，只有 bytes alternative
+可以暴露 `value()`；禁止恢复 `HttpClientRequestContentMode + value` tuple 或让 absent 状态读取假空
+bytes。该区分必须遵循
+[RFC 9112 §6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3) 的 ordered request framing。
+完整 wire 计划只能由公开、零分配的
 `Http1ClientRequestWriter` 写入 caller-provided head buffer：它必须在修改 buffer 前原子校验 method、
 direct-origin target、header、数量/大小与 TRACE/OPTIONS content 约束，统一生成首个 `Host`、唯一
 Content-Length、外部关闭策略要求的 `Connection: close` 和 `Expect: 100-continue`。
@@ -332,11 +337,15 @@ authority-form target 与对应 Host，普通 origin-form 入口必须拒绝 CON
 
 request prepare 结果必须是 buffer-too-small、`PreparedHttp1ClientRequest` 或 typed failure 三态，
 失败/容量不足不得留下 partial bytes。Prepared 同时绑定 head 与不可变
-`Http1ClientRequestContentPlan`，其 disposition 只能是 none、immediate 或 continue-gated；后者必须
-生成 Expect 且仅允许非空 content。外部 runtime 决定有限等待时长，但不得重扫 header 判断 gate。
+`Http1ClientRequestContentPlan`，其 alternative 只能是 `Http1ClientRequestWithoutContent`、
+`Http1ClientImmediateRequestContent` 或 `Http1ClientContinueGatedRequestContent`；只有 immediate 与
+continue-gated 可以暴露 `bytes()`，后者必须生成 Expect 且仅允许非空 content。禁止恢复
+`Http1ClientRequestContentDisposition + bytes` tuple、plan-wide `bytes()` 或在无 content alternative
+读取假空 payload。外部 runtime 决定有限等待时长，但不得重扫 header 判断 gate。
 `Http1ClientResponseParser` 只能从对应 Prepared 构造，禁止暴露 response context accessor，亦禁止从
 裸 request、method 或 header/close/expect 标量重建，以确保 method、Upgrade offer、content gate 与
-close policy 和实际 wire 一致。
+close policy 和实际 wire 一致；private response context 也不得复制 `expectsContinue` 布尔值，parser
+必须从 continue-gated alternative 初始化 Expect exchange 状态。
 
 outbound HTTP/1 response head 必须通过公开 sans-I/O `Http1ClientResponseParser` 解析完整增长缓冲；
 parser 是 per-request stateful exchange，必须跨 1xx 复用直到 final/tunnel/upgrade，final 或 protocol
@@ -530,8 +539,16 @@ connection-level `FLOW_CONTROL_ERROR`，不得因 stream 已关闭而绕过。�
 猜测是否需要归还 credit。
 
 HTTP/2 本地响应的 `Content-Length` 必须由 stream-owned、无分配的
-`Http2LocalContentState` 绑定到 core 接管的 DATA。`kAccepted`/`kQueued` 按整次输入只推进
-一次 accepted，DATA 真正物化进 outbound buffer 时才推进 committed；`kBackpressured`、
+`Http2LocalContentState` 绑定到 core 接管的 DATA。state 必须是 `Http2LocalContentUnset`、
+`Http2LocalContentForbidden`、`Http2LocalContentUnbounded`、`Http2LocalContentKnownLength` 四个
+互斥 alternative 之一，只有 known-length 可以暴露 `declaredLength()`；禁止恢复
+`Http2LocalContentMode + declaredLength` tuple、plan-wide 假 0，或在 `Http2StreamState` 转发独立
+mode/has/length/counter accessor。stream 只暴露一个 const `localContent()` state。unset 状态必须以
+`kNotStarted` 拒绝 DATA 且不得报告 length complete，符合
+[RFC 9113 §8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1) 的 HEADERS/DATA 顺序；已声明
+Content-Length 必须遵循 [§8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的 DATA
+总长度一致性。`kAccepted`/`kQueued` 按整次输入只推进一次 accepted，DATA 真正物化进 outbound
+buffer 时才推进 committed；`kBackpressured`、
 超长输入和短 END_STREAM 都必须零接管且不得修改 output/window/phase。exact body 未达到
 声明长度时 `finishResponse()` 必须拒绝并保持 body-open，WINDOW_UPDATE drain 不得重复推进
 accepted。HEAD/204/205/304 的 Content-Length 是无内容或 representation metadata，不得变成
@@ -539,9 +556,15 @@ DATA 长度契约；WebSocket/CONNECT tunnel 保持 unbounded。
 
 HTTP/2 client role 的普通请求头只能走 `submitRegularRequestHead()`，并以无分配值类型
 `Http2RequestContent` 在 `none()`、`knownLength(n)`、`streaming()` 三种契约中显式选择。
-该值必须统一决定 canonical Content-Length、HEADERS END_STREAM 与
+三者必须分别产出 `Http2RequestWithoutContent`、`Http2KnownLengthRequestContent`、
+`Http2StreamingRequestContent` alternative，且只有 known-length alternative 可以暴露 `length()`；
+禁止恢复 `Http2RequestContentMode + length` tuple，或在 absent/streaming 状态读取假 0。该值必须统一
+决定 canonical Content-Length、HEADERS END_STREAM 与
 `Http2LocalContentState`，普通 header span 中的 `content-length` 必须在 HPACK/output/phase
-修改前事务性拒绝。普通/standard CONNECT/Extended CONNECT 三种 request-head 入口必须各自
+修改前事务性拒绝。该边界必须遵循
+[RFC 9113 §8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1) 的 HEADERS/DATA/END_STREAM
+framing 与 [§8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的 Content-Length/DATA
+总长度一致性。普通/standard CONNECT/Extended CONNECT 三种 request-head 入口必须各自
 通过 `Http2RequestHeadSubmitResult` 原子完成语义校验、odd stream ID 分配、对端
 `SETTINGS_MAX_CONCURRENT_STREAMS` 门控与 HEADERS 提交。该 result 必须是
 `Http2SubmittedRequestHead` 与 `Http2RequestHeadSubmitFailure` 的判别联合：只有 submitted
