@@ -132,8 +132,42 @@ if(NOT EXISTS "${_installed_http1_client_response_parser}")
 endif()
 file(READ "${_installed_http1_client_response_parser}"
     _installed_http1_client_response_parser_content)
+if(_installed_http1_client_response_parser_content MATCHES
+       "Http1ClientResponseBodyMode|Http1ClientConnectionDisposition|connectionDisposition[(][)]|isCloseDelimited[(][)]|isOpaque[(][)]")
+    message(FATAL_ERROR "installed HTTP/1 client response parser restored a mode/payload lifecycle tuple")
+endif()
 if(NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientResponseParser final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientInformationalResponse final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseWithoutContent final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientKnownLengthResponse final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientChunkedResponse final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientCloseDelimitedResponse final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientConnectTunnel final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientProtocolUpgrade final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "Http1ClientResponsePersistence" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "informational[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "withoutContent[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "knownLength[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "chunked[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "closeDelimited[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "connectTunnel[(][)]" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "protocolUpgrade[(][)]" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "class Http1ClientResponseNeedMore final" OR
    NOT _installed_http1_client_response_parser_content MATCHES
@@ -157,11 +191,7 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "kExchangeFailed" OR
    NOT _installed_http1_client_response_parser_content MATCHES
-       "consumedBytes" OR
-   NOT _installed_http1_client_response_parser_content MATCHES
-       "kConnectTunnel" OR
-   NOT _installed_http1_client_response_parser_content MATCHES
-       "kUpgrade")
+       "consumedBytes")
     message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
 endif()
 set(_installed_http1_client_request_writer
@@ -209,6 +239,40 @@ foreach(_removed_http2_upgrade_header IN ITEMS
 endforeach()
 if(EXISTS "${_install_prefix}/include/ruvia/http/detail/HttpBase64Url.h")
     message(FATAL_ERROR "generic base64url helper was installed under the HTTP target")
+endif()
+set(_installed_http_byte_range_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpByteRange.h")
+if(NOT EXISTS "${_installed_http_byte_range_path}")
+    message(FATAL_ERROR "installed HTTP package is missing its byte-range resolution contract")
+endif()
+file(READ "${_installed_http_byte_range_path}" _installed_http_byte_range)
+if(_installed_http_byte_range MATCHES "HttpRangeOutcome" OR
+   _installed_http_byte_range MATCHES "HttpByteRangeResult" OR
+   _installed_http_byte_range MATCHES "struct[ \t]+HttpByteRange" OR
+   _installed_http_byte_range MATCHES "httpParseByteRange" OR
+   _installed_http_byte_range MATCHES "httpByteRangeSetHasMultiple")
+    message(FATAL_ERROR "installed HTTP byte-range helper restored a loose or split result API")
+endif()
+if(NOT _installed_http_byte_range MATCHES
+       "class HttpByteRangeIgnored final" OR
+   NOT _installed_http_byte_range MATCHES
+       "class HttpByteRangeUnsatisfiable final" OR
+   NOT _installed_http_byte_range MATCHES
+       "class HttpResolvedByteRange final" OR
+   NOT _installed_http_byte_range MATCHES
+       "class HttpByteRangeResolution final" OR
+   NOT _installed_http_byte_range MATCHES "using Value = std::variant" OR
+   NOT _installed_http_byte_range MATCHES
+       "std::get_if<HttpByteRangeIgnored>" OR
+   NOT _installed_http_byte_range MATCHES
+       "std::get_if<HttpByteRangeUnsatisfiable>" OR
+   NOT _installed_http_byte_range MATCHES
+       "std::get_if<HttpResolvedByteRange>" OR
+   NOT _installed_http_byte_range MATCHES "resolveHttpByteRange" OR
+   NOT _installed_http_byte_range MATCHES "httpAsciiEqualsIgnoreCase" OR
+   NOT _installed_http_byte_range MATCHES "std::errc::result_out_of_range" OR
+   NOT _installed_http_byte_range MATCHES "representationLength == 0")
+    message(FATAL_ERROR "installed HTTP byte-range helper lost its discriminated RFC resolution")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h"
     _installed_http2_connection)
@@ -430,6 +494,45 @@ if(NOT _installed_http1_server_request_parser MATCHES
    NOT _installed_http1_server_request_parser MATCHES
        "class Http1ServerRequestParser final")
     message(FATAL_ERROR "installed HTTP/1 server parser lost distinct head/message phases")
+endif()
+set(_installed_http1_request_body_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")
+if(NOT EXISTS "${_installed_http1_request_body_plan_path}")
+    message(FATAL_ERROR "installed HTTP package is missing its HTTP/1 request-body plan")
+endif()
+file(READ "${_installed_http1_request_body_plan_path}"
+    _installed_http1_request_body_plan)
+if(_installed_http1_request_body_plan MATCHES "Http1RequestBodyMode" OR
+   _installed_http1_request_body_plan MATCHES
+       "Http1RequestBodyPlan::(none|knownLength|chunked)" OR
+   _installed_http1_request_body_plan MATCHES
+       "static[ \t\r\n]+Http1RequestBodyPlan[ \t\r\n]+(none|knownLength|chunked)" OR
+   _installed_http1_request_body_plan MATCHES "hasContentLength[(][)]" OR
+   _installed_http1_request_body_plan MATCHES "isChunked[(][)]")
+    message(FATAL_ERROR "installed HTTP/1 request-body plan restored a mode/payload tuple or public factory")
+endif()
+if(NOT _installed_http1_request_body_plan MATCHES
+       "class Http1RequestWithoutBody final" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "class Http1KnownLengthRequestBody final" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "class Http1ChunkedRequestBody final" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "class Http1RequestBodyPlan final" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "using Framing = std::variant" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "std::get_if<Http1RequestWithoutBody>" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "std::get_if<Http1KnownLengthRequestBody>" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "std::get_if<Http1ChunkedRequestBody>" OR
+   NOT _installed_http1_request_body_plan MATCHES "makeWithoutBody" OR
+   NOT _installed_http1_request_body_plan MATCHES "makeKnownLength" OR
+   NOT _installed_http1_request_body_plan MATCHES "makeChunked" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "friend class Http1ServerRequestParser")
+    message(FATAL_ERROR "installed HTTP/1 request-body plan lost parser-only discriminated framing")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/Http1RequestParser.h"
     _installed_http1_request_parser)

@@ -1,11 +1,14 @@
 #include "test_harness.h"
 
 #include <charconv>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include <brotli/encode.h>
 #include <zlib.h>
@@ -22,9 +25,7 @@ namespace {
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1RequestBodyPlan;
-using ruvia::detail::Http1RequestBodyMode;
 using ruvia::detail::Http1ServerRequestParser;
-using ruvia::detail::HttpRequestExpectations;
 using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
@@ -106,40 +107,105 @@ std::string chunked(std::string_view body) {
     return wire;
 }
 
+template <typename T>
+concept HasRequestBodyMode = requires(const T& value) {
+    value.mode();
+};
+
+template <typename T>
+concept HasRequestContentLength = requires(const T& value) {
+    { value.contentLength() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasRequestTransferCodings = requires(const T& value) {
+    value.transferCodings();
+};
+
+template <typename T>
+concept HasPublicRequestBodyPlanFactories = requires {
+    T::makeWithoutBody();
+    T::makeKnownLength(std::size_t{});
+    T::makeChunked(HttpTransferCodings{});
+};
+
+static_assert(!std::default_initializable<Http1RequestBodyPlan>);
+static_assert(!std::default_initializable<ruvia::detail::Http1RequestWithoutBody>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1KnownLengthRequestBody>);
+static_assert(!std::default_initializable<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(!std::constructible_from<
+    ruvia::detail::Http1KnownLengthRequestBody,
+    std::size_t>);
+static_assert(!std::constructible_from<
+    ruvia::detail::Http1ChunkedRequestBody,
+    HttpTransferCodings>);
+static_assert(!HasPublicRequestBodyPlanFactories<Http1RequestBodyPlan>);
+static_assert(!HasRequestBodyMode<Http1RequestBodyPlan>);
+static_assert(!HasRequestContentLength<Http1RequestBodyPlan>);
+static_assert(!HasRequestTransferCodings<Http1RequestBodyPlan>);
+static_assert(HasRequestContentLength<ruvia::detail::Http1KnownLengthRequestBody>);
+static_assert(!HasRequestContentLength<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(HasRequestTransferCodings<ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(!HasRequestTransferCodings<
+    ruvia::detail::Http1KnownLengthRequestBody>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1RequestBodyPlan&>().withoutBody()),
+    const ruvia::detail::Http1RequestWithoutBody*>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1RequestBodyPlan&>().knownLength()),
+    const ruvia::detail::Http1KnownLengthRequestBody*>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1RequestBodyPlan&>().chunked()),
+    const ruvia::detail::Http1ChunkedRequestBody*>);
+
 }  // namespace
 
 RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
-    const auto none = Http1RequestBodyPlan::none();
-    RUVIA_CHECK(none.mode() == Http1RequestBodyMode::kNone);
+    Http1ServerRequestParser parser;
+    const auto noneState = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    const auto& none = noneState.bodyPlan;
+    RUVIA_CHECK(none.withoutBody() != nullptr);
+    RUVIA_CHECK(none.knownLength() == nullptr);
+    RUVIA_CHECK(none.chunked() == nullptr);
     RUVIA_CHECK(!none.requiresConsumption());
 
-    HttpRequestExpectations expectations;
-    expectations.parseField("100-continue");
-    const auto emptyLength = Http1RequestBodyPlan::knownLength(
-        0, expectations);
-    RUVIA_CHECK(emptyLength.mode() == Http1RequestBodyMode::kContentLength);
-    RUVIA_CHECK(emptyLength.hasContentLength());
+    const auto emptyLengthState = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
+    const auto& emptyLength = emptyLengthState.bodyPlan;
+    const auto* knownLength = emptyLength.knownLength();
+    RUVIA_CHECK(knownLength != nullptr);
+    RUVIA_CHECK(emptyLength.withoutBody() == nullptr);
+    RUVIA_CHECK(emptyLength.chunked() == nullptr);
+    if (knownLength != nullptr) {
+        RUVIA_CHECK_EQ(knownLength->contentLength(), std::size_t{0});
+    }
     RUVIA_CHECK(!emptyLength.requiresConsumption());
     RUVIA_CHECK(emptyLength.expectations().has100Continue());
     RUVIA_CHECK(
         emptyLength.expectationAction() ==
         HttpServerExpectationAction::kNone);
 
-    HttpTransferCodings codings{};
-    codings.values[0] = HttpTransferCoding::kGzip;
-    codings.count = 1;
-    const auto compressedChunked = Http1RequestBodyPlan::chunked(
-        codings, expectations);
-    RUVIA_CHECK(compressedChunked.mode() == Http1RequestBodyMode::kChunked);
-    RUVIA_CHECK(compressedChunked.isChunked());
-    RUVIA_CHECK(!compressedChunked.hasContentLength());
+    const auto compressedChunkedState = parser.parseMessage(
+        "POST / HTTP/1.1\r\nHost: x\r\n"
+        "Expect: 100-continue\r\n"
+        "Transfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n");
+    const auto& compressedChunked = compressedChunkedState.bodyPlan;
+    const auto* chunkedBody = compressedChunked.chunked();
+    RUVIA_CHECK(chunkedBody != nullptr);
+    RUVIA_CHECK(compressedChunked.withoutBody() == nullptr);
+    RUVIA_CHECK(compressedChunked.knownLength() == nullptr);
     RUVIA_CHECK(compressedChunked.requiresConsumption());
     RUVIA_CHECK(
         compressedChunked.expectationAction() ==
         HttpServerExpectationAction::kSend100Continue);
-    RUVIA_CHECK_EQ(
-        compressedChunked.transferCodings().count,
-        std::size_t{1});
+    if (chunkedBody != nullptr) {
+        RUVIA_CHECK_EQ(
+            chunkedBody->transferCodings().count,
+            std::size_t{1});
+    }
 }
 
 RUVIA_TEST(request_content_coding_mapping) {
@@ -240,13 +306,17 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         wireBody;
     const auto parsed = parser.parseMessage(rawRequest);
     RUVIA_CHECK(parsed.messageReady());
-    RUVIA_CHECK(parsed.bodyPlan.isChunked());
-    RUVIA_CHECK_EQ(parsed.bodyPlan.transferCodings().count, std::size_t{1});
+    const auto* chunkedBody = parsed.bodyPlan.chunked();
+    RUVIA_CHECK(chunkedBody != nullptr);
+    if (chunkedBody == nullptr) {
+        return;
+    }
+    RUVIA_CHECK_EQ(chunkedBody->transferCodings().count, std::size_t{1});
 
     auto* resource = std::pmr::get_default_resource();
     Http1ChunkedBodyDecoder chunks(1u << 20);
     TransferCodingDecoder transfer(
-        parsed.bodyPlan.transferCodings(),
+        chunkedBody->transferCodings(),
         std::pmr::polymorphic_allocator<char>(resource),
         1u << 20);
     std::pmr::string output(resource);

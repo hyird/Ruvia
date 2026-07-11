@@ -3,19 +3,13 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<std::string_view> StreamBodyReader<Stream>::readContentLengthAll(std::pmr::string& body) {
-    if (bodyPlan_.isChunked()) {
-        throw std::logic_error("chunked request body cannot use Content-Length reader");
-    }
-    if (transferDecoder_ != nullptr) {
-        throw std::logic_error("transfer-coded request body cannot use Content-Length reader");
-    }
-
+Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
+    std::pmr::string& body,
+    std::size_t contentLength) {
     compactPending();
     if (finished_) {
         co_return std::string_view(body.data(), body.size());
     }
-    const auto contentLength = bodyPlan_.contentLength();
     if (exceedsLimit(contentLength)) {
         throwRequestBodyTooLarge();
     }
@@ -55,12 +49,12 @@ Task<std::string_view> StreamBodyReader<Stream>::readContentLengthAll(std::pmr::
 }
 
 template <typename Stream>
-Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readContentLength() {
+Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readKnownLength(
+    std::size_t contentLength) {
     compactPending();
     if (finished_) {
         co_return std::nullopt;
     }
-    const auto contentLength = bodyPlan_.contentLength();
     if (exceedsLimit(contentLength)) {
         throwRequestBodyTooLarge();
     }

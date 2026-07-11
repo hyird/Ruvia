@@ -10,9 +10,10 @@ namespace ruvia::detail {
 inline bool contentLengthExceedsLimit(
     const Http1RequestBodyPlan& bodyPlan,
     std::size_t limit) noexcept {
-    return bodyPlan.hasContentLength() &&
+    const auto* knownLength = bodyPlan.knownLength();
+    return knownLength != nullptr &&
         limit != 0 &&
-        bodyPlan.contentLength() > limit;
+        knownLength->contentLength() > limit;
 }
 
 }  // namespace ruvia::detail

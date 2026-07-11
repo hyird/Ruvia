@@ -91,11 +91,16 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         const std::string content(100, 'a');
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
     }
+    {
+        std::ofstream out(dir / "empty.txt", std::ios::binary | std::ios::trunc);
+    }
     StaticRootOptions options;
     options.allowAll = true;
     StaticRoot root(dir, std::move(options));
 
-    const auto serve = [&root](std::string_view range) {
+    const auto serveFile = [&root](
+        std::string_view path,
+        std::string_view range) {
         ruvia::WorkerMemory worker;
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
@@ -109,10 +114,13 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
                 HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kRange));
         }
         auto context = ContextAccess::make(memory, request);
-        const auto response = context.staticFile(root, "data.txt", "text/plain");
+        const auto response = context.staticFile(root, path, "text/plain");
         // Copy out before the request arena unwinds.
         return std::pair<std::uint16_t, std::string>(
             response.status(), std::string(response.header("Content-Range")));
+    };
+    const auto serve = [&serveFile](std::string_view range) {
+        return serveFile("data.txt", range);
     };
 
     // A valid single range -> 206 with the byte range echoed.
@@ -136,6 +144,17 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
     // A syntactically malformed byte range is likewise ignored -> full 200.
     const auto malformed = serve("bytes=abc");
     RUVIA_CHECK_EQ(malformed.first, std::uint16_t{200});
+
+    // Range units are case-insensitive (RFC 9110 §14.1); this is still a 206.
+    const auto caseInsensitiveUnit = serve("Bytes=5-9");
+    RUVIA_CHECK_EQ(caseInsensitiveUnit.first, std::uint16_t{206});
+    RUVIA_CHECK_EQ(caseInsensitiveUnit.second, std::string("bytes 5-9/100"));
+
+    // This server uses RFC 9110 §14.2's permitted ignore policy for a selected
+    // representation with no content, avoiding an invalid zero-length 206 range.
+    const auto empty = serveFile("empty.txt", "bytes=0-0");
+    RUVIA_CHECK_EQ(empty.first, std::uint16_t{200});
+    RUVIA_CHECK(empty.second.empty());
 
     fs::remove_all(dir);
 }

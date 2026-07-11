@@ -33,7 +33,7 @@ void Http1ServerRequestParser::parseRequestHead(
     state.headerBytes = 0;
     state.messageBytes = 0;
     state.requiredTotalBytes.reset();
-    state.bodyPlan = Http1RequestBodyPlan::none();
+    state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody();
     state.connectionPlan = Http1ServerConnectionPlan::close();
     state.responseCoding = HttpContentCoding::kNone;
     HttpRequestAccess::reset(state.request);
@@ -144,13 +144,13 @@ void Http1ServerRequestParser::parseRequestHead(
         expectations.ignore100Continue();
     }
     if (block.transferEncoding.finalChunked()) {
-        state.bodyPlan = Http1RequestBodyPlan::chunked(
+        state.bodyPlan = Http1RequestBodyPlan::makeChunked(
             block.transferEncoding.codings(), expectations);
     } else if (block.contentLength.present()) {
-        state.bodyPlan = Http1RequestBodyPlan::knownLength(
+        state.bodyPlan = Http1RequestBodyPlan::makeKnownLength(
             block.contentLength.value(), expectations);
     } else {
-        state.bodyPlan = Http1RequestBodyPlan::none(expectations);
+        state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody(expectations);
     }
     state.connectionPlan = http1PlanRequestConnection(
         protocolVersion, block.connectionOptions);
@@ -177,7 +177,7 @@ void Http1ServerRequestParser::parseMessageBody(
         state.error = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
-        state.bodyPlan = Http1RequestBodyPlan::none();
+        state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody();
         state.connectionPlan = Http1ServerConnectionPlan::close();
     };
     const auto needMore = [&state](
@@ -197,12 +197,13 @@ void Http1ServerRequestParser::parseMessageBody(
 
     const auto headerBytes = state.headerBytes;
     const auto bodyPlan = state.bodyPlan;
-    const auto contentLength = bodyPlan.contentLength();
+    const auto* chunkedBody = bodyPlan.chunked();
+    const auto* knownLengthBody = bodyPlan.knownLength();
     if (buffer.size() < headerBytes) {
         return needMore(
-            0, Http1RequestBodyPlan::none(), std::nullopt);
+            0, Http1RequestBodyPlan::makeWithoutBody(), std::nullopt);
     }
-    if (bodyPlan.isChunked()) {
+    if (chunkedBody != nullptr) {
         const auto chunked = scanHttpChunkedBody(buffer.substr(headerBytes));
         if (const auto* complete = chunked.complete()) {
             state.messageBytes = headerBytes + complete->consumedBytes();
@@ -224,11 +225,14 @@ void Http1ServerRequestParser::parseMessageBody(
                     return fail(HttpParseError::kBodyTooLarge);
             }
         }
-    } else {
+    } else if (knownLengthBody != nullptr) {
+        const auto contentLength = knownLengthBody->contentLength();
         if (contentLength > kMaxHttpBodyBytes || contentLength > kMaxHttpRequestBytes - headerBytes) {
             return fail(HttpParseError::kBodyTooLarge);
         }
         state.messageBytes = headerBytes + contentLength;
+    } else {
+        state.messageBytes = headerBytes;
     }
     if (state.messageBytes > kMaxHttpRequestBytes) {
         return fail(HttpParseError::kBodyTooLarge);
@@ -239,9 +243,9 @@ void Http1ServerRequestParser::parseMessageBody(
 
     HttpRequestAccess::setBody(
         state.request,
-        bodyPlan.isChunked()
-            ? std::string_view{}
-            : buffer.substr(headerBytes, contentLength));
+        knownLengthBody != nullptr
+            ? buffer.substr(headerBytes, knownLengthBody->contentLength())
+            : std::string_view{});
     state.phase_ = Http1ServerRequestParsePhase::kRequestMessageReady;
 }
 

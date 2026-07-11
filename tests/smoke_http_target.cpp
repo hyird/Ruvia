@@ -54,8 +54,7 @@ int main() {
             origin.scheme() != ruvia::HttpScheme::kHttps ||
             responseHead == nullptr ||
             responseHead->response().status() != 204 ||
-            responseHead->plan().mode() !=
-                ruvia::Http1ClientResponseBodyMode::kNone
+            responseHead->plan().withoutContent() == nullptr
         ? 3
         : 0;
 }

@@ -19,12 +19,13 @@ StreamBodyReader<Stream>::StreamBodyReader(
       chunkDecoder_(maxBodyBytes),
       scannerEntry_(scannerEntry),
       finished_(!bodyPlan_.requiresConsumption()) {
-    if (!bodyPlan_.transferCodings().empty()) {
+    const auto* chunked = bodyPlan_.chunked();
+    if (chunked != nullptr && !chunked->transferCodings().empty()) {
         transferDecoder_ = transferDecoderAllocator_.allocate(1);
         try {
             std::construct_at(
                 transferDecoder_,
-                bodyPlan_.transferCodings(),
+                chunked->transferCodings(),
                 allocator,
                 maxBodyBytes);
         } catch (...) {
@@ -59,22 +60,31 @@ void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std
 
 template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
-    if (bodyPlan_.isChunked()) {
+    if (bodyPlan_.chunked() != nullptr) {
         co_await ensureContinue();
         co_return co_await readTransferDecodedChunked();
     }
-    if (exceedsLimit(bodyPlan_.contentLength())) {
+    const auto* knownLength = bodyPlan_.knownLength();
+    if (knownLength == nullptr) {
+        co_return std::nullopt;
+    }
+    if (exceedsLimit(knownLength->contentLength())) {
         throwRequestBodyTooLarge();
     }
 
     co_await ensureContinue();
-    co_return co_await readContentLength();
+    co_return co_await readKnownLength(knownLength->contentLength());
 }
 
 template <typename Stream>
 Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body) {
-    if (!bodyPlan_.isChunked()) {
-        co_return co_await readContentLengthAll(body);
+    if (const auto* knownLength = bodyPlan_.knownLength()) {
+        co_return co_await readKnownLengthAll(
+            body,
+            knownLength->contentLength());
+    }
+    if (bodyPlan_.withoutBody() != nullptr) {
+        co_return std::string_view(body.data(), body.size());
     }
 
     co_await ensureContinue();
@@ -108,7 +118,7 @@ template <typename Stream>
 Task<void> StreamBodyReader<Stream>::readMore() {
     compactPending();
     const auto oldSize = buffer_.size();
-    const auto hardLimit = bodyPlan_.isChunked()
+    const auto hardLimit = bodyPlan_.chunked() != nullptr
         ? kChunkedEncodedBufferBytes
         : (maxBodyBytes_ == 0 ? (std::numeric_limits<std::size_t>::max)() : maxBodyBytes_);
     if (oldSize >= hardLimit) {

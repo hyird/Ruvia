@@ -88,12 +88,19 @@ returning an empty body, and no request can be read from need-more or failure st
 `HttpParseStatus` tuple is not part of the API, so head completion cannot masquerade as message
 completion and buffer growth cannot interpret a completed-message boundary as future capacity.
 The parser also emits one immutable `Http1RequestBodyPlan` for every request. It is the only
-contract passed to buffered readers, streaming readers, and WebSocket gates: none, exact
-Content-Length, or final chunked framing; any preceding transfer coding;
-and the typed Expect action travel together instead of as loose scalar arguments. Plans are built
-only through the named `none()`, `knownLength()`, and `chunked()` alternatives; the former
-five-scalar `http1PlanRequestBody(...)` entry no longer permits contradictory framing inputs.
-For RFC 9112 request framing, Ruvia accepts final `chunked` and one supported `gzip` or
+contract passed to buffered readers, streaming readers, and WebSocket gates. Its framing is a
+variant of `Http1RequestWithoutBody`, `Http1KnownLengthRequestBody`, or
+`Http1ChunkedRequestBody`; absent framing remains distinct from an explicit `Content-Length: 0`.
+Only the known-length alternative exposes `contentLength()`, and only the chunked alternative
+exposes the preceding transfer-coding order. Expectations are common plan metadata and derive one
+typed action from whether the active alternative actually requires consumption. Construction is
+private to `Http1ServerRequestParser`, so neither Web nor an installed consumer can inject an
+unchecked coding count or synthesize a lookalike plan. Web readers dispatch on the active
+alternative instead of reading fake zero/empty payload from an unrelated mode. This directly
+models the ordered request framing rules in
+[RFC 9112 Section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3).
+
+Ruvia accepts final `chunked` and one supported `gzip` or
 `deflate` coding before it (for example `gzip, chunked`), de-chunks before incrementally
 decoding that coding, maps an unsupported coding to 501, and rejects Transfer-Encoding on
 HTTP/1.0.
@@ -153,18 +160,33 @@ whole head and its framing plan validate, so there is no partially mutated respo
 and no exception for malformed wire input (resource exhaustion while materializing success can
 still throw).
 
-That success alternative carries one immutable `Http1ClientResponsePlan`, not separate
-`hasContentLength`/`isChunked`/`closeAfterResponse` fields. The plan binds none, exact-length,
-final-chunked, close-delimited, and opaque modes to transfer-decoding order and an `await final
-response`/reuse/close/CONNECT-tunnel/protocol-upgrade connection disposition. For a continue-gated
-request it also emits one `Http1ClientRequestContentSignal`: none for unrelated informational
-responses, continue for 100, and exchange-complete when a final response or 101 means pending
-content must no longer be started. Consequently, a body-allowed response without Content-Length
-or final chunked is always close-delimited; HTTP/1.0
-defaults to close unless its response opts into `keep-alive`; and a 2xx CONNECT switches to an
-opaque tunnel instead of being mistaken for a response body. A valid `101 Switching Protocols`
-likewise produces opaque bytes only when the actual request and response both carry
-`Connection: Upgrade`, the selected `Upgrade` protocol was offered by that request, and the 101
+That success alternative carries one immutable, discriminated `Http1ClientResponsePlan`, not a
+mode/length/codings/connection tuple. Its mutually exclusive alternatives are
+`Http1ClientInformationalResponse`, `Http1ClientResponseWithoutContent`,
+`Http1ClientKnownLengthResponse`, `Http1ClientChunkedResponse`,
+`Http1ClientCloseDelimitedResponse`, `Http1ClientConnectTunnel`, and
+`Http1ClientProtocolUpgrade`. Only the known-length alternative exposes `contentLength()`; only
+chunked and close-delimited alternatives expose transfer-decoding order; and only self-delimited
+final responses expose `Http1ClientResponsePersistence`. Close-delimited always consumes through
+EOF and closes, while informational, tunnel, and upgrade alternatives cannot be mistaken for an
+HTTP response body or a poolable final response. The parser constructs this alternative directly,
+without a mutable intermediate framing tuple.
+
+This mapping follows the ordered response-length rules in
+[RFC 9112 Section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3), including the
+method/status no-content precedence, immediate successful-CONNECT tunnel transition, final
+chunked framing, and close delimiting. Connection reuse additionally follows
+[RFC 9112 Section 9.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.3): a reusable client
+must consume the complete self-delimited response. For a continue-gated request the plan also
+emits one `Http1ClientRequestContentSignal`: none for unrelated informational responses, continue
+for 100, and exchange-complete when a final response or 101 means pending content must no longer
+be started. Consequently, a body-allowed response without Content-Length or final chunked is
+always close-delimited; HTTP/1.0 defaults to close unless its response opts into `keep-alive`; and
+a 2xx CONNECT switches to an
+explicit tunnel alternative instead of being mistaken for a response body. A valid
+`101 Switching Protocols` likewise produces a protocol-upgrade alternative only when the actual
+request and response both carry `Connection: Upgrade`, the selected `Upgrade` protocol was offered
+by that request, and the 101
 does not carry Content-Length or Transfer-Encoding. Protocol names compare case-insensitively,
 while protocol versions remain exact tokens. When Upgrade and 100-continue are both present, the
 stateful parser rejects a 101 that was not preceded by 100 Continue. A content-bearing request also
@@ -649,6 +671,21 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 ## HTTP Library
 
 `ruvia::http` is intended to be useful without the web framework or the Ruvia runtime foundation, in the nghttp2 class: a pure, core-free, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and connection semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core (`WebSocketProtocol.h`), HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding (`MultipartParser.h`), SSE formatting (`Sse.h`), content decoding, and opaque protocol body handles. You feed it bytes and drive its events from any runtime.
+
+Single byte-range handling has one protocol entry, `resolveHttpByteRange()`, and one discriminated
+`HttpByteRangeResolution`. `HttpByteRangeIgnored` owns no slicing data,
+`HttpByteRangeUnsatisfiable` owns no fake default range, and only `HttpResolvedByteRange` exposes a
+nonempty `offset()`/`length()` pair.
+The resolver handles the case-insensitive range unit, clamps syntactically valid decimal numerals
+larger than `uint64_t` according to their semantics instead of treating conversion overflow as
+malformed input, and uses RFC 9110's permitted ignore policy for an empty selected representation
+and unsupported multipart range sets. `ruvia::web` performs no preliminary comma scan: it maps only
+these alternatives to the full 200 response, 416 plus unsatisfied Content-Range, or a single 206
+file slice. This follows the extensible, case-insensitive range-unit requirement in
+[RFC 9110 Section 14.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1), the numeric and
+byte-range rules in [Section 14.1.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.2), and
+the processing choices in
+[Section 14.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-14.2).
 
 Multipart parsing uses one RFC contract in both buffered and streaming paths.
 `MultipartBoundary` validates and owns the 1–70 byte boundary once; Content-Type extraction additionally

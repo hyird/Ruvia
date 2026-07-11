@@ -20,24 +20,12 @@ struct Http1ClientResponsePlanAccess;
 
 }  // namespace detail
 
-enum class Http1ClientResponseBodyMode : std::uint8_t {
-    kNone,
-    kContentLength,
-    kChunked,
-    kCloseDelimited,
-    // Bytes after the head belong to a CONNECT tunnel or an upgraded protocol,
-    // not to an HTTP response body.
-    kOpaque
-};
-
-enum class Http1ClientConnectionDisposition : std::uint8_t {
-    // An informational response completed, but the request still awaits its final
-    // response; the connection must not be released to another request.
-    kAwaitFinalResponse,
+// Connection lifecycle after a self-delimited final response has been consumed.
+// Informational responses, close-delimited responses, tunnels, and upgrades are
+// separate alternatives and therefore cannot be mistaken for reusable messages.
+enum class Http1ClientResponsePersistence : std::uint8_t {
     kReuse,
-    kClose,
-    kConnectTunnel,
-    kUpgrade
+    kClose
 };
 
 // Signal for a request body gated by Expect: 100-continue. It is deliberately
@@ -59,101 +47,177 @@ enum class Http1ClientRequestContentCompletionStatus : std::uint8_t {
     kExchangeTerminal,
 };
 
-// Immutable RFC 9110/9112 response framing and connection contract. External
-// I/O runtimes drive exactly this plan instead of reconstructing body length,
-// persistence, CONNECT, or Upgrade transitions from independent parser facts.
-class Http1ClientResponsePlan final {
+class Http1ClientInformationalResponse final {
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+    constexpr Http1ClientInformationalResponse() noexcept = default;
+};
+
+class Http1ClientResponseWithoutContent final {
 public:
-    [[nodiscard]] Http1ClientResponseBodyMode mode() const noexcept {
-        return mode_;
+    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+        return persistence_;
     }
 
-    [[nodiscard]] bool hasContentLength() const noexcept {
-        return mode_ == Http1ClientResponseBodyMode::kContentLength;
-    }
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
 
-    [[nodiscard]] std::size_t contentLength() const noexcept {
+    explicit constexpr Http1ClientResponseWithoutContent(
+        Http1ClientResponsePersistence persistence) noexcept
+        : persistence_(persistence) {}
+
+    Http1ClientResponsePersistence persistence_;
+};
+
+class Http1ClientKnownLengthResponse final {
+public:
+    [[nodiscard]] constexpr std::size_t contentLength() const noexcept {
         return contentLength_;
     }
 
-    [[nodiscard]] bool isChunked() const noexcept {
-        return mode_ == Http1ClientResponseBodyMode::kChunked;
+    [[nodiscard]] constexpr bool requiresBodyConsumption() const noexcept {
+        return contentLength_ != 0;
     }
 
-    [[nodiscard]] bool isCloseDelimited() const noexcept {
-        return mode_ == Http1ClientResponseBodyMode::kCloseDelimited;
+    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+        return persistence_;
     }
 
-    [[nodiscard]] bool isOpaque() const noexcept {
-        return mode_ == Http1ClientResponseBodyMode::kOpaque;
-    }
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
 
-    [[nodiscard]] bool isConnectTunnel() const noexcept {
-        return connectionDisposition_ ==
-            Http1ClientConnectionDisposition::kConnectTunnel;
-    }
+    constexpr Http1ClientKnownLengthResponse(
+        std::size_t contentLength,
+        Http1ClientResponsePersistence persistence) noexcept
+        : contentLength_(contentLength), persistence_(persistence) {}
 
-    [[nodiscard]] bool isUpgrade() const noexcept {
-        return connectionDisposition_ ==
-            Http1ClientConnectionDisposition::kUpgrade;
-    }
+    std::size_t contentLength_;
+    Http1ClientResponsePersistence persistence_;
+};
 
-    // Chunked requires its terminal zero chunk; close-delimited requires EOF.
-    [[nodiscard]] bool requiresBodyConsumption() const noexcept {
-        switch (mode_) {
-            case Http1ClientResponseBodyMode::kContentLength:
-                return contentLength_ != 0;
-            case Http1ClientResponseBodyMode::kChunked:
-            case Http1ClientResponseBodyMode::kCloseDelimited:
-                return true;
-            case Http1ClientResponseBodyMode::kNone:
-            case Http1ClientResponseBodyMode::kOpaque:
-                return false;
-        }
-        return false;
-    }
-
-    [[nodiscard]] bool selfDelimited() const noexcept {
-        return mode_ == Http1ClientResponseBodyMode::kNone ||
-            mode_ == Http1ClientResponseBodyMode::kContentLength ||
-            mode_ == Http1ClientResponseBodyMode::kChunked;
-    }
-
-    // Transfer codings preceding final chunked, or the sole supported coding on
-    // a close-delimited response. The runtime removes message framing first and
-    // then drives this decoder list.
-    [[nodiscard]] const detail::HttpTransferCodings& transferCodings() const noexcept {
+class Http1ClientChunkedResponse final {
+public:
+    // Transfer codings preceding the terminal chunked framing. The runtime
+    // removes chunk framing first and then drives this decoder list.
+    [[nodiscard]] constexpr const detail::HttpTransferCodings&
+    transferCodings() const noexcept {
         return transferCodings_;
     }
 
-    [[nodiscard]] Http1ClientConnectionDisposition connectionDisposition() const noexcept {
-        return connectionDisposition_;
+    [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
+        return persistence_;
     }
 
-    [[nodiscard]] Http1ClientRequestContentSignal requestContentSignal() const noexcept {
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+
+    constexpr Http1ClientChunkedResponse(
+        detail::HttpTransferCodings transferCodings,
+        Http1ClientResponsePersistence persistence) noexcept
+        : transferCodings_(transferCodings), persistence_(persistence) {}
+
+    detail::HttpTransferCodings transferCodings_;
+    Http1ClientResponsePersistence persistence_;
+};
+
+class Http1ClientCloseDelimitedResponse final {
+public:
+    // Any non-chunked transfer coding is decoded after EOF delimits the message.
+    // This alternative always consumes through EOF and always closes; it exposes
+    // no independent persistence field that could contradict those facts.
+    [[nodiscard]] constexpr const detail::HttpTransferCodings&
+    transferCodings() const noexcept {
+        return transferCodings_;
+    }
+
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+
+    explicit constexpr Http1ClientCloseDelimitedResponse(
+        detail::HttpTransferCodings transferCodings) noexcept
+        : transferCodings_(transferCodings) {}
+
+    detail::HttpTransferCodings transferCodings_;
+};
+
+class Http1ClientConnectTunnel final {
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+    constexpr Http1ClientConnectTunnel() noexcept = default;
+};
+
+class Http1ClientProtocolUpgrade final {
+private:
+    friend struct detail::Http1ClientResponsePlanAccess;
+    constexpr Http1ClientProtocolUpgrade() noexcept = default;
+};
+
+// Immutable RFC 9110/9112 response framing and lifecycle contract. The seven
+// alternatives mirror the message-length precedence directly: informational,
+// no-content final, exact-length final, final-chunked, close-delimited, CONNECT
+// tunnel, or protocol upgrade. Alternative-specific payload is only reachable
+// from the alternative that owns it.
+class Http1ClientResponsePlan final {
+public:
+    [[nodiscard]] constexpr const Http1ClientInformationalResponse*
+    informational() const noexcept {
+        return std::get_if<Http1ClientInformationalResponse>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientResponseWithoutContent*
+    withoutContent() const noexcept {
+        return std::get_if<Http1ClientResponseWithoutContent>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
+    knownLength() const noexcept {
+        return std::get_if<Http1ClientKnownLengthResponse>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientChunkedResponse*
+    chunked() const noexcept {
+        return std::get_if<Http1ClientChunkedResponse>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const noexcept {
+        return std::get_if<Http1ClientCloseDelimitedResponse>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientConnectTunnel*
+    connectTunnel() const noexcept {
+        return std::get_if<Http1ClientConnectTunnel>(&state_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientProtocolUpgrade*
+    protocolUpgrade() const noexcept {
+        return std::get_if<Http1ClientProtocolUpgrade>(&state_);
+    }
+
+    [[nodiscard]] constexpr Http1ClientRequestContentSignal
+    requestContentSignal() const noexcept {
         return requestContentSignal_;
     }
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
 
+    using State = std::variant<
+        Http1ClientInformationalResponse,
+        Http1ClientResponseWithoutContent,
+        Http1ClientKnownLengthResponse,
+        Http1ClientChunkedResponse,
+        Http1ClientCloseDelimitedResponse,
+        Http1ClientConnectTunnel,
+        Http1ClientProtocolUpgrade>;
+
     Http1ClientResponsePlan(
-        Http1ClientResponseBodyMode mode,
-        std::size_t contentLength,
-        detail::HttpTransferCodings transferCodings,
-        Http1ClientConnectionDisposition connectionDisposition,
+        State state,
         Http1ClientRequestContentSignal requestContentSignal) noexcept
-        : mode_(mode),
-          contentLength_(contentLength),
-          transferCodings_(transferCodings),
-          connectionDisposition_(connectionDisposition),
+        : state_(std::move(state)),
           requestContentSignal_(requestContentSignal) {}
 
-    Http1ClientResponseBodyMode mode_{Http1ClientResponseBodyMode::kNone};
-    std::size_t contentLength_{0};
-    detail::HttpTransferCodings transferCodings_;
-    Http1ClientConnectionDisposition connectionDisposition_{
-        Http1ClientConnectionDisposition::kClose};
+    State state_;
     Http1ClientRequestContentSignal requestContentSignal_{
         Http1ClientRequestContentSignal::kNone};
 };
@@ -225,7 +289,7 @@ private:
         Http1ClientResponsePlan plan,
         std::size_t consumedBytes) noexcept
         : response_(std::move(response)),
-          plan_(plan),
+          plan_(std::move(plan)),
           consumedBytes_(consumedBytes) {}
 
     HttpClientResponse response_;

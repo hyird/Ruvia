@@ -5,14 +5,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <variant>
 
 namespace ruvia::detail {
 
-enum class Http1RequestBodyMode : std::uint8_t {
-    kNone,
-    kContentLength,
-    kChunked
-};
+class Http1ServerRequestParseState;
+class Http1ServerRequestParser;
 
 // Whether the runtime consumed the complete request message before attempting
 // to reuse its transport. This is a protocol lifecycle fact, not a product
@@ -22,66 +20,73 @@ enum class Http1RequestBodyConsumption : std::uint8_t {
     kIncomplete
 };
 
-// Immutable framing contract produced by the HTTP/1 parser and consumed by any
-// runtime driver. Content-Length, chunked framing, transfer-coding decode order,
-// and 100-continue eligibility cannot drift as independent caller arguments.
-class Http1RequestBodyPlan final {
+class Http1RequestWithoutBody final {
+private:
+    friend class Http1RequestBodyPlan;
+    constexpr Http1RequestWithoutBody() noexcept = default;
+};
+
+class Http1KnownLengthRequestBody final {
 public:
-    Http1RequestBodyPlan() = delete;
-
-    [[nodiscard]] static Http1RequestBodyPlan none(
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Http1RequestBodyMode::kNone,
-            0,
-            {},
-            expectations);
-    }
-
-    [[nodiscard]] static Http1RequestBodyPlan knownLength(
-        std::size_t contentLength,
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Http1RequestBodyMode::kContentLength,
-            contentLength,
-            {},
-            expectations);
-    }
-
-    [[nodiscard]] static Http1RequestBodyPlan chunked(
-        HttpTransferCodings transferCodings = {},
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Http1RequestBodyMode::kChunked,
-            0,
-            transferCodings,
-            expectations);
-    }
-
-    [[nodiscard]] Http1RequestBodyMode mode() const noexcept {
-        return mode_;
-    }
-
-    [[nodiscard]] bool hasContentLength() const noexcept {
-        return mode_ == Http1RequestBodyMode::kContentLength;
-    }
-
-    [[nodiscard]] std::size_t contentLength() const noexcept {
+    [[nodiscard]] constexpr std::size_t contentLength() const noexcept {
         return contentLength_;
     }
 
-    [[nodiscard]] bool isChunked() const noexcept {
-        return mode_ == Http1RequestBodyMode::kChunked;
+private:
+    friend class Http1RequestBodyPlan;
+
+    explicit constexpr Http1KnownLengthRequestBody(
+        std::size_t contentLength) noexcept
+        : contentLength_(contentLength) {}
+
+    std::size_t contentLength_;
+};
+
+class Http1ChunkedRequestBody final {
+public:
+    [[nodiscard]] constexpr const HttpTransferCodings&
+    transferCodings() const noexcept {
+        return transferCodings_;
+    }
+
+private:
+    friend class Http1RequestBodyPlan;
+
+    explicit constexpr Http1ChunkedRequestBody(
+        HttpTransferCodings transferCodings) noexcept
+        : transferCodings_(transferCodings) {}
+
+    HttpTransferCodings transferCodings_;
+};
+
+// Immutable framing contract produced only by the HTTP/1 parser and consumed
+// by any runtime driver. Content-Length belongs only to the known-length
+// alternative; transfer-coding order belongs only to the final-chunked
+// alternative. A caller cannot synthesize a plan that bypasses wire validation.
+class Http1RequestBodyPlan final {
+public:
+    [[nodiscard]] constexpr const Http1RequestWithoutBody*
+    withoutBody() const noexcept {
+        return std::get_if<Http1RequestWithoutBody>(&framing_);
+    }
+
+    [[nodiscard]] constexpr const Http1KnownLengthRequestBody*
+    knownLength() const noexcept {
+        return std::get_if<Http1KnownLengthRequestBody>(&framing_);
+    }
+
+    [[nodiscard]] constexpr const Http1ChunkedRequestBody*
+    chunked() const noexcept {
+        return std::get_if<Http1ChunkedRequestBody>(&framing_);
     }
 
     // Chunked framing requires consuming the terminating zero chunk even when
     // the decoded content is empty.
-    [[nodiscard]] bool requiresConsumption() const noexcept {
-        return isChunked() || (hasContentLength() && contentLength_ != 0);
-    }
-
-    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
-        return transferCodings_;
+    [[nodiscard]] constexpr bool requiresConsumption() const noexcept {
+        if (const auto* known = knownLength()) {
+            return known->contentLength() != 0;
+        }
+        return chunked() != nullptr;
     }
 
     [[nodiscard]] const HttpRequestExpectations& expectations() const noexcept {
@@ -96,19 +101,44 @@ public:
     }
 
 private:
-    Http1RequestBodyPlan(
-        Http1RequestBodyMode mode,
+    friend class Http1ServerRequestParseState;
+    friend class Http1ServerRequestParser;
+
+    using Framing = std::variant<
+        Http1RequestWithoutBody,
+        Http1KnownLengthRequestBody,
+        Http1ChunkedRequestBody>;
+
+    [[nodiscard]] static Http1RequestBodyPlan makeWithoutBody(
+        HttpRequestExpectations expectations = {}) noexcept {
+        return Http1RequestBodyPlan(
+            Framing(Http1RequestWithoutBody()),
+            expectations);
+    }
+
+    [[nodiscard]] static Http1RequestBodyPlan makeKnownLength(
         std::size_t contentLength,
+        HttpRequestExpectations expectations = {}) noexcept {
+        return Http1RequestBodyPlan(
+            Framing(Http1KnownLengthRequestBody(contentLength)),
+            expectations);
+    }
+
+    [[nodiscard]] static Http1RequestBodyPlan makeChunked(
         HttpTransferCodings transferCodings,
+        HttpRequestExpectations expectations = {}) noexcept {
+        return Http1RequestBodyPlan(
+            Framing(Http1ChunkedRequestBody(transferCodings)),
+            expectations);
+    }
+
+    Http1RequestBodyPlan(
+        Framing framing,
         HttpRequestExpectations expectations) noexcept
-        : mode_(mode),
-          contentLength_(contentLength),
-          transferCodings_(transferCodings),
+        : framing_(framing),
           expectations_(expectations) {}
 
-    Http1RequestBodyMode mode_{Http1RequestBodyMode::kNone};
-    std::size_t contentLength_{0};
-    HttpTransferCodings transferCodings_;
+    Framing framing_;
     HttpRequestExpectations expectations_;
 };
 

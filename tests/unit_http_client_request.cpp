@@ -13,7 +13,6 @@
 
 namespace {
 
-using ruvia::Http1ClientConnectionDisposition;
 using ruvia::Http1ClientRequestClosePolicy;
 using ruvia::Http1ClientRequestContentDisposition;
 using ruvia::Http1ClientRequestPrepareError;
@@ -410,9 +409,14 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
             "HTTP/1.1 204 No Content\r\n\r\n");
         RUVIA_CHECK(response.parsed() != nullptr);
         if (response.parsed() != nullptr) {
-            RUVIA_CHECK(
-                response.parsed()->plan().connectionDisposition() ==
-                Http1ClientConnectionDisposition::kClose);
+            const auto* withoutContent =
+                response.parsed()->plan().withoutContent();
+            RUVIA_CHECK(withoutContent != nullptr);
+            if (withoutContent != nullptr) {
+                RUVIA_CHECK(
+                    withoutContent->persistence() ==
+                    ruvia::Http1ClientResponsePersistence::kClose);
+            }
         }
     }
 
