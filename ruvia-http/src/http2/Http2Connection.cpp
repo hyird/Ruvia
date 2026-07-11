@@ -2059,10 +2059,13 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidState);
     }
-    const auto controlPlan = httpFinalResponseControlPlan(
+    const auto controlResult = httpFinalResponseControlPlan(
         response,
         HttpProtocolVersion::kHttp2);
-    if (!controlPlan.accepted()) {
+    const auto* controlPlan = controlResult.plan();
+    const auto* http2Control =
+        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    if (http2Control == nullptr) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
@@ -2079,7 +2082,11 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
-    appendHttp2ResponseHeaders(*stream, response, *headPlan);
+    appendHttp2ResponseHeaders(
+        *stream,
+        response,
+        *headPlan,
+        *http2Control);
     const auto endStream = writePlan.sendBody()
         ? Http2EndStream::kKeepOpen
         : Http2EndStream::kEndStream;
@@ -2123,10 +2130,13 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidState);
     }
-    const auto controlPlan = httpFinalResponseControlPlan(
+    const auto controlResult = httpFinalResponseControlPlan(
         head,
         HttpProtocolVersion::kHttp2);
-    if (!controlPlan.accepted()) {
+    const auto* controlPlan = controlResult.plan();
+    const auto* http2Control =
+        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    if (http2Control == nullptr) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
@@ -2151,7 +2161,11 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
-    appendHttp2ResponseHeaders(*stream, streamHead.response(), *headPlan);
+    appendHttp2ResponseHeaders(
+        *stream,
+        streamHead.response(),
+        *headPlan,
+        *http2Control);
     const auto endStream =
         commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded
         ? Http2EndStream::kEndStream
@@ -2312,13 +2326,26 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     if (!http2IsValidConnectResponseHead(response)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
+    const auto controlResult = httpFinalResponseControlPlan(
+        response,
+        HttpProtocolVersion::kHttp2);
+    const auto* controlPlan = controlResult.plan();
+    const auto* http2Control =
+        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    if (http2Control == nullptr) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
     const auto headPlanResult = http2ConnectResponseHeadPlan(
         httpResponseBodyPlan(HttpKnownMethod::kConnect, response.status()));
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    appendHttp2ResponseHeaders(*stream, response, *headPlan);
+    appendHttp2ResponseHeaders(
+        *stream,
+        response,
+        *headPlan,
+        *http2Control);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(

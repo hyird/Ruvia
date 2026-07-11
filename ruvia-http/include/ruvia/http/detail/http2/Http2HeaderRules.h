@@ -2,6 +2,7 @@
 
 #include <string_view>
 
+#include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
@@ -22,6 +23,20 @@ namespace ruvia::detail {
         name == "proxy-connection" ||
         name == "transfer-encoding" ||
         name == "upgrade";
+}
+
+// Application response fields are protocol-neutral and may retain their
+// conventional HTTP/1 casing. Before encoding an HTTP/2 response, match the
+// complete RFC 9113 section 8.2.2 forbidden set case-insensitively. The TE
+// exception applies only to requests, so it is forbidden in responses too.
+[[nodiscard]] inline bool http2IsForbiddenResponseConnectionField(
+    std::string_view name) noexcept {
+    return httpAsciiEqualsIgnoreCase(name, "connection") ||
+        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
+        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
+        httpAsciiEqualsIgnoreCase(name, "te") ||
+        httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
+        httpAsciiEqualsIgnoreCase(name, "upgrade");
 }
 
 [[nodiscard]] inline bool http2IsValidRegularHeader(

@@ -95,26 +95,6 @@ private:
         parsed.request.knownMethod());
 }
 
-// Connection is a list field and a response can contain repeated field lines.
-// Inspect every line: the response's indexed known-header fast path intentionally
-// points at only one occurrence and cannot decide transport lifecycle by itself.
-[[nodiscard]] inline HttpConnectionOptions http1ResponseConnectionOptions(
-    const HttpResponse& response) {
-    HttpConnectionOptions options;
-    for (const auto& header : response.headers()) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
-            continue;
-        }
-        if (options.parseField(
-                header.value(),
-                HttpFieldListRole::kSender) !=
-            HttpFieldListParseStatus::kOk) {
-            throw std::invalid_argument("invalid HTTP Connection header");
-        }
-    }
-    return options;
-}
-
 enum class Http1ConnectionCloseFieldPolicy : std::uint8_t {
     kCloseOnly,
     kPreserveUpgrade
@@ -144,23 +124,40 @@ inline void http1MarkConnectionClose(
 [[nodiscard]] inline Http1ServerConnectionPlan http1FinalizeResponseConnection(
     HttpResponse& response,
     Http1ServerConnectionPlan plan) {
-    const auto controlPlan = httpFinalResponseControlPlan(
+    const auto controlResult = httpFinalResponseControlPlan(
         response,
         plan.protocolVersion());
-    switch (controlPlan.status()) {
-        case HttpFinalResponseControlStatus::kOk:
-            break;
-        case HttpFinalResponseControlStatus::kInvalidStatus:
-            throw std::invalid_argument("invalid final HTTP response status");
-        case HttpFinalResponseControlStatus::kInvalidUpgradeField:
-            throw std::invalid_argument("invalid HTTP Upgrade header");
-        case HttpFinalResponseControlStatus::kUpgradeRequired:
-            throw std::invalid_argument("426 response requires an Upgrade protocol");
-        case HttpFinalResponseControlStatus::kUpgradeUnavailable:
-            throw std::invalid_argument("Upgrade is unavailable for this HTTP version");
+    if (const auto* failure = controlResult.failure()) {
+        switch (failure->error()) {
+            case HttpFinalResponseControlPlanError::kInvalidStatus:
+                throw std::invalid_argument(
+                    "invalid final HTTP response status");
+            case HttpFinalResponseControlPlanError::kInvalidConnectionField:
+                throw std::invalid_argument(
+                    "invalid HTTP Connection header");
+            case HttpFinalResponseControlPlanError::kInvalidUpgradeField:
+                throw std::invalid_argument(
+                    "invalid HTTP Upgrade header");
+            case HttpFinalResponseControlPlanError::kUpgradeRequired:
+                throw std::invalid_argument(
+                    "426 response requires an Upgrade protocol");
+            case HttpFinalResponseControlPlanError::kUpgradeUnavailable:
+                throw std::invalid_argument(
+                    "Upgrade is unavailable for this HTTP version");
+            case HttpFinalResponseControlPlanError::
+                    kConnectionSpecificFieldForbidden:
+                throw std::invalid_argument(
+                    "connection-specific field is unavailable for this HTTP version");
+        }
     }
-    const auto responseOptions = http1ResponseConnectionOptions(response);
-    const auto& upgradeProtocols = controlPlan.upgradeProtocols();
+    const auto* controlPlan = controlResult.plan();
+    if (controlPlan == nullptr || controlPlan->http1() == nullptr) {
+        throw std::logic_error(
+            "HTTP/1 final response received a non-HTTP/1 control plan");
+    }
+    const auto& http1Control = *controlPlan->http1();
+    const auto& responseOptions = http1Control.connectionOptions();
+    const auto& upgradeProtocols = http1Control.upgradeProtocols();
     const bool preserveUpgrade = upgradeProtocols.hasField();
     const bool generateUpgradeOption =
         preserveUpgrade && !responseOptions.upgrade();
