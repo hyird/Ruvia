@@ -347,6 +347,13 @@ if(NOT _installed_http2_connection MATCHES "enum class Http2FeedResult" OR
    NOT _installed_http2_connection MATCHES "kProtocolFailure")
     message(FATAL_ERROR "installed HTTP/2 core lost its direct feed ownership result")
 endif()
+if(NOT _installed_http2_connection MATCHES "releaseReceivedData" OR
+   _installed_http2_connection MATCHES "deferStreamWindowRelease" OR
+   _installed_http2_connection MATCHES "releaseStreamWindow" OR
+   _installed_http2_connection MATCHES "Http2ConnectionLimits")
+    message(FATAL_ERROR
+        "installed HTTP/2 core retained Web body policy or implicit DATA credit release")
+endif()
 if(_installed_http2_connection MATCHES "Http2RequestHeadSubmitStatus" OR
    _installed_http2_connection MATCHES
        "status_[ \t]*;[ \t\r\n]*std::uint32_t[ \t]+streamId_")
@@ -665,19 +672,53 @@ set(_installed_http2_remote_content_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2RemoteContentState.h")
 set(_installed_http2_stale_body_accounting_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
-set(_installed_http2_body_state_path
+set(_installed_http2_stale_body_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2BodyState.h")
-if(EXISTS "${_installed_http2_stale_body_accounting_path}")
-    message(FATAL_ERROR "installed package retained the stale HTTP/2 body-accounting header")
+set(_installed_http2_stale_body_queue_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2BodyQueue.h")
+set(_installed_http2_stale_stream_body_queue_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamBodyQueue.h")
+set(_installed_http2_stale_stream_body_policy_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamBodyPolicy.h")
+foreach(_stale_http2_runtime_header IN ITEMS
+        "${_installed_http2_stale_body_accounting_path}"
+        "${_installed_http2_stale_body_state_path}"
+        "${_installed_http2_stale_body_queue_path}"
+        "${_installed_http2_stale_stream_body_queue_path}"
+        "${_installed_http2_stale_stream_body_policy_path}")
+    if(EXISTS "${_stale_http2_runtime_header}")
+        message(FATAL_ERROR
+            "installed HTTP package retained Web request-body runtime state")
+    endif()
+endforeach()
+set(_installed_http2_web_runtime_path
+    "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    if(NOT EXISTS "${_installed_http2_web_runtime_path}")
+        message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")
+    endif()
+    file(READ "${_installed_http2_web_runtime_path}"
+        _installed_http2_web_runtime)
+    if(NOT _installed_http2_web_runtime MATCHES
+           "class Http2SansIoBodyQueue final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2RequestBodyRuntime final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "class Http2SansIoStreamRuntimeTable final" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "Http2RequestBodyStoreResult" OR
+       NOT _installed_http2_web_runtime MATCHES "RequestBodyMode" OR
+       NOT _installed_http2_web_runtime MATCHES "kModeNotSelected" OR
+       NOT _installed_http2_web_runtime MATCHES "streamingBacklogLimit")
+        message(FATAL_ERROR
+            "installed Web package lost route-owned HTTP/2 body storage and limits")
+    endif()
 endif()
-if(NOT EXISTS "${_installed_http2_remote_content_path}" OR
-   NOT EXISTS "${_installed_http2_body_state_path}")
+if(NOT EXISTS "${_installed_http2_remote_content_path}")
     message(FATAL_ERROR "installed HTTP/2 remote content state is missing")
 endif()
 file(READ "${_installed_http2_remote_content_path}"
     _installed_http2_remote_content)
-file(READ "${_installed_http2_body_state_path}"
-    _installed_http2_body_state)
 if(_installed_http2_remote_content MATCHES
        "Http2StreamBodyAccounting|hasContentLength|contentLength[(][)]|Http2RemoteContentCheck|Http2RemoteContentWithoutLength|Http2RemoteContentKnownLength|checkAccept[(]|void[ \t]+accept[(]" OR
    NOT _installed_http2_remote_content MATCHES
@@ -703,8 +744,6 @@ if(_installed_http2_remote_content MATCHES
    NOT _installed_http2_remote_content MATCHES "selectMetadataOnly" OR
    NOT _installed_http2_remote_content MATCHES "account[(]" OR
    NOT _installed_http2_remote_content MATCHES "terminalLengthValid" OR
-   NOT _installed_http2_body_state MATCHES
-       "Http2RemoteContentAccountingResult::kContentForbidden" OR
    NOT _installed_http2_stream_state MATCHES
        "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
    NOT _installed_http2_stream_state MATCHES "accountRemoteContent" OR
@@ -1020,19 +1059,14 @@ set(_installed_http2_remote_receive_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
 set(_installed_http2_request_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
-set(_installed_http2_body_queue_path
-    "${_install_prefix}/include/ruvia/http/detail/http2/Http2BodyQueue.h")
 if(NOT EXISTS "${_installed_http2_remote_receive_path}" OR
-   NOT EXISTS "${_installed_http2_request_state_path}" OR
-   NOT EXISTS "${_installed_http2_body_queue_path}")
+   NOT EXISTS "${_installed_http2_request_state_path}")
     message(FATAL_ERROR "installed HTTP/2 remote receive state is missing")
 endif()
 file(READ "${_installed_http2_remote_receive_path}"
     _installed_http2_remote_receive)
 file(READ "${_installed_http2_request_state_path}"
     _installed_http2_request_state)
-file(READ "${_installed_http2_body_queue_path}"
-    _installed_http2_body_queue)
 if(NOT _installed_http2_remote_receive MATCHES
        "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
    NOT _installed_http2_remote_receive MATCHES
@@ -1068,8 +1102,6 @@ if(NOT _installed_http2_remote_receive MATCHES
    NOT _installed_http2_stream_state MATCHES "finalizeRemoteConnectHead" OR
    NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
    NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
-   NOT _installed_http2_body_queue MATCHES
-       "remoteReceive[(][)][.]endStream[(][)]" OR
    _installed_http2_lifecycle MATCHES
        "(bodyEnded|peerEndStream|markBodyEnded|markPeerEndStream)[(]" OR
    _installed_http2_stream_state MATCHES

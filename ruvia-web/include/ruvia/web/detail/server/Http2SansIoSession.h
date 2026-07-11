@@ -11,8 +11,8 @@
 //
 // Framework parity with the coroutine Http2ServerSession (which this replaces): route
 // policy resolved at kMessageHead (mirroring resolveStreamRoute), rate limiting,
-// request-body size limits, streaming request bodies (BodyReader over the stream's
-// body-chunk queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
+// request-body size limits, streaming request bodies (BodyReader over the Web-owned
+// per-stream body queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
 // responses with compression/CORS via prepareBufferedHttpResponse, access logging,
 // client certificates, connection-scanner inactivity phases, graceful drain on server
 // shutdown, TLS ALPN, and cleartext prior-knowledge startup.
@@ -22,6 +22,7 @@
 // peer RST then keeps the stream alive+reset rather than freeing it, and the handler
 // checks isAborted() before submitting. The handler unpins on completion, freeing it.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -52,8 +53,8 @@
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2RequestBuilder.h"
 #include "ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
-#include "ruvia/http/detail/http2/Http2StreamBodyPolicy.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
@@ -63,6 +64,7 @@
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"
+#include "ruvia/web/detail/server/RequestBodyLimit.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
@@ -90,16 +92,6 @@ struct Http2SansIoSessionEnv final {
     const std::atomic_bool* serverStarted{nullptr};   // false -> graceful GOAWAY drain
 };
 
-struct Http2SansIoRouteState final {
-    std::uint32_t streamId{0};
-    RouteMatch scratch;
-    RouteResolution resolution;
-};
-
-[[nodiscard]] inline HttpRequestBodyMode httpRequestBodyModeForRoute(RequestBodyMode mode) noexcept {
-    return mode == RequestBodyMode::kStream ? HttpRequestBodyMode::kStream : HttpRequestBodyMode::kBuffered;
-}
-
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
     Stream& stream,
@@ -116,11 +108,7 @@ Task<void> runHttp2SansIoSession(
         env.scannerEntry != nullptr ? *env.scannerEntry : localScannerEntry;
     constexpr bool kTlsStream = !std::is_same_v<Stream, asio::ip::tcp::socket>;
 
-    Http2ConnectionLimits connectionLimits;
-    connectionLimits.maxStreamBodyBytes = options.maxStreamBodyBytes;
-    connectionLimits.maxBufferedBodyBytes = options.maxBufferedBodyBytes;
-    Http2Connection connection(
-        worker.resource(), Http2Role::kServer, connectionLimits);
+    Http2Connection connection(worker.resource(), Http2Role::kServer);
 
     asio::steady_timer writeSignal(executor);
     int inFlight = 0;       // concurrent handlers not yet finished
@@ -145,26 +133,18 @@ Task<void> runHttp2SansIoSession(
         }
         return nullptr;
     };
-    std::pmr::vector<Http2SansIoRouteState> streamRoutes(worker.resource());
-    const auto findRouteState = [&streamRoutes](std::uint32_t streamId) noexcept -> Http2SansIoRouteState* {
-        for (auto& entry : streamRoutes) {
-            if (entry.streamId == streamId) {
-                return &entry;
-            }
-        }
-        return nullptr;
+    Http2SansIoStreamRuntimeTable streamRuntimes(worker.resource());
+    const auto findStreamRuntime = [&streamRuntimes](
+        std::uint32_t streamId) noexcept {
+        return streamRuntimes.find(streamId);
     };
-    const auto ensureRouteState = [&streamRoutes, &findRouteState](std::uint32_t streamId) -> Http2SansIoRouteState& {
-        if (auto* existing = findRouteState(streamId)) {
-            return *existing;
-        }
-        streamRoutes.push_back(Http2SansIoRouteState{.streamId = streamId});
-        return streamRoutes.back();
+    const auto ensureStreamRuntime = [&streamRuntimes](
+        std::uint32_t streamId) {
+        return streamRuntimes.ensure(streamId);
     };
-    const auto eraseRouteState = [&streamRoutes](std::uint32_t streamId) {
-        std::erase_if(streamRoutes, [streamId](const auto& entry) {
-            return entry.streamId == streamId;
-        });
+    const auto eraseStreamRuntime = [&streamRuntimes](
+        std::uint32_t streamId) {
+        (void)streamRuntimes.remove(streamId);
     };
 
     // Single writer: serialize all outbound writes; sleep on writeSignal when idle.
@@ -374,12 +354,26 @@ Task<void> runHttp2SansIoSession(
         if (streamState == nullptr) {
             co_return;
         }
+        auto* streamRuntime = findStreamRuntime(streamId);
+        if (streamRuntime == nullptr) {
+            (void)connection.submitReset(
+                streamId,
+                Http2ErrorCode::kInternalError);
+            wakeWriter();
+            co_return;
+        }
         const auto baseServices = ContextServices(
             env.databases, env.redis, env.rateLimiter)
             .withTransport(remoteAddress, env.clientCertificate, kTlsStream);
 
         HttpRequest request = HttpRequestAccess::make();
-        if (!Http2RequestBuilder::build(*streamState, request, requestMemory.resource())) {
+        if (!Http2RequestBuilder::build(
+                *streamState,
+                request,
+                requestMemory.resource(),
+                streamRuntime->body().streaming()
+                    ? std::string_view{}
+                    : streamRuntime->body().buffered())) {
             auto response = co_await routes.handleError(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
@@ -399,9 +393,7 @@ Task<void> runHttp2SansIoSession(
             co_await submitResponse(streamId, response);
             co_return;
         }
-        const auto* routeState = findRouteState(streamId);
-        const RouteResolution resolution =
-            routeState != nullptr ? routeState->resolution : RouteResolution{};
+        const RouteResolution resolution = streamRuntime->routeResolution();
 
         const auto appRateLimit = rateLimitRequestAllowed(env.rateLimiter, remoteAddress);
         if (!appRateLimit.allowed) {
@@ -415,27 +407,16 @@ Task<void> runHttp2SansIoSession(
                 options.accessLog, request, remoteAddress, response.status(), requestStart, true);
             co_return;
         }
-        const auto maxBody = httpRequestBodyByteLimit(
-            streamState->bodyMode(), options.maxStreamBodyBytes, options.maxBufferedBodyBytes);
-        if (maxBody != 0 && streamState->requestBodySize() > maxBody) {
-            auto response = co_await routes.handleError(
-                request, requestMemory,
-                HttpErrorInfo(413, {}, "request body is too large"),
-                baseServices);
-            co_await submitResponse(streamId, response);
-            co_return;
-        }
-
         std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
         std::optional<BodyReader> bodyReaderStorage;
-        if (streamState->usesStreamRequestBody() &&
+        if (streamRuntime->body().streaming() &&
             streamState->tunnel().pending() == nullptr) {
-            if (!streamState->requestBodyEmpty()) {
-                // An END_STREAM-on-HEADERS request can already have a buffered chunk
-                // before dispatch; hand it to the reader first.
-                streamState->enqueueBufferedRequestBodyChunk();
-            }
-            streamReaderStorage.emplace(connection, streamId, findSignal(streamId));
+            streamReaderStorage.emplace(
+                connection,
+                streamId,
+                streamRuntime->body().queue(),
+                findSignal(streamId),
+                writeSignal);
             emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
         }
         auto dispatchServices = baseServices;
@@ -466,7 +447,13 @@ Task<void> runHttp2SansIoSession(
                 // clobber each other's server-initiated pings.
                 using WsTransport = Http2SansIoWsTransport<decltype(executor)>;
                 WebSocketConnection<WsTransport> webSocketConnection(
-                    WsTransport(connection, streamId, *signal, writeSignal, executor),
+                    WsTransport(
+                        connection,
+                        streamId,
+                        streamRuntime->body().queue(),
+                        *signal,
+                        writeSignal,
+                        executor),
                     scannerEntry,
                     resolution.webSocketLifecycle(),
                     options.maxWebSocketMessageBytes,
@@ -519,12 +506,14 @@ Task<void> runHttp2SansIoSession(
         if (live == nullptr || live->isAborted()) {
             co_return;
         }
-        const auto preparation = prepareBufferedHttpResponse(
-            request, response, options, live->responseCompressionScratch());
+        std::pmr::string responseCompressionScratch(
+            requestMemory.resource());
+        (void)prepareBufferedHttpResponse(
+            request,
+            response,
+            options,
+            responseCompressionScratch);
         co_await submitResponse(streamId, response);
-        if (preparation.bodyBorrowsCompressionScratch()) {
-            live->clearRequestBody();
-        }
         recordHttpAccess(
             options.accessLog, request, remoteAddress, response.status(), requestStart, true);
     };
@@ -545,7 +534,7 @@ Task<void> runHttp2SansIoSession(
         std::erase_if(streamSignals, [streamId](const auto& entry) {
             return entry.first == streamId;
         });
-        eraseRouteState(streamId);
+        eraseStreamRuntime(streamId);
         connection.unpinStream(streamId);
         --inFlight;
         wakeWriter();
@@ -554,27 +543,37 @@ Task<void> runHttp2SansIoSession(
 
     // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
     // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
-    const auto resolveStreamRoute = [&routes, &ensureRouteState](Http2StreamState& streamState) {
+    const auto resolveStreamRoute = [&routes, &ensureStreamRuntime](
+        Http2StreamState& streamState) -> Http2SansIoStreamRuntime* {
         const auto method = Http2RequestBuilder::routeMethod(streamState);
         const auto path = Http2RequestBuilder::requestPath(streamState);
-        auto& routeState = ensureRouteState(streamState.id());
-        routeState.scratch.clear();
-        routeState.resolution = {};
+        auto* runtime = ensureStreamRuntime(streamState.id());
+        if (runtime == nullptr) {
+            return nullptr;
+        }
+        runtime->routeScratch().clear();
+        runtime->routeResolution() = {};
+        auto bodyMode = RequestBodyMode::kBuffered;
         if (method == HttpKnownMethod::kUnknown || path.empty()) {
-            streamState.resetBodyModeToBuffered();
-            return;
+            return runtime->body().selectMode(bodyMode)
+                ? runtime
+                : nullptr;
         }
-        routeState.resolution = routes.resolve(method, path, routeState.scratch);
-        const auto& resolution = routeState.resolution;
-        if (!resolution.found()) {
-            streamState.setBodyMode(HttpRequestBodyMode::kBuffered);
-            return;
+        runtime->routeResolution() = routes.resolve(
+            method,
+            path,
+            runtime->routeScratch());
+        const auto& resolution = runtime->routeResolution();
+        if (resolution.found()) {
+            bodyMode = resolution.bodyMode();
         }
-        streamState.setBodyMode(httpRequestBodyModeForRoute(resolution.bodyMode()));
         if (http2IsPendingWebSocketConnect(streamState) &&
             resolution.isWebSocketResponse()) {
-            streamState.setBodyMode(HttpRequestBodyMode::kStream);
+            bodyMode = RequestBodyMode::kStream;
         }
+        return runtime->body().selectMode(bodyMode)
+            ? runtime
+            : nullptr;
     };
 
     // Admit a stream for dispatch: EVERY dispatched stream gets a signal, so response
@@ -595,6 +594,47 @@ Task<void> runHttp2SansIoSession(
 
     // Drain the core's event queue, admitting streams and routing body bytes.
     const auto drainEvents = [&]() {
+        std::array<std::uint32_t,
+                   Http2LocalSettings::kMaxConcurrentStreams>
+            copiedBodyStreams{};
+        std::size_t copiedBodyStreamCount = 0;
+        const auto markBufferedBodyCopied = [&](std::uint32_t streamId) {
+            const auto end = copiedBodyStreams.begin() +
+                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
+            if (std::find(copiedBodyStreams.begin(), end, streamId) == end) {
+                if (copiedBodyStreamCount == copiedBodyStreams.size()) {
+                    return false;
+                }
+                copiedBodyStreams[copiedBodyStreamCount++] = streamId;
+            }
+            return true;
+        };
+        const auto unmarkBufferedBodyCopied = [&](std::uint32_t streamId) {
+            const auto end = copiedBodyStreams.begin() +
+                static_cast<std::ptrdiff_t>(copiedBodyStreamCount);
+            const auto found = std::find(
+                copiedBodyStreams.begin(), end, streamId);
+            if (found == end) {
+                return;
+            }
+            --copiedBodyStreamCount;
+            *found = copiedBodyStreams[copiedBodyStreamCount];
+        };
+        const auto resetEventStream = [&](std::uint32_t streamId,
+                                          Http2ErrorCode error) {
+            unmarkBufferedBodyCopied(streamId);
+            auto* signal = findSignal(streamId);
+            (void)connection.submitReset(streamId, error);
+            if (signal != nullptr) {
+                // A dispatched handler owns the runtime until dispatchOne finishes.
+                signal->wake();
+            } else {
+                // Owner-side reset is intentionally not echoed as kStreamClosed.
+                // An undispatched runtime therefore has to be reclaimed here.
+                eraseStreamRuntime(streamId);
+            }
+            wakeWriter();
+        };
         for (;;) {
             const auto event = connection.nextEvent();
             if (!event.has_value()) {
@@ -606,7 +646,12 @@ Task<void> runHttp2SansIoSession(
                 if (streamState == nullptr) {
                     continue;
                 }
-                resolveStreamRoute(*streamState);
+                auto* streamRuntime = resolveStreamRoute(*streamState);
+                if (streamRuntime == nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                    continue;
+                }
                 const auto expectationAction = streamState->expectationAction();
                 if (expectationAction ==
                     HttpServerExpectationAction::kSend100Continue) {
@@ -617,10 +662,10 @@ Task<void> runHttp2SansIoSession(
                         wakeWriter();
                     } else {
                         if (status != Http2SubmitStatus::kClosed) {
-                            (void)connection.submitReset(
-                                streamId,
-                                Http2ErrorCode::kInternalError);
-                            wakeWriter();
+                            resetEventStream(
+                                streamId, Http2ErrorCode::kInternalError);
+                        } else {
+                            eraseStreamRuntime(streamId);
                         }
                         continue;
                     }
@@ -628,12 +673,12 @@ Task<void> runHttp2SansIoSession(
                 const bool connectRequest =
                     streamState->tunnel().pending() != nullptr;
                 const bool streamingBody = !connectRequest &&
-                    streamState->usesStreamRequestBody() &&
+                    streamRuntime->body().streaming() &&
                     streamState->remoteReceive().contentOpen() != nullptr;
                 if (expectationAction ==
                         HttpServerExpectationAction::kUnsupported ||
                     connectRequest || streamingBody) {
-                    // Dispatch NOW; body bytes stream through the stream's chunk queue
+                    // Dispatch NOW; body bytes stream through the Web runtime's queue
                     // while the handler runs. Unsupported expectations also need an
                     // immediate 417: waiting for buffered content would deadlock a
                     // conforming client that is waiting for the expectation decision.
@@ -642,27 +687,58 @@ Task<void> runHttp2SansIoSession(
             } else if (const auto* bodyChunk = event->messageBodyChunk()) {
                 const auto streamId = bodyChunk->streamId();
                 auto* streamState = connection.stream(streamId);
-                if (streamState == nullptr) {
+                auto* streamRuntime = findStreamRuntime(streamId);
+                if (streamState == nullptr || streamRuntime == nullptr) {
+                    if (streamState != nullptr) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                    }
                     continue;
                 }
-                if (streamState->usesStreamRequestBody()) {
-                    streamState->enqueueBodyChunk(bodyChunk->bytes());
+                const auto totalLimit = requestBodyByteLimit(
+                    streamRuntime->body().mode(),
+                    options.maxStreamBodyBytes,
+                    options.maxBufferedBodyBytes);
+                const auto stored = streamRuntime->body().store(
+                    bodyChunk->bytes(),
+                    totalLimit,
+                    options.maxBufferedBodyBytes);
+                if (stored != Http2RequestBodyStoreResult::kAccepted) {
+                    resetEventStream(
+                        streamId,
+                        stored == Http2RequestBodyStoreResult::kModeNotSelected
+                            ? Http2ErrorCode::kInternalError
+                            : Http2ErrorCode::kCancel);
+                    continue;
+                }
+                if (streamRuntime->body().streaming()) {
                     if (auto* signal = findSignal(streamId)) {
                         signal->wake();
                     }
                 } else {
-                    streamState->appendRequestBody(bodyChunk->bytes());
+                    // Delay acknowledgement until the complete event batch has been
+                    // copied. releaseReceivedData() returns all debt currently held
+                    // by the stream, including later DATA frames from this feed.
+                    if (!markBufferedBodyCopied(streamId)) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                    }
                 }
             } else if (const auto* tunnelData = event->tunnelData()) {
                 const auto streamId = tunnelData->streamId();
                 auto* streamState = connection.stream(streamId);
-                if (streamState == nullptr) {
+                auto* streamRuntime = findStreamRuntime(streamId);
+                auto* signal = findSignal(streamId);
+                if (streamState == nullptr || streamRuntime == nullptr ||
+                    signal == nullptr) {
+                    if (streamState != nullptr) {
+                        resetEventStream(
+                            streamId, Http2ErrorCode::kInternalError);
+                    }
                     continue;
                 }
-                streamState->enqueueBodyChunk(tunnelData->bytes());
-                if (auto* signal = findSignal(streamId)) {
-                    signal->wake();
-                }
+                streamRuntime->body().queue().enqueue(tunnelData->bytes());
+                signal->wake();
             } else if (const auto* tunnelEnd = event->tunnelEnd()) {
                 if (auto* signal = findSignal(tunnelEnd->streamId())) {
                     signal->wake();
@@ -672,6 +748,11 @@ Task<void> runHttp2SansIoSession(
                 if (connection.stream(streamId) == nullptr) {
                     continue;
                 }
+                if (findStreamRuntime(streamId) == nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                    continue;
+                }
                 if (auto* signal = findSignal(streamId)) {
                     signal->wake();  // remote END_STREAM was committed before this event
                 } else {
@@ -679,15 +760,22 @@ Task<void> runHttp2SansIoSession(
                 }
             } else if (const auto* streamClosed = event->streamClosed()) {
                 const auto streamId = streamClosed->streamId();
+                unmarkBufferedBodyCopied(streamId);
                 if (auto* signal = findSignal(streamId)) {
                     signal->wake();  // stream is reset; blocked readers/writers see it
                 } else {
                     // The protocol core can erase an unpinned reset stream before
                     // this event is drained. Cleanup is keyed by the typed event,
                     // not by a second lookup of already-removed core state.
-                    eraseRouteState(streamId);
+                    eraseStreamRuntime(streamId);
                 }
             }
+        }
+        for (std::size_t i = 0; i < copiedBodyStreamCount; ++i) {
+            connection.releaseReceivedData(copiedBodyStreams[i]);
+        }
+        if (copiedBodyStreamCount != 0) {
+            wakeWriter();
         }
         // Send-window reopenings drained deferred bodies inside the core; wake the
         // paced response writers so they pull their next chunk.

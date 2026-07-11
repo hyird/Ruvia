@@ -11,8 +11,6 @@
 
 namespace ruvia::detail {
 
-class Http2StreamBodyQueue;
-
 class Http2StreamRequestData final {
 public:
     explicit Http2StreamRequestData(std::pmr::memory_resource* resource = nullptr)
@@ -79,36 +77,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::size_t bodySize() const noexcept {
-        return body_.size();
-    }
-
-    [[nodiscard]] bool bodyEmpty() const noexcept {
-        return body_.empty();
-    }
-
-    [[nodiscard]] std::string_view bodyView() const noexcept {
-        return body_;
-    }
-
-    void appendBody(std::string_view value) {
-        body_.append(value.data(), value.size());
-    }
-
-    void assignBody(std::string_view value) {
-        body_.assign(value.data(), value.size());
-    }
-
-    void clearBody() noexcept {
-        body_.clear();
-    }
-
-    [[nodiscard]] std::pmr::string& responseCompressionScratch() noexcept {
-        return body_;
-    }
-
-    void moveBodyToQueue(Http2StreamBodyQueue& queue);
-
     [[nodiscard]] bool headersFull() const noexcept {
         return headers_.full();
     }
@@ -135,7 +103,6 @@ private:
           path_(resource),
           protocol_(resource),
           cookie_(resource),
-          body_(resource),
           headers_(resource) {}
 
     std::pmr::string method_;
@@ -144,7 +111,6 @@ private:
     std::pmr::string path_;
     std::pmr::string protocol_;
     std::pmr::string cookie_;
-    std::pmr::string body_;
     Http2HeaderList headers_;
 };
 

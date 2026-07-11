@@ -38,7 +38,8 @@ public:
     static bool build(
         Http2StreamState& stream,
         HttpRequest& request,
-        std::pmr::memory_resource* resource) noexcept {
+        std::pmr::memory_resource* resource,
+        std::string_view body) noexcept {
         HttpRequestAccess::reset(request);
         HttpRequestAccess::setResource(request, resource);
         const auto method = stream.requestMethod();
@@ -77,7 +78,7 @@ public:
         HttpRequestAccess::setTarget(request, target);
         HttpRequestAccess::setPath(request, targetParts.path);
         HttpRequestAccess::setQueryString(request, targetParts.queryString);
-        HttpRequestAccess::setBody(request, stream.requestBodyView());
+        HttpRequestAccess::setBody(request, body);
 
         for (std::size_t i = 0; i < stream.requestHeaderCount(); ++i) {
             const auto header = stream.requestHeaderAt(i);

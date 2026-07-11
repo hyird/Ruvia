@@ -636,7 +636,7 @@ RUVIA_TEST(http2_connect_pending_accepts_empty_request_half_close) {
     RUVIA_CHECK(!server.nextEvent().has_value());
 }
 
-RUVIA_TEST(http2_connect_open_tunnel_replenishes_deferred_stream_window) {
+RUVIA_TEST(http2_connect_open_tunnel_replenishes_owner_released_stream_window) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection server(&resource);
     handshake(server);
@@ -645,7 +645,6 @@ RUVIA_TEST(http2_connect_open_tunnel_replenishes_deferred_stream_window) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(stream->remoteReceive().tunnelOpen() != nullptr);
 
-    server.deferStreamWindowRelease(1);
     const auto data = frame(&resource, Http2FrameType::kData, 0, 1, "peer");
     RUVIA_CHECK(server.feed(std::string_view(data.data(), data.size())) ==
         ruvia::detail::Http2FeedResult::kAccepted);
@@ -653,7 +652,7 @@ RUVIA_TEST(http2_connect_open_tunnel_replenishes_deferred_stream_window) {
     RUVIA_CHECK(!server.nextEvent().has_value());
     RUVIA_CHECK(server.pendingOutput().empty());
 
-    server.releaseStreamWindow(1);
+    server.releaseReceivedData(1);
     const auto updates = server.pendingOutput();
     RUVIA_CHECK_EQ(
         updates.size(),

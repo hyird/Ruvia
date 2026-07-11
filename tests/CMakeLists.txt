@@ -44,7 +44,7 @@ add_executable(ruvia_unit_tests
     unit_http2_local_content_state.cpp
     unit_http2_connect.cpp
     unit_http2_ready_queue.cpp
-    unit_http2_body_queue.cpp
+    unit_http2_sansio_stream_runtime.cpp
     unit_websocket_assembler.cpp
     unit_websocket_heartbeat.cpp
     unit_websocket_close.cpp
@@ -80,12 +80,10 @@ add_executable(ruvia_unit_tests
     unit_request_access.cpp
     unit_context_cookie.cpp
     unit_context_redirect.cpp
-    unit_http2_body_state.cpp
     unit_http2_frame_codec.cpp
     unit_http2_peer_settings.cpp
     unit_route_resolution.cpp
     unit_connection_read_buffer.cpp
-    unit_http2_stream_body_policy.cpp
     unit_http2_stream_request_data.cpp
     unit_http2_request_headers.cpp
     unit_http1_parser.cpp

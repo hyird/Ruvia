@@ -13,6 +13,7 @@ using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http2RequestBuilder;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::HttpRequestAccess;
+using ruvia::detail::requestBodyBytes;
 
 Http2StreamState makeStream() {
     return Http2StreamState(1, std::pmr::new_delete_resource());
@@ -36,7 +37,7 @@ RUVIA_TEST(h2_request_builder_preserves_extension_method_for_web_501) {
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kUnknown);
     RUVIA_CHECK(Http2RequestBuilder::build(
-        stream, request, std::pmr::new_delete_resource()));
+        stream, request, std::pmr::new_delete_resource(), {}));
     RUVIA_CHECK_EQ(request.method(), std::string_view("PROPFIND"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
     RUVIA_CHECK_EQ(request.path(), std::string_view("/dav/resource"));
@@ -51,9 +52,25 @@ RUVIA_TEST(h2_request_builder_uses_connection_protocol_version) {
     stream.assignRequestPath("/");
 
     RUVIA_CHECK(Http2RequestBuilder::build(
-        stream, request, std::pmr::new_delete_resource()));
+        stream, request, std::pmr::new_delete_resource(), {}));
     RUVIA_CHECK(
         request.protocolVersion() == HttpProtocolVersion::kHttp2);
+}
+
+RUVIA_TEST(h2_request_builder_accepts_body_from_external_runtime_owner) {
+    auto request = HttpRequestAccess::make();
+    auto stream = makeStream();
+    stream.assignRequestMethod("POST");
+    stream.assignRequestPath("/upload");
+
+    RUVIA_CHECK(Http2RequestBuilder::build(
+        stream,
+        request,
+        std::pmr::new_delete_resource(),
+        "runtime-owned"));
+    RUVIA_CHECK_EQ(
+        requestBodyBytes(request),
+        std::string_view("runtime-owned"));
 }
 
 RUVIA_TEST(h2_request_builder_target_is_path_and_splits_query) {
@@ -85,13 +102,18 @@ RUVIA_TEST(h2_request_builder_rejects_non_options_asterisk_target) {
     auto stream = makeStream();
     stream.assignRequestMethod("GET");
     stream.assignRequestPath("*");
-    RUVIA_CHECK(!Http2RequestBuilder::build(stream, request, std::pmr::new_delete_resource()));
+    RUVIA_CHECK(!Http2RequestBuilder::build(
+        stream, request, std::pmr::new_delete_resource(), {}));
 
     auto optionsRequest = HttpRequestAccess::make();
     auto optionsStream = makeStream();
     optionsStream.assignRequestMethod("OPTIONS");
     optionsStream.assignRequestPath("*");
-    RUVIA_CHECK(Http2RequestBuilder::build(optionsStream, optionsRequest, std::pmr::new_delete_resource()));
+    RUVIA_CHECK(Http2RequestBuilder::build(
+        optionsStream,
+        optionsRequest,
+        std::pmr::new_delete_resource(),
+        {}));
     RUVIA_CHECK_EQ(optionsRequest.path(), std::string_view("*"));
 }
 
@@ -114,7 +136,7 @@ RUVIA_TEST(h2_request_builder_standard_connect_keeps_authority_form_target) {
         Http2RequestBuilder::requestTarget(stream),
         std::string_view("proxy.example:443"));
     RUVIA_CHECK(Http2RequestBuilder::build(
-        stream, request, std::pmr::new_delete_resource()));
+        stream, request, std::pmr::new_delete_resource(), {}));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);
     RUVIA_CHECK_EQ(request.target(), std::string_view("proxy.example:443"));
@@ -133,7 +155,7 @@ RUVIA_TEST(h2_request_builder_generic_extended_connect_retains_connect_method) {
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kConnect);
     RUVIA_CHECK(Http2RequestBuilder::build(
-        stream, request, std::pmr::new_delete_resource()));
+        stream, request, std::pmr::new_delete_resource(), {}));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);
     RUVIA_CHECK_EQ(
@@ -153,7 +175,7 @@ RUVIA_TEST(h2_request_builder_websocket_extended_connect_maps_only_route_method)
 
     RUVIA_CHECK(Http2RequestBuilder::routeMethod(stream) == HttpKnownMethod::kGet);
     RUVIA_CHECK(Http2RequestBuilder::build(
-        stream, request, std::pmr::new_delete_resource()));
+        stream, request, std::pmr::new_delete_resource(), {}));
     RUVIA_CHECK_EQ(request.method(), std::string_view("CONNECT"));
     RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kConnect);
     RUVIA_CHECK_EQ(request.path(), std::string_view("/chat"));

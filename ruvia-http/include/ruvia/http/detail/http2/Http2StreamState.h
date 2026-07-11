@@ -1,20 +1,16 @@
 #pragma once
 
-#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/Http2RemoteContentState.h"
-#include "ruvia/http/detail/http2/Http2StreamBodyQueue.h"
 #include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
 #include "ruvia/http/detail/http2/Http2StreamHeaderBlocks.h"
 #include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
-#include "ruvia/http/detail/http2/Http2StreamBodyPolicy.h"
 #include "ruvia/http/detail/http2/Http2StreamRequestData.h"
 #include "ruvia/http/detail/http2/Http2StreamRequestState.h"
 #include "ruvia/http/detail/http2/Http2TunnelState.h"
@@ -29,13 +25,10 @@ class Http2StreamState final {
     Http2RemoteContentState remoteContent_;
     Http2LocalContentState localContent_;
     Http2StreamLifecycle lifecycle_;
-    Http2StreamBodyQueue bodyQueue_;
-    Http2StreamBodyPolicy bodyPolicy_;
     HttpRequestExpectations expectations_;
     Http2StreamRequestState requestState_;
     Http2TunnelState tunnelState_;
     Http2StreamFlowControl flowControl_;
-    bool deferWindowRelease_{false};
     std::uint32_t windowDebt_{0};
     Http2StreamHeaderBlocks headerBlocks_;
     Http2StreamRequestData requestData_;
@@ -43,7 +36,6 @@ class Http2StreamState final {
 public:
     explicit Http2StreamState(std::uint32_t streamId, std::pmr::memory_resource* resource)
         : id_(streamId),
-          bodyQueue_(resource),
           headerBlocks_(resource),
           requestData_(resource) {}
 
@@ -69,17 +61,6 @@ public:
 
     [[nodiscard]] bool consumeReceiveWindow(std::int32_t bytes) noexcept {
         return flowControl_.consumeReceive(bytes);
-    }
-
-    // Client streaming consumers: when set, DATA receive-window credit is banked as
-    // windowDebt instead of being re-advertised per frame; the owner releases it as
-    // the consumer drains (Http2Connection::releaseStreamWindow).
-    [[nodiscard]] bool deferWindowRelease() const noexcept {
-        return deferWindowRelease_;
-    }
-
-    void setDeferWindowRelease() noexcept {
-        deferWindowRelease_ = true;
     }
 
     void addWindowDebt(std::uint32_t bytes) noexcept {
@@ -300,62 +281,6 @@ public:
         return lifecycle_.tryStartDispatch();
     }
 
-    [[nodiscard]] bool hasOverflowQueuedBodyChunk() const noexcept {
-        return bodyQueue_.hasOverflowQueuedChunk();
-    }
-
-    void enqueueBodyChunk(std::string_view data) {
-        bodyQueue_.enqueue(data);
-    }
-
-    void enqueueOwnedBodyChunk(std::pmr::string& body) {
-        bodyQueue_.enqueueOwned(body);
-    }
-
-    void enqueueBufferedRequestBodyChunk() {
-        requestData_.moveBodyToQueue(bodyQueue_);
-    }
-
-    [[nodiscard]] bool hasQueuedBodyChunk() const noexcept {
-        return bodyQueue_.hasQueuedChunk();
-    }
-
-    [[nodiscard]] std::size_t queuedBodyBytes() const noexcept {
-        return bodyQueue_.queuedBytes();
-    }
-
-    void compactBodyChunks() {
-        bodyQueue_.compact();
-    }
-
-    [[nodiscard]] std::string_view popBodyChunk() {
-        return bodyQueue_.pop();
-    }
-
-    void setBodyWaiter(std::coroutine_handle<> continuation) noexcept {
-        bodyQueue_.setWaiter(continuation);
-    }
-
-    [[nodiscard]] std::coroutine_handle<> takeBodyWaiter() noexcept {
-        return bodyQueue_.takeWaiter();
-    }
-
-    [[nodiscard]] HttpRequestBodyMode bodyMode() const noexcept {
-        return bodyPolicy_.bodyMode();
-    }
-
-    [[nodiscard]] bool usesStreamRequestBody() const noexcept {
-        return bodyPolicy_.usesStreamRequestBody();
-    }
-
-    void resetBodyModeToBuffered() noexcept {
-        bodyPolicy_.resetToBuffered();
-    }
-
-    void setBodyMode(HttpRequestBodyMode bodyMode) noexcept {
-        bodyPolicy_.setBodyMode(bodyMode);
-    }
-
     void parseRequestExpectationField(std::string_view value) noexcept {
         expectations_.parseField(value);
     }
@@ -411,34 +336,6 @@ public:
         std::string_view value,
         bool hasExistingCookie) {
         return requestData_.appendCookieHeaderValue(value, hasExistingCookie);
-    }
-
-    [[nodiscard]] std::size_t requestBodySize() const noexcept {
-        return requestData_.bodySize();
-    }
-
-    [[nodiscard]] bool requestBodyEmpty() const noexcept {
-        return requestData_.bodyEmpty();
-    }
-
-    [[nodiscard]] std::string_view requestBodyView() const noexcept {
-        return requestData_.bodyView();
-    }
-
-    void appendRequestBody(std::string_view value) {
-        requestData_.appendBody(value);
-    }
-
-    void assignRequestBody(std::string_view value) {
-        requestData_.assignBody(value);
-    }
-
-    void clearRequestBody() noexcept {
-        requestData_.clearBody();
-    }
-
-    [[nodiscard]] std::pmr::string& responseCompressionScratch() noexcept {
-        return requestData_.responseCompressionScratch();
     }
 
     [[nodiscard]] bool requestHeadersFull() const noexcept {

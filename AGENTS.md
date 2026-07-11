@@ -587,8 +587,8 @@ frame 与已建立 stream 必须继续处理到完成。本端检测到的 fatal
 code 的 GOAWAY 发送 API，也不得让 runtime 自行猜测待清理流。
 `Http2LocalSettings` 是本地接收能力的唯一来源，必须同时决定 wire SETTINGS、可接收 frame
 上限、stream/connection receive window、stream table 与 ready queue 容量。
-`Http2ConnectionLimits` 只允许保存 message-body 上限，不得混入 max-frame 或 initial-window
-wire knob；connection send window 必须从 RFC 默认值开始，之后只由对端 SETTINGS 与
+`Http2Connection` 构造不得接收 route/body limit 或其他 runtime policy；connection send window 必须从
+RFC 默认值开始，之后只由对端 SETTINGS 与
 WINDOW_UPDATE 推进。`Http2PeerSettings` 构造时必须绑定本地 `Http2Role`，不得恢复无角色的
 peer SETTINGS 解析；client 收到 server 的 `SETTINGS_ENABLE_PUSH=1` 必须使用
 connection-level `PROTOCOL_ERROR` 拒绝，server 则可接受 client 发来的合法 0/1。单个 setting
@@ -657,6 +657,30 @@ terminal `END_STREAM`，但不得产出 content event。该行为遵循
 [RFC 9113 §6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1) 先执行。initial HEADERS、DATA 与
 trailing HEADERS 的 END_STREAM 必须读取 active state 的 `terminalLengthValid()`；metadata-only
 不能因 representation length 被误判为缺失 DATA，其余已声明长度严格匹配 DATA payload 总和。
+
+HTTP/2 非空 content/tunnel DATA event 必须保留完整 flow-controlled payload（包括 Pad Length 与
+padding）的 connection/stream debt，直到 owner 已复制或消费当前交付的所有该 stream DATA 后调用唯一
+`releaseReceivedData(streamId)`；依据
+[RFC 9113 §5.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.2) 与
+[§6.9.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1)，WINDOW_UPDATE 只能表示接收方真正
+释放的容量。stream 关闭必须只归还 connection debt，empty/padding-only 或不产生应用 event 的
+metadata-only DATA 可以立即归还。禁止恢复 `deferStreamWindowRelease()`、`releaseStreamWindow()`、
+可选 defer flag，或在产生非空 event 时默认立即 WINDOW_UPDATE。
+
+route-selected body 存储与限额只属于 `ruvia-web`。`ruvia-http` 的 `Http2StreamState` 不得包含
+`RequestBodyMode`、coroutine waiter、应用 body queue/buffer、queued backlog、response compression
+scratch 或 `Http2ConnectionLimits`；`Http2BodyState.h`、`Http2BodyQueue.h`、
+`Http2StreamBodyQueue.h`、`Http2StreamBodyPolicy.h` 必须保持删除。协议 core 只通过
+`Http2RemoteContentState::account()` 校验 Content-Length/message semantics 并产生有序 event。
+`ruvia-web` 必须用 PMR-stable `Http2SansIoStreamRuntimeTable`、`Http2RequestBodyRuntime` 与
+`Http2SansIoBodyQueue` 保存每个 active stream 的 route resolution 和 body；同一 `feed()` 内 HEADERS
+后紧跟的 DATA 也必须先按 message-head event 选择 Web `RequestBodyMode`，再应用 total/backlog limit。
+未完成一次性 mode selection 时，`store()` 必须返回 `kModeNotSelected`，不得静默采用 buffered 默认值。
+buffered event batch 完整复制后才能统一调用 `releaseReceivedData()`；stream request/CONNECT tunnel
+必须等 Web queue drain 后归还。`Http2RequestBuilder::build()` 只接收 Web owner 提供的 body view；
+response compression scratch 必须留在 handler-local Web storage，不得借用 protocol stream storage。
+owner-side reset 不会回送 `kStreamClosed` 给同一 owner；尚未 dispatch 的 Web runtime 必须在 reset
+调用链立即删除，已 dispatch 的 runtime 则保留到 handler cleanup，禁止泄漏并发槽。
 
 HTTP/2 client role 的普通请求头只能走 `submitRegularRequestHead()`，并以无分配值类型
 `Http2RequestContent` 在 `none()`、`knownLength(n)`、`streaming()` 三种契约中显式选择。
