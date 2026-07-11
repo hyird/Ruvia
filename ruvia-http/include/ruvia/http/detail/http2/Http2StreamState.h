@@ -172,16 +172,12 @@ public:
         return lifecycle_.aborted();
     }
 
-    [[nodiscard]] bool bodyEnded() const noexcept {
-        return lifecycle_.bodyEnded();
-    }
-
-    [[nodiscard]] bool peerEndStream() const noexcept {
-        return lifecycle_.peerEndStream();
-    }
-
     [[nodiscard]] const Http2LocalSendState& localSend() const noexcept {
         return lifecycle_.localSend();
+    }
+
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const noexcept {
+        return lifecycle_.remoteReceive();
     }
 
     [[nodiscard]] bool queued() const noexcept {
@@ -204,8 +200,47 @@ public:
         return lifecycle_.abort(source);
     }
 
-    void markPeerEndStream() noexcept {
-        lifecycle_.markPeerEndStream();
+    [[nodiscard]] bool recordRemoteHeadEndStream() noexcept {
+        return lifecycle_.recordRemoteHeadEndStream();
+    }
+
+    [[nodiscard]] bool finalizeRemoteContentHead() noexcept {
+        if (tunnelState_.notConnect() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finalizeRemoteContentHead();
+    }
+
+    [[nodiscard]] bool finalizeRemoteConnectHead() noexcept {
+        if (tunnelState_.pending() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finalizeRemoteConnectHead();
+    }
+
+    [[nodiscard]] bool finishRemoteContent() noexcept {
+        return lifecycle_.finishRemoteContent();
+    }
+
+    [[nodiscard]] bool finishRemotePendingConnect() noexcept {
+        if (tunnelState_.pending() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finishRemotePendingConnect();
+    }
+
+    [[nodiscard]] bool finishRemoteTunnel() noexcept {
+        if (tunnelState_.open() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finishRemoteTunnel();
+    }
+
+    [[nodiscard]] bool finishRemoteRejectedConnect() noexcept {
+        if (tunnelState_.rejected() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finishRemoteRejectedConnect();
     }
 
     [[nodiscard]] bool beginLocalRequestContent() noexcept {
@@ -251,10 +286,6 @@ public:
 
     [[nodiscard]] bool commitLocalEndStream() noexcept {
         return lifecycle_.commitLocalEndStream();
-    }
-
-    void markBodyEnded() noexcept {
-        lifecycle_.markBodyEnded();
     }
 
     [[nodiscard]] bool tryMarkQueued() noexcept {
@@ -335,9 +366,9 @@ public:
 
     [[nodiscard]] HttpServerExpectationAction expectationAction() const noexcept {
         return expectations_.serverAction(
-            bodyEnded()
-                ? HttpRequestContentIndication::kNone
-                : HttpRequestContentIndication::kWillFollow);
+            remoteReceive().contentOpen() != nullptr
+                ? HttpRequestContentIndication::kWillFollow
+                : HttpRequestContentIndication::kNone);
     }
 
     [[nodiscard]] std::string_view requestMethod() const noexcept {
@@ -502,14 +533,6 @@ public:
         return requestState_.markSingletonHeader(bit);
     }
 
-    [[nodiscard]] bool headersDecoded() const noexcept {
-        return requestState_.headersDecoded();
-    }
-
-    void markHeadersDecoded() noexcept {
-        requestState_.markHeadersDecoded();
-    }
-
     [[nodiscard]] bool beginStandardConnect() noexcept {
         return tunnelState_.begin(Http2ConnectForm::kStandard);
     }
@@ -519,11 +542,25 @@ public:
     }
 
     [[nodiscard]] bool acceptConnect() noexcept {
-        return tunnelState_.accept();
+        if (tunnelState_.pending() == nullptr ||
+            !lifecycle_.canAcceptRemoteConnect()) {
+            return false;
+        }
+        if (!tunnelState_.accept()) {
+            return false;
+        }
+        return lifecycle_.acceptRemoteConnect();
     }
 
     [[nodiscard]] bool rejectConnect() noexcept {
-        return tunnelState_.reject();
+        if (tunnelState_.pending() == nullptr ||
+            !lifecycle_.canRejectRemoteConnect()) {
+            return false;
+        }
+        if (!tunnelState_.reject()) {
+            return false;
+        }
+        return lifecycle_.rejectRemoteConnect();
     }
 
     [[nodiscard]] const Http2TunnelState& tunnel() const noexcept {

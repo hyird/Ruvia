@@ -628,7 +628,8 @@ Task<void> runHttp2SansIoSession(
                 const bool connectRequest =
                     streamState->tunnel().pending() != nullptr;
                 const bool streamingBody = !connectRequest &&
-                    streamState->usesStreamRequestBody() && !streamState->bodyEnded();
+                    streamState->usesStreamRequestBody() &&
+                    streamState->remoteReceive().contentOpen() != nullptr;
                 if (expectationAction ==
                         HttpServerExpectationAction::kUnsupported ||
                     connectRequest || streamingBody) {
@@ -672,7 +673,7 @@ Task<void> runHttp2SansIoSession(
                     continue;
                 }
                 if (auto* signal = findSignal(streamId)) {
-                    signal->wake();  // bodyEnded was marked by the core before this event
+                    signal->wake();  // remote END_STREAM was committed before this event
                 } else {
                     admitStream(streamId);  // buffered request: dispatch at end
                 }

@@ -126,7 +126,7 @@ inline void http2CompactBodyChunks(Http2StreamState& stream) {
         stream->isAborted() ||
         closing ||
         http2HasQueuedStreamBodyChunk(*stream) ||
-        stream->bodyEnded();
+        stream->remoteReceive().endStream() != nullptr;
 }
 
 [[nodiscard]] inline std::string_view http2PopStreamBodyChunk(Http2StreamState& stream) {

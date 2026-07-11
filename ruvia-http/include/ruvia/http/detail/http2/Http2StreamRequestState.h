@@ -75,14 +75,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool headersDecoded() const noexcept {
-        return headersDecoded_;
-    }
-
-    void markHeadersDecoded() noexcept {
-        headersDecoded_ = true;
-    }
-
     // Client role: the decoded response :status for a stream this endpoint opened,
     // and how many 1xx interim heads preceded the final one (bounded by the owner).
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {
@@ -109,7 +101,6 @@ private:
     bool hasHost_ : 1 {false};
     bool hasCookie_ : 1 {false};
     bool regularHeaderSeen_ : 1 {false};
-    bool headersDecoded_ : 1 {false};
     std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
     std::uint16_t responseStatus_{0};

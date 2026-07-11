@@ -600,8 +600,8 @@ private:
     [[nodiscard]] HeaderDecodeStatus decodeHeaderBlock(Http2StreamState& stream);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
     // stream's header table). A 1xx interim head is validated then discarded WITHOUT
-    // marking the stream decoded, so the next HEADERS block decodes as the real head;
-    // the callers emit events only when headersDecoded() flipped.
+    // leaving the remote head-pending alternative active, so the next HEADERS block
+    // decodes as the real head; callers emit events only after that alternative changes.
     [[nodiscard]] HeaderDecodeStatus decodeResponseHeaderBlock(Http2StreamState& stream);
     // Role-aware initial-head decode dispatch (request vs response semantics).
     [[nodiscard]] HeaderDecodeStatus decodeInitialHeaderBlock(Http2StreamState& stream);

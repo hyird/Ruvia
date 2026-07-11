@@ -13,6 +13,7 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2TunnelState.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+#include "ruvia/http/detail/http2/Http2WindowUpdate.h"
 
 namespace {
 
@@ -435,7 +436,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK(server.nextEvent().value().kind() == Http2EventKind::kTunnelEnd);
     RUVIA_CHECK(!server.nextEvent().has_value());
     server.consumeOutput(server.pendingOutput().size());
-    RUVIA_CHECK(stream->peerEndStream());
+    RUVIA_CHECK(stream->remoteReceive().endStream() != nullptr);
 
     // Peer FIN closes only its send half; the server can still finish its own half.
     RUVIA_CHECK(server.submitData(1, "reply", Http2EndStream::kKeepOpen) ==
@@ -550,6 +551,127 @@ RUVIA_TEST(http2_connect_client_rejection_closes_request_half_and_decodes_respon
     RUVIA_CHECK(event.kind() == Http2EventKind::kMessageBodyChunk);
     RUVIA_CHECK_EQ(event.messageBodyChunk()->bytes(), std::string_view("bad"));
     RUVIA_CHECK(client.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+}
+
+RUVIA_TEST(http2_connect_server_rejection_accepts_empty_terminal_data) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    handshake(server);
+    feedStandardConnect(server, &resource);
+    drainEvents(server);
+
+    auto* stream = server.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->remoteReceive().connectPending() != nullptr);
+
+    ruvia::HttpResponse rejected(&resource);
+    rejected.status(403);
+    const auto submitted = server.submitResponseHead(1, rejected);
+    RUVIA_CHECK(submitted.submitted() != nullptr);
+    RUVIA_CHECK(
+        stream->remoteReceive().connectRejectedAwaitingEndStream() != nullptr);
+    server.consumeOutput(server.pendingOutput().size());
+
+    const auto emptyKeepOpen = frame(
+        &resource, Http2FrameType::kData, 0, 1);
+    RUVIA_CHECK(server.feed(
+        std::string_view(emptyKeepOpen.data(), emptyKeepOpen.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(server.pendingOutput().empty());
+    RUVIA_CHECK(
+        stream->remoteReceive().connectRejectedAwaitingEndStream() != nullptr);
+
+    // A client that receives the non-2xx response closes its still-open CONNECT
+    // request half with an empty DATA(END_STREAM). This is normal completion, not a
+    // second request body and not a STREAM_CLOSED error.
+    const auto terminal = frame(
+        &resource,
+        Http2FrameType::kData,
+        ruvia::detail::kHttp2FlagEndStream,
+        1);
+    RUVIA_CHECK(server.feed(
+        std::string_view(terminal.data(), terminal.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(server.pendingOutput().empty());
+    RUVIA_CHECK(!server.nextEvent().has_value());
+    RUVIA_CHECK(stream->remoteReceive().endStream() != nullptr);
+    RUVIA_CHECK(!server.connectionError().has_value());
+}
+
+RUVIA_TEST(http2_connect_pending_accepts_empty_request_half_close) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    handshake(server);
+    feedStandardConnect(server, &resource);
+    drainEvents(server);
+
+    auto* stream = server.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->remoteReceive().connectPending() != nullptr);
+    const auto terminal = frame(
+        &resource,
+        Http2FrameType::kData,
+        ruvia::detail::kHttp2FlagEndStream,
+        1);
+    RUVIA_CHECK(server.feed(
+        std::string_view(terminal.data(), terminal.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(server.pendingOutput().empty());
+    RUVIA_CHECK(!server.nextEvent().has_value());
+    RUVIA_CHECK(
+        stream->remoteReceive().connectPendingEndStream() != nullptr);
+
+    ruvia::HttpResponse accepted(&resource);
+    accepted.status(200);
+    RUVIA_CHECK(server.submitConnectResponseHead(1, accepted) ==
+        Http2SubmitStatus::kAccepted);
+    RUVIA_CHECK(stream->remoteReceive().endStream() != nullptr);
+    RUVIA_CHECK(server.nextEvent().value().kind() ==
+        Http2EventKind::kTunnelEnd);
+    RUVIA_CHECK(!server.nextEvent().has_value());
+}
+
+RUVIA_TEST(http2_connect_open_tunnel_replenishes_deferred_stream_window) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection server(&resource);
+    handshake(server);
+    openStandardTunnel(server, &resource);
+    auto* stream = server.stream(1);
+    RUVIA_CHECK(stream != nullptr);
+    RUVIA_CHECK(stream->remoteReceive().tunnelOpen() != nullptr);
+
+    server.deferStreamWindowRelease(1);
+    const auto data = frame(&resource, Http2FrameType::kData, 0, 1, "peer");
+    RUVIA_CHECK(server.feed(std::string_view(data.data(), data.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(server.nextEvent().value().kind() == Http2EventKind::kTunnelData);
+    RUVIA_CHECK(!server.nextEvent().has_value());
+    RUVIA_CHECK(server.pendingOutput().empty());
+
+    server.releaseStreamWindow(1);
+    const auto updates = server.pendingOutput();
+    RUVIA_CHECK_EQ(
+        updates.size(),
+        std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
+    const auto connectionUpdate =
+        ruvia::detail::http2ParseFrameHeader(updates.substr(0, 9));
+    const auto streamUpdate = ruvia::detail::http2ParseFrameHeader(
+        updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes, 9));
+    RUVIA_CHECK_EQ(
+        connectionUpdate.type,
+        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+    RUVIA_CHECK_EQ(connectionUpdate.streamId, std::uint32_t{0});
+    RUVIA_CHECK_EQ(
+        streamUpdate.type,
+        static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+    RUVIA_CHECK_EQ(streamUpdate.streamId, std::uint32_t{1});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(updates.substr(9, 4)),
+        std::uint32_t{4});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(
+            updates.substr(ruvia::detail::kHttp2WindowUpdateFrameBytes + 9, 4)),
+        std::uint32_t{4});
 }
 
 RUVIA_TEST(http2_connect_server_rejects_data_before_acceptance) {

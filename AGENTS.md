@@ -265,9 +265,8 @@ response、tunnel DATA 权限不得合并；trailers-only 不得开放 DATA；qu
 `Http2StreamCloseSource`；它统一表示 local/peer RST_STREAM 与被 peer GOAWAY last-stream-id
 排除的请求，后者不是 reset，不得恢复 `Http2LocalReset`、`isReset()`、`markReset()` 或
 `removeReset()` 这套错误词汇。状态查询统一使用 `isAborted()`；`abort(source)` 是异常终止的唯一
-mutation，必须同时关闭 peer/body
-生命周期并清除 ready-queue ownership；正常 END_STREAM 只能进入 committed half-close，不能伪装成
-abort。
+mutation，必须同时进入 remote-aborted alternative 并清除 ready-queue ownership；正常 END_STREAM
+只能进入 committed half-close，不能伪装成 abort。
 `Http2StreamLifecycle` 与 `Http2StreamState` 只暴露一个 const `localSend()` view，禁止恢复
 `Http2LocalSendPhase + Http2LocalMessageKind + bool + closeSource` 笛卡尔积、对应 forwarding
 accessor 或分散 mutation。`Http2LocalSendState` 的 transition 只能由 friend
@@ -280,6 +279,26 @@ tunnel/content 联合校验。该状态必须遵守
 RST_STREAM 的 whole-stream closed 转换遵守
 [§6.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4)，GOAWAY 排除未处理请求的语义遵守
 [§6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8)。
+
+HTTP/2 远端收帧权限必须由一个 `Http2RemoteReceiveState` 独占，并且只能是
+`Http2RemoteHeadPending`、`Http2RemoteHeadEndStreamPending`、`Http2RemoteContentOpen`、
+`Http2RemoteConnectPending`、`Http2RemoteConnectPendingEndStream`、
+`Http2RemoteConnectRejectedAwaitingEndStream`、`Http2RemoteTunnelOpen`、
+`Http2RemoteEndStream` 或 `Http2RemoteAborted` 之一。initial/final HEADERS 必须原子选择普通 content、
+CONNECT 决策、tunnel 或 peer half-close 语义；1xx 继续停留在 head-pending。禁止恢复
+`headersDecoded()`、`bodyEnded()`、`peerEndStream()` 及其独立 mutation，也禁止用“CONNECT 的 HTTP
+content 必为空”冒充“对端已发送 END_STREAM”。server 拒绝尚未 half-close 的 CONNECT 后，只能接受
+空 DATA，并以其中的 `END_STREAM` 正常终止；pending CONNECT 也必须允许空 terminal DATA 在决策前
+完成 peer half-close。接受仍开放的 CONNECT 后必须进入 `Http2RemoteTunnelOpen`，延迟消费
+tunnel DATA 时在真实 peer END_STREAM 前同时补回 connection 与 stream receive window。
+`Http2StreamLifecycle` 与 `Http2StreamState` 只能暴露一个 const `remoteReceive()` view，mutation 继续
+遵守 lifecycle 到 stream 的 friend-only ownership chain。该状态遵守
+[RFC 9113 §5.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1) 的 peer half-close、
+[§8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1) 的 message termination、
+[§8.5](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.5) 的 CONNECT tunnel DATA 与空 terminal
+DATA，以及
+[RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 的 Extended CONNECT orderly
+closure。
 
 HTTP/1 parser 必须产出不可变的 `Http1RequestBodyPlan`，其 framing 只能是
 `Http1RequestWithoutBody`、`Http1KnownLengthRequestBody` 或 `Http1ChunkedRequestBody`；缺少 framing
