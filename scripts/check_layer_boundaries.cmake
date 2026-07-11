@@ -105,6 +105,8 @@ set(RULE_WEB_HEAD_BODY_DECISION
     "request[.](method|knownMethod)[(][)][ \t]*==[ \t]*(HttpKnownMethod::kHead|\"HEAD\")")
 set(RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR
     "suppressAutoContentLength|streamHead[.]policy[(][)]|responseBodyFramingHeaderForbidden|responseHasForbiddenBodyFramingHeader")
+set(RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR
+    "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|bool[ 	]+emitAutoContentLength|std::uint64_t[ 	]+autoContentLength")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -413,6 +415,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("scalar HTTP/1 response-head framing"
         "${RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR}"
         "bool suppressAutoContentLength = true;")
+    expect_match("scalar HTTP/2 response-head Content-Length ownership"
+        "${RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR}"
+        "std::uint64_t autoContentLength, bool emitAutoContentLength")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -1747,6 +1752,82 @@ if(EXISTS "${HTTP_RESPONSE_HEAD_SOURCE}")
 endif()
 set(HTTP2_RESPONSE_HEADERS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeaders.h")
+set(HTTP2_RESPONSE_HEAD_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(HTTP2_RESPONSE_CONNECTION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+check_files_no_match("HTTP/2 response-head encoding must not restore scalar Content-Length ownership"
+    "${RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR}"
+    "${HTTP2_RESPONSE_HEADERS}"
+    "${HTTP2_RESPONSE_CONNECTION_SOURCE}")
+if(NOT EXISTS "${HTTP2_RESPONSE_HEAD_PLAN}" OR
+   NOT EXISTS "${HTTP2_RESPONSE_HEADERS}" OR
+   NOT EXISTS "${HTTP2_RESPONSE_CONNECTION_SOURCE}")
+    boundary_error("typed HTTP/2 response-head plan is incomplete"
+        "the plan, HPACK encoder, and connection driver are all required")
+else()
+    file(READ "${HTTP2_RESPONSE_HEAD_PLAN}" http2_response_head_plan)
+    file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_head_encoder)
+    file(READ "${HTTP2_RESPONSE_CONNECTION_SOURCE}"
+        http2_response_head_connection)
+    set(http2_response_head_missing)
+    foreach(http2_head_probe IN ITEMS
+            "class Http2CanonicalResponseContentLength final"
+            "class Http2ExplicitResponseContentLength final"
+            "class Http2AbsentResponseContentLength final"
+            "class Http2ForbiddenResponseContentLength final"
+            "class Http2ResponseHeadPlan final"
+            "using ContentLength = std::variant"
+            "std::get_if<Http2CanonicalResponseContentLength>"
+            "std::get_if<Http2ExplicitResponseContentLength>"
+            "std::get_if<Http2AbsentResponseContentLength>"
+            "std::get_if<Http2ForbiddenResponseContentLength>"
+            "class Http2ResponseHeadPlanResult final"
+            "std::get_if<Http2ResponseHeadPlan>"
+            "HttpResponseBodyPlan bodyPlan_"
+            "http2BufferedResponseHeadPlan"
+            "http2StreamingResponseHeadPlan"
+            "http2ConnectResponseHeadPlan")
+        if(NOT http2_response_head_plan MATCHES "${http2_head_probe}")
+            list(APPEND http2_response_head_missing
+                "plan:${http2_head_probe}")
+        endif()
+    endforeach()
+    foreach(http2_encoder_probe IN ITEMS
+            "const Http2ResponseHeadPlan& plan"
+            "knownBit == kResponseHeaderContentLength"
+            "plan[.]canonicalContentLength[(][)]"
+            "plan[.]explicitContentLength[(][)]")
+        if(NOT http2_response_head_encoder MATCHES
+               "${http2_encoder_probe}")
+            list(APPEND http2_response_head_missing
+                "encoder:${http2_encoder_probe}")
+        endif()
+    endforeach()
+    foreach(http2_connection_probe IN ITEMS
+            "http2BufferedResponseHeadPlan"
+            "http2StreamingResponseHeadPlan"
+            "http2ConnectResponseHeadPlan"
+            "headPlan->explicitContentLength[(][)]")
+        if(NOT http2_response_head_connection MATCHES
+               "${http2_connection_probe}")
+            list(APPEND http2_response_head_missing
+                "connection:${http2_connection_probe}")
+        endif()
+    endforeach()
+    if(http2_response_head_encoder MATCHES
+           "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength|std::uint64_t[ 	]+autoContentLength" OR
+       http2_response_head_connection MATCHES
+           "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength")
+        list(APPEND http2_response_head_missing "stale-scalar-api")
+    endif()
+    if(http2_response_head_missing)
+        string(JOIN ", " http2_response_head_missing_text
+            ${http2_response_head_missing})
+        boundary_error("HTTP/2 response-head Content-Length escaped its exclusive plan"
+            "canonical, explicit, absent, and forbidden ownership must be exclusive; HPACK and DATA accounting consume the same plan; missing ${http2_response_head_missing_text}")
+    endif()
+endif()
 set(HTTP_STATUS_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpStatus.h")
 set(HTTP_RESPONSE_MODEL_HEADER
@@ -1911,6 +1992,46 @@ if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
            "!HasStalePreparedStreamPolicy")
         boundary_error("typed HTTP/1 response-head framing is under-tested"
             "wire tests, prepared-plan tests, and installed consumers must pin canonical chunked framing, HTTP/1.0 TE/CL filtering, HEAD metadata, and removal of the scalar API")
+    endif()
+endif()
+
+set(HTTP2_RESPONSE_HEAD_PLAN_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
+set(HTTP2_RESPONSE_HEAD_CONNECTION_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+if(EXISTS "${HTTP2_RESPONSE_HEAD_PLAN_TEST}" AND
+   EXISTS "${HTTP2_RESPONSE_HEAD_CONNECTION_TEST}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_RESPONSE_HEAD_PLAN_TEST}"
+        http2_response_head_plan_test)
+    file(READ "${HTTP2_RESPONSE_HEAD_CONNECTION_TEST}"
+        http2_response_head_connection_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}"
+        http2_response_head_package_test)
+    if(NOT http2_response_head_plan_test MATCHES
+           "http2_response_head_content_length_plan_is_exclusive" OR
+       NOT http2_response_head_plan_test MATCHES
+           "http2_response_headers_canonicalize_valid_explicit_content_length_once" OR
+       NOT http2_response_head_plan_test MATCHES
+           "http2_response_headers_reject_only_preserved_invalid_content_length" OR
+       NOT http2_response_head_plan_test MATCHES
+           "!std::is_default_constructible_v<Http2ResponseHeadPlan>" OR
+       NOT http2_response_head_connection_test MATCHES
+           "http2_connection_streaming_content_length_finish_and_trailers_are_exact" OR
+       NOT http2_response_head_package_test MATCHES
+           "HasHttp2ResponseHeadContentLengthAlternatives" OR
+       NOT http2_response_head_package_test MATCHES
+           "HasHttp2ResponseContentLengthValue" OR
+       NOT http2_response_head_package_test MATCHES
+           "!std::default_initializable<[ \t\r\n]*ruvia::detail::Http2ResponseHeadPlan>" OR
+       NOT http2_response_head_package_test MATCHES
+           "http2BufferedResponseHeadPlan" OR
+       NOT http2_response_head_package_test MATCHES
+           "http2StreamingResponseHeadPlan" OR
+       NOT http2_response_head_package_test MATCHES
+           "Http2ResponseHeadPlanError::kInvalidContentLength")
+        boundary_error("typed HTTP/2 response-head plan is under-tested"
+            "unit, connection, and installed-package tests must pin exclusive length ownership, single parsing, canonical wire bytes, invalid failure, and DATA accounting")
     endif()
 endif()
 
@@ -4244,10 +4365,25 @@ foreach(boundary_doc IN ITEMS
        NOT boundary_doc_content MATCHES "section-8[.]1" OR
        NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
        NOT boundary_doc_content MATCHES "accepted" OR
-       NOT boundary_doc_content MATCHES "committed")
+       NOT boundary_doc_content MATCHES "committed" OR
+       NOT boundary_doc_content MATCHES "Http2ResponseHeadPlan" OR
+       NOT boundary_doc_content MATCHES
+           "Http2CanonicalResponseContentLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2ExplicitResponseContentLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2AbsentResponseContentLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2ForbiddenResponseContentLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2ResponseHeadPlanResult" OR
+       NOT boundary_doc_content MATCHES "http2BufferedResponseHeadPlan" OR
+       NOT boundary_doc_content MATCHES "http2StreamingResponseHeadPlan" OR
+       NOT boundary_doc_content MATCHES "http2ConnectResponseHeadPlan" OR
+       NOT boundary_doc_content MATCHES "emitAutoContentLength")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 outbound Content-Length contract is undocumented"
-            "${relative} must document exclusive local-content states, pre-head rejection, payload ownership, and accepted versus committed DATA")
+            "${relative} must document exclusive head ownership, removal of the scalar API, single explicit-length parsing, local-content states, and accepted versus committed DATA")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2RemoteContentState" OR
        NOT boundary_doc_content MATCHES

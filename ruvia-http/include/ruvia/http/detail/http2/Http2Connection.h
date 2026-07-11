@@ -400,12 +400,15 @@ public:
     // Submit a final response for `streamId`. Head first, then data chunks, then
     // end. Informational status codes and HTTP/2-unrepresentable control semantics
     // (notably 426, whose mandatory Upgrade field is forbidden here) are rejected
-    // transactionally before HPACK or stream state changes.
+    // transactionally before HPACK or stream state changes. An exclusive
+    // Http2ResponseHeadPlan owns canonical, explicit, absent, or forbidden
+    // Content-Length metadata before the encoder and local DATA state advance.
     [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(
         std::uint32_t streamId, const HttpResponse& response);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
-    // an explicit value is strictly parsed and binds all later DATA. With no explicit
-    // value the body is unbounded. The stream stays open for subsequent submitData
+    // an explicit value is strictly parsed once and the same plan binds both HPACK
+    // metadata and all later DATA. With no explicit value the body is unbounded.
+    // The stream stays open for subsequent submitData
     // chunks unless the method/status suppresses a body. A declared trailer section
     // keeps an HTTP/2 content-forbidden response open in a trailers-only phase; without
     // one, END_STREAM is carried by the initial HEADERS. The owner then streams DATA

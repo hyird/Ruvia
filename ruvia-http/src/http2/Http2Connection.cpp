@@ -2071,15 +2071,19 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     // Explicit response streaming uses submitStreamingResponseHead() instead.
     auto writePlan = httpBufferedResponseWritePlan(
         stream->requestKnownMethod(), response);
-    if (appendHttp2ResponseHeaders(*stream, response, writePlan.contentLength(), true) !=
-        Http2ResponseHeaderEncodeStatus::kOk) {
+    const auto headPlanResult = http2BufferedResponseHeadPlan(
+        writePlan,
+        response);
+    const auto* headPlan = headPlanResult.plan();
+    if (headPlan == nullptr) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
+    appendHttp2ResponseHeaders(*stream, response, *headPlan);
     const auto endStream = writePlan.sendBody()
         ? Http2EndStream::kKeepOpen
         : Http2EndStream::kEndStream;
-    if (writePlan.bodySuppressed()) {
+    if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
     } else {
         stream->beginLocalContentKnownLength(writePlan.contentLength());
@@ -2135,27 +2139,28 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         bodyPlan,
         trailerIntent);
     const auto& commitPlan = streamHead.commitPlan();
-    // Streaming never invents a length: an explicit value is validated and becomes
-    // the exact DATA contract; absence remains unbounded. A content-forbidden
-    // response either ends on this HEADERS block or enters the explicit
-    // trailers-only phase; it never becomes DATA-open.
-    const auto explicitContentLength =
-        http2ExplicitResponseContentLength(streamHead.response());
-    if (appendHttp2ResponseHeaders(
-            *stream, streamHead.response(), 0, /*emitAutoContentLength=*/false) !=
-        Http2ResponseHeaderEncodeStatus::kOk) {
+    // One prepared plan owns both the encoded Content-Length metadata and the
+    // local DATA accounting contract. Explicit length is parsed exactly once;
+    // absence remains unbounded, while content-forbidden responses never become
+    // DATA-open.
+    const auto headPlanResult = http2StreamingResponseHeadPlan(
+        commitPlan.bodyPlan(),
+        streamHead.response());
+    const auto* headPlan = headPlanResult.plan();
+    if (headPlan == nullptr) {
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
+    appendHttp2ResponseHeaders(*stream, streamHead.response(), *headPlan);
     const auto endStream =
         commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded
         ? Http2EndStream::kEndStream
         : Http2EndStream::kKeepOpen;
-    if (bodyPlan.bodySuppressed()) {
+    if (headPlan->bodyPlan().bodySuppressed()) {
         stream->beginLocalContentForbidden();
-    } else if (explicitContentLength.status ==
-               Http2ExplicitContentLengthStatus::kValid) {
-        stream->beginLocalContentKnownLength(explicitContentLength.value);
+    } else if (const auto* explicitLength =
+                   headPlan->explicitContentLength()) {
+        stream->beginLocalContentKnownLength(explicitLength->value());
     } else {
         stream->beginLocalContentUnbounded();
     }
@@ -2192,7 +2197,7 @@ Http2SubmitStatus Http2Connection::submitInterimResponseHead(
         return Http2SubmitStatus::kInvalidState;
     }
     if (appendHttp2InterimResponseHeaders(*stream, response) !=
-        Http2ResponseHeaderEncodeStatus::kOk) {
+        Http2InterimResponseHeaderEncodeStatus::kOk) {
         return Http2SubmitStatus::kInvalidMessage;
     }
     appendResponseHeaderFrames(
@@ -2307,11 +2312,13 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     if (!http2IsValidConnectResponseHead(response)) {
         return Http2SubmitStatus::kInvalidMessage;
     }
-    if (appendHttp2ResponseHeaders(
-            *stream, response, 0, /*emitAutoContentLength=*/false) !=
-        Http2ResponseHeaderEncodeStatus::kOk) {
+    const auto headPlanResult = http2ConnectResponseHeadPlan(
+        httpResponseBodyPlan(HttpKnownMethod::kConnect, response.status()));
+    const auto* headPlan = headPlanResult.plan();
+    if (headPlan == nullptr) {
         return Http2SubmitStatus::kInvalidMessage;
     }
+    appendHttp2ResponseHeaders(*stream, response, *headPlan);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(

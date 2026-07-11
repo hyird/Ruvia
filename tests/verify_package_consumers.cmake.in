@@ -791,6 +791,48 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "suppressAutoContentLength|ResponseWritePolicy[ \t]+policy")
     message(FATAL_ERROR "installed HTTP/1 response-head API restored scalar framing or lost its exclusive plan")
 endif()
+set(_installed_http2_response_head_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
+set(_installed_http2_response_headers_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeaders.h")
+if(NOT EXISTS "${_installed_http2_response_head_plan_path}" OR
+   NOT EXISTS "${_installed_http2_response_headers_path}")
+    message(FATAL_ERROR "installed typed HTTP/2 response-head plan is missing")
+endif()
+file(READ "${_installed_http2_response_head_plan_path}"
+    _installed_http2_response_head_plan)
+file(READ "${_installed_http2_response_headers_path}"
+    _installed_http2_response_headers)
+if(NOT _installed_http2_response_head_plan MATCHES
+       "class Http2CanonicalResponseContentLength final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "class Http2ExplicitResponseContentLength final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "class Http2AbsentResponseContentLength final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "class Http2ForbiddenResponseContentLength final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "class Http2ResponseHeadPlan final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "using ContentLength = std::variant" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "class Http2ResponseHeadPlanResult final" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "std::get_if<Http2ResponseHeadPlan>" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "http2BufferedResponseHeadPlan" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "http2StreamingResponseHeadPlan" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "http2ConnectResponseHeadPlan" OR
+   NOT _installed_http2_response_headers MATCHES
+       "const Http2ResponseHeadPlan& plan" OR
+   _installed_http2_response_headers MATCHES
+       "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength|std::uint64_t[ 	]+autoContentLength")
+    message(FATAL_ERROR "installed HTTP/2 response-head API restored scalar Content-Length ownership or lost its exclusive plan")
+endif()
 set(_installed_http2_tunnel_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2TunnelState.h")
 if(NOT EXISTS "${_installed_http2_tunnel_state_path}")
