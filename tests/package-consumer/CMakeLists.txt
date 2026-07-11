@@ -67,6 +67,13 @@ if(NOT RUVIA_EXPECT_AVAILABLE_COMPONENTS STREQUAL "")
 endif()
 
 foreach(_ruvia_component IN LISTS _ruvia_components)
-    add_executable(ruvia_consumer_${_ruvia_component} ${_ruvia_component}.cpp)
+    set(_ruvia_consumer_source ${_ruvia_component}.cpp)
+    if(_ruvia_component STREQUAL "http")
+        # The exhaustive public-header contract is a regular test target and is
+        # compiled once per build. Package scenarios only need to prove that each
+        # isolated imported target can compile and link.
+        set(_ruvia_consumer_source http_smoke.cpp)
+    endif()
+    add_executable(ruvia_consumer_${_ruvia_component} ${_ruvia_consumer_source})
     target_link_libraries(ruvia_consumer_${_ruvia_component} PRIVATE ruvia::${_ruvia_component})
 endforeach()
