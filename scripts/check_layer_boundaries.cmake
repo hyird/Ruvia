@@ -104,7 +104,9 @@ set(RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION
 set(RULE_WEB_HEAD_BODY_DECISION
     "request[.](method|knownMethod)[(][)][ \t]*==[ \t]*(HttpKnownMethod::kHead|\"HEAD\")")
 set(RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR
-    "suppressAutoContentLength|streamHead[.]policy[(][)]|responseBodyFramingHeaderForbidden|responseHasForbiddenBodyFramingHeader")
+    "suppressAutoContentLength|streamHead[.]policy[(][)]|responseBodyFramingHeaderForbidden|responseHasForbiddenBodyFramingHeader|http1BufferedResponseHeadPlan")
+set(RULE_STALE_HTTP1_RESPONSE_VERSION_SIGNAL
+    "Http1ResponseConnectionSignal|responseSignal[(][)]|http1PlanRequestConnection")
 set(RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR
     "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|bool[ 	]+emitAutoContentLength|std::uint64_t[ 	]+autoContentLength")
 set(RULE_ROUTER_CONNECTION_POLICY
@@ -415,6 +417,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("scalar HTTP/1 response-head framing"
         "${RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR}"
         "bool suppressAutoContentLength = true;")
+    expect_match("lossy HTTP/1 response-version signal"
+        "${RULE_STALE_HTTP1_RESPONSE_VERSION_SIGNAL}"
+        "Http1ResponseConnectionSignal responseSignal();")
     expect_match("scalar HTTP/2 response-head Content-Length ownership"
         "${RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR}"
         "std::uint64_t autoContentLength, bool emitAutoContentLength")
@@ -1477,6 +1482,7 @@ check_files_no_match("ruvia-web must not decide HEAD response body semantics"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
 check_files_no_match("HTTP/1 response-head framing must not collapse to a boolean"
     "${RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHead.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
@@ -1654,13 +1660,16 @@ set(WEB_RESPONSE_WRITER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
 set(WEB_RESPONSE_STREAM_SINK
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
+set(WEB_RESPONSE_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 foreach(http1_response_head_contract_file IN ITEMS
         "${HTTP1_RESPONSE_HEAD_PLAN}"
         "${HTTP_RESPONSE_HEAD_HEADER}"
         "${HTTP_RESPONSE_STREAM_HEAD}"
         "${HTTP1_SERVER_SEMANTICS}"
         "${WEB_RESPONSE_WRITER}"
-        "${WEB_RESPONSE_STREAM_SINK}")
+        "${WEB_RESPONSE_STREAM_SINK}"
+        "${WEB_RESPONSE_SESSION}")
     if(NOT EXISTS "${http1_response_head_contract_file}")
         file(RELATIVE_PATH relative
             "${RUVIA_ROOT}" "${http1_response_head_contract_file}")
@@ -1673,13 +1682,15 @@ if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
    EXISTS "${HTTP_RESPONSE_STREAM_HEAD}" AND
    EXISTS "${HTTP1_SERVER_SEMANTICS}" AND
    EXISTS "${WEB_RESPONSE_WRITER}" AND
-   EXISTS "${WEB_RESPONSE_STREAM_SINK}")
+   EXISTS "${WEB_RESPONSE_STREAM_SINK}" AND
+   EXISTS "${WEB_RESPONSE_SESSION}")
     file(READ "${HTTP1_RESPONSE_HEAD_PLAN}" http1_response_head_plan)
     file(READ "${HTTP_RESPONSE_HEAD_HEADER}" http_response_head_header)
     file(READ "${HTTP_RESPONSE_STREAM_HEAD}" http_response_stream_head)
     file(READ "${HTTP1_SERVER_SEMANTICS}" http1_response_head_semantics)
     file(READ "${WEB_RESPONSE_WRITER}" web_response_writer)
     file(READ "${WEB_RESPONSE_STREAM_SINK}" web_response_stream_sink)
+    file(READ "${WEB_RESPONSE_SESSION}" web_response_session)
     set(http1_response_head_missing)
     foreach(http1_head_probe IN ITEMS
             "class Http1BufferedResponseHead final"
@@ -1689,7 +1700,11 @@ if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
             "std::get_if<Http1BufferedResponseHead>"
             "std::get_if<Http1ChunkedResponseStreamHead>"
             "std::get_if<Http1CloseDelimitedResponseStreamHead>"
-            "HttpResponseBodyPlan bodyPlan_")
+            "HttpResponseBodyPlan bodyPlan_"
+            "std::uint64_t contentLength_"
+            "HttpProtocolVersion protocolVersion_"
+            "class Http1BufferedResponsePlan final"
+            "http1BufferedResponsePlan")
         if(NOT http1_response_head_plan MATCHES "${http1_head_probe}")
             list(APPEND http1_response_head_missing
                 "plan:${http1_head_probe}")
@@ -1717,8 +1732,18 @@ if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
                 "semantics:${http1_semantics_probe}")
         endif()
     endforeach()
-    if(NOT web_response_writer MATCHES "http1BufferedResponseHeadPlan")
+    if(NOT web_response_writer MATCHES
+           "const Http1BufferedResponsePlan& responsePlan" OR
+       NOT web_response_writer MATCHES "responsePlan[.]headPlan[(][)]" OR
+       web_response_writer MATCHES "http1BufferedResponseHeadPlan")
         list(APPEND http1_response_head_missing "web-buffered-driver")
+    endif()
+    if(NOT web_response_session MATCHES "http1BufferedResponsePlan" OR
+       NOT web_response_session MATCHES
+           "responsePreparation[.]writePlan[(][)]" OR
+       NOT web_response_session MATCHES "connectionPlan")
+        list(APPEND http1_response_head_missing
+            "web-buffered-composition")
     endif()
     if(NOT web_response_stream_sink MATCHES
            "streamHead[.]responseHeadPlan[(][)]")
@@ -1741,13 +1766,19 @@ if(EXISTS "${HTTP_RESPONSE_HEAD_SOURCE}")
        NOT http1_typed_response_head_source MATCHES
            "plan[.]closeDelimitedStream[(][)]" OR
        NOT http1_typed_response_head_source MATCHES
+           "plan[.]protocolVersion[(][)]" OR
+       NOT http1_typed_response_head_source MATCHES
+           "buffered->contentLength[(][)]" OR
+       NOT http1_typed_response_head_source MATCHES "HTTP/1[.]0" OR
+       NOT http1_typed_response_head_source MATCHES "HTTP/1[.]1" OR
+       NOT http1_typed_response_head_source MATCHES
            "kChunkedTransferEncodingHeader" OR
        NOT http1_typed_response_head_source MATCHES
            "knownBit == kResponseHeaderTransferEncoding" OR
        NOT http1_typed_response_head_source MATCHES
            "knownBit == kResponseHeaderContentLength")
         boundary_error("HTTP/1 response-head emitter bypasses its typed framing plan"
-            "canonical chunked ownership and close-delimited TE/CL filtering must be derived from Http1ResponseHeadPlan")
+            "status-line version, canonical buffered length, chunked ownership, and close-delimited TE/CL filtering must derive from Http1ResponseHeadPlan")
     endif()
 endif()
 set(HTTP2_RESPONSE_HEADERS
@@ -1975,23 +2006,39 @@ if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
     if(NOT http1_response_head_wire_test MATCHES
            "response_head_close_delimited_stream_rejects_declared_framing" OR
        NOT http1_response_head_wire_test MATCHES
+           "http1_buffered_response_plan_owns_request_version_and_length" OR
+       NOT http1_response_head_wire_test MATCHES "HTTP/1[.]0 200 OK" OR
+       NOT http1_response_head_wire_test MATCHES
            "Transfer-Encoding: chunked" OR
        NOT http1_response_head_wire_test MATCHES
            "Content-Length: 8" OR
        NOT http1_response_head_policy_test MATCHES
            "http1_response_head_framing_is_an_exclusive_plan" OR
+       NOT http1_response_head_policy_test MATCHES
+           "Http1BufferedResponsePlan" OR
        NOT http1_response_stream_plan_test MATCHES
            "http1_prepared_stream_head_owns_exact_wire_framing" OR
        NOT http1_response_stream_plan_test MATCHES
            "responseHeadPlan[(][)][.]closeDelimitedStream[(][)]" OR
+       NOT http1_response_stream_plan_test MATCHES
+           "http10Wire[.]starts_with[(]\"HTTP/1[.]0" OR
+       NOT http1_response_stream_plan_test MATCHES "failedHttp10" OR
+       NOT http1_response_stream_plan_test MATCHES
+           "failedHttp10[.]connectionPlan[.]protocolVersion[(][)]" OR
        NOT http1_response_head_package_test MATCHES
            "HasHttp1ResponseHeadAlternatives" OR
+       NOT http1_response_head_package_test MATCHES
+           "HasHttp1ProtocolVersion" OR
+       NOT http1_response_head_package_test MATCHES
+           "HasHttp1BufferedPlanComposition" OR
+       NOT http1_response_head_package_test MATCHES
+           "!HasStaleHttp1ResponseSignal" OR
        NOT http1_response_head_package_test MATCHES
            "!HasStaleHttp1ResponseHeadScalar" OR
        NOT http1_response_head_package_test MATCHES
            "!HasStalePreparedStreamPolicy")
         boundary_error("typed HTTP/1 response-head framing is under-tested"
-            "wire tests, prepared-plan tests, and installed consumers must pin canonical chunked framing, HTTP/1.0 TE/CL filtering, HEAD metadata, and removal of the scalar API")
+            "wire tests, parser body-failure tests, prepared-plan tests, and installed consumers must pin exact HTTP/1.0 status-line ownership, canonical buffered length, chunked framing, TE/CL filtering, HEAD metadata, and removal of scalar/version-signal APIs")
     endif()
 endif()
 
@@ -2038,7 +2085,7 @@ endif()
 if(EXISTS "${HTTP_RESPONSE_HEAD_SOURCE}" AND EXISTS "${HTTP2_RESPONSE_HEADERS}")
     file(READ "${HTTP_RESPONSE_HEAD_SOURCE}" http_response_head_source)
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_headers)
-    if(NOT http_response_head_source MATCHES "flags\.bodyAllowed" OR
+    if(NOT http_response_head_source MATCHES "canonicalContentLength" OR
        NOT http2_response_headers MATCHES "canonicalContentLength")
         boundary_error("205 zero-length canonicalization is incomplete across protocols"
             "HTTP/1 and HTTP/2 writers must replace application framing with length zero")
@@ -3446,11 +3493,19 @@ if(NOT EXISTS "${HTTP1_SERVER_CONNECTION_PLAN}")
 else()
     file(READ "${HTTP1_SERVER_CONNECTION_PLAN}" http1_server_connection_plan)
     if(NOT http1_server_connection_plan MATCHES "class Http1ServerConnectionPlan" OR
-       NOT http1_server_connection_plan MATCHES "Http1ResponseConnectionSignal" OR
-       NOT http1_server_connection_plan MATCHES "http1PlanRequestConnection" OR
+       NOT http1_server_connection_plan MATCHES "HttpProtocolVersion protocolVersion_" OR
+       NOT http1_server_connection_plan MATCHES "protocolVersion[(][)] const noexcept" OR
+       NOT http1_server_connection_plan MATCHES "http1PlanHttp10RequestConnection" OR
+       NOT http1_server_connection_plan MATCHES "http1PlanHttp11RequestConnection" OR
+       NOT http1_server_connection_plan MATCHES "http11Close" OR
        NOT http1_server_connection_plan MATCHES "requireClose")
         boundary_error("HTTP/1 connection plan lost part of its typed contract"
-            "disposition, version signal, parser construction, and close-only tightening must stay bound")
+            "exact protocol version, disposition, version-specific parser construction, and close-only tightening must stay bound")
+    endif()
+    if(http1_server_connection_plan MATCHES
+           "${RULE_STALE_HTTP1_RESPONSE_VERSION_SIGNAL}")
+        boundary_error("HTTP/1 connection plan compressed its protocol version"
+            "the exact HTTP/1.0 or HTTP/1.1 value must survive; responseSignal and the generic version factory are forbidden")
     endif()
 endif()
 if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
@@ -3462,15 +3517,21 @@ if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
        NOT http1_server_semantics MATCHES "response\\.headers\\(\\)" OR
        NOT http1_server_semantics MATCHES "std::nullopt" OR
        NOT http1_server_semantics MATCHES "bodyPlan\\.bodySuppressed\\(\\)" OR
-       NOT http1_server_semantics MATCHES "http1FinalizeResponseConnection")
+       NOT http1_server_semantics MATCHES "http1FinalizeResponseConnection" OR
+       NOT http1_server_semantics MATCHES "plan[.]protocolVersion[(][)]")
         boundary_error("HTTP/1 connection lifecycle lost its commit-time typed plan"
-            "request, runtime policy, response body semantics, wire signal, and socket disposition must share one typed path")
+            "request version, runtime policy, response body semantics, status-line bytes, and socket disposition must share one typed path")
     endif()
     if(http1_server_semantics MATCHES "http1RequestNeedsKeepAliveSignal" OR
        http1_server_semantics MATCHES "needsKeepAliveSignal" OR
        http1_server_semantics MATCHES "http1RequestConnectionDisposition")
         boundary_error("HTTP/1 connection plan was split back into scalar facts"
-            "version signal and disposition must remain bound in Http1ServerConnectionPlan")
+            "exact protocol version and disposition must remain bound in Http1ServerConnectionPlan")
+    endif()
+    if(http1_server_semantics MATCHES
+           "httpFinalResponseControlPlan\\([^)]*HttpProtocolVersion::kHttp11")
+        boundary_error("HTTP/1 final response control hard-coded its version"
+            "HttpFinalResponseControlPlan must consume the exact version retained by Http1ServerConnectionPlan")
     endif()
 endif()
 if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
@@ -3478,9 +3539,13 @@ if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
     file(READ "${HTTP1_PARSER_SOURCE}" http1_parser_source)
     if(NOT http1_parser_internal MATCHES "Http1ServerConnectionPlan connectionPlan" OR
        NOT http1_parser_source MATCHES
-           "state\\.connectionPlan[ \\t]*=[ \\t]*http1PlanRequestConnection")
+           "http1PlanHttp10RequestConnection" OR
+       NOT http1_parser_source MATCHES
+           "http1PlanHttp11RequestConnection" OR
+       NOT http1_parser_source MATCHES
+           "state[.]connectionPlan[.]requireClose[(][)]")
         boundary_error("HTTP/1 parser stopped owning the connection plan"
-            "the validated request version and flags must produce one plan stored in Http1ServerRequestParseState")
+            "the validated request version and flags must produce one plan stored in Http1ServerRequestParseState, and body-framing failure must preserve its version while forcing close")
     endif()
     if(NOT http1_parser_internal MATCHES "enum class Http1ServerRequestParsePhase" OR
        NOT http1_parser_internal MATCHES "kNeedRequestHead" OR
@@ -4171,17 +4236,25 @@ foreach(boundary_doc IN ITEMS
            "Http1ChunkedResponseStreamHead" OR
        NOT boundary_doc_content MATCHES
            "Http1CloseDelimitedResponseStreamHead" OR
+       NOT boundary_doc_content MATCHES "Http1BufferedResponsePlan" OR
+       NOT boundary_doc_content MATCHES "contentLength" OR
+       NOT boundary_doc_content MATCHES "section-2[.]5" OR
        NOT boundary_doc_content MATCHES "suppressAutoContentLength" OR
        NOT boundary_doc_content MATCHES "section-6[.]1" OR
        NOT boundary_doc_content MATCHES "section-6[.]3")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 response-head plan is undocumented"
-            "${relative} must document the exclusive buffered/chunked/close-delimited alternatives, removal of the scalar API, canonical Transfer-Encoding ownership, and RFC 9112 framing")
+            "${relative} must document exact status-line version ownership, buffered write/head composition and canonical length, exclusive framing alternatives, removal of the scalar API, and RFC 9110/9112 behavior")
     endif()
-    if(NOT boundary_doc_content MATCHES "Http1ServerConnectionPlan")
+    if(NOT boundary_doc_content MATCHES "Http1ServerConnectionPlan" OR
+       NOT boundary_doc_content MATCHES "HttpProtocolVersion" OR
+       NOT boundary_doc_content MATCHES "http1PlanHttp10RequestConnection" OR
+       NOT boundary_doc_content MATCHES "http1PlanHttp11RequestConnection" OR
+       NOT boundary_doc_content MATCHES "http11Close" OR
+       NOT boundary_doc_content MATCHES "responseSignal")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 connection-plan boundary is undocumented"
-            "${relative} must document the inseparable disposition and version signal")
+            "${relative} must document exact version/disposition ownership, version-specific factories, the unparsed HTTP/1.1 close fallback, and removal of responseSignal")
     endif()
     if(NOT boundary_doc_content MATCHES "Http1RequestBodyPlan" OR
        NOT boundary_doc_content MATCHES "Http1RequestWithoutBody" OR

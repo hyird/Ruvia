@@ -22,7 +22,6 @@ using ruvia::detail::appendResponseHead;
 using ruvia::detail::contentLengthExceedsLimit;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::Http1ConnectionDisposition;
-using ruvia::detail::Http1ResponseConnectionSignal;
 using ruvia::detail::Http1ServerClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::http1PlanResponseStream;
@@ -78,19 +77,22 @@ RUVIA_TEST(request_state_keep_alive_default_by_version) {
     RUVIA_CHECK(http11.disposition() ==
         Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK(
-        http11.responseSignal() == Http1ResponseConnectionSignal::kImplicitPersistence);
+        http11.protocolVersion() == ruvia::HttpProtocolVersion::kHttp11);
     const auto http10Default = parser.parseMessage(
         "GET / HTTP/1.0\r\n\r\n").connectionPlan;
     RUVIA_CHECK(http10Default.disposition() ==
         Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(
+        http10Default.protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
     // HTTP/1.0 can still opt in with an explicit keep-alive.
     const auto http10KeepAlive = parser.parseMessage(
         "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan;
     RUVIA_CHECK(http10KeepAlive.disposition() ==
         Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK(
-        http10KeepAlive.responseSignal() ==
-        Http1ResponseConnectionSignal::kExplicitKeepAlive);
+        http10KeepAlive.protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
 
     // The full-message convenience parser clears request views while waiting
     // for missing body bytes, but the header-derived connection contract must
@@ -104,8 +106,23 @@ RUVIA_TEST(request_state_keep_alive_default_by_version) {
         incompleteHttp10.connectionPlan.disposition() ==
         Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK(
-        incompleteHttp10.connectionPlan.responseSignal() ==
-        Http1ResponseConnectionSignal::kExplicitKeepAlive);
+        incompleteHttp10.connectionPlan.protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
+
+    // A body-framing failure happens after the request version was accepted.
+    // It must tighten persistence without reverting the response to HTTP/1.1.
+    const auto failedHttp10 = parser.parseMessage(
+        "POST / HTTP/1.0\r\nConnection: keep-alive\r\n"
+        "Content-Length: 16777217\r\n\r\n");
+    RUVIA_CHECK(
+        failedHttp10.phase() ==
+        ruvia::detail::Http1ServerRequestParsePhase::kFailure);
+    RUVIA_CHECK(
+        failedHttp10.connectionPlan.disposition() ==
+        Http1ConnectionDisposition::kClose);
+    RUVIA_CHECK(
+        failedHttp10.connectionPlan.protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
 }
 
 RUVIA_TEST(request_state_wants_continue) {
@@ -159,8 +176,8 @@ RUVIA_TEST(http1_response_stream_plan_owns_version_body_and_persistence_semantic
         http11.requestConnectionPlan().disposition() == Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK(http11.closePolicy() == Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(
-        http11.requestConnectionPlan().responseSignal() ==
-        Http1ResponseConnectionSignal::kImplicitPersistence);
+        http11.requestConnectionPlan().protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp11);
 
     const auto limitedHttp11 = http1PlanResponseStream(
         parser.parseMessage("GET / HTTP/1.1\r\nHost: x\r\n\r\n"),
@@ -188,8 +205,8 @@ RUVIA_TEST(http1_response_stream_plan_owns_version_body_and_persistence_semantic
         Http1ConnectionDisposition::kReuse);
     RUVIA_CHECK(http10KeepAlive.closePolicy() == Http1ServerClosePolicy::kAllowReuse);
     RUVIA_CHECK(
-        http10KeepAlive.requestConnectionPlan().responseSignal() ==
-        Http1ResponseConnectionSignal::kExplicitKeepAlive);
+        http10KeepAlive.requestConnectionPlan().protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
 }
 
 RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disposition) {
@@ -279,6 +296,9 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     appendResponseHead(
         http10.response(), http10Buffer, http10.responseHeadPlan());
     const auto http10Wire = http10Buffer.view();
+    RUVIA_CHECK(http10.responseHeadPlan().protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp10);
+    RUVIA_CHECK(http10Wire.starts_with("HTTP/1.0 200 OK\r\n"));
     RUVIA_CHECK(http10Wire.find("Transfer-Encoding:") == std::string_view::npos);
     RUVIA_CHECK(http10Wire.find("Content-Length:") == std::string_view::npos);
 
@@ -293,6 +313,9 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
     appendResponseHead(
         http11.response(), http11Buffer, http11.responseHeadPlan());
     const auto http11Wire = http11Buffer.view();
+    RUVIA_CHECK(http11.responseHeadPlan().protocolVersion() ==
+        ruvia::HttpProtocolVersion::kHttp11);
+    RUVIA_CHECK(http11Wire.starts_with("HTTP/1.1 200 OK\r\n"));
     RUVIA_CHECK(
         http11Wire.find("Transfer-Encoding: chunked\r\n") !=
         std::string_view::npos);

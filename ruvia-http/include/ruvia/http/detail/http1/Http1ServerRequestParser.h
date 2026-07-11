@@ -75,7 +75,8 @@ public:
     std::optional<std::size_t> requiredTotalBytes;
     Http1RequestBodyPlan bodyPlan{
         Http1RequestBodyPlan(HttpRequestExpectations{})};
-    Http1ServerConnectionPlan connectionPlan{Http1ServerConnectionPlan::close()};
+    Http1ServerConnectionPlan connectionPlan{
+        Http1ServerConnectionPlan::http11Close()};
     HttpContentCoding responseCoding{HttpContentCoding::kNone};
 
 private:

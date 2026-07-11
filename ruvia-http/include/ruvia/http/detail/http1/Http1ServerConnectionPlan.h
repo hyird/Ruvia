@@ -12,72 +12,70 @@ enum class Http1ConnectionDisposition : std::uint8_t {
     kClose
 };
 
-// The response-side wire signal needed to make the request's persistence
-// semantics unambiguous to the peer. HTTP/1.1 persistence is implicit, whereas
-// an HTTP/1.0 connection can only be reused after an explicit keep-alive option.
-enum class Http1ResponseConnectionSignal : std::uint8_t {
-    kImplicitPersistence,
-    kExplicitKeepAlive
-};
-
-// Immutable server-side connection contract. The disposition and the response
-// signal are deliberately inseparable: carrying only the former through a
-// runtime branch loses the HTTP-version information needed to emit a correct
-// persistent response. Transformations can only tighten the plan to kClose.
+// Immutable server-side connection contract. The exact request protocol version
+// and disposition are deliberately inseparable: reducing the former to a
+// keep-alive signal loses the version needed by the response status-line and
+// final control validation. Transformations can only tighten the plan to kClose.
 class Http1ServerConnectionPlan final {
 public:
-    [[nodiscard]] static constexpr Http1ServerConnectionPlan close() noexcept {
+    // Errors produced before a valid request version exists use the server's
+    // native HTTP/1.1 response version and always close. Once parsing succeeds,
+    // callers must preserve the parsed plan and use requireClose().
+    [[nodiscard]] static constexpr Http1ServerConnectionPlan
+    http11Close() noexcept {
         return Http1ServerConnectionPlan(
-            Http1ConnectionDisposition::kClose,
-            Http1ResponseConnectionSignal::kImplicitPersistence);
+            HttpProtocolVersion::kHttp11,
+            Http1ConnectionDisposition::kClose);
+    }
+
+    [[nodiscard]] constexpr HttpProtocolVersion
+    protocolVersion() const noexcept {
+        return protocolVersion_;
     }
 
     [[nodiscard]] constexpr Http1ConnectionDisposition disposition() const noexcept {
         return disposition_;
     }
 
-    [[nodiscard]] constexpr Http1ResponseConnectionSignal responseSignal() const noexcept {
-        return responseSignal_;
-    }
-
     [[nodiscard]] constexpr Http1ServerConnectionPlan requireClose() const noexcept {
         return Http1ServerConnectionPlan(
-            Http1ConnectionDisposition::kClose,
-            responseSignal_);
+            protocolVersion_,
+            Http1ConnectionDisposition::kClose);
     }
 
 private:
-    friend Http1ServerConnectionPlan http1PlanRequestConnection(
-        HttpProtocolVersion, const HttpConnectionOptions&) noexcept;
+    friend Http1ServerConnectionPlan http1PlanHttp10RequestConnection(
+        const HttpConnectionOptions&) noexcept;
+    friend Http1ServerConnectionPlan http1PlanHttp11RequestConnection(
+        const HttpConnectionOptions&) noexcept;
 
     constexpr Http1ServerConnectionPlan(
-        Http1ConnectionDisposition disposition,
-        Http1ResponseConnectionSignal responseSignal) noexcept
-        : disposition_(disposition), responseSignal_(responseSignal) {}
+        HttpProtocolVersion protocolVersion,
+        Http1ConnectionDisposition disposition) noexcept
+        : protocolVersion_(protocolVersion), disposition_(disposition) {}
 
-    Http1ConnectionDisposition disposition_{Http1ConnectionDisposition::kClose};
-    Http1ResponseConnectionSignal responseSignal_{
-        Http1ResponseConnectionSignal::kImplicitPersistence};
+    HttpProtocolVersion protocolVersion_;
+    Http1ConnectionDisposition disposition_;
 };
 
-[[nodiscard]] inline Http1ServerConnectionPlan http1PlanRequestConnection(
-    HttpProtocolVersion protocolVersion,
+[[nodiscard]] inline Http1ServerConnectionPlan
+http1PlanHttp10RequestConnection(
     const HttpConnectionOptions& options) noexcept {
-    const bool http11 = protocolVersion == HttpProtocolVersion::kHttp11;
-    const auto responseSignal = http11
-        ? Http1ResponseConnectionSignal::kImplicitPersistence
-        : Http1ResponseConnectionSignal::kExplicitKeepAlive;
-    Http1ConnectionDisposition disposition;
-    if (options.close()) {
-        disposition = Http1ConnectionDisposition::kClose;
-    } else if (options.keepAlive()) {
-        disposition = Http1ConnectionDisposition::kReuse;
-    } else {
-        disposition = http11
+    return Http1ServerConnectionPlan(
+        HttpProtocolVersion::kHttp10,
+        !options.close() && options.keepAlive()
             ? Http1ConnectionDisposition::kReuse
-            : Http1ConnectionDisposition::kClose;
-    }
-    return Http1ServerConnectionPlan(disposition, responseSignal);
+            : Http1ConnectionDisposition::kClose);
+}
+
+[[nodiscard]] inline Http1ServerConnectionPlan
+http1PlanHttp11RequestConnection(
+    const HttpConnectionOptions& options) noexcept {
+    return Http1ServerConnectionPlan(
+        HttpProtocolVersion::kHttp11,
+        options.close()
+            ? Http1ConnectionDisposition::kClose
+            : Http1ConnectionDisposition::kReuse);
 }
 
 }  // namespace ruvia::detail

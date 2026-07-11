@@ -17,6 +17,8 @@ using ruvia::detail::responseWritePolicy;
 static_assert(!std::default_initializable<
     ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(!std::default_initializable<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(!std::default_initializable<
     ruvia::detail::Http1BufferedResponseHead>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1ChunkedResponseStreamHead>);
@@ -126,14 +128,28 @@ RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
 }
 
 RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.setBodyCopy("hello");
     const auto bodyPlan = ruvia::detail::httpResponseBodyPlan(
         ruvia::HttpKnownMethod::kGet, 200);
-    const auto buffered =
-        ruvia::detail::http1BufferedResponseHeadPlan(bodyPlan);
+    const auto connectionPlan =
+        ruvia::detail::http1PlanHttp11RequestConnection(
+            ruvia::detail::HttpConnectionOptions{});
+    const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
+        bodyPlan,
+        response);
+    const auto combined = ruvia::detail::http1BufferedResponsePlan(
+        writePlan,
+        connectionPlan);
+    const auto& buffered = combined.headPlan();
     const auto chunked =
-        ruvia::detail::http1ChunkedResponseStreamHeadPlan(bodyPlan);
+        ruvia::detail::http1ChunkedResponseStreamHeadPlan(
+            bodyPlan,
+            connectionPlan);
     const auto closeDelimited =
-        ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan);
+        ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(
+            bodyPlan,
+            connectionPlan);
 
     RUVIA_CHECK(buffered.buffered() != nullptr);
     RUVIA_CHECK(buffered.chunkedStream() == nullptr);
@@ -146,4 +162,13 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
     RUVIA_CHECK(closeDelimited.closeDelimitedStream() != nullptr);
     RUVIA_CHECK(
         closeDelimited.bodyPlan().contentSemantics().withContent() != nullptr);
+    RUVIA_CHECK_EQ(
+        buffered.buffered()->contentLength(),
+        std::uint64_t{5});
+    RUVIA_CHECK(
+        buffered.protocolVersion() == ruvia::HttpProtocolVersion::kHttp11);
+
+    RUVIA_CHECK_EQ(
+        combined.writePlan().contentLength(),
+        combined.headPlan().buffered()->contentLength());
 }

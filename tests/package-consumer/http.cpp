@@ -276,6 +276,29 @@ concept HasHttp1ResponseHeadAlternatives = requires(const T& plan) {
 };
 
 template <typename T>
+concept HasHttp1ProtocolVersion = requires(const T& plan) {
+    { plan.protocolVersion() } -> std::same_as<ruvia::HttpProtocolVersion>;
+};
+
+template <typename T>
+concept HasHttp1BufferedContentLength = requires(const T& buffered) {
+    { buffered.contentLength() } -> std::same_as<std::uint64_t>;
+};
+
+template <typename T>
+concept HasHttp1BufferedPlanComposition = requires(const T& plan) {
+    { plan.writePlan() } -> std::same_as<const
+        ruvia::detail::HttpBufferedResponseWritePlan&>;
+    { plan.headPlan() } -> std::same_as<const
+        ruvia::detail::Http1ResponseHeadPlan&>;
+};
+
+template <typename T>
+concept HasStaleHttp1ResponseSignal = requires(const T& plan) {
+    plan.responseSignal();
+};
+
+template <typename T>
 concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) {
     plan.suppressAutoContentLength();
 };
@@ -604,10 +627,24 @@ static_assert(!std::default_initializable<
 
 static_assert(HasHttp1ResponseHeadAlternatives<
     ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(HasHttp1ProtocolVersion<
+    ruvia::detail::Http1ServerConnectionPlan>);
+static_assert(HasHttp1ProtocolVersion<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(HasHttp1BufferedContentLength<
+    ruvia::detail::Http1BufferedResponseHead>);
+static_assert(HasHttp1BufferedPlanComposition<
+    ruvia::detail::Http1BufferedResponsePlan>);
+static_assert(!HasStaleHttp1ResponseSignal<
+    ruvia::detail::Http1ServerConnectionPlan>);
 static_assert(!HasStaleHttp1ResponseHeadScalar<
     ruvia::detail::Http1ResponseHeadPlan>);
 static_assert(!std::default_initializable<
+    ruvia::detail::Http1ServerConnectionPlan>);
+static_assert(!std::default_initializable<
     ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1BufferedResponsePlan>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1BufferedResponseHead>);
 static_assert(!std::default_initializable<
@@ -1714,8 +1751,8 @@ int main() {
     if (streamPlan.framing() != ruvia::detail::ResponseStreamFraming::kHttp1Chunked ||
         streamPlan.requestConnectionPlan().disposition() !=
             ruvia::detail::Http1ConnectionDisposition::kReuse ||
-        streamPlan.requestConnectionPlan().responseSignal() !=
-            ruvia::detail::Http1ResponseConnectionSignal::kImplicitPersistence ||
+        streamPlan.requestConnectionPlan().protocolVersion() !=
+            ruvia::HttpProtocolVersion::kHttp11 ||
         streamPlan.closePolicy() != ruvia::detail::Http1ServerClosePolicy::kAllowReuse) {
         return 4;
     }
@@ -1751,6 +1788,8 @@ int main() {
         preparedHttp10.commitPlan().headDisposition() !=
             ruvia::detail::ResponseStreamHeadDisposition::kMessageEnded ||
         preparedHttp10.responseHeadPlan().closeDelimitedStream() == nullptr ||
+        preparedHttp10.responseHeadPlan().protocolVersion() !=
+            ruvia::HttpProtocolVersion::kHttp10 ||
         preparedHttp10.connectionPlan().disposition() !=
             ruvia::detail::Http1ConnectionDisposition::kReuse ||
         preparedHttp10.response().header("Connection") != "keep-alive") {
@@ -1765,9 +1804,16 @@ int main() {
         writePlan.contentLength() != 4) {
         return 6;
     }
-    const auto bufferedHeadPlan =
-        ruvia::detail::http1BufferedResponseHeadPlan(writePlan.bodyPlan());
+    const auto bufferedResponsePlan =
+        ruvia::detail::http1BufferedResponsePlan(
+            writePlan,
+            streamPlan.requestConnectionPlan());
+    const auto& bufferedHeadPlan = bufferedResponsePlan.headPlan();
     if (bufferedHeadPlan.buffered() == nullptr ||
+        bufferedHeadPlan.buffered()->contentLength() != 4 ||
+        bufferedResponsePlan.writePlan().contentLength() != 4 ||
+        bufferedHeadPlan.protocolVersion() !=
+            ruvia::HttpProtocolVersion::kHttp11 ||
         bufferedHeadPlan.chunkedStream() != nullptr ||
         bufferedHeadPlan.closeDelimitedStream() != nullptr) {
         return 6;

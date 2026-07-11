@@ -754,9 +754,12 @@ set(_installed_response_head_path
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseHead.h")
 set(_installed_http1_server_semantics_path
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(_installed_http1_server_connection_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerConnectionPlan.h")
 if(NOT EXISTS "${_installed_http1_response_head_plan_path}" OR
    NOT EXISTS "${_installed_response_head_path}" OR
-   NOT EXISTS "${_installed_http1_server_semantics_path}")
+   NOT EXISTS "${_installed_http1_server_semantics_path}" OR
+   NOT EXISTS "${_installed_http1_server_connection_plan_path}")
     message(FATAL_ERROR "installed typed HTTP/1 response-head plan is missing")
 endif()
 file(READ "${_installed_http1_response_head_plan_path}"
@@ -765,6 +768,8 @@ file(READ "${_installed_response_head_path}"
     _installed_response_head)
 file(READ "${_installed_http1_server_semantics_path}"
     _installed_http1_server_semantics)
+file(READ "${_installed_http1_server_connection_plan_path}"
+    _installed_http1_server_connection_plan)
 if(NOT _installed_http1_response_head_plan MATCHES
        "class Http1BufferedResponseHead final" OR
    NOT _installed_http1_response_head_plan MATCHES
@@ -781,6 +786,28 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "std::get_if<Http1CloseDelimitedResponseStreamHead>" OR
    NOT _installed_http1_response_head_plan MATCHES
        "HttpResponseBodyPlan bodyPlan_" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::uint64_t contentLength_" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "HttpProtocolVersion protocolVersion_" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "class Http1BufferedResponsePlan final" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "http1BufferedResponsePlan" OR
+   _installed_http1_response_head_plan MATCHES
+       "http1BufferedResponseHeadPlan" OR
+   NOT _installed_http1_server_connection_plan MATCHES
+       "HttpProtocolVersion protocolVersion_" OR
+   NOT _installed_http1_server_connection_plan MATCHES
+       "protocolVersion[(][)] const noexcept" OR
+   NOT _installed_http1_server_connection_plan MATCHES
+       "http1PlanHttp10RequestConnection" OR
+   NOT _installed_http1_server_connection_plan MATCHES
+       "http1PlanHttp11RequestConnection" OR
+   NOT _installed_http1_server_connection_plan MATCHES
+       "http11Close" OR
+   _installed_http1_server_connection_plan MATCHES
+       "Http1ResponseConnectionSignal|responseSignal[(][)]|http1PlanRequestConnection" OR
    NOT _installed_http1_server_semantics MATCHES
        "Http1ResponseHeadPlan responseHeadPlan_" OR
    NOT _installed_http1_server_semantics MATCHES

@@ -28,13 +28,14 @@ Task<void> writeResponseWithScratch(
     ResponseHeadBuffer& head,
     std::pmr::string* fileChunkBuffer,
     const HttpResponse& response,
-    const HttpBufferedResponseWritePlan& writePlan,
+    const Http1BufferedResponsePlan& responsePlan,
     std::error_code& ec) {
+    const auto& writePlan = responsePlan.writePlan();
     head.reset();
     appendResponseHead(
         response,
         head,
-        http1BufferedResponseHeadPlan(writePlan.bodyPlan()));
+        responsePlan.headPlan());
     if (responseHasFileBody(response)) {
         const auto fileBody = responseFileBody(response);
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {
@@ -82,11 +83,11 @@ Task<void> writeResponseWithLocalHead(
     WorkerMemory& memory,
     std::pmr::string* fileChunkBuffer,
     const HttpResponse& response,
-    const HttpBufferedResponseWritePlan& writePlan,
+    const Http1BufferedResponsePlan& responsePlan,
     std::error_code& ec) {
     ResponseHeadBuffer localHead(memory.allocator<char>());
     co_await writeResponseWithScratch(
-        stream, memory, localHead, fileChunkBuffer, response, writePlan, ec);
+        stream, memory, localHead, fileChunkBuffer, response, responsePlan, ec);
 }
 
 template <typename Stream>
@@ -96,14 +97,20 @@ Task<void> writeResponse(
     ResponseHeadBuffer* reusableHead,
     std::pmr::string* fileChunkBuffer,
     const HttpResponse& response,
-    const HttpBufferedResponseWritePlan& writePlan,
+    const Http1BufferedResponsePlan& responsePlan,
     std::error_code& ec) {
     if (reusableHead != nullptr) {
         return writeResponseWithScratch(
-            stream, memory, *reusableHead, fileChunkBuffer, response, writePlan, ec);
+            stream,
+            memory,
+            *reusableHead,
+            fileChunkBuffer,
+            response,
+            responsePlan,
+            ec);
     }
     return writeResponseWithLocalHead(
-        stream, memory, fileChunkBuffer, response, writePlan, ec);
+        stream, memory, fileChunkBuffer, response, responsePlan, ec);
 }
 
 }  // namespace ruvia::detail

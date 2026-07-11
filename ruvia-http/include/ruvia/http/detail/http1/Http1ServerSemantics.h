@@ -66,7 +66,7 @@ private:
           requestMethod_(requestMethod) {}
 
     ResponseStreamFraming framing_;
-    Http1ServerConnectionPlan requestConnectionPlan_{Http1ServerConnectionPlan::close()};
+    Http1ServerConnectionPlan requestConnectionPlan_;
     Http1ServerClosePolicy closePolicy_{Http1ServerClosePolicy::kCloseAfterResponse};
     HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
 };
@@ -139,14 +139,14 @@ inline void http1MarkConnectionClose(
 // Finalize response-side HTTP/1 persistence after the runtime has folded in
 // request-body completion and server policy. This is the sole protocol mutation:
 // it honors an application-provided Connection: close and emits the version-
-// appropriate response signal. The returned plan is the authoritative transport
-// lifecycle contract and cannot lose the request-version signal on another branch.
+// appropriate Connection field. The returned plan is the authoritative transport
+// lifecycle contract and retains the exact request version for head serialization.
 [[nodiscard]] inline Http1ServerConnectionPlan http1FinalizeResponseConnection(
     HttpResponse& response,
     Http1ServerConnectionPlan plan) {
     const auto controlPlan = httpFinalResponseControlPlan(
         response,
-        HttpProtocolVersion::kHttp11);
+        plan.protocolVersion());
     switch (controlPlan.status()) {
         case HttpFinalResponseControlStatus::kOk:
             break;
@@ -183,8 +183,7 @@ inline void http1MarkConnectionClose(
             preserveUpgrade
                 ? Http1ConnectionCloseFieldPolicy::kPreserveUpgrade
                 : Http1ConnectionCloseFieldPolicy::kCloseOnly);
-    } else if (plan.responseSignal() ==
-                   Http1ResponseConnectionSignal::kExplicitKeepAlive &&
+    } else if (plan.protocolVersion() == HttpProtocolVersion::kHttp10 &&
                !responseOptions.keepAlive()) {
         if (responseOptions.hasField() || generateUpgradeOption) {
             response.header(
@@ -240,7 +239,7 @@ private:
 
     ResponseStreamHead head_;
     Http1ResponseHeadPlan responseHeadPlan_;
-    Http1ServerConnectionPlan connectionPlan_{Http1ServerConnectionPlan::close()};
+    Http1ServerConnectionPlan connectionPlan_;
 };
 
 [[nodiscard]] inline PreparedHttp1ResponseStream prepareHttp1ResponseStreamHead(
@@ -267,8 +266,12 @@ private:
         std::move(response), kind, plan.framing(), bodyPlan, trailerIntent);
     const auto responseHeadPlan =
         plan.framing() == ResponseStreamFraming::kHttp1Chunked
-        ? http1ChunkedResponseStreamHeadPlan(head.commitPlan().bodyPlan())
-        : http1CloseDelimitedResponseStreamHeadPlan(head.commitPlan().bodyPlan());
+        ? http1ChunkedResponseStreamHeadPlan(
+              head.commitPlan().bodyPlan(),
+              connectionPlan)
+        : http1CloseDelimitedResponseStreamHeadPlan(
+              head.commitPlan().bodyPlan(),
+              connectionPlan);
     return PreparedHttp1ResponseStream(
         std::move(head),
         responseHeadPlan,
