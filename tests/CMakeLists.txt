@@ -74,6 +74,7 @@ add_executable(ruvia_unit_tests
     unit_pool_waiter_queue.cpp
     unit_http2_header_list.cpp
     unit_response_head_policy.cpp
+    unit_http_response_content_semantics.cpp
     unit_http2_request_builder.cpp
     unit_request_access.cpp
     unit_context_cookie.cpp

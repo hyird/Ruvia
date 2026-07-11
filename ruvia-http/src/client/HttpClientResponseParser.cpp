@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HttpContentLength.h"
+#include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/client/HttpClientAccess.h"
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
@@ -269,15 +270,10 @@ using ResponsePlanningResult = std::variant<
     output.statusCode = statusLine.statusCode;
     output.protocolVersion = statusLine.protocolVersion;
 
-    const bool protocolSwitch = output.statusCode == 101;
-    const bool informational = output.statusCode < 200 && !protocolSwitch;
-    const bool connectTunnel = request.method() == "CONNECT" &&
-        output.statusCode >= 200 && output.statusCode < 300;
-    const bool framingFieldsApply = !informational && !protocolSwitch &&
-        request.method() != "HEAD" &&
-        output.statusCode != 204 &&
-        output.statusCode != 304 &&
-        !connectTunnel;
+    const auto contentSemantics = detail::httpResponseContentSemantics(
+        request.method(), output.statusCode);
+    const bool framingFieldsApply =
+        contentSemantics.withContent() != nullptr;
 
     auto remaining = firstLineEnd == std::string_view::npos
         ? std::string_view{}
@@ -381,27 +377,21 @@ using ResponsePlanningResult = std::variant<
     bool continueGated,
     bool sawContinue,
     bool requestContentComplete) noexcept {
-    const bool protocolSwitch = response.statusCode == 101;
-    const bool informational = response.statusCode < 200 && !protocolSwitch;
-    const bool connectTunnel = request.method() == "CONNECT" &&
-        response.statusCode >= 200 && response.statusCode < 300;
-    const bool framingFieldsApply = !informational && !protocolSwitch &&
-        request.method() != "HEAD" &&
-        response.statusCode != 204 &&
-        response.statusCode != 304 &&
-        !connectTunnel;
+    const auto contentSemantics = detail::httpResponseContentSemantics(
+        request.method(), response.statusCode);
 
     auto requestContentSignal = Http1ClientRequestContentSignal::kNone;
     if (continueGated) {
         if (response.statusCode == 100) {
             requestContentSignal = Http1ClientRequestContentSignal::kContinue;
-        } else if (protocolSwitch || response.statusCode >= 200) {
+        } else if (contentSemantics.protocolSwitch() != nullptr ||
+                   response.statusCode >= 200) {
             requestContentSignal =
                 Http1ClientRequestContentSignal::kExchangeComplete;
         }
     }
 
-    if (protocolSwitch) {
+    if (contentSemantics.protocolSwitch() != nullptr) {
         if (response.protocolVersion != HttpProtocolVersion::kHttp11 ||
             response.contentLengthFieldPresent ||
             response.sawTransferEncoding ||
@@ -416,17 +406,17 @@ using ResponsePlanningResult = std::variant<
         return detail::Http1ClientResponsePlanAccess::protocolUpgrade(
             requestContentSignal);
     }
-    if (informational) {
+    if (contentSemantics.informational() != nullptr) {
         return detail::Http1ClientResponsePlanAccess::informational(
             requestContentSignal);
     }
-    if (connectTunnel) {
+    if (contentSemantics.connectTunnel() != nullptr) {
         return detail::Http1ClientResponsePlanAccess::connectTunnel(
             requestContentSignal);
     }
 
     const auto persistence = responsePersistence(request, response);
-    if (!framingFieldsApply) {
+    if (contentSemantics.withoutContent() != nullptr) {
         return detail::Http1ClientResponsePlanAccess::withoutContent(
             persistence,
             requestContentSignal);

@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/HttpResponse.h"
@@ -21,18 +22,26 @@ public:
     }
 
     [[nodiscard]] bool bodySuppressed() const noexcept {
-        return bodySuppressed_;
+        return !policy_.bodyAllowed() ||
+            semantics_.withContent() == nullptr;
+    }
+
+    [[nodiscard]] const HttpResponseContentSemantics&
+    contentSemantics() const noexcept {
+        return semantics_;
     }
 
 private:
     friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, std::uint16_t) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
-    HttpResponseBodyPlan(ResponseWritePolicy policy, bool bodySuppressed) noexcept
-        : policy_(policy), bodySuppressed_(bodySuppressed) {}
+    HttpResponseBodyPlan(
+        ResponseWritePolicy policy,
+        HttpResponseContentSemantics semantics) noexcept
+        : policy_(policy), semantics_(semantics) {}
 
     ResponseWritePolicy policy_;
-    bool bodySuppressed_{false};
+    HttpResponseContentSemantics semantics_;
 };
 
 [[nodiscard]] inline HttpResponseBodyPlan httpResponseBodyPlan(
@@ -41,7 +50,7 @@ private:
     const auto policy = responseWritePolicy(statusCode);
     return HttpResponseBodyPlan(
         policy,
-        !policy.bodyAllowed() || requestMethod == HttpKnownMethod::kHead);
+        httpResponseContentSemantics(requestMethod, statusCode));
 }
 
 class HttpBufferedResponseWritePlan final {
@@ -87,7 +96,8 @@ private:
     const HttpResponseBodyPlan& bodyPlan,
     const HttpResponse& response) noexcept {
     std::uint64_t contentLength = 0;
-    if (bodyPlan.statusAllowsBody()) {
+    if (bodyPlan.statusAllowsBody() &&
+        bodyPlan.contentSemantics().connectTunnel() == nullptr) {
         contentLength = responseHasFileBody(response)
             ? responseFileBody(response).length
             : static_cast<std::uint64_t>(responseBodySize(response));

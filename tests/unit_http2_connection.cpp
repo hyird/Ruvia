@@ -2900,7 +2900,8 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
     // content-length was decoded into the stream (auto CL from the server head).
-    const auto* remoteKnownLength = stream->remoteContent().knownLength();
+    const auto* remoteKnownLength =
+        stream->remoteContent().allowedKnownLength();
     RUVIA_CHECK(remoteKnownLength != nullptr);
     RUVIA_CHECK_EQ(
         remoteKnownLength->declaredLength(), std::size_t{4});
@@ -3062,10 +3063,11 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(!client.nextEvent().has_value());
     const auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
-    const auto* known = stream->remoteContent().knownLength();
+    const auto* known =
+        stream->remoteContent().metadataOnlyKnownLength();
     RUVIA_CHECK(known != nullptr);
     RUVIA_CHECK_EQ(known->declaredLength(), std::size_t{10});
-    RUVIA_CHECK_EQ(stream->remoteContent().receivedBytes(), std::size_t{0});
+    RUVIA_CHECK(stream->remoteContent().metadataOnlyKnownLength() != nullptr);
 
     std::pmr::string trailers(&resource);
     HpackEncoder::encodeHeader(trailers, "server-timing", "db;dur=4");
@@ -3082,6 +3084,143 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
         Http2EventKind::kMessageEnd);
     RUVIA_CHECK(!client.nextEvent().has_value());
     RUVIA_CHECK(!client.connectionError().has_value());
+    RUVIA_CHECK(client.pendingOutput().empty());
+    RUVIA_CHECK(
+        client.stream(streamId)->remoteReceive().endStream() != nullptr);
+
+    client.unpinStream(streamId);
+    RUVIA_CHECK(client.stream(streamId) == nullptr);
+}
+
+// RFC 9110 Section 6.4.1 defines HEAD/204/304 responses as having no message
+// content. RFC 9113 Section 8.1.1 therefore makes a non-empty DATA payload a
+// malformed response and requires PROTOCOL_ERROR on that stream. This is distinct
+// from Content-Length representation metadata, which remains legal for HEAD/304.
+RUVIA_TEST(http2_connection_client_rejects_data_for_responses_without_content) {
+    struct Case final {
+        std::string_view method;
+        std::string_view status;
+    };
+    constexpr std::array cases{
+        Case{"HEAD", "200"},
+        Case{"GET", "204"},
+        Case{"GET", "304"}};
+
+    for (const auto& testCase : cases) {
+        std::pmr::monotonic_buffer_resource resource;
+        Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+        handshake(client);
+
+        const auto request = client.submitRegularRequestHead(
+            testCase.method,
+            "https",
+            "example.test",
+            "/",
+            {},
+            Http2RequestContent::none());
+        RUVIA_CHECK(request.submitted() != nullptr);
+        const auto streamId = submittedRequestStreamId(request);
+        client.pinStream(streamId);
+        client.consumeOutput(client.pendingOutput().size());
+
+        std::pmr::string response(&resource);
+        HpackEncoder::encodeHeader(response, ":status", testCase.status);
+        const auto responseHead = headersFrame(
+            &resource,
+            streamId,
+            ruvia::detail::kHttp2FlagEndHeaders,
+            std::string_view(response.data(), response.size()));
+        RUVIA_CHECK(client.feed(
+            std::string_view(responseHead.data(), responseHead.size())) ==
+            Http2FeedResult::kAccepted);
+        RUVIA_CHECK(client.nextEvent().value().kind() ==
+            Http2EventKind::kMessageHead);
+        RUVIA_CHECK(!client.nextEvent().has_value());
+        const auto* live = client.stream(streamId);
+        RUVIA_CHECK(live != nullptr);
+        RUVIA_CHECK(
+            live->remoteContent().metadataOnlyWithoutLength() != nullptr);
+
+        const auto forbidden = dataFrame(
+            &resource,
+            streamId,
+            ruvia::detail::kHttp2FlagEndStream,
+            "x");
+        RUVIA_CHECK(client.feed(
+            std::string_view(forbidden.data(), forbidden.size())) ==
+            Http2FeedResult::kAccepted);
+
+        bool sawClosed = false;
+        while (const auto event = client.nextEvent()) {
+            RUVIA_CHECK(event->messageBodyChunk() == nullptr);
+            RUVIA_CHECK(event->messageEnd() == nullptr);
+            if (const auto* closed = event->streamClosed()) {
+                sawClosed = true;
+                RUVIA_CHECK(closed->source() ==
+                    ruvia::detail::Http2StreamCloseSource::kLocal);
+                RUVIA_CHECK(closed->error() ==
+                    Http2ErrorCode::kProtocolError);
+            }
+        }
+        RUVIA_CHECK(sawClosed);
+        RUVIA_CHECK(!client.connectionError().has_value());
+        const auto reset = client.pendingOutput();
+        const auto resetHead = ruvia::detail::http2ParseFrameHeader(
+            reset.substr(0, 9));
+        RUVIA_CHECK_EQ(
+            resetHead.type,
+            static_cast<std::uint8_t>(Http2FrameType::kRstStream));
+        RUVIA_CHECK_EQ(
+            ruvia::detail::http2Read32(
+                reinterpret_cast<const unsigned char*>(reset.data() + 9)),
+            static_cast<std::uint32_t>(Http2ErrorCode::kProtocolError));
+        client.unpinStream(streamId);
+    }
+}
+
+RUVIA_TEST(http2_connection_client_allows_empty_terminal_data_without_content_event) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);
+    handshake(client);
+
+    const auto request = client.submitRegularRequestHead(
+        "HEAD", "https", "example.test", "/", {},
+        Http2RequestContent::none());
+    RUVIA_CHECK(request.submitted() != nullptr);
+    const auto streamId = submittedRequestStreamId(request);
+    client.pinStream(streamId);
+    client.consumeOutput(client.pendingOutput().size());
+
+    std::pmr::string response(&resource);
+    HpackEncoder::encodeHeader(response, ":status", "200");
+    HpackEncoder::encodeHeader(response, "content-length", "12");
+    const auto responseHead = headersFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndHeaders,
+        std::string_view(response.data(), response.size()));
+    RUVIA_CHECK(client.feed(
+        std::string_view(responseHead.data(), responseHead.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(client.nextEvent().value().kind() ==
+        Http2EventKind::kMessageHead);
+    const auto* metadata =
+        client.stream(streamId)->remoteContent().metadataOnlyKnownLength();
+    RUVIA_CHECK(metadata != nullptr);
+    RUVIA_CHECK_EQ(metadata->declaredLength(), std::size_t{12});
+
+    const auto terminal = dataFrame(
+        &resource,
+        streamId,
+        ruvia::detail::kHttp2FlagEndStream,
+        {});
+    RUVIA_CHECK(client.feed(
+        std::string_view(terminal.data(), terminal.size())) ==
+        Http2FeedResult::kAccepted);
+    const auto end = client.nextEvent();
+    RUVIA_CHECK(end.has_value());
+    RUVIA_CHECK(end->kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!client.nextEvent().has_value());
     RUVIA_CHECK(client.pendingOutput().empty());
     RUVIA_CHECK(
         client.stream(streamId)->remoteReceive().endStream() != nullptr);

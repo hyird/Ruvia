@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <limits>
 
-#include "ruvia/http/detail/http2/Http2Role.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 
 namespace ruvia::detail {
@@ -12,7 +11,8 @@ namespace ruvia::detail {
 enum class Http2BodyAccountingResult : std::uint8_t {
     kOk,
     kTooLarge,
-    kContentLengthExceeded
+    kContentLengthExceeded,
+    kContentForbidden
 };
 
 [[nodiscard]] inline Http2BodyAccountingResult http2AccountDataBody(
@@ -20,14 +20,22 @@ enum class Http2BodyAccountingResult : std::uint8_t {
     std::size_t dataSize,
     std::size_t maxStreamBodyBytes,
     std::size_t maxBufferedBodyBytes) noexcept {
-    if (stream.tunnel().open() != nullptr) {
-        return Http2BodyAccountingResult::kOk;
+    const auto& remoteContent = stream.remoteContent();
+    if (remoteContent.metadataOnlyWithoutLength() != nullptr ||
+        remoteContent.metadataOnlyKnownLength() != nullptr) {
+        return stream.accountRemoteContent(dataSize) ==
+                Http2RemoteContentAccountingResult::kAccepted
+            ? Http2BodyAccountingResult::kOk
+            : Http2BodyAccountingResult::kContentForbidden;
     }
     const auto maxBody = httpRequestBodyByteLimit(
         stream.bodyMode(),
         maxStreamBodyBytes,
         maxBufferedBodyBytes);
-    const auto receivedBytes = stream.remoteContent().receivedBytes();
+    const auto receivedBytes =
+        remoteContent.allowedWithoutLength() != nullptr
+        ? remoteContent.allowedWithoutLength()->receivedBytes()
+        : remoteContent.allowedKnownLength()->receivedBytes();
     if (maxBody != 0 &&
         (receivedBytes > maxBody || dataSize > maxBody - receivedBytes)) {
         return Http2BodyAccountingResult::kTooLarge;
@@ -47,30 +55,17 @@ enum class Http2BodyAccountingResult : std::uint8_t {
             return Http2BodyAccountingResult::kTooLarge;
         }
     }
-    switch (stream.checkRemoteContentAccept(dataSize)) {
-        case Http2RemoteContentCheck::kAccepted:
-            break;
-        case Http2RemoteContentCheck::kCounterOverflow:
+    switch (stream.accountRemoteContent(dataSize)) {
+        case Http2RemoteContentAccountingResult::kAccepted:
+            return Http2BodyAccountingResult::kOk;
+        case Http2RemoteContentAccountingResult::kCounterOverflow:
             return Http2BodyAccountingResult::kTooLarge;
-        case Http2RemoteContentCheck::kDeclaredLengthExceeded:
+        case Http2RemoteContentAccountingResult::kDeclaredLengthExceeded:
             return Http2BodyAccountingResult::kContentLengthExceeded;
+        case Http2RemoteContentAccountingResult::kContentForbidden:
+            return Http2BodyAccountingResult::kContentForbidden;
     }
-    stream.acceptRemoteContent(dataSize);
-    return Http2BodyAccountingResult::kOk;
-}
-
-[[nodiscard]] inline bool http2RemoteContentTerminalValid(
-    const Http2StreamState& stream,
-    Http2Role role) noexcept {
-    // RFC 9113 §8.1.1 delegates no-content response semantics to HTTP. A HEAD
-    // response and 204/304 may carry representation Content-Length metadata even
-    // though their HTTP/2 message contains no DATA. Successful CONNECT is already
-    // a tunnel and its DATA is not HTTP content.
-    const bool lengthExempt = role == Http2Role::kClient &&
-        (stream.requestKnownMethod() == HttpKnownMethod::kHead ||
-         stream.responseStatus() == 204 || stream.responseStatus() == 304);
-    return stream.tunnel().open() != nullptr || lengthExempt ||
-        stream.remoteContent().terminalLengthValid();
+    return Http2BodyAccountingResult::kTooLarge;
 }
 
 }  // namespace ruvia::detail

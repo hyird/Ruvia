@@ -182,7 +182,7 @@ set(RULE_STALE_H2_LOCAL_SEND_PRODUCT
 set(RULE_STALE_H2_REMOTE_RECEIVE_PRODUCT
     "Http2RemoteReceivePhase|remoteReceivePhase_|headersDecoded_|peerEndStream_|bodyEnded_|headersDecoded[ \t]*[(]|peerEndStream[ \t]*[(]|bodyEnded[ \t]*[(]|markHeadersDecoded|markPeerEndStream|markBodyEnded|http2MarkBodyEnded")
 set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
-    "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
+    "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|Http2RemoteContentWithoutLength|Http2RemoteContentKnownLength|Http2RemoteContentCheck|checkRemoteContentAccept|acceptRemoteContent|http2RemoteContentTerminalValid|remoteContent[(][)][.]receivedBytes[(][)]|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
     "205 [(]Reset Content[)] deliberately falls through|response_policy_reset_content_carries_framing")
 set(RULE_STALE_DEPENDENCY
@@ -1770,6 +1770,10 @@ set(HTTP1_SERVER_SEMANTICS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(HTTP2_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(HTTP_RESPONSE_CONTENT_SEMANTICS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseContentSemantics.h")
+set(HTTP_RESPONSE_WRITE_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
 if(NOT EXISTS "${HTTP_FINAL_RESPONSE_CONTROL_PLAN}")
     boundary_error("final response control plan is missing"
         "status/Upgrade semantics must be shared by HTTP/1 and HTTP/2")
@@ -1930,6 +1934,48 @@ set(HTTP2_LOCAL_SETTINGS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalSettings.h")
 set(HTTP2_PEER_SETTINGS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2PeerSettings.h")
+if(NOT EXISTS "${HTTP_RESPONSE_CONTENT_SEMANTICS}" OR
+   NOT EXISTS "${HTTP_RESPONSE_WRITE_PLAN}" OR
+   NOT EXISTS "${HTTP1_CLIENT_RESPONSE_SOURCE}" OR
+   NOT EXISTS "${HTTP2_CONNECTION_SOURCE}")
+    boundary_error("shared response-content semantics contract is missing"
+        "HTTP/1 client, HTTP/2 client, and response writers must consume one method/status classification")
+else()
+    file(READ "${HTTP_RESPONSE_CONTENT_SEMANTICS}"
+        http_response_content_semantics)
+    file(READ "${HTTP_RESPONSE_WRITE_PLAN}" http_response_write_plan)
+    file(READ "${HTTP1_CLIENT_RESPONSE_SOURCE}"
+        http1_shared_response_semantics)
+    file(READ "${HTTP2_CONNECTION_SOURCE}"
+        http2_shared_response_semantics)
+    if(NOT http_response_content_semantics MATCHES
+           "class HttpInformationalResponseContent final" OR
+       NOT http_response_content_semantics MATCHES
+           "class HttpProtocolSwitchResponseContent final" OR
+       NOT http_response_content_semantics MATCHES
+           "class HttpConnectTunnelResponseContent final" OR
+       NOT http_response_content_semantics MATCHES
+           "class HttpResponseWithoutContent final" OR
+       NOT http_response_content_semantics MATCHES
+           "class HttpResponseWithContent final" OR
+       NOT http_response_content_semantics MATCHES "using State = std::variant" OR
+       NOT http_response_content_semantics MATCHES
+           "std::get_if<HttpResponseWithoutContent>" OR
+       NOT http_response_content_semantics MATCHES
+           "httpResponseContentSemantics" OR
+       NOT http1_shared_response_semantics MATCHES
+           "detail::httpResponseContentSemantics" OR
+       NOT http2_shared_response_semantics MATCHES
+           "httpResponseContentSemantics" OR
+       NOT http_response_write_plan MATCHES
+           "HttpResponseContentSemantics semantics_" OR
+       NOT http_response_write_plan MATCHES
+           "semantics_[.]withContent[(][)] == nullptr" OR
+       http_response_write_plan MATCHES "bodySuppressed_")
+        boundary_error("response content semantics split by protocol direction"
+            "informational, switch, CONNECT, without-content, and with-content alternatives must drive H1 client, H2 client, and server body plans")
+    endif()
+endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
    NOT EXISTS "${HTTP2_STREAM_CLOSE_SOURCE}" OR
    NOT EXISTS "${HTTP2_STREAM_LIFECYCLE}" OR
@@ -2134,26 +2180,41 @@ else()
     file(READ "${HTTP2_REQUEST_HEADERS}" http2_request_headers)
     file(READ "${HTTP2_STREAM_STATE}" http2_remote_stream_state)
     if(NOT http2_remote_content_state MATCHES
-           "class Http2RemoteContentWithoutLength final" OR
+           "class Http2RemoteContentAllowedWithoutLength final" OR
        NOT http2_remote_content_state MATCHES
-           "class Http2RemoteContentKnownLength final" OR
-       NOT http2_remote_content_state MATCHES "using Content = std::variant" OR
+           "class Http2RemoteContentAllowedKnownLength final" OR
        NOT http2_remote_content_state MATCHES
-           "std::get_if<Http2RemoteContentWithoutLength>" OR
+           "class Http2RemoteContentMetadataOnlyWithoutLength final" OR
        NOT http2_remote_content_state MATCHES
-           "std::get_if<Http2RemoteContentKnownLength>" OR
+           "class Http2RemoteContentMetadataOnlyKnownLength final" OR
+       NOT http2_remote_content_state MATCHES "using State = std::variant" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<Http2RemoteContentAllowedWithoutLength>" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<Http2RemoteContentAllowedKnownLength>" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<[\r\n \t]*Http2RemoteContentMetadataOnlyWithoutLength>" OR
+       NOT http2_remote_content_state MATCHES
+           "std::get_if<[\r\n \t]*Http2RemoteContentMetadataOnlyKnownLength>" OR
        NOT http2_remote_content_state MATCHES "kCounterOverflow" OR
        NOT http2_remote_content_state MATCHES "kDeclaredLengthExceeded" OR
+       NOT http2_remote_content_state MATCHES "kContentForbidden" OR
+       NOT http2_remote_content_state MATCHES "selectMetadataOnly" OR
+       NOT http2_remote_content_state MATCHES "account[(]" OR
        NOT http2_remote_content_state MATCHES "terminalLengthValid" OR
        NOT http2_remote_stream_state MATCHES
            "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
-       NOT http2_body_state MATCHES "checkRemoteContentAccept" OR
-       NOT http2_body_state MATCHES "acceptRemoteContent" OR
+       NOT http2_remote_stream_state MATCHES "accountRemoteContent" OR
+       NOT http2_remote_stream_state MATCHES
+           "selectRemoteContentMetadataOnly" OR
+       NOT http2_body_state MATCHES "accountRemoteContent" OR
        NOT http2_body_state MATCHES
-           "Http2RemoteContentCheck::kDeclaredLengthExceeded" OR
+           "Http2RemoteContentAccountingResult::kDeclaredLengthExceeded" OR
+       NOT http2_body_state MATCHES
+           "Http2RemoteContentAccountingResult::kContentForbidden" OR
        NOT http2_request_headers MATCHES "declareRemoteContentLength")
         boundary_error("HTTP/2 remote content accounting lost its discriminated transaction"
-            "absent and known lengths must be exclusive, DATA must preflight before commit, and only known length may own a value")
+            "content allowance and length must be exclusive, DATA accounting must be atomic, and metadata-only responses must reject payload")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_REQUEST_CONTENT}")
@@ -2209,14 +2270,13 @@ else()
            "form != Http2ConnectForm::kExtended" OR
        NOT http2_tunnel_stream_state MATCHES
            "const Http2TunnelState& tunnel[(][)] const noexcept" OR
-       NOT http2_tunnel_body_state MATCHES
-           "tunnel[(][)][.]open[(][)] != nullptr" OR
+       http2_tunnel_body_state MATCHES "tunnel[(]" OR
        NOT http2_tunnel_request_builder MATCHES
            "tunnel[(][)][.]pending[(][)]" OR
        NOT http2_tunnel_websocket_handshake MATCHES
            "http2IsPendingWebSocketConnect")
         boundary_error("HTTP/2 CONNECT tunnel state lost exclusive alternatives"
-            "only pending may own standard/extended form; open and rejected must be payload-free phases exposed through one const tunnel view")
+            "only pending may own standard/extended form; message-content accounting must not reinterpret tunnel bytes")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SETTINGS}")
@@ -2296,19 +2356,21 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
     endif()
     if(NOT http2_connection_source MATCHES "declareRemoteContentLength" OR
        NOT http2_connection_source MATCHES
-           "remoteContent[(][)][.]knownLength[(][)]" OR
+           "remoteContent[(][)][.]allowedKnownLength[(][)]" OR
        NOT http2_connection_source MATCHES
-           "http2RemoteContentTerminalValid[(]")
+           "remoteContent[(][)][.]terminalLengthValid[(][)]" OR
+       NOT http2_connection_source MATCHES
+           "selectRemoteContentMetadataOnly")
         boundary_error("HTTP/2 inbound Content-Length bypasses remote content state"
-            "response-head decode, CONNECT validation, and terminal HEADERS must share the peer-content contract")
+            "response semantics, CONNECT validation, DATA, and terminal HEADERS must share the peer-content contract")
     endif()
-    string(REGEX MATCHALL "http2RemoteContentTerminalValid[(]"
+    string(REGEX MATCHALL "remoteContent[(][)][.]terminalLengthValid[(][)]"
         http2_remote_terminal_call_sites "${http2_connection_source}")
     list(LENGTH http2_remote_terminal_call_sites
         http2_remote_terminal_call_site_count)
     if(http2_remote_terminal_call_site_count LESS 3)
         boundary_error("HTTP/2 END_STREAM paths split remote length validation"
-            "initial HEADERS, DATA, and trailing HEADERS must all call http2RemoteContentTerminalValid")
+            "initial HEADERS, DATA, and trailing HEADERS must all consult the active remote-content alternative")
     endif()
     if(NOT http2_connection_source MATCHES "submitRegularRequestHead" OR
        NOT http2_connection_source MATCHES "content[.]withoutContent" OR
@@ -2489,6 +2551,8 @@ else()
 endif()
 
 set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+set(HTTP_RESPONSE_CONTENT_SEMANTICS_TEST
+    "${RUVIA_ROOT}/tests/unit_http_response_content_semantics.cpp")
 set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/unit_http2_peer_settings.cpp")
 set(HTTP2_LOCAL_CONTENT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_local_content_state.cpp")
@@ -2501,6 +2565,33 @@ set(HTTP2_BODY_STATE_TEST
 set(HTTP2_CONNECT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+if(NOT EXISTS "${HTTP_RESPONSE_CONTENT_SEMANTICS_TEST}" OR
+   NOT EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    boundary_error("shared response-content semantics are untested"
+        "unit and installed consumers must pin every exclusive response classification")
+else()
+    file(READ "${HTTP_RESPONSE_CONTENT_SEMANTICS_TEST}"
+        http_response_content_semantics_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}"
+        http_response_content_semantics_package_test)
+    if(NOT http_response_content_semantics_test MATCHES
+           "response_content_semantics_owns_method_status_precedence" OR
+       NOT http_response_content_semantics_test MATCHES
+           "response_content_semantics_preserves_case_sensitive_method_tokens" OR
+       NOT http_response_content_semantics_test MATCHES
+           "HttpKnownMethod::kConnect, 204" OR
+       NOT http_response_content_semantics_test MATCHES
+           "HttpKnownMethod::kGet, 205" OR
+       NOT http_response_content_semantics_package_test MATCHES
+           "HasHttpResponseContentAlternatives" OR
+       NOT http_response_content_semantics_package_test MATCHES
+           "!std::default_initializable<[\r\n \t]*ruvia::detail::HttpResponseContentSemantics>" OR
+       NOT http_response_content_semantics_package_test MATCHES
+           "httpResponseContentSemantics")
+        boundary_error("shared response-content semantics ownership is under-tested"
+            "method/status precedence, case sensitivity, CONNECT, no-content, and installed alternatives must remain explicit")
+    endif()
+endif()
 if(NOT EXISTS "${HTTP2_PEER_SETTINGS_TEST}")
     boundary_error("HTTP/2 peer SETTINGS result contract is untested"
         "unit_http2_peer_settings.cpp must pin all exclusive alternatives")
@@ -2709,40 +2800,60 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
     file(READ "${HTTP2_EVENT_TEST}" http2_remote_connection_test)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http2_remote_package_test)
     if(NOT http2_remote_content_test MATCHES
-           "http2_remote_content_length_alternatives_are_explicit" OR
+           "http2_remote_content_allowance_and_length_alternatives_are_explicit" OR
        NOT http2_remote_content_test MATCHES
-           "http2_remote_content_acceptance_is_transactional" OR
+           "http2_remote_content_metadata_only_preserves_representation_length" OR
        NOT http2_remote_content_test MATCHES
-           "http2_remote_content_counter_overflow_is_transactional" OR
+           "http2_remote_content_accounting_is_atomic" OR
        NOT http2_remote_content_test MATCHES
-           "http2_remote_content_rejects_late_length_declaration" OR
+           "http2_remote_content_counter_overflow_is_atomic" OR
        NOT http2_remote_content_test MATCHES
-           "HasDeclaredLength<Http2RemoteContentKnownLength>" OR
+           "http2_remote_content_rejects_late_semantic_transitions" OR
+       NOT http2_remote_content_test MATCHES
+           "HasDeclaredLength<Http2RemoteContentAllowedKnownLength>" OR
+       NOT http2_remote_content_test MATCHES
+           "HasDeclaredLength<[\r\n \t]*Http2RemoteContentMetadataOnlyKnownLength>" OR
        NOT http2_remote_content_test MATCHES
            "!HasStaleLengthTuple<Http2RemoteContentState>" OR
        NOT http2_remote_content_test MATCHES
-           "Http2RemoteContentCheck::kCounterOverflow" OR
+           "!HasReceivedBytes<Http2RemoteContentState>" OR
        NOT http2_remote_content_test MATCHES
-           "Http2RemoteContentCheck::kDeclaredLengthExceeded" OR
+           "!HasStaleCheckAcceptSplit<Http2RemoteContentState>" OR
+       NOT http2_remote_content_test MATCHES
+           "Http2RemoteContentAccountingResult::kCounterOverflow" OR
+       NOT http2_remote_content_test MATCHES
+           "Http2RemoteContentAccountingResult::kDeclaredLengthExceeded" OR
+       NOT http2_remote_content_test MATCHES
+           "Http2RemoteContentAccountingResult::kContentForbidden" OR
        NOT http2_remote_body_state_test MATCHES
            "Http2BodyAccountingResult::kContentLengthExceeded" OR
        NOT http2_remote_body_state_test MATCHES
-           "remoteContent[(][)][.]receivedBytes[(][)]" OR
+           "Http2BodyAccountingResult::kContentForbidden" OR
        NOT http2_remote_body_state_test MATCHES
-           "h2_remote_content_terminal_validation_shares_no_content_exemptions" OR
+           "remoteContent[(][)][.]allowedWithoutLength[(][)][-][>]receivedBytes[(][)]" OR
        NOT http2_remote_body_state_test MATCHES
-           "http2RemoteContentTerminalValid" OR
+           "h2_remote_content_terminal_validation_is_owned_by_active_alternative" OR
+       NOT http2_remote_body_state_test MATCHES
+           "selectRemoteContentMetadataOnly" OR
        NOT http2_remote_connection_test MATCHES "remoteKnownLength" OR
        NOT http2_remote_connection_test MATCHES
            "http2_connection_client_head_representation_length_survives_trailer_terminal" OR
+       NOT http2_remote_connection_test MATCHES
+           "http2_connection_client_rejects_data_for_responses_without_content" OR
+       NOT http2_remote_connection_test MATCHES
+           "http2_connection_client_allows_empty_terminal_data_without_content_event" OR
        NOT http2_remote_package_test MATCHES
            "HasHttp2RemoteContentAlternatives" OR
        NOT http2_remote_package_test MATCHES
            "!HasStaleHttp2RemoteContentTuple" OR
        NOT http2_remote_package_test MATCHES
+           "!HasHttp2RemoteReceivedBytes<[\r\n \t]*ruvia::detail::Http2RemoteContentState>" OR
+       NOT http2_remote_package_test MATCHES
+           "!HasStaleHttp2RemoteCheckAcceptSplit" OR
+       NOT http2_remote_package_test MATCHES
            "!HasStaleHttp2StreamRemoteContentForwarders")
         boundary_error("HTTP/2 remote content ownership is under-tested"
-            "unit and installed consumers must reject fake lengths/forwarders and prove failed DATA leaves accounting unchanged")
+            "unit and installed consumers must pin metadata-only alternatives, atomic accounting, and malformed no-content DATA rejection")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_TEST}")
@@ -3569,7 +3680,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES
            "request[.]closePolicy[(][)] ==[\r\n \t]*Http1ClientRequestClosePolicy::kCloseAfterResponse" OR
        NOT http1_client_response_parser MATCHES "contentLengthFieldPresent" OR
-       NOT http1_client_response_parser MATCHES "request\\.method\\(\\)[ \t]*==[ \t]*\"CONNECT\"" OR
+       NOT http1_client_response_parser MATCHES
+           "detail::httpResponseContentSemantics" OR
        http1_client_response_parser MATCHES "request[.]expectsContinue" OR
        http1_client_response_parser MATCHES "throw[ \t]+std::runtime_error")
         boundary_error("HTTP/1 client response parser bypasses its typed plan"
@@ -3876,11 +3988,17 @@ foreach(boundary_doc IN ITEMS
         boundary_error("HTTP byte-range resolution contract is undocumented"
             "${relative} must document exclusive outcomes, overflow-safe resolution, and the RFC 200/416/206 mapping")
     endif()
-    if(NOT boundary_doc_content MATCHES "HttpResponseBodyPlan" OR
+    if(NOT boundary_doc_content MATCHES "HttpResponseContentSemantics" OR
+       NOT boundary_doc_content MATCHES "HttpInformationalResponseContent" OR
+       NOT boundary_doc_content MATCHES "HttpProtocolSwitchResponseContent" OR
+       NOT boundary_doc_content MATCHES "HttpConnectTunnelResponseContent" OR
+       NOT boundary_doc_content MATCHES "HttpResponseWithoutContent" OR
+       NOT boundary_doc_content MATCHES "HttpResponseWithContent" OR
+       NOT boundary_doc_content MATCHES "HttpResponseBodyPlan" OR
        NOT boundary_doc_content MATCHES "HttpBufferedResponseWritePlan")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("response body-plan boundary is undocumented"
-            "${relative} must describe HTTP-owned response write plans")
+            "${relative} must describe the shared response-content alternatives and HTTP-owned write plans")
     endif()
     if(NOT boundary_doc_content MATCHES "ResponseStreamCommitPlan" OR
        NOT boundary_doc_content MATCHES "ResponseStreamWriter::end" OR
@@ -3960,17 +4078,24 @@ foreach(boundary_doc IN ITEMS
     endif()
     if(NOT boundary_doc_content MATCHES "Http2RemoteContentState" OR
        NOT boundary_doc_content MATCHES
-           "Http2RemoteContentWithoutLength" OR
+           "Http2RemoteContentAllowedWithoutLength" OR
        NOT boundary_doc_content MATCHES
-           "Http2RemoteContentKnownLength" OR
+           "Http2RemoteContentAllowedKnownLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteContentMetadataOnlyWithoutLength" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteContentMetadataOnlyKnownLength" OR
        NOT boundary_doc_content MATCHES "remoteContent[(][)]" OR
        NOT boundary_doc_content MATCHES "kCounterOverflow" OR
        NOT boundary_doc_content MATCHES "kDeclaredLengthExceeded" OR
-       NOT boundary_doc_content MATCHES "transaction" OR
+       NOT boundary_doc_content MATCHES "kContentForbidden" OR
+       NOT boundary_doc_content MATCHES "account[(][)]" OR
+       NOT boundary_doc_content MATCHES "terminalLengthValid[(][)]" OR
+       NOT boundary_doc_content MATCHES "section-6[.]4[.]1" OR
        NOT boundary_doc_content MATCHES "section-8[.]1[.]1")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 inbound Content-Length contract is undocumented"
-            "${relative} must document exclusive peer-content alternatives and transactional DATA accounting")
+            "${relative} must document allowance/length alternatives, atomic DATA accounting, and malformed no-content payload rejection")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
        NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR

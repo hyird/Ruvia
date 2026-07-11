@@ -482,7 +482,7 @@ RUVIA_TEST(http2_connect_client_success_ignores_length_and_uses_tunnel_events) {
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(stream->tunnel().open() != nullptr);
-    RUVIA_CHECK(stream->remoteContent().withoutLength() != nullptr);
+    RUVIA_CHECK(stream->remoteContent().allowedWithoutLength() != nullptr);
     RUVIA_CHECK(stream->localSend().tunnelOpen() != nullptr);
 
     const auto data = frame(

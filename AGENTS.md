@@ -177,7 +177,7 @@ body、通知 EOF，并在 done 后消费协议语义上忽略的 epilogue，确
 
 `ruvia-web` 拥有 HTTP 之上的应用能力：App/Context/Router/middleware/controller、route validation、session、CSRF、JWT、rate limit、CORS 策略与中间件、安全头中间件、静态文件目录扫描/索引/产品配置、AutoHTTPS redirect、DB/Redis 集成、WebSocket route 绑定等。它们可以读写 HTTP header，但这不等于它们属于 HTTP 协议本体。
 
-边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议失败对应哪个 HTTP status”，应放在 `ruvia-http`；如果代码决定“协议失败如何变成应用 error code/JSON envelope，或某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 必须在知道 request-body/keep-alive 状态后统一最终化连接语义。流式响应在 handler 前由 `ruvia-http` 的 `Http1ResponseStreamPlan` 绑定 request connection plan、body 状态、chunked/close-delimited framing 和类型化的外部强制关闭策略；提交 response head 时必须再由 `PreparedHttp1ResponseStream` 合并 response 的 `Connection` 选项、规范化响应信号并产出最终 `Http1ServerConnectionPlan`。`ruvia-web` 只能驱动 prepared plan，不得把 pre-commit plan 的下界当成最终 socket 生命周期结论。响应方法/状态是否允许发送 body 必须由 `ruvia-http` 的 `HttpResponseBodyPlan` 统一决定，buffered 响应再由 `HttpBufferedResponseWritePlan` 绑定 representation length 与最终 send-body 结论；HTTP/1、HTTP/2 和 streaming 调用链不得在 `ruvia-web` 通过 `skipBody` 等松散布尔值重复判断。HEAD 保留对应 GET representation 的协商 metadata 和长度，但 HTTP/1 不发送 payload、HTTP/2 不发送 DATA。`Http2Connection` 必须拥有完整的本地发送 phase：interim head 不关闭 initial-head phase，request/final response/WebSocket initial head 只能成功提交一次，DATA 只能在 body-open phase 提交。`submitData()` 的 `kQueued` 表示 core 已复制并接管未发送后缀，调用方不得重试同一输入；`kBackpressured` 表示本次零接管，调用方等待已排队数据 drain 后重试。已接管的终止信号与已经物化到输出缓冲的 `END_STREAM` 必须分别记录；任何本地或对端 reset/reject 都必须统一清理未物化 DATA、trailers 和 drain 通知。所有 inbound HEADERS field block 即使最终因 local reset、drain refusal 或 stream error 被丢弃，也必须连续接收同 stream 的 CONTINUATION，并在 detached scratch 中完整 HPACK 解码后才应用完成动作；owner 在 field block 中途关闭 live stream 时必须转移已累积的压缩字节。local RST 必须是本端在该 stream 的最后一帧，不得在 discarded block 完成后再次发送 RST；无法完成强制解压时必须使用 connection-level `COMPRESSION_ERROR`。RFC 9113 已废弃 priority tree，合法形状的 dependency/weight 只能忽略，不得再触发 stream 状态或 reset。`ruvia-web` 只能驱动这些类型化状态，不得自行复制 HTTP/2 head/data/terminal 判断。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
+边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议失败对应哪个 HTTP status”，应放在 `ruvia-http`；如果代码决定“协议失败如何变成应用 error code/JSON envelope，或某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 必须在知道 request-body/keep-alive 状态后统一最终化连接语义。流式响应在 handler 前由 `ruvia-http` 的 `Http1ResponseStreamPlan` 绑定 request connection plan、body 状态、chunked/close-delimited framing 和类型化的外部强制关闭策略；提交 response head 时必须再由 `PreparedHttp1ResponseStream` 合并 response 的 `Connection` 选项、规范化响应信号并产出最终 `Http1ServerConnectionPlan`。`ruvia-web` 只能驱动 prepared plan，不得把 pre-commit plan 的下界当成最终 socket 生命周期结论。method/status 的响应 content 语义必须由无分配 `HttpResponseContentSemantics` 唯一分类为 `HttpInformationalResponseContent`、`HttpProtocolSwitchResponseContent`、`HttpConnectTunnelResponseContent`、`HttpResponseWithoutContent` 或 `HttpResponseWithContent` alternative；HTTP/1 client、HTTP/2 client 和 `HttpResponseBodyPlan` 必须消费同一结果，禁止各自重写 HEAD/1xx/204/304/CONNECT 判断。发送侧再由 `HttpResponseBodyPlan` 绑定 status write policy，buffered 响应由 `HttpBufferedResponseWritePlan` 绑定 representation length 与最终 send-body 结论；HTTP/1、HTTP/2 和 streaming 调用链不得在 `ruvia-web` 通过 `skipBody` 等松散布尔值重复判断。HEAD 保留对应 GET representation 的协商 metadata 和长度，但 HTTP/1 不发送 payload、HTTP/2 不发送 DATA。`Http2Connection` 必须拥有完整的本地发送 phase：interim head 不关闭 initial-head phase，request/final response/WebSocket initial head 只能成功提交一次，DATA 只能在 body-open phase 提交。`submitData()` 的 `kQueued` 表示 core 已复制并接管未发送后缀，调用方不得重试同一输入；`kBackpressured` 表示本次零接管，调用方等待已排队数据 drain 后重试。已接管的终止信号与已经物化到输出缓冲的 `END_STREAM` 必须分别记录；任何本地或对端 reset/reject 都必须统一清理未物化 DATA、trailers 和 drain 通知。所有 inbound HEADERS field block 即使最终因 local reset、drain refusal 或 stream error 被丢弃，也必须连续接收同 stream 的 CONTINUATION，并在 detached scratch 中完整 HPACK 解码后才应用完成动作；owner 在 field block 中途关闭 live stream 时必须转移已累积的压缩字节。local RST 必须是本端在该 stream 的最后一帧，不得在 discarded block 完成后再次发送 RST；无法完成强制解压时必须使用 connection-level `COMPRESSION_ERROR`。RFC 9113 已废弃 priority tree，合法形状的 dependency/weight 只能忽略，不得再触发 stream 状态或 reset。`ruvia-web` 只能驱动这些类型化状态，不得自行复制 HTTP/2 head/data/terminal 判断。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
 HTTP/1 parser 必须先产出不可拆分的 `Http1ServerConnectionPlan`，把
 `Http1ConnectionDisposition` 与 HTTP/1.0 显式 `keep-alive`/HTTP/1.1 隐式持久化响应信号绑定；
@@ -601,19 +601,25 @@ accepted。HEAD/204/205/304 的 Content-Length 是无内容或 representation me
 DATA 长度契约；WebSocket/CONNECT tunnel 保持 unbounded。
 
 HTTP/2 对端发来的 message content 必须由独立、无分配的 `Http2RemoteContentState` 统一记账。
-state 只能是 `Http2RemoteContentWithoutLength` 或 `Http2RemoteContentKnownLength` 两个互斥
-alternative 之一，只有 known-length 可以暴露 `declaredLength()`；禁止恢复
-`Http2StreamBodyAccounting`、`hasContentLength + contentLength` tuple、缺失长度的假 0，或在
-`Http2StreamState` 转发 presence/length/received/completion accessor。stream 只暴露一个 const
-`remoteContent()` view。第一个 DATA byte accepted 后不得再切换为 known-length；late declaration
-必须失败并保持原 alternative。所有非 tunnel DATA 必须走 transactional check-then-accept：
-`kCounterOverflow`、`kDeclaredLengthExceeded` 必须保持 `receivedBytes()` 不变，只有 `kAccepted`
-才能提交计数；完整 DATA payload（含 Pad Length/padding）的 connection/stream flow-control 记账仍按
-[RFC 9113 §6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1) 先执行。initial HEADERS、
-DATA 与 trailing HEADERS 的 END_STREAM 必须共用 `http2RemoteContentTerminalValid()`；client role 对
-HEAD/204/304 的无内容/representation-length 例外必须一致，不能因由 trailers 终止就把合法
-Content-Length 判为缺失 DATA。其余已声明长度严格遵守
-[RFC 9113 §8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的 DATA payload 总和。
+state 只能是 `Http2RemoteContentAllowedWithoutLength`、`Http2RemoteContentAllowedKnownLength`、
+`Http2RemoteContentMetadataOnlyWithoutLength` 或 `Http2RemoteContentMetadataOnlyKnownLength` 四个
+互斥 alternative 之一；只有 known-length 可以暴露 `declaredLength()`，只有 allowed 可以拥有
+received bytes。禁止恢复 `Http2StreamBodyAccounting`、`hasContentLength + contentLength` tuple、
+缺失长度的假 0，或在 `Http2StreamState` 转发 presence/length/received/completion accessor；stream
+只暴露一个 const `remoteContent()` view。HTTP/2 client 解出 final HEAD/204/304 head 后必须按共享
+`HttpResponseContentSemantics` 原子切换到 metadata-only，并保留 representation Content-Length。
+此后非空 DATA 必须返回 `kContentForbidden` 并产生 stream-level `PROTOCOL_ERROR`；空 DATA 可以只携带
+terminal `END_STREAM`，但不得产出 content event。该行为遵循
+[RFC 9110 §6.4.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-6.4.1) 的无 content 定义以及
+[RFC 9113 §8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的 malformed response
+处理。第一个 DATA byte accepted 后不得再切换为 known-length 或 metadata-only；late transition
+必须失败并保持原 alternative。所有普通 content DATA 必须走单次原子 `account()`：
+`kCounterOverflow`、`kDeclaredLengthExceeded`、`kContentForbidden` 都保持 `receivedBytes()` 不变，
+只有 `kAccepted` 才提交计数，禁止恢复可被调用方拆开的 `checkAccept() + accept()`。完整 DATA payload
+（含 Pad Length/padding）的 connection/stream flow-control 记账仍按
+[RFC 9113 §6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1) 先执行。initial HEADERS、DATA 与
+trailing HEADERS 的 END_STREAM 必须读取 active state 的 `terminalLengthValid()`；metadata-only
+不能因 representation length 被误判为缺失 DATA，其余已声明长度严格匹配 DATA payload 总和。
 
 HTTP/2 client role 的普通请求头只能走 `submitRegularRequestHead()`，并以无分配值类型
 `Http2RequestContent` 在 `none()`、`knownLength(n)`、`streaming()` 三种契约中显式选择。

@@ -293,10 +293,14 @@ close-handshake timeout is five seconds, zero disables it, and negative route va
 at registration. A timeout aborts only that WebSocket transport—`RST_STREAM(CANCEL)` for an HTTP/2
 tunnel—rather than closing the multiplexed connection and its unrelated streams.
 
-Buffered and streaming body decisions are also HTTP-owned: `HttpResponseBodyPlan` combines
-the request method with the response status, while `HttpBufferedResponseWritePlan` adds the
-representation length and the final send-body verdict. HTTP/1 and HTTP/2 consume these same
-plans; `ruvia-web` must not recompute them with loose `skipBody` flags. In particular, a HEAD
+Buffered and streaming body decisions are also HTTP-owned. One allocation-free
+`HttpResponseContentSemantics` classifies a method/status pair as exactly one of
+`HttpInformationalResponseContent`, `HttpProtocolSwitchResponseContent`,
+`HttpConnectTunnelResponseContent`, `HttpResponseWithoutContent`, or `HttpResponseWithContent`. The HTTP/1 client
+parser, HTTP/2 client role, and `HttpResponseBodyPlan` all consume those same exclusive alternatives;
+the body plan additionally binds the sender-only write policy (including 205's required zero-length
+generation rule), while `HttpBufferedResponseWritePlan` adds the representation length and final
+send-body verdict. `ruvia-web` must not recompute them with loose `skipBody` flags. In particular, a HEAD
 response keeps the GET representation metadata (including negotiated content coding and
 content length) but never emits payload bytes or HTTP/2 DATA frames. A 205 Reset Content is
 also suppressed by that shared status plan: HTTP/1 canonicalizes it to `Content-Length: 0`
@@ -410,21 +414,26 @@ before HPACK output. This follows HTTP/2's HEADERS-then-DATA message order and t
 Content-Length/DATA requirement in
 [Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1).
 
-Peer-sent message content is accounted independently by `Http2RemoteContentState`. It is exactly
-one of `Http2RemoteContentWithoutLength` or `Http2RemoteContentKnownLength`; only the latter exposes
-`declaredLength()`, so an absent field cannot be observed as a fake zero. `Http2StreamState` exposes
-one const `remoteContent()` view instead of forwarding presence, length, and received-byte fields.
-The declaration transition is closed after the first accepted DATA byte; a late declaration fails
-without replacing the active alternative.
-Every non-tunnel DATA payload follows a transactional check-then-accept path:
-`Http2RemoteContentCheck::kCounterOverflow` and `kDeclaredLengthExceeded` leave `receivedBytes()`
-unchanged, while only `kAccepted` advances it. Flow control still counts the complete DATA frame
-payload, including padding, before message semantics are applied as required by
-[RFC 9113 Section 6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1). Initial HEADERS,
-DATA, and trailing HEADERS share `http2RemoteContentTerminalValid()` when END_STREAM arrives,
-including the RFC-defined HEAD/204/304 no-content exceptions, so a HEAD representation length is not mistaken for
-missing DATA merely because trailers terminate the message. The exact declared-length check follows
-[RFC 9113 Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1).
+Peer-sent message content is accounted independently by `Http2RemoteContentState`. It is exactly one
+of `Http2RemoteContentAllowedWithoutLength`, `Http2RemoteContentAllowedKnownLength`,
+`Http2RemoteContentMetadataOnlyWithoutLength`, or
+`Http2RemoteContentMetadataOnlyKnownLength`. Only the two known-length alternatives expose
+`declaredLength()`; only the allowed alternatives own received bytes. `Http2StreamState` exposes only
+one const `remoteContent()` view. After a client decodes the final
+HEAD/204/304 head, the shared `HttpResponseContentSemantics` atomically selects metadata-only while
+preserving any representation Content-Length. Non-empty DATA then returns
+`Http2RemoteContentAccountingResult::kContentForbidden` and the connection emits
+`RST_STREAM(PROTOCOL_ERROR)` as required for a malformed response; empty DATA may still carry the
+terminal END_STREAM without producing a content event. This follows the no-content rules in
+[RFC 9110 Section 6.4.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-6.4.1) and malformed-message
+handling in [RFC 9113 Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1).
+All allowed DATA uses one atomic `account()` transition: `kCounterOverflow`,
+`kDeclaredLengthExceeded`, and `kContentForbidden` leave `receivedBytes()` unchanged, while only
+`kAccepted` advances it. A late length declaration or metadata-only transition fails without replacing
+the active alternative. Flow control still counts the complete DATA frame payload, including padding,
+before message semantics are applied as required by
+[RFC 9113 Section 6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1), and every END_STREAM path
+consults the active state's `terminalLengthValid()` result.
 
 Client-role regular request heads use `Http2RequestContent` as the single framing contract.
 `none()`, `knownLength(n)`, and

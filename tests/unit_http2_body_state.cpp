@@ -12,10 +12,8 @@ namespace {
 
 using ruvia::detail::HttpRequestBodyMode;
 using ruvia::detail::Http2BodyAccountingResult;
-using ruvia::detail::Http2Role;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::http2AccountDataBody;
-using ruvia::detail::http2RemoteContentTerminalValid;
 using ruvia::detail::httpRequestBodyByteLimit;
 
 Http2StreamState makeStream() {
@@ -34,7 +32,8 @@ RUVIA_TEST(h2_account_data_body_ok_and_accumulates) {
     RUVIA_CHECK(http2AccountDataBody(stream, 40, 0, 1000) == Http2BodyAccountingResult::kOk);
     RUVIA_CHECK(http2AccountDataBody(stream, 60, 0, 1000) == Http2BodyAccountingResult::kOk);
     RUVIA_CHECK_EQ(
-        stream.remoteContent().receivedBytes(), std::size_t{100});
+        stream.remoteContent().allowedWithoutLength()->receivedBytes(),
+        std::size_t{100});
 }
 
 RUVIA_TEST(h2_account_data_body_too_large) {
@@ -48,7 +47,7 @@ RUVIA_TEST(h2_account_data_body_too_large) {
     RUVIA_CHECK(http2AccountDataBody(accumulate, 60, 0, 100) == Http2BodyAccountingResult::kOk);
     RUVIA_CHECK(http2AccountDataBody(accumulate, 50, 0, 100) == Http2BodyAccountingResult::kTooLarge);
     RUVIA_CHECK_EQ(
-        accumulate.remoteContent().receivedBytes(),
+        accumulate.remoteContent().allowedWithoutLength()->receivedBytes(),
         std::size_t{60});  // rejected bytes not counted
 }
 
@@ -97,45 +96,30 @@ RUVIA_TEST(h2_account_data_body_content_length_exceeded) {
     RUVIA_CHECK(http2AccountDataBody(stream, 60, 0, 0) ==
                 Http2BodyAccountingResult::kContentLengthExceeded);
     RUVIA_CHECK_EQ(
-        stream.remoteContent().receivedBytes(), std::size_t{0});
+        stream.remoteContent().allowedKnownLength()->receivedBytes(),
+        std::size_t{0});
 }
 
-RUVIA_TEST(h2_account_data_body_open_connect_tunnel_bypasses_limits) {
+RUVIA_TEST(h2_account_data_body_rejects_metadata_only_payload_before_product_limits) {
     auto stream = makeStream();
-    RUVIA_CHECK(stream.beginStandardConnect());
-    RUVIA_CHECK(stream.acceptConnect());
-    // A tiny limit, but a tunnel bypasses request-body accounting entirely.
-    RUVIA_CHECK(http2AccountDataBody(stream, 100000, 1, 1) == Http2BodyAccountingResult::kOk);
-    RUVIA_CHECK(http2RemoteContentTerminalValid(
-        stream, Http2Role::kServer));  // tunnel bytes are not HTTP content
+    RUVIA_CHECK(stream.declareRemoteContentLength(42));
+    RUVIA_CHECK(stream.selectRemoteContentMetadataOnly());
+    RUVIA_CHECK(http2AccountDataBody(stream, 1, 0, 0) ==
+        Http2BodyAccountingResult::kContentForbidden);
+    RUVIA_CHECK(stream.remoteContent().metadataOnlyKnownLength() != nullptr);
+    RUVIA_CHECK(http2AccountDataBody(stream, 0, 0, 0) ==
+        Http2BodyAccountingResult::kOk);
 }
 
-RUVIA_TEST(h2_remote_content_terminal_validation_shares_no_content_exemptions) {
-    auto headResponse = makeStream();
-    headResponse.assignRequestMethod("HEAD");
-    RUVIA_CHECK(headResponse.declareRemoteContentLength(42));
-    RUVIA_CHECK(http2RemoteContentTerminalValid(
-        headResponse, Http2Role::kClient));
-
-    auto noContent = makeStream();
-    noContent.setResponseStatus(204);
-    RUVIA_CHECK(noContent.declareRemoteContentLength(42));
-    RUVIA_CHECK(http2RemoteContentTerminalValid(
-        noContent, Http2Role::kClient));
-
-    auto notModified = makeStream();
-    notModified.setResponseStatus(304);
-    RUVIA_CHECK(notModified.declareRemoteContentLength(42));
-    RUVIA_CHECK(http2RemoteContentTerminalValid(
-        notModified, Http2Role::kClient));
-
+RUVIA_TEST(h2_remote_content_terminal_validation_is_owned_by_active_alternative) {
     auto ordinary = makeStream();
-    ordinary.setResponseStatus(200);
     RUVIA_CHECK(ordinary.declareRemoteContentLength(42));
-    RUVIA_CHECK(!http2RemoteContentTerminalValid(
-        ordinary, Http2Role::kClient));
-    RUVIA_CHECK(!http2RemoteContentTerminalValid(
-        ordinary, Http2Role::kServer));
+    RUVIA_CHECK(!ordinary.remoteContent().terminalLengthValid());
+
+    auto metadataOnly = makeStream();
+    RUVIA_CHECK(metadataOnly.declareRemoteContentLength(42));
+    RUVIA_CHECK(metadataOnly.selectRemoteContentMetadataOnly());
+    RUVIA_CHECK(metadataOnly.remoteContent().terminalLengthValid());
 }
 
 RUVIA_TEST(h2_account_data_body_mode_selects_limit) {
