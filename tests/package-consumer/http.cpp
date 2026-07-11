@@ -27,8 +27,10 @@
 #include <ruvia/http/detail/http1/Http1ServerSemantics.h>
 #include <ruvia/http/detail/http2/Http2Connection.h>
 #include <ruvia/http/detail/http2/Http2Event.h>
+#include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
+#include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
@@ -374,6 +376,86 @@ concept HasStaleHttp2StreamTunnelForwarders = requires(const T& stream) {
     stream.connectRejected();
 };
 
+template <typename T>
+concept HasHttp2LocalSendAlternatives = requires(const T& state) {
+    { state.headPending() } ->
+        std::same_as<const ruvia::detail::Http2LocalHeadPending*>;
+    { state.requestContentOpen() } ->
+        std::same_as<const ruvia::detail::Http2LocalRequestContentOpen*>;
+    { state.responseContentOpen() } ->
+        std::same_as<const ruvia::detail::Http2LocalResponseContentOpen*>;
+    { state.responseTrailersOnly() } ->
+        std::same_as<const ruvia::detail::Http2LocalResponseTrailersOnly*>;
+    { state.connectPending() } ->
+        std::same_as<const ruvia::detail::Http2LocalConnectPending*>;
+    { state.tunnelOpen() } ->
+        std::same_as<const ruvia::detail::Http2LocalTunnelOpen*>;
+    { state.endStreamQueued() } ->
+        std::same_as<const ruvia::detail::Http2LocalEndStreamQueued*>;
+    { state.endStreamCommitted() } ->
+        std::same_as<const ruvia::detail::Http2LocalEndStreamCommitted*>;
+    { state.aborted() } ->
+        std::same_as<const ruvia::detail::Http2StreamAborted*>;
+};
+
+template <typename T>
+concept HasHttp2LocalCloseSource = requires(const T& state) {
+    { state.source() } ->
+        std::same_as<ruvia::detail::Http2StreamCloseSource>;
+};
+
+template <typename T>
+concept HasStaleHttp2LocalSendProduct = requires(const T& state) {
+    state.localSendPhase();
+    state.localMessageKind();
+    state.localEndStreamCommitted();
+};
+
+template <typename T>
+concept HasStaleHttp2StreamLocalSendForwarders = requires(const T& stream) {
+    stream.localSendPhase();
+    stream.localMessageKind();
+    stream.localEndStream();
+    stream.localEndStreamCommitted();
+    stream.canSubmitLocalHead();
+    stream.localBodyOpen();
+    stream.localTrailersOnly();
+};
+
+template <typename T>
+concept HasHttp2AbortLifecycle = requires(T& stream) {
+    { stream.isAborted() } -> std::same_as<bool>;
+    { stream.abort(ruvia::detail::Http2StreamCloseSource::kLocal) } ->
+        std::same_as<bool>;
+};
+
+template <typename T>
+concept HasStaleHttp2IsReset = requires(const T& stream) {
+    stream.isReset();
+};
+
+template <typename T>
+concept HasStaleHttp2MarkReset = requires(T& stream) {
+    stream.markReset(ruvia::detail::Http2StreamCloseSource::kLocal);
+};
+
+template <typename T>
+concept HasStaleHttp2MarkClosed = requires(T& stream) {
+    stream.markClosed(ruvia::detail::Http2StreamCloseSource::kLocal);
+};
+
+template <typename T>
+concept HasHttp2RemoveAborted = requires(T& table) {
+    table.removeAborted(
+        [](const ruvia::detail::Http2StreamState&) noexcept {});
+};
+
+template <typename T>
+concept HasStaleHttp2RemoveReset = requires(T& table) {
+    table.removeReset(
+        [](const ruvia::detail::Http2StreamState&) noexcept {});
+};
+
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
@@ -510,6 +592,57 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .tunnel()),
     const ruvia::detail::Http2TunnelState&>);
+static_assert(HasHttp2LocalSendAlternatives<
+    ruvia::detail::Http2LocalSendState>);
+static_assert(!HasStaleHttp2LocalSendProduct<
+    ruvia::detail::Http2LocalSendState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalSendState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalHeadPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalRequestContentOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalResponseContentOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalResponseTrailersOnly>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalConnectPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalTunnelOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalEndStreamQueued>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2LocalEndStreamCommitted>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2StreamAborted>);
+static_assert(!std::constructible_from<
+    ruvia::detail::Http2StreamAborted,
+    ruvia::detail::Http2StreamCloseSource>);
+static_assert(!HasHttp2LocalCloseSource<
+    ruvia::detail::Http2LocalSendState>);
+static_assert(!HasHttp2LocalCloseSource<
+    ruvia::detail::Http2LocalEndStreamCommitted>);
+static_assert(HasHttp2LocalCloseSource<
+    ruvia::detail::Http2StreamAborted>);
+static_assert(!HasStaleHttp2StreamLocalSendForwarders<
+    ruvia::detail::Http2StreamState>);
+static_assert(HasHttp2AbortLifecycle<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2IsReset<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2MarkReset<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2MarkClosed<
+    ruvia::detail::Http2StreamState>);
+static_assert(HasHttp2RemoveAborted<
+    ruvia::detail::Http2StreamTable>);
+static_assert(!HasStaleHttp2RemoveReset<
+    ruvia::detail::Http2StreamTable>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .localSend()),
+    const ruvia::detail::Http2LocalSendState&>);
 
 template <typename T>
 concept HasHttp1RequestBodyPlanAlternatives = requires(const T& plan) {
@@ -1013,6 +1146,28 @@ static_assert(HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTargetFailure>);
 
 int main() {
+    std::pmr::monotonic_buffer_resource localSendResource;
+    ruvia::detail::Http2StreamState localSendStream(1, &localSendResource);
+    const auto& localSend = localSendStream.localSend();
+    if (localSend.headPending() == nullptr ||
+        localSend.responseTrailersOnly() != nullptr ||
+        !localSendStream.beginLocalResponseTrailersOnly() ||
+        localSend.headPending() != nullptr ||
+        localSend.responseTrailersOnly() == nullptr ||
+        !localSendStream.queueLocalEndStream() ||
+        localSend.endStreamQueued() == nullptr ||
+        !localSendStream.commitLocalEndStream() ||
+        localSend.endStreamCommitted() == nullptr ||
+        localSendStream.abort(ruvia::detail::Http2StreamCloseSource::kNone) ||
+        !localSendStream.abort(ruvia::detail::Http2StreamCloseSource::kPeer) ||
+        localSend.aborted() == nullptr ||
+        localSend.aborted()->source() !=
+            ruvia::detail::Http2StreamCloseSource::kPeer ||
+        localSendStream.abort(static_cast<
+            ruvia::detail::Http2StreamCloseSource>(0xFF))) {
+        return 38;
+    }
+
     ruvia::detail::Http2TunnelState tunnel;
     if (tunnel.notConnect() == nullptr || tunnel.pending() != nullptr ||
         !tunnel.begin(ruvia::detail::Http2ConnectForm::kExtended) ||
@@ -1480,6 +1635,8 @@ int main() {
         : connectStream->tunnel().pending();
     if (submittedConnect == nullptr || connect.failure() != nullptr ||
         pendingConnect == nullptr ||
+        connectStream->localSend().connectPending() == nullptr ||
+        connectStream->localSend().tunnelOpen() != nullptr ||
         pendingConnect->form() !=
             ruvia::detail::Http2ConnectForm::kStandard ||
         h2.submitData(

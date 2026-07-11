@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
-#include "ruvia/http/detail/http2/Http2StreamLifecycle.h"
+#include "ruvia/http/detail/http2/Http2StreamCloseSource.h"
 
 namespace ruvia::detail {
 

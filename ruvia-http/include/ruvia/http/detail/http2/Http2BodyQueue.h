@@ -123,7 +123,7 @@ inline void http2CompactBodyChunks(Http2StreamState& stream) {
 
 [[nodiscard]] inline bool http2StreamBodyReadReady(const Http2StreamState* stream, bool closing) noexcept {
     return stream == nullptr ||
-        stream->isReset() ||
+        stream->isAborted() ||
         closing ||
         http2HasQueuedStreamBodyChunk(*stream) ||
         stream->bodyEnded();

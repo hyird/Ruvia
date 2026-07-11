@@ -1,47 +1,15 @@
 #pragma once
 
-#include <cstdint>
+#include "ruvia/http/detail/http2/Http2LocalSendState.h"
 
 namespace ruvia::detail {
 
-enum class Http2StreamCloseSource : std::uint8_t {
-    kNone,
-    kLocal,
-    kPeer,
-    // The peer's GOAWAY proved this locally initiated request was never processed.
-    kPeerGoaway
-};
-
-// The local HTTP message submission phase. This is intentionally separate from
-// the peer/body state below: a server can be half-closed(remote) while its local
-// response is still awaiting HEADERS, and a client can have ended its request
-// while the response remains open.
-enum class Http2LocalSendPhase : std::uint8_t {
-    kAwaitingHead,
-    // CONNECT HEADERS were sent without END_STREAM; DATA remains forbidden until
-    // the peer accepts the tunnel with a final 2xx response.
-    kAwaitingTunnelResponse,
-    kBodyOpen,
-    // The initial response head is open only for a terminal trailer HEADERS
-    // section. DATA is rejected by phase, not by a second content-mode check.
-    kTrailersOnly,
-    // END_STREAM has been accepted by the core. It may already be serialized or
-    // may still sit behind flow-control-blocked DATA/trailers.
-    kEndStreamQueued,
-    kReset
-};
-
-enum class Http2LocalMessageKind : std::uint8_t {
-    kNone,
-    kRequest,
-    kResponse,
-    kConnectTunnel
-};
+class Http2StreamState;
 
 class Http2StreamLifecycle final {
 public:
-    [[nodiscard]] bool reset() const noexcept {
-        return reset_;
+    [[nodiscard]] bool aborted() const noexcept {
+        return localSend_.aborted() != nullptr;
     }
 
     [[nodiscard]] bool bodyEnded() const noexcept {
@@ -52,21 +20,8 @@ public:
         return peerEndStream_;
     }
 
-    [[nodiscard]] bool localEndStream() const noexcept {
-        return localSendPhase_ == Http2LocalSendPhase::kEndStreamQueued ||
-            localSendPhase_ == Http2LocalSendPhase::kReset;
-    }
-
-    [[nodiscard]] bool localEndStreamCommitted() const noexcept {
-        return localEndStreamCommitted_;
-    }
-
-    [[nodiscard]] Http2LocalSendPhase localSendPhase() const noexcept {
-        return localSendPhase_;
-    }
-
-    [[nodiscard]] Http2LocalMessageKind localMessageKind() const noexcept {
-        return localMessageKind_;
+    [[nodiscard]] const Http2LocalSendState& localSend() const noexcept {
+        return localSend_;
     }
 
     [[nodiscard]] bool queued() const noexcept {
@@ -77,9 +32,10 @@ public:
         return dispatchStarted_;
     }
 
-    [[nodiscard]] Http2StreamCloseSource closeSource() const noexcept {
-        return closeSource_;
-    }
+private:
+    friend class Http2StreamState;
+
+    constexpr Http2StreamLifecycle() noexcept = default;
 
     [[nodiscard]] bool holdPeerConcurrencySlot() noexcept {
         if (peerConcurrencySlotHeld_) {
@@ -97,93 +53,54 @@ public:
         return true;
     }
 
-    void markReset(Http2StreamCloseSource source = Http2StreamCloseSource::kLocal) noexcept {
-        reset_ = true;
-        localSendPhase_ = Http2LocalSendPhase::kReset;
-        if (source != Http2StreamCloseSource::kNone) {
-            closeSource_ = source;
+    [[nodiscard]] bool abort(Http2StreamCloseSource source) noexcept {
+        if (!localSend_.abort(source)) {
+            return false;
         }
-    }
-
-    void markClosed(Http2StreamCloseSource source) noexcept {
-        reset_ = true;
         peerEndStream_ = true;
         bodyEnded_ = true;
-        localSendPhase_ = Http2LocalSendPhase::kReset;
-        closeSource_ = source;
+        queued_ = false;
+        return true;
     }
 
     void markPeerEndStream() noexcept {
         peerEndStream_ = true;
     }
 
-    [[nodiscard]] bool canSubmitLocalHead() const noexcept {
-        return !reset_ && localSendPhase_ == Http2LocalSendPhase::kAwaitingHead;
+    [[nodiscard]] bool beginLocalRequestContent() noexcept {
+        return localSend_.beginRequestContent();
     }
 
-    void markLocalHeadSubmitted(
-        Http2LocalMessageKind kind,
-        bool endStream) noexcept {
-        localMessageKind_ = kind;
-        localSendPhase_ = endStream
-            ? Http2LocalSendPhase::kEndStreamQueued
-            : Http2LocalSendPhase::kBodyOpen;
-        localEndStreamCommitted_ = endStream;
+    [[nodiscard]] bool beginLocalResponseContent() noexcept {
+        return localSend_.beginResponseContent();
     }
 
-    void markLocalTrailersOnlyHeadSubmitted(
-        Http2LocalMessageKind kind) noexcept {
-        localMessageKind_ = kind;
-        localSendPhase_ = Http2LocalSendPhase::kTrailersOnly;
-        localEndStreamCommitted_ = false;
+    [[nodiscard]] bool beginLocalResponseTrailersOnly() noexcept {
+        return localSend_.beginResponseTrailersOnly();
     }
 
-    void markLocalConnectRequestSubmitted() noexcept {
-        localMessageKind_ = Http2LocalMessageKind::kConnectTunnel;
-        localSendPhase_ = Http2LocalSendPhase::kAwaitingTunnelResponse;
-        localEndStreamCommitted_ = false;
+    [[nodiscard]] bool commitLocalHeadEndStream() noexcept {
+        return localSend_.commitHeadEndStream();
+    }
+
+    [[nodiscard]] bool beginLocalConnectRequest() noexcept {
+        return localSend_.beginConnectRequest();
     }
 
     [[nodiscard]] bool openLocalConnectTunnel() noexcept {
-        if (reset_ ||
-            localMessageKind_ != Http2LocalMessageKind::kConnectTunnel ||
-            localSendPhase_ != Http2LocalSendPhase::kAwaitingTunnelResponse) {
-            return false;
-        }
-        localSendPhase_ = Http2LocalSendPhase::kBodyOpen;
-        return true;
+        return localSend_.openTunnel();
     }
 
     [[nodiscard]] bool rejectLocalConnect() noexcept {
-        if (reset_ ||
-            localMessageKind_ != Http2LocalMessageKind::kConnectTunnel ||
-            localSendPhase_ != Http2LocalSendPhase::kAwaitingTunnelResponse) {
-            return false;
-        }
-        localSendPhase_ = Http2LocalSendPhase::kEndStreamQueued;
-        localEndStreamCommitted_ = true;
-        return true;
+        return localSend_.rejectConnect();
     }
 
-    [[nodiscard]] bool localBodyOpen() const noexcept {
-        return !reset_ && localSendPhase_ == Http2LocalSendPhase::kBodyOpen;
+    [[nodiscard]] bool queueLocalEndStream() noexcept {
+        return localSend_.queueEndStream();
     }
 
-    [[nodiscard]] bool localTrailersOnly() const noexcept {
-        return !reset_ && localSendPhase_ == Http2LocalSendPhase::kTrailersOnly;
-    }
-
-    void markLocalEndStreamQueued() noexcept {
-        if (!reset_) {
-            localSendPhase_ = Http2LocalSendPhase::kEndStreamQueued;
-        }
-    }
-
-    void markLocalEndStreamCommitted() noexcept {
-        if (!reset_) {
-            localSendPhase_ = Http2LocalSendPhase::kEndStreamQueued;
-            localEndStreamCommitted_ = true;
-        }
+    [[nodiscard]] bool commitLocalEndStream() noexcept {
+        return localSend_.commitEndStream();
     }
 
     void markBodyEnded() noexcept {
@@ -191,7 +108,7 @@ public:
     }
 
     [[nodiscard]] bool tryMarkQueued() noexcept {
-        if (queued_ || reset_) {
+        if (queued_ || aborted()) {
             return false;
         }
         queued_ = true;
@@ -204,28 +121,20 @@ public:
 
     [[nodiscard]] bool tryStartDispatch() noexcept {
         queued_ = false;
-        if (dispatchStarted_ || reset_) {
+        if (dispatchStarted_ || aborted()) {
             return false;
         }
         dispatchStarted_ = true;
         return true;
     }
 
-    void markDispatchStarted() noexcept {
-        dispatchStarted_ = true;
-    }
-
 private:
+    Http2LocalSendState localSend_;
     bool peerEndStream_ : 1 {false};
-    bool localEndStreamCommitted_ : 1 {false};
     bool bodyEnded_ : 1 {false};
     bool queued_ : 1 {false};
     bool dispatchStarted_ : 1 {false};
-    bool reset_ : 1 {false};
     bool peerConcurrencySlotHeld_ : 1 {false};
-    Http2LocalSendPhase localSendPhase_{Http2LocalSendPhase::kAwaitingHead};
-    Http2LocalMessageKind localMessageKind_{Http2LocalMessageKind::kNone};
-    Http2StreamCloseSource closeSource_{Http2StreamCloseSource::kNone};
 };
 
 }  // namespace ruvia::detail

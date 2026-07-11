@@ -156,7 +156,7 @@ set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
-    "markWebSocketTunnel|kWebSocketTunnel|standardConnect_|extendedConnectWebSocket_|webSocketTunnel_|Http2ConnectKind|Http2TunnelPhase|(standardConnect|extendedConnect|extendedConnectWebSocket|webSocketTunnel|connectRequest|connectPending|tunnelOpen|connectRejected|markStandardConnectPending|markExtendedConnectPending|markConnectTunnelOpen|markConnectRejected)[ \t]*[(]")
+    "markWebSocketTunnel|kWebSocketTunnel|standardConnect_|extendedConnectWebSocket_|webSocketTunnel_|Http2ConnectKind|Http2TunnelPhase|(standardConnect|extendedConnect|extendedConnectWebSocket|webSocketTunnel|connectRequest|connectRejected|markStandardConnectPending|markExtendedConnectPending|markConnectTunnelOpen|markConnectRejected)[ \t]*[(]")
 set(RULE_STALE_H2_PREFACE_API
     "Http2CoreConfig|queueLocalSettings|queueClientPreface|expectClientPreface|initialSendWindow|initialReceiveWindow|receivedFirstSettings_|connectionStarted_|awaitingClientPreface_")
 set(RULE_STALE_H2_CLIENT_STREAM_API
@@ -177,6 +177,8 @@ set(RULE_STALE_H2_DATA_FLOW_ACCOUNTING
     "Http2ReceiveWindowResult|http2ConsumeReceiveWindows|http2RestoreReceiveWindows|dropDataFrame|windowConsumed")
 set(RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE
     "Http2LocalContentMode|localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)[ \t]*[(]")
+set(RULE_STALE_H2_LOCAL_SEND_PRODUCT
+    "Http2LocalSendPhase|Http2LocalMessageKind|Http2LocalReset|localSendPhase_|localMessageKind_|localEndStream_|localEndStreamCommitted_|reset_|closeSource_|localSendPhase[ \t]*[(]|localMessageKind[ \t]*[(]|localEndStream[ \t]*[(]|localEndStreamCommitted[ \t]*[(]|canSubmitLocalHead[ \t]*[(]|localBodyOpen[ \t]*[(]|localTrailersOnly[ \t]*[(]|closeSource[ \t]*[(]|isReset[ \t]*[(]|markReset[ \t]*[(]|markClosed[ \t]*[(]|removeReset[ \t]*[(]|markLocalHeadSubmitted|markLocalTrailersOnlyHeadSubmitted|markLocalConnectRequestSubmitted|markLocalEndStreamQueued|markLocalEndStreamCommitted|markDispatchStarted")
 set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
     "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
@@ -481,6 +483,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("mode/payload HTTP/2 local-content tuple"
         "${RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE}"
         "if (stream.localContentMode() == Http2LocalContentMode::kKnownLength) stream.localContentDeclaredLength();")
+    expect_match("phase/kind/boolean HTTP/2 local-send product"
+        "${RULE_STALE_H2_LOCAL_SEND_PRODUCT}"
+        "if (stream.localSendPhase() == Http2LocalSendPhase::kBodyOpen) stream.markLocalEndStreamQueued();")
+    expect_match("reset vocabulary applied to GOAWAY-aborted HTTP/2 streams"
+        "${RULE_STALE_H2_LOCAL_SEND_PRODUCT}"
+        "if (stream.isReset()) table.removeReset(callback);")
     expect_match("presence/value HTTP/2 remote-content tuple"
         "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
         "if (stream.hasContentLength()) stream.contentLength();")
@@ -1466,6 +1474,17 @@ check_files_no_match("HTTP/2 local content accounting must use exclusive alterna
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+check_files_no_match("HTTP/2 local send permission must use one exclusive state"
+    "${RULE_STALE_H2_LOCAL_SEND_PRODUCT}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalSendState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamTable.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyQueue.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
 check_files_no_match("HTTP/2 remote content accounting must use exclusive alternatives"
     "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h"
@@ -1865,6 +1884,14 @@ endif()
 
 set(HTTP2_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(HTTP2_LOCAL_SEND_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalSendState.h")
+set(HTTP2_STREAM_CLOSE_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamCloseSource.h")
+set(HTTP2_STREAM_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
+set(HTTP2_STREAM_TABLE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamTable.h")
 set(HTTP2_LOCAL_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h")
 set(HTTP2_REMOTE_CONTENT_STATE
@@ -1885,6 +1912,99 @@ set(HTTP2_LOCAL_SETTINGS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalSettings.h")
 set(HTTP2_PEER_SETTINGS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2PeerSettings.h")
+if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
+   NOT EXISTS "${HTTP2_STREAM_CLOSE_SOURCE}" OR
+   NOT EXISTS "${HTTP2_STREAM_LIFECYCLE}" OR
+   NOT EXISTS "${HTTP2_STREAM_TABLE}" OR
+   NOT EXISTS "${HTTP2_STREAM_STATE}" OR
+   NOT EXISTS "${HTTP2_CONNECTION_SOURCE}")
+    boundary_error("HTTP/2 local send state is missing"
+        "local frame permission must be owned by one installed discriminated state")
+else()
+    file(READ "${HTTP2_LOCAL_SEND_STATE}" http2_local_send_state)
+    file(READ "${HTTP2_STREAM_CLOSE_SOURCE}" http2_stream_close_source)
+    file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_stream_lifecycle)
+    file(READ "${HTTP2_STREAM_TABLE}" http2_stream_table)
+    file(READ "${HTTP2_STREAM_STATE}" http2_local_send_stream_state)
+    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_local_send_connection)
+    if(NOT http2_stream_close_source MATCHES
+           "enum class Http2StreamCloseSource" OR
+       NOT http2_stream_close_source MATCHES "kNone" OR
+       NOT http2_stream_close_source MATCHES "kPeerGoaway" OR
+       NOT http2_local_send_state MATCHES
+           "Http2StreamCloseSource[.]h" OR
+       NOT http2_local_send_state MATCHES
+           "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
+       http2_local_send_state MATCHES
+           "enum class Http2StreamCloseSource" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalHeadPending final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalRequestContentOpen final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalResponseContentOpen final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalResponseTrailersOnly final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalConnectPending final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalTunnelOpen final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalEndStreamQueued final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2LocalEndStreamCommitted final" OR
+       NOT http2_local_send_state MATCHES
+           "class Http2StreamAborted final" OR
+       NOT http2_local_send_state MATCHES "using State = std::variant" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalHeadPending>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalRequestContentOpen>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalResponseContentOpen>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalResponseTrailersOnly>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalConnectPending>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalTunnelOpen>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalEndStreamQueued>" OR
+       NOT http2_local_send_state MATCHES
+           "std::get_if<Http2LocalEndStreamCommitted>" OR
+       NOT http2_local_send_state MATCHES "std::get_if<Http2StreamAborted>" OR
+       NOT http2_local_send_state MATCHES
+           "Http2StreamCloseSource source[(][)] const noexcept" OR
+       http2_local_send_state MATCHES
+           "source == Http2StreamCloseSource::kNone" OR
+       NOT http2_stream_lifecycle MATCHES
+           "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       NOT http2_stream_lifecycle MATCHES
+           "private:[\r\n \t]+friend class Http2StreamState" OR
+       NOT http2_stream_lifecycle MATCHES
+           "bool aborted[(][)] const noexcept" OR
+       NOT http2_stream_lifecycle MATCHES
+           "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
+       NOT http2_stream_lifecycle MATCHES "queued_ = false" OR
+       NOT http2_local_send_stream_state MATCHES
+           "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+       NOT http2_local_send_stream_state MATCHES
+           "bool isAborted[(][)] const noexcept" OR
+       NOT http2_local_send_stream_state MATCHES
+           "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
+       NOT http2_stream_table MATCHES "void removeAborted" OR
+       NOT http2_local_send_connection MATCHES "beginLocalRequestContent" OR
+       NOT http2_local_send_connection MATCHES "beginLocalResponseContent" OR
+       NOT http2_local_send_connection MATCHES
+           "beginLocalResponseTrailersOnly" OR
+       NOT http2_local_send_connection MATCHES "beginLocalConnectRequest" OR
+       NOT http2_local_send_connection MATCHES "openLocalConnectTunnel" OR
+       NOT http2_local_send_connection MATCHES "queueLocalEndStream" OR
+       NOT http2_local_send_connection MATCHES "commitLocalEndStream")
+        boundary_error("HTTP/2 local send lifecycle lost its discriminated state"
+            "head, request/response content, trailers, CONNECT, queued/committed END_STREAM, and whole-stream abort must remain exclusive; only abort owns a non-none close source and it must atomically clear queue ownership")
+    endif()
+endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_STATE}")
     boundary_error("HTTP/2 local content state is missing"
         "Http2LocalContentState.h must own outbound response length accounting")
@@ -2064,11 +2184,14 @@ else()
 endif()
 if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
     file(READ "${HTTP2_CONNECTION_SOURCE}" http2_connection_source)
-    if(NOT http2_connection_source MATCHES "stream->canSubmitLocalHead\\(\\)" OR
-       NOT http2_connection_source MATCHES "stream->localBodyOpen\\(\\)" OR
+    if(NOT http2_connection_source MATCHES
+           "localSend[(][)][.]headPending[(][)]" OR
+       NOT http2_connection_source MATCHES "requestContentOpen[(][)]" OR
+       NOT http2_connection_source MATCHES "responseContentOpen[(][)]" OR
+       NOT http2_connection_source MATCHES "tunnelOpen[(][)]" OR
        NOT http2_connection_source MATCHES "Http2DataSubmitStatus::kBackpressured")
-        boundary_error("HTTP/2 core does not enforce its typed local send phases"
-            "initial head, body-open DATA, and zero-ownership backpressure must be core-owned")
+        boundary_error("HTTP/2 core does not enforce its typed local send state"
+            "head ownership, request/response/tunnel DATA permission, and zero-ownership backpressure must be core-owned")
     endif()
     if(NOT http2_connection_source MATCHES "discardDeferredStreamState\\(streamId\\)" OR
        NOT http2_connection_source MATCHES "first && http2EndsStream\\(endStream\\)")
@@ -2288,6 +2411,8 @@ set(HTTP2_EVENT_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 set(HTTP2_PEER_SETTINGS_TEST "${RUVIA_ROOT}/tests/unit_http2_peer_settings.cpp")
 set(HTTP2_LOCAL_CONTENT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_local_content_state.cpp")
+set(HTTP2_LOCAL_SEND_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_stream_lifecycle.cpp")
 set(HTTP2_REMOTE_CONTENT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_remote_content_state.cpp")
 set(HTTP2_BODY_STATE_TEST
@@ -2339,6 +2464,77 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "invalidSetting[.]failure[(][)]->error[(][)]")
         boundary_error("HTTP/2 peer SETTINGS result contract is under-tested"
             "unit and installed-package consumers must pin payload-free application, delta-only change, and error-only failure")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_LOCAL_SEND_TEST}")
+    boundary_error("HTTP/2 local send alternatives are untested"
+        "unit_http2_stream_lifecycle.cpp must pin every transition and exclusive payload owner")
+elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_LOCAL_SEND_TEST}" http2_local_send_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_local_send_package_test)
+    if(NOT http2_local_send_test MATCHES
+           "http2_local_send_state_request_content_has_exclusive_transitions" OR
+       NOT http2_local_send_test MATCHES
+           "http2_local_send_state_response_content_and_trailers_are_distinct" OR
+       NOT http2_local_send_test MATCHES
+           "http2_local_send_state_connect_waits_for_acceptance" OR
+       NOT http2_local_send_test MATCHES
+           "http2_local_send_state_abort_owns_immutable_close_source" OR
+       NOT http2_local_send_test MATCHES
+           "!std::default_initializable<Http2LocalSendState>" OR
+       NOT http2_local_send_test MATCHES
+           "!std::default_initializable<Http2StreamLifecycle>" OR
+       NOT http2_local_send_test MATCHES
+           "!std::default_initializable<Http2LocalHeadPending>" OR
+       NOT http2_local_send_test MATCHES
+           "HasCloseSource<Http2StreamAborted>" OR
+       NOT http2_local_send_test MATCHES
+           "std::constructible_from<[\r\n \t]*Http2StreamAborted" OR
+       NOT http2_local_send_test MATCHES
+           "!HasStaleLocalSendProduct<Http2StreamLifecycle>" OR
+       NOT http2_local_send_test MATCHES
+           "!HasStaleResetAccessor<Http2LocalSendState>" OR
+       NOT http2_local_send_test MATCHES
+           "!HasStaleResetAccessor<Http2StreamLifecycle>" OR
+       NOT http2_local_send_test MATCHES
+           "!HasStaleMarkReset<Http2StreamLifecycle>" OR
+       NOT http2_local_send_test MATCHES
+           "!HasStaleMarkClosed<Http2StreamLifecycle>" OR
+       NOT http2_local_send_test MATCHES
+           "stream[.]abort[(]Http2StreamCloseSource::kNone[)]" OR
+       NOT http2_local_send_test MATCHES "!queuedThenAborted[.]queued[(][)]" OR
+       NOT http2_local_send_test MATCHES
+           "static_cast<Http2StreamCloseSource>[(]0xFF[)]" OR
+       NOT http2_local_send_package_test MATCHES
+           "HasHttp2LocalSendAlternatives" OR
+       NOT http2_local_send_package_test MATCHES
+           "!std::default_initializable<[\r\n \t]*ruvia::detail::Http2LocalSendState" OR
+       NOT http2_local_send_package_test MATCHES
+           "!HasStaleHttp2LocalSendProduct" OR
+       NOT http2_local_send_package_test MATCHES
+           "!HasStaleHttp2StreamLocalSendForwarders" OR
+       NOT http2_local_send_package_test MATCHES "HasHttp2AbortLifecycle" OR
+       NOT http2_local_send_package_test MATCHES "!HasStaleHttp2IsReset" OR
+       NOT http2_local_send_package_test MATCHES "!HasStaleHttp2MarkReset" OR
+       NOT http2_local_send_package_test MATCHES "!HasStaleHttp2MarkClosed" OR
+       NOT http2_local_send_package_test MATCHES "HasHttp2RemoveAborted" OR
+       NOT http2_local_send_package_test MATCHES "!HasStaleHttp2RemoveReset" OR
+       NOT http2_local_send_package_test MATCHES
+           "HasHttp2LocalCloseSource" OR
+       NOT http2_local_send_package_test MATCHES
+           "std::constructible_from<[\r\n \t]*ruvia::detail::Http2StreamAborted" OR
+       NOT http2_local_send_package_test MATCHES
+           "const ruvia::detail::Http2LocalSendState&" OR
+       NOT http2_local_send_package_test MATCHES
+           "localSendStream[.]beginLocalResponseTrailersOnly" OR
+       NOT http2_local_send_package_test MATCHES
+           "localSend[.]responseTrailersOnly[(][)]" OR
+       NOT http2_local_send_package_test MATCHES
+           "localSend[.]endStreamQueued[(][)]" OR
+       NOT http2_local_send_package_test MATCHES
+           "localSend[.]aborted[(][)][-][>]source[(][)]")
+        boundary_error("HTTP/2 local send alternative ownership is under-tested"
+            "unit and installed consumers must reject phase/kind/boolean products, private alternatives, none/invalid abort sources, reset vocabulary, and stale forwarding accessors")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_CONNECT_TEST}")
@@ -3572,6 +3768,31 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("205 response-body contract is undocumented"
             "${relative} must describe HTTP-owned zero-length 205 framing")
+    endif()
+    if(NOT boundary_doc_content MATCHES "Http2LocalSendState" OR
+       NOT boundary_doc_content MATCHES "Http2LocalHeadPending" OR
+       NOT boundary_doc_content MATCHES "Http2LocalRequestContentOpen" OR
+       NOT boundary_doc_content MATCHES "Http2LocalResponseContentOpen" OR
+       NOT boundary_doc_content MATCHES "Http2LocalResponseTrailersOnly" OR
+       NOT boundary_doc_content MATCHES "Http2LocalConnectPending" OR
+       NOT boundary_doc_content MATCHES "Http2LocalTunnelOpen" OR
+       NOT boundary_doc_content MATCHES "Http2LocalEndStreamQueued" OR
+       NOT boundary_doc_content MATCHES "Http2LocalEndStreamCommitted" OR
+       NOT boundary_doc_content MATCHES "Http2StreamAborted" OR
+       NOT boundary_doc_content MATCHES "localSend[(][)]" OR
+       NOT boundary_doc_content MATCHES "isAborted[(][)]" OR
+       NOT boundary_doc_content MATCHES "abort[(]source[)]" OR
+       NOT boundary_doc_content MATCHES "friend" OR
+       NOT boundary_doc_content MATCHES "Http2StreamState" OR
+       NOT boundary_doc_content MATCHES "kNone" OR
+       NOT boundary_doc_content MATCHES "section-5[.]1" OR
+       NOT boundary_doc_content MATCHES "section-6[.]1" OR
+       NOT boundary_doc_content MATCHES "section-6[.]2" OR
+       NOT boundary_doc_content MATCHES "section-6[.]4" OR
+       NOT boundary_doc_content MATCHES "section-6[.]8")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP/2 local send lifecycle is undocumented"
+            "${relative} must document exclusive head/content/trailer/CONNECT/END_STREAM/abort alternatives, friend-only mutation through Http2StreamState, one const view, atomic abort cleanup, and RFC frame/GOAWAY semantics")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2LocalContentState" OR
        NOT boundary_doc_content MATCHES "Http2LocalContentUnset" OR

@@ -247,12 +247,39 @@ response trailer 只能作为 `ResponseStreamWriter::end(std::span<const HttpHea
 `ruvia-http` 的 `ResponseStreamCommitPlan` 必须把 `HttpResponseBodyPlan`、head 后的
 body-open/trailers-only/message-ended phase 与实际 trailer framing 绑定为一个结论：HTTP/1 仅
 body-allowed chunked response 可发送 trailer，HTTP/1.0 close-delimited 和 HEAD/1xx/204/304
-必须报告 unavailable；HTTP/2 必须用显式 `Http2LocalSendPhase::kTrailersOnly` 为禁止 DATA 的
-response 保留 trailer 终止能力，以 trailing HEADERS 携带 `END_STREAM`，不得把它标成 body-open
+必须报告 unavailable；HTTP/2 必须用 `Http2LocalSendState` 的显式
+`Http2LocalResponseTrailersOnly` alternative 为禁止 DATA 的 response 保留 trailer 终止能力，以
+trailing HEADERS 携带 `END_STREAM`，不得把它标成 body-open
 或回退为空 DATA。`Http2Connection::submitResponseTrailerSection()` 只能在 final response
 head 后原子接管非空 section，必须先验证全部字段及 Content-Length 完成状态再修改 HPACK/stream
 状态，并以 `Http2ResponseTrailerSubmitStatus` 显式报告 closed、wrong phase、empty、invalid field
 或 incomplete length；`finishResponse()` 仍是终止帧顺序的唯一 owner。
+
+HTTP/2 本地发帧权限必须由一个 `Http2LocalSendState` 独占，并且只能是
+`Http2LocalHeadPending`、`Http2LocalRequestContentOpen`、`Http2LocalResponseContentOpen`、
+`Http2LocalResponseTrailersOnly`、`Http2LocalConnectPending`、`Http2LocalTunnelOpen`、
+`Http2LocalEndStreamQueued`、`Http2LocalEndStreamCommitted` 或 `Http2StreamAborted` 之一。request、
+response、tunnel DATA 权限不得合并；trailers-only 不得开放 DATA；queued END_STREAM 表示 core 已
+接管但仍排在 flow-control DATA/trailer 后，committed END_STREAM 表示终止 HEADERS/DATA 已物化到
+输出缓冲。只有 `Http2StreamAborted` 可以拥有不可变且非 `kNone` 的
+`Http2StreamCloseSource`；它统一表示 local/peer RST_STREAM 与被 peer GOAWAY last-stream-id
+排除的请求，后者不是 reset，不得恢复 `Http2LocalReset`、`isReset()`、`markReset()` 或
+`removeReset()` 这套错误词汇。状态查询统一使用 `isAborted()`；`abort(source)` 是异常终止的唯一
+mutation，必须同时关闭 peer/body
+生命周期并清除 ready-queue ownership；正常 END_STREAM 只能进入 committed half-close，不能伪装成
+abort。
+`Http2StreamLifecycle` 与 `Http2StreamState` 只暴露一个 const `localSend()` view，禁止恢复
+`Http2LocalSendPhase + Http2LocalMessageKind + bool + closeSource` 笛卡尔积、对应 forwarding
+accessor 或分散 mutation。`Http2LocalSendState` 的 transition 只能由 friend
+`Http2StreamLifecycle` 驱动，lifecycle mutation 又只能由 friend `Http2StreamState` 驱动；Connection
+只能调用 `Http2StreamState` 的 typed mutation，其他层只能观察 alternative，不得绕过 stream-owned
+tunnel/content 联合校验。该状态必须遵守
+[RFC 9113 §5.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1) 的 half-closed(local) 转换、
+[§6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1) 的 DATA/END_STREAM 限制和
+[§6.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.2) 的 HEADERS/END_STREAM 语义。
+RST_STREAM 的 whole-stream closed 转换遵守
+[§6.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4)，GOAWAY 排除未处理请求的语义遵守
+[§6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8)。
 
 HTTP/1 parser 必须产出不可变的 `Http1RequestBodyPlan`，其 framing 只能是
 `Http1RequestWithoutBody`、`Http1KnownLengthRequestBody` 或 `Http1ChunkedRequestBody`；缺少 framing

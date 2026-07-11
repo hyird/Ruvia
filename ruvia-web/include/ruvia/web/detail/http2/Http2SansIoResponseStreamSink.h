@@ -64,7 +64,7 @@ public:
 
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
-        return stream == nullptr || stream->isReset();
+        return stream == nullptr || stream->isAborted();
     }
 
     void bindContext(Context* context, ResponseStreamState::StreamingHeadThunk streamingHead) noexcept {
@@ -221,18 +221,18 @@ private:
 
     // Park until the reader reports the window-blocked remainder drained. A spurious
     // wake just re-checks; if the stream dies or the session tears down, stop waiting
-    // (the dispatch wrapper observes the abort via peerAborted / isReset).
+    // (the dispatch wrapper observes the abort via peerAborted / isAborted).
     Task<bool> awaitSendWindow() {
         while (connection_.hasQueuedData(streamId_)) {
             auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isReset() || streamSignal_ == nullptr ||
+            if (stream == nullptr || stream->isAborted() || streamSignal_ == nullptr ||
                 streamSignal_->ended) {
                 co_return false;
             }
             co_await streamSignal_->wait();
         }
         auto* stream = connection_.stream(streamId_);
-        co_return stream != nullptr && !stream->isReset() &&
+        co_return stream != nullptr && !stream->isAborted() &&
             streamSignal_ != nullptr && !streamSignal_->ended;
     }
 
