@@ -159,6 +159,7 @@ if(MSVC)
 endif()
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
+set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
 endif()
 
 if(RUVIA_BUILD_CORE)
