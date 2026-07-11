@@ -818,6 +818,37 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "suppressAutoContentLength|ResponseWritePolicy[ \t]+policy")
     message(FATAL_ERROR "installed HTTP/1 response-head API restored scalar framing or lost its exclusive plan")
 endif()
+set(_installed_final_response_control_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpFinalResponseControlPlan.h")
+if(NOT EXISTS "${_installed_final_response_control_plan_path}")
+    message(FATAL_ERROR "installed final-response control plan is missing")
+endif()
+file(READ "${_installed_final_response_control_plan_path}"
+    _installed_final_response_control_plan)
+if(NOT _installed_final_response_control_plan MATCHES
+       "class Http1FinalResponseControl final" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "class Http2FinalResponseControl final" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "class HttpFinalResponseControlPlan final" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "using Protocol = std::variant" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "class HttpFinalResponseControlPlanFailure final" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "class HttpFinalResponseControlPlanResult final" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "std::get_if<HttpFinalResponseControlPlan>" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "kConnectionSpecificFieldForbidden" OR
+   NOT _installed_final_response_control_plan MATCHES
+       "http2IsForbiddenResponseConnectionField" OR
+   _installed_final_response_control_plan MATCHES
+       "HttpFinalResponseControlStatus")
+    message(FATAL_ERROR "installed final-response control API restored status/default-payload state or lost protocol alternatives")
+endif()
 set(_installed_http2_response_head_plan_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2ResponseHeadPlan.h")
 set(_installed_http2_response_headers_path
@@ -856,6 +887,10 @@ if(NOT _installed_http2_response_head_plan MATCHES
        "http2ConnectResponseHeadPlan" OR
    NOT _installed_http2_response_headers MATCHES
        "const Http2ResponseHeadPlan& plan" OR
+   NOT _installed_http2_response_headers MATCHES
+       "const Http2FinalResponseControl& control" OR
+   _installed_http2_response_headers MATCHES
+       "http2ResponseConnectionHeaderForbidden" OR
    _installed_http2_response_headers MATCHES
        "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|emitAutoContentLength|std::uint64_t[ 	]+autoContentLength")
     message(FATAL_ERROR "installed HTTP/2 response-head API restored scalar Content-Length ownership or lost its exclusive plan")

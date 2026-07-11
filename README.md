@@ -327,8 +327,22 @@ content length) but never emits payload bytes or HTTP/2 DATA frames. A 205 Reset
 also suppressed by that shared status plan: HTTP/1 canonicalizes it to `Content-Length: 0`
 without transfer coding, while HTTP/2 ends it on the response HEADERS; caller-provided body
 bytes or contradictory framing fields are never sent.
-Status/control semantics are committed through one `HttpFinalResponseControlPlan`, not inferred
-from the body policy. Outbound HTTP status codes are limited to the RFC 9110 range `100..599`;
+Status/control semantics are committed through one non-default-constructible
+`HttpFinalResponseControlPlanResult`, not inferred from the body policy. The result contains either
+one `HttpFinalResponseControlPlan` or one `HttpFinalResponseControlPlanFailure`; failures alone expose
+`HttpFinalResponseControlPlanError`, so there is no `status()/accepted()` plus plausible default
+Upgrade payload. A successful plan then contains exactly one `Http1FinalResponseControl` or
+`Http2FinalResponseControl`. Only the HTTP/1 alternative exposes the already parsed repeated
+`HttpConnectionOptions` and `HttpUpgradeProtocols`; the finalizer consumes those values instead of
+rescanning response fields. The HTTP/2 alternative is available only after all connection-specific
+response fields have been rejected. Buffered, streaming, and successful CONNECT final-head paths
+must obtain that alternative before HPACK or stream mutation, and the encoder requires it rather
+than silently dropping fields. This follows
+[RFC 9113 Section 8.2.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.2): an endpoint must
+not generate `Connection`, `Proxy-Connection`, `Keep-Alive`, `Transfer-Encoding`, or `Upgrade`, and
+the request-only `TE: trailers` exception does not apply to responses.
+
+Outbound HTTP status codes are limited to the RFC 9110 range `100..599`;
 `HttpResponse`, `Context`, and generic buffered/streaming handlers represent final responses only
 (`200..599`). Non-101 1xx progress heads use the immutable, bodyless, borrowed
 `HttpInterimResponseHead`. HTTP/1.1 encodes it only through the allocation-free,
@@ -353,7 +367,9 @@ reports the exact required buffer size transactionally, and carries `Connection:
 `requiresFinalConnectionClose()` because a final response is still required. It encodes exactly the
 fields in the typed head—no hidden field injection. The Web runtime's automatic 100
 Continue path drives this writer and treats socket write failure as transport failure; it contains no
-independent HTTP status-line bytes. HTTP/2 additionally rejects all connection-specific fields.
+independent HTTP status-line bytes. HTTP/2 additionally rejects all connection-specific fields
+transactionally; an application-originated final response is never treated like an intermediary
+translation whose hop-by-hop fields may be removed.
 Across the HTTP-owned HTTP/1 and HTTP/2 final/interim encoders, a caller-supplied `Server` field is
 preserved, but an absent field stays absent; the dedicated WebSocket handshake paths likewise never
 invent a `Server` product identity. Product-banner policy belongs to the application/Web layer. This

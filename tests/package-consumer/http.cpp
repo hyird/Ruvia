@@ -38,6 +38,7 @@
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
+#include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
 #include <ruvia/http/detail/websocket/WsConnection.h>
 #include <ruvia/http/detail/websocket/WsEvent.h>
@@ -306,6 +307,43 @@ concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) {
 template <typename T>
 concept HasStalePreparedStreamPolicy = requires(const T& prepared) {
     prepared.policy();
+};
+
+template <typename T>
+concept HasFinalResponseControlResultAlternatives = requires(
+    const T& result) {
+    { result.plan() } -> std::same_as<const
+        ruvia::detail::HttpFinalResponseControlPlan*>;
+    { result.failure() } -> std::same_as<const
+        ruvia::detail::HttpFinalResponseControlPlanFailure*>;
+};
+
+template <typename T>
+concept HasFinalResponseControlProtocolAlternatives = requires(
+    const T& plan) {
+    { plan.http1() } -> std::same_as<const
+        ruvia::detail::Http1FinalResponseControl*>;
+    { plan.http2() } -> std::same_as<const
+        ruvia::detail::Http2FinalResponseControl*>;
+};
+
+template <typename T>
+concept HasHttp1FinalResponseControlFields = requires(const T& plan) {
+    { plan.connectionOptions() } -> std::same_as<const
+        ruvia::detail::HttpConnectionOptions&>;
+    { plan.upgradeProtocols() } -> std::same_as<const
+        ruvia::detail::HttpUpgradeProtocols&>;
+};
+
+template <typename T>
+concept HasStaleFinalResponseControlStatus = requires(const T& result) {
+    result.status();
+    result.accepted();
+};
+
+template <typename T>
+concept HasStaleTopLevelUpgradeProtocols = requires(const T& plan) {
+    plan.upgradeProtocols();
 };
 
 template <typename T>
@@ -653,6 +691,29 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 static_assert(!HasStalePreparedStreamPolicy<
     ruvia::detail::PreparedHttp1ResponseStream>);
+
+static_assert(HasFinalResponseControlResultAlternatives<
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
+static_assert(HasFinalResponseControlProtocolAlternatives<
+    ruvia::detail::HttpFinalResponseControlPlan>);
+static_assert(HasHttp1FinalResponseControlFields<
+    ruvia::detail::Http1FinalResponseControl>);
+static_assert(!HasHttp1FinalResponseControlFields<
+    ruvia::detail::Http2FinalResponseControl>);
+static_assert(!HasStaleFinalResponseControlStatus<
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
+static_assert(!HasStaleTopLevelUpgradeProtocols<
+    ruvia::detail::HttpFinalResponseControlPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1FinalResponseControl>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2FinalResponseControl>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpFinalResponseControlPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpFinalResponseControlPlanFailure>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpFinalResponseControlPlanResult>);
 
 static_assert(HasHttp2ResponseHeadContentLengthAlternatives<
     ruvia::detail::Http2ResponseHeadPlan>);
@@ -1817,6 +1878,49 @@ int main() {
         bufferedHeadPlan.chunkedStream() != nullptr ||
         bufferedHeadPlan.closeDelimitedStream() != nullptr) {
         return 6;
+    }
+
+    ruvia::HttpResponse http1ControlResponse;
+    http1ControlResponse.header("Connection", "Upgrade");
+    http1ControlResponse.header("Upgrade", "websocket");
+    const auto http1ControlResult =
+        ruvia::detail::httpFinalResponseControlPlan(
+            http1ControlResponse,
+            ruvia::HttpProtocolVersion::kHttp11);
+    const auto* http1ControlPlan = http1ControlResult.plan();
+    const auto* http1Control = http1ControlPlan == nullptr
+        ? nullptr
+        : http1ControlPlan->http1();
+    if (http1Control == nullptr || http1ControlResult.failure() != nullptr ||
+        !http1Control->connectionOptions().upgrade() ||
+        !http1Control->upgradeProtocols().hasProtocol() ||
+        http1ControlPlan->http2() != nullptr) {
+        return 45;
+    }
+
+    const auto http2ControlResult =
+        ruvia::detail::httpFinalResponseControlPlan(
+            response,
+            ruvia::HttpProtocolVersion::kHttp2);
+    if (http2ControlResult.plan() == nullptr ||
+        http2ControlResult.plan()->http1() != nullptr ||
+        http2ControlResult.plan()->http2() == nullptr ||
+        http2ControlResult.failure() != nullptr) {
+        return 46;
+    }
+
+    ruvia::HttpResponse forbiddenHttp2Control;
+    forbiddenHttp2Control.header("Connection", "close");
+    const auto forbiddenHttp2ControlResult =
+        ruvia::detail::httpFinalResponseControlPlan(
+            forbiddenHttp2Control,
+            ruvia::HttpProtocolVersion::kHttp2);
+    if (forbiddenHttp2ControlResult.plan() != nullptr ||
+        forbiddenHttp2ControlResult.failure() == nullptr ||
+        forbiddenHttp2ControlResult.failure()->error() !=
+            ruvia::detail::HttpFinalResponseControlPlanError::
+                kConnectionSpecificFieldForbidden) {
+        return 47;
     }
 
     const auto h2BufferedHeadResult =

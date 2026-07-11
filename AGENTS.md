@@ -215,7 +215,21 @@ field set，不能用 known-header 的单值 cache 决定 Upgrade 或重复握�
 server response finalizer 是响应 `Upgrade` 配对的唯一 owner：缺少 option 时必须自动补
 `Connection: Upgrade`；若最终连接计划关闭，则必须生成 `Connection: close, Upgrade`，不得抛弃
 426/其他响应中的 Upgrade 广告，也不得留下一条失去 Connection option 的 Upgrade field。
-出站状态和协议控制必须统一走 `HttpFinalResponseControlPlan`：有效 HTTP status 仅为 `100..599`，
+出站状态和协议控制必须先统一产出不可默认构造的 `HttpFinalResponseControlPlanResult`；result 只能是
+`HttpFinalResponseControlPlan` 或 `HttpFinalResponseControlPlanFailure` alternative，只有 failure 可通过
+`HttpFinalResponseControlPlanError` 暴露错误。成功 plan 必须再且仅能持有
+`Http1FinalResponseControl` 或 `Http2FinalResponseControl`；只有 HTTP/1 alternative 可以暴露一次解析完成的
+`HttpConnectionOptions` / `HttpUpgradeProtocols`，finalizer 不得重扫 response fields。禁止恢复
+`HttpFinalResponseControlStatus`、`status()/accepted()` 加默认 Upgrade payload 的 tuple，也不得让
+failure 暴露貌似可提交的 plan。
+HTTP/2 buffered、streaming 与成功 CONNECT final head 都必须在 HPACK/output/stream mutation 前取得
+`Http2FinalResponseControl`，encoder 必须接收该 proof。依据
+[RFC 9113 §8.2.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.2.2)，endpoint 生成的 response
+若含 `Connection`、`Proxy-Connection`、`Keep-Alive`、`Transfer-Encoding`、`Upgrade` 或 `TE` 必须
+事务性拒绝；`TE: trailers` 例外只适用于 request。禁止把 origin/application response 当成 intermediary
+translation 静默过滤这些字段，也禁止只在 buffered/streaming/CONNECT 的部分路径验证。
+
+有效 HTTP status 仅为 `100..599`，
 `HttpResponse`/`Context`/普通 buffered/streaming handler 只能表示 `200..599` final response；非 101
 的 1xx 必须使用无 body、不可变状态的 borrowed `HttpInterimResponseHead`。HTTP/1.1 只能通过无分配、
 事务式 `Http1InterimResponseWriter::prepare()` 编码，HTTP/2 只能通过

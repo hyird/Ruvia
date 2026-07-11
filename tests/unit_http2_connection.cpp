@@ -1989,6 +1989,51 @@ RUVIA_TEST(http2_connection_rejects_upgrade_required_final_heads_transactionally
     RUVIA_CHECK(!conn.pendingOutput().empty());
 }
 
+RUVIA_TEST(http2_connection_rejects_connection_specific_final_heads_transactionally) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+    driveGetRequest(conn, &resource);
+
+    constexpr std::pair<std::string_view, std::string_view> fields[] = {
+        {"Connection", "close"},
+        {"Keep-Alive", "timeout=5"},
+        {"Proxy-Connection", "keep-alive"},
+        {"TE", "trailers"},
+        {"Transfer-Encoding", "chunked"},
+        {"Upgrade", "websocket"},
+    };
+    for (const auto& [name, value] : fields) {
+        ruvia::HttpResponse buffered(&resource);
+        buffered.header(name, value);
+        const auto bufferedResult = conn.submitResponseHead(1, buffered);
+        RUVIA_CHECK(
+            responseHeadSubmitError(bufferedResult) ==
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(conn.pendingOutput().empty());
+
+        ruvia::HttpResponse streaming(&resource);
+        streaming.header(name, value);
+        const auto streamingResult = conn.submitStreamingResponseHead(
+            1,
+            std::move(streaming),
+            ruvia::detail::ResponseStreamKind::kGeneric,
+            ruvia::detail::ResponseTrailerIntent::kNone);
+        RUVIA_CHECK(
+            responseHeadSubmitError(streamingResult) ==
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+        RUVIA_CHECK(conn.pendingOutput().empty());
+    }
+
+    // Every rejection happened before HPACK and stream mutation, so the same
+    // stream can still accept one conformant final response.
+    ruvia::HttpResponse fallback(&resource);
+    fallback.status(500);
+    RUVIA_CHECK(responseHeadSubmitted(
+        conn.submitResponseHead(1, fallback)));
+    RUVIA_CHECK(!conn.pendingOutput().empty());
+}
+
 RUVIA_TEST(http2_connection_terminal_large_head_sets_end_stream_only_on_headers) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);

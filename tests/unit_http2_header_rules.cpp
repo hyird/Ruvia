@@ -8,6 +8,7 @@ namespace {
 
 using ruvia::detail::http2HeaderNameHasUppercase;
 using ruvia::detail::http2IsForbiddenConnectionHeader;
+using ruvia::detail::http2IsForbiddenResponseConnectionField;
 using ruvia::detail::http2IsForbiddenTrailerHeader;
 using ruvia::detail::http2IsValidRegularHeader;
 
@@ -31,6 +32,20 @@ RUVIA_TEST(http2_forbidden_connection_headers) {
     RUVIA_CHECK(!http2IsForbiddenConnectionHeader("content-type"));
     // The HTTP/2 check is exact-lowercase; an uppercase form is caught separately.
     RUVIA_CHECK(!http2IsForbiddenConnectionHeader("Connection"));
+
+    // Application response models are version-neutral, so the final-response
+    // gate owns a case-insensitive check and forbids TE as well (the trailers
+    // exception in RFC 9113 applies only to requests).
+    for (const auto name : {
+             "Connection",
+             "keep-alive",
+             "PROXY-CONNECTION",
+             "te",
+             "Transfer-Encoding",
+             "Upgrade"}) {
+        RUVIA_CHECK(http2IsForbiddenResponseConnectionField(name));
+    }
+    RUVIA_CHECK(!http2IsForbiddenResponseConnectionField("content-type"));
 }
 
 RUVIA_TEST(http2_valid_regular_header) {

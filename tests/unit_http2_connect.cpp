@@ -401,6 +401,11 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     invalidLength.header("Content-Length", "0");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidLength) ==
         Http2SubmitStatus::kInvalidMessage);
+    ruvia::HttpResponse invalidConnection(&resource);
+    invalidConnection.status(200);
+    invalidConnection.header("Connection", "close");
+    RUVIA_CHECK(server.submitConnectResponseHead(1, invalidConnection) ==
+        Http2SubmitStatus::kInvalidMessage);
     RUVIA_CHECK(server.pendingOutput().empty());
     RUVIA_CHECK(stream->tunnel().pending() != nullptr);
 

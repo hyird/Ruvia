@@ -13,9 +13,11 @@
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2HeaderRules.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeadPlan.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
+#include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpInterimResponse.h"
@@ -111,24 +113,6 @@ inline constexpr std::size_t kHttp2LowerHeaderStackBytes = 64;
     return name;
 }
 
-[[nodiscard]] inline bool http2ResponseConnectionHeaderForbidden(
-    std::uint32_t knownBit,
-    std::string_view name) noexcept {
-    if (knownBit == kResponseHeaderConnection ||
-        knownBit == kResponseHeaderTransferEncoding) {
-        return true;
-    }
-    if (knownBit != 0) {
-        return false;
-    }
-    return httpAsciiEqualsIgnoreCase(name, "connection") ||
-        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
-        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
-        httpAsciiEqualsIgnoreCase(name, "te") ||
-        httpAsciiEqualsIgnoreCase(name, "transfer-encoding") ||
-        httpAsciiEqualsIgnoreCase(name, "upgrade");
-}
-
 inline void appendHttp2EncodedResponseHeader(
     std::pmr::string& headerBlock,
     std::string_view name,
@@ -163,10 +147,9 @@ validateHttp2InterimResponseHeaders(
     }
     for (const auto& header : response.headers()) {
         const auto name = header.name();
-        const auto knownBit = classifyResponseHeaderName(name);
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
-        if (http2ResponseConnectionHeaderForbidden(knownBit, name)) {
+        if (http2IsForbiddenResponseConnectionField(name)) {
             return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
         }
     }
@@ -202,7 +185,12 @@ appendHttp2InterimResponseHeaders(
 inline void appendHttp2ResponseHeaders(
     Http2StreamState& stream,
     const HttpResponse& response,
-    const Http2ResponseHeadPlan& plan) {
+    const Http2ResponseHeadPlan& plan,
+    const Http2FinalResponseControl& control) {
+    // The unforgeable control alternative proves that the same submission path
+    // rejected all HTTP/2 connection-specific fields before this function can
+    // touch HPACK state. The encoder therefore has no silent filtering branch.
+    (void)control;
     const auto knownBits = responseKnownHeaderBits(response);
 
     auto& headerBlock = stream.responseHeaderBlock();
@@ -212,9 +200,6 @@ inline void appendHttp2ResponseHeaders(
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
-        if (http2ResponseConnectionHeaderForbidden(knownBit, header.name())) {
-            continue;
-        }
         if (knownBit == kResponseHeaderContentLength) {
             // Content-Length is emitted only from the prepared plan below. This
             // makes canonical buffered length, validated explicit metadata,

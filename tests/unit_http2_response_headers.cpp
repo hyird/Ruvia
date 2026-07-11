@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
+#include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 
@@ -54,10 +55,20 @@ bool appendBufferedResponseHeaders(
         ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response),
         response);
     const auto* plan = planResult.plan();
-    if (plan == nullptr) {
+    const auto controlResult = ruvia::detail::httpFinalResponseControlPlan(
+        response,
+        ruvia::HttpProtocolVersion::kHttp2);
+    const auto* controlPlan = controlResult.plan();
+    const auto* http2Control =
+        controlPlan == nullptr ? nullptr : controlPlan->http2();
+    if (plan == nullptr || http2Control == nullptr) {
         return false;
     }
-    appendHttp2ResponseHeaders(stream, response, *plan);
+    appendHttp2ResponseHeaders(
+        stream,
+        response,
+        *plan,
+        *http2Control);
     return true;
 }
 
@@ -79,10 +90,21 @@ bool decodeResponseHeaders(
             bodyPlan,
             response);
         const auto* plan = planResult.plan();
-        if (plan == nullptr) {
+        const auto controlResult =
+            ruvia::detail::httpFinalResponseControlPlan(
+                response,
+                ruvia::HttpProtocolVersion::kHttp2);
+        const auto* controlPlan = controlResult.plan();
+        const auto* http2Control =
+            controlPlan == nullptr ? nullptr : controlPlan->http2();
+        if (plan == nullptr || http2Control == nullptr) {
             return false;
         }
-        appendHttp2ResponseHeaders(stream, response, *plan);
+        appendHttp2ResponseHeaders(
+            stream,
+            response,
+            *plan,
+            *http2Control);
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
@@ -463,23 +485,20 @@ RUVIA_TEST(http2_response_headers_non_sensitive_uses_without_indexing) {
     RUVIA_CHECK((static_cast<unsigned char>(block[1]) & 0xF0U) == 0x00U);
 }
 
-RUVIA_TEST(http2_response_headers_omit_hop_by_hop_fields) {
-    HttpResponse response(std::pmr::get_default_resource());
-    response.header("Connection", "close");
-    response.header("Keep-Alive", "timeout=5");
-    response.header("Proxy-Connection", "keep-alive");
-    response.header("TE", "trailers");
-    response.header("Transfer-Encoding", "chunked");
-    response.header("Upgrade", "websocket");
-    response.header("X-Ok", "yes");
-
-    Collector headers;
-    RUVIA_CHECK(decodeResponseHeaders(response, headers));
-    RUVIA_CHECK(!hasHeaderName(headers, "connection"));
-    RUVIA_CHECK(!hasHeaderName(headers, "keep-alive"));
-    RUVIA_CHECK(!hasHeaderName(headers, "proxy-connection"));
-    RUVIA_CHECK(!hasHeaderName(headers, "te"));
-    RUVIA_CHECK(!hasHeaderName(headers, "transfer-encoding"));
-    RUVIA_CHECK(!hasHeaderName(headers, "upgrade"));
-    RUVIA_CHECK(hasHeader(headers, "x-ok", "yes"));
+RUVIA_TEST(http2_response_headers_reject_connection_specific_fields_before_hpack) {
+    constexpr std::pair<std::string_view, std::string_view> fields[] = {
+        {"Connection", "close"},
+        {"Keep-Alive", "timeout=5"},
+        {"Proxy-Connection", "keep-alive"},
+        {"TE", "trailers"},
+        {"Transfer-Encoding", "chunked"},
+        {"Upgrade", "websocket"},
+    };
+    for (const auto& [name, value] : fields) {
+        HttpResponse response(std::pmr::get_default_resource());
+        response.header(name, value);
+        Collector headers;
+        RUVIA_CHECK(!decodeResponseHeaders(response, headers));
+        RUVIA_CHECK(headers.headers.empty());
+    }
 }
