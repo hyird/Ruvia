@@ -358,7 +358,7 @@ already materialized in the outbound buffer. Only `Http2StreamAborted` owns an i
 non-`kNone` `Http2StreamCloseSource`. It covers local/peer RST_STREAM and a request excluded by the
 peer GOAWAY last-stream-id; the latter is not a reset, so the lifecycle exposes `isAborted()` and one
 atomic `abort(source)` transition rather than `isReset()`/`markReset()`/`removeReset()` vocabulary.
-Aborting also closes peer/body lifecycle and clears ready-queue ownership, whereas normal
+Aborting also selects the remote-aborted alternative and clears ready-queue ownership, whereas normal
 END_STREAM remains a committed half-close. `Http2StreamLifecycle` and `Http2StreamState` expose one const
 `localSend()` view instead of a phase/kind/boolean product or forwarding accessors. Mutation is
 private below `Http2StreamState`: `Http2LocalSendState` only accepts its lifecycle friend, the
@@ -373,6 +373,27 @@ RST_STREAM whole-stream termination follows
 [Section 6.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4); GOAWAY exclusion of requests
 above its last-stream-id follows
 [Section 6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8).
+
+Remote frame permission is likewise one `Http2RemoteReceiveState`, exactly one of
+`Http2RemoteHeadPending`, `Http2RemoteHeadEndStreamPending`, `Http2RemoteContentOpen`,
+`Http2RemoteConnectPending`, `Http2RemoteConnectPendingEndStream`,
+`Http2RemoteConnectRejectedAwaitingEndStream`, `Http2RemoteTunnelOpen`,
+`Http2RemoteEndStream`, or `Http2RemoteAborted`. Initial/final HEADERS therefore select content,
+CONNECT-decision, tunnel, or peer-half-close semantics atomically; interim responses remain
+head-pending. The server can distinguish a CONNECT whose HTTP content is necessarily absent from a
+peer send half that is still open. Rejecting such a CONNECT accepts exactly the peer's empty
+DATA frames and uses `END_STREAM` to terminate; the same empty terminal DATA can half-close a
+pending CONNECT before the decision. Accepting an open CONNECT enters `Http2RemoteTunnelOpen`, so deferred reads
+continue replenishing both connection and stream receive windows until an actual peer
+`END_STREAM`. `Http2StreamLifecycle` and `Http2StreamState` expose one const `remoteReceive()` view;
+the former `headersDecoded()`, `bodyEnded()`, and `peerEndStream()` booleans and their independent
+mutators do not exist. Friend-only mutation follows the same lifecycle-to-stream ownership chain as
+local send state. This models peer half-close in
+[RFC 9113 Section 5.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1), message termination in
+[Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), CONNECT tunnel DATA and empty
+terminal DATA in [Section 8.5](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.5), and orderly
+Extended CONNECT closure in
+[RFC 8441 Section 5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5).
 `submitData()` also distinguishes `kQueued` (the core copied and owns the
 unsent suffix) from `kBackpressured` (the core accepted nothing, so the caller must retry after
 the prior submission drains). `Http2LocalContentState` binds a final response's declared

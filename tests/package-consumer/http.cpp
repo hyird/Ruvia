@@ -30,6 +30,7 @@
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
+#include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
@@ -399,6 +400,43 @@ concept HasHttp2LocalSendAlternatives = requires(const T& state) {
 };
 
 template <typename T>
+concept HasHttp2RemoteReceiveAlternatives = requires(const T& state) {
+    { state.headPending() } ->
+        std::same_as<const ruvia::detail::Http2RemoteHeadPending*>;
+    { state.headEndStreamPending() } ->
+        std::same_as<const ruvia::detail::Http2RemoteHeadEndStreamPending*>;
+    { state.contentOpen() } ->
+        std::same_as<const ruvia::detail::Http2RemoteContentOpen*>;
+    { state.connectPending() } ->
+        std::same_as<const ruvia::detail::Http2RemoteConnectPending*>;
+    { state.connectPendingEndStream() } ->
+        std::same_as<const ruvia::detail::Http2RemoteConnectPendingEndStream*>;
+    { state.connectRejectedAwaitingEndStream() } -> std::same_as<
+        const ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream*>;
+    { state.tunnelOpen() } ->
+        std::same_as<const ruvia::detail::Http2RemoteTunnelOpen*>;
+    { state.endStream() } ->
+        std::same_as<const ruvia::detail::Http2RemoteEndStream*>;
+    { state.aborted() } ->
+        std::same_as<const ruvia::detail::Http2RemoteAborted*>;
+};
+
+template <typename T>
+concept HasStaleHttp2BodyEnded = requires(const T& stream) {
+    stream.bodyEnded();
+};
+
+template <typename T>
+concept HasStaleHttp2PeerEndStream = requires(const T& stream) {
+    stream.peerEndStream();
+};
+
+template <typename T>
+concept HasStaleHttp2HeadersDecoded = requires(const T& stream) {
+    stream.headersDecoded();
+};
+
+template <typename T>
 concept HasHttp2LocalCloseSource = requires(const T& state) {
     { state.source() } ->
         std::same_as<ruvia::detail::Http2StreamCloseSource>;
@@ -643,6 +681,38 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .localSend()),
     const ruvia::detail::Http2LocalSendState&>);
+static_assert(HasHttp2RemoteReceiveAlternatives<
+    ruvia::detail::Http2RemoteReceiveState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteReceiveState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteHeadPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteHeadEndStreamPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteContentOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteConnectPending>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteConnectPendingEndStream>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteConnectRejectedAwaitingEndStream>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteTunnelOpen>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteEndStream>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteAborted>);
+static_assert(!HasStaleHttp2BodyEnded<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2PeerEndStream<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2HeadersDecoded<
+    ruvia::detail::Http2StreamState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .remoteReceive()),
+    const ruvia::detail::Http2RemoteReceiveState&>);
 
 template <typename T>
 concept HasHttp1RequestBodyPlanAlternatives = requires(const T& plan) {
@@ -1146,6 +1216,32 @@ static_assert(HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTargetFailure>);
 
 int main() {
+    std::pmr::monotonic_buffer_resource remoteReceiveResource;
+    ruvia::detail::Http2StreamState remoteReceiveStream(
+        3, &remoteReceiveResource);
+    const auto& remoteReceive = remoteReceiveStream.remoteReceive();
+    if (remoteReceive.headPending() == nullptr ||
+        !remoteReceiveStream.beginStandardConnect() ||
+        !remoteReceiveStream.finalizeRemoteConnectHead() ||
+        remoteReceive.connectPending() == nullptr ||
+        !remoteReceiveStream.rejectConnect() ||
+        remoteReceive.connectRejectedAwaitingEndStream() == nullptr ||
+        !remoteReceiveStream.finishRemoteRejectedConnect() ||
+        remoteReceive.endStream() == nullptr) {
+        return 39;
+    }
+    ruvia::detail::Http2StreamState remotePendingEndStream(
+        5, &remoteReceiveResource);
+    const auto& pendingEnd = remotePendingEndStream.remoteReceive();
+    if (!remotePendingEndStream.beginStandardConnect() ||
+        !remotePendingEndStream.finalizeRemoteConnectHead() ||
+        !remotePendingEndStream.finishRemotePendingConnect() ||
+        pendingEnd.connectPendingEndStream() == nullptr ||
+        !remotePendingEndStream.acceptConnect() ||
+        pendingEnd.endStream() == nullptr) {
+        return 40;
+    }
+
     std::pmr::monotonic_buffer_resource localSendResource;
     ruvia::detail::Http2StreamState localSendStream(1, &localSendResource);
     const auto& localSend = localSendStream.localSend();

@@ -95,7 +95,7 @@ public:
             if (http2HasQueuedStreamBodyChunk(*stream)) {
                 continue;
             }
-            if (stream->peerEndStream() || signal_->ended) {
+            if (stream->remoteReceive().endStream() != nullptr || signal_->ended) {
                 co_return false;
             }
             co_await signal_->wait();
@@ -185,7 +185,8 @@ public:
             if (http2HasQueuedStreamBodyChunk(*stream)) {
                 continue;
             }
-            if (stream->bodyEnded() || signal_ == nullptr || signal_->ended) {
+            if (stream->remoteReceive().endStream() != nullptr ||
+                signal_ == nullptr || signal_->ended) {
                 co_return std::nullopt;
             }
             co_await signal_->wait();

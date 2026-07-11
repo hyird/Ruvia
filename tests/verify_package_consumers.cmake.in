@@ -822,6 +822,68 @@ if(NOT _installed_http2_close_source MATCHES
        "(localSendPhase|localMessageKind|localEndStream|localEndStreamCommitted|canSubmitLocalHead|localBodyOpen|localTrailersOnly|closeSource|isReset|markReset|markClosed)[(]")
     message(FATAL_ERROR "installed HTTP/2 local send lifecycle retained a phase/kind/boolean product, reset vocabulary, or forwarding accessors")
 endif()
+set(_installed_http2_remote_receive_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
+set(_installed_http2_request_state_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
+set(_installed_http2_body_queue_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2BodyQueue.h")
+if(NOT EXISTS "${_installed_http2_remote_receive_path}" OR
+   NOT EXISTS "${_installed_http2_request_state_path}" OR
+   NOT EXISTS "${_installed_http2_body_queue_path}")
+    message(FATAL_ERROR "installed HTTP/2 remote receive state is missing")
+endif()
+file(READ "${_installed_http2_remote_receive_path}"
+    _installed_http2_remote_receive)
+file(READ "${_installed_http2_request_state_path}"
+    _installed_http2_request_state)
+file(READ "${_installed_http2_body_queue_path}"
+    _installed_http2_body_queue)
+if(NOT _installed_http2_remote_receive MATCHES
+       "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteHeadPending final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteHeadEndStreamPending final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteContentOpen final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteConnectPending final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteConnectPendingEndStream final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteConnectRejectedAwaitingEndStream final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteTunnelOpen final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteEndStream final" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "class Http2RemoteAborted final" OR
+   NOT _installed_http2_remote_receive MATCHES "using State = std::variant" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "std::get_if<Http2RemoteHeadPending>" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "std::get_if<Http2RemoteConnectRejectedAwaitingEndStream>" OR
+   NOT _installed_http2_remote_receive MATCHES
+       "std::get_if<Http2RemoteEndStream>" OR
+   NOT _installed_http2_lifecycle MATCHES
+       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+   NOT _installed_http2_lifecycle MATCHES "remoteReceive_[.]abort[(][)]" OR
+   NOT _installed_http2_stream_state MATCHES
+       "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+   NOT _installed_http2_stream_state MATCHES "finalizeRemoteConnectHead" OR
+   NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
+   NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
+   NOT _installed_http2_body_queue MATCHES
+       "remoteReceive[(][)][.]endStream[(][)]" OR
+   _installed_http2_lifecycle MATCHES
+       "(bodyEnded|peerEndStream|markBodyEnded|markPeerEndStream)[(]" OR
+   _installed_http2_stream_state MATCHES
+       "(headersDecoded|bodyEnded|peerEndStream|markHeadersDecoded|markBodyEnded|markPeerEndStream)[(]" OR
+   _installed_http2_request_state MATCHES
+       "headersDecoded_|headersDecoded[(]|markHeadersDecoded")
+    message(FATAL_ERROR "installed HTTP/2 remote receive lifecycle retained a head/body/peer boolean product or lost typed alternatives")
+endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
     _installed_http_authority)
 if(NOT _installed_http_authority MATCHES "enum class HttpAuthorityPortKind" OR

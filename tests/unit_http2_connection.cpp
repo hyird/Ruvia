@@ -3083,7 +3083,8 @@ RUVIA_TEST(http2_connection_client_head_representation_length_survives_trailer_t
     RUVIA_CHECK(!client.nextEvent().has_value());
     RUVIA_CHECK(!client.connectionError().has_value());
     RUVIA_CHECK(client.pendingOutput().empty());
-    RUVIA_CHECK(client.stream(streamId)->peerEndStream());
+    RUVIA_CHECK(
+        client.stream(streamId)->remoteReceive().endStream() != nullptr);
 
     client.unpinStream(streamId);
     RUVIA_CHECK(client.stream(streamId) == nullptr);

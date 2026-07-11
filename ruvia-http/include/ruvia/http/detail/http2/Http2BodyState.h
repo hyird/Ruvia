@@ -73,9 +73,4 @@ enum class Http2BodyAccountingResult : std::uint8_t {
         stream.remoteContent().terminalLengthValid();
 }
 
-inline void http2MarkBodyEnded(Http2StreamState& stream) noexcept {
-    stream.markPeerEndStream();
-    stream.markBodyEnded();
-}
-
 }  // namespace ruvia::detail

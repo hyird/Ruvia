@@ -179,6 +179,8 @@ set(RULE_STALE_H2_LOCAL_CONTENT_MODE_TUPLE
     "Http2LocalContentMode|localContent(Mode|HasKnownLength|DeclaredLength|AcceptedBytes|CommittedBytes|LengthComplete)[ \t]*[(]")
 set(RULE_STALE_H2_LOCAL_SEND_PRODUCT
     "Http2LocalSendPhase|Http2LocalMessageKind|Http2LocalReset|localSendPhase_|localMessageKind_|localEndStream_|localEndStreamCommitted_|reset_|closeSource_|localSendPhase[ \t]*[(]|localMessageKind[ \t]*[(]|localEndStream[ \t]*[(]|localEndStreamCommitted[ \t]*[(]|canSubmitLocalHead[ \t]*[(]|localBodyOpen[ \t]*[(]|localTrailersOnly[ \t]*[(]|closeSource[ \t]*[(]|isReset[ \t]*[(]|markReset[ \t]*[(]|markClosed[ \t]*[(]|removeReset[ \t]*[(]|markLocalHeadSubmitted|markLocalTrailersOnlyHeadSubmitted|markLocalConnectRequestSubmitted|markLocalEndStreamQueued|markLocalEndStreamCommitted|markDispatchStarted")
+set(RULE_STALE_H2_REMOTE_RECEIVE_PRODUCT
+    "Http2RemoteReceivePhase|remoteReceivePhase_|headersDecoded_|peerEndStream_|bodyEnded_|headersDecoded[ \t]*[(]|peerEndStream[ \t]*[(]|bodyEnded[ \t]*[(]|markHeadersDecoded|markPeerEndStream|markBodyEnded|http2MarkBodyEnded")
 set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
     "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
@@ -489,6 +491,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("reset vocabulary applied to GOAWAY-aborted HTTP/2 streams"
         "${RULE_STALE_H2_LOCAL_SEND_PRODUCT}"
         "if (stream.isReset()) table.removeReset(callback);")
+    expect_match("boolean-product HTTP/2 remote receive lifecycle"
+        "${RULE_STALE_H2_REMOTE_RECEIVE_PRODUCT}"
+        "if (stream.headersDecoded() && stream.bodyEnded()) stream.markPeerEndStream();")
     expect_match("presence/value HTTP/2 remote-content tuple"
         "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
         "if (stream.hasContentLength()) stream.contentLength();")
@@ -1485,6 +1490,17 @@ check_files_no_match("HTTP/2 local send permission must use one exclusive state"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
+check_files_no_match("HTTP/2 remote receive permission must use one exclusive state"
+    "${RULE_STALE_H2_REMOTE_RECEIVE_PRODUCT}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyQueue.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
 check_files_no_match("HTTP/2 remote content accounting must use exclusive alternatives"
     "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h"
@@ -1896,6 +1912,8 @@ set(HTTP2_LOCAL_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalContentState.h")
 set(HTTP2_REMOTE_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h")
+set(HTTP2_REMOTE_RECEIVE_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
 set(HTTP2_STALE_BODY_ACCOUNTING
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
 set(HTTP2_BODY_STATE
@@ -2003,6 +2021,66 @@ else()
        NOT http2_local_send_connection MATCHES "commitLocalEndStream")
         boundary_error("HTTP/2 local send lifecycle lost its discriminated state"
             "head, request/response content, trailers, CONNECT, queued/committed END_STREAM, and whole-stream abort must remain exclusive; only abort owns a non-none close source and it must atomically clear queue ownership")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_REMOTE_RECEIVE_STATE}" OR
+   NOT EXISTS "${HTTP2_STREAM_LIFECYCLE}" OR
+   NOT EXISTS "${HTTP2_STREAM_STATE}" OR
+   NOT EXISTS "${HTTP2_CONNECTION_SOURCE}")
+    boundary_error("HTTP/2 remote receive state is missing"
+        "remote HEADERS, content, CONNECT, tunnel, END_STREAM, and abort permission must be one installed discriminated state")
+else()
+    file(READ "${HTTP2_REMOTE_RECEIVE_STATE}" http2_remote_receive_state)
+    file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_remote_receive_lifecycle)
+    file(READ "${HTTP2_STREAM_STATE}" http2_remote_receive_stream)
+    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_remote_receive_connection)
+    if(NOT http2_remote_receive_state MATCHES
+           "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteHeadPending final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteHeadEndStreamPending final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteContentOpen final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteConnectPending final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteConnectPendingEndStream final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteConnectRejectedAwaitingEndStream final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteTunnelOpen final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteEndStream final" OR
+       NOT http2_remote_receive_state MATCHES
+           "class Http2RemoteAborted final" OR
+       NOT http2_remote_receive_state MATCHES "using State = std::variant" OR
+       NOT http2_remote_receive_state MATCHES
+           "std::get_if<Http2RemoteHeadPending>" OR
+       NOT http2_remote_receive_state MATCHES
+           "std::get_if<Http2RemoteConnectRejectedAwaitingEndStream>" OR
+       NOT http2_remote_receive_state MATCHES
+           "std::get_if<Http2RemoteEndStream>" OR
+       NOT http2_remote_receive_lifecycle MATCHES
+           "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       NOT http2_remote_receive_lifecycle MATCHES "remoteReceive_[.]abort[(][)]" OR
+       NOT http2_remote_receive_stream MATCHES
+           "const Http2RemoteReceiveState& remoteReceive[(][)] const noexcept" OR
+       NOT http2_remote_receive_stream MATCHES "finalizeRemoteConnectHead" OR
+       NOT http2_remote_receive_stream MATCHES "finishRemotePendingConnect" OR
+       NOT http2_remote_receive_stream MATCHES "finishRemoteRejectedConnect" OR
+       NOT http2_remote_receive_connection MATCHES
+           "http2RemoteFinalHeadDecoded" OR
+       NOT http2_remote_receive_connection MATCHES
+           "http2RemotePeerHalfClosed" OR
+       NOT http2_remote_receive_connection MATCHES
+           "connectRejectedAwaitingEndStream" OR
+       NOT http2_remote_receive_connection MATCHES
+           "finishRemoteRejectedConnect" OR
+       NOT http2_remote_receive_connection MATCHES
+           "remote[.]tunnelOpen[(][)]")
+        boundary_error("HTTP/2 remote receive lifecycle lost its discriminated state"
+            "final-head decoding, content/trailer DATA, CONNECT decisions, tunnel flow control, normal peer half-close, and whole-stream abort must remain exclusive and stream-owned")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_STATE}")
@@ -2270,7 +2348,10 @@ if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
        NOT http2_connection_source MATCHES "Http2Event::tunnelEnd" OR
        NOT http2_connection_source MATCHES
            "prefacePhase_ != PrefacePhase::kReady" OR
-       NOT http2_connection_source MATCHES "stream->peerEndStream\(\)")
+       NOT http2_connection_source MATCHES
+           "remote[.]tunnelOpen[(][)]" OR
+       NOT http2_connection_source MATCHES
+           "http2RemotePeerHalfClosed")
         boundary_error("HTTP/2 CONNECT bypasses the shared tunnel lifecycle"
             "typed pending/open/rejected transitions, dedicated heads, tunnel events, and peer half-close enforcement must remain core-owned")
     endif()
@@ -2535,6 +2616,52 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "localSend[.]aborted[(][)][-][>]source[(][)]")
         boundary_error("HTTP/2 local send alternative ownership is under-tested"
             "unit and installed consumers must reject phase/kind/boolean products, private alternatives, none/invalid abort sources, reset vocabulary, and stale forwarding accessors")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_LOCAL_SEND_TEST}" OR
+   NOT EXISTS "${HTTP2_CONNECT_TEST}")
+    boundary_error("HTTP/2 remote receive alternatives are untested"
+        "stream lifecycle and CONNECT tests must pin every remote transition and terminal-flow regression")
+elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${HTTP2_LOCAL_SEND_TEST}" http2_remote_receive_test)
+    file(READ "${HTTP2_CONNECT_TEST}" http2_remote_receive_connect_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_remote_receive_package_test)
+    if(NOT http2_remote_receive_test MATCHES
+           "http2_remote_receive_state_owns_head_content_connect_and_terminal_transitions" OR
+       NOT http2_remote_receive_test MATCHES
+           "!std::default_initializable<Http2RemoteReceiveState>" OR
+       NOT http2_remote_receive_test MATCHES
+           "Http2RemoteConnectRejectedAwaitingEndStream" OR
+       NOT http2_remote_receive_test MATCHES
+           "!HasStaleBodyEnded<Http2StreamState>" OR
+       NOT http2_remote_receive_test MATCHES
+           "!HasStalePeerEndStream<Http2StreamState>" OR
+       NOT http2_remote_receive_test MATCHES
+           "!HasStaleHeadersDecoded<Http2StreamState>" OR
+       NOT http2_remote_receive_connect_test MATCHES
+           "http2_connect_server_rejection_accepts_empty_terminal_data" OR
+       NOT http2_remote_receive_connect_test MATCHES
+           "http2_connect_pending_accepts_empty_request_half_close" OR
+       NOT http2_remote_receive_connect_test MATCHES
+           "http2_connect_open_tunnel_replenishes_deferred_stream_window" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "HasHttp2RemoteReceiveAlternatives" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "!std::default_initializable<[\r\n \t]*ruvia::detail::Http2RemoteReceiveState" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "!HasStaleHttp2BodyEnded" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "!HasStaleHttp2PeerEndStream" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "!HasStaleHttp2HeadersDecoded" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "const ruvia::detail::Http2RemoteReceiveState&" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "remoteReceiveStream[.]finishRemoteRejectedConnect" OR
+       NOT http2_remote_receive_package_test MATCHES
+           "remotePendingEndStream[.]finishRemotePendingConnect")
+        boundary_error("HTTP/2 remote receive alternative ownership is under-tested"
+            "unit and installed consumers must reject head/body/peer booleans, pin private alternatives, and preserve rejected-CONNECT termination plus tunnel stream-window replenishment")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_CONNECT_TEST}")
@@ -3793,6 +3920,28 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/2 local send lifecycle is undocumented"
             "${relative} must document exclusive head/content/trailer/CONNECT/END_STREAM/abort alternatives, friend-only mutation through Http2StreamState, one const view, atomic abort cleanup, and RFC frame/GOAWAY semantics")
+    endif()
+    if(NOT boundary_doc_content MATCHES "Http2RemoteReceiveState" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteHeadPending" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteHeadEndStreamPending" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteContentOpen" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteConnectPending" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteConnectPendingEndStream" OR
+       NOT boundary_doc_content MATCHES
+           "Http2RemoteConnectRejectedAwaitingEndStream" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteTunnelOpen" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteEndStream" OR
+       NOT boundary_doc_content MATCHES "Http2RemoteAborted" OR
+       NOT boundary_doc_content MATCHES "remoteReceive[(][)]" OR
+       NOT boundary_doc_content MATCHES "section-5[.]1" OR
+       NOT boundary_doc_content MATCHES "section-8[.]1" OR
+       NOT boundary_doc_content MATCHES "section-8[.]5" OR
+       NOT boundary_doc_content MATCHES "rfc8441[.]html#section-5")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP/2 remote receive lifecycle is undocumented"
+            "${relative} must document exclusive head/content/CONNECT/tunnel/END_STREAM/abort alternatives, one const view, rejected-CONNECT termination, tunnel flow-control ownership, and RFC half-close semantics")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2LocalContentState" OR
        NOT boundary_doc_content MATCHES "Http2LocalContentUnset" OR

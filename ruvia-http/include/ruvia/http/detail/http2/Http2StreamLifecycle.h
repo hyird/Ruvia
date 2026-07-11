@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/http2/Http2LocalSendState.h"
+#include "ruvia/http/detail/http2/Http2RemoteReceiveState.h"
 
 namespace ruvia::detail {
 
@@ -12,16 +13,12 @@ public:
         return localSend_.aborted() != nullptr;
     }
 
-    [[nodiscard]] bool bodyEnded() const noexcept {
-        return bodyEnded_;
-    }
-
-    [[nodiscard]] bool peerEndStream() const noexcept {
-        return peerEndStream_;
-    }
-
     [[nodiscard]] const Http2LocalSendState& localSend() const noexcept {
         return localSend_;
+    }
+
+    [[nodiscard]] const Http2RemoteReceiveState& remoteReceive() const noexcept {
+        return remoteReceive_;
     }
 
     [[nodiscard]] bool queued() const noexcept {
@@ -54,17 +51,61 @@ private:
     }
 
     [[nodiscard]] bool abort(Http2StreamCloseSource source) noexcept {
+        if (remoteReceive_.aborted() != nullptr) {
+            return false;
+        }
         if (!localSend_.abort(source)) {
             return false;
         }
-        peerEndStream_ = true;
-        bodyEnded_ = true;
+        if (!remoteReceive_.abort()) {
+            return false;
+        }
         queued_ = false;
         return true;
     }
 
-    void markPeerEndStream() noexcept {
-        peerEndStream_ = true;
+    [[nodiscard]] bool recordRemoteHeadEndStream() noexcept {
+        return remoteReceive_.recordHeadEndStream();
+    }
+
+    [[nodiscard]] bool finalizeRemoteContentHead() noexcept {
+        return remoteReceive_.finalizeContentHead();
+    }
+
+    [[nodiscard]] bool finalizeRemoteConnectHead() noexcept {
+        return remoteReceive_.finalizeConnectHead();
+    }
+
+    [[nodiscard]] bool canAcceptRemoteConnect() const noexcept {
+        return remoteReceive_.canAcceptConnect();
+    }
+
+    [[nodiscard]] bool acceptRemoteConnect() noexcept {
+        return remoteReceive_.acceptConnect();
+    }
+
+    [[nodiscard]] bool canRejectRemoteConnect() const noexcept {
+        return remoteReceive_.canRejectConnect();
+    }
+
+    [[nodiscard]] bool rejectRemoteConnect() noexcept {
+        return remoteReceive_.rejectConnect();
+    }
+
+    [[nodiscard]] bool finishRemoteContent() noexcept {
+        return remoteReceive_.finishContent();
+    }
+
+    [[nodiscard]] bool finishRemotePendingConnect() noexcept {
+        return remoteReceive_.finishPendingConnect();
+    }
+
+    [[nodiscard]] bool finishRemoteTunnel() noexcept {
+        return remoteReceive_.finishTunnel();
+    }
+
+    [[nodiscard]] bool finishRemoteRejectedConnect() noexcept {
+        return remoteReceive_.finishRejectedConnect();
     }
 
     [[nodiscard]] bool beginLocalRequestContent() noexcept {
@@ -103,10 +144,6 @@ private:
         return localSend_.commitEndStream();
     }
 
-    void markBodyEnded() noexcept {
-        bodyEnded_ = true;
-    }
-
     [[nodiscard]] bool tryMarkQueued() noexcept {
         if (queued_ || aborted()) {
             return false;
@@ -130,8 +167,7 @@ private:
 
 private:
     Http2LocalSendState localSend_;
-    bool peerEndStream_ : 1 {false};
-    bool bodyEnded_ : 1 {false};
+    Http2RemoteReceiveState remoteReceive_;
     bool queued_ : 1 {false};
     bool dispatchStarted_ : 1 {false};
     bool peerConcurrencySlotHeld_ : 1 {false};

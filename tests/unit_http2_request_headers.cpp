@@ -301,11 +301,12 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
         supportedContext, "expect", ", 100-continue,"));
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         supportedContext, "expect", "100-Continue"));
+    RUVIA_CHECK(supported.finalizeRemoteContentHead());
     RUVIA_CHECK(
         supported.expectationAction() ==
         HttpServerExpectationAction::kSend100Continue);
 
-    supported.markBodyEnded();
+    RUVIA_CHECK(supported.finishRemoteContent());
     RUVIA_CHECK(
         supported.expectationAction() ==
         HttpServerExpectationAction::kNone);
@@ -314,6 +315,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
     Http2HeaderDecodeContext extensionContext{extension};
     RUVIA_CHECK(http2OnDecodedInitialHeader(
         extensionContext, "expect", "100-continue, custom-feature"));
+    RUVIA_CHECK(extension.finalizeRemoteContentHead());
     RUVIA_CHECK(
         extension.expectationAction() ==
         HttpServerExpectationAction::kUnsupported);
