@@ -48,19 +48,9 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
-
-// Protocol-core message limits. Wire-level SETTINGS are deliberately absent: local
-// receive constraints come only from Http2LocalSettings, while send constraints come
-// only from the peer SETTINGS/WINDOW_UPDATE state.
-struct Http2ConnectionLimits final {
-    // DoS-protection body caps (nghttp2-style; the owner selects route body mode).
-    std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};      // 0 = unlimited
-    std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
-};
 
 // feed() has all-or-nothing ownership for each supplied span; it never partially
 // consumes caller input. The result itself therefore carries the complete state
@@ -365,8 +355,7 @@ class Http2Connection final {
 public:
     explicit Http2Connection(
         std::pmr::memory_resource* resource,
-        Http2Role role = Http2Role::kServer,
-        Http2ConnectionLimits limits = {});
+        Http2Role role = Http2Role::kServer);
 
     [[nodiscard]] Http2Role role() const noexcept { return role_; }
 
@@ -511,13 +500,11 @@ public:
         std::string_view authority,
         std::string_view path,
         std::span<const HttpHeaderView> headers = {});
-    // Streaming response consumers: bank this stream's DATA receive-window credit as
-    // debt instead of re-advertising per frame (call before the response arrives)...
-    void deferStreamWindowRelease(std::uint32_t streamId);
-    // ...and release ALL banked debt once the consumer drained the buffered bytes:
-    // credits the connection window (and the stream window while the stream is still
-    // open) and queues the WINDOW_UPDATEs. Safe when the stream is gone.
-    void releaseStreamWindow(std::uint32_t streamId);
+    // A DATA event borrows bytes from the accepted input and retains the matching
+    // receive-window debt. Once the owner has copied/consumed every currently
+    // delivered DATA event for this stream, release the debt and queue the required
+    // connection/stream WINDOW_UPDATE frames. Safe when the stream is gone.
+    void releaseReceivedData(std::uint32_t streamId);
     // True while submitData left a window-blocked remainder queued for this stream
     // (the owner waits for the drain report before pulling its next body chunk).
     [[nodiscard]] bool hasQueuedData(std::uint32_t streamId) const noexcept;
@@ -669,7 +656,6 @@ private:
     void flushWindowDebt(Http2StreamState& stream);
 
     std::pmr::memory_resource* resource_;
-    Http2ConnectionLimits limits_;
 
     // inbound byte buffer (reused across feeds; inputOffset_ = consumed cursor)
     std::pmr::string input_;

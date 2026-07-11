@@ -8,8 +8,6 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/http/detail/http2/Http2BodyQueue.h"
-#include "ruvia/http/detail/http2/Http2BodyState.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
@@ -156,10 +154,8 @@ constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
 
 Http2Connection::Http2Connection(
     std::pmr::memory_resource* resource,
-    Http2Role role,
-    Http2ConnectionLimits limits)
+    Http2Role role)
     : resource_(resource),
-      limits_(limits),
       input_(resource),
       outBuffer_(resource),
       streams_(resource),
@@ -458,12 +454,10 @@ void Http2Connection::pinStream(std::uint32_t streamId) {
 }
 
 void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
-    // A streaming consumer's banked receive-window credit (deferStreamWindowRelease)
-    // must return to the CONNECTION window when the stream is removed, or the owner's
-    // releaseStreamWindow-after-removal is a silent no-op and the connection window
-    // shrinks permanently (nghttp2 self-heals unconsumed data at stream close the same
-    // way). Connection-scope only: a stream-scope WINDOW_UPDATE on a gone stream is a
-    // peer protocol error.
+    // Unreleased event credit must return to the CONNECTION window when a stream is
+    // removed, or an owner that stops consuming after reset would permanently shrink
+    // the shared window. Connection-scope only: a stream WINDOW_UPDATE on a gone
+    // stream is a peer protocol error.
     const auto debt = stream.takeWindowDebt();
     if (debt == 0) {
         return;
@@ -811,13 +805,7 @@ bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
     return http2IsIdleStream(streamId, lastStreamId_);
 }
 
-void Http2Connection::deferStreamWindowRelease(std::uint32_t streamId) {
-    if (auto* stream = findStream(streamId)) {
-        stream->setDeferWindowRelease();
-    }
-}
-
-void Http2Connection::releaseStreamWindow(std::uint32_t streamId) {
+void Http2Connection::releaseReceivedData(std::uint32_t streamId) {
     auto* stream = findStream(streamId);
     if (stream == nullptr) {
         return;  // debt (if any) died with the stream; nothing left to credit
@@ -1766,14 +1754,10 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
 
     if (contentData) {
-        switch (http2AccountDataBody(
-            *stream,
-            data.size(),
-            limits_.maxStreamBodyBytes,
-            limits_.maxBufferedBodyBytes)) {
-            case Http2BodyAccountingResult::kOk:
+        switch (stream->accountRemoteContent(data.size())) {
+            case Http2RemoteContentAccountingResult::kAccepted:
                 break;
-            case Http2BodyAccountingResult::kTooLarge:
+            case Http2RemoteContentAccountingResult::kCounterOverflow:
                 appendRstStream(header.streamId, Http2ErrorCode::kCancel);
                 closeStream(
                     header.streamId,
@@ -1781,15 +1765,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
                     Http2ErrorCode::kCancel);
                 releaseDroppedDataConnectionWindow(flowBytes);
                 return true;
-            case Http2BodyAccountingResult::kContentLengthExceeded:
-                appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-                closeStream(
-                    header.streamId,
-                    Http2StreamCloseSource::kLocal,
-                    Http2ErrorCode::kProtocolError);
-                releaseDroppedDataConnectionWindow(flowBytes);
-                return true;
-            case Http2BodyAccountingResult::kContentForbidden:
+            case Http2RemoteContentAccountingResult::kDeclaredLengthExceeded:
+            case Http2RemoteContentAccountingResult::kContentForbidden:
                 appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
                 closeStream(
                     header.streamId,
@@ -1799,13 +1776,17 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
                 return true;
         }
     }
+    const bool deliverData = !metadataOnlyContent && !data.empty();
     if (flowBytes > 0) {
-        if (stream->deferWindowRelease()) {
-            // Streaming consumer: bank the credit; releaseStreamWindow() re-advertises
-            // it as the owner drains, so a slow reader stalls the peer (backpressure)
-            // instead of growing the buffered response without bound.
+        if (deliverData) {
+            // The receiver advertises new capacity only after the event owner has
+            // consumed or copied these bytes. This applies equally to HTTP content
+            // and CONNECT tunnel DATA; immediate credit would disable backpressure
+            // before the external runtime can select its storage policy.
             stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
         } else {
+            // Empty DATA (including padding-only DATA) gives the owner no content to
+            // retain. Metadata-only empty frames likewise need no application ack.
             const auto increment = static_cast<std::uint32_t>(flowBytes);
             http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
             http2CreditStreamReceiveWindow(*stream, flowBytes);
@@ -1816,9 +1797,9 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     }
 
     // sans-I/O: hand the body to the owner as an event; the core does not buffer it
-    // (buffered vs streaming delivery is application policy). Content-length and size caps
-    // were already enforced by http2AccountDataBody above. The view is valid until the
-    // next feed (input_ is only reclaimed at the start of the following feed).
+    // (buffered vs streaming delivery and product size limits are owner policy).
+    // Content-Length was accounted above. A non-empty event retains receive-window
+    // debt until releaseReceivedData(); the view remains valid until the next feed.
     if (!metadataOnlyContent) {
         events_.push_back(tunnelData
             ? Http2Event::tunnelData(header.streamId, data)

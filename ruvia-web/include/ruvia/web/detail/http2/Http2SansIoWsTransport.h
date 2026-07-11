@@ -2,14 +2,10 @@
 
 // Per-stream async plumbing for the sans-I/O HTTP/2 session.
 //
-// Inbound bytes for a stream consumed asynchronously (a WebSocket tunnel or a
-// streaming request body) live in the stream's own body-chunk queue -- the same
-// Http2BodyQueue the coroutine session's readBodyChunk popped, so the core's
-// backlog accounting (http2AccountDataBody's queued-bytes cap) keeps bounding a
-// consumer that falls behind. The session's reader enqueues kTunnelData for an
-// accepted CONNECT tunnel (or kMessageBodyChunk for a streaming HTTP request) and
-// wakes the stream's Http2SansIoStreamSignal; the consumers here pop chunks,
-// mirroring readBodyChunk's semantics exactly (reset/peer half-close -> EOF).
+// Inbound bytes consumed asynchronously (a WebSocket tunnel or streaming request
+// body) live in a Web-owned queue. The HTTP core retains receive-window debt for
+// each delivered DATA event; these consumers acknowledge it only after the queue
+// drains, so a suspended handler naturally backpressures the peer.
 //
 // The same-executor discipline of the session (reader, writer and handlers all run
 // on the connection's executor) means these never race: a wake via signal.cancel()
@@ -23,16 +19,16 @@
 
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/http/detail/http2/Http2BodyQueue.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
+#include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
 namespace ruvia::detail {
 
-// Wake signal for one dispatched stream: readers of the stream's body queue (and
+// Wake signal for one dispatched stream: readers of its Web-owned body queue (and
 // window-blocked response-body writers) suspend on it; the session's reader wakes it
 // on new chunks / body end / RST / send-window reopen, and ends it at teardown.
 struct Http2SansIoStreamSignal final {
@@ -60,7 +56,7 @@ struct Http2SansIoStreamSignal final {
 };
 
 // WebSocket transport (RFC 8441 Extended CONNECT) over the sans-I/O core. Mirrors the
-// coroutine Http2WebSocketTransport: readMore pops tunnel DATA from the stream's body
+// coroutine Http2WebSocketTransport: readMore pops tunnel DATA from the Web runtime's
 // queue (the coroutine's readBodyChunk), writeBytes submits DATA through the core (a
 // window-blocked remainder is queued in-order inside the core) and wakes the writer.
 template <typename Executor>
@@ -69,11 +65,13 @@ public:
     Http2SansIoWsTransport(
         Http2Connection& connection,
         std::uint32_t streamId,
+        Http2SansIoBodyQueue& bodyQueue,
         Http2SansIoStreamSignal& signal,
         asio::steady_timer& writeSignal,
         Executor executor) noexcept
         : connection_(&connection),
           streamId_(streamId),
+          bodyQueue_(&bodyQueue),
           signal_(&signal),
           writeSignal_(&writeSignal),
           executor_(executor) {}
@@ -88,11 +86,12 @@ public:
             if (stream == nullptr || stream->isAborted()) {
                 co_return false;
             }
-            if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
+            if (const auto chunk = bodyQueue_->pop(); !chunk.empty()) {
+                releaseCreditIfDrained();
                 buffer.append(chunk.data(), chunk.size());
                 co_return true;
             }
-            if (http2HasQueuedStreamBodyChunk(*stream)) {
+            if (!bodyQueue_->empty()) {
                 continue;
             }
             if (stream->remoteReceive().endStream() != nullptr || signal_->ended) {
@@ -154,8 +153,17 @@ public:
     }
 
 private:
+    void releaseCreditIfDrained() {
+        if (!bodyQueue_->empty()) {
+            return;
+        }
+        connection_->releaseReceivedData(streamId_);
+        writeSignal_->cancel();
+    }
+
     Http2Connection* connection_;
     std::uint32_t streamId_;
+    Http2SansIoBodyQueue* bodyQueue_;
     Http2SansIoStreamSignal* signal_;
     asio::steady_timer* writeSignal_;
     Executor executor_;
@@ -170,8 +178,14 @@ public:
     Http2SansIoRequestBodyReader(
         Http2Connection& connection,
         std::uint32_t streamId,
-        Http2SansIoStreamSignal* signal) noexcept
-        : connection_(&connection), streamId_(streamId), signal_(signal) {}
+        Http2SansIoBodyQueue& bodyQueue,
+        Http2SansIoStreamSignal* signal,
+        asio::steady_timer& writeSignal) noexcept
+        : connection_(&connection),
+          streamId_(streamId),
+          bodyQueue_(&bodyQueue),
+          signal_(signal),
+          writeSignal_(&writeSignal) {}
 
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
         for (;;) {
@@ -179,10 +193,14 @@ public:
             if (stream == nullptr || stream->isAborted()) {
                 co_return std::nullopt;
             }
-            if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
+            if (const auto chunk = bodyQueue_->pop(); !chunk.empty()) {
+                if (bodyQueue_->empty()) {
+                    connection_->releaseReceivedData(streamId_);
+                    writeSignal_->cancel();
+                }
                 co_return chunk;
             }
-            if (http2HasQueuedStreamBodyChunk(*stream)) {
+            if (!bodyQueue_->empty()) {
                 continue;
             }
             if (stream->remoteReceive().endStream() != nullptr ||
@@ -196,7 +214,9 @@ public:
 private:
     Http2Connection* connection_;
     std::uint32_t streamId_;
+    Http2SansIoBodyQueue* bodyQueue_;
     Http2SansIoStreamSignal* signal_;
+    asio::steady_timer* writeSignal_;
 };
 
 }  // namespace ruvia::detail

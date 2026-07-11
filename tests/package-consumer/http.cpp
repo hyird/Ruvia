@@ -479,6 +479,27 @@ concept HasStaleHttp2StreamRemoteContentForwarders = requires(
 };
 
 template <typename T>
+concept HasStaleHttp2WebRuntimeState = requires(T& stream) {
+    stream.bodyMode();
+    stream.usesStreamRequestBody();
+    stream.requestBodyView();
+    stream.enqueueBodyChunk(std::string_view{});
+    stream.responseCompressionScratch();
+};
+
+template <typename T>
+concept HasHttp2ReceiveDataRelease = requires(T& connection) {
+    { connection.releaseReceivedData(std::uint32_t{1}) } ->
+        std::same_as<void>;
+};
+
+template <typename T>
+concept HasStaleHttp2ReceiveDeferral = requires(T& connection) {
+    connection.deferStreamWindowRelease(std::uint32_t{1});
+    connection.releaseStreamWindow(std::uint32_t{1});
+};
+
+template <typename T>
 concept HasHttp2TunnelAlternatives = requires(const T& state) {
     { state.notConnect() } ->
         std::same_as<const ruvia::detail::Http2NotConnect*>;
@@ -818,6 +839,12 @@ static_assert(!HasStaleHttp2RemoteCheckAcceptSplit<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2StreamRemoteContentForwarders<
     ruvia::detail::Http2StreamState>);
+static_assert(!HasStaleHttp2WebRuntimeState<
+    ruvia::detail::Http2StreamState>);
+static_assert(HasHttp2ReceiveDataRelease<
+    ruvia::detail::Http2Connection>);
+static_assert(!HasStaleHttp2ReceiveDeferral<
+    ruvia::detail::Http2Connection>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .remoteContent()),

@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstddef>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -17,6 +18,7 @@
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>
 #include <ruvia/web/detail/ValidatedValues.h>
+#include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/model/Parser.h>
 
 #ifdef RUVIA_ENABLE_JWT
@@ -42,6 +44,12 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::AccessLogRecord&>().method()),
     std::string_view>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
+        std::declval<std::string_view>(),
+        std::size_t{},
+        std::size_t{})),
+    ruvia::detail::Http2RequestBodyStoreResult>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -55,6 +63,13 @@ int main() {
     const ruvia::WebSocketRouteOptions webSocketOptions;
     if (webSocketOptions.lifecycle.closeHandshakeTimeout != std::chrono::seconds(5)) {
         return 3;
+    }
+    ruvia::detail::Http2RequestBodyRuntime body;
+    if (!body.selectMode(ruvia::detail::RequestBodyMode::kStream) ||
+        body.store("web-owned", 0, 1024) !=
+            ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
+        body.queue().pop() != "web-owned") {
+        return 4;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

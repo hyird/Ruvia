@@ -54,20 +54,6 @@ RUVIA_TEST(stream_request_data_cookie_accumulation_overflow_rejected) {
     RUVIA_CHECK_EQ(std::string(data.cookie()), before);             // unchanged, not partially grown
 }
 
-RUVIA_TEST(stream_request_data_body_accumulation) {
-    auto data = makeData();
-    RUVIA_CHECK(data.bodyEmpty());
-    data.appendBody("chunk1");
-    data.appendBody("chunk2");
-    RUVIA_CHECK_EQ(data.bodyView(), std::string_view("chunk1chunk2"));
-    RUVIA_CHECK_EQ(data.bodySize(), std::size_t{12});
-    RUVIA_CHECK(!data.bodyEmpty());
-    data.clearBody();
-    RUVIA_CHECK(data.bodyEmpty());
-    data.assignBody("replaced");
-    RUVIA_CHECK_EQ(data.bodyView(), std::string_view("replaced"));
-}
-
 RUVIA_TEST(stream_request_data_scalar_fields) {
     auto data = makeData();
     RUVIA_CHECK(data.method().empty());

@@ -111,6 +111,8 @@ set(RULE_STALE_HTTP2_RESPONSE_HEAD_SCALAR
     "Http2ExplicitContentLengthStatus|http2ExplicitResponseContentLength|bool[ 	]+emitAutoContentLength|std::uint64_t[ 	]+autoContentLength")
 set(RULE_STALE_FINAL_RESPONSE_CONTROL_TUPLE
     "HttpFinalResponseControlStatus|HttpUpgradeProtocols[ 	]+upgradeProtocols[ 	]*=[ 	]*[{][}]")
+set(RULE_HTTP2_WEB_RUNTIME_IN_CORE
+    "#[ 	]*include[ 	]*[<\"]coroutine|std::coroutine_handle|HttpRequestBodyMode|Http2StreamBody(Policy|Queue)|Http2ConnectionLimits|deferStreamWindowRelease|releaseStreamWindow|responseCompressionScratch|requestBody(View|Size|Empty)|enqueueBufferedRequestBodyChunk|queuedBodyBytes")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -428,6 +430,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("status plus default final-response control payload"
         "${RULE_STALE_FINAL_RESPONSE_CONTROL_TUPLE}"
         "HttpFinalResponseControlStatus status; HttpUpgradeProtocols upgradeProtocols = {};")
+    expect_match("Web request-body runtime leaked into HTTP/2 core"
+        "${RULE_HTTP2_WEB_RUNTIME_IN_CORE}"
+        "std::coroutine_handle<> bodyWaiter; HttpRequestBodyMode bodyMode;")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -811,6 +816,8 @@ check_files_no_match("removed mixed-layer error API is still referenced"
     "${RULE_STALE_ERROR_API}" ${EDGE_REFERENCE_SOURCE})
 check_files_no_match("ruvia-http must not reference asio" "${RULE_ASIO}"
     ${HTTP_SOURCE})
+check_files_no_match("ruvia-http HTTP/2 core must not own Web request-body runtime"
+    "${RULE_HTTP2_WEB_RUNTIME_IN_CORE}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not perform OS file I/O (sans-I/O protocol lib)"
     "${RULE_FILE_IO}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not include core/web headers"
@@ -1514,7 +1521,6 @@ check_files_no_match("HTTP/2 local send permission must use one exclusive state"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamTable.h"
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyQueue.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
@@ -1525,8 +1531,6 @@ check_files_no_match("HTTP/2 remote receive permission must use one exclusive st
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyQueue.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
@@ -1534,7 +1538,6 @@ check_files_no_match("HTTP/2 remote content accounting must use exclusive altern
     "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestHeaders.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
@@ -2361,8 +2364,11 @@ set(HTTP2_REMOTE_RECEIVE_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
 set(HTTP2_STALE_BODY_ACCOUNTING
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
-set(HTTP2_BODY_STATE
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h")
+set(HTTP2_STALE_WEB_RUNTIME_HEADERS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyState.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2BodyQueue.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyQueue.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyPolicy.h")
 set(HTTP2_REQUEST_HEADERS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestHeaders.h")
 set(HTTP2_STREAM_STATE
@@ -2610,16 +2616,16 @@ if(EXISTS "${HTTP2_STALE_BODY_ACCOUNTING}")
 elseif(NOT EXISTS "${HTTP2_REMOTE_CONTENT_STATE}")
     boundary_error("HTTP/2 remote content state is missing"
         "Http2RemoteContentState.h must own peer Content-Length and DATA accounting")
-elseif(NOT EXISTS "${HTTP2_BODY_STATE}" OR
-       NOT EXISTS "${HTTP2_REQUEST_HEADERS}" OR
-       NOT EXISTS "${HTTP2_STREAM_STATE}")
+elseif(NOT EXISTS "${HTTP2_REQUEST_HEADERS}" OR
+       NOT EXISTS "${HTTP2_STREAM_STATE}" OR
+       NOT EXISTS "${HTTP2_CONNECTION_SOURCE}")
     boundary_error("HTTP/2 remote content call chain is incomplete"
         "header decode, DATA preflight, and stream state must consume one remote-content contract")
 else()
     file(READ "${HTTP2_REMOTE_CONTENT_STATE}" http2_remote_content_state)
-    file(READ "${HTTP2_BODY_STATE}" http2_body_state)
     file(READ "${HTTP2_REQUEST_HEADERS}" http2_request_headers)
     file(READ "${HTTP2_STREAM_STATE}" http2_remote_stream_state)
+    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_remote_content_connection)
     if(NOT http2_remote_content_state MATCHES
            "class Http2RemoteContentAllowedWithoutLength final" OR
        NOT http2_remote_content_state MATCHES
@@ -2648,16 +2654,26 @@ else()
        NOT http2_remote_stream_state MATCHES "accountRemoteContent" OR
        NOT http2_remote_stream_state MATCHES
            "selectRemoteContentMetadataOnly" OR
-       NOT http2_body_state MATCHES "accountRemoteContent" OR
-       NOT http2_body_state MATCHES
+       NOT http2_remote_content_connection MATCHES
+           "stream->accountRemoteContent[(]data[.]size[(][)][)]" OR
+       NOT http2_remote_content_connection MATCHES
            "Http2RemoteContentAccountingResult::kDeclaredLengthExceeded" OR
-       NOT http2_body_state MATCHES
+       NOT http2_remote_content_connection MATCHES
            "Http2RemoteContentAccountingResult::kContentForbidden" OR
        NOT http2_request_headers MATCHES "declareRemoteContentLength")
         boundary_error("HTTP/2 remote content accounting lost its discriminated transaction"
             "content allowance and length must be exclusive, DATA accounting must be atomic, and metadata-only responses must reject payload")
     endif()
 endif()
+foreach(http2_stale_web_runtime_header IN LISTS
+        HTTP2_STALE_WEB_RUNTIME_HEADERS)
+    if(EXISTS "${http2_stale_web_runtime_header}")
+        file(RELATIVE_PATH relative
+            "${RUVIA_ROOT}" "${http2_stale_web_runtime_header}")
+        boundary_error("ruvia-http regained Web request-body runtime state"
+            "${relative} must remain absent; route storage, buffering, queues, and coroutine wakeups belong to ruvia-web")
+    endif()
+endforeach()
 if(NOT EXISTS "${HTTP2_REQUEST_CONTENT}")
     boundary_error("HTTP/2 request content contract is missing"
         "Http2RequestContent.h must own regular request Content-Length/END_STREAM selection")
@@ -2688,7 +2704,6 @@ if(NOT EXISTS "${HTTP2_TUNNEL_STATE}")
 else()
     file(READ "${HTTP2_TUNNEL_STATE}" http2_tunnel_state)
     file(READ "${HTTP2_STREAM_STATE}" http2_tunnel_stream_state)
-    file(READ "${HTTP2_BODY_STATE}" http2_tunnel_body_state)
     file(READ
         "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestBuilder.h"
         http2_tunnel_request_builder)
@@ -2711,7 +2726,6 @@ else()
            "form != Http2ConnectForm::kExtended" OR
        NOT http2_tunnel_stream_state MATCHES
            "const Http2TunnelState& tunnel[(][)] const noexcept" OR
-       http2_tunnel_body_state MATCHES "tunnel[(]" OR
        NOT http2_tunnel_request_builder MATCHES
            "tunnel[(][)][.]pending[(][)]" OR
        NOT http2_tunnel_websocket_handshake MATCHES
@@ -3001,8 +3015,8 @@ set(HTTP2_LOCAL_SEND_TEST
     "${RUVIA_ROOT}/tests/unit_http2_stream_lifecycle.cpp")
 set(HTTP2_REMOTE_CONTENT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_remote_content_state.cpp")
-set(HTTP2_BODY_STATE_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_body_state.cpp")
+set(HTTP2_WEB_STREAM_RUNTIME_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_sansio_stream_runtime.cpp")
 set(HTTP2_CONNECT_TEST
     "${RUVIA_ROOT}/tests/unit_http2_connect.cpp")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
@@ -3175,7 +3189,7 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
        NOT http2_remote_receive_connect_test MATCHES
            "http2_connect_pending_accepts_empty_request_half_close" OR
        NOT http2_remote_receive_connect_test MATCHES
-           "http2_connect_open_tunnel_replenishes_deferred_stream_window" OR
+           "http2_connect_open_tunnel_replenishes_owner_released_stream_window" OR
        NOT http2_remote_receive_package_test MATCHES
            "HasHttp2RemoteReceiveAlternatives" OR
        NOT http2_remote_receive_package_test MATCHES
@@ -3231,13 +3245,11 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
             "unit and installed consumers must reject kind/phase products and inspect form only on pending")
     endif()
 endif()
-if(NOT EXISTS "${HTTP2_REMOTE_CONTENT_TEST}" OR
-   NOT EXISTS "${HTTP2_BODY_STATE_TEST}")
+if(NOT EXISTS "${HTTP2_REMOTE_CONTENT_TEST}")
     boundary_error("HTTP/2 remote content alternatives are untested"
         "unit tests must pin typed length ownership and transactional DATA acceptance")
 elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
     file(READ "${HTTP2_REMOTE_CONTENT_TEST}" http2_remote_content_test)
-    file(READ "${HTTP2_BODY_STATE_TEST}" http2_remote_body_state_test)
     file(READ "${HTTP2_EVENT_TEST}" http2_remote_connection_test)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http2_remote_package_test)
     if(NOT http2_remote_content_test MATCHES
@@ -3266,16 +3278,12 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "Http2RemoteContentAccountingResult::kDeclaredLengthExceeded" OR
        NOT http2_remote_content_test MATCHES
            "Http2RemoteContentAccountingResult::kContentForbidden" OR
-       NOT http2_remote_body_state_test MATCHES
-           "Http2BodyAccountingResult::kContentLengthExceeded" OR
-       NOT http2_remote_body_state_test MATCHES
-           "Http2BodyAccountingResult::kContentForbidden" OR
-       NOT http2_remote_body_state_test MATCHES
-           "remoteContent[(][)][.]allowedWithoutLength[(][)][-][>]receivedBytes[(][)]" OR
-       NOT http2_remote_body_state_test MATCHES
-           "h2_remote_content_terminal_validation_is_owned_by_active_alternative" OR
-       NOT http2_remote_body_state_test MATCHES
-           "selectRemoteContentMetadataOnly" OR
+       NOT http2_remote_connection_test MATCHES
+           "http2_connection_feed_data_emits_body_chunk_and_end" OR
+       NOT http2_remote_connection_test MATCHES
+           "http2_connection_same_feed_data_credit_waits_for_owner_batch_release" OR
+       NOT http2_remote_connection_test MATCHES
+           "releaseReceivedData[(]1[)]" OR
        NOT http2_remote_connection_test MATCHES "remoteKnownLength" OR
        NOT http2_remote_connection_test MATCHES
            "http2_connection_client_head_representation_length_survives_trailer_terminal" OR
@@ -3295,6 +3303,24 @@ elseif(EXISTS "${HTTP2_EVENT_TEST}" AND EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "!HasStaleHttp2StreamRemoteContentForwarders")
         boundary_error("HTTP/2 remote content ownership is under-tested"
             "unit and installed consumers must pin metadata-only alternatives, atomic accounting, and malformed no-content DATA rejection")
+    endif()
+endif()
+if(NOT EXISTS "${HTTP2_WEB_STREAM_RUNTIME_TEST}")
+    boundary_error("Web-owned HTTP/2 request body runtime is untested"
+        "unit_http2_sansio_stream_runtime.cpp must pin route-selected storage, limits, FIFO queueing, and stable per-stream ownership")
+else()
+    file(READ "${HTTP2_WEB_STREAM_RUNTIME_TEST}"
+        http2_web_stream_runtime_test)
+    if(NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_body_queue_preserves_fifo_and_tracks_backlog" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_request_body_runtime_selects_storage_before_data" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_request_body_runtime_enforces_total_and_backlog_limits" OR
+       NOT http2_web_stream_runtime_test MATCHES
+           "http2_web_stream_runtime_table_keeps_active_storage_stable")
+        boundary_error("Web-owned HTTP/2 request body runtime is under-tested"
+            "FIFO/backlog accounting, one-time route mode, total limits, and stable active storage must remain explicit")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_CONTENT_TEST}")
@@ -3508,8 +3534,7 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
         boundary_error("HTTP/2 CONNECT restored an implicit request path"
             "standard, extended, server acceptance, and SETTINGS-gate statuses need dedicated API")
     endif()
-    if(NOT http2_connection_header MATCHES "Http2ConnectionLimits" OR
-       NOT http2_connection_header MATCHES "Http2Role role" OR
+    if(NOT http2_connection_header MATCHES "Http2Role role" OR
        NOT http2_connection_header MATCHES "beginConnection" OR
        NOT http2_connection_header MATCHES "enum class Http2FeedResult" OR
        NOT http2_connection_header MATCHES "enum class PrefacePhase" OR
@@ -3524,6 +3549,13 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
         boundary_error("HTTP/2 connection startup restored ambiguous configuration ordering"
             "role-aware startup and the direct all-or-nothing feed ownership enum must remain")
     endif()
+    if(NOT http2_connection_header MATCHES "releaseReceivedData" OR
+       http2_connection_header MATCHES "Http2ConnectionLimits" OR
+       http2_connection_header MATCHES "deferStreamWindowRelease" OR
+       http2_connection_header MATCHES "releaseStreamWindow")
+        boundary_error("HTTP/2 DATA flow control regained implicit runtime policy"
+            "non-empty DATA events must retain receive credit until the owner calls releaseReceivedData; route limits and defer-mode toggles do not belong in the protocol core")
+    endif()
     if(NOT http2_connection_header MATCHES
            "ruvia/http/detail/http2/Http2Event.h" OR
        NOT http2_connection_header MATCHES
@@ -3537,6 +3569,47 @@ if(EXISTS "${HTTP2_CONNECTION_HEADER}")
     endif()
 endif()
 
+set(WEB_HTTP2_STREAM_RUNTIME
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+set(WEB_HTTP2_WS_TRANSPORT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
+if(NOT EXISTS "${WEB_HTTP2_STREAM_RUNTIME}" OR
+   NOT EXISTS "${WEB_HTTP2_WS_TRANSPORT}")
+    boundary_error("Web-owned HTTP/2 request-body runtime is missing"
+        "stable per-stream body storage and asynchronous queue consumers must live under ruvia-web/include/ruvia/web/detail/http2")
+else()
+    file(READ "${WEB_HTTP2_STREAM_RUNTIME}" web_http2_stream_runtime)
+    file(READ "${WEB_HTTP2_WS_TRANSPORT}" web_http2_ws_transport)
+    if(NOT web_http2_stream_runtime MATCHES
+           "class Http2SansIoBodyQueue final" OR
+       NOT web_http2_stream_runtime MATCHES
+           "class Http2RequestBodyRuntime final" OR
+       NOT web_http2_stream_runtime MATCHES
+           "class Http2SansIoStreamRuntimeTable final" OR
+       NOT web_http2_stream_runtime MATCHES "RequestBodyMode" OR
+       NOT web_http2_stream_runtime MATCHES "kModeNotSelected" OR
+       NOT web_http2_stream_runtime MATCHES "streamingBacklogLimit" OR
+       NOT web_http2_stream_runtime MATCHES "makePmrObject" OR
+       NOT web_http2_ws_transport MATCHES "releaseReceivedData" OR
+       web_http2_ws_transport MATCHES
+           "Http2BodyQueue|Http2StreamBodyQueue")
+        boundary_error("HTTP/2 Web body runtime lost its ownership boundary"
+            "route-selected storage, PMR-stable stream state, Web queues, and consume-time receive-credit release must remain Web-owned")
+    endif()
+endif()
+if(EXISTS "${HTTP2_REQUEST_BUILDER}")
+    file(READ "${HTTP2_REQUEST_BUILDER}" http2_external_body_builder)
+    if(NOT http2_external_body_builder MATCHES
+           "std::string_view[ \t\r\n]+body[ \t\r\n]*[)]" OR
+       http2_external_body_builder MATCHES
+           "std::string_view[ \t\r\n]+body[ \t\r\n]*=" OR
+       NOT http2_external_body_builder MATCHES
+           "setBody[(]request, body[)]")
+        boundary_error("HTTP/2 request builder regained protocol-owned body storage"
+            "the external runtime must pass an explicit body view; an empty default would hide the ownership boundary")
+    endif()
+endif()
+
 set(WEB_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 if(EXISTS "${WEB_HTTP2_SESSION}")
@@ -3547,10 +3620,25 @@ if(EXISTS "${WEB_HTTP2_SESSION}")
             "the HTTP/2 driver must consume the core's dedicated tunnel DATA and FIN events")
     endif()
     if(NOT web_http2_session MATCHES "event->streamClosed[(][)]" OR
-       NOT web_http2_session MATCHES "eraseRouteState[(]streamId[)]" OR
+       NOT web_http2_session MATCHES "eraseStreamRuntime[(]streamId[)]" OR
        NOT web_http2_session MATCHES "already-removed core state")
         boundary_error("ruvia-web re-derived an already-closed HTTP/2 stream"
             "stream-close cleanup must use the typed event ID without querying erased protocol state")
+    endif()
+    if(NOT web_http2_session MATCHES
+           "Http2SansIoStreamRuntimeTable" OR
+       NOT web_http2_session MATCHES
+           "streamRuntime->body[(][)][.]store" OR
+       NOT web_http2_session MATCHES "requestBodyByteLimit" OR
+       NOT web_http2_session MATCHES "releaseReceivedData" OR
+       NOT web_http2_session MATCHES "markBufferedBodyCopied" OR
+       NOT web_http2_session MATCHES "unmarkBufferedBodyCopied" OR
+       NOT web_http2_session MATCHES "resetEventStream" OR
+       NOT web_http2_session MATCHES "Owner-side reset" OR
+       web_http2_session MATCHES
+           "Http2ConnectionLimits|HttpRequestBodyMode|setBodyMode|usesStreamRequestBody")
+        boundary_error("ruvia-web HTTP/2 session bypasses Web-owned body storage"
+            "message-head route selection must precede Web limits/storage, buffered event batches must release credit only after copying, owner resets must reclaim undispatched runtimes, and protocol streams must remain policy-free")
     endif()
     if(NOT web_http2_session MATCHES "feedAndDrain" OR
        NOT web_http2_session MATCHES "Http2FeedResult::kEventsPending" OR
@@ -4593,6 +4681,21 @@ foreach(boundary_doc IN ITEMS
         boundary_error("HTTP/2 inbound Content-Length contract is undocumented"
             "${relative} must document allowance/length alternatives, atomic DATA accounting, and malformed no-content payload rejection")
     endif()
+    if(NOT boundary_doc_content MATCHES "releaseReceivedData" OR
+       NOT boundary_doc_content MATCHES "Http2SansIoStreamRuntimeTable" OR
+       NOT boundary_doc_content MATCHES "Http2RequestBodyRuntime" OR
+       NOT boundary_doc_content MATCHES "Http2SansIoBodyQueue" OR
+       NOT boundary_doc_content MATCHES "RequestBodyMode" OR
+       NOT boundary_doc_content MATCHES "kModeNotSelected" OR
+       NOT boundary_doc_content MATCHES "Http2BodyState[.]h" OR
+       NOT boundary_doc_content MATCHES "Http2StreamBodyPolicy[.]h" OR
+       NOT boundary_doc_content MATCHES "owner-side reset" OR
+       NOT boundary_doc_content MATCHES "section-5[.]2" OR
+       NOT boundary_doc_content MATCHES "section-6[.]9[.]1")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP/2 DATA runtime/flow-control boundary is undocumented"
+            "${relative} must pin owner-consumption credit release, removed HTTP runtime headers, Web PMR-stable route storage, same-feed event ordering, and RFC receiver-capacity semantics")
+    endif()
     if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
        NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR
        NOT boundary_doc_content MATCHES
@@ -4649,7 +4752,6 @@ foreach(boundary_doc IN ITEMS
             "${relative} must document exclusive tunnel states, pending-only form, dedicated heads, events, and half-close ownership")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2LocalSettings" OR
-       NOT boundary_doc_content MATCHES "Http2ConnectionLimits" OR
        NOT boundary_doc_content MATCHES "beginConnection" OR
        NOT boundary_doc_content MATCHES "Http2PeerSettings" OR
        NOT boundary_doc_content MATCHES "SETTINGS_ENABLE_PUSH" OR

@@ -481,6 +481,36 @@ before message semantics are applied as required by
 [RFC 9113 Section 6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1), and every END_STREAM path
 consults the active state's `terminalLengthValid()` result.
 
+Inbound DATA delivery now has one explicit protocol/runtime ownership boundary. Every non-empty
+`Http2MessageBodyChunkEvent` or `Http2TunnelDataEvent` retains the complete flow-controlled frame
+debt (including Pad Length and padding) inside `Http2Connection`; the external owner calls
+`releaseReceivedData(streamId)` only after all currently delivered event bytes for that stream have
+been copied or consumed. Empty and metadata-only DATA have no application bytes to retain, while
+stream removal returns unreleased debt at connection scope. There is no
+`deferStreamWindowRelease()` opt-in, `releaseStreamWindow()` alias, or `Http2ConnectionLimits`
+route-policy object. This follows
+[RFC 9113 Section 5.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.2), where receive credit
+describes capacity the receiver is prepared to accept, and
+[Section 6.9.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1), where WINDOW_UPDATE is
+sent as consumed data frees that capacity.
+
+Buffered/streamed request storage is therefore Web runtime state, not HTTP/2 protocol state.
+`ruvia-web` owns a PMR-stable `Http2SansIoStreamRuntimeTable`; each entry owns one
+`Http2RequestBodyRuntime` and its `Http2SansIoBodyQueue`. The ordered message-head event selects the
+route's `RequestBodyMode` before later body events are stored—even when HEADERS and DATA arrived in
+one `feed()` span; storing before that one-time selection returns `kModeNotSelected`. Buffered
+events are copied and acknowledged after the complete event batch;
+streaming request and CONNECT tunnel events remain window-deferred until the handler drains its Web
+queue. Total and streaming-backlog product limits are applied there. Because an owner-side reset
+does not echo a `kStreamClosed` event back to that owner, the session immediately removes an
+undispatched Web runtime on its reset path; a dispatched handler retains its runtime until handler
+cleanup. `Http2RequestBuilder` receives the resulting body view explicitly. Buffered-response
+compression uses a handler-local Web scratch buffer. Consequently, `Http2StreamState` contains no
+route mode, coroutine waiter, application
+body queue/buffer, or response-compression storage, and the former `Http2BodyState.h`,
+`Http2BodyQueue.h`, `Http2StreamBodyQueue.h`, and `Http2StreamBodyPolicy.h` headers are absent from
+the independently usable HTTP package.
+
 Client-role regular request heads use `Http2RequestContent` as the single framing contract.
 `none()`, `knownLength(n)`, and
 `streaming()` create `Http2RequestWithoutContent`, `Http2KnownLengthRequestContent`, and
@@ -591,8 +621,9 @@ one-boolean lifecycle contract on every protocol. Arbitrary GOAWAY error emissio
 to protocol-error handling.
 `Http2LocalSettings` is the only source for local receive capabilities: the exact SETTINGS bytes,
 accepted frame size, stream and connection receive windows, and bounded stream/ready-queue
-capacity all derive from it. `Http2ConnectionLimits` contains only message-body limits. The
-connection send window starts at the RFC default and changes only in response to peer SETTINGS or
+capacity all derive from it. The protocol connection constructor accepts no route/body-limit
+configuration; application limits belong to the runtime that consumes DATA events. The connection
+send window starts at the RFC default and changes only in response to peer SETTINGS or
 WINDOW_UPDATE; no runtime configuration knob may impersonate peer flow-control state.
 Every inbound DATA frame not being rejected immediately as a connection error is debited from the
 connection receive window by its entire payload length, including padding fields, before stream

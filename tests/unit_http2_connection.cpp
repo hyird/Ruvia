@@ -1319,7 +1319,8 @@ RUVIA_TEST(http2_connection_invalid_multiframe_trailer_resets_after_hpack_decode
 }
 
 // A DATA frame after the head yields a kMessageBodyChunk carrying the bytes, then
-// (on END_STREAM) kMessageEnd; the core also credits the peer back with WINDOW_UPDATE.
+// (on END_STREAM) kMessageEnd. WINDOW_UPDATE is withheld until the event owner
+// explicitly confirms that the borrowed bytes were consumed.
 RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
@@ -1345,8 +1346,55 @@ RUVIA_TEST(http2_connection_feed_data_emits_body_chunk_and_end) {
     RUVIA_CHECK_EQ(
         end.messageEnd()->streamId(), static_cast<std::uint32_t>(1));
 
-    const auto wu = ruvia::detail::http2ParseFrameHeader(conn.pendingOutput().substr(0, 9));
+    RUVIA_CHECK(conn.pendingOutput().empty());
+    conn.releaseReceivedData(1);
+    const auto wu = ruvia::detail::http2ParseFrameHeader(
+        conn.pendingOutput().substr(0, 9));
     RUVIA_CHECK_EQ(wu.type, static_cast<std::uint8_t>(Http2FrameType::kWindowUpdate));
+}
+
+RUVIA_TEST(http2_connection_same_feed_data_credit_waits_for_owner_batch_release) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    const auto head = postHeadFrame(&resource, "");
+    const auto first = dataFrame(&resource, 1, 0, "one");
+    const auto second = dataFrame(&resource, 1, 0, "two");
+    std::pmr::string batch(&resource);
+    batch.append(head.data(), head.size());
+    batch.append(first.data(), first.size());
+    batch.append(second.data(), second.size());
+
+    RUVIA_CHECK(conn.feed(std::string_view(batch.data(), batch.size())) ==
+        ruvia::detail::Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() ==
+        Http2EventKind::kMessageHead);
+    RUVIA_CHECK_EQ(
+        conn.nextEvent().value().messageBodyChunk()->bytes(),
+        std::string_view("one"));
+    RUVIA_CHECK_EQ(
+        conn.nextEvent().value().messageBodyChunk()->bytes(),
+        std::string_view("two"));
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+    RUVIA_CHECK(conn.pendingOutput().empty());
+
+    // One owner acknowledgement releases the complete copied event batch and
+    // coalesces its six flow-controlled octets into one update per live scope.
+    conn.releaseReceivedData(1);
+    const auto updates = conn.pendingOutput();
+    RUVIA_CHECK_EQ(
+        updates.size(),
+        std::size_t{2 * ruvia::detail::kHttp2WindowUpdateFrameBytes});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(updates.substr(9, 4)),
+        std::uint32_t{6});
+    RUVIA_CHECK_EQ(
+        ruvia::detail::http2WindowUpdateIncrement(
+            updates.substr(
+                ruvia::detail::kHttp2WindowUpdateFrameBytes + 9,
+                4)),
+        std::uint32_t{6});
 }
 
 RUVIA_TEST(http2_connection_feed_preserves_pending_events_and_retries_input) {
@@ -3691,15 +3739,15 @@ RUVIA_TEST(http2_connection_begin_drain_refuses_new_streams) {
     RUVIA_CHECK(conn.pendingOutput().empty());
 }
 
-// A streaming consumer's banked receive-window debt (deferStreamWindowRelease) must
-// return to the CONNECTION window when the stream is removed, even if the owner never
-// calls releaseStreamWindow -- otherwise the connection window shrinks permanently.
+// Every non-empty DATA event retains receive-window debt. That debt must return to
+// the CONNECTION window when the stream is removed, even if the owner never calls
+// releaseReceivedData(), or the shared window would shrink permanently.
 RUVIA_TEST(http2_connection_window_debt_flushed_on_removal) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection conn(&resource);
     handshake(conn);
 
-    // Open stream 1 with a body (POST, content-length) and mark it deferred-release.
+    // Open stream 1 with a body (POST, content-length).
     std::pmr::string block(&resource);
     HpackEncoder::encodeHeader(block, ":method", "POST");
     HpackEncoder::encodeHeader(block, ":scheme", "https");
@@ -3711,7 +3759,6 @@ RUVIA_TEST(http2_connection_window_debt_flushed_on_removal) {
         std::string_view(block.data(), block.size()));
     (void)conn.feed(std::string_view(h.data(), h.size()));
     while (conn.nextEvent().has_value()) {}
-    conn.deferStreamWindowRelease(1);
     conn.consumeOutput(conn.pendingOutput().size());
 
     // Feed 5 body bytes: the receive-window credit is BANKED (deferred), so NO
@@ -3799,17 +3846,15 @@ RUVIA_TEST(http2_connection_discarded_data_still_enforces_connection_window) {
     Http2Connection conn(&resource);
     handshake(conn);
 
-    // Stream 1 banks valid DATA instead of returning WINDOW_UPDATE, allowing the test
-    // to exhaust the shared connection receive window without exceeding its stream
-    // window or application body limit.
+    // Stream 1 banks valid DATA until owner acknowledgement, allowing the test to
+    // exhaust the shared connection receive window without exceeding its stream
+    // window.
     const auto streamingHead = postHeadFrame(&resource, "");
     RUVIA_CHECK(conn.feed(
         std::string_view(streamingHead.data(), streamingHead.size())) ==
         ruvia::detail::Http2FeedResult::kAccepted);
     RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
     RUVIA_CHECK(!conn.nextEvent().has_value());
-    conn.deferStreamWindowRelease(1);
-
     // Open then locally reset stream 3 so later DATA targets a known closed stream.
     std::pmr::string closedBlock(&resource);
     encodeGetRequest(closedBlock);
