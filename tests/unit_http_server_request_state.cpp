@@ -10,12 +10,15 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
+#include "ruvia/http/detail/server/HttpResponseHead.h"
+#include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
 #include "ruvia/web/detail/server/HttpServerAutoHttps.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 
 namespace {
 
 using ruvia::detail::appendHttpsPort;
+using ruvia::detail::appendResponseHead;
 using ruvia::detail::contentLengthExceedsLimit;
 using ruvia::detail::hostWithoutExplicitPort;
 using ruvia::detail::Http1ConnectionDisposition;
@@ -30,6 +33,7 @@ using ruvia::detail::ResponseStreamHeadDisposition;
 using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::HttpServerExpectationAction;
+using ruvia::detail::ResponseHeadBuffer;
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {
     std::pmr::string location(std::pmr::get_default_resource());
@@ -245,6 +249,55 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
     RUVIA_CHECK(std::get<0>(closeDelimited) == Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(std::get<1>(closeDelimited), std::string("close"));
     RUVIA_CHECK(std::get<2>(closeDelimited).empty());
+}
+
+RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
+    Http1ServerRequestParser parser;
+    const auto prepare = [&](std::string_view request) {
+        const auto plan = http1PlanResponseStream(
+            parser.parseMessage(request),
+            Http1ServerClosePolicy::kAllowReuse);
+        ruvia::HttpResponse response(std::pmr::get_default_resource());
+        response.status(200);
+        response.header("Transfer-Encoding", "gzip, chunked");
+        response.header("Content-Length", "99");
+        return prepareHttp1ResponseStreamHead(
+            std::move(response),
+            ResponseStreamKind::kGeneric,
+            plan,
+            ResponseTrailerIntent::kNone);
+    };
+
+    auto http10 = prepare("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
+    RUVIA_CHECK(http10.responseHeadPlan().closeDelimitedStream() != nullptr);
+    RUVIA_CHECK(http10.responseHeadPlan().chunkedStream() == nullptr);
+    RUVIA_CHECK(http10.response().header("Transfer-Encoding").empty());
+    RUVIA_CHECK(http10.response().header("Content-Length").empty());
+    RUVIA_CHECK(
+        http10.connectionPlan().disposition() == Http1ConnectionDisposition::kClose);
+    ResponseHeadBuffer http10Buffer(std::pmr::get_default_resource());
+    appendResponseHead(
+        http10.response(), http10Buffer, http10.responseHeadPlan());
+    const auto http10Wire = http10Buffer.view();
+    RUVIA_CHECK(http10Wire.find("Transfer-Encoding:") == std::string_view::npos);
+    RUVIA_CHECK(http10Wire.find("Content-Length:") == std::string_view::npos);
+
+    auto http11 = prepare("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
+    RUVIA_CHECK(http11.responseHeadPlan().chunkedStream() != nullptr);
+    RUVIA_CHECK(http11.responseHeadPlan().closeDelimitedStream() == nullptr);
+    RUVIA_CHECK_EQ(
+        std::string(http11.response().header("Transfer-Encoding")),
+        std::string("chunked"));
+    RUVIA_CHECK(http11.response().header("Content-Length").empty());
+    ResponseHeadBuffer http11Buffer(std::pmr::get_default_resource());
+    appendResponseHead(
+        http11.response(), http11Buffer, http11.responseHeadPlan());
+    const auto http11Wire = http11Buffer.view();
+    RUVIA_CHECK(
+        http11Wire.find("Transfer-Encoding: chunked\r\n") !=
+        std::string_view::npos);
+    RUVIA_CHECK(http11Wire.find("gzip") == std::string_view::npos);
+    RUVIA_CHECK(http11Wire.find("Content-Length:") == std::string_view::npos);
 }
 
 RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {

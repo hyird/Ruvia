@@ -103,6 +103,8 @@ set(RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION
     "responseWritePolicy|responseBodySize\\(response\\)|responseFileBody\\(response\\)\\.length")
 set(RULE_WEB_HEAD_BODY_DECISION
     "request[.](method|knownMethod)[(][)][ \t]*==[ \t]*(HttpKnownMethod::kHead|\"HEAD\")")
+set(RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR
+    "suppressAutoContentLength|streamHead[.]policy[(][)]|responseBodyFramingHeaderForbidden|responseHasForbiddenBodyFramingHeader")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -408,6 +410,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HEAD response body decision in Web runtime"
         "${RULE_WEB_HEAD_BODY_DECISION}"
         "request.knownMethod() == HttpKnownMethod::kHead")
+    expect_match("scalar HTTP/1 response-head framing"
+        "${RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR}"
+        "bool suppressAutoContentLength = true;")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -1465,6 +1470,14 @@ check_files_no_match("ruvia-web must not decide HEAD response body semantics"
     "${RULE_WEB_HEAD_BODY_DECISION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpBufferedResponse.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+check_files_no_match("HTTP/1 response-head framing must not collapse to a boolean"
+    "${RULE_STALE_HTTP1_RESPONSE_HEAD_SCALAR}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHead.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHeadPolicy.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h"
+    "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
 check_files_no_match("HTTP/2 send path must not restore ambiguous retry ownership"
     "${RULE_STALE_H2_SEND_API}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -1624,8 +1637,114 @@ if(EXISTS "${HTTP_RESPONSE_HEAD_POLICY}")
     endif()
 endif()
 
+set(HTTP1_RESPONSE_HEAD_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ResponseHeadPlan.h")
+set(HTTP_RESPONSE_HEAD_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseHead.h")
+set(HTTP_RESPONSE_STREAM_HEAD
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(HTTP1_SERVER_SEMANTICS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(WEB_RESPONSE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
+set(WEB_RESPONSE_STREAM_SINK
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
+foreach(http1_response_head_contract_file IN ITEMS
+        "${HTTP1_RESPONSE_HEAD_PLAN}"
+        "${HTTP_RESPONSE_HEAD_HEADER}"
+        "${HTTP_RESPONSE_STREAM_HEAD}"
+        "${HTTP1_SERVER_SEMANTICS}"
+        "${WEB_RESPONSE_WRITER}"
+        "${WEB_RESPONSE_STREAM_SINK}")
+    if(NOT EXISTS "${http1_response_head_contract_file}")
+        file(RELATIVE_PATH relative
+            "${RUVIA_ROOT}" "${http1_response_head_contract_file}")
+        boundary_error("typed HTTP/1 response-head call chain is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP1_RESPONSE_HEAD_PLAN}" AND
+   EXISTS "${HTTP_RESPONSE_HEAD_HEADER}" AND
+   EXISTS "${HTTP_RESPONSE_STREAM_HEAD}" AND
+   EXISTS "${HTTP1_SERVER_SEMANTICS}" AND
+   EXISTS "${WEB_RESPONSE_WRITER}" AND
+   EXISTS "${WEB_RESPONSE_STREAM_SINK}")
+    file(READ "${HTTP1_RESPONSE_HEAD_PLAN}" http1_response_head_plan)
+    file(READ "${HTTP_RESPONSE_HEAD_HEADER}" http_response_head_header)
+    file(READ "${HTTP_RESPONSE_STREAM_HEAD}" http_response_stream_head)
+    file(READ "${HTTP1_SERVER_SEMANTICS}" http1_response_head_semantics)
+    file(READ "${WEB_RESPONSE_WRITER}" web_response_writer)
+    file(READ "${WEB_RESPONSE_STREAM_SINK}" web_response_stream_sink)
+    set(http1_response_head_missing)
+    foreach(http1_head_probe IN ITEMS
+            "class Http1BufferedResponseHead final"
+            "class Http1ChunkedResponseStreamHead final"
+            "class Http1CloseDelimitedResponseStreamHead final"
+            "using Framing = std::variant"
+            "std::get_if<Http1BufferedResponseHead>"
+            "std::get_if<Http1ChunkedResponseStreamHead>"
+            "std::get_if<Http1CloseDelimitedResponseStreamHead>"
+            "HttpResponseBodyPlan bodyPlan_")
+        if(NOT http1_response_head_plan MATCHES "${http1_head_probe}")
+            list(APPEND http1_response_head_missing
+                "plan:${http1_head_probe}")
+        endif()
+    endforeach()
+    if(NOT http_response_head_header MATCHES
+           "const Http1ResponseHeadPlan& plan")
+        list(APPEND http1_response_head_missing "head-signature")
+    endif()
+    foreach(http1_stream_probe IN ITEMS
+            "writerOwnsHttp1Chunked"
+            "response[.]header[(]\"Transfer-Encoding\", std::nullopt[)]"
+            "response[.]header[(]\"Content-Length\", std::nullopt[)]")
+        if(NOT http_response_stream_head MATCHES "${http1_stream_probe}")
+            list(APPEND http1_response_head_missing
+                "stream:${http1_stream_probe}")
+        endif()
+    endforeach()
+    foreach(http1_semantics_probe IN ITEMS
+            "Http1ResponseHeadPlan responseHeadPlan_"
+            "http1ChunkedResponseStreamHeadPlan"
+            "http1CloseDelimitedResponseStreamHeadPlan")
+        if(NOT http1_response_head_semantics MATCHES "${http1_semantics_probe}")
+            list(APPEND http1_response_head_missing
+                "semantics:${http1_semantics_probe}")
+        endif()
+    endforeach()
+    if(NOT web_response_writer MATCHES "http1BufferedResponseHeadPlan")
+        list(APPEND http1_response_head_missing "web-buffered-driver")
+    endif()
+    if(NOT web_response_stream_sink MATCHES
+           "streamHead[.]responseHeadPlan[(][)]")
+        list(APPEND http1_response_head_missing "web-stream-driver")
+    endif()
+    if(http1_response_head_missing)
+        string(JOIN ", " http1_response_head_missing_text
+            ${http1_response_head_missing})
+        boundary_error("HTTP/1 response-head framing escaped its exclusive plan"
+            "buffered, chunked-stream, and close-delimited-stream heads must remain exclusive; the prepared HTTP/1 plan owns canonical framing and Web may only drive it; missing ${http1_response_head_missing_text}")
+    endif()
+endif()
+
 set(HTTP_RESPONSE_HEAD_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/server/HttpResponseHead.cpp")
+if(EXISTS "${HTTP_RESPONSE_HEAD_SOURCE}")
+    file(READ "${HTTP_RESPONSE_HEAD_SOURCE}" http1_typed_response_head_source)
+    if(NOT http1_typed_response_head_source MATCHES
+           "plan[.]chunkedStream[(][)]" OR
+       NOT http1_typed_response_head_source MATCHES
+           "plan[.]closeDelimitedStream[(][)]" OR
+       NOT http1_typed_response_head_source MATCHES
+           "kChunkedTransferEncodingHeader" OR
+       NOT http1_typed_response_head_source MATCHES
+           "knownBit == kResponseHeaderTransferEncoding" OR
+       NOT http1_typed_response_head_source MATCHES
+           "knownBit == kResponseHeaderContentLength")
+        boundary_error("HTTP/1 response-head emitter bypasses its typed framing plan"
+            "canonical chunked ownership and close-delimited TE/CL filtering must be derived from Http1ResponseHeadPlan")
+    endif()
+endif()
 set(HTTP2_RESPONSE_HEADERS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ResponseHeaders.h")
 set(HTTP_STATUS_HEADER
@@ -1751,6 +1870,47 @@ if(EXISTS "${RESPONSE_STATUS_MODEL_TEST}" AND
        NOT response_status_api_surface MATCHES "HasResponseReasonPhraseSetter")
         boundary_error("response status/reason-phrase regression coverage is incomplete"
             "API shape, unknown-code phrase, H1 empty phrase, and Web-only error label all require direct coverage")
+    endif()
+endif()
+
+set(HTTP1_RESPONSE_HEAD_POLICY_TEST
+    "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
+set(HTTP1_RESPONSE_STREAM_PLAN_TEST
+    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
+set(HTTP_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+if(EXISTS "${RESPONSE_HEAD_REASON_PHRASE_TEST}" AND
+   EXISTS "${HTTP1_RESPONSE_HEAD_POLICY_TEST}" AND
+   EXISTS "${HTTP1_RESPONSE_STREAM_PLAN_TEST}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}")
+    file(READ "${RESPONSE_HEAD_REASON_PHRASE_TEST}"
+        http1_response_head_wire_test)
+    file(READ "${HTTP1_RESPONSE_HEAD_POLICY_TEST}"
+        http1_response_head_policy_test)
+    file(READ "${HTTP1_RESPONSE_STREAM_PLAN_TEST}"
+        http1_response_stream_plan_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}"
+        http1_response_head_package_test)
+    if(NOT http1_response_head_wire_test MATCHES
+           "response_head_close_delimited_stream_rejects_declared_framing" OR
+       NOT http1_response_head_wire_test MATCHES
+           "Transfer-Encoding: chunked" OR
+       NOT http1_response_head_wire_test MATCHES
+           "Content-Length: 8" OR
+       NOT http1_response_head_policy_test MATCHES
+           "http1_response_head_framing_is_an_exclusive_plan" OR
+       NOT http1_response_stream_plan_test MATCHES
+           "http1_prepared_stream_head_owns_exact_wire_framing" OR
+       NOT http1_response_stream_plan_test MATCHES
+           "responseHeadPlan[(][)][.]closeDelimitedStream[(][)]" OR
+       NOT http1_response_head_package_test MATCHES
+           "HasHttp1ResponseHeadAlternatives" OR
+       NOT http1_response_head_package_test MATCHES
+           "!HasStaleHttp1ResponseHeadScalar" OR
+       NOT http1_response_head_package_test MATCHES
+           "!HasStalePreparedStreamPolicy")
+        boundary_error("typed HTTP/1 response-head framing is under-tested"
+            "wire tests, prepared-plan tests, and installed consumers must pin canonical chunked framing, HTTP/1.0 TE/CL filtering, HEAD metadata, and removal of the scalar API")
     endif()
 endif()
 
@@ -3883,6 +4043,19 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 commit-time disposition boundary is undocumented"
             "${relative} must describe PreparedHttp1ResponseStream ownership")
+    endif()
+    if(NOT boundary_doc_content MATCHES "Http1ResponseHeadPlan" OR
+       NOT boundary_doc_content MATCHES "Http1BufferedResponseHead" OR
+       NOT boundary_doc_content MATCHES
+           "Http1ChunkedResponseStreamHead" OR
+       NOT boundary_doc_content MATCHES
+           "Http1CloseDelimitedResponseStreamHead" OR
+       NOT boundary_doc_content MATCHES "suppressAutoContentLength" OR
+       NOT boundary_doc_content MATCHES "section-6[.]1" OR
+       NOT boundary_doc_content MATCHES "section-6[.]3")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("HTTP/1 response-head plan is undocumented"
+            "${relative} must document the exclusive buffered/chunked/close-delimited alternatives, removal of the scalar API, canonical Transfer-Encoding ownership, and RFC 9112 framing")
     endif()
     if(NOT boundary_doc_content MATCHES "Http1ServerConnectionPlan")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")

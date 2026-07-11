@@ -1,7 +1,7 @@
 #pragma once
 
+#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 
 namespace ruvia {
 
@@ -12,8 +12,7 @@ namespace detail {
 void appendResponseHead(
     const HttpResponse& response,
     ResponseHeadBuffer& head,
-    ResponseWritePolicy policy,
-    bool suppressAutoContentLength = false);
+    const Http1ResponseHeadPlan& plan);
 
 }  // namespace detail
 }  // namespace ruvia

@@ -10,24 +10,53 @@
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 
 namespace {
 
 using ruvia::HttpResponse;
+using ruvia::HttpKnownMethod;
+using ruvia::detail::Http1ResponseHeadPlan;
 using ruvia::detail::ResponseHeadBuffer;
-using ruvia::detail::ResponseWritePolicy;
 using ruvia::detail::appendResponseHead;
-using ruvia::detail::responseWritePolicy;
+using ruvia::detail::http1BufferedResponseHeadPlan;
+using ruvia::detail::http1ChunkedResponseStreamHeadPlan;
+using ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan;
+using ruvia::detail::httpResponseBodyPlan;
 
-std::string emitHead(
-    HttpResponse& response, ResponseWritePolicy policy, bool suppressAutoContentLength = false) {
+std::string emitHead(HttpResponse& response, const Http1ResponseHeadPlan& plan) {
     ResponseHeadBuffer buffer(std::pmr::new_delete_resource());
-    appendResponseHead(response, buffer, policy, suppressAutoContentLength);
+    appendResponseHead(response, buffer, plan);
     const auto view = buffer.view();
     return std::string(view.data(), view.size());
+}
+
+std::string emitBufferedHead(
+    HttpResponse& response,
+    HttpKnownMethod requestMethod = HttpKnownMethod::kGet) {
+    return emitHead(
+        response,
+        http1BufferedResponseHeadPlan(
+            httpResponseBodyPlan(requestMethod, response.status())));
+}
+
+std::string emitChunkedStreamHead(
+    HttpResponse& response,
+    HttpKnownMethod requestMethod = HttpKnownMethod::kGet) {
+    return emitHead(
+        response,
+        http1ChunkedResponseStreamHeadPlan(
+            httpResponseBodyPlan(requestMethod, response.status())));
+}
+
+std::string emitCloseDelimitedStreamHead(
+    HttpResponse& response,
+    HttpKnownMethod requestMethod = HttpKnownMethod::kGet) {
+    return emitHead(
+        response,
+        http1CloseDelimitedResponseStreamHeadPlan(
+            httpResponseBodyPlan(requestMethod, response.status())));
 }
 
 std::size_t countOccurrences(std::string_view haystack, std::string_view needle) {
@@ -112,9 +141,7 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
             "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n").connectionPlan);
     RUVIA_CHECK(
         http10UpgradePlan.disposition() == Http1ConnectionDisposition::kReuse);
-    const auto http10UpgradeHead = emitHead(
-        http10Upgrade,
-        responseWritePolicy(http10Upgrade.status()));
+    const auto http10UpgradeHead = emitBufferedHead(http10Upgrade);
     RUVIA_CHECK(
         http10UpgradeHead.find("Connection: upgrade\r\n") != std::string::npos);
     RUVIA_CHECK(
@@ -133,9 +160,7 @@ RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
     RUVIA_CHECK(
         applicationClosePlan.disposition() == Http1ConnectionDisposition::kClose);
     RUVIA_CHECK_EQ(std::string(applicationClose.header("Connection")), std::string("close"));
-    const auto applicationCloseHead = emitHead(
-        applicationClose,
-        responseWritePolicy(applicationClose.status()));
+    const auto applicationCloseHead = emitBufferedHead(applicationClose);
     RUVIA_CHECK_EQ(
         countOccurrences(applicationCloseHead, "Connection: "),
         std::size_t{1});
@@ -281,7 +306,7 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
     response.status(200);
     response.header("X-Foo", "bar");
     response.setBodyCopy("hello");
-    const auto head = emitHead(response, ResponseWritePolicy::normal());
+    const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
     RUVIA_CHECK(head.find("X-Foo: bar\r\n") != std::string::npos);
@@ -294,7 +319,7 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
 RUVIA_TEST(response_head_extension_status_uses_an_empty_reason_phrase) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(299);
-    const auto head = emitHead(response, responseWritePolicy(299));
+    const auto head = emitBufferedHead(response);
 
     // RFC 9112 section 4 keeps the SP before the optional reason-phrase.
     // An unregistered status must not be mislabeled as a generic client error.
@@ -307,7 +332,7 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
     response.header("Server", "custom");
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
     response.setBodyCopy("x");
-    const auto head = emitHead(response, ResponseWritePolicy::normal());
+    const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.find("Server: custom\r\n") != std::string::npos);
     RUVIA_CHECK_EQ(countOccurrences(head, "Server: "), std::size_t{1});
@@ -315,18 +340,53 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
 }
 
 RUVIA_TEST(response_head_suppresses_auto_content_length) {
-    // A streaming/chunked writer owns framing itself, so the auto Content-Length
-    // must be withheld when suppression is requested.
+    // A streaming/chunked writer owns framing itself. Caller-provided framing is
+    // replaced by one canonical chunked field and no Content-Length survives.
     HttpResponse response(std::pmr::new_delete_resource());
     response.setBodyCopy("hello");
-    const auto head = emitHead(response, ResponseWritePolicy::normal(), /*suppress=*/true);
+    response.header("Transfer-Encoding", "gzip, chunked");
+    response.header("Content-Length", "999");
+    const auto head = emitChunkedStreamHead(response);
     RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
+    RUVIA_CHECK(head.find("Transfer-Encoding: chunked\r\n") != std::string::npos);
+    RUVIA_CHECK(head.find("gzip") == std::string::npos);
+    RUVIA_CHECK_EQ(
+        countOccurrences(head, "Transfer-Encoding: "),
+        std::size_t{1});
+}
+
+RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.setBodyCopy("streamed");
+    response.header("Transfer-Encoding", "chunked");
+    response.header("Content-Length", "8");
+
+    const auto head = emitCloseDelimitedStreamHead(response);
+    RUVIA_CHECK(head.find("Transfer-Encoding:") == std::string::npos);
+    RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
+
+    // A HEAD response has no payload and may retain representation length
+    // metadata, but HTTP/1.0 still cannot carry Transfer-Encoding.
+    const auto metadataHead = emitCloseDelimitedStreamHead(
+        response, HttpKnownMethod::kHead);
+    RUVIA_CHECK(metadataHead.find("Transfer-Encoding:") == std::string::npos);
+    RUVIA_CHECK(metadataHead.find("Content-Length: 8\r\n") != std::string::npos);
+
+    HttpResponse notModified(std::pmr::new_delete_resource());
+    notModified.status(304);
+    notModified.header("Transfer-Encoding", "chunked");
+    notModified.header("Content-Length", "123");
+    const auto notModifiedHead = emitCloseDelimitedStreamHead(notModified);
+    RUVIA_CHECK(notModifiedHead.find("Transfer-Encoding:") == std::string::npos);
+    RUVIA_CHECK(
+        notModifiedHead.find("Content-Length: 123\r\n") !=
+        std::string::npos);
 }
 
 RUVIA_TEST(response_head_bodyless_status_omits_auto_content_length) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(204);
-    const auto head = emitHead(response, responseWritePolicy(204));
+    const auto head = emitBufferedHead(response);
     RUVIA_CHECK(head.starts_with("HTTP/1.1 204 No Content\r\n"));
     RUVIA_CHECK(head.find("Content-Length:") == std::string::npos);
     RUVIA_CHECK(head.ends_with("\r\n\r\n"));
@@ -342,7 +402,9 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
         response.setBodyCopy("must-not-be-sent");
         response.header("Content-Length", "16");
         response.header("Transfer-Encoding", "chunked");
-        const auto head = emitHead(response, responseWritePolicy(205), streaming);
+        const auto head = streaming
+            ? emitChunkedStreamHead(response)
+            : emitBufferedHead(response);
         RUVIA_CHECK(head.starts_with("HTTP/1.1 205 Reset Content\r\n"));
         RUVIA_CHECK_EQ(countOccurrences(head, "Content-Length: "), std::size_t{1});
         RUVIA_CHECK(head.find("Content-Length: 0\r\n") != std::string::npos);
@@ -364,7 +426,7 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
         response.header("X-Pad-" + std::to_string(i), big);
     }
     response.setBodyCopy("body");
-    const auto head = emitHead(response, ResponseWritePolicy::normal());
+    const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
     for (int i = 0; i < 10; ++i) {

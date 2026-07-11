@@ -15,11 +15,13 @@ namespace {
 
 struct ResponseHeadFlags {
     bool bodyAllowed{false};
-    bool transferEncodingAllowed{false};
+    bool emitChunkedTransferEncoding{false};
     bool autoContentLengthOwnedByWriter{false};
     bool explicitContentLengthAllowed{false};
-    bool filterForbiddenBodyHeaders{false};
 };
+
+inline constexpr std::string_view kChunkedTransferEncodingHeader =
+    "Transfer-Encoding: chunked\r\n";
 
 // Unchecked sink writing through a raw cursor; the caller guarantees capacity
 // via ResponseHeadBuffer::stackCursor. Constant-size appends inline to stores.
@@ -61,13 +63,15 @@ void emitResponseHead(
     sink.append(std::string_view("\r\n"));
 
     for (const auto& header : response.headers()) {
-        if (flags.filterForbiddenBodyHeaders) {
-            if (responseBodyFramingHeaderForbidden(
-                    responseHeaderKnownBit(header),
-                    flags.explicitContentLengthAllowed,
-                    flags.transferEncodingAllowed)) {
-                continue;
-            }
+        const auto knownBit = responseHeaderKnownBit(header);
+        // HTTP/1 framing belongs exclusively to Http1ResponseHeadPlan. A handler
+        // cannot override canonical chunked framing, invent Transfer-Encoding on
+        // an HTTP/1.0 response, or attach Content-Length to a body-open
+        // close-delimited stream.
+        if (knownBit == kResponseHeaderTransferEncoding ||
+            (knownBit == kResponseHeaderContentLength &&
+             !flags.explicitContentLengthAllowed)) {
+            continue;
         }
         sink.append(header.name());
         sink.append(std::string_view(": "));
@@ -78,6 +82,9 @@ void emitResponseHead(
     const auto knownBits = responseKnownHeaderBits(response);
     if ((knownBits & kResponseHeaderDate) == 0) {
         sink.append(dateHeader);
+    }
+    if (flags.emitChunkedTransferEncoding) {
+        sink.append(kChunkedTransferEncodingHeader);
     }
     if (flags.autoContentLengthOwnedByWriter) {
         sink.append(std::string_view("Content-Length: "));
@@ -96,29 +103,27 @@ void emitResponseHead(
 void appendResponseHead(
     const HttpResponse& response,
     ResponseHeadBuffer& head,
-    ResponseWritePolicy policy,
-    bool suppressAutoContentLength) {
-    const bool transferEncodingAllowed = policy.transferEncodingAllowed() && suppressAutoContentLength;
-    const auto knownBits = responseKnownHeaderBits(response);
-    const bool hasTransferEncoding = transferEncodingAllowed &&
-        (knownBits & kResponseHeaderTransferEncoding) != 0;
+    const Http1ResponseHeadPlan& plan) {
+    const auto& bodyPlan = plan.bodyPlan();
+    const auto& policy = bodyPlan.policy();
+    const bool emitChunkedTransferEncoding =
+        plan.chunkedStream() != nullptr && policy.transferEncodingAllowed();
     const bool autoContentLengthOwnedByWriter =
         policy.autoContentLengthAllowed() &&
-        !hasTransferEncoding &&
-        (!suppressAutoContentLength || !policy.bodyAllowed());
+        !emitChunkedTransferEncoding &&
+        (plan.buffered() != nullptr || !policy.bodyAllowed());
     const bool explicitContentLengthAllowed =
         policy.explicitContentLengthAllowed() &&
-        !hasTransferEncoding &&
-        !autoContentLengthOwnedByWriter;
+        !emitChunkedTransferEncoding &&
+        !autoContentLengthOwnedByWriter &&
+        (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
     const ResponseHeadFlags flags{
         .bodyAllowed = policy.bodyAllowed(),
-        .transferEncodingAllowed = transferEncodingAllowed,
+        .emitChunkedTransferEncoding = emitChunkedTransferEncoding,
         .autoContentLengthOwnedByWriter = autoContentLengthOwnedByWriter,
-        .explicitContentLengthAllowed = explicitContentLengthAllowed,
-        .filterForbiddenBodyHeaders = responseHasForbiddenBodyFramingHeader(
-            knownBits,
-            explicitContentLengthAllowed,
-            transferEncodingAllowed)};
+        .explicitContentLengthAllowed = explicitContentLengthAllowed};
+
+    const auto knownBits = responseKnownHeaderBits(response);
 
     const auto reasonPhrase = httpReasonPhrase(response.status());
     const auto dateHeader = cachedDateHeader();
@@ -133,6 +138,9 @@ void appendResponseHead(
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
         bound += dateHeader.size();
+    }
+    if (emitChunkedTransferEncoding) {
+        bound += kChunkedTransferEncodingHeader.size();
     }
     if (autoContentLengthOwnedByWriter) {
         bound += 16 + 20 + 2;

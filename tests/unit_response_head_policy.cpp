@@ -1,19 +1,27 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 
+#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
-#include "ruvia/http/detail/HttpResponseHeaderBits.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace {
 
-using ruvia::detail::responseBodyFramingHeaderForbidden;
-using ruvia::detail::responseHasForbiddenBodyFramingHeader;
 using ruvia::detail::responseWritePolicy;
+
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1BufferedResponseHead>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1ChunkedResponseStreamHead>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 
 }  // namespace
 
@@ -117,64 +125,25 @@ RUVIA_TEST(response_policy_not_modified_keeps_explicit_content_length) {
     RUVIA_CHECK(!policy.transferEncodingAllowed());
 }
 
-RUVIA_TEST(response_framing_header_forbidden_single_bit) {
-    using ruvia::detail::kResponseHeaderContentLength;
-    using ruvia::detail::kResponseHeaderContentType;
-    using ruvia::detail::kResponseHeaderTransferEncoding;
+RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
+    const auto bodyPlan = ruvia::detail::httpResponseBodyPlan(
+        ruvia::HttpKnownMethod::kGet, 200);
+    const auto buffered =
+        ruvia::detail::http1BufferedResponseHeadPlan(bodyPlan);
+    const auto chunked =
+        ruvia::detail::http1ChunkedResponseStreamHeadPlan(bodyPlan);
+    const auto closeDelimited =
+        ruvia::detail::http1CloseDelimitedResponseStreamHeadPlan(bodyPlan);
 
-    // Content-Length is forbidden only when explicit lengths are disallowed.
-    RUVIA_CHECK(responseBodyFramingHeaderForbidden(kResponseHeaderContentLength, false, true));
-    RUVIA_CHECK(!responseBodyFramingHeaderForbidden(kResponseHeaderContentLength, true, true));
-    // Transfer-Encoding is forbidden only when transfer-encoding is disallowed.
-    RUVIA_CHECK(responseBodyFramingHeaderForbidden(kResponseHeaderTransferEncoding, true, false));
-    RUVIA_CHECK(!responseBodyFramingHeaderForbidden(kResponseHeaderTransferEncoding, true, true));
-    // An unrelated header is never a forbidden framing header.
-    RUVIA_CHECK(!responseBodyFramingHeaderForbidden(kResponseHeaderContentType, false, false));
-}
-
-RUVIA_TEST(response_has_forbidden_framing_header_over_bitmask) {
-    using ruvia::detail::kResponseHeaderContentLength;
-    using ruvia::detail::kResponseHeaderContentType;
-    using ruvia::detail::kResponseHeaderTransferEncoding;
-
-    // Under a 304 policy (explicit CL allowed, TE forbidden): a Content-Length
-    // header is fine, a Transfer-Encoding header is forbidden.
-    const auto notModified = responseWritePolicy(304);
-    RUVIA_CHECK(!responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderContentLength,
-        notModified.explicitContentLengthAllowed(),
-        notModified.transferEncodingAllowed()));
-    RUVIA_CHECK(responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderTransferEncoding,
-        notModified.explicitContentLengthAllowed(),
-        notModified.transferEncodingAllowed()));
-
-    // Under a body-forbidden policy (204): both framing headers are forbidden.
-    const auto noContent = responseWritePolicy(204);
-    RUVIA_CHECK(responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderContentLength | kResponseHeaderContentType,
-        noContent.explicitContentLengthAllowed(),
-        noContent.transferEncodingAllowed()));
-    RUVIA_CHECK(responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderTransferEncoding,
-        noContent.explicitContentLengthAllowed(),
-        noContent.transferEncodingAllowed()));
-
-    // 205 is bodyless but self-delimited with a writer-owned Content-Length: 0;
-    // both caller-provided framing fields are therefore filtered.
-    const auto resetContent = responseWritePolicy(205);
-    RUVIA_CHECK(responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderContentLength | kResponseHeaderTransferEncoding,
-        resetContent.explicitContentLengthAllowed(),
-        resetContent.transferEncodingAllowed()));
-
-    // A normal (200) policy forbids nothing, and a bitmask without framing bits
-    // is never forbidden.
-    const auto normal = responseWritePolicy(200);
-    RUVIA_CHECK(!responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderContentLength | kResponseHeaderTransferEncoding,
-        normal.explicitContentLengthAllowed(),
-        normal.transferEncodingAllowed()));
-    RUVIA_CHECK(!responseHasForbiddenBodyFramingHeader(
-        kResponseHeaderContentType, false, false));
+    RUVIA_CHECK(buffered.buffered() != nullptr);
+    RUVIA_CHECK(buffered.chunkedStream() == nullptr);
+    RUVIA_CHECK(buffered.closeDelimitedStream() == nullptr);
+    RUVIA_CHECK(chunked.buffered() == nullptr);
+    RUVIA_CHECK(chunked.chunkedStream() != nullptr);
+    RUVIA_CHECK(chunked.closeDelimitedStream() == nullptr);
+    RUVIA_CHECK(closeDelimited.buffered() == nullptr);
+    RUVIA_CHECK(closeDelimited.chunkedStream() == nullptr);
+    RUVIA_CHECK(closeDelimited.closeDelimitedStream() != nullptr);
+    RUVIA_CHECK(
+        closeDelimited.bodyPlan().contentSemantics().withContent() != nullptr);
 }

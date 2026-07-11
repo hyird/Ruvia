@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/http1/Http1ResponseHeadPlan.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
@@ -210,8 +211,8 @@ public:
         return head_.response();
     }
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
-        return head_.policy();
+    [[nodiscard]] const Http1ResponseHeadPlan& responseHeadPlan() const noexcept {
+        return responseHeadPlan_;
     }
 
     [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
@@ -231,11 +232,14 @@ private:
 
     PreparedHttp1ResponseStream(
         ResponseStreamHead head,
+        Http1ResponseHeadPlan responseHeadPlan,
         Http1ServerConnectionPlan connectionPlan) noexcept
         : head_(std::move(head)),
+          responseHeadPlan_(responseHeadPlan),
           connectionPlan_(connectionPlan) {}
 
     ResponseStreamHead head_;
+    Http1ResponseHeadPlan responseHeadPlan_;
     Http1ServerConnectionPlan connectionPlan_{Http1ServerConnectionPlan::close()};
 };
 
@@ -261,8 +265,13 @@ private:
         plannedConnection);
     auto head = prepareResponseStreamHead(
         std::move(response), kind, plan.framing(), bodyPlan, trailerIntent);
+    const auto responseHeadPlan =
+        plan.framing() == ResponseStreamFraming::kHttp1Chunked
+        ? http1ChunkedResponseStreamHeadPlan(head.commitPlan().bodyPlan())
+        : http1CloseDelimitedResponseStreamHeadPlan(head.commitPlan().bodyPlan());
     return PreparedHttp1ResponseStream(
         std::move(head),
+        responseHeadPlan,
         connectionPlan);
 }
 

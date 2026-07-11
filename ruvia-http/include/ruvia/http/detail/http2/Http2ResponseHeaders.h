@@ -269,7 +269,7 @@ appendHttp2InterimResponseHeaders(
             continue;
         }
         if (knownBit == kResponseHeaderContentLength) {
-            if (responseBodyFramingHeaderForbidden(knownBit, explicitContentLengthAllowed, true)) {
+            if (!explicitContentLengthAllowed) {
                 // Writer owns the length: drop the user's value and leave
                 // contentLengthWritten false so the correct auto Content-Length
                 // (the real body size) is emitted below.

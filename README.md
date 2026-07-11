@@ -44,7 +44,17 @@ For streaming responses, `ruvia-http` first returns an `Http1ResponseStreamPlan`
 the request connection plan, version/body state, candidate chunked versus close-delimited framing,
 and a typed external close policy. At head commit, `PreparedHttp1ResponseStream` also folds in
 the response method/status and `Connection` options, canonicalizes the wire signal, and returns
-the authoritative connection disposition. Thus an HTTP/1.0 body-allowed stream remains
+the authoritative connection disposition. It also carries one exclusive `Http1ResponseHeadPlan`:
+`Http1BufferedResponseHead`, `Http1ChunkedResponseStreamHead`, or
+`Http1CloseDelimitedResponseStreamHead`. `appendResponseHead()` accepts only that plan; the former
+policy plus `suppressAutoContentLength` boolean entry no longer exists. The writer is the sole owner
+of canonical `Transfer-Encoding: chunked`, replacing any application framing declaration. A
+body-open close-delimited response filters both application `Transfer-Encoding` and
+`Content-Length`; a body-suppressed HEAD/304 response may retain representation-length metadata but
+still never sends Transfer-Encoding to an HTTP/1.0 peer. These rules follow
+[RFC 9112 Section 6.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.1) and the ordered
+message-length rules in
+[Section 6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3). Thus an HTTP/1.0 body-allowed stream remains
 close-delimited, while a HEAD/204/205/304 response on an opted-in persistent connection is
 self-delimited and can be reused. The committed sink returns the complete connection plan, so
 its socket disposition cannot drift away from the response signal already emitted on the wire.
