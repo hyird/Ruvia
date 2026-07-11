@@ -168,8 +168,8 @@ public:
         return localContent_;
     }
 
-    [[nodiscard]] bool isReset() const noexcept {
-        return lifecycle_.reset();
+    [[nodiscard]] bool isAborted() const noexcept {
+        return lifecycle_.aborted();
     }
 
     [[nodiscard]] bool bodyEnded() const noexcept {
@@ -180,20 +180,8 @@ public:
         return lifecycle_.peerEndStream();
     }
 
-    [[nodiscard]] bool localEndStream() const noexcept {
-        return lifecycle_.localEndStream();
-    }
-
-    [[nodiscard]] bool localEndStreamCommitted() const noexcept {
-        return lifecycle_.localEndStreamCommitted();
-    }
-
-    [[nodiscard]] Http2LocalSendPhase localSendPhase() const noexcept {
-        return lifecycle_.localSendPhase();
-    }
-
-    [[nodiscard]] Http2LocalMessageKind localMessageKind() const noexcept {
-        return lifecycle_.localMessageKind();
+    [[nodiscard]] const Http2LocalSendState& localSend() const noexcept {
+        return lifecycle_.localSend();
     }
 
     [[nodiscard]] bool queued() const noexcept {
@@ -204,10 +192,6 @@ public:
         return lifecycle_.dispatchStarted();
     }
 
-    [[nodiscard]] Http2StreamCloseSource closeSource() const noexcept {
-        return lifecycle_.closeSource();
-    }
-
     [[nodiscard]] bool holdPeerConcurrencySlot() noexcept {
         return lifecycle_.holdPeerConcurrencySlot();
     }
@@ -216,59 +200,57 @@ public:
         return lifecycle_.releasePeerConcurrencySlot();
     }
 
-    void markReset(Http2StreamCloseSource source = Http2StreamCloseSource::kLocal) noexcept {
-        lifecycle_.markReset(source);
-    }
-
-    void markClosed(Http2StreamCloseSource source) noexcept {
-        lifecycle_.markClosed(source);
+    [[nodiscard]] bool abort(Http2StreamCloseSource source) noexcept {
+        return lifecycle_.abort(source);
     }
 
     void markPeerEndStream() noexcept {
         lifecycle_.markPeerEndStream();
     }
 
-    [[nodiscard]] bool canSubmitLocalHead() const noexcept {
-        return lifecycle_.canSubmitLocalHead();
+    [[nodiscard]] bool beginLocalRequestContent() noexcept {
+        return lifecycle_.beginLocalRequestContent();
     }
 
-    void markLocalHeadSubmitted(
-        Http2LocalMessageKind kind,
-        bool endStream) noexcept {
-        lifecycle_.markLocalHeadSubmitted(kind, endStream);
+    [[nodiscard]] bool beginLocalResponseContent() noexcept {
+        return lifecycle_.beginLocalResponseContent();
     }
 
-    void markLocalTrailersOnlyHeadSubmitted(
-        Http2LocalMessageKind kind) noexcept {
-        lifecycle_.markLocalTrailersOnlyHeadSubmitted(kind);
+    [[nodiscard]] bool beginLocalResponseTrailersOnly() noexcept {
+        return lifecycle_.beginLocalResponseTrailersOnly();
     }
 
-    void markLocalConnectRequestSubmitted() noexcept {
-        lifecycle_.markLocalConnectRequestSubmitted();
+    [[nodiscard]] bool commitLocalHeadEndStream() noexcept {
+        return lifecycle_.commitLocalHeadEndStream();
+    }
+
+    [[nodiscard]] bool beginLocalConnectRequest() noexcept {
+        if (tunnelState_.pending() == nullptr) {
+            return false;
+        }
+        return lifecycle_.beginLocalConnectRequest();
     }
 
     [[nodiscard]] bool openLocalConnectTunnel() noexcept {
+        if (tunnelState_.open() == nullptr) {
+            return false;
+        }
         return lifecycle_.openLocalConnectTunnel();
     }
 
     [[nodiscard]] bool rejectLocalConnect() noexcept {
+        if (tunnelState_.rejected() == nullptr) {
+            return false;
+        }
         return lifecycle_.rejectLocalConnect();
     }
 
-    [[nodiscard]] bool localBodyOpen() const noexcept {
-        return lifecycle_.localBodyOpen();
+    [[nodiscard]] bool queueLocalEndStream() noexcept {
+        return lifecycle_.queueLocalEndStream();
     }
 
-    [[nodiscard]] bool localTrailersOnly() const noexcept {
-        return lifecycle_.localTrailersOnly();
-    }
-
-    void markLocalEndStreamQueued() noexcept {
-        lifecycle_.markLocalEndStreamQueued();
-    }
-
-    void markLocalEndStreamCommitted() noexcept {
-        lifecycle_.markLocalEndStreamCommitted();
+    [[nodiscard]] bool commitLocalEndStream() noexcept {
+        return lifecycle_.commitLocalEndStream();
     }
 
     void markBodyEnded() noexcept {
@@ -285,10 +267,6 @@ public:
 
     [[nodiscard]] bool tryStartDispatch() noexcept {
         return lifecycle_.tryStartDispatch();
-    }
-
-    void markDispatchStarted() noexcept {
-        lifecycle_.markDispatchStarted();
     }
 
     [[nodiscard]] bool hasOverflowQueuedBodyChunk() const noexcept {

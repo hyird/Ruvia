@@ -299,7 +299,8 @@ RUVIA_TEST(http2_connect_client_standard_head_owns_shape_and_gates_data) {
     const auto* pending = stream->tunnel().pending();
     RUVIA_CHECK(pending != nullptr);
     RUVIA_CHECK(pending->form() == Http2ConnectForm::kStandard);
-    RUVIA_CHECK(!stream->localBodyOpen());
+    RUVIA_CHECK(stream->localSend().connectPending() != nullptr);
+    RUVIA_CHECK(stream->localSend().tunnelOpen() == nullptr);
     RUVIA_CHECK(stream->localContent().forbidden() != nullptr);
     RUVIA_CHECK(client.submitData(streamId, "early", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kInvalidState);
@@ -415,7 +416,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
     RUVIA_CHECK_EQ(observed.contentLengthCount, std::size_t{0});
     server.consumeOutput(responseBytes.size());
     RUVIA_CHECK(stream->tunnel().open() != nullptr);
-    RUVIA_CHECK(stream->localBodyOpen());
+    RUVIA_CHECK(stream->localSend().tunnelOpen() != nullptr);
 
     const auto peerData = frame(&resource, Http2FrameType::kData, 0, 1, "peer");
     (void)server.feed(std::string_view(peerData.data(), peerData.size()));
@@ -481,7 +482,7 @@ RUVIA_TEST(http2_connect_client_success_ignores_length_and_uses_tunnel_events) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(stream->tunnel().open() != nullptr);
     RUVIA_CHECK(stream->remoteContent().withoutLength() != nullptr);
-    RUVIA_CHECK(stream->localBodyOpen());
+    RUVIA_CHECK(stream->localSend().tunnelOpen() != nullptr);
 
     const auto data = frame(
         &resource,
@@ -532,8 +533,9 @@ RUVIA_TEST(http2_connect_client_rejection_closes_request_half_and_decodes_respon
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK(stream->tunnel().rejected() != nullptr);
-    RUVIA_CHECK(stream->localEndStreamCommitted());
-    RUVIA_CHECK(!stream->localBodyOpen());
+    RUVIA_CHECK(stream->localSend().endStreamCommitted() != nullptr);
+    RUVIA_CHECK(stream->localSend().connectPending() == nullptr);
+    RUVIA_CHECK(stream->localSend().tunnelOpen() == nullptr);
     RUVIA_CHECK(client.submitData(streamId, "tunnel?", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kInvalidState);
 

@@ -734,6 +734,94 @@ if(_installed_http2_tunnel_state MATCHES
        "(standardConnect|extendedConnect|extendedConnectWebSocket|connectRequest|connectPending|tunnelOpen|connectRejected)[(]")
     message(FATAL_ERROR "installed HTTP/2 tunnel state retained a kind/phase product or stream forwarding accessors")
 endif()
+set(_installed_http2_local_send_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2LocalSendState.h")
+set(_installed_http2_close_source_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamCloseSource.h")
+set(_installed_http2_lifecycle_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
+set(_installed_http2_stream_table_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamTable.h")
+if(NOT EXISTS "${_installed_http2_local_send_path}" OR
+   NOT EXISTS "${_installed_http2_close_source_path}" OR
+   NOT EXISTS "${_installed_http2_lifecycle_path}" OR
+   NOT EXISTS "${_installed_http2_stream_table_path}")
+    message(FATAL_ERROR "installed HTTP/2 local send state is missing")
+endif()
+file(READ "${_installed_http2_local_send_path}"
+    _installed_http2_local_send)
+file(READ "${_installed_http2_close_source_path}"
+    _installed_http2_close_source)
+file(READ "${_installed_http2_lifecycle_path}"
+    _installed_http2_lifecycle)
+file(READ "${_installed_http2_stream_table_path}"
+    _installed_http2_stream_table)
+if(NOT _installed_http2_close_source MATCHES
+       "enum class Http2StreamCloseSource" OR
+   NOT _installed_http2_close_source MATCHES "kNone" OR
+   NOT _installed_http2_close_source MATCHES "kPeerGoaway" OR
+   NOT _installed_http2_local_send MATCHES "Http2StreamCloseSource[.]h" OR
+   NOT _installed_http2_local_send MATCHES
+       "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
+   _installed_http2_local_send MATCHES "enum class Http2StreamCloseSource" OR
+   _installed_http2_local_send MATCHES
+       "Http2LocalSendPhase|Http2LocalMessageKind|Http2LocalReset|localSendPhase_|localMessageKind_|localEndStreamCommitted_|reset_|closeSource_" OR
+   NOT _installed_http2_local_send MATCHES "class Http2LocalHeadPending final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalRequestContentOpen final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalResponseContentOpen final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalResponseTrailersOnly final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalConnectPending final" OR
+   NOT _installed_http2_local_send MATCHES "class Http2LocalTunnelOpen final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalEndStreamQueued final" OR
+   NOT _installed_http2_local_send MATCHES
+       "class Http2LocalEndStreamCommitted final" OR
+   NOT _installed_http2_local_send MATCHES "class Http2StreamAborted final" OR
+   NOT _installed_http2_local_send MATCHES "using State = std::variant" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalHeadPending>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalRequestContentOpen>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalResponseContentOpen>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalResponseTrailersOnly>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalConnectPending>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalTunnelOpen>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalEndStreamQueued>" OR
+   NOT _installed_http2_local_send MATCHES
+       "std::get_if<Http2LocalEndStreamCommitted>" OR
+   NOT _installed_http2_local_send MATCHES "std::get_if<Http2StreamAborted>" OR
+   NOT _installed_http2_local_send MATCHES
+       "Http2StreamCloseSource source[(][)] const noexcept" OR
+   NOT _installed_http2_local_send MATCHES
+       "source == Http2StreamCloseSource::kPeerGoaway" OR
+   NOT _installed_http2_lifecycle MATCHES
+       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+   NOT _installed_http2_lifecycle MATCHES
+       "private:[\r\n \t]+friend class Http2StreamState" OR
+   NOT _installed_http2_lifecycle MATCHES "bool aborted[(][)] const noexcept" OR
+   NOT _installed_http2_lifecycle MATCHES
+       "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
+   NOT _installed_http2_lifecycle MATCHES "queued_ = false" OR
+   NOT _installed_http2_stream_state MATCHES
+       "const Http2LocalSendState& localSend[(][)] const noexcept" OR
+   NOT _installed_http2_stream_state MATCHES "bool isAborted[(][)] const noexcept" OR
+   NOT _installed_http2_stream_state MATCHES
+       "bool abort[(]Http2StreamCloseSource source[)] noexcept" OR
+   NOT _installed_http2_stream_table MATCHES "void removeAborted" OR
+   _installed_http2_stream_table MATCHES "removeReset" OR
+   _installed_http2_stream_state MATCHES
+       "(localSendPhase|localMessageKind|localEndStream|localEndStreamCommitted|canSubmitLocalHead|localBodyOpen|localTrailersOnly|closeSource|isReset|markReset|markClosed)[(]")
+    message(FATAL_ERROR "installed HTTP/2 local send lifecycle retained a phase/kind/boolean product, reset vocabulary, or forwarding accessors")
+endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
     _installed_http_authority)
 if(NOT _installed_http_authority MATCHES "enum class HttpAuthorityPortKind" OR

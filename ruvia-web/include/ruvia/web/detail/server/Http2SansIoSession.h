@@ -20,7 +20,7 @@
 // Lifetime safety: a request/response holds VIEWS into its stream's decoded storage, so
 // before spawning a handler the stream is pinned (see Http2Connection::pinStream) -- a
 // peer RST then keeps the stream alive+reset rather than freeing it, and the handler
-// checks isReset() before submitting. The handler unpins on completion, freeing it.
+// checks isAborted() before submitting. The handler unpins on completion, freeing it.
 
 #include <array>
 #include <atomic>
@@ -222,7 +222,7 @@ Task<void> runHttp2SansIoSession(
         auto* signal = findSignal(streamId);
         for (;;) {
             auto* live = connection.stream(streamId);
-            if (live == nullptr || live->isReset()) {
+            if (live == nullptr || live->isAborted()) {
                 co_return false;
             }
             if (!connection.hasQueuedData(streamId)) {
@@ -268,7 +268,7 @@ Task<void> runHttp2SansIoSession(
     // streaming has its own route dispatch and ResponseStreamSink call chain.
     auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response) -> Task<void> {
         auto* streamState = connection.stream(streamId);
-        if (streamState == nullptr || streamState->isReset()) {
+        if (streamState == nullptr || streamState->isAborted()) {
             co_return;
         }
         const auto headResult = connection.submitResponseHead(streamId, response);
@@ -312,7 +312,7 @@ Task<void> runHttp2SansIoSession(
             std::uint64_t remaining = fileBody.length;
             while (remaining > 0) {
                 auto* live = connection.stream(streamId);
-                if (live == nullptr || live->isReset()) {
+                if (live == nullptr || live->isAborted()) {
                     co_return;
                 }
                 const auto next = static_cast<std::size_t>(
@@ -492,7 +492,7 @@ Task<void> runHttp2SansIoSession(
                 sink, routes, request, resolution, requestMemory, dispatchServices,
                 [&connection, streamId]() noexcept {
                     auto* s = connection.stream(streamId);
-                    return s == nullptr || s->isReset();
+                    return s == nullptr || s->isAborted();
                 });
             if (result.abortedAfterCommit()) {
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
@@ -516,7 +516,7 @@ Task<void> runHttp2SansIoSession(
         }
 
         auto* live = connection.stream(streamId);
-        if (live == nullptr || live->isReset()) {
+        if (live == nullptr || live->isAborted()) {
             co_return;
         }
         const auto preparation = prepareBufferedHttpResponse(
@@ -538,7 +538,7 @@ Task<void> runHttp2SansIoSession(
         } catch (...) {
             // Last-resort: a dispatch failure must not leak the pin/inFlight count.
             auto* live = connection.stream(streamId);
-            if (live != nullptr && !live->isReset()) {
+            if (live != nullptr && !live->isAborted()) {
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
             }
         }

@@ -85,7 +85,7 @@ public:
     [[nodiscard]] Task<bool> readMore(std::pmr::string& buffer) {
         for (;;) {
             auto* stream = connection_->stream(streamId_);
-            if (stream == nullptr || stream->isReset()) {
+            if (stream == nullptr || stream->isAborted()) {
                 co_return false;
             }
             if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {
@@ -132,7 +132,7 @@ public:
             // wait for the older queued input and retry this exact view.
             while (connection_->hasQueuedData(streamId_)) {
                 auto* stream = connection_->stream(streamId_);
-                if (stream == nullptr || stream->isReset() || signal_->ended) {
+                if (stream == nullptr || stream->isAborted() || signal_->ended) {
                     co_return std::make_error_code(std::errc::connection_reset);
                 }
                 co_await signal_->wait();
@@ -141,7 +141,7 @@ public:
                 co_return std::error_code{};
             }
             auto* stream = connection_->stream(streamId_);
-            if (stream == nullptr || stream->isReset() || signal_->ended) {
+            if (stream == nullptr || stream->isAborted() || signal_->ended) {
                 co_return std::make_error_code(std::errc::connection_reset);
             }
         }
@@ -176,7 +176,7 @@ public:
     [[nodiscard]] Task<std::optional<std::string_view>> read() {
         for (;;) {
             auto* stream = connection_->stream(streamId_);
-            if (stream == nullptr || stream->isReset()) {
+            if (stream == nullptr || stream->isAborted()) {
                 co_return std::nullopt;
             }
             if (const auto chunk = http2PopStreamBodyChunk(*stream); !chunk.empty()) {

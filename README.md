@@ -55,7 +55,8 @@ only through `ResponseStreamWriter::end(std::span<const HttpHeaderView>)`; there
 `addTrailer()` side channel. HTTP/1 accepts that section only for a body-allowed chunked response,
 so HTTP/1.0 close-delimited responses and HEAD/1xx/204/304 reject it instead of dropping it.
 HTTP/2 can keep a content-forbidden response open in the explicit
-`Http2LocalSendPhase::kTrailersOnly` phase and terminate it with trailing HEADERS; it never
+`Http2LocalResponseTrailersOnly` alternative of `Http2LocalSendState` and terminate it with
+trailing HEADERS; it never
 becomes DATA-open or falls back to empty DATA. `Http2Connection::submitResponseTrailerSection()` accepts fields only
 after the final response head, validates the whole section before HPACK mutation, and returns a
 typed `Http2ResponseTrailerSubmitStatus` for closed/wrong-phase/empty/invalid/incomplete-length
@@ -344,10 +345,35 @@ HTTP/2 cannot represent 426 because RFC 9110 requires that Upgrade field while R
 the core therefore returns `kInvalidMessage` without HPACK or stream mutation, and the Web driver
 resets an otherwise-open stream instead of leaving the peer waiting indefinitely. Actual HTTP/1
 WebSocket 101 and HTTP/2 Extended CONNECT transitions remain owned by their dedicated drivers.
-The HTTP/2 core records
-an explicit local send phase: interim heads leave the initial-head phase open, exactly
-one request/final-response/WebSocket head advances it, and DATA is accepted only while the
-body phase is open. `submitData()` also distinguishes `kQueued` (the core copied and owns the
+The HTTP/2 core records local frame permission as one `Http2LocalSendState`, exactly one of
+`Http2LocalHeadPending`, `Http2LocalRequestContentOpen`, `Http2LocalResponseContentOpen`,
+`Http2LocalResponseTrailersOnly`, `Http2LocalConnectPending`, `Http2LocalTunnelOpen`,
+`Http2LocalEndStreamQueued`, `Http2LocalEndStreamCommitted`, or `Http2StreamAborted`. Interim heads
+leave the head-pending alternative unchanged; one request/final-response/WebSocket head selects the
+applicable content, trailer, CONNECT, or terminal alternative. Request DATA, response DATA, and
+tunnel DATA therefore cannot be confused, while a trailers-only response can never become
+DATA-open. Queued END_STREAM means that the core owns a terminal signal still waiting behind
+flow-controlled DATA or trailers; committed END_STREAM means that the terminal HEADERS or DATA is
+already materialized in the outbound buffer. Only `Http2StreamAborted` owns an immutable,
+non-`kNone` `Http2StreamCloseSource`. It covers local/peer RST_STREAM and a request excluded by the
+peer GOAWAY last-stream-id; the latter is not a reset, so the lifecycle exposes `isAborted()` and one
+atomic `abort(source)` transition rather than `isReset()`/`markReset()`/`removeReset()` vocabulary.
+Aborting also closes peer/body lifecycle and clears ready-queue ownership, whereas normal
+END_STREAM remains a committed half-close. `Http2StreamLifecycle` and `Http2StreamState` expose one const
+`localSend()` view instead of a phase/kind/boolean product or forwarding accessors. Mutation is
+private below `Http2StreamState`: `Http2LocalSendState` only accepts its lifecycle friend, the
+lifecycle only accepts its stream-state friend, and the connection mutates through that single typed
+entry point so tunnel/content checks cannot be bypassed. These transitions
+model the half-closed(local) boundary in
+[RFC 9113 Section 5.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1), DATA permissions and
+terminal END_STREAM in [Section 6.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.1), and
+HEADERS-carried END_STREAM in
+[Section 6.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.2).
+RST_STREAM whole-stream termination follows
+[Section 6.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4); GOAWAY exclusion of requests
+above its last-stream-id follows
+[Section 6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8).
+`submitData()` also distinguishes `kQueued` (the core copied and owns the
 unsent suffix) from `kBackpressured` (the core accepted nothing, so the caller must retry after
 the prior submission drains). `Http2LocalContentState` binds a final response's declared
 `Content-Length` to the DATA bytes accepted by the core. Its state is exactly one of

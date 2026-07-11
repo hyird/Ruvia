@@ -13,8 +13,8 @@ int main() {
         }
     }
 
-    auto* resetStream = streams.find(35);
-    if (resetStream == nullptr) {
+    auto* abortedStream = streams.find(35);
+    if (abortedStream == nullptr) {
         return 2;
     }
 
@@ -24,8 +24,10 @@ int main() {
         ++visited;
         if (!removedDuringIteration && stream.id() == 33) {
             removedDuringIteration = true;
-            resetStream->markReset();
-            streams.removeReset([](const ruvia::detail::Http2StreamState&) noexcept {});
+            (void)abortedStream->abort(
+                ruvia::detail::Http2StreamCloseSource::kLocal);
+            streams.removeAborted(
+                [](const ruvia::detail::Http2StreamState&) noexcept {});
         }
     });
 

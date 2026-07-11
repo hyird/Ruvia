@@ -123,9 +123,9 @@ public:
     }
 
     template <typename Callback>
-    void removeReset(Callback&& callback) {
+    void removeAborted(Callback&& callback) {
         for (auto& slot : inline_) {
-            if (!slot || !slot->isReset()) {
+            if (!slot || !slot->isAborted()) {
                 continue;
             }
             callback(*slot);
@@ -134,7 +134,7 @@ public:
         }
         for (std::size_t i = 0; i < overflow_.size();) {
             auto& stream = overflow_[i];
-            if (stream == nullptr || !stream->isReset()) {
+            if (stream == nullptr || !stream->isAborted()) {
                 ++i;
                 continue;
             }
