@@ -13,9 +13,9 @@
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HttpInterimResponseValidation.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
+#include "ruvia/http/detail/http2/Http2ResponseHeadPlan.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/server/HttpDateCache.h"
-#include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpInterimResponse.h"
@@ -24,35 +24,8 @@
 
 namespace ruvia::detail {
 
-enum class Http2ExplicitContentLengthStatus : std::uint8_t {
-    kAbsent,
-    kValid,
-    kInvalid
-};
-
-struct Http2ExplicitContentLength final {
-    Http2ExplicitContentLengthStatus status{Http2ExplicitContentLengthStatus::kAbsent};
-    std::uint64_t value{0};
-};
-
-[[nodiscard]] inline Http2ExplicitContentLength http2ExplicitResponseContentLength(
-    const HttpResponse& response) noexcept {
-    if (!responseHasKnownHeader(response, kResponseHeaderContentLength)) {
-        return {};
-    }
-    const auto value = responseKnownHeader(response, kResponseHeaderContentLength);
-    std::uint64_t parsed = 0;
-    const auto [ptr, ec] = std::from_chars(
-        value.data(), value.data() + value.size(), parsed);
-    if (value.empty() || ec != std::errc{} || ptr != value.data() + value.size()) {
-        return {Http2ExplicitContentLengthStatus::kInvalid, 0};
-    }
-    return {Http2ExplicitContentLengthStatus::kValid, parsed};
-}
-
-enum class Http2ResponseHeaderEncodeStatus : std::uint8_t {
+enum class Http2InterimResponseHeaderEncodeStatus : std::uint8_t {
     kOk,
-    kInvalidContentLength,
     kInvalidHeader
 };
 
@@ -180,13 +153,13 @@ inline void appendHttp2EncodedResponseHeader(
         value);
 }
 
-[[nodiscard]] inline Http2ResponseHeaderEncodeStatus
+[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus
 validateHttp2InterimResponseHeaders(
     const HttpInterimResponseHead& response) noexcept {
     const auto commonValidation = validateHttpInterimResponseHeaders(response);
     if (commonValidation !=
         HttpInterimResponseHeaderValidationStatus::kOk) {
-        return Http2ResponseHeaderEncodeStatus::kInvalidHeader;
+        return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
     }
     for (const auto& header : response.headers()) {
         const auto name = header.name();
@@ -194,18 +167,18 @@ validateHttp2InterimResponseHeaders(
         // RFC 9113 forbids connection-specific fields in HTTP/2. Common 1xx
         // content/framing and singleton validation has already run above.
         if (http2ResponseConnectionHeaderForbidden(knownBit, name)) {
-            return Http2ResponseHeaderEncodeStatus::kInvalidHeader;
+            return Http2InterimResponseHeaderEncodeStatus::kInvalidHeader;
         }
     }
-    return Http2ResponseHeaderEncodeStatus::kOk;
+    return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
 
-[[nodiscard]] inline Http2ResponseHeaderEncodeStatus
+[[nodiscard]] inline Http2InterimResponseHeaderEncodeStatus
 appendHttp2InterimResponseHeaders(
     Http2StreamState& stream,
     const HttpInterimResponseHead& response) {
     if (const auto status = validateHttp2InterimResponseHeaders(response);
-        status != Http2ResponseHeaderEncodeStatus::kOk) {
+        status != Http2InterimResponseHeaderEncodeStatus::kOk) {
         return status;
     }
 
@@ -223,59 +196,30 @@ appendHttp2InterimResponseHeaders(
             lowerNameStack,
             lowerNameScratch);
     }
-    return Http2ResponseHeaderEncodeStatus::kOk;
+    return Http2InterimResponseHeaderEncodeStatus::kOk;
 }
 
-[[nodiscard]] inline Http2ResponseHeaderEncodeStatus appendHttp2ResponseHeaders(
+inline void appendHttp2ResponseHeaders(
     Http2StreamState& stream,
     const HttpResponse& response,
-    std::uint64_t autoContentLength,
-    bool emitAutoContentLength = true) {
-    const auto policy = responseWritePolicy(response.status());
+    const Http2ResponseHeadPlan& plan) {
     const auto knownBits = responseKnownHeaderBits(response);
-    // Mirror the HTTP/1.1 framing decision (appendResponseHead): when the writer
-    // owns the auto Content-Length -- a buffered body whose status permits it --
-    // a user-set Content-Length must be filtered and replaced with the real body
-    // size. Otherwise a handler that sets a wrong Content-Length yields a response
-    // whose header disagrees with the DATA payload length, which RFC 9113 8.1.1
-    // makes malformed (a conformant peer resets the stream). HTTP/2 forbids
-    // Transfer-Encoding (filtered above), so there is no transfer-encoding term.
-    // A streaming body normally has no automatic length. A status whose content
-    // is forbidden but whose HTTP/1 framing still requires an explicit zero
-    // (currently 205) is the exception: emitting Content-Length: 0 in HTTP/2 as
-    // well keeps the shared semantic policy deterministic and replaces any
-    // caller-provided, contradictory value.
-    const bool autoContentLengthOwnedByWriter =
-        policy.autoContentLengthAllowed() &&
-        (emitAutoContentLength || !policy.bodyAllowed());
-    const bool explicitContentLengthAllowed =
-        policy.explicitContentLengthAllowed() && !autoContentLengthOwnedByWriter;
-    if (explicitContentLengthAllowed &&
-        (knownBits & kResponseHeaderContentLength) != 0 &&
-        http2ExplicitResponseContentLength(response).status ==
-            Http2ExplicitContentLengthStatus::kInvalid) {
-        return Http2ResponseHeaderEncodeStatus::kInvalidContentLength;
-    }
 
     auto& headerBlock = stream.responseHeaderBlock();
     headerBlock.clear();
     HpackEncoder::encodeStatus(headerBlock, response.status());
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
-    bool contentLengthWritten = false;
     for (const auto& header : response.headers()) {
         const auto knownBit = responseHeaderKnownBit(header);
         if (http2ResponseConnectionHeaderForbidden(knownBit, header.name())) {
             continue;
         }
         if (knownBit == kResponseHeaderContentLength) {
-            if (!explicitContentLengthAllowed) {
-                // Writer owns the length: drop the user's value and leave
-                // contentLengthWritten false so the correct auto Content-Length
-                // (the real body size) is emitted below.
-                continue;
-            }
-            contentLengthWritten = true;
+            // Content-Length is emitted only from the prepared plan below. This
+            // makes canonical buffered length, validated explicit metadata,
+            // streaming absence, and forbidden content mutually exclusive.
+            continue;
         }
         appendHttp2EncodedResponseHeader(
             headerBlock,
@@ -291,20 +235,22 @@ appendHttp2InterimResponseHeaders(
             HpackStaticIndex::kDate,
             cachedDateValue());
     }
-    if (autoContentLengthOwnedByWriter && !contentLengthWritten) {
+    const auto emitContentLength = [&headerBlock](std::uint64_t value) {
         std::array<char, 20> buffer{};
-        const auto canonicalContentLength =
-            policy.bodyAllowed() ? autoContentLength : std::uint64_t{0};
         const auto [ptr, ec] = std::to_chars(
-            buffer.data(), buffer.data() + buffer.size(), canonicalContentLength);
+            buffer.data(), buffer.data() + buffer.size(), value);
         if (ec == std::errc{}) {
             HpackEncoder::encodeHeaderWithNameIndex(
                 headerBlock,
                 HpackStaticIndex::kContentLength,
                 std::string_view(buffer.data(), static_cast<std::size_t>(ptr - buffer.data())));
         }
+    };
+    if (const auto* canonical = plan.canonicalContentLength()) {
+        emitContentLength(canonical->value());
+    } else if (const auto* explicitLength = plan.explicitContentLength()) {
+        emitContentLength(explicitLength->value());
     }
-    return Http2ResponseHeaderEncodeStatus::kOk;
 }
 
 inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {

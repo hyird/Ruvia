@@ -600,6 +600,16 @@ buffer 时才推进 committed；`kBackpressured`、
 accepted。HEAD/204/205/304 的 Content-Length 是无内容或 representation metadata，不得变成
 DATA 长度契约；WebSocket/CONNECT tunnel 保持 unbounded。
 
+HTTP/2 final response 在 HPACK 与 stream mutation 前必须生成唯一、不可默认构造的
+`Http2ResponseHeadPlan`；其 Content-Length 所有权只能是
+`Http2CanonicalResponseContentLength`、`Http2ExplicitResponseContentLength`、
+`Http2AbsentResponseContentLength`、`Http2ForbiddenResponseContentLength` 四个互斥 alternative。
+buffered、streaming、成功 CONNECT 必须分别走 `http2BufferedResponseHeadPlan()`、
+`http2StreamingResponseHeadPlan()`、`http2ConnectResponseHeadPlan()`；invalid explicit length 只允许
+存在于 `Http2ResponseHeadPlanResult` 的 failure alternative。显式长度只能解析一次，该 plan 的同一
+数值既驱动 canonical HPACK bytes，又初始化 `Http2LocalContentKnownLength`；encoder 只能接收 plan，
+禁止恢复 `autoContentLength + emitAutoContentLength` 标量入口或在 connection driver 二次解析。
+
 HTTP/2 对端发来的 message content 必须由独立、无分配的 `Http2RemoteContentState` 统一记账。
 state 只能是 `Http2RemoteContentAllowedWithoutLength`、`Http2RemoteContentAllowedKnownLength`、
 `Http2RemoteContentMetadataOnlyWithoutLength` 或 `Http2RemoteContentMetadataOnlyKnownLength` 四个

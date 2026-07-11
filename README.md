@@ -417,6 +417,15 @@ the prior submission drains). `Http2LocalContentState` binds a final response's 
 message rejects DATA with `kNotStarted`, while forbidden content rejects every DATA submission.
 Accepted and committed byte counters remain common accounting, available through the stream's one
 const `localContent()` view instead of duplicated mode/length/counter forwarding accessors.
+Before HPACK or local stream mutation, `Http2ResponseHeadPlan` also makes response-head
+Content-Length ownership exactly one of `Http2CanonicalResponseContentLength`,
+`Http2ExplicitResponseContentLength`, `Http2AbsentResponseContentLength`, or
+`Http2ForbiddenResponseContentLength`. Buffered, streaming, and successful CONNECT heads use
+`http2BufferedResponseHeadPlan()`, `http2StreamingResponseHeadPlan()`, and
+`http2ConnectResponseHeadPlan()` respectively. `Http2ResponseHeadPlanResult` keeps an invalid
+explicit length in its failure alternative; a valid explicit value is parsed once, canonicalized
+on the wire, and reused to initialize `Http2LocalContentKnownLength`. The HPACK encoder accepts only
+that plan—the former `autoContentLength + emitAutoContentLength` scalar entry does not exist.
 Overrun and premature END_STREAM are rejected before output/window mutation,
 `finishResponse()` refuses an incomplete exact body, and invalid preserved lengths reject the head
 before HPACK output. This follows HTTP/2's HEADERS-then-DATA message order and terminal END_STREAM in

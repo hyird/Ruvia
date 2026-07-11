@@ -33,6 +33,7 @@
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
 #include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
+#include <ruvia/http/detail/http2/Http2ResponseHeadPlan.h>
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
@@ -282,6 +283,24 @@ concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) {
 template <typename T>
 concept HasStalePreparedStreamPolicy = requires(const T& prepared) {
     prepared.policy();
+};
+
+template <typename T>
+concept HasHttp2ResponseHeadContentLengthAlternatives = requires(
+    const T& plan) {
+    { plan.canonicalContentLength() } -> std::same_as<const
+        ruvia::detail::Http2CanonicalResponseContentLength*>;
+    { plan.explicitContentLength() } -> std::same_as<const
+        ruvia::detail::Http2ExplicitResponseContentLength*>;
+    { plan.absentContentLength() } -> std::same_as<const
+        ruvia::detail::Http2AbsentResponseContentLength*>;
+    { plan.forbiddenContentLength() } -> std::same_as<const
+        ruvia::detail::Http2ForbiddenResponseContentLength*>;
+};
+
+template <typename T>
+concept HasHttp2ResponseContentLengthValue = requires(const T& length) {
+    { length.value() } -> std::same_as<std::uint64_t>;
 };
 
 template <typename T>
@@ -597,6 +616,21 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 static_assert(!HasStalePreparedStreamPolicy<
     ruvia::detail::PreparedHttp1ResponseStream>);
+
+static_assert(HasHttp2ResponseHeadContentLengthAlternatives<
+    ruvia::detail::Http2ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2ResponseHeadPlanResult>);
+static_assert(HasHttp2ResponseContentLengthValue<
+    ruvia::detail::Http2CanonicalResponseContentLength>);
+static_assert(HasHttp2ResponseContentLengthValue<
+    ruvia::detail::Http2ExplicitResponseContentLength>);
+static_assert(!HasHttp2ResponseContentLengthValue<
+    ruvia::detail::Http2AbsentResponseContentLength>);
+static_assert(!HasHttp2ResponseContentLengthValue<
+    ruvia::detail::Http2ForbiddenResponseContentLength>);
 
 static_assert(HasHttp2RequestContentAlternatives<
     ruvia::detail::Http2RequestContent>);
@@ -1737,6 +1771,51 @@ int main() {
         bufferedHeadPlan.chunkedStream() != nullptr ||
         bufferedHeadPlan.closeDelimitedStream() != nullptr) {
         return 6;
+    }
+
+    const auto h2BufferedHeadResult =
+        ruvia::detail::http2BufferedResponseHeadPlan(writePlan, response);
+    const auto* h2BufferedHead = h2BufferedHeadResult.plan();
+    if (h2BufferedHead == nullptr ||
+        h2BufferedHeadResult.failure() != nullptr ||
+        h2BufferedHead->canonicalContentLength() == nullptr ||
+        h2BufferedHead->canonicalContentLength()->value() != 4 ||
+        h2BufferedHead->explicitContentLength() != nullptr ||
+        h2BufferedHead->absentContentLength() != nullptr ||
+        h2BufferedHead->forbiddenContentLength() != nullptr) {
+        return 42;
+    }
+
+    ruvia::HttpResponse h2StreamingResponse;
+    h2StreamingResponse.header("Content-Length", "0004");
+    const auto h2StreamingBodyPlan = ruvia::detail::httpResponseBodyPlan(
+        ruvia::HttpKnownMethod::kGet,
+        h2StreamingResponse.status());
+    const auto h2StreamingHeadResult =
+        ruvia::detail::http2StreamingResponseHeadPlan(
+            h2StreamingBodyPlan,
+            h2StreamingResponse);
+    const auto* h2StreamingHead = h2StreamingHeadResult.plan();
+    if (h2StreamingHead == nullptr ||
+        h2StreamingHeadResult.failure() != nullptr ||
+        h2StreamingHead->canonicalContentLength() != nullptr ||
+        h2StreamingHead->explicitContentLength() == nullptr ||
+        h2StreamingHead->explicitContentLength()->value() != 4 ||
+        h2StreamingHead->absentContentLength() != nullptr ||
+        h2StreamingHead->forbiddenContentLength() != nullptr) {
+        return 43;
+    }
+
+    h2StreamingResponse.header("Content-Length", "invalid");
+    const auto invalidH2StreamingHead =
+        ruvia::detail::http2StreamingResponseHeadPlan(
+            h2StreamingBodyPlan,
+            h2StreamingResponse);
+    if (invalidH2StreamingHead.plan() != nullptr ||
+        invalidH2StreamingHead.failure() == nullptr ||
+        invalidH2StreamingHead.failure()->error() !=
+            ruvia::detail::Http2ResponseHeadPlanError::kInvalidContentLength) {
+        return 44;
     }
 
     response.status(205);
