@@ -21,6 +21,7 @@
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/HttpByteRange.h>
+#include <ruvia/http/detail/HttpResponseContentSemantics.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
 #include <ruvia/http/detail/http1/Http1ServerRequestParser.h>
@@ -316,10 +317,18 @@ concept HasStaleHttp2StreamLocalContentForwarders = requires(const T& stream) {
 
 template <typename T>
 concept HasHttp2RemoteContentAlternatives = requires(const T& content) {
-    { content.withoutLength() } ->
-        std::same_as<const ruvia::detail::Http2RemoteContentWithoutLength*>;
-    { content.knownLength() } ->
-        std::same_as<const ruvia::detail::Http2RemoteContentKnownLength*>;
+    { content.allowedWithoutLength() } ->
+        std::same_as<const
+            ruvia::detail::Http2RemoteContentAllowedWithoutLength*>;
+    { content.allowedKnownLength() } ->
+        std::same_as<const
+            ruvia::detail::Http2RemoteContentAllowedKnownLength*>;
+    { content.metadataOnlyWithoutLength() } ->
+        std::same_as<const
+            ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength*>;
+    { content.metadataOnlyKnownLength() } ->
+        std::same_as<const
+            ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength*>;
 };
 
 template <typename T>
@@ -328,9 +337,34 @@ concept HasHttp2RemoteDeclaredLength = requires(const T& content) {
 };
 
 template <typename T>
+concept HasHttp2RemoteReceivedBytes = requires(const T& content) {
+    { content.receivedBytes() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
 concept HasStaleHttp2RemoteContentTuple = requires(const T& content) {
     content.hasContentLength();
     content.contentLength();
+};
+
+template <typename T>
+concept HasStaleHttp2RemoteCheckAcceptSplit = requires(T& content) {
+    content.checkAccept(std::size_t{1});
+    content.accept(std::size_t{1});
+};
+
+template <typename T>
+concept HasHttpResponseContentAlternatives = requires(const T& semantics) {
+    { semantics.informational() } -> std::same_as<const
+        ruvia::detail::HttpInformationalResponseContent*>;
+    { semantics.protocolSwitch() } -> std::same_as<const
+        ruvia::detail::HttpProtocolSwitchResponseContent*>;
+    { semantics.connectTunnel() } -> std::same_as<const
+        ruvia::detail::HttpConnectTunnelResponseContent*>;
+    { semantics.withoutContent() } -> std::same_as<const
+        ruvia::detail::HttpResponseWithoutContent*>;
+    { semantics.withContent() } -> std::same_as<const
+        ruvia::detail::HttpResponseWithContent*>;
 };
 
 template <typename T>
@@ -584,22 +618,56 @@ static_assert(!HasStaleHttp2RemoteContentTuple<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasHttp2RemoteDeclaredLength<
     ruvia::detail::Http2RemoteContentState>);
+static_assert(!HasHttp2RemoteReceivedBytes<
+    ruvia::detail::Http2RemoteContentState>);
+static_assert(HasHttp2RemoteReceivedBytes<
+    ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
+static_assert(HasHttp2RemoteReceivedBytes<
+    ruvia::detail::Http2RemoteContentAllowedKnownLength>);
+static_assert(!HasHttp2RemoteReceivedBytes<
+    ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(!HasHttp2RemoteReceivedBytes<
+    ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
 static_assert(!HasHttp2RemoteDeclaredLength<
-    ruvia::detail::Http2RemoteContentWithoutLength>);
+    ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
 static_assert(HasHttp2RemoteDeclaredLength<
-    ruvia::detail::Http2RemoteContentKnownLength>);
+    ruvia::detail::Http2RemoteContentAllowedKnownLength>);
+static_assert(!HasHttp2RemoteDeclaredLength<
+    ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(HasHttp2RemoteDeclaredLength<
+    ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
 static_assert(std::default_initializable<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!std::default_initializable<
-    ruvia::detail::Http2RemoteContentWithoutLength>);
+    ruvia::detail::Http2RemoteContentAllowedWithoutLength>);
 static_assert(!std::default_initializable<
-    ruvia::detail::Http2RemoteContentKnownLength>);
+    ruvia::detail::Http2RemoteContentAllowedKnownLength>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteContentMetadataOnlyWithoutLength>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http2RemoteContentMetadataOnlyKnownLength>);
+static_assert(!HasStaleHttp2RemoteCheckAcceptSplit<
+    ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2StreamRemoteContentForwarders<
     ruvia::detail::Http2StreamState>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .remoteContent()),
     const ruvia::detail::Http2RemoteContentState&>);
+static_assert(HasHttpResponseContentAlternatives<
+    ruvia::detail::HttpResponseContentSemantics>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpResponseContentSemantics>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpInformationalResponseContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpProtocolSwitchResponseContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpConnectTunnelResponseContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpResponseWithoutContent>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpResponseWithContent>);
 static_assert(HasHttp2TunnelAlternatives<
     ruvia::detail::Http2TunnelState>);
 static_assert(!HasStaleHttp2TunnelKindPhase<
@@ -1276,21 +1344,41 @@ int main() {
     }
 
     ruvia::detail::Http2RemoteContentState remoteContent;
-    if (remoteContent.withoutLength() == nullptr ||
-        remoteContent.knownLength() != nullptr ||
-        remoteContent.receivedBytes() != 0 ||
+    if (remoteContent.allowedWithoutLength() == nullptr ||
+        remoteContent.allowedKnownLength() != nullptr ||
+        remoteContent.allowedWithoutLength()->receivedBytes() != 0 ||
         !remoteContent.declareKnownLength(3) ||
-        remoteContent.knownLength() == nullptr ||
-        remoteContent.knownLength()->declaredLength() != 3 ||
-        remoteContent.checkAccept(2) !=
-            ruvia::detail::Http2RemoteContentCheck::kAccepted) {
+        remoteContent.allowedKnownLength() == nullptr ||
+        remoteContent.allowedKnownLength()->declaredLength() != 3 ||
+        remoteContent.account(2) !=
+            ruvia::detail::Http2RemoteContentAccountingResult::kAccepted) {
         return 36;
     }
-    remoteContent.accept(2);
     if (remoteContent.terminalLengthValid() ||
-        remoteContent.checkAccept(2) !=
-            ruvia::detail::Http2RemoteContentCheck::kDeclaredLengthExceeded ||
-        remoteContent.receivedBytes() != 2) {
+        remoteContent.account(2) !=
+            ruvia::detail::Http2RemoteContentAccountingResult::
+                kDeclaredLengthExceeded ||
+        remoteContent.allowedKnownLength()->receivedBytes() != 2) {
+        return 36;
+    }
+    ruvia::detail::Http2RemoteContentState metadataOnly;
+    if (!metadataOnly.declareKnownLength(9) ||
+        !metadataOnly.selectMetadataOnly() ||
+        metadataOnly.metadataOnlyKnownLength() == nullptr ||
+        metadataOnly.metadataOnlyKnownLength()->declaredLength() != 9 ||
+        metadataOnly.account(1) !=
+            ruvia::detail::Http2RemoteContentAccountingResult::
+                kContentForbidden) {
+        return 36;
+    }
+
+    const auto headSemantics = ruvia::detail::httpResponseContentSemantics(
+        ruvia::HttpKnownMethod::kHead, 200);
+    const auto tunnelSemantics = ruvia::detail::httpResponseContentSemantics(
+        ruvia::HttpKnownMethod::kConnect, 200);
+    if (headSemantics.withoutContent() == nullptr ||
+        headSemantics.withContent() != nullptr ||
+        tunnelSemantics.connectTunnel() == nullptr) {
         return 36;
     }
 

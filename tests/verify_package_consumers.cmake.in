@@ -679,27 +679,74 @@ file(READ "${_installed_http2_remote_content_path}"
 file(READ "${_installed_http2_body_state_path}"
     _installed_http2_body_state)
 if(_installed_http2_remote_content MATCHES
-       "Http2StreamBodyAccounting|hasContentLength|contentLength[(][)]" OR
+       "Http2StreamBodyAccounting|hasContentLength|contentLength[(][)]|Http2RemoteContentCheck|Http2RemoteContentWithoutLength|Http2RemoteContentKnownLength|checkAccept[(]|void[ \t]+accept[(]" OR
    NOT _installed_http2_remote_content MATCHES
-       "class Http2RemoteContentWithoutLength final" OR
+       "class Http2RemoteContentAllowedWithoutLength final" OR
    NOT _installed_http2_remote_content MATCHES
-       "class Http2RemoteContentKnownLength final" OR
-   NOT _installed_http2_remote_content MATCHES "using Content = std::variant" OR
+       "class Http2RemoteContentAllowedKnownLength final" OR
    NOT _installed_http2_remote_content MATCHES
-       "std::get_if<Http2RemoteContentWithoutLength>" OR
+       "class Http2RemoteContentMetadataOnlyWithoutLength final" OR
    NOT _installed_http2_remote_content MATCHES
-       "std::get_if<Http2RemoteContentKnownLength>" OR
+       "class Http2RemoteContentMetadataOnlyKnownLength final" OR
+   NOT _installed_http2_remote_content MATCHES "using State = std::variant" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<Http2RemoteContentAllowedWithoutLength>" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<Http2RemoteContentAllowedKnownLength>" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<[\r\n \t]*Http2RemoteContentMetadataOnlyWithoutLength>" OR
+   NOT _installed_http2_remote_content MATCHES
+       "std::get_if<[\r\n \t]*Http2RemoteContentMetadataOnlyKnownLength>" OR
    NOT _installed_http2_remote_content MATCHES "kCounterOverflow" OR
    NOT _installed_http2_remote_content MATCHES "kDeclaredLengthExceeded" OR
+   NOT _installed_http2_remote_content MATCHES "kContentForbidden" OR
+   NOT _installed_http2_remote_content MATCHES "selectMetadataOnly" OR
+   NOT _installed_http2_remote_content MATCHES "account[(]" OR
    NOT _installed_http2_remote_content MATCHES "terminalLengthValid" OR
    NOT _installed_http2_body_state MATCHES
-       "http2RemoteContentTerminalValid" OR
-   NOT _installed_http2_body_state MATCHES "Http2Role role" OR
+       "Http2RemoteContentAccountingResult::kContentForbidden" OR
    NOT _installed_http2_stream_state MATCHES
        "const Http2RemoteContentState&[ \t\r\n]+remoteContent[(][)] const noexcept" OR
+   NOT _installed_http2_stream_state MATCHES "accountRemoteContent" OR
+   NOT _installed_http2_stream_state MATCHES
+       "selectRemoteContentMetadataOnly" OR
+   _installed_http2_stream_state MATCHES
+       "remoteContent[(][)][.]receivedBytes[(][)]" OR
    _installed_http2_stream_state MATCHES
        "(hasContentLength|contentLength|receivedBodyBytes|receivedBodyExceedsContentLength|bodyLengthComplete)[(]")
-    message(FATAL_ERROR "installed HTTP/2 remote content accounting retained a presence/value tuple or forwarding accessors")
+    message(FATAL_ERROR "installed HTTP/2 remote content accounting lost allowance/length alternatives or atomic DATA ownership")
+endif()
+set(_installed_response_content_semantics_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseContentSemantics.h")
+set(_installed_response_write_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+if(NOT EXISTS "${_installed_response_content_semantics_path}" OR
+   NOT EXISTS "${_installed_response_write_plan_path}")
+    message(FATAL_ERROR "installed shared response-content semantics contract is missing")
+endif()
+file(READ "${_installed_response_content_semantics_path}"
+    _installed_response_content_semantics)
+file(READ "${_installed_response_write_plan_path}"
+    _installed_response_write_plan)
+if(NOT _installed_response_content_semantics MATCHES
+       "class HttpInformationalResponseContent final" OR
+   NOT _installed_response_content_semantics MATCHES
+       "class HttpProtocolSwitchResponseContent final" OR
+   NOT _installed_response_content_semantics MATCHES
+       "class HttpConnectTunnelResponseContent final" OR
+   NOT _installed_response_content_semantics MATCHES
+       "class HttpResponseWithoutContent final" OR
+   NOT _installed_response_content_semantics MATCHES
+       "class HttpResponseWithContent final" OR
+   NOT _installed_response_content_semantics MATCHES "using State = std::variant" OR
+   NOT _installed_response_content_semantics MATCHES
+       "httpResponseContentSemantics" OR
+   NOT _installed_response_write_plan MATCHES
+       "HttpResponseContentSemantics semantics_" OR
+   NOT _installed_response_write_plan MATCHES
+       "semantics_[.]withContent[(][)] == nullptr" OR
+   _installed_response_write_plan MATCHES "bodySuppressed_")
+    message(FATAL_ERROR "installed response writers and parsers lost their shared content semantics")
 endif()
 set(_installed_http2_tunnel_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2TunnelState.h")

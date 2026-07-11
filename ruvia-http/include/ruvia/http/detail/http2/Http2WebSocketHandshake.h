@@ -34,7 +34,7 @@ namespace ruvia::detail {
     const Http2StreamState& stream,
     const HttpRequest& request) noexcept {
     return http2IsPendingWebSocketConnect(stream) &&
-        stream.remoteContent().withoutLength() != nullptr &&
+        stream.remoteContent().allowedWithoutLength() != nullptr &&
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
 }
 

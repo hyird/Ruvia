@@ -125,13 +125,13 @@ public:
         return remoteContent_.declareKnownLength(value);
     }
 
-    [[nodiscard]] Http2RemoteContentCheck checkRemoteContentAccept(
-        std::size_t bytes) const noexcept {
-        return remoteContent_.checkAccept(bytes);
+    [[nodiscard]] bool selectRemoteContentMetadataOnly() noexcept {
+        return remoteContent_.selectMetadataOnly();
     }
 
-    void acceptRemoteContent(std::size_t bytes) noexcept {
-        remoteContent_.accept(bytes);
+    [[nodiscard]] Http2RemoteContentAccountingResult accountRemoteContent(
+        std::size_t bytes) noexcept {
+        return remoteContent_.account(bytes);
     }
 
     [[nodiscard]] const Http2RemoteContentState& remoteContent() const noexcept {

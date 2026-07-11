@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
+#include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/http2/Http2BodyQueue.h"
 #include "ruvia/http/detail/http2/Http2BodyState.h"
@@ -1067,7 +1068,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
             !stream.hasScheme() ||
             !stream.hasPath() ||
             !stream.hasAuthority() ||
-            stream.remoteContent().knownLength() != nullptr) {
+            stream.remoteContent().allowedKnownLength() != nullptr) {
             return HeaderDecodeStatus::kProtocolError;
         }
         if (!stream.beginExtendedConnect()) {
@@ -1076,7 +1077,7 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
     } else if (stream.requestKnownMethod() == HttpKnownMethod::kConnect) {
         RequestTargetView connectTarget;
         if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath() ||
-            stream.remoteContent().knownLength() != nullptr ||
+            stream.remoteContent().allowedKnownLength() != nullptr ||
             !parseRequestTarget(
                 HttpKnownMethod::kConnect,
                 stream.requestAuthority(),
@@ -1147,8 +1148,10 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return true;  // interim head: validate only, never stored
     }
     const auto kind = classifyRequestHeader(name);
-    const bool successfulConnect = stream.tunnel().pending() != nullptr &&
-        context->status >= 200 && context->status < 300;
+    const bool successfulConnect =
+        httpResponseContentSemantics(
+            stream.requestKnownMethod(), context->status)
+            .connectTunnel() != nullptr;
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
@@ -1201,8 +1204,14 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kOk;
     }
     stream.setResponseStatus(context.status);
+    const auto contentSemantics = httpResponseContentSemantics(
+        stream.requestKnownMethod(), context.status);
+    if (contentSemantics.withoutContent() != nullptr &&
+        !stream.selectRemoteContentMetadataOnly()) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
     if (stream.tunnel().pending() != nullptr) {
-        if (context.status >= 200 && context.status < 300) {
+        if (contentSemantics.connectTunnel() != nullptr) {
             if (!stream.acceptConnect()) {
                 return HeaderDecodeStatus::kProtocolError;
             }
@@ -1324,7 +1333,7 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream)
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
-    if (!http2RemoteContentTerminalValid(stream, role_)) {
+    if (!stream.remoteContent().terminalLengthValid()) {
         return HeaderDecodeStatus::kProtocolError;
     }
     if (!stream.finishRemoteContent()) {
@@ -1361,7 +1370,7 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // role: HEAD responses and 204/304 are exempt (their content-length describes the
     // body a GET would have had, RFC 9110 §8.6).
     if (http2RemotePeerHalfClosed(stream) &&
-        !http2RemoteContentTerminalValid(stream, role_)) {
+        !stream.remoteContent().terminalLengthValid()) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
         closeStream(
             stream.id(),
@@ -1690,6 +1699,9 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         remote.connectRejectedAwaitingEndStream() != nullptr;
     const bool tunnelData = remote.tunnelOpen() != nullptr;
     const bool contentData = remote.contentOpen() != nullptr;
+    const bool metadataOnlyContent = contentData &&
+        (stream->remoteContent().metadataOnlyWithoutLength() != nullptr ||
+         stream->remoteContent().metadataOnlyKnownLength() != nullptr);
     if (!pendingConnectControl && !rejectedConnectTerminal &&
         !tunnelData && !contentData) {
         appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
@@ -1777,6 +1789,14 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
                     Http2ErrorCode::kProtocolError);
                 releaseDroppedDataConnectionWindow(flowBytes);
                 return true;
+            case Http2BodyAccountingResult::kContentForbidden:
+                appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+                closeStream(
+                    header.streamId,
+                    Http2StreamCloseSource::kLocal,
+                    Http2ErrorCode::kProtocolError);
+                releaseDroppedDataConnectionWindow(flowBytes);
+                return true;
         }
     }
     if (flowBytes > 0) {
@@ -1799,12 +1819,14 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     // (buffered vs streaming delivery is application policy). Content-length and size caps
     // were already enforced by http2AccountDataBody above. The view is valid until the
     // next feed (input_ is only reclaimed at the start of the following feed).
-    events_.push_back(tunnelData
-        ? Http2Event::tunnelData(header.streamId, data)
-        : Http2Event::messageBodyChunk(header.streamId, data));
+    if (!metadataOnlyContent) {
+        events_.push_back(tunnelData
+            ? Http2Event::tunnelData(header.streamId, data)
+            : Http2Event::messageBodyChunk(header.streamId, data));
+    }
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         if (contentData &&
-            !http2RemoteContentTerminalValid(*stream, role_)) {
+            !stream->remoteContent().terminalLengthValid()) {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
             closeStream(
                 header.streamId,
