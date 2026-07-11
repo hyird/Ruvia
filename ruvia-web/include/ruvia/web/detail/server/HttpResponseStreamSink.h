@@ -98,7 +98,10 @@ private:
         connectionPlan_ = streamHead.connectionPlan();
 
         head_.reset();
-        appendResponseHead(streamHead.response(), head_, streamHead.policy(), true);
+        appendResponseHead(
+            streamHead.response(),
+            head_,
+            streamHead.responseHeadPlan());
         // Mark committed before the write; a partial header flush must never be
         // followed by the normal error-response path on the same socket.
         state_.markCommitted(streamHead.commitPlan());

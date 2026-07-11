@@ -748,6 +748,49 @@ if(NOT _installed_response_content_semantics MATCHES
    _installed_response_write_plan MATCHES "bodySuppressed_")
     message(FATAL_ERROR "installed response writers and parsers lost their shared content semantics")
 endif()
+set(_installed_http1_response_head_plan_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ResponseHeadPlan.h")
+set(_installed_response_head_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseHead.h")
+set(_installed_http1_server_semantics_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+if(NOT EXISTS "${_installed_http1_response_head_plan_path}" OR
+   NOT EXISTS "${_installed_response_head_path}" OR
+   NOT EXISTS "${_installed_http1_server_semantics_path}")
+    message(FATAL_ERROR "installed typed HTTP/1 response-head plan is missing")
+endif()
+file(READ "${_installed_http1_response_head_plan_path}"
+    _installed_http1_response_head_plan)
+file(READ "${_installed_response_head_path}"
+    _installed_response_head)
+file(READ "${_installed_http1_server_semantics_path}"
+    _installed_http1_server_semantics)
+if(NOT _installed_http1_response_head_plan MATCHES
+       "class Http1BufferedResponseHead final" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "class Http1ChunkedResponseStreamHead final" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "class Http1CloseDelimitedResponseStreamHead final" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "using Framing = std::variant" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::get_if<Http1BufferedResponseHead>" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::get_if<Http1ChunkedResponseStreamHead>" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "std::get_if<Http1CloseDelimitedResponseStreamHead>" OR
+   NOT _installed_http1_response_head_plan MATCHES
+       "HttpResponseBodyPlan bodyPlan_" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "Http1ResponseHeadPlan responseHeadPlan_" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "const Http1ResponseHeadPlan& responseHeadPlan[(][)] const noexcept" OR
+   _installed_http1_server_semantics MATCHES
+       "const ResponseWritePolicy& policy[(][)] const noexcept" OR
+   _installed_response_head MATCHES
+       "suppressAutoContentLength|ResponseWritePolicy[ \t]+policy")
+    message(FATAL_ERROR "installed HTTP/1 response-head API restored scalar framing or lost its exclusive plan")
+endif()
 set(_installed_http2_tunnel_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2TunnelState.h")
 if(NOT EXISTS "${_installed_http2_tunnel_state_path}")

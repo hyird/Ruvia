@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -57,10 +58,6 @@ class ResponseStreamCommitPlan final {
 public:
     [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
         return bodyPlan_;
-    }
-
-    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
-        return bodyPlan_.policy();
     }
 
     [[nodiscard]] ResponseStreamTrailerFraming trailerFraming() const noexcept {
@@ -129,10 +126,6 @@ public:
         return response_;
     }
 
-    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
-        return commitPlan_.policy();
-    }
-
     [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
         return commitPlan_;
     }
@@ -151,12 +144,30 @@ private:
     const auto commitPlan = httpResponseStreamCommitPlan(
         framing, bodyPlan, trailerIntent);
     const auto& policy = bodyPlan.policy();
+    const bool writerOwnsHttp1Chunked =
+        framing == ResponseStreamFraming::kHttp1Chunked &&
+        policy.transferEncodingAllowed();
+
+    // Keep the prepared response metadata consistent with the wire plan. The
+    // framework's chunk writer is the only Transfer-Encoding producer; an
+    // HTTP/1.0 close-delimited body cannot retain either framing field. HEAD/304
+    // may retain Content-Length metadata because their body is suppressed.
+    if (writerOwnsHttp1Chunked) {
+        response.header("Content-Length", std::nullopt);
+    } else if (framing == ResponseStreamFraming::kHttp1Chunked ||
+               framing == ResponseStreamFraming::kHttp1CloseDelimited) {
+        response.header("Transfer-Encoding", std::nullopt);
+    }
+    if (framing == ResponseStreamFraming::kHttp1CloseDelimited &&
+        !bodyPlan.bodySuppressed()) {
+        response.header("Content-Length", std::nullopt);
+    }
+
     const bool needsSseContentType =
         kind == ResponseStreamKind::kSse &&
         !responseHasKnownHeader(response, kResponseHeaderContentType);
     const bool needsHttp1Chunked =
-        framing == ResponseStreamFraming::kHttp1Chunked &&
-        policy.transferEncodingAllowed() &&
+        writerOwnsHttp1Chunked &&
         !responseHasKnownHeader(response, kResponseHeaderTransferEncoding);
     const bool needsSseCacheControl =
         kind == ResponseStreamKind::kSse &&
@@ -173,7 +184,7 @@ private:
     if (needsSseContentType) {
         setResponseHeaderStableView(response, "Content-Type", "text/event-stream");
     }
-    if (framing == ResponseStreamFraming::kHttp1Chunked && policy.transferEncodingAllowed()) {
+    if (writerOwnsHttp1Chunked) {
         setResponseHeaderStableView(response, "Transfer-Encoding", "chunked");
     }
     if (needsSseCacheControl) {

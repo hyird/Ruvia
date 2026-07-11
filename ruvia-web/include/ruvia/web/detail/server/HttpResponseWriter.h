@@ -31,7 +31,10 @@ Task<void> writeResponseWithScratch(
     const HttpBufferedResponseWritePlan& writePlan,
     std::error_code& ec) {
     head.reset();
-    appendResponseHead(response, head, writePlan.policy());
+    appendResponseHead(
+        response,
+        head,
+        http1BufferedResponseHeadPlan(writePlan.bodyPlan()));
     if (responseHasFileBody(response)) {
         const auto fileBody = responseFileBody(response);
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {

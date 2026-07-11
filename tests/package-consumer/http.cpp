@@ -24,6 +24,7 @@
 #include <ruvia/http/detail/HttpResponseContentSemantics.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
+#include <ruvia/http/detail/http1/Http1ResponseHeadPlan.h>
 #include <ruvia/http/detail/http1/Http1ServerRequestParser.h>
 #include <ruvia/http/detail/http1/Http1ServerSemantics.h>
 #include <ruvia/http/detail/http2/Http2Connection.h>
@@ -261,6 +262,26 @@ concept HasHttp1PreparedContentDisposition = requires(const T& plan) {
 template <typename T>
 concept HasHttp1PreparedContentBytes = requires(const T& content) {
     { content.bytes() } -> std::same_as<std::string_view>;
+};
+
+template <typename T>
+concept HasHttp1ResponseHeadAlternatives = requires(const T& plan) {
+    { plan.buffered() } ->
+        std::same_as<const ruvia::detail::Http1BufferedResponseHead*>;
+    { plan.chunkedStream() } ->
+        std::same_as<const ruvia::detail::Http1ChunkedResponseStreamHead*>;
+    { plan.closeDelimitedStream() } -> std::same_as<
+        const ruvia::detail::Http1CloseDelimitedResponseStreamHead*>;
+};
+
+template <typename T>
+concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) {
+    plan.suppressAutoContentLength();
+};
+
+template <typename T>
+concept HasStalePreparedStreamPolicy = requires(const T& prepared) {
+    prepared.policy();
 };
 
 template <typename T>
@@ -561,6 +582,21 @@ static_assert(!std::default_initializable<
     ruvia::Http1ClientImmediateRequestContent>);
 static_assert(!std::default_initializable<
     ruvia::Http1ClientContinueGatedRequestContent>);
+
+static_assert(HasHttp1ResponseHeadAlternatives<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!HasStaleHttp1ResponseHeadScalar<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1ResponseHeadPlan>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1BufferedResponseHead>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1ChunkedResponseStreamHead>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
+static_assert(!HasStalePreparedStreamPolicy<
+    ruvia::detail::PreparedHttp1ResponseStream>);
 
 static_assert(HasHttp2RequestContentAlternatives<
     ruvia::detail::Http2RequestContent>);
@@ -1659,7 +1695,10 @@ int main() {
         ruvia::detail::ResponseTrailerIntent::kNone);
     if (preparedStream.connectionPlan().disposition() !=
             ruvia::detail::Http1ConnectionDisposition::kClose ||
-        preparedStream.response().header("Connection") != "close") {
+        preparedStream.response().header("Connection") != "close" ||
+        preparedStream.responseHeadPlan().chunkedStream() == nullptr ||
+        preparedStream.responseHeadPlan().buffered() != nullptr ||
+        preparedStream.responseHeadPlan().closeDelimitedStream() != nullptr) {
         return 5;
     }
 
@@ -1677,6 +1716,7 @@ int main() {
     if (!preparedHttp10.commitPlan().bodyPlan().bodySuppressed() ||
         preparedHttp10.commitPlan().headDisposition() !=
             ruvia::detail::ResponseStreamHeadDisposition::kMessageEnded ||
+        preparedHttp10.responseHeadPlan().closeDelimitedStream() == nullptr ||
         preparedHttp10.connectionPlan().disposition() !=
             ruvia::detail::Http1ConnectionDisposition::kReuse ||
         preparedHttp10.response().header("Connection") != "keep-alive") {
@@ -1689,6 +1729,13 @@ int main() {
         ruvia::HttpKnownMethod::kHead, response);
     if (!writePlan.bodySuppressed() || writePlan.sendBody() ||
         writePlan.contentLength() != 4) {
+        return 6;
+    }
+    const auto bufferedHeadPlan =
+        ruvia::detail::http1BufferedResponseHeadPlan(writePlan.bodyPlan());
+    if (bufferedHeadPlan.buffered() == nullptr ||
+        bufferedHeadPlan.chunkedStream() != nullptr ||
+        bufferedHeadPlan.closeDelimitedStream() != nullptr) {
         return 6;
     }
 

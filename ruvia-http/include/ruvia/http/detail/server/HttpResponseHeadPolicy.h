@@ -78,28 +78,4 @@ private:
     return ResponseWritePolicy::normal();
 }
 
-[[nodiscard]] inline bool responseBodyFramingHeaderForbidden(
-    std::uint32_t knownBit,
-    bool explicitContentLengthAllowed,
-    bool transferEncodingAllowed) noexcept {
-    return (!explicitContentLengthAllowed && knownBit == kResponseHeaderContentLength) ||
-        (!transferEncodingAllowed && knownBit == kResponseHeaderTransferEncoding);
-}
-
-[[nodiscard]] inline bool responseHasForbiddenBodyFramingHeader(
-    std::uint32_t knownBits,
-    bool explicitContentLengthAllowed,
-    bool transferEncodingAllowed) noexcept {
-    return ((knownBits & kResponseHeaderContentLength) != 0 &&
-               responseBodyFramingHeaderForbidden(
-                   kResponseHeaderContentLength,
-                   explicitContentLengthAllowed,
-                   transferEncodingAllowed)) ||
-        ((knownBits & kResponseHeaderTransferEncoding) != 0 &&
-            responseBodyFramingHeaderForbidden(
-                kResponseHeaderTransferEncoding,
-                explicitContentLengthAllowed,
-                transferEncodingAllowed));
-}
-
 }  // namespace ruvia::detail
