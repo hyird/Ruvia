@@ -64,8 +64,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             memory_,
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
-        bool keepAlive = false;
-        bool closeAfterWrite = false;
+        auto connectionPlan = Http1ServerConnectionPlan::close();
         bool responseStreamDispatched = false;
         bool bufferAlreadyCompacted = false;
         std::size_t consumedBytes = 0;
@@ -97,9 +96,9 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 }
             }
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
-            parser.parseHeaders(bufferView, parsed, headerSearchOffset);
+            parser.parseHead(bufferView, parsed, headerSearchOffset);
             HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
-            if (parsed.status == HttpParseStatus::kComplete) {
+            if (parsed.headReady()) {
                 // Reset phase so clientHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingPayload on their own; the
                 // streaming/websocket paths set their own phases below; the
@@ -107,6 +106,22 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                 // one of those transitions, keepaliveTimeout governs as the
                 // deadman switch for hung handlers.
                 scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
+                if (parsed.bodyPlan.expectationAction() ==
+                    HttpServerExpectationAction::kUnsupported) {
+                    // Expect extensions are valid HTTP syntax. The protocol parser
+                    // reports the semantic fact; this Web product deliberately does
+                    // not implement extensions beyond 100-continue and chooses the
+                    // RFC 9110-permitted 417 response before reading request content.
+                    consumedBytes = parsed.headerBytes;
+                    response = co_await routes.handleError(
+                        parsed.request,
+                        requestMemory,
+                        HttpErrorInfo(417, {}, "unsupported Expect header"),
+                        baseRouteServices);
+                    connectionPlan = http1FinalizeResponseConnection(
+                        response, Http1ServerConnectionPlan::close());
+                    break;
+                }
                 if (options_.autoHttps.enabled) {
                     consumedBytes = parsed.headerBytes;
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
@@ -115,45 +130,17 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                             requestMemory,
                             HttpErrorInfo(400, {}, "missing Host header"),
                             baseRouteServices);
-                        http1MarkConnectionClose(response);
                     } else {
                         response = makeAutoHttpsRedirectResponse(
                             parsed.request,
                             requestMemory,
                             options_.autoHttps.httpsPort);
                     }
-                    keepAlive = false;
-                    closeAfterWrite = true;
+                    connectionPlan = http1FinalizeResponseConnection(
+                        response,
+                        Http1ServerConnectionPlan::close());
                     scannerEntry.touch();
                     break;
-                }
-                if constexpr (kPlainTcp) {
-                    if (isHttp2UpgradeAttempt(parsed)) {
-                        consumedBytes = parsed.headerBytes;
-                        const auto upgradeResult = co_await dispatchHttp2UpgradeRoute(
-                            stream,
-                            socket,
-                            memory_,
-                            scannerEntry,
-                            routes_,
-                            databases_,
-                            redis_,
-                            options_,
-                            remoteAddress,
-                            rateLimiter_,
-                            parsed,
-                            readBuffer,
-                            usedBytes,
-                            requestMemory,
-                            baseRouteServices,
-                            response,
-                            closeAfterWrite,
-                            &started_);
-                        if (upgradeResult == Http2UpgradeRouteResult::kWriteBufferedResponse) {
-                            break;
-                        }
-                        co_return;
-                    }
                 }
                 routeResolution = routes.resolve(parsed.request, routeMatch);
                 const auto appRateLimit = rateLimitRequestAllowed(rateLimiter_, remoteAddress);
@@ -165,31 +152,36 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         HttpErrorInfo(429, {}, "rate limit exceeded"),
                         baseRouteServices);
                     setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
-                    markConnectionCloseAfterWrite(response, closeAfterWrite);
+                    connectionPlan = http1FinalizeResponseConnection(
+                        response, Http1ServerConnectionPlan::close());
                     break;
                 }
                 if (!routeResolution.found()) {
                     consumedBytes = parsed.headerBytes;
-                    if (contentLengthExceedsLimit(parsed.contentLength, options_.maxBufferedBodyBytes)) {
+                    if (contentLengthExceedsLimit(
+                            parsed.bodyPlan,
+                            options_.maxBufferedBodyBytes)) {
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,
                             HttpErrorInfo(413, {}, "request body is too large"),
                             baseRouteServices);
-                        markConnectionCloseAfterWrite(response, closeAfterWrite);
+                        connectionPlan = http1FinalizeResponseConnection(
+                            response, Http1ServerConnectionPlan::close());
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
                         response = std::move(*documentResponse);
-                        keepAlive = http1ShouldKeepAlive(parsed) &&
-                            parsed.contentLength == 0 &&
-                            !parsed.chunked;
-                        finalizeBufferedRouteResponse(
+                        connectionPlan = http1ApplyRequestBodyConsumption(
+                            parsed.connectionPlan,
+                            parsed.bodyPlan.requiresConsumption()
+                                ? Http1RequestBodyConsumption::kIncomplete
+                                : Http1RequestBodyConsumption::kComplete);
+                        connectionPlan = finalizeBufferedRouteResponse(
                             response,
-                            keepAlive,
+                            connectionPlan,
                             requestCount,
-                            options_.keepaliveRequests,
-                            http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()));
+                            options_.keepaliveRequests);
                         scannerEntry.touch();
                         break;
                     }
@@ -198,21 +190,23 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         routeResolution,
                         requestMemory,
                         baseRouteServices);
-                    markConnectionCloseAfterWrite(response, closeAfterWrite);
+                    connectionPlan = http1FinalizeResponseConnection(
+                        response, Http1ServerConnectionPlan::close());
                     break;
                 }
 
                 const auto& route = routeResolution.route();
                 const auto maxRequestBodyBytes = requestBodyByteLimit(
                     route.bodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
-                if (contentLengthExceedsLimit(parsed.contentLength, maxRequestBodyBytes)) {
+                if (contentLengthExceedsLimit(parsed.bodyPlan, maxRequestBodyBytes)) {
                     consumedBytes = parsed.headerBytes;
                     response = co_await routes.handleError(
                         parsed.request,
                         requestMemory,
                         HttpErrorInfo(413, {}, "request body is too large"),
                         baseRouteServices);
-                    markConnectionCloseAfterWrite(response, closeAfterWrite);
+                    connectionPlan = http1FinalizeResponseConnection(
+                        response, Http1ServerConnectionPlan::close());
                     break;
                 }
 
@@ -233,7 +227,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         options_,
                         pendingFrames,
                         response,
-                        closeAfterWrite);
+                        connectionPlan);
                     if (webSocketResult == HttpWebSocketRouteResult::kWriteBufferedResponse) {
                         break;
                     }
@@ -254,7 +248,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         baseRouteServices,
                         options_,
                         response,
-                        keepAlive,
+                        connectionPlan,
                         requestCount);
                     if (streamResult.finishedSession()) {
                         co_return;
@@ -279,7 +273,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         readBuffer,
                         usedBytes,
                         response,
-                        keepAlive,
+                        connectionPlan,
                         requestCount,
                         consumedBytes,
                         bufferAlreadyCompacted);
@@ -299,18 +293,18 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     readBuffer,
                     usedBytes,
                     response,
-                    keepAlive,
+                    connectionPlan,
                     requestCount,
                     consumedBytes,
                     bufferAlreadyCompacted);
                 break;
             }
 
-            if (parsed.status == HttpParseStatus::kError) {
+            if (parsed.failed()) {
                 const auto error = parsed.error;
                 if constexpr (kPlainTcp) {
                     if (!options_.autoHttps.enabled &&
-                        http2ShouldDropInvalidCleartextPreface(bufferView, error)) {
+                        shouldDropInvalidCleartextHttp1Input(bufferView, error)) {
                         co_return;
                     }
                 }
@@ -319,7 +313,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     requestMemory,
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     baseRouteServices);
-                markConnectionCloseAfterWrite(response, closeAfterWrite);
+                connectionPlan = http1FinalizeResponseConnection(
+                    response, Http1ServerConnectionPlan::close());
                 break;
             }
 
@@ -334,7 +329,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     requestMemory,
                     HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
                     baseRouteServices);
-                markConnectionCloseAfterWrite(response, closeAfterWrite);
+                connectionPlan = http1FinalizeResponseConnection(
+                    response, Http1ServerConnectionPlan::close());
                 break;
             }
 
@@ -376,7 +372,9 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
                 response.status(), requestStart, false);
-            if (ec || closeAfterWrite || !keepAlive || !started_.load(std::memory_order_relaxed)) {
+            if (ec ||
+                connectionPlan.disposition() == Http1ConnectionDisposition::kClose ||
+                !started_.load(std::memory_order_relaxed)) {
                 co_return;
             }
         } else {

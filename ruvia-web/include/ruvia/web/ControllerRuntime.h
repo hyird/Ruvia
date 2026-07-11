@@ -52,7 +52,7 @@ protected:
 
     static void ruviaAddRoute(
         const detail::ControllerRouteBuilder& scope,
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         detail::ControllerRouteHandler handler,
         detail::RequestBodyMode bodyMode,
@@ -62,7 +62,7 @@ protected:
 
     static void ruviaAddStreamRoute(
         const detail::ControllerRouteBuilder& scope,
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         detail::ControllerRouteStreamHandler handler,
         detail::ResponseBodyMode responseMode,

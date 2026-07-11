@@ -1,9 +1,15 @@
 #include "test_harness.h"
 
+#include <array>
 #include <cstddef>
+#include <concepts>
 #include <cstdint>
 #include <limits>
+#include <memory_resource>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/WebSocketProtocol.h"
@@ -16,8 +22,71 @@ using ruvia::detail::decodeWebSocketFrameStart;
 using ruvia::detail::encodeWebSocketFrameHeader;
 using ruvia::detail::isInvalidWebSocketControlFrame;
 using ruvia::detail::WebSocketFrameHeader;
+using ruvia::detail::WebSocketFrameReadResult;
 using ruvia::detail::WebSocketFrameStart;
+using ruvia::detail::WebSocketProtocolFailure;
 using ruvia::detail::webSocketFrameLengthExceedsLimit;
+using ruvia::detail::webSocketTryReadFrame;
+
+template <typename T>
+concept HasFrameReadStatusField = requires(const T& result) {
+    result.status;
+};
+
+template <typename T>
+concept HasFrameReadStatusAccessor = requires(const T& result) {
+    result.status();
+};
+
+template <typename T>
+concept HasRequiredBytesField = requires(const T& result) {
+    result.requiredBytes;
+};
+
+template <typename T>
+concept HasCleanEofAllowedField = requires(const T& result) {
+    result.cleanEofAllowed;
+};
+
+template <typename T>
+concept HasFrameReadError = requires(const T& result) {
+    { result.error() } -> std::same_as<WebSocketProtocolFailure>;
+};
+
+static_assert(!std::default_initializable<WebSocketFrameReadResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const WebSocketFrameReadResult&>().needInput()),
+    const ruvia::detail::WebSocketFrameNeedInput*>);
+static_assert(std::same_as<
+    decltype(std::declval<const WebSocketFrameReadResult&>().frame()),
+    const ruvia::detail::WebSocketFrameView*>);
+static_assert(std::same_as<
+    decltype(std::declval<const WebSocketFrameReadResult&>().failure()),
+    const ruvia::detail::WebSocketFrameReadFailure*>);
+static_assert(!HasFrameReadStatusField<WebSocketFrameReadResult>);
+static_assert(!HasFrameReadStatusAccessor<WebSocketFrameReadResult>);
+static_assert(!HasRequiredBytesField<WebSocketFrameReadResult>);
+static_assert(!HasCleanEofAllowedField<WebSocketFrameReadResult>);
+static_assert(!HasFrameReadError<WebSocketFrameReadResult>);
+static_assert(HasFrameReadError<ruvia::detail::WebSocketFrameReadFailure>);
+
+std::pmr::string maskedFrame(
+    unsigned char first,
+    std::string_view payload) {
+    constexpr std::array<unsigned char, 4> mask{0x12, 0x34, 0x56, 0x78};
+    std::pmr::string bytes(std::pmr::get_default_resource());
+    bytes.reserve(2 + mask.size() + payload.size());
+    bytes.push_back(static_cast<char>(first));
+    bytes.push_back(static_cast<char>(0x80U | payload.size()));
+    for (const auto byte : mask) {
+        bytes.push_back(static_cast<char>(byte));
+    }
+    for (std::size_t index = 0; index < payload.size(); ++index) {
+        const auto byte = static_cast<unsigned char>(payload[index]);
+        bytes.push_back(static_cast<char>(byte ^ mask[index & 3U]));
+    }
+    return bytes;
+}
 
 }  // namespace
 
@@ -126,4 +195,80 @@ RUVIA_TEST(ws_frame_length_limit) {
     RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(1000000, 0));      // 0 == unlimited
     RUVIA_CHECK(webSocketFrameLengthExceedsLimit(
         std::numeric_limits<std::uint64_t>::max(), 1000));          // enormous payload over limit
+}
+
+RUVIA_TEST(ws_frame_reader_needs_input_without_sentinel_metadata) {
+    std::pmr::string input(std::pmr::get_default_resource());
+    std::size_t offset = 0;
+    std::size_t pendingCompactUntil = 0;
+
+    const auto empty = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, 1024, false);
+    RUVIA_CHECK(empty.needInput() != nullptr);
+    RUVIA_CHECK(empty.frame() == nullptr);
+    RUVIA_CHECK(empty.failure() == nullptr);
+
+    input.push_back(static_cast<char>(0x81));
+    const auto partial = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, 1024, false);
+    RUVIA_CHECK(partial.needInput() != nullptr);
+    RUVIA_CHECK(partial.frame() == nullptr);
+    RUVIA_CHECK(partial.failure() == nullptr);
+    RUVIA_CHECK_EQ(offset, std::size_t{0});
+    RUVIA_CHECK_EQ(pendingCompactUntil, std::size_t{0});
+}
+
+RUVIA_TEST(ws_frame_reader_returns_one_unmasked_borrowed_frame) {
+    auto input = maskedFrame(0x81, "hi");
+    std::size_t offset = 0;
+    std::size_t pendingCompactUntil = 0;
+
+    const auto result = webSocketTryReadFrame(
+        input, offset, pendingCompactUntil, 1024, false);
+    RUVIA_CHECK(result.needInput() == nullptr);
+    RUVIA_CHECK(result.failure() == nullptr);
+    RUVIA_CHECK(result.frame() != nullptr);
+    RUVIA_CHECK(result.frame()->opcode == WebSocketOpcode::kText);
+    RUVIA_CHECK(result.frame()->fin);
+    RUVIA_CHECK(!result.frame()->continuation);
+    RUVIA_CHECK_EQ(result.frame()->payload, std::string_view("hi"));
+    RUVIA_CHECK_EQ(offset, input.size());
+    RUVIA_CHECK_EQ(pendingCompactUntil, input.size());
+}
+
+RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
+    std::size_t offset = 0;
+    std::size_t pendingCompactUntil = 0;
+    std::pmr::string unmasked(
+        std::string_view("\x81\x02hi", 4),
+        std::pmr::get_default_resource());
+    const auto maskFailure = webSocketTryReadFrame(
+        unmasked, offset, pendingCompactUntil, 1024, false);
+    RUVIA_CHECK(maskFailure.failure() != nullptr);
+    RUVIA_CHECK(
+        maskFailure.failure()->error() ==
+        WebSocketProtocolFailure::kProtocolError);
+    RUVIA_CHECK(maskFailure.frame() == nullptr);
+
+    auto tooLarge = maskedFrame(0x82, "123456");
+    offset = 0;
+    pendingCompactUntil = 0;
+    const auto sizeFailure = webSocketTryReadFrame(
+        tooLarge, offset, pendingCompactUntil, 5, false);
+    RUVIA_CHECK(sizeFailure.failure() != nullptr);
+    RUVIA_CHECK(
+        sizeFailure.failure()->error() ==
+        WebSocketProtocolFailure::kMessageTooLarge);
+
+    const std::string invalidClose(
+        "\x03\xe8\xc0\x80", 4);  // 1000 plus invalid UTF-8 reason
+    auto close = maskedFrame(0x88, invalidClose);
+    offset = 0;
+    pendingCompactUntil = 0;
+    const auto closeFailure = webSocketTryReadFrame(
+        close, offset, pendingCompactUntil, 1024, false);
+    RUVIA_CHECK(closeFailure.failure() != nullptr);
+    RUVIA_CHECK(
+        closeFailure.failure()->error() ==
+        WebSocketProtocolFailure::kInvalidPayloadData);
 }

@@ -70,7 +70,7 @@ RUVIA_TEST(header_list_spills_both_fields_and_bytes_preserving_prior_views) {
 
 RUVIA_TEST(header_list_full_rejects_further_append) {
     Http2HeaderList list(resource());
-    // kMaxRequestHeaders is 64.
+    // kMaxHttpHeaderFields is 64.
     for (int i = 0; i < 64; ++i) {
         RUVIA_CHECK(list.append("k", "v", RequestHeaderKind::kOther));
     }

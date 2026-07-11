@@ -22,13 +22,13 @@
 
 namespace {
 
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 using ruvia::detail::setResponseAllowHeader;
 using ruvia::detail::setResponseContentRange;
 using ruvia::detail::setResponseContentRangeUnsatisfied;
 
-constexpr std::uint32_t methodBit(HttpMethod method) {
+constexpr std::uint32_t methodBit(HttpKnownMethod method) {
     return std::uint32_t{1} << static_cast<std::uint32_t>(method);
 }
 
@@ -65,13 +65,13 @@ RUVIA_TEST(allow_header_lists_methods_in_canonical_order) {
     // The Allow header (405/OPTIONS) lists the mask's methods in method-enum
     // order, comma-separated.
     auto many = makeResponse();
-    setResponseAllowHeader(many, methodBit(HttpMethod::kGet) | methodBit(HttpMethod::kPost) |
-                                     methodBit(HttpMethod::kHead));
+    setResponseAllowHeader(many, methodBit(HttpKnownMethod::kGet) | methodBit(HttpKnownMethod::kPost) |
+                                     methodBit(HttpKnownMethod::kHead));
     RUVIA_CHECK_EQ(many.header("Allow"), std::string_view("GET, POST, HEAD"));
 
     // A single method has no separator.
     auto one = makeResponse();
-    setResponseAllowHeader(one, methodBit(HttpMethod::kDelete));
+    setResponseAllowHeader(one, methodBit(HttpKnownMethod::kDelete));
     RUVIA_CHECK_EQ(one.header("Allow"), std::string_view("DELETE"));
 }
 
@@ -100,7 +100,7 @@ RUVIA_TEST(static_file_range_serving_status_and_content_range) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         if (!range.empty()) {
             HttpRequestAccess::addHeader(
@@ -163,7 +163,7 @@ RUVIA_TEST(static_file_resolves_percent_encoded_name_and_stays_traversal_safe) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
         std::uint16_t status = 0;
@@ -215,7 +215,7 @@ RUVIA_TEST(static_file_declares_vary_accept_encoding_but_context_file_does_not) 
     ruvia::RequestMemory memory(worker);
     ruvia::HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+    HttpRequestAccess::setMethod(request, "GET");
     HttpRequestAccess::setResource(request, memory.resource());
     auto context = ContextAccess::make(memory, request);
 
@@ -242,6 +242,7 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
     using ruvia::detail::ContextAccess;
     using ruvia::detail::HttpRequestAccess;
     using ruvia::detail::prepareResponseStreamHead;
+    using ruvia::detail::ResponseTrailerIntent;
     using ruvia::detail::ResponseStreamFraming;
     using ruvia::detail::ResponseStreamKind;
 
@@ -250,7 +251,7 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
         if (presetNoCache) {
@@ -261,7 +262,8 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
             std::move(response),
             ResponseStreamKind::kSse,
             ResponseStreamFraming::kHttp1Chunked,
-            ruvia::detail::httpResponseBodyPlan(HttpMethod::kGet, 200));
+            ruvia::detail::httpResponseBodyPlan(HttpKnownMethod::kGet, 200),
+            ResponseTrailerIntent::kNone);
         return std::string(streamHead.response().header("Cache-Control"));
     };
 
@@ -271,56 +273,6 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
     // A handler that set its own Cache-Control -- e.g. the recommended SSE
     // "no-cache" -- must have it preserved, not clobbered with no-store.
     RUVIA_CHECK_EQ(head(true), std::string("no-cache"));
-}
-
-RUVIA_TEST(http1_stream_head_framing_follows_request_version) {
-    using ruvia::detail::ContextAccess;
-    using ruvia::detail::HttpRequestAccess;
-    using ruvia::detail::prepareResponseStreamHead;
-    using ruvia::detail::ResponseStreamFraming;
-    using ruvia::detail::ResponseStreamKind;
-
-    const auto head = [](ResponseStreamFraming framing, bool connectionWillClose) {
-        ruvia::WorkerMemory worker;
-        ruvia::RequestMemory memory(worker);
-        ruvia::HttpRequest request = HttpRequestAccess::make();
-        HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
-        HttpRequestAccess::setResource(request, memory.resource());
-        auto context = ContextAccess::make(memory, request);
-        auto response = ContextAccess::streamingHead(context);
-        auto streamHead = prepareResponseStreamHead(
-            std::move(response),
-            ResponseStreamKind::kGeneric,
-            framing,
-            ruvia::detail::httpResponseBodyPlan(HttpMethod::kGet, 200),
-            connectionWillClose);
-        return std::pair<std::string, std::string>(
-            std::string(streamHead.response().header("Transfer-Encoding")),
-            std::string(streamHead.response().header("Connection")));
-    };
-
-    // HTTP/1.1 kept-alive stream: chunked framing, no Connection: close (persistent
-    // by default).
-    const auto chunkedKeepAlive = head(ResponseStreamFraming::kHttp1Chunked, false);
-    RUVIA_CHECK_EQ(chunkedKeepAlive.first, std::string("chunked"));
-    RUVIA_CHECK(chunkedKeepAlive.second.empty());
-
-    // HTTP/1.1 stream that will close (e.g. the per-connection request limit is
-    // reached): still chunked, but the head must announce Connection: close so the
-    // client does not reuse the socket the session is about to shut -- matching the
-    // buffered path. The head is committed before that verdict is finalized, so it
-    // is passed in.
-    const auto chunkedClosing = head(ResponseStreamFraming::kHttp1Chunked, true);
-    RUVIA_CHECK_EQ(chunkedClosing.first, std::string("chunked"));
-    RUVIA_CHECK_EQ(chunkedClosing.second, std::string("close"));
-
-    // HTTP/1.0 stream: RFC 9112 6.1 forbids Transfer-Encoding to a non-HTTP/1.1
-    // client, so the head carries no chunked framing; the body is delimited by the
-    // connection close, always announced with Connection: close.
-    const auto closeDelimited = head(ResponseStreamFraming::kHttp1CloseDelimited, false);
-    RUVIA_CHECK(closeDelimited.first.empty());
-    RUVIA_CHECK_EQ(closeDelimited.second, std::string("close"));
 }
 
 RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
@@ -349,7 +301,7 @@ RUVIA_TEST(static_file_if_range_date_requires_exact_match) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         HttpRequestAccess::addHeader(
             request, HttpHeaderView{"Range", "bytes=0-4"},
@@ -420,7 +372,7 @@ RUVIA_TEST(static_file_ignores_range_with_if_range_when_validators_disabled) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         HttpRequestAccess::addHeader(
             request, HttpHeaderView{"Range", "bytes=0-4"},
@@ -476,7 +428,7 @@ RUVIA_TEST(static_file_if_match_takes_precedence_over_if_unmodified_since) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         for (const auto& header : headers) {
             HttpRequestAccess::addHeader(
@@ -544,7 +496,7 @@ RUVIA_TEST(static_file_conditional_request_serving) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         if (!headerName.empty()) {
             HttpRequestAccess::addHeader(
@@ -608,7 +560,7 @@ RUVIA_TEST(static_file_serves_precompressed_gzip_variant) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         if (!acceptEncoding.empty()) {
             HttpRequestAccess::addHeader(
@@ -661,7 +613,7 @@ RUVIA_TEST(static_file_if_modified_since_serving) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         HttpRequestAccess::addHeader(
             request,
@@ -699,7 +651,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
         ruvia::RequestMemory memory(worker);
         ruvia::HttpRequest request = HttpRequestAccess::make();
         HttpRequestAccess::reset(request);
-        HttpRequestAccess::setMethod(request, ruvia::HttpMethod::kGet);
+        HttpRequestAccess::setMethod(request, "GET");
         HttpRequestAccess::setResource(request, memory.resource());
         auto context = ContextAccess::make(memory, request);
         try {

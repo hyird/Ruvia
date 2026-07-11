@@ -11,7 +11,7 @@ namespace ruvia::detail {
 namespace {
 
 // "Date: <value>\r\n" -- the cache is the single owner of this wire format.
-// Both the full-line accessor (HTTP/1, h2c upgrade text response) and the
+// Both the full-line accessor (HTTP/1 text response) and the
 // value-only accessor (HPACK :date for HTTP/2) derive their views from these
 // constants, so the framing lives in exactly one place.
 inline constexpr std::string_view kDateHeaderPrefix = "Date: ";

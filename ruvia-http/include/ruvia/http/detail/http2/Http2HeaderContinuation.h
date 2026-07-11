@@ -6,6 +6,14 @@
 
 namespace ruvia::detail {
 
+enum class Http2HeaderBlockKind : std::uint8_t {
+    kInitial,
+    kTrailers,
+    // The block must still be fully HPACK-decoded for connection-state
+    // synchronization, but its HTTP fields do not mutate a live stream.
+    kDiscarded
+};
+
 class Http2HeaderContinuation final {
 public:
     [[nodiscard]] bool active() const noexcept {
@@ -20,25 +28,29 @@ public:
         return streamId != 0 && streamId == streamId_;
     }
 
-    void start(std::uint32_t streamId, bool trailers) noexcept {
+    void start(std::uint32_t streamId, Http2HeaderBlockKind kind) noexcept {
         streamId_ = streamId;
-        trailers_ = trailers;
+        kind_ = kind;
     }
 
     void reset() noexcept {
         streamId_ = 0;
-        trailers_ = false;
+        kind_ = Http2HeaderBlockKind::kInitial;
     }
 
-    [[nodiscard]] bool finishWasTrailers() noexcept {
-        const bool trailers = trailers_;
+    [[nodiscard]] Http2HeaderBlockKind kind() const noexcept {
+        return kind_;
+    }
+
+    [[nodiscard]] Http2HeaderBlockKind finishKind() noexcept {
+        const auto kind = kind_;
         reset();
-        return trailers;
+        return kind;
     }
 
 private:
     std::uint32_t streamId_{0};
-    bool trailers_{false};
+    Http2HeaderBlockKind kind_{Http2HeaderBlockKind::kInitial};
 };
 
 }  // namespace ruvia::detail

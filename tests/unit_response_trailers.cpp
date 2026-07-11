@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <array>
 #include <string_view>
 
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
@@ -10,6 +11,7 @@ using ruvia::detail::isForbiddenResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
+using ruvia::detail::responseTrailerSectionValid;
 
 }  // namespace
 
@@ -96,4 +98,19 @@ RUVIA_TEST(response_trailer_field_combined_rule) {
     RUVIA_CHECK(!responseTrailerFieldValid("Set-Cookie", "a=b"));
     // Invalid value.
     RUVIA_CHECK(!responseTrailerFieldValid("X-Trace-Id", std::string_view("a\r\nb", 4)));
+}
+
+RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
+    const std::array<ruvia::HttpHeaderView, 2> valid{
+        ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
+        ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
+    RUVIA_CHECK(responseTrailerSectionValid(valid));
+
+    const std::array<ruvia::HttpHeaderView, 2> mixed{
+        ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
+        ruvia::HttpHeaderView{"Content-Length", "5"}};
+    RUVIA_CHECK(!responseTrailerSectionValid(mixed));
+    // An empty field sequence is the valid absence of a trailer section; the
+    // submission API reports kEmpty separately when asked to submit one.
+    RUVIA_CHECK(responseTrailerSectionValid({}));
 }

@@ -4,12 +4,12 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 
-using ruvia::detail::HttpServerParser;
+using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::WebSocketDeflate;
 using ruvia::detail::WebSocketInflateResult;
 using ruvia::detail::webSocketNegotiatePermessageDeflate;
@@ -26,8 +26,8 @@ WebSocketDeflateNegotiation negotiateDeflate(std::string_view extensions) {
         raw += "\r\n";
     }
     raw += "\r\n";
-    HttpServerParser parser;
-    const auto result = parser.parse(raw);
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(raw);
     return webSocketNegotiatePermessageDeflate(result.request);
 }
 
@@ -168,8 +168,8 @@ RUVIA_TEST(websocket_deflate_offer_spans_multiple_extension_lines) {
             raw += "\r\n";
         }
         raw += "\r\n";
-        HttpServerParser parser;
-        const auto result = parser.parse(raw);
+        Http1ServerRequestParser parser;
+        const auto result = parser.parseMessage(raw);
         return webSocketNegotiatePermessageDeflate(result.request);
     };
 

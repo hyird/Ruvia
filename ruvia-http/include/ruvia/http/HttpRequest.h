@@ -21,8 +21,12 @@ struct HttpRequestAccess;
 
 class HttpRequest final {
 public:
-    [[nodiscard]] HttpMethod method() const noexcept {
+    [[nodiscard]] std::string_view method() const noexcept {
         return method_;
+    }
+
+    [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
+        return knownMethod_;
     }
 
     [[nodiscard]] std::string_view target() const noexcept {
@@ -37,8 +41,8 @@ public:
         return queryString_;
     }
 
-    [[nodiscard]] std::string_view httpVersion() const noexcept {
-        return httpVersion_;
+    [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept {
+        return protocolVersion_;
     }
 
     [[nodiscard]] std::span<const HttpHeaderView> headers() const noexcept {
@@ -58,12 +62,13 @@ private:
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
 
-    HttpMethod method_{HttpMethod::kUnknown};
+    std::string_view method_;
+    HttpKnownMethod knownMethod_{HttpKnownMethod::kUnknown};
     std::string_view target_;
     std::string_view path_;
     std::string_view queryString_;
-    std::string_view httpVersion_{"HTTP/1.1"};
-    std::array<HttpHeaderView, kMaxRequestHeaders> headers_{};
+    HttpProtocolVersion protocolVersion_{HttpProtocolVersion::kHttp11};
+    std::array<HttpHeaderView, kMaxHttpHeaderFields> headers_{};
     std::size_t headerCount_{0};
     std::uint32_t cachedHeaderBits_{0};
     std::array<std::string_view, kCachedHeaderSlots> cachedHeaders_{};

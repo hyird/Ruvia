@@ -2,6 +2,7 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpInterimResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpRequest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpResponseHeaderOps.cpp
@@ -13,10 +14,11 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/body/HttpTransferCodingDecoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpChunkParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpHeaderBlockParser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParser.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserErrors.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/Http1RequestParser.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParseError.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpParserSyntax.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/parser/HttpRequestTarget.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server/Http1InterimResponseWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpDateCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHeadBuffer.cpp
@@ -29,6 +31,9 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketValidation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/WsConnection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpOrigin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientRedirect.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client/Http1ClientRequestWriter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client/HttpClientResponseParser.cpp
 )
 add_library(ruvia::http ALIAS ruvia-http)
@@ -60,11 +65,16 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpProtocolError.h
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h
-    include/ruvia/http/HttpClientTypes.h
+    include/ruvia/http/HttpClientRedirect.h
     include/ruvia/http/HttpCommon.h
+    include/ruvia/http/Http1InterimResponseWriter.h
+    include/ruvia/http/HttpInterimResponse.h
     include/ruvia/http/HttpLimits.h
-    include/ruvia/http/HttpParseTypes.h
-    include/ruvia/http/HttpParser.h
+    include/ruvia/http/HttpParseError.h
+    include/ruvia/http/HttpProtocolVersion.h
+    include/ruvia/http/Http1ClientRequestWriter.h
+    include/ruvia/http/Http1ClientResponseParser.h
+    include/ruvia/http/Http1RequestParser.h
     include/ruvia/http/HttpRequest.h
     include/ruvia/http/HttpResponse.h
     include/ruvia/http/HttpStatus.h

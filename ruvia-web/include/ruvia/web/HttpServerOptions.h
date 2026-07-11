@@ -27,8 +27,12 @@ struct AccessLogRecordAccess;
 // written. Views borrow request memory and are valid only for the call.
 class AccessLogRecord final {
 public:
-    [[nodiscard]] constexpr HttpMethod method() const noexcept {
+    [[nodiscard]] constexpr std::string_view method() const noexcept {
         return method_;
+    }
+
+    [[nodiscard]] constexpr HttpKnownMethod knownMethod() const noexcept {
+        return knownMethod_;
     }
 
     [[nodiscard]] constexpr std::string_view path() const noexcept {
@@ -55,20 +59,23 @@ private:
     friend struct detail::AccessLogRecordAccess;
 
     constexpr AccessLogRecord(
-        HttpMethod method,
+        std::string_view method,
+        HttpKnownMethod knownMethod,
         std::string_view path,
         std::string_view remoteAddress,
         std::uint16_t status,
         std::uint64_t durationMicros,
         bool http2) noexcept
         : method_(method),
+          knownMethod_(knownMethod),
           path_(path),
           remoteAddress_(remoteAddress),
           status_(status),
           durationMicros_(durationMicros),
           http2_(http2) {}
 
-    HttpMethod method_;
+    std::string_view method_;
+    HttpKnownMethod knownMethod_;
     std::string_view path_;
     std::string_view remoteAddress_;
     std::uint16_t status_;

@@ -82,7 +82,7 @@ detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resour
       webSocketSubprotocols_(
           init.webSocketSubprotocols,
           path_.get_allocator().resource()),
-      webSocketHeartbeat_(init.webSocketHeartbeat) {
+      webSocketLifecycle_(init.webSocketLifecycle) {
     auto* const routeResource = path_.get_allocator().resource();
     if (init.path.get_allocator().resource() == routeResource) {
         path_ = std::move(init.path);
@@ -102,7 +102,7 @@ void detail::ControllerRouteBuilder::ImplDeleter::operator()(Impl* impl) const n
 }
 
 void detail::RouterImpl::registerRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::pmr::string path,
     RouteHandler handler,
     RequestBodyMode bodyMode,
@@ -126,11 +126,11 @@ void detail::RouterImpl::registerRoute(
         .dynamic = false,
         .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
         .webSocketSubprotocols = {},
-        .webSocketHeartbeat = {}}));
+        .webSocketLifecycle = {}}));
 }
 
 void detail::RouterImpl::registerStreamRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::pmr::string path,
     RouteStreamHandler handler,
     ResponseBodyMode responseMode,
@@ -143,6 +143,12 @@ void detail::RouterImpl::registerStreamRoute(
     if (responseMode == ResponseBodyMode::kBuffered) {
         throw std::invalid_argument("response stream route requires a streaming response mode");
     }
+    if (responseMode == ResponseBodyMode::kWebSocket &&
+        (webSocketOptions.lifecycle.pingInterval.count() < 0 ||
+         webSocketOptions.lifecycle.pongTimeout.count() < 0 ||
+         webSocketOptions.lifecycle.closeHandshakeTimeout.count() < 0)) {
+        throw std::invalid_argument("websocket lifecycle timeouts must not be negative");
+    }
 
     appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
         .method = method,
@@ -154,7 +160,7 @@ void detail::RouterImpl::registerStreamRoute(
         .dynamic = false,
         .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
         .webSocketSubprotocols = webSocketOptions.subprotocols,
-        .webSocketHeartbeat = webSocketOptions.heartbeat}));
+        .webSocketLifecycle = webSocketOptions.lifecycle}));
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
@@ -195,7 +201,7 @@ detail::ControllerRouteBuilder& detail::ControllerRouteBuilder::operator=(Contro
 detail::ControllerRouteBuilder::~ControllerRouteBuilder() = default;
 
 void detail::ControllerRouteBuilder::registerRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path,
     ControllerRouteHandler handler,
     RequestBodyMode bodyMode,
@@ -212,7 +218,7 @@ void detail::ControllerRouteBuilder::registerRoute(
 }
 
 void detail::ControllerRouteBuilder::registerStreamRoute(
-    HttpMethod method,
+    HttpKnownMethod method,
     std::string_view path,
     ControllerRouteStreamHandler handler,
     ResponseBodyMode responseMode,

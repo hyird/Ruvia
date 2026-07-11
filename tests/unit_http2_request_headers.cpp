@@ -11,6 +11,7 @@ namespace {
 
 using ruvia::detail::Http2HeaderDecodeContext;
 using ruvia::detail::Http2StreamState;
+using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::http2AccumulateHeaderListBytes;
 using ruvia::detail::http2OnDecodedInitialHeader;
 using ruvia::detail::http2OnDecodedTrailer;
@@ -52,7 +53,7 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
     {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
-        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":method", "FOO"));  // unsupported method
+        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":method", "BAD METHOD"));
     }
     {
         Http2StreamState stream(1, res());
@@ -73,6 +74,14 @@ RUVIA_TEST(h2_headers_empty_and_unknown_pseudo_rejected) {
     RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, "", "x"));          // empty name
 }
 
+RUVIA_TEST(h2_headers_extension_method_is_valid_and_preserved) {
+    Http2StreamState stream(1, res());
+    Http2HeaderDecodeContext ctx{stream};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":method", "PROPFIND"));
+    RUVIA_CHECK_EQ(stream.requestMethod(), std::string_view("PROPFIND"));
+    RUVIA_CHECK(stream.requestKnownMethod() == ruvia::HttpKnownMethod::kUnknown);
+}
+
 RUVIA_TEST(h2_headers_authority_and_host_are_validated) {
     {
         Http2StreamState stream(1, res());
@@ -82,7 +91,14 @@ RUVIA_TEST(h2_headers_authority_and_host_are_validated) {
     {
         Http2StreamState stream(1, res());
         Http2HeaderDecodeContext ctx{stream};
-        RUVIA_CHECK(!http2OnDecodedInitialHeader(ctx, ":authority", "example.com:"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "example.com:"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "EXA%6dPLE.com"));
+    }
+    {
+        Http2StreamState stream(1, res());
+        Http2HeaderDecodeContext ctx{stream};
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, ":authority", "[v1.future]:"));
+        RUVIA_CHECK(http2OnDecodedInitialHeader(ctx, "host", "[V1.FUTURE]"));
     }
     {
         Http2StreamState stream(1, res());
@@ -276,6 +292,33 @@ RUVIA_TEST(h2_headers_content_length_and_cookie) {
     RUVIA_CHECK(http2OnDecodedInitialHeader(ctx2, "cookie", "b=2"));
     RUVIA_CHECK(stream2.hasCookie());
     RUVIA_CHECK_EQ(stream2.requestCookie(), std::string_view("a=1; b=2"));
+}
+
+RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
+    Http2StreamState supported(1, res());
+    Http2HeaderDecodeContext supportedContext{supported};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(
+        supportedContext, "expect", ", 100-continue,"));
+    RUVIA_CHECK(http2OnDecodedInitialHeader(
+        supportedContext, "expect", "100-Continue"));
+    RUVIA_CHECK(
+        supported.expectationAction() ==
+        HttpServerExpectationAction::kSend100Continue);
+
+    supported.markBodyEnded();
+    RUVIA_CHECK(
+        supported.expectationAction() ==
+        HttpServerExpectationAction::kNone);
+
+    Http2StreamState extension(3, res());
+    Http2HeaderDecodeContext extensionContext{extension};
+    RUVIA_CHECK(http2OnDecodedInitialHeader(
+        extensionContext, "expect", "100-continue, custom-feature"));
+    RUVIA_CHECK(
+        extension.expectationAction() ==
+        HttpServerExpectationAction::kUnsupported);
+    RUVIA_CHECK(extension.requestExpectations().has100Continue());
+    RUVIA_CHECK(extension.requestExpectations().hasUnsupported());
 }
 
 RUVIA_TEST(h2_headers_trailer_rejects_pseudo_and_invalid) {

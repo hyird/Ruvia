@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/MultipartReader.h"
 #include "ruvia/web/Streaming.h"
 
@@ -50,7 +51,9 @@ struct CollectedPart final {
 Task<void> collectParts(MultipartReader& reader, std::vector<CollectedPart>& out) {
     CollectedPart current;
     while (auto part = co_await reader.read()) {
-        if (part->partBegin()) {
+        const auto phase = part->phase();
+        if (phase == ruvia::MultipartChunkPhase::kFirst ||
+            phase == ruvia::MultipartChunkPhase::kComplete) {
             current = CollectedPart{
                 std::string(part->name()),
                 std::string(part->filename()),
@@ -58,7 +61,8 @@ Task<void> collectParts(MultipartReader& reader, std::vector<CollectedPart>& out
                 std::string()};
         }
         current.body.append(part->body());
-        if (part->partEnd()) {
+        if (phase == ruvia::MultipartChunkPhase::kLast ||
+            phase == ruvia::MultipartChunkPhase::kComplete) {
             out.push_back(current);
         }
     }
@@ -69,7 +73,10 @@ std::vector<CollectedPart> parseMultipart(std::vector<std::string> chunks, std::
     ChunkSource source{std::move(chunks), 0};
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, boundary, std::pmr::get_default_resource());
+    MultipartReader reader(
+        *bodyReader,
+        ruvia::MultipartBoundary(boundary),
+        std::pmr::get_default_resource());
 
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);
@@ -126,10 +133,73 @@ RUVIA_TEST(multipart_reader_reassembles_across_chunk_boundaries) {
     RUVIA_CHECK_EQ(parts[1].body, std::string("file content"));
 }
 
+RUVIA_TEST(multipart_reader_accepts_transport_padding_and_exact_eof_close) {
+    const std::string body =
+        "--BOUNDARY \t\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY-- \t";  // closing delimiter is completed by HTTP body EOF
+    for (const std::size_t chunkSize : {
+             std::size_t{1}, std::size_t{4}, std::size_t{17}, std::size_t{4096}}) {
+        const auto parts = parseMultipart(splitChunks(body, chunkSize), "BOUNDARY");
+        RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
+    }
+}
+
+RUVIA_TEST(multipart_reader_does_not_commit_ambiguous_close_before_more_input) {
+    const std::string prefix =
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY--";
+    bool threw = false;
+    try {
+        // Without an explicit input-finished phase, the first chunk used to be
+        // accepted as complete and the invalid suffix was silently ignored.
+        (void)parseMultipart({prefix, "X"}, "BOUNDARY");
+    } catch (const ruvia::HttpProtocolError& error) {
+        threw = error.status() == 400;
+    }
+    RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(multipart_reader_drains_a_split_epilogue_before_reporting_done) {
+    ChunkSource source;
+    source.chunks = {
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY--\r\nfirst epilogue bytes",
+        " and the remaining epilogue"};
+
+    std::optional<BodyReader> bodyReader;
+    ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
+    MultipartReader reader(
+        *bodyReader,
+        ruvia::MultipartBoundary("BOUNDARY"),
+        std::pmr::get_default_resource());
+    std::vector<CollectedPart> parts;
+    asio::io_context context(1);
+    auto future = asio::co_spawn(
+        context,
+        ruvia::detail::taskAsAwaitable(collectParts(reader, parts)),
+        asio::use_future);
+    context.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parts[0].body, std::string("value"));
+    RUVIA_CHECK_EQ(source.index, source.chunks.size());
+}
+
 RUVIA_TEST(multipart_reader_emits_an_empty_field_body) {
     // A form field with no value (name="empty" immediately followed by the next
     // boundary) has a zero-length body. The reader must still emit exactly one
-    // part for it, carrying partBegin and partEnd on that empty chunk, rather
+    // part for it, carrying the complete phase on that empty chunk, rather
     // than swallowing the field. This hits the boundary-at-offset-0 branch that
     // the non-empty bodies never reach.
     const std::string body =
@@ -287,7 +357,10 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
 
     std::optional<BodyReader> bodyReader;
     ruvia::detail::emplaceBodyReaderFacade(bodyReader, source);
-    MultipartReader reader(*bodyReader, "BOUNDARY", std::pmr::get_default_resource());
+    MultipartReader reader(
+        *bodyReader,
+        ruvia::MultipartBoundary("BOUNDARY"),
+        std::pmr::get_default_resource());
 
     std::vector<CollectedPart> parts;
     asio::io_context ctx(1);
@@ -298,8 +371,8 @@ RUVIA_TEST(multipart_reader_rejects_invalid_boundary_terminator_without_bufferin
     bool threw = false;
     try {
         future.get();
-    } catch (const std::invalid_argument&) {
-        threw = true;
+    } catch (const ruvia::HttpProtocolError& error) {
+        threw = error.status() == 400;
     }
     RUVIA_CHECK(threw);
     // Rejected without pulling the large trailing payload chunks. Without the fix the

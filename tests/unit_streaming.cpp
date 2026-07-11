@@ -4,6 +4,7 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
+#include <array>
 #include <chrono>
 #include <memory_resource>
 #include <stdexcept>
@@ -22,6 +23,7 @@ namespace {
 struct CaptureStreamSink final {
     std::pmr::string scratch{std::pmr::get_default_resource()};
     std::vector<std::string> writes;
+    std::vector<std::string> trailers;
 };
 
 ruvia::Task<void> writeChunk(void* target, std::string_view chunk) {
@@ -29,7 +31,14 @@ ruvia::Task<void> writeChunk(void* target, std::string_view chunk) {
     co_return;
 }
 
-ruvia::Task<void> endStream(void*) {
+ruvia::Task<void> endStream(
+    void* target,
+    std::span<const ruvia::HttpHeaderView> trailers) {
+    auto& captured = static_cast<CaptureStreamSink*>(target)->trailers;
+    for (const auto& trailer : trailers) {
+        captured.emplace_back(
+            std::string(trailer.name()) + "=" + std::string(trailer.value()));
+    }
     co_return;
 }
 
@@ -42,8 +51,6 @@ void bindContext(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&
 std::pmr::string& scratch(void* target) noexcept {
     return static_cast<CaptureStreamSink*>(target)->scratch;
 }
-
-void addTrailer(void*, std::string_view, std::string_view) {}
 
 bool committed(void*) noexcept {
     return false;
@@ -61,7 +68,6 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
         &sleepStream,
         &bindContext,
         &scratch,
-        &addTrailer,
         &committed,
         &aborted);
 }
@@ -69,6 +75,13 @@ ruvia::ResponseStreamWriter makeWriter(CaptureStreamSink& sink) noexcept {
 ruvia::Task<void> writeLines(ruvia::ResponseStreamWriter& writer) {
     co_await writer.writeln("first");
     co_await writer.writeln("second");
+}
+
+ruvia::Task<void> endWithTrailers(ruvia::ResponseStreamWriter& writer) {
+    const std::array<ruvia::HttpHeaderView, 2> trailers{
+        ruvia::HttpHeaderView{"Digest", "sha-256=value"},
+        ruvia::HttpHeaderView{"Server-Timing", "db;dur=7"}};
+    co_await writer.end(trailers);
 }
 
 }  // namespace
@@ -88,6 +101,23 @@ RUVIA_TEST(response_stream_writeln_reuses_scratch_without_leaking_previous_chunk
     RUVIA_CHECK_EQ(sink.writes.size(), std::size_t{2});
     RUVIA_CHECK_EQ(sink.writes[0], std::string("first\n"));
     RUVIA_CHECK_EQ(sink.writes[1], std::string("second\n"));
+}
+
+RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
+    CaptureStreamSink sink;
+    auto writer = makeWriter(sink);
+
+    asio::io_context ctx(1);
+    auto future = asio::co_spawn(
+        ctx,
+        ruvia::detail::taskAsAwaitable(endWithTrailers(writer)),
+        asio::use_future);
+    ctx.run();
+    future.get();
+
+    RUVIA_CHECK_EQ(sink.trailers.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(sink.trailers[0], std::string("Digest=sha-256=value"));
+    RUVIA_CHECK_EQ(sink.trailers[1], std::string("Server-Timing=db;dur=7"));
 }
 
 namespace {
@@ -245,12 +275,17 @@ RUVIA_TEST(sse_writer_rejects_nul_in_id) {
     RUVIA_CHECK_EQ(sink.writes.size(), static_cast<std::size_t>(1));
 }
 
-RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
+RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     using ruvia::detail::ResponseStreamState;
     // A committed stream that allows a body accepts a chunk before end()...
     ResponseStreamState open;
-    open.markCommitted(false);
+    open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, 200),
+        ruvia::detail::ResponseTrailerIntent::kNone));
     open.ensureBodyAllowed();  // no throw
+    open.ensureTrailersAllowed(
+        ruvia::detail::ResponseStreamTrailerFraming::kHttp1Chunked);
 
     // ...but after end() a further body chunk would land past the terminal
     // 0\r\n\r\n (HTTP/1.1) or END_STREAM (HTTP/2) and desync the connection, so
@@ -265,7 +300,8 @@ RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
     RUVIA_CHECK(bodyAfterEnd);
     bool trailerAfterEnd = false;
     try {
-        open.ensureTrailerOpen();
+        open.ensureTrailersAllowed(
+            ruvia::detail::ResponseStreamTrailerFraming::kHttp1Chunked);
     } catch (const std::logic_error&) {
         trailerAfterEnd = true;
     }
@@ -273,7 +309,10 @@ RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
 
     // A suppressed body (e.g. HEAD, 204 or 304) still rejects a body chunk.
     ResponseStreamState suppressed;
-    suppressed.markCommitted(true);
+    suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kHead, 200),
+        ruvia::detail::ResponseTrailerIntent::kNone));
     bool bodyRejected = false;
     try {
         suppressed.ensureBodyAllowed();
@@ -281,4 +320,23 @@ RUVIA_TEST(response_stream_state_rejects_body_and_trailers_after_end) {
         bodyRejected = true;
     }
     RUVIA_CHECK(bodyRejected);
+
+    // HTTP/2 can keep the same content-forbidden response open solely for a
+    // terminal trailing-HEADERS block, without accidentally enabling DATA.
+    ResponseStreamState trailersOnly;
+    trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp2Frames,
+        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kHead, 200),
+        ruvia::detail::ResponseTrailerIntent::kPresent));
+    RUVIA_CHECK(trailersOnly.committed());
+    RUVIA_CHECK(!trailersOnly.ended());
+    bool trailersOnlyBodyRejected = false;
+    try {
+        trailersOnly.ensureBodyAllowed();
+    } catch (const std::logic_error&) {
+        trailersOnlyBodyRejected = true;
+    }
+    RUVIA_CHECK(trailersOnlyBodyRejected);
+    trailersOnly.ensureTrailersAllowed(
+        ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
 }

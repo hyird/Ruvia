@@ -2,11 +2,15 @@
 
 #include "ruvia/http/HttpCommon.h"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
-#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace ruvia {
@@ -14,6 +18,64 @@ namespace ruvia {
 namespace detail {
 struct MultipartStreamPartAccess;
 }  // namespace detail
+
+// RFC 2046 multipart boundary value. The validated bytes are stored inline so
+// every buffered/streaming parser consumes the same allocation-free value and
+// cannot observe a dangling Content-Type substring.
+class MultipartBoundary final {
+public:
+    explicit MultipartBoundary(std::string_view value) {
+        if (!valid(value)) {
+            throw std::invalid_argument("invalid multipart boundary");
+        }
+        assign(value);
+    }
+
+    [[nodiscard]] constexpr std::string_view value() const noexcept {
+        return std::string_view(bytes_.data(), size_);
+    }
+
+private:
+    static constexpr std::size_t kMaxSize = 70;
+
+    [[nodiscard]] static constexpr bool nonSpaceChar(char value) noexcept {
+        return (value >= '0' && value <= '9') ||
+            (value >= 'A' && value <= 'Z') ||
+            (value >= 'a' && value <= 'z') ||
+            value == '\'' || value == '(' || value == ')' || value == '+' ||
+            value == '_' || value == ',' || value == '-' || value == '.' ||
+            value == '/' || value == ':' || value == '=' || value == '?';
+    }
+
+    [[nodiscard]] static constexpr bool valid(std::string_view value) noexcept {
+        if (value.empty() || value.size() > kMaxSize || value.back() == ' ') {
+            return false;
+        }
+        for (const char byte : value) {
+            if (byte != ' ' && !nonSpaceChar(byte)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    constexpr void assign(std::string_view value) noexcept {
+        for (std::size_t index = 0; index < value.size(); ++index) {
+            bytes_[index] = value[index];
+        }
+        size_ = static_cast<std::uint8_t>(value.size());
+    }
+
+    std::array<char, kMaxSize> bytes_{};
+    std::uint8_t size_{0};
+};
+
+enum class MultipartChunkPhase : std::uint8_t {
+    kComplete,
+    kFirst,
+    kMiddle,
+    kLast,
+};
 
 class MultipartStreamPart final {
 public:
@@ -33,12 +95,8 @@ public:
         return body_;
     }
 
-    [[nodiscard]] bool partBegin() const noexcept {
-        return partBegin_;
-    }
-
-    [[nodiscard]] bool partEnd() const noexcept {
-        return partEnd_;
+    [[nodiscard]] constexpr MultipartChunkPhase phase() const noexcept {
+        return phase_;
     }
 
 private:
@@ -49,41 +107,138 @@ private:
         std::string_view filename,
         std::string_view contentType,
         std::string_view body,
-        bool partBegin,
-        bool partEnd) noexcept
+        MultipartChunkPhase phase) noexcept
         : name_(name),
           filename_(filename),
           contentType_(contentType),
           body_(body),
-          partBegin_(partBegin),
-          partEnd_(partEnd) {}
+          phase_(phase) {}
 
     std::string_view name_;
     std::string_view filename_;
     std::string_view contentType_;
     std::string_view body_;
-    bool partBegin_{false};
-    bool partEnd_{false};
+    MultipartChunkPhase phase_{MultipartChunkPhase::kMiddle};
+};
+
+class MultipartPollNeedInput final {
+private:
+    friend class MultipartPollResult;
+    constexpr MultipartPollNeedInput() noexcept = default;
+};
+
+class MultipartPollDone final {
+private:
+    friend class MultipartPollResult;
+    constexpr MultipartPollDone() noexcept = default;
+};
+
+enum class MultipartParseError : std::uint8_t {
+    kIncompleteBody,
+    kInvalidDelimiter,
+    kPreambleTooLarge,
+    kPartHeadersTooLarge,
+    kInvalidContentDisposition,
+    kMissingFieldName,
+    kDelimiterLineTooLarge,
+};
+
+[[nodiscard]] std::string_view multipartParseErrorMessage(
+    MultipartParseError error) noexcept;
+
+class MultipartPollFailure final {
+public:
+    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class MultipartPollResult;
+
+    explicit constexpr MultipartPollFailure(MultipartParseError error) noexcept
+        : error_(error) {}
+
+    MultipartParseError error_;
+};
+
+// Incremental multipart parsing has four mutually exclusive outcomes. Only
+// the part alternative exposes borrowed part metadata/body, while only a
+// failure exposes a protocol error. Need-input and done are payload-free
+// lifecycle signals. All borrowed views remain valid only until the next
+// feed(), finishInput(), or poll() call.
+class MultipartPollResult final {
+public:
+    [[nodiscard]] constexpr const MultipartPollNeedInput*
+    needInput() const noexcept {
+        return std::get_if<MultipartPollNeedInput>(&value_);
+    }
+
+    [[nodiscard]] constexpr const MultipartStreamPart* part() const noexcept {
+        return std::get_if<MultipartStreamPart>(&value_);
+    }
+
+    [[nodiscard]] constexpr const MultipartPollDone* done() const noexcept {
+        return std::get_if<MultipartPollDone>(&value_);
+    }
+
+    [[nodiscard]] constexpr const MultipartPollFailure*
+    failure() const noexcept {
+        return std::get_if<MultipartPollFailure>(&value_);
+    }
+
+private:
+    friend class MultipartParser;
+
+    using Value = std::variant<
+        MultipartPollNeedInput,
+        MultipartStreamPart,
+        MultipartPollDone,
+        MultipartPollFailure>;
+
+    explicit constexpr MultipartPollResult(MultipartPollNeedInput value) noexcept
+        : value_(value) {}
+
+    explicit constexpr MultipartPollResult(MultipartStreamPart value) noexcept
+        : value_(value) {}
+
+    explicit constexpr MultipartPollResult(MultipartPollDone value) noexcept
+        : value_(value) {}
+
+    explicit constexpr MultipartPollResult(MultipartPollFailure value) noexcept
+        : value_(value) {}
+
+    [[nodiscard]] static constexpr MultipartPollResult makeNeedInput() noexcept {
+        return MultipartPollResult(MultipartPollNeedInput());
+    }
+
+    [[nodiscard]] static constexpr MultipartPollResult makePart(
+        MultipartStreamPart part) noexcept {
+        return MultipartPollResult(part);
+    }
+
+    [[nodiscard]] static constexpr MultipartPollResult makeDone() noexcept {
+        return MultipartPollResult(MultipartPollDone());
+    }
+
+    [[nodiscard]] static constexpr MultipartPollResult makeFailure(
+        MultipartParseError error) noexcept {
+        return MultipartPollResult(MultipartPollFailure(error));
+    }
+
+    Value value_;
 };
 
 class MultipartParser final {
 public:
-    enum class PollStatus {
-        kNeedMore,
-        kContinue,
-        kPart,
-        kDone
-    };
+    MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
 
-    struct PollResult final {
-        PollStatus status;
-        std::optional<MultipartStreamPart> part;
-    };
+    // Copies input into parser-owned PMR storage. finishInput() is required when
+    // the enclosing HTTP body ends so a close delimiter ending exactly at EOF
+    // can be distinguished from a delimiter line split across input chunks.
+    void feed(std::string_view chunk);
+    void finishInput() noexcept;
 
-    MultipartParser(std::string_view boundary, std::pmr::memory_resource* resource);
-
-    void appendChunk(std::string_view chunk);
-    [[nodiscard]] PollResult poll();
+    [[nodiscard]] MultipartPollResult poll();
 
 private:
     enum class State {
@@ -93,36 +248,49 @@ private:
         kDone
     };
 
+    enum class StepStatus : std::uint8_t {
+        kNeedInput,
+        kContinue,
+        kDone,
+        kInvalidDelimiter,
+        kPreambleTooLarge,
+        kPartHeadersTooLarge,
+        kInvalidContentDisposition,
+        kMissingFieldName,
+    };
+
     static constexpr std::size_t kCompactConsumedPrefixBytes = 64 * 1024;
 
     [[nodiscard]] std::string_view bufferView() const noexcept;
     void consume(std::size_t bytes) noexcept;
     void compactConsumedPrefix();
     void compactPending();
-    [[nodiscard]] PollStatus processBoundary();
-    [[nodiscard]] PollStatus processHeaders();
+    [[nodiscard]] static MultipartParseError stepError(
+        StepStatus status) noexcept;
+    [[nodiscard]] StepStatus processBoundary();
+    [[nodiscard]] StepStatus processHeaders();
     [[nodiscard]] MultipartStreamPart makePart(std::string_view body, bool partEnd);
-    [[nodiscard]] PollResult readBodyChunk();
+    [[nodiscard]] MultipartPollResult readBodyChunk();
 
     std::pmr::memory_resource* resource_;
+    MultipartBoundary boundary_;
     std::pmr::string buffer_;
-    std::pmr::string boundaryLine_;
-    std::pmr::string boundaryPrefix_;
     std::pmr::string currentName_;
     std::pmr::string currentFilename_;
     std::pmr::string currentContentType_;
     State state_{State::kBoundary};
     std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
-    bool partBegin_{false};
+    bool nextChunkIsFirst_{false};
     bool firstBoundary_{true};
+    bool inputFinished_{false};
 };
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // and content types borrow `body`; decoded name/filename values own PMR storage.
 [[nodiscard]] std::pmr::vector<MultipartPart> parseMultipartBody(
     std::string_view body,
-    std::string_view boundary,
+    MultipartBoundary boundary,
     std::pmr::memory_resource* resource = nullptr);
 
 }  // namespace ruvia

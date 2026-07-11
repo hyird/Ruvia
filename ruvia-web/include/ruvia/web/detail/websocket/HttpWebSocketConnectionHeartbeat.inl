@@ -13,19 +13,23 @@ void WebSocketConnection<Transport>::completeBackgroundWrite() noexcept {
 
 template <typename Transport>
 bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
-    switch (webSocketHeartbeatDecision(
-        heartbeatOptions_,
-        closeSent_,
+    switch (webSocketLivenessDecision(
+        lifecycleOptions_,
+        protocol_.closePhase(),
         awaitingPong_,
         writeActive_,
         scannerEntry_.lastActiveMs(),
         heartbeatPingSentMs_,
+        localCloseStartedMs_,
         now)) {
-        case WebSocketHeartbeatDecision::kIdle:
+        case WebSocketLivenessDecision::kIdle:
             return false;
-        case WebSocketHeartbeatDecision::kTimeout:
-            return true;
-        case WebSocketHeartbeatDecision::kSendPing:
+        case WebSocketLivenessDecision::kAbortTransport:
+            // A heartbeat/close timeout belongs to this WebSocket transport.
+            // For RFC 8441 that is one stream, not the multiplexed h2 socket.
+            abortTransport();
+            return false;
+        case WebSocketLivenessDecision::kSendPing:
             break;
     }
 
@@ -43,7 +47,8 @@ bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
         heartbeatWriteActive_ = false;
         writeActive_ = false;
         completeBackgroundWrite();
-        return true;
+        abortTransport();
+        return false;
     }
     return false;
 }
@@ -51,9 +56,9 @@ bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeHeartbeatPing() {
     try {
-        co_await writeFrameNow(WebSocketOpcode::kPing, {}, false);
+        co_await writeFrameNow(WebSocketOpcode::kPing, {});
     } catch (...) {
-        closeSent_ = true;
+        abortTransport();
     }
     heartbeatWriteActive_ = false;
     writeActive_ = false;

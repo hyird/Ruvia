@@ -10,9 +10,10 @@
 namespace {
 
 using ruvia::detail::encodeWebSocketClosePayload;
-using ruvia::detail::validateWebSocketClosePayload;
 using ruvia::detail::WebSocketClosePayload;
-using ruvia::detail::WebSocketProtocolError;
+using ruvia::detail::WebSocketProtocolFailure;
+using ruvia::detail::webSocketClosePayloadFailure;
+using ruvia::detail::webSocketProtocolFailureCloseCode;
 
 std::string closeBody(std::uint16_t code, std::string_view reason) {
     std::string body;
@@ -32,25 +33,16 @@ bool encodeThrows(std::uint16_t code, std::string_view reason) {
     }
 }
 
-bool validateThrows(std::string_view body) {
-    try {
-        validateWebSocketClosePayload(body);
-        return false;
-    } catch (const std::invalid_argument&) {
-        return true;
-    }
-}
-
 // The RFC 6455 §7.4.1 close code carried by the rejection, or 0 if the body is
 // accepted (used to pin that the read loop echoes the right code, not 1011).
-std::uint16_t validateCloseCode(std::string_view body) {
-    try {
-        validateWebSocketClosePayload(body);
-        return 0;
-    } catch (const WebSocketProtocolError& error) {
-        return error.closeCode();
-    }
+std::uint16_t failureCloseCode(std::string_view body) {
+    const auto failure = webSocketClosePayloadFailure(body);
+    return failure.has_value()
+        ? webSocketProtocolFailureCloseCode(*failure)
+        : 0;
 }
+
+static_assert(noexcept(webSocketClosePayloadFailure(std::string_view{})));
 
 }  // namespace
 
@@ -74,23 +66,31 @@ RUVIA_TEST(ws_close_encode_rejects_invalid) {
 
 RUVIA_TEST(ws_close_validate_incoming) {
     // An empty close body is valid; a 1-byte body (a partial code) is not.
-    RUVIA_CHECK(!validateThrows(std::string_view()));
-    RUVIA_CHECK(validateThrows(std::string(1, 'x')));
+    RUVIA_CHECK(!webSocketClosePayloadFailure(std::string_view()).has_value());
+    RUVIA_CHECK(
+        webSocketClosePayloadFailure(std::string(1, 'x')) ==
+        WebSocketProtocolFailure::kProtocolError);
     // A valid code with a valid UTF-8 reason passes.
-    RUVIA_CHECK(!validateThrows(closeBody(1000, "ok")));
+    RUVIA_CHECK(!webSocketClosePayloadFailure(
+        closeBody(1000, "ok")).has_value());
     // A reserved code or an invalid-UTF-8 reason is rejected.
-    RUVIA_CHECK(validateThrows(closeBody(1005, "")));
-    RUVIA_CHECK(validateThrows(closeBody(1000, std::string("\xc0\x80", 2))));
+    RUVIA_CHECK(
+        webSocketClosePayloadFailure(closeBody(1005, "")) ==
+        WebSocketProtocolFailure::kProtocolError);
+    RUVIA_CHECK(
+        webSocketClosePayloadFailure(
+            closeBody(1000, std::string("\xc0\x80", 2))) ==
+        WebSocketProtocolFailure::kInvalidPayloadData);
 }
 
 RUVIA_TEST(ws_close_incoming_violation_carries_rfc_close_code) {
     // RFC 6455 §7.4.1: a malformed incoming Close is a protocol error (1002); a
     // Close whose 2-byte code is valid but whose reason is not UTF-8 is invalid
     // payload data (1007). The read loop echoes this code instead of a generic 1011.
-    RUVIA_CHECK_EQ(validateCloseCode(std::string(1, 'x')), std::uint16_t{1002});   // 1-byte partial code
-    RUVIA_CHECK_EQ(validateCloseCode(closeBody(1005, "")), std::uint16_t{1002});   // reserved code
-    RUVIA_CHECK_EQ(validateCloseCode(closeBody(1006, "")), std::uint16_t{1002});   // never-on-wire code
-    RUVIA_CHECK_EQ(validateCloseCode(closeBody(1000, std::string("\xc0\x80", 2))),
+    RUVIA_CHECK_EQ(failureCloseCode(std::string(1, 'x')), std::uint16_t{1002});   // 1-byte partial code
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1005, "")), std::uint16_t{1002});   // reserved code
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1006, "")), std::uint16_t{1002});   // never-on-wire code
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, std::string("\xc0\x80", 2))),
                    std::uint16_t{1007});                                           // bad UTF-8 reason
-    RUVIA_CHECK_EQ(validateCloseCode(closeBody(1000, "ok")), std::uint16_t{0});    // valid: accepted
+    RUVIA_CHECK_EQ(failureCloseCode(closeBody(1000, "ok")), std::uint16_t{0});    // valid: accepted
 }

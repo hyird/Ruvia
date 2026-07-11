@@ -13,23 +13,24 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
         const auto source = !initialBodyAndPipeline_.empty()
             ? std::string_view(initialBodyAndPipeline_.data(), initialBodyAndPipeline_.size())
             : std::string_view(buffer_.data(), buffer_.size());
-        const auto event = chunkDecoder_.decode(source.substr(readCursor_));
-        if (event.consumedBytes != 0) {
-            pendingCompactUntil_ = readCursor_ + event.consumedBytes;
+        const auto result = chunkDecoder_.decode(source.substr(readCursor_));
+        if (result.consumedBytes() != 0) {
+            pendingCompactUntil_ = readCursor_ + result.consumedBytes();
         }
-        switch (event.kind) {
-            case HttpChunkDecodeEventKind::kBody:
-                co_return event.body;
-            case HttpChunkDecodeEventKind::kComplete:
-                markFinished();
-                compactPending();
-                co_return std::nullopt;
-            case HttpChunkDecodeEventKind::kNeedMore:
-                compactPending();
-                materializeInitialRemainder();
-                co_await readMore();
-                break;
+        if (const auto* bodyChunk = result.bodyChunk()) {
+            co_return bodyChunk->bytes();
         }
+        if (result.complete() != nullptr) {
+            markFinished();
+            compactPending();
+            co_return std::nullopt;
+        }
+        if (result.needMore() == nullptr) {
+            throw std::logic_error("unexpected HTTP/1 chunk decode result");
+        }
+        compactPending();
+        materializeInitialRemainder();
+        co_await readMore();
     }
 }
 

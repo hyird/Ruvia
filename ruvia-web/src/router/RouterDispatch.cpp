@@ -22,7 +22,7 @@ void setAllowHeader(HttpResponse& response, std::uint32_t methodMask) {
 
 HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t methodMask) {
     HttpResponse response(memory.resource());
-    response.status(204, {});
+    response.status(204);
     setAllowHeader(response, methodMask);
     return response;
 }
@@ -262,12 +262,20 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     RequestMemory& memory,
     ContextServices services) const {
     if (!resolution.found()) {
-        if (request.method() == HttpMethod::kOptions && request.path() == "*") {
+        if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+            co_return co_await handleError(
+                request,
+                memory,
+                HttpErrorInfo(501, {}, "method not implemented"),
+                services);
+        }
+
+        if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
             co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
         }
 
         if (resolution.methodNotAllowed()) {
-            if (request.method() == HttpMethod::kOptions) {
+            if (request.knownMethod() == HttpKnownMethod::kOptions) {
                 co_return makeAllowNoContentResponse(memory, resolution.allowedMethods());
             }
 

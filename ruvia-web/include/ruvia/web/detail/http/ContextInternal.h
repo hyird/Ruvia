@@ -24,7 +24,7 @@ inline Context::Context(
     std::size_t paramCount,
     std::uintptr_t routeRateLimitScope,
     detail::ContextServices services,
-    HttpMethod routeMethod,
+    HttpKnownMethod routeMethod,
     std::size_t routeMiddlewareCount) noexcept
     : memory_(memory),
       request_(request),
@@ -73,7 +73,7 @@ struct ContextAccess final {
         RequestMemory& memory,
         const HttpRequest& request,
         std::string_view routePath,
-        HttpMethod routeMethod,
+        HttpKnownMethod routeMethod,
         std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
@@ -97,7 +97,7 @@ struct ContextAccess final {
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
-        HttpMethod routeMethod,
+        HttpKnownMethod routeMethod,
         std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {

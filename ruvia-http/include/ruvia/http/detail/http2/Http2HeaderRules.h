@@ -2,7 +2,6 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 
 namespace ruvia::detail {
@@ -23,17 +22,6 @@ namespace ruvia::detail {
         name == "proxy-connection" ||
         name == "transfer-encoding" ||
         name == "upgrade";
-}
-
-[[nodiscard]] inline bool http2IsForbiddenUpgradedRequestHeader(std::string_view name) noexcept {
-    return httpAsciiEqualsIgnoreCase(name, "connection") ||
-        httpAsciiEqualsIgnoreCase(name, "upgrade") ||
-        httpAsciiEqualsIgnoreCase(name, "http2-settings") ||
-        httpAsciiEqualsIgnoreCase(name, "keep-alive") ||
-        httpAsciiEqualsIgnoreCase(name, "proxy-connection") ||
-        httpAsciiEqualsIgnoreCase(name, "te") ||
-        httpAsciiEqualsIgnoreCase(name, "trailer") ||
-        httpAsciiEqualsIgnoreCase(name, "transfer-encoding");
 }
 
 [[nodiscard]] inline bool http2IsValidRegularHeader(

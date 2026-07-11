@@ -62,14 +62,34 @@ RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {
         const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(4004, "x", "y"));
         RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
     }
-    // A status text carrying CR/LF (which HttpResponse::status also rejects) is
-    // replaced with the default reason phrase rather than throwing.
+    // 600..999 are three-digit library sentinels rather than HTTP status codes,
+    // and an informational status cannot terminate an application error response.
+    {
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(600, "x", "y"));
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
+    }
+    {
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(103, "x", "y"));
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{500});
+    }
+    // A Web error label carrying CR/LF is replaced before JSON serialization.
+    // It is presentation data only and never becomes an HTTP/1 reason phrase.
     {
         HttpErrorInfo error(400, "bad", "msg", std::string_view("Bad\r\nRequest", 12));
         const auto response = makeDefaultErrorResponse(resource, error);
         RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
-        RUVIA_CHECK(response.statusText().find('\r') == std::string_view::npos);
-        RUVIA_CHECK(response.statusText().find('\n') == std::string_view::npos);
+        const auto body = ruvia::detail::responseBodyBytes(response);
+        RUVIA_CHECK(body.find(R"("error":"Bad Request")") != std::string_view::npos);
+        RUVIA_CHECK(body.find('\r') == std::string_view::npos);
+        RUVIA_CHECK(body.find('\n') == std::string_view::npos);
+    }
+    // An extension status has no conventional reason phrase. The Web JSON
+    // envelope gets its own neutral label instead of inventing wire semantics.
+    {
+        const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(599));
+        RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
+        const auto body = ruvia::detail::responseBodyBytes(response);
+        RUVIA_CHECK(body.find(R"("error":"HTTP Error")") != std::string_view::npos);
     }
     // A valid in-range status is preserved unchanged.
     {

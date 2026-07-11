@@ -13,7 +13,7 @@ namespace {
     std::pmr::string body,
     std::uint16_t statusCode = 200) {
     HttpResponse response(context.resource());
-    response.status(statusCode, {});
+    response.status(statusCode);
     response.header("Content-Type", "application/json");
     detail::setResponseBodyOwned(response, std::move(body));
     return response;

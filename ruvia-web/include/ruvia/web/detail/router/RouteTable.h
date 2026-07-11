@@ -58,7 +58,7 @@ using RouteMiddleware = CallableRef<void, Context&, Next&>;
 class RouteEntry final {
 public:
     struct Init final {
-        HttpMethod method;
+        HttpKnownMethod method;
         std::string_view path;
         RouteHandler handler;
         RouteStreamHandler streamHandler;
@@ -68,7 +68,7 @@ public:
         std::size_t middlewareOffset{0};
         std::size_t middlewareCount{0};
         std::string_view webSocketSubprotocols{};
-        WebSocketHeartbeatOptions webSocketHeartbeat{};
+        WebSocketLifecycleOptions webSocketLifecycle{};
     };
 
     RouteEntry(std::pmr::memory_resource* resource, Init init);
@@ -78,7 +78,7 @@ public:
     RouteEntry(RouteEntry&&) noexcept = default;
     RouteEntry& operator=(RouteEntry&&) noexcept = default;
 
-    [[nodiscard]] HttpMethod method() const noexcept {
+    [[nodiscard]] HttpKnownMethod method() const noexcept {
         return method_;
     }
 
@@ -143,8 +143,8 @@ public:
         return webSocketSubprotocols_;
     }
 
-    [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
-        return webSocketHeartbeat_;
+    [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
+        return webSocketLifecycle_;
     }
 
     void setMiddlewareRange(std::size_t offset, std::size_t count) noexcept {
@@ -157,7 +157,7 @@ public:
     }
 
 private:
-    HttpMethod method_;
+    HttpKnownMethod method_;
     std::pmr::string path_;
     RouteHandler handler_;
     RouteStreamHandler streamHandler_;
@@ -168,7 +168,7 @@ private:
     std::size_t middlewareOffset_{0};
     std::size_t middlewareCount_{0};
     std::pmr::string webSocketSubprotocols_;
-    WebSocketHeartbeatOptions webSocketHeartbeat_{};
+    WebSocketLifecycleOptions webSocketLifecycle_{};
 };
 
 class RouteTable final : public RequestDispatcher {
@@ -182,7 +182,7 @@ public:
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
     [[nodiscard]] RouteResolution resolve(const HttpRequest& request, RouteMatch& match) const noexcept;
-    [[nodiscard]] RouteResolution resolve(HttpMethod method, std::string_view path, RouteMatch& match) const noexcept;
+    [[nodiscard]] RouteResolution resolve(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         RequestMemory& memory,
@@ -278,11 +278,11 @@ private:
     void buildDynamicRoutes();
     void buildAllowedMethodMask() noexcept;
 
-    [[nodiscard]] static std::size_t methodIndex(HttpMethod method) noexcept;
-    [[nodiscard]] static bool isRoutableMethod(HttpMethod method) noexcept;
+    [[nodiscard]] static std::size_t methodIndex(HttpKnownMethod method) noexcept;
+    [[nodiscard]] static bool isRoutableMethod(HttpKnownMethod method) noexcept;
     [[nodiscard]] static bool isDynamicPath(std::string_view path) noexcept;
     [[nodiscard]] static std::uint64_t routeHash(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         std::uint64_t seed) noexcept;
     [[nodiscard]] static std::size_t nextPowerOfTwo(std::size_t value) noexcept;
@@ -326,18 +326,18 @@ private:
         std::string_view& rest) noexcept;
     [[nodiscard]] static bool sameDynamicShape(std::string_view left, std::string_view right) noexcept;
 
-    [[nodiscard]] const RouteEntry* findStaticRoute(HttpMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findStaticRoute(HttpKnownMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamicRoute(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         RouteMatch& match) const noexcept;
-    [[nodiscard]] const RouteEntry* findPerfect(HttpMethod method, std::string_view path) const noexcept;
-    [[nodiscard]] const RouteEntry* findRadix(HttpMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findPerfect(HttpKnownMethod method, std::string_view path) const noexcept;
+    [[nodiscard]] const RouteEntry* findRadix(HttpKnownMethod method, std::string_view path) const noexcept;
     [[nodiscard]] const RouteEntry* findDynamic(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         RouteMatch& match) const noexcept;
-    [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpMethod requestedMethod) const noexcept;
+    [[nodiscard]] std::uint32_t allowedMethods(std::string_view path, HttpKnownMethod requestedMethod) const noexcept;
     [[nodiscard]] std::uint32_t allowedMethodsForServer() const noexcept;
     [[nodiscard]] Task<HttpResponse> invokeRoute(const RouteEntry& route, Context& context) const;
     [[nodiscard]] Task<HttpResponse> invokeRouteWithMiddleware(const RouteEntry& route, Context& context) const;

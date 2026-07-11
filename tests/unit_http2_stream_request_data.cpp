@@ -10,7 +10,7 @@
 
 namespace {
 
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::detail::Http2StreamRequestData;
 
 Http2StreamRequestData makeData() {
@@ -70,9 +70,14 @@ RUVIA_TEST(stream_request_data_body_accumulation) {
 
 RUVIA_TEST(stream_request_data_scalar_fields) {
     auto data = makeData();
-    RUVIA_CHECK(data.method() == HttpMethod::kUnknown);
-    data.setMethod(HttpMethod::kPost);
-    RUVIA_CHECK(data.method() == HttpMethod::kPost);
+    RUVIA_CHECK(data.method().empty());
+    RUVIA_CHECK(data.knownMethod() == HttpKnownMethod::kUnknown);
+    data.assignMethod("POST");
+    RUVIA_CHECK_EQ(data.method(), std::string_view("POST"));
+    RUVIA_CHECK(data.knownMethod() == HttpKnownMethod::kPost);
+    data.assignMethod("PROPFIND");
+    RUVIA_CHECK_EQ(data.method(), std::string_view("PROPFIND"));
+    RUVIA_CHECK(data.knownMethod() == HttpKnownMethod::kUnknown);
     data.assignAuthority("example.com");
     RUVIA_CHECK_EQ(data.authority(), std::string_view("example.com"));
     data.assignPath("/api?x=1");

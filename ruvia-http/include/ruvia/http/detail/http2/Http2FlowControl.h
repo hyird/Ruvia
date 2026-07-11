@@ -11,10 +11,9 @@
 
 namespace ruvia::detail {
 
-enum class Http2ReceiveWindowResult : std::uint8_t {
-    kOk,
-    kConnectionExceeded,
-    kStreamExceeded
+enum class Http2ReceiveWindowDebitStatus : std::uint8_t {
+    kAccepted,
+    kExceeded
 };
 
 [[nodiscard]] inline Http2WindowUpdateResult http2ApplyStreamWindowUpdate(
@@ -28,25 +27,38 @@ enum class Http2ReceiveWindowResult : std::uint8_t {
         : Http2WindowUpdateResult::kOverflow;
 }
 
-[[nodiscard]] inline Http2ReceiveWindowResult http2ConsumeReceiveWindows(
+// Unless the frame itself is rejected as a connection error, DATA is debited from the
+// connection window first. Keeping connection and stream operations separate lets
+// callers account for frames on closed/reset streams, which have no live stream window
+// but still consume connection credit (RFC 9113 §6.9/§6.9.1). A rejected debit is
+// transactional.
+[[nodiscard]] inline Http2ReceiveWindowDebitStatus http2DebitConnectionReceiveWindow(
     std::int32_t& connectionWindow,
-    Http2StreamState& stream,
     std::int32_t bytes) noexcept {
     if (bytes > connectionWindow) {
-        return Http2ReceiveWindowResult::kConnectionExceeded;
-    }
-    if (!stream.consumeReceiveWindow(bytes)) {
-        return Http2ReceiveWindowResult::kStreamExceeded;
+        return Http2ReceiveWindowDebitStatus::kExceeded;
     }
     connectionWindow -= bytes;
-    return Http2ReceiveWindowResult::kOk;
+    return Http2ReceiveWindowDebitStatus::kAccepted;
 }
 
-inline void http2RestoreReceiveWindows(
-    std::int32_t& connectionWindow,
+[[nodiscard]] inline Http2ReceiveWindowDebitStatus http2DebitStreamReceiveWindow(
     Http2StreamState& stream,
     std::int32_t bytes) noexcept {
+    return stream.consumeReceiveWindow(bytes)
+        ? Http2ReceiveWindowDebitStatus::kAccepted
+        : Http2ReceiveWindowDebitStatus::kExceeded;
+}
+
+inline void http2CreditConnectionReceiveWindow(
+    std::int32_t& connectionWindow,
+    std::int32_t bytes) noexcept {
     connectionWindow += bytes;
+}
+
+inline void http2CreditStreamReceiveWindow(
+    Http2StreamState& stream,
+    std::int32_t bytes) noexcept {
     stream.restoreReceiveWindow(bytes);
 }
 

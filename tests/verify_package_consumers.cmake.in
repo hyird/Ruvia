@@ -1,7 +1,15 @@
+cmake_minimum_required(VERSION 3.24)
+
 set(_install_prefix "@CMAKE_BINARY_DIR@/package-consumer-install")
 set(_consumer_build "@CMAKE_BINARY_DIR@/package-consumer-build")
+set(_component_install_root "@CMAKE_BINARY_DIR@/package-component-installs")
+set(_built_components "@RUVIA_BUILT_COMPONENTS@")
+set(_built_components_csv "@RUVIA_BUILT_COMPONENTS_CSV@")
 
-file(REMOVE_RECURSE "${_install_prefix}" "${_consumer_build}")
+file(REMOVE_RECURSE
+    "${_install_prefix}"
+    "${_consumer_build}"
+    "${_component_install_root}")
 
 execute_process(
     COMMAND "@CMAKE_COMMAND@" --install "@CMAKE_BINARY_DIR@" --config "${RUVIA_CONFIG}" --prefix "${_install_prefix}"
@@ -9,54 +17,669 @@ execute_process(
 if(NOT _install_result EQUAL 0)
     message(FATAL_ERROR "Ruvia package install failed: ${_install_result}")
 endif()
+
+if(EXISTS "${_install_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruviaTargets.cmake")
+    message(FATAL_ERROR "obsolete monolithic Ruvia target export was installed")
+endif()
+foreach(_ruvia_component IN ITEMS core http web)
+    if(_ruvia_component IN_LIST _built_components AND
+       NOT EXISTS
+           "${_install_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruvia-${_ruvia_component}-targets.cmake")
+        message(FATAL_ERROR "component target export was not installed: ${_ruvia_component}")
+    endif()
+endforeach()
+
+if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
+   NOT EXISTS "${_install_prefix}/include/ruvia/core/detail/Base64Url.h")
+    message(FATAL_ERROR "core base64url helper was not installed")
+endif()
+
+if(_built_components_csv MATCHES "(^|,)http(,|$)")
 string(CONCAT _removed_response_stream_header
     "${_install_prefix}/include/ruvia/http/HttpBody" "Stream.h")
 if(EXISTS "${_removed_response_stream_header}")
     message(FATAL_ERROR "removed dynamic response-body stream header was installed")
 endif()
+set(_removed_client_types_header
+    "${_install_prefix}/include/ruvia/http/HttpClientTypes.h")
+if(EXISTS "${_removed_client_types_header}")
+    message(FATAL_ERROR "removed Fetch-shaped client model header was installed")
+endif()
+set(_removed_loose_http_parser_header
+    "${_install_prefix}/include/ruvia/http/HttpParser.h")
+if(EXISTS "${_removed_loose_http_parser_header}")
+    message(FATAL_ERROR "removed loose HTTP parser result header was installed")
+endif()
+set(_removed_http_parse_status_header
+    "${_install_prefix}/include/ruvia/http/HttpParseTypes.h")
+if(EXISTS "${_removed_http_parse_status_header}")
+    message(FATAL_ERROR "removed loose HTTP parse-status header was installed")
+endif()
+set(_removed_generic_server_parser_header
+    "${_install_prefix}/include/ruvia/http/detail/HttpParserInternal.h")
+if(EXISTS "${_removed_generic_server_parser_header}")
+    message(FATAL_ERROR "removed generic internal HTTP parser header was installed")
+endif()
+if(NOT EXISTS "${_install_prefix}/include/ruvia/http/HttpParseError.h")
+    message(FATAL_ERROR "typed HTTP parse-error header was not installed")
+endif()
+set(_removed_generic_chunk_framer
+    "${_install_prefix}/include/ruvia/http/detail/HttpBodyFramer.h")
+if(EXISTS "${_removed_generic_chunk_framer}")
+    message(FATAL_ERROR "removed generic HTTP body framer was installed")
+endif()
+set(_installed_http1_chunk_decoder
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h")
+set(_installed_http1_chunk_scanner
+    "${_install_prefix}/include/ruvia/http/detail/parser/HttpChunkParser.h")
+if(NOT EXISTS "${_installed_http1_chunk_decoder}" OR
+   NOT EXISTS "${_installed_http1_chunk_scanner}")
+    message(FATAL_ERROR "installed HTTP target is missing its typed HTTP/1 chunked contracts")
+endif()
+file(READ "${_installed_http1_chunk_decoder}"
+    _installed_http1_chunk_decoder_content)
+file(READ "${_installed_http1_chunk_scanner}"
+    _installed_http1_chunk_scanner_content)
+if(NOT _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkedBodyDecoder final" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkDecodeNeedMore final" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkDecodeBodyChunk final" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkDecodeComplete final" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "std::size_t consumedBytes[(][)] const" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "std::string_view bytes[(][)] const" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "std::get_if<Http1ChunkDecodeBodyChunk>")
+    message(FATAL_ERROR "installed HTTP/1 streaming chunk decoder lost its discriminated result contract")
+endif()
+if(NOT _installed_http1_chunk_scanner_content MATCHES
+       "class HttpChunkScanNeedMore final" OR
+   NOT _installed_http1_chunk_scanner_content MATCHES
+       "class HttpChunkScanComplete final" OR
+   NOT _installed_http1_chunk_scanner_content MATCHES
+       "class HttpChunkScanFailure final" OR
+   NOT _installed_http1_chunk_scanner_content MATCHES
+       "class HttpChunkScanResult final" OR
+   NOT _installed_http1_chunk_scanner_content MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_http1_chunk_scanner_content MATCHES
+       "std::optional<HttpChunkScanError> validateHttpChunkTrailers")
+    message(FATAL_ERROR "installed HTTP/1 whole-message chunk scanner lost its discriminated result contract")
+endif()
+if(_installed_http1_chunk_decoder_content MATCHES
+       "HttpChunkDecodeEvent|HttpChunkDecodeEventKind" OR
+   _installed_http1_chunk_scanner_content MATCHES
+       "struct[ \t]+HttpChunkScanResult|HttpChunkScanStatus")
+    message(FATAL_ERROR "installed HTTP/1 chunked API restored a loose event/status tuple")
+endif()
+foreach(_removed_http1_client_response_header IN ITEMS
+    "${_install_prefix}/include/ruvia/http/detail/client/HttpClientResponseParser.h"
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ClientResponsePlan.h")
+    if(EXISTS "${_removed_http1_client_response_header}")
+        message(FATAL_ERROR "removed private HTTP/1 client response parser header was installed")
+    endif()
+endforeach()
+set(_installed_http1_client_response_parser
+    "${_install_prefix}/include/ruvia/http/Http1ClientResponseParser.h")
+if(NOT EXISTS "${_installed_http1_client_response_parser}")
+    message(FATAL_ERROR "public HTTP/1 client response parser was not installed")
+endif()
+file(READ "${_installed_http1_client_response_parser}"
+    _installed_http1_client_response_parser_content)
+if(NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseParser final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseNeedMore final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ParsedClientResponseHead final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseParseFailure final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "class Http1ClientResponseParseResult final" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "const PreparedHttp1ClientRequest& request" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "Http1ClientRequestContentSignal" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "requestContentSignal" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "Http1ClientRequestContentCompletionStatus" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "completeRequestContent" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kExchangeComplete" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kExchangeFailed" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "consumedBytes" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kConnectTunnel" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
+       "kUpgrade")
+    message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
+endif()
+set(_installed_http1_client_request_writer
+    "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")
+if(NOT EXISTS "${_installed_http1_client_request_writer}")
+    message(FATAL_ERROR "public HTTP/1 client request writer was not installed")
+endif()
+file(READ "${_installed_http1_client_request_writer}"
+    _installed_http1_client_request_writer_content)
+if(NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestWriter final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class PreparedHttp1ClientRequest final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestBufferTooSmall final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestPrepareFailure final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestPrepareResult final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "prepareConnect" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestWirePolicy final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientRequestContentPlan final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "kContinueGated" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "kExpectHeaderManagedByWriter" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::span<char> headBuffer")
+    message(FATAL_ERROR "installed HTTP/1 client request writer lost its transactional public contract")
+endif()
+if(_installed_http1_client_request_writer_content MATCHES
+   "responseContext[ \\t\\r\\n]*\\([ \\t\\r\\n]*\\)")
+    message(FATAL_ERROR "installed HTTP/1 request plan still leaks a reconstructible response context")
+endif()
+foreach(_removed_http2_upgrade_header IN ITEMS
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Upgrade.h"
+    "${_install_prefix}/include/ruvia/web/detail/http2/Http2UpgradeHandshake.h"
+    "${_install_prefix}/include/ruvia/web/detail/server/HttpServerHttp2UpgradeRoute.h")
+    if(EXISTS "${_removed_http2_upgrade_header}")
+        message(FATAL_ERROR "obsolete HTTP/2 HTTP/1.1 Upgrade header was installed")
+    endif()
+endforeach()
+if(EXISTS "${_install_prefix}/include/ruvia/http/detail/HttpBase64Url.h")
+    message(FATAL_ERROR "generic base64url helper was installed under the HTTP target")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/detail/http2/Http2Connection.h"
+    _installed_http2_connection)
+set(_installed_http2_peer_settings_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2PeerSettings.h")
+if(NOT EXISTS "${_installed_http2_peer_settings_path}")
+    message(FATAL_ERROR "installed HTTP/2 core is missing its peer SETTINGS contract")
+endif()
+file(READ "${_installed_http2_peer_settings_path}" _installed_http2_peer_settings)
+if(_installed_http2_peer_settings MATCHES "Http2PeerSettingsStatus" OR
+   _installed_http2_peer_settings MATCHES "Http2PeerSettingsResult" OR
+   _installed_http2_peer_settings MATCHES "initialWindowChanged" OR
+   _installed_http2_peer_settings MATCHES "initialWindowDelta" OR
+   _installed_http2_peer_settings MATCHES "http2PeerSettingsError")
+    message(FATAL_ERROR "installed HTTP/2 peer SETTINGS restored the status/changed/delta tuple")
+endif()
+if(NOT _installed_http2_peer_settings MATCHES
+       "enum class Http2PeerSettingError" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "class Http2PeerSettingApplied final" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "class Http2PeerInitialWindowChange final" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "class Http2PeerSettingFailure final" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "class Http2PeerSettingApplyResult final" OR
+   NOT _installed_http2_peer_settings MATCHES "using Value = std::variant" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "std::get_if<Http2PeerSettingApplied>" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "std::get_if<Http2PeerInitialWindowChange>" OR
+   NOT _installed_http2_peer_settings MATCHES
+       "std::get_if<Http2PeerSettingFailure>" OR
+   NOT _installed_http2_peer_settings MATCHES "makeInitialWindowChange" OR
+   NOT _installed_http2_peer_settings MATCHES "http2PeerSettingErrorCode")
+    message(FATAL_ERROR "installed HTTP/2 peer SETTINGS lost its discriminated apply result")
+endif()
+if(_installed_http2_connection MATCHES
+   "beginUpgraded|seedUpgradedStream|HTTP2-Settings")
+    message(FATAL_ERROR "installed HTTP/2 core still exposes obsolete HTTP/1.1 Upgrade state")
+endif()
+if(_installed_http2_connection MATCHES "Http2FeedStatus" OR
+   _installed_http2_connection MATCHES "struct[ \t]+Http2FeedResult")
+    message(FATAL_ERROR "installed HTTP/2 core restored the feed status/byte-count tuple")
+endif()
+if(NOT _installed_http2_connection MATCHES "enum class Http2FeedResult" OR
+   NOT _installed_http2_connection MATCHES "kConnectionNotStarted" OR
+   NOT _installed_http2_connection MATCHES "kEventsPending" OR
+   NOT _installed_http2_connection MATCHES "kAccepted" OR
+   NOT _installed_http2_connection MATCHES "kNeedInput" OR
+   NOT _installed_http2_connection MATCHES "kProtocolFailure")
+    message(FATAL_ERROR "installed HTTP/2 core lost its direct feed ownership result")
+endif()
+if(_installed_http2_connection MATCHES "Http2RequestHeadSubmitStatus" OR
+   _installed_http2_connection MATCHES
+       "status_[ \t]*;[ \t\r\n]*std::uint32_t[ \t]+streamId_")
+    message(FATAL_ERROR "installed HTTP/2 core restored the request-head status/stream-ID tuple")
+endif()
+if(NOT _installed_http2_connection MATCHES
+       "enum class Http2RequestHeadSubmitError" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2SubmittedRequestHead final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2RequestHeadSubmitFailure final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2RequestHeadSubmitResult final" OR
+   NOT _installed_http2_connection MATCHES
+       "std::get_if<Http2SubmittedRequestHead>" OR
+   NOT _installed_http2_connection MATCHES
+       "std::get_if<Http2RequestHeadSubmitFailure>" OR
+   NOT _installed_http2_connection MATCHES "streamId_ == 0" OR
+   NOT _installed_http2_connection MATCHES "[(]streamId_ [&] 1U[)] == 0" OR
+   NOT _installed_http2_connection MATCHES "makeSubmitted" OR
+   NOT _installed_http2_connection MATCHES "makeFailure")
+    message(FATAL_ERROR "installed HTTP/2 core lost its discriminated request-head submission result")
+endif()
+if(_installed_http2_connection MATCHES "Http2HeadSubmitResult" OR
+   _installed_http2_connection MATCHES "Http2BufferedHeadSubmitResult" OR
+   _installed_http2_connection MATCHES "Http2StreamingHeadSubmitResult" OR
+   _installed_http2_connection MATCHES
+       "Http2SubmitStatus[ \t]+status_[ \t]*[{][^}]*[}][ \t]*;[ \t\r\n]*Plan[ \t]+plan_")
+    message(FATAL_ERROR "installed HTTP/2 core restored the response-head status/plan tuple")
+endif()
+if(NOT _installed_http2_connection MATCHES
+       "enum class Http2ResponseHeadSubmitError" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2SubmittedResponseHead final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2ResponseHeadSubmitFailure final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2ResponseHeadSubmitResult final" OR
+   NOT _installed_http2_connection MATCHES
+       "std::variant<Submitted, Http2ResponseHeadSubmitFailure>" OR
+   NOT _installed_http2_connection MATCHES "std::get_if<Submitted>" OR
+   NOT _installed_http2_connection MATCHES
+       "std::get_if<Http2ResponseHeadSubmitFailure>" OR
+   NOT _installed_http2_connection MATCHES
+       "Http2SubmittedBufferedResponseHead" OR
+   NOT _installed_http2_connection MATCHES
+       "Http2SubmittedStreamingResponseHead" OR
+   NOT _installed_http2_connection MATCHES
+       "Http2BufferedResponseHeadSubmitResult" OR
+   NOT _installed_http2_connection MATCHES
+       "Http2StreamingResponseHeadSubmitResult")
+    message(FATAL_ERROR "installed HTTP/2 core lost its discriminated response-head submission result")
+endif()
+set(_installed_http2_event_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Event.h")
+if(NOT EXISTS "${_installed_http2_event_path}")
+    message(FATAL_ERROR "installed HTTP/2 core is missing its typed event contract")
+endif()
+file(READ "${_installed_http2_event_path}" _installed_http2_event)
+if(NOT _installed_http2_connection MATCHES
+       "std::optional<Http2Event>[ \t]+nextEvent" OR
+   NOT _installed_http2_event MATCHES "enum class Http2EventKind" OR
+   NOT _installed_http2_event MATCHES "using Value = std::variant" OR
+   NOT _installed_http2_event MATCHES "class Http2StreamClosedEvent final" OR
+   NOT _installed_http2_event MATCHES "Http2StreamCloseSource source" OR
+   NOT _installed_http2_event MATCHES "Http2ErrorCode error" OR
+   NOT _installed_http2_event MATCHES "class Http2RequestUnprocessedEvent final" OR
+   NOT _installed_http2_event MATCHES "class Http2GoawayEvent final" OR
+   NOT _installed_http2_event MATCHES "lastStreamId[(][)] const" OR
+   NOT _installed_http2_event MATCHES "std::get_if<Http2StreamClosedEvent>")
+    message(FATAL_ERROR "installed HTTP/2 core lost its optional discriminated event contract")
+endif()
+if(_installed_http2_event MATCHES "struct[ \t]+Http2Event[ \t]+final" OR
+   _installed_http2_event MATCHES "Http2Event::Kind" OR
+   _installed_http2_event MATCHES "Kind::kNone")
+    message(FATAL_ERROR "installed HTTP/2 core restored the loose sentinel event tuple")
+endif()
+set(_installed_ws_connection_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/WsConnection.h")
+set(_installed_ws_event_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/WsEvent.h")
+set(_installed_ws_inbound_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+if(NOT EXISTS "${_installed_ws_connection_path}" OR
+   NOT EXISTS "${_installed_ws_event_path}" OR
+   NOT EXISTS "${_installed_ws_inbound_path}")
+    message(FATAL_ERROR "installed WebSocket core is missing its typed event contract")
+endif()
+file(READ "${_installed_ws_connection_path}" _installed_ws_connection)
+file(READ "${_installed_ws_event_path}" _installed_ws_event)
+file(READ "${_installed_ws_inbound_path}" _installed_ws_inbound)
+if(NOT _installed_ws_connection MATCHES
+       "std::optional<WsEvent>[ \t]+poll" OR
+   NOT _installed_ws_event MATCHES "enum class WsEventKind" OR
+   NOT _installed_ws_event MATCHES "using Value = std::variant" OR
+   NOT _installed_ws_event MATCHES "class WsMessageEvent final" OR
+   NOT _installed_ws_event MATCHES "class WsPingEvent final" OR
+   NOT _installed_ws_event MATCHES "class WsPongEvent final" OR
+   NOT _installed_ws_event MATCHES "class WsCloseEvent final" OR
+   NOT _installed_ws_event MATCHES "std::string_view reason" OR
+   NOT _installed_ws_event MATCHES "class WsProtocolErrorEvent final" OR
+   NOT _installed_ws_event MATCHES "class WsTransportEndEvent final")
+    message(FATAL_ERROR "installed WebSocket core lost its optional discriminated event contract")
+endif()
+if(_installed_ws_event MATCHES "struct[ \t]+WsEvent[ \t]+final" OR
+   _installed_ws_event MATCHES "WsEvent::Kind" OR
+   _installed_ws_event MATCHES "Kind::kNone")
+    message(FATAL_ERROR "installed WebSocket core restored the loose sentinel event tuple")
+endif()
+if(NOT _installed_ws_inbound MATCHES
+       "enum class WebSocketProtocolFailure" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketFrameNeedInput final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketFrameReadFailure final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketFrameReadResult final" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketFrameNeedInput>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketFrameView>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketFrameReadFailure>" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundContinue final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundControlFrame final" OR
+   NOT _installed_ws_inbound MATCHES
+       "enum class WebSocketInboundContentEncoding" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundMessage final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundFailure final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketInboundResult final" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketInboundContinue>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketInboundControlFrame>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketInboundMessage>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketInboundFailure>" OR
+   NOT _installed_ws_inbound MATCHES "webSocketClosePayloadFailure")
+    message(FATAL_ERROR "installed WebSocket core lost its typed inbound result contract")
+endif()
+if(_installed_ws_inbound MATCHES "WebSocketProtocolError" OR
+   _installed_ws_inbound MATCHES "WebSocketInboundAction" OR
+   _installed_ws_inbound MATCHES "WebSocketFrameReadStatus" OR
+   _installed_ws_inbound MATCHES
+       "struct[ \t]+WebSocketFrameReadResult" OR
+   _installed_ws_inbound MATCHES "validateWebSocketClosePayload" OR
+   _installed_ws_inbound MATCHES "requiredBytes" OR
+   _installed_ws_inbound MATCHES "cleanEofAllowed")
+    message(FATAL_ERROR "installed WebSocket core restored a loose or throwing inbound result")
+endif()
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
+    _installed_http1_server_request_parser)
+if(NOT _installed_http1_server_request_parser MATCHES
+       "enum class Http1ServerRequestParsePhase" OR
+   NOT _installed_http1_server_request_parser MATCHES "kRequestHeadReady" OR
+   NOT _installed_http1_server_request_parser MATCHES "kRequestMessageReady" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerRequestParseState final" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerRequestParser final")
+    message(FATAL_ERROR "installed HTTP/1 server parser lost distinct head/message phases")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/Http1RequestParser.h"
+    _installed_http1_request_parser)
+if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
+   NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
+   NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
+   NOT _installed_http1_request_parser MATCHES "class Http1RequestParseResult final" OR
+   NOT _installed_http1_request_parser MATCHES "std::variant" OR
+   NOT _installed_http1_request_parser MATCHES "requiredTotalBytes" OR
+   NOT _installed_http1_request_parser MATCHES "bodyPlan" OR
+   NOT _installed_http1_request_parser MATCHES "wireBody" OR
+   NOT _installed_http1_request_parser MATCHES "error_[ \t]*==[ \t]*HttpParseError::kNone")
+    message(FATAL_ERROR "installed HTTP/1 parser lost its discriminated whole-message contract")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/HttpClient.h" _installed_http_client)
+if(_installed_http_client MATCHES
+   "HttpFetchOptions|FetchResponse(Header|Access)?|bodyStream|maxRedirects|decodeStream|static[ \\t]+constexpr[ \\t]+HttpOrigin[ \\t]+(http|https)|std::string_view[ \\t]+body[ \\t]*\\{")
+    message(FATAL_ERROR "installed outbound client model contains stale runtime-era API")
+endif()
+if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
+   NOT _installed_http_client MATCHES "class HttpOrigin final" OR
+   NOT _installed_http_client MATCHES "basic_string<char, Traits, Allocator>&&" OR
+   NOT _installed_http_client MATCHES "class HttpClientRequestContent final" OR
+   NOT _installed_http_client MATCHES "HttpClientRequestContentMode::kNone" OR
+   NOT _installed_http_client MATCHES "HttpClientRequestContentMode::kBytes" OR
+   NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
+   NOT _installed_http_client MATCHES "class HttpClientResponse final")
+    message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
+    _installed_http_authority)
+if(NOT _installed_http_authority MATCHES "enum class HttpAuthorityPortKind" OR
+   NOT _installed_http_authority MATCHES "class HttpAuthorityView final" OR
+   NOT _installed_http_authority MATCHES "parseHttpAuthority" OR
+   NOT _installed_http_authority MATCHES "httpUriHostEquals")
+    message(FATAL_ERROR "installed HTTP authority parser lost its typed absent/empty/value contract")
+endif()
+if(EXISTS "${_install_prefix}/include/ruvia/http/detail/client/HttpClientRedirect.h")
+    message(FATAL_ERROR "installed package retained the private redirect API header")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/HttpClientRedirect.h"
+    _installed_http_client_redirect)
+if(_installed_http_client_redirect MATCHES
+       "HttpClientResponseHeaderLookupStatus|HttpClientRedirectTargetStatus|std::pmr::string[ \\t]*&[ \\t]*outTarget" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientResponseHeaderAbsent final" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientResponseHeaderFound final" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientResponseHeaderRepeated final" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientResponseHeaderLookupResult final" OR
+   NOT _installed_http_client_redirect MATCHES "std::get_if<HttpClientResponseHeaderFound>" OR
+   NOT _installed_http_client_redirect MATCHES "enum class HttpClientRedirectTargetError" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientRedirectTarget final" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientRedirectTargetFailure final" OR
+   NOT _installed_http_client_redirect MATCHES "class HttpClientRedirectTargetResult final" OR
+   NOT _installed_http_client_redirect MATCHES "std::get_if<HttpClientRedirectTarget>" OR
+   NOT _installed_http_client_redirect MATCHES "std::get_if<HttpClientRedirectTargetFailure>" OR
+   NOT _installed_http_client_redirect MATCHES "enum class HttpClientOriginAuthorityStatus" OR
+   NOT _installed_http_client_redirect MATCHES "kSameOrigin" OR
+   NOT _installed_http_client_redirect MATCHES "kDifferentOrigin" OR
+   NOT _installed_http_client_redirect MATCHES "kInvalidAuthority" OR
+   _installed_http_client_redirect MATCHES "httpClientAuthorityMatchesOrigin")
+    message(FATAL_ERROR "installed redirect helper lost its public discriminated contract")
+endif()
+file(READ "${_install_prefix}/include/ruvia/http/MultipartParser.h"
+    _installed_multipart_parser)
+file(READ "${_install_prefix}/include/ruvia/http/detail/MultipartParsing.h"
+    _installed_multipart_parsing)
+if(_installed_multipart_parser MATCHES
+       "partBegin[ \\t]*\\(|partEnd[ \\t]*\\(|appendChunk[ \\t]*\\(|enum class PollStatus|MultipartParser::PollResult|MultipartParser[ \\t\\r\\n]*\\([ \\t\\r\\n]*std::string_view" OR
+   _installed_multipart_parsing MATCHES
+       "HttpMultipartDelimiter(Status|Match)|HttpMultipartBoundaryParseStatus|HttpMultipartPartHeaderStatus|httpParseMultipartPartHeaders[ \\t\\r\\n]*\\([^)]*HttpMultipartPartHeaders[ \\t]*&")
+    message(FATAL_ERROR "installed multipart parser contains a stale raw-boundary or status/payload tuple API")
+endif()
+if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
+   NOT _installed_multipart_parser MATCHES "enum class MultipartChunkPhase" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartPollNeedInput final" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartPollDone final" OR
+   NOT _installed_multipart_parser MATCHES "enum class MultipartParseError" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartPollFailure final" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartPollResult final" OR
+   NOT _installed_multipart_parser MATCHES "using Value = std::variant" OR
+   NOT _installed_multipart_parser MATCHES "std::get_if<MultipartStreamPart>" OR
+   NOT _installed_multipart_parser MATCHES "std::get_if<MultipartPollFailure>" OR
+   NOT _installed_multipart_parser MATCHES "multipartParseErrorMessage" OR
+   NOT _installed_multipart_parser MATCHES "void finishInput[(][)] noexcept" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNoMatch final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterNeedInput final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartDelimiter final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartCloseDelimiter final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartDelimiterResult final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartBoundaryParseFailure final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartBoundaryParseResult final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartHeaderParseFailure final" OR
+   NOT _installed_multipart_parsing MATCHES "class HttpMultipartPartHeaderParseResult final")
+    message(FATAL_ERROR "installed multipart parser lost its discriminated boundary/input lifecycle API")
+endif()
+endif()
 
-set(_configure_command
-    "@CMAKE_COMMAND@"
-    -S "@CMAKE_SOURCE_DIR@/tests/package-consumer"
-    -B "${_consumer_build}"
-    -G "@CMAKE_GENERATOR@"
-    "-DCMAKE_PREFIX_PATH=${_install_prefix}"
-    "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_CONFIG}"
-    "-DRUVIA_PACKAGE_COMPONENTS=@RUVIA_BUILT_COMPONENTS_CSV@")
+function(ruvia_verify_package_consumer
+    name prefix components visible_components available_components optional_components
+    expect_configure_failure)
+    set(_build_dir "${_consumer_build}/${name}")
+    file(REMOVE_RECURSE "${_build_dir}")
 
-if(NOT "@CMAKE_GENERATOR_PLATFORM@" STREQUAL "")
-    list(APPEND _configure_command -A "@CMAKE_GENERATOR_PLATFORM@")
-endif()
-if(NOT "@CMAKE_GENERATOR_TOOLSET@" STREQUAL "")
-    list(APPEND _configure_command -T "@CMAKE_GENERATOR_TOOLSET@")
-endif()
-if(NOT "@CMAKE_TOOLCHAIN_FILE@" STREQUAL "")
-    list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@")
-endif()
-if(NOT "@VCPKG_TARGET_TRIPLET@" STREQUAL "")
-    list(APPEND _configure_command "-DVCPKG_TARGET_TRIPLET=@VCPKG_TARGET_TRIPLET@")
-endif()
-if(NOT "@VCPKG_INSTALLED_DIR@" STREQUAL "")
-    list(APPEND _configure_command "-DVCPKG_INSTALLED_DIR=@VCPKG_INSTALLED_DIR@")
-endif()
-if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
-    list(APPEND _configure_command "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")
-endif()
-if(NOT "@CMAKE_CXX_FLAGS@" STREQUAL "")
-    list(APPEND _configure_command "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@")
-endif()
-if(NOT "@CMAKE_EXE_LINKER_FLAGS@" STREQUAL "")
-    list(APPEND _configure_command "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@")
+    set(_configure_command
+        "@CMAKE_COMMAND@"
+        -S "@CMAKE_SOURCE_DIR@/tests/package-consumer"
+        -B "${_build_dir}"
+        -G "@CMAKE_GENERATOR@"
+        "-DCMAKE_PREFIX_PATH=${prefix}"
+        "-DCMAKE_CONFIGURATION_TYPES=${RUVIA_CONFIG}"
+        "-DRUVIA_PACKAGE_COMPONENTS=${components}"
+        "-DRUVIA_PACKAGE_OPTIONAL_COMPONENTS=${optional_components}"
+        "-DRUVIA_EXPECT_VISIBLE_COMPONENTS=${visible_components}"
+        "-DRUVIA_EXPECT_AVAILABLE_COMPONENTS=${available_components}")
+
+    if(NOT "@CMAKE_GENERATOR_PLATFORM@" STREQUAL "")
+        list(APPEND _configure_command -A "@CMAKE_GENERATOR_PLATFORM@")
+    endif()
+    if(NOT "@CMAKE_GENERATOR_TOOLSET@" STREQUAL "")
+        list(APPEND _configure_command -T "@CMAKE_GENERATOR_TOOLSET@")
+    endif()
+    if(NOT "@CMAKE_TOOLCHAIN_FILE@" STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@")
+    endif()
+    if(NOT "@VCPKG_TARGET_TRIPLET@" STREQUAL "")
+        list(APPEND _configure_command "-DVCPKG_TARGET_TRIPLET=@VCPKG_TARGET_TRIPLET@")
+    endif()
+    if(NOT "@VCPKG_INSTALLED_DIR@" STREQUAL "")
+        list(APPEND _configure_command "-DVCPKG_INSTALLED_DIR=@VCPKG_INSTALLED_DIR@")
+    endif()
+    if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")
+    endif()
+    if(NOT "@CMAKE_CXX_FLAGS@" STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_CXX_FLAGS=@CMAKE_CXX_FLAGS@")
+    endif()
+    if(NOT "@CMAKE_EXE_LINKER_FLAGS@" STREQUAL "")
+        list(APPEND _configure_command "-DCMAKE_EXE_LINKER_FLAGS=@CMAKE_EXE_LINKER_FLAGS@")
+    endif()
+
+    execute_process(COMMAND ${_configure_command} RESULT_VARIABLE _configure_result)
+    if(expect_configure_failure)
+        if(_configure_result EQUAL 0)
+            message(FATAL_ERROR
+                "Ruvia package consumer '${name}' unexpectedly accepted a missing required component")
+        endif()
+        return()
+    endif()
+    if(NOT _configure_result EQUAL 0)
+        message(FATAL_ERROR
+            "Ruvia package consumer '${name}' configure failed: ${_configure_result}")
+    endif()
+
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@" --build "${_build_dir}"
+            --config "${RUVIA_CONFIG}" --parallel
+        RESULT_VARIABLE _build_result)
+    if(NOT _build_result EQUAL 0)
+        message(FATAL_ERROR
+            "Ruvia package consumer '${name}' build failed: ${_build_result}")
+    endif()
+endfunction()
+
+function(ruvia_install_component_package name components_csv)
+    set(_prefix "${_component_install_root}/${name}")
+    string(REPLACE "," ";" _components "${components_csv}")
+    foreach(_component IN LISTS _components)
+        execute_process(
+            COMMAND "@CMAKE_COMMAND@" --install "@CMAKE_BINARY_DIR@"
+                --config "${RUVIA_CONFIG}"
+                --prefix "${_prefix}"
+                --component "${_component}"
+            RESULT_VARIABLE _component_install_result)
+        if(NOT _component_install_result EQUAL 0)
+            message(FATAL_ERROR
+                "Ruvia '${name}' component install failed for ${_component}: ${_component_install_result}")
+        endif()
+    endforeach()
+    execute_process(
+        COMMAND "@CMAKE_COMMAND@" --install "@CMAKE_BINARY_DIR@"
+            --config "${RUVIA_CONFIG}"
+            --prefix "${_prefix}"
+            --component Development
+        RESULT_VARIABLE _development_install_result)
+    if(NOT _development_install_result EQUAL 0)
+        message(FATAL_ERROR
+            "Ruvia '${name}' Development install failed: ${_development_install_result}")
+    endif()
+
+    foreach(_component IN ITEMS core http web)
+        set(_export
+            "${_prefix}/@CMAKE_INSTALL_LIBDIR@/cmake/ruvia/ruvia-${_component}-targets.cmake")
+        if(_component IN_LIST _components)
+            if(NOT EXISTS "${_export}")
+                message(FATAL_ERROR
+                    "Ruvia '${name}' install omitted the ${_component} target export")
+            endif()
+        elseif(EXISTS "${_export}")
+            message(FATAL_ERROR
+                "Ruvia '${name}' install leaked the ${_component} target export")
+        endif()
+    endforeach()
+
+    set(${name}_PREFIX "${_prefix}" PARENT_SCOPE)
+endfunction()
+
+# A full install exposes every available component but imports only the requested
+# target closure into each consuming project.
+ruvia_verify_package_consumer(
+    full-all "${_install_prefix}" "${_built_components_csv}"
+    "${_built_components_csv}" "${_built_components_csv}" "" FALSE)
+
+if("core" IN_LIST _built_components)
+    ruvia_verify_package_consumer(
+        full-core "${_install_prefix}" core core "${_built_components_csv}"
+        unavailable FALSE)
+
+    ruvia_install_component_package(partial_core core)
+    ruvia_verify_package_consumer(
+        partial-core "${partial_core_PREFIX}" core core core unavailable FALSE)
+    ruvia_verify_package_consumer(
+        partial-core-missing-web "${partial_core_PREFIX}" web "" core "" TRUE)
 endif()
 
-execute_process(COMMAND ${_configure_command} RESULT_VARIABLE _configure_result)
-if(NOT _configure_result EQUAL 0)
-    message(FATAL_ERROR "Ruvia package consumer configure failed: ${_configure_result}")
+if("http" IN_LIST _built_components)
+    ruvia_verify_package_consumer(
+        full-http "${_install_prefix}" http http "${_built_components_csv}"
+        unavailable FALSE)
+
+    ruvia_install_component_package(partial_http http)
+    ruvia_verify_package_consumer(
+        partial-http "${partial_http_PREFIX}" http http http unavailable FALSE)
+    ruvia_verify_package_consumer(
+        partial-http-missing-core "${partial_http_PREFIX}" core "" http "" TRUE)
 endif()
 
-execute_process(
-    COMMAND "@CMAKE_COMMAND@" --build "${_consumer_build}" --config "${RUVIA_CONFIG}" --parallel
-    RESULT_VARIABLE _build_result)
-if(NOT _build_result EQUAL 0)
-    message(FATAL_ERROR "Ruvia package consumer build failed: ${_build_result}")
+if("web" IN_LIST _built_components)
+    ruvia_verify_package_consumer(
+        full-web "${_install_prefix}" web "core,http,web"
+        "${_built_components_csv}" unavailable FALSE)
+
+    # A web artifact without both lower target exports is deliberately not a
+    # usable package component; install the full closure for the success case.
+    ruvia_install_component_package(partial_web_only web)
+    ruvia_verify_package_consumer(
+        partial-web-missing-dependencies "${partial_web_only_PREFIX}"
+        web "" "" "" TRUE)
+
+    ruvia_install_component_package(partial_web_closure "core,http,web")
+    ruvia_verify_package_consumer(
+        partial-web-closure "${partial_web_closure_PREFIX}" web "core,http,web"
+        "core,http,web" unavailable FALSE)
 endif()

@@ -5,22 +5,6 @@
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
-namespace {
-
-[[nodiscard]] bool protocolOffered(
-    const HttpRequest& request,
-    const HttpRequestFlags& flags,
-    std::string_view protocol) noexcept {
-    if (httpHasExactToken(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketProtocol), protocol)) {
-        return true;
-    }
-    if (flags.secWebSocketProtocolCount <= 1) {
-        return false;
-    }
-    return webSocketProtocolOffered(request, protocol);
-}
-
-}  // namespace
 
 bool webSocketProtocolOffered(const HttpRequest& request, std::string_view protocol) noexcept {
     if (httpHasExactToken(requestKnownHeader(request, RequestKnownHeader::kSecWebSocketProtocol), protocol)) {
@@ -37,10 +21,9 @@ bool webSocketProtocolOffered(const HttpRequest& request, std::string_view proto
 
 std::string_view chooseWebSocketSubprotocol(
     const HttpRequest& request,
-    const HttpRequestFlags& flags,
     std::string_view supported) noexcept {
-    return httpFindHeaderToken(supported, [&request, &flags](std::string_view token) noexcept {
-        return protocolOffered(request, flags, token);
+    return httpFindHeaderToken(supported, [&request](std::string_view token) noexcept {
+        return webSocketProtocolOffered(request, token);
     });
 }
 

@@ -1,18 +1,39 @@
 #include "test_harness.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
+#include <vector>
 
+#include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 
 namespace {
 
 using ruvia::HttpResponse;
+
+template <typename T>
+concept HasCustomReasonPhraseSetter = requires(T& response) {
+    response.status(std::uint16_t{200}, std::string_view{});
+};
+
+static_assert(!HasCustomReasonPhraseSetter<HttpResponse>);
+
+static_assert(!std::is_constructible_v<
+    ruvia::HttpInterimResponseHead::HeaderInit,
+    std::array<ruvia::HttpHeaderView, 1>&&>);
+static_assert(!std::is_constructible_v<
+    ruvia::HttpInterimResponseHead::HeaderInit,
+    const std::vector<ruvia::HttpHeaderView>&>);
+static_assert(!std::is_constructible_v<
+    ruvia::HttpInterimResponseHead::HeaderInit,
+    std::initializer_list<ruvia::HttpHeaderView>>);
 
 HttpResponse makeResponse() {
     return HttpResponse(std::pmr::new_delete_resource());
@@ -30,42 +51,52 @@ bool throwsInvalid(Fn&& fn) {
 
 }  // namespace
 
-RUVIA_TEST(response_default_status_text) {
+RUVIA_TEST(response_status_is_version_neutral_code_only) {
     auto response = makeResponse();
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("OK"));
     response.status(404);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{404});
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("Not Found"));
-    // Unknown codes fall back by class.
     response.status(599);
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("Internal Server Error"));
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
     response.status(299);
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("Bad Request"));
-}
-
-RUVIA_TEST(response_custom_status_text_and_normalization) {
-    auto response = makeResponse();
-    response.status(404, "Totally Missing");
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("Totally Missing"));
-    // Explicitly passing the default phrase normalizes back to the default.
-    response.status(404, "Not Found");
-    RUVIA_CHECK_EQ(response.statusText(), std::string_view("Not Found"));
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{299});
 }
 
 RUVIA_TEST(response_status_code_range_validated) {
     auto response = makeResponse();
     RUVIA_CHECK(throwsInvalid([&] { response.status(99); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(1000); }));
-    RUVIA_CHECK(!throwsInvalid([&] { response.status(100); }));  // lower boundary
-    RUVIA_CHECK(!throwsInvalid([&] { response.status(999); }));  // upper boundary
+    RUVIA_CHECK(throwsInvalid([&] { response.status(100); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.status(199); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.status(600); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.status(999); }));
+    RUVIA_CHECK(!throwsInvalid([&] { response.status(200); }));  // lower boundary
+    RUVIA_CHECK(!throwsInvalid([&] { response.status(599); }));  // upper boundary
 }
 
-RUVIA_TEST(response_status_text_rejects_injection) {
-    // A custom reason phrase must not carry response-splitting bytes.
+RUVIA_TEST(response_switching_protocols_requires_a_dedicated_driver) {
     auto response = makeResponse();
-    RUVIA_CHECK(throwsInvalid([&] { response.status(200, std::string_view("a\r\nInjected: x", 14)); }));
-    RUVIA_CHECK(throwsInvalid([&] { response.status(200, std::string_view("a\nb", 3)); }));
+    RUVIA_CHECK(throwsInvalid([&] { response.status(101); }));
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
+}
+
+RUVIA_TEST(interim_response_head_owns_the_non_switching_1xx_status_space) {
+    const ruvia::HttpHeaderView headers[] = {
+        {"Link", "</style.css>; rel=preload"},
+    };
+    const ruvia::HttpInterimResponseHead earlyHints(103, headers);
+    RUVIA_CHECK_EQ(earlyHints.status(), std::uint16_t{103});
+    RUVIA_CHECK_EQ(earlyHints.headers().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(earlyHints.headers()[0].name(), std::string_view("Link"));
+
+    for (const std::uint16_t status : {
+             std::uint16_t{99},
+             std::uint16_t{101},
+             std::uint16_t{200},
+             std::uint16_t{600}}) {
+        RUVIA_CHECK(throwsInvalid([&] {
+            (void)ruvia::HttpInterimResponseHead(status);
+        }));
+    }
 }
 
 RUVIA_TEST(response_header_replace_append_and_remove) {
@@ -218,4 +249,23 @@ RUVIA_TEST(response_header_rejects_name_and_value_injection) {
     // A clean header is accepted.
     RUVIA_CHECK(!throwsInvalid([&] { response.header("X-Clean", "ok"); }));
     RUVIA_CHECK_EQ(response.header("X-Clean"), std::string_view("ok"));
+}
+
+RUVIA_TEST(response_header_rejects_invalid_connection_control_lists) {
+    auto response = makeResponse();
+    for (const auto value : {"close,", ", Upgrade", "close;invalid", ""}) {
+        RUVIA_CHECK(throwsInvalid([&] {
+            response.header("Connection", value);
+        }));
+    }
+    for (const auto value : {"websocket/", ", websocket", ""}) {
+        RUVIA_CHECK(throwsInvalid([&] {
+            response.header("Upgrade", value);
+        }));
+    }
+
+    RUVIA_CHECK(!throwsInvalid([&] {
+        response.header("Connection", "keep-alive, Upgrade");
+        response.header("Upgrade", "custom/1, websocket");
+    }));
 }

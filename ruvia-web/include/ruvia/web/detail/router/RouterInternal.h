@@ -65,7 +65,7 @@ public:
     [[nodiscard]] const RouteTable& routeTable() const;
 
     void registerRoute(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::pmr::string path,
         RouteHandler handler,
         RequestBodyMode bodyMode,
@@ -73,7 +73,7 @@ public:
         std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
     void registerStreamRoute(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::pmr::string path,
         RouteStreamHandler handler,
         ResponseBodyMode responseMode,
@@ -85,7 +85,7 @@ private:
     class PendingRoute final {
     public:
         struct Init final {
-            HttpMethod method;
+            HttpKnownMethod method;
             std::pmr::string path;
             RouteHandler handler;
             RouteStreamHandler streamHandler;
@@ -94,7 +94,7 @@ private:
             bool dynamic{false};
             std::pmr::vector<RouteMiddleware> middlewares;
             std::string_view webSocketSubprotocols{};
-            WebSocketHeartbeatOptions webSocketHeartbeat{};
+            WebSocketLifecycleOptions webSocketLifecycle{};
         };
 
         PendingRoute(std::pmr::memory_resource* resource, Init init);
@@ -103,7 +103,7 @@ private:
         PendingRoute(PendingRoute&&) noexcept = default;
         PendingRoute& operator=(PendingRoute&&) noexcept = default;
 
-        [[nodiscard]] HttpMethod method() const noexcept {
+        [[nodiscard]] HttpKnownMethod method() const noexcept {
             return method_;
         }
 
@@ -143,8 +143,8 @@ private:
             return webSocketSubprotocols_;
         }
 
-        [[nodiscard]] const WebSocketHeartbeatOptions& webSocketHeartbeat() const noexcept {
-            return webSocketHeartbeat_;
+        [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
+            return webSocketLifecycle_;
         }
 
         void setDynamic(bool dynamic) noexcept {
@@ -156,7 +156,7 @@ private:
         }
 
     private:
-        HttpMethod method_;
+        HttpKnownMethod method_;
         std::pmr::string path_;
         RouteHandler handler_;
         RouteStreamHandler streamHandler_;
@@ -165,7 +165,7 @@ private:
         bool dynamic_{false};
         std::pmr::vector<RouteMiddleware> middlewares_;
         std::pmr::string webSocketSubprotocols_;
-        WebSocketHeartbeatOptions webSocketHeartbeat_{};
+        WebSocketLifecycleOptions webSocketLifecycle_{};
     };
 
     void appendPendingRoute(PendingRoute route);
@@ -188,7 +188,7 @@ private:
     };
 
     static void validateNoDynamicRouteConflict(std::span<const PendingRoute> routes);
-    void validateRouteTarget(HttpMethod method, std::string_view path) const;
+    void validateRouteTarget(HttpKnownMethod method, std::string_view path) const;
     [[nodiscard]] RouteMiddleware materializeMiddleware(ControllerMiddlewareDescriptor middleware);
     void appendMaterializedMiddlewares(
         std::pmr::vector<RouteMiddleware>& frames,

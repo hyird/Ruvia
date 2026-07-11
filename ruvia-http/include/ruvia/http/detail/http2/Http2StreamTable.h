@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/HttpPmrObject.h"
 
@@ -67,7 +68,7 @@ public:
         if (auto* existing = find(streamId); existing != nullptr) {
             return existing;
         }
-        if (size_ >= kHttp2LocalMaxConcurrentStreams) {
+        if (size_ >= Http2LocalSettings::kMaxConcurrentStreams) {
             return nullptr;
         }
         for (auto& slot : inline_) {

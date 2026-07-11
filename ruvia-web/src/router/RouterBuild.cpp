@@ -112,7 +112,7 @@ detail::RouteEntry::RouteEntry(
       middlewareOffset_(init.middlewareOffset),
       middlewareCount_(init.middlewareCount),
       webSocketSubprotocols_(init.webSocketSubprotocols, resource),
-      webSocketHeartbeat_(init.webSocketHeartbeat) {}
+      webSocketLifecycle_(init.webSocketLifecycle) {}
 
 detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
@@ -161,7 +161,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
-        if (route.method() == HttpMethod::kGet && route.isBufferedResponse()) {
+        if (route.method() == HttpKnownMethod::kGet && route.isBufferedResponse()) {
             ++headShadowCandidateCount;
         }
         middlewareCount += route.middlewares().size();
@@ -182,7 +182,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
             .middlewareOffset = 0,
             .middlewareCount = 0,
             .webSocketSubprotocols = pending.webSocketSubprotocols(),
-            .webSocketHeartbeat = pending.webSocketHeartbeat()});
+            .webSocketLifecycle = pending.webSocketLifecycle()});
         route.setMiddlewareRange(table.middlewareFrames_.size(), pendingMiddlewares.size());
         table.middlewareFrames_.insert(
             table.middlewareFrames_.end(),
@@ -207,14 +207,14 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
 
     std::pmr::vector<const RouteEntry*> explicitHeadRoutes(table.resource_);
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
-        if (table.routes_[i].method() == HttpMethod::kHead) {
+        if (table.routes_[i].method() == HttpKnownMethod::kHead) {
             explicitHeadRoutes.push_back(&table.routes_[i]);
         }
     }
 
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
-        if (source.method() != HttpMethod::kGet || !source.isBufferedResponse()) {
+        if (source.method() != HttpKnownMethod::kGet || !source.isBufferedResponse()) {
             continue;
         }
         bool conflictsWithExistingHead = false;
@@ -228,7 +228,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
             continue;
         }
         RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
-            .method = HttpMethod::kHead,
+            .method = HttpKnownMethod::kHead,
             .path = source.path(),
             .handler = source.handler(),
             .streamHandler = source.streamHandler(),
@@ -238,7 +238,7 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
             .middlewareOffset = source.middlewareOffset(),
             .middlewareCount = source.middlewareCount(),
             .webSocketSubprotocols = source.webSocketSubprotocols(),
-            .webSocketHeartbeat = source.webSocketHeartbeat()});
+            .webSocketLifecycle = source.webSocketLifecycle()});
         table.routes_.push_back(std::move(shadow));
     }
 

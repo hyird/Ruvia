@@ -19,7 +19,7 @@ enum class Http2BodyAccountingResult : std::uint8_t {
     std::size_t dataSize,
     std::size_t maxStreamBodyBytes,
     std::size_t maxBufferedBodyBytes) noexcept {
-    if (stream.webSocketTunnel()) {
+    if (stream.tunnelOpen()) {
         return Http2BodyAccountingResult::kOk;
     }
     const auto maxBody = httpRequestBodyByteLimit(
@@ -56,7 +56,7 @@ enum class Http2BodyAccountingResult : std::uint8_t {
 }
 
 [[nodiscard]] inline bool http2BodyLengthComplete(const Http2StreamState& stream) noexcept {
-    return stream.webSocketTunnel() || stream.bodyLengthComplete();
+    return stream.tunnelOpen() || stream.bodyLengthComplete();
 }
 
 inline void http2MarkBodyEnded(Http2StreamState& stream) noexcept {

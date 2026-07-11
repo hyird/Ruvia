@@ -6,9 +6,10 @@
 // streaming request body) live in the stream's own body-chunk queue -- the same
 // Http2BodyQueue the coroutine session's readBodyChunk popped, so the core's
 // backlog accounting (http2AccountDataBody's queued-bytes cap) keeps bounding a
-// consumer that falls behind. The session's reader enqueues each kMessageBodyChunk
-// and wakes the stream's Http2SansIoStreamSignal; the consumers here pop chunks,
-// mirroring readBodyChunk's semantics exactly (reset/EOF -> end of stream).
+// consumer that falls behind. The session's reader enqueues kTunnelData for an
+// accepted CONNECT tunnel (or kMessageBodyChunk for a streaming HTTP request) and
+// wakes the stream's Http2SansIoStreamSignal; the consumers here pop chunks,
+// mirroring readBodyChunk's semantics exactly (reset/peer half-close -> EOF).
 //
 // The same-executor discipline of the session (reader, writer and handlers all run
 // on the connection's executor) means these never race: a wake via signal.cancel()
@@ -24,6 +25,7 @@
 
 #include "ruvia/http/detail/http2/Http2BodyQueue.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/websocket/WsConnection.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -93,7 +95,7 @@ public:
             if (http2HasQueuedStreamBodyChunk(*stream)) {
                 continue;
             }
-            if (stream->bodyEnded() || signal_->ended) {
+            if (stream->peerEndStream() || signal_->ended) {
                 co_return false;
             }
             co_await signal_->wait();
@@ -102,25 +104,53 @@ public:
 
     [[nodiscard]] Task<std::error_code> writeBytes(
         std::string_view bytes,
-        bool endStream) {
-        const auto result = connection_->submitData(streamId_, bytes, endStream);
-        writeSignal_->cancel();
-        if (result == Http2SubmitResult::kClosed) {
-            co_return std::make_error_code(std::errc::connection_reset);
-        }
-        // Backpressure: if the send window is closed, park until the core drains this
-        // stream's blocked remainder (the reader wakes signal_ via takeUnblockedStreams).
-        // Without this, a WS client that stops granting window while the app keeps
-        // writing (broadcast/heartbeat) grows the core's pendingSends_ without bound.
-        // WebSocketConnection serializes writers, so suspending here is safe.
-        while (!signal_->ended && connection_->hasBlockedSend(streamId_)) {
-            auto* stream = connection_->stream(streamId_);
-            if (stream == nullptr || stream->isReset()) {
+        WsTransportDisposition disposition) {
+        const auto terminal = disposition == WsTransportDisposition::kEndTransport
+            ? Http2EndStream::kEndStream
+            : Http2EndStream::kKeepOpen;
+        for (;;) {
+            const auto result = connection_->submitData(streamId_, bytes, terminal);
+            writeSignal_->cancel();
+            if (result == Http2DataSubmitStatus::kAccepted) {
+                co_return std::error_code{};
+            }
+            if (result == Http2DataSubmitStatus::kClosed) {
                 co_return std::make_error_code(std::errc::connection_reset);
             }
-            co_await signal_->wait();
+            if (result == Http2DataSubmitStatus::kInvalidState) {
+                co_return std::make_error_code(std::errc::protocol_error);
+            }
+            if (result == Http2DataSubmitStatus::kContentLengthExceeded ||
+                result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+                // Tunnel DATA is unbounded; observing a response-length verdict here
+                // means the stream was configured with the wrong local message mode.
+                co_return std::make_error_code(std::errc::protocol_error);
+            }
+
+            // kQueued means this input is already core-owned; wait for it to drain,
+            // then return without resubmitting. kBackpressured accepted no bytes, so
+            // wait for the older queued input and retry this exact view.
+            while (connection_->hasQueuedData(streamId_)) {
+                auto* stream = connection_->stream(streamId_);
+                if (stream == nullptr || stream->isReset() || signal_->ended) {
+                    co_return std::make_error_code(std::errc::connection_reset);
+                }
+                co_await signal_->wait();
+            }
+            if (result == Http2DataSubmitStatus::kQueued) {
+                co_return std::error_code{};
+            }
+            auto* stream = connection_->stream(streamId_);
+            if (stream == nullptr || stream->isReset() || signal_->ended) {
+                co_return std::make_error_code(std::errc::connection_reset);
+            }
         }
-        co_return std::error_code{};
+    }
+
+    void abort() noexcept {
+        (void)connection_->submitReset(streamId_, Http2ErrorCode::kCancel);
+        signal_->end();
+        writeSignal_->cancel();
     }
 
 private:
@@ -134,7 +164,7 @@ private:
 // Streaming request-body reader for the sans-I/O session; the BodyReader facade wraps
 // it for handler consumption. Chunk-for-chunk port of the coroutine readBodyChunk. A
 // null signal means the body already ended when dispatch started (END_STREAM on the
-// request HEADERS, or an h2c-upgrade seeded body), so read never needs to wait.
+// request HEADERS), so read never needs to wait.
 class Http2SansIoRequestBodyReader final {
 public:
     Http2SansIoRequestBodyReader(

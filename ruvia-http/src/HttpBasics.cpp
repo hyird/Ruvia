@@ -36,70 +36,82 @@ bool isValidHttpStatusText(std::string_view value) noexcept {
     return isValidHttpHeaderValue(value);
 }
 
-HttpMethod parseMethod(std::string_view method) {
+HttpKnownMethod classifyHttpMethod(std::string_view method) noexcept {
     switch (method.size()) {
         case 3:
             if (method == "GET") {
-                return HttpMethod::kGet;
+                return HttpKnownMethod::kGet;
             }
             if (method == "PUT") {
-                return HttpMethod::kPut;
+                return HttpKnownMethod::kPut;
             }
             break;
         case 4:
             if (method == "POST") {
-                return HttpMethod::kPost;
+                return HttpKnownMethod::kPost;
             }
             if (method == "HEAD") {
-                return HttpMethod::kHead;
+                return HttpKnownMethod::kHead;
             }
             break;
         case 5:
             if (method == "PATCH") {
-                return HttpMethod::kPatch;
+                return HttpKnownMethod::kPatch;
             }
             break;
         case 6:
             if (method == "DELETE") {
-                return HttpMethod::kDelete;
+                return HttpKnownMethod::kDelete;
             }
             break;
         case 7:
             if (method == "OPTIONS") {
-                return HttpMethod::kOptions;
+                return HttpKnownMethod::kOptions;
             }
             if (method == "CONNECT") {
-                return HttpMethod::kConnect;
+                return HttpKnownMethod::kConnect;
             }
             break;
         default:
             break;
     }
-    return HttpMethod::kUnknown;
+    return HttpKnownMethod::kUnknown;
 }
 
-std::string_view methodName(HttpMethod method) {
+std::string_view knownHttpMethodToken(HttpKnownMethod method) noexcept {
     switch (method) {
-        case HttpMethod::kGet:
+        case HttpKnownMethod::kGet:
             return "GET";
-        case HttpMethod::kPost:
+        case HttpKnownMethod::kPost:
             return "POST";
-        case HttpMethod::kPut:
+        case HttpKnownMethod::kPut:
             return "PUT";
-        case HttpMethod::kDelete:
+        case HttpKnownMethod::kDelete:
             return "DELETE";
-        case HttpMethod::kPatch:
+        case HttpKnownMethod::kPatch:
             return "PATCH";
-        case HttpMethod::kHead:
+        case HttpKnownMethod::kHead:
             return "HEAD";
-        case HttpMethod::kOptions:
+        case HttpKnownMethod::kOptions:
             return "OPTIONS";
-        case HttpMethod::kConnect:
+        case HttpKnownMethod::kConnect:
             return "CONNECT";
-        case HttpMethod::kUnknown:
+        case HttpKnownMethod::kUnknown:
         default:
-            return "UNKNOWN";
+            return {};
     }
+}
+
+bool isValidHttpMethodToken(std::string_view method) noexcept {
+    if (method.empty()) {
+        return false;
+    }
+    for (const auto ch : method) {
+        if (!detail::isHttpTokenChar(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace ruvia

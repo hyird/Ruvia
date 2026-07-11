@@ -7,26 +7,26 @@ StreamBodyReader<Stream>::StreamBodyReader(
     Stream& stream,
     std::pmr::polymorphic_allocator<char> allocator,
     std::string_view initialBodyAndPipeline,
-    std::size_t contentLength,
-    bool chunked,
-    HttpTransferCodings transferCodings,
+    Http1RequestBodyPlan bodyPlan,
     std::size_t maxBodyBytes,
-    ConnectionScanner::Entry& scannerEntry,
-    bool sendContinue)
+    ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
       transferDecoderAllocator_(allocator.resource()),
       initialBodyAndPipeline_(initialBodyAndPipeline),
-      contentLength_(contentLength),
-      chunked_(chunked),
+      bodyPlan_(bodyPlan),
       maxBodyBytes_(maxBodyBytes),
       chunkDecoder_(maxBodyBytes),
       scannerEntry_(scannerEntry),
-      sendContinue_(sendContinue) {
-    if (!transferCodings.empty()) {
+      finished_(!bodyPlan_.requiresConsumption()) {
+    if (!bodyPlan_.transferCodings().empty()) {
         transferDecoder_ = transferDecoderAllocator_.allocate(1);
         try {
-            std::construct_at(transferDecoder_, transferCodings, allocator, maxBodyBytes);
+            std::construct_at(
+                transferDecoder_,
+                bodyPlan_.transferCodings(),
+                allocator,
+                maxBodyBytes);
         } catch (...) {
             transferDecoderAllocator_.deallocate(transferDecoder_, 1);
             transferDecoder_ = nullptr;
@@ -44,8 +44,10 @@ StreamBodyReader<Stream>::~StreamBodyReader() {
 }
 
 template <typename Stream>
-bool StreamBodyReader<Stream>::finished() const noexcept {
-    return finished_ && (transferDecoder_ == nullptr || transferDecoder_->finished());
+Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexcept {
+    return finished_ && (transferDecoder_ == nullptr || transferDecoder_->finished())
+        ? Http1RequestBodyConsumption::kComplete
+        : Http1RequestBodyConsumption::kIncomplete;
 }
 
 template <typename Stream>
@@ -57,11 +59,11 @@ void StreamBodyReader<Stream>::restorePipeline(std::pmr::string& readBuffer, std
 
 template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
-    if (chunked_) {
+    if (bodyPlan_.isChunked()) {
         co_await ensureContinue();
         co_return co_await readTransferDecodedChunked();
     }
-    if (exceedsLimit(contentLength_)) {
+    if (exceedsLimit(bodyPlan_.contentLength())) {
         throwRequestBodyTooLarge();
     }
 
@@ -71,7 +73,7 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::read() {
 
 template <typename Stream>
 Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body) {
-    if (!chunked_) {
+    if (!bodyPlan_.isChunked()) {
         co_return co_await readContentLengthAll(body);
     }
 
@@ -94,10 +96,10 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
 
 template <typename Stream>
 Task<void> StreamBodyReader<Stream>::ensureContinue() {
-    if (sendContinue_ && !continueSent_) {
-        if (!(co_await writeContinue(stream_))) {
-            throw std::invalid_argument("failed to write 100 Continue");
-        }
+    if (bodyPlan_.expectationAction() ==
+            HttpServerExpectationAction::kSend100Continue &&
+        !continueSent_) {
+        co_await writeHttp1Continue(stream_);
         continueSent_ = true;
     }
 }
@@ -106,7 +108,7 @@ template <typename Stream>
 Task<void> StreamBodyReader<Stream>::readMore() {
     compactPending();
     const auto oldSize = buffer_.size();
-    const auto hardLimit = chunked_
+    const auto hardLimit = bodyPlan_.isChunked()
         ? kChunkedEncodedBufferBytes
         : (maxBodyBytes_ == 0 ? (std::numeric_limits<std::size_t>::max)() : maxBodyBytes_);
     if (oldSize >= hardLimit) {

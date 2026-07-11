@@ -11,7 +11,8 @@
 namespace {
 
 using ruvia::HttpHeaderView;
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
+using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequest;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::HttpContentCoding;
@@ -25,10 +26,28 @@ using ruvia::detail::requestKnownHeader;
 RUVIA_TEST(request_access_reset_initializes_defaults) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    RUVIA_CHECK(request.method() == HttpMethod::kUnknown);
-    RUVIA_CHECK_EQ(request.httpVersion(), std::string_view("HTTP/1.1"));
+    RUVIA_CHECK(request.method().empty());
+    RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
+    RUVIA_CHECK(
+        request.protocolVersion() == HttpProtocolVersion::kHttp11);
     RUVIA_CHECK(request.headers().empty());
     RUVIA_CHECK(requestBodyBytes(request).empty());
+}
+
+RUVIA_TEST(request_access_protocol_version_is_typed_control_data) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::setProtocolVersion(
+        request, HttpProtocolVersion::kHttp2);
+    RUVIA_CHECK(
+        request.protocolVersion() == HttpProtocolVersion::kHttp2);
+}
+
+RUVIA_TEST(request_access_preserves_extension_method_token) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::setMethod(request, "PROPFIND");
+    RUVIA_CHECK_EQ(request.method(), std::string_view("PROPFIND"));
+    RUVIA_CHECK(request.knownMethod() == HttpKnownMethod::kUnknown);
 }
 
 RUVIA_TEST(request_access_known_header_slot_mapping) {
@@ -142,7 +161,7 @@ RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
 RUVIA_TEST(request_access_add_header_rejects_when_full) {
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    for (int i = 0; i < 64; ++i) {  // kMaxRequestHeaders == 64
+    for (int i = 0; i < 64; ++i) {  // kMaxHttpHeaderFields == 64
         RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"x", "y"}));
     }
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{64});

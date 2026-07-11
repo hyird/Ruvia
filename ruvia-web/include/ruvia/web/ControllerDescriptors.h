@@ -99,14 +99,14 @@ private:
             std::pmr::vector<ControllerMiddlewareDescriptor>(registrationResource()));
 
     void registerRoute(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         ControllerRouteHandler handler,
         RequestBodyMode bodyMode,
         std::span<const ControllerMiddlewareDescriptor> middlewares = {},
         ResponseBodyMode responseMode = ResponseBodyMode::kBuffered) const;
     void registerStreamRoute(
-        HttpMethod method,
+        HttpKnownMethod method,
         std::string_view path,
         ControllerRouteStreamHandler handler,
         ResponseBodyMode responseMode,

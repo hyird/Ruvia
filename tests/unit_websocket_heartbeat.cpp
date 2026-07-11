@@ -3,61 +3,97 @@
 #include <chrono>
 #include <cstdint>
 
-#include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
-#include "ruvia/http/WebSocketProtocol.h"
+#include "ruvia/web/detail/websocket/HttpWebSocketLiveness.h"
 
 namespace {
 
-using ruvia::WebSocketHeartbeatOptions;
-using ruvia::detail::WebSocketHeartbeatDecision;
-using ruvia::detail::webSocketHeartbeatDecision;
+using ruvia::WebSocketLifecycleOptions;
+using ruvia::detail::WebSocketLivenessDecision;
+using ruvia::detail::WsClosePhase;
+using ruvia::detail::webSocketLivenessDecision;
 
-WebSocketHeartbeatOptions options(int pingMs, int pongMs) {
-    WebSocketHeartbeatOptions opts;
+WebSocketLifecycleOptions options(int pingMs, int pongMs, int closeMs = 5000) {
+    WebSocketLifecycleOptions opts;
     opts.pingInterval = std::chrono::milliseconds(pingMs);
     opts.pongTimeout = std::chrono::milliseconds(pongMs);
+    opts.closeHandshakeTimeout = std::chrono::milliseconds(closeMs);
     return opts;
 }
 
-WebSocketHeartbeatDecision decide(
-    const WebSocketHeartbeatOptions& opts, bool closeSent, bool awaitingPong,
-    bool writeActive, std::int64_t lastActiveMs, std::int64_t pingSentMs, std::int64_t now) {
-    return webSocketHeartbeatDecision(opts, closeSent, awaitingPong, writeActive, lastActiveMs, pingSentMs, now);
+WebSocketLivenessDecision decide(
+    const WebSocketLifecycleOptions& opts,
+    WsClosePhase closePhase,
+    bool awaitingPong,
+    bool writeActive,
+    std::int64_t lastActiveMs,
+    std::int64_t pingSentMs,
+    std::int64_t closeStartedMs,
+    std::int64_t now) {
+    return webSocketLivenessDecision(
+        opts,
+        closePhase,
+        awaitingPong,
+        writeActive,
+        lastActiveMs,
+        pingSentMs,
+        closeStartedMs,
+        now);
 }
 
 }  // namespace
 
 RUVIA_TEST(ws_heartbeat_disabled_stays_idle) {
     // A non-positive ping interval disables the heartbeat.
-    RUVIA_CHECK(decide(options(0, 0), false, false, false, 0, 0, 10000) ==
-                WebSocketHeartbeatDecision::kIdle);
-    // Once a Close has been sent the heartbeat is idle regardless.
-    RUVIA_CHECK(decide(options(1000, 500), true, false, false, 0, 0, 10000) ==
-                WebSocketHeartbeatDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(0, 0), WsClosePhase::kOpen, false, false, 0, 0, -1, 10000) ==
+        WebSocketLivenessDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kClosed, false, false, 0, 0, -1, 10000) ==
+        WebSocketLivenessDecision::kIdle);
 }
 
 RUVIA_TEST(ws_heartbeat_sends_ping_when_idle) {
     // Not awaiting a pong, idle for >= the ping interval, and no write in flight.
-    RUVIA_CHECK(decide(options(1000, 500), false, false, false, 0, 0, 2000) ==
-                WebSocketHeartbeatDecision::kSendPing);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kOpen, false, false, 0, 0, -1, 2000) ==
+        WebSocketLivenessDecision::kSendPing);
     // Recent activity keeps it idle.
-    RUVIA_CHECK(decide(options(1000, 500), false, false, false, 1500, 0, 2000) ==
-                WebSocketHeartbeatDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kOpen, false, false, 1500, 0, -1, 2000) ==
+        WebSocketLivenessDecision::kIdle);
     // A write in flight defers the ping.
-    RUVIA_CHECK(decide(options(1000, 500), false, false, true, 0, 0, 2000) ==
-                WebSocketHeartbeatDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kOpen, false, true, 0, 0, -1, 2000) ==
+        WebSocketLivenessDecision::kIdle);
 }
 
 RUVIA_TEST(ws_heartbeat_pong_timeout) {
     // Awaiting a pong past the pong timeout -> timeout.
-    RUVIA_CHECK(decide(options(1000, 500), false, true, false, 0, 1000, 1600) ==
-                WebSocketHeartbeatDecision::kTimeout);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kOpen, true, false, 0, 1000, -1, 1600) ==
+        WebSocketLivenessDecision::kAbortTransport);
     // Still within the pong timeout -> idle.
-    RUVIA_CHECK(decide(options(1000, 500), false, true, false, 0, 1000, 1400) ==
-                WebSocketHeartbeatDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(1000, 500), WsClosePhase::kOpen, true, false, 0, 1000, -1, 1400) ==
+        WebSocketLivenessDecision::kIdle);
     // A non-positive pong timeout falls back to the ping interval.
-    RUVIA_CHECK(decide(options(1000, 0), false, true, false, 0, 1000, 2200) ==
-                WebSocketHeartbeatDecision::kTimeout);
-    RUVIA_CHECK(decide(options(1000, 0), false, true, false, 0, 1000, 1500) ==
-                WebSocketHeartbeatDecision::kIdle);
+    RUVIA_CHECK(decide(
+        options(1000, 0), WsClosePhase::kOpen, true, false, 0, 1000, -1, 2200) ==
+        WebSocketLivenessDecision::kAbortTransport);
+    RUVIA_CHECK(decide(
+        options(1000, 0), WsClosePhase::kOpen, true, false, 0, 1000, -1, 1500) ==
+        WebSocketLivenessDecision::kIdle);
+}
+
+RUVIA_TEST(ws_liveness_bounds_local_close_handshake) {
+    const auto opts = options(1000, 500, 2000);
+    RUVIA_CHECK(decide(
+        opts, WsClosePhase::kAwaitingPeerClose, false, false, 0, 0, 1000, 2999) ==
+        WebSocketLivenessDecision::kIdle);
+    RUVIA_CHECK(decide(
+        opts, WsClosePhase::kAwaitingPeerClose, false, false, 0, 0, 1000, 3000) ==
+        WebSocketLivenessDecision::kAbortTransport);
+    RUVIA_CHECK(decide(
+        options(1000, 500, 0), WsClosePhase::kAwaitingPeerClose,
+        false, false, 0, 0, 1000, 100000) == WebSocketLivenessDecision::kIdle);
 }

@@ -2,7 +2,7 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -21,7 +21,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
-    const HttpServerParseResult& parsed,
+    const Http1ServerRequestParseState& parsed,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -30,11 +30,16 @@ Task<void> dispatchHttpBufferedBodyRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     HttpResponse& response,
-    bool& keepAlive,
+    Http1ServerConnectionPlan& connectionPlan,
     std::size_t& requestCount,
     std::size_t& consumedBytes,
     bool& bufferAlreadyCompacted) {
-    const auto bodyAndPipeline = beginHttpBodyRoute(parsed, readBuffer, usedBytes, keepAlive, consumedBytes);
+    const auto bodyAndPipeline = beginHttpBodyRoute(
+        parsed,
+        readBuffer,
+        usedBytes,
+        connectionPlan,
+        consumedBytes);
 
     // The body reader/loader are this transport's own state, and their setup can
     // throw (e.g. constructing a transfer-coding decoder for a bad
@@ -58,15 +63,14 @@ Task<void> dispatchHttpBufferedBodyRoute(
     }
 
     if (setupException != nullptr) {
-        co_await completeFailedHttpBodyRoute(
+        connectionPlan = co_await completeFailedHttpBodyRoute(
             scannerEntry,
             setupException,
             parsed,
             routes,
             requestMemory,
             baseRouteServices,
-            response,
-            keepAlive);
+            response);
         co_return;
     }
 
@@ -76,14 +80,13 @@ Task<void> dispatchHttpBufferedBodyRoute(
         requestMemory,
         bodyState.withLoader(baseRouteServices));
 
-    completeSuccessfulHttpBodyRoute(
+    connectionPlan = completeSuccessfulHttpBodyRoute(
         scannerEntry,
         response,
-        keepAlive,
+        connectionPlan,
         requestCount,
         options.keepaliveRequests,
-        bodyState.consumed(),
-        http1RequestNeedsKeepAliveSignal(parsed.request.httpVersion()),
+        bodyState.consumption(),
         readBuffer,
         usedBytes,
         consumedBytes,

@@ -4,6 +4,7 @@
 #include <exception>
 #include <iterator>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/web/detail/http/ContextInternal.h"
@@ -67,7 +68,7 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
 
 RUVIA_TEST(context_redirect_sets_verbatim_ascii_location_and_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.redirect("https://example.com/path?q=1", 302, "Found");
+    const auto response = context.redirect("https://example.com/path?q=1", 302);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{302});
     RUVIA_CHECK_EQ(response.header("Location"), std::string_view("https://example.com/path?q=1"));
 }
@@ -77,7 +78,7 @@ RUVIA_TEST(context_redirect_percent_encodes_non_ascii_location) {
     // A UTF-8 'é' (0xC3 0xA9) is percent-encoded while the URI structure
     // (scheme, host, path separators) is preserved.
     const auto response = context.redirect(
-        std::string_view("https://example.com/caf\xC3\xA9"), 307, "Temporary Redirect");
+        std::string_view("https://example.com/caf\xC3\xA9"), 307);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{307});
     RUVIA_CHECK_EQ(response.header("Location"),
                    std::string_view("https://example.com/caf%C3%A9"));
@@ -90,14 +91,14 @@ RUVIA_TEST(context_redirect_preserves_existing_percent_escapes_when_encoding) {
     // become %C3%A9, but the existing escapes must survive intact -- not be
     // double-encoded to "%2520"/"%252F", which would corrupt the target.
     const auto response = context.redirect(
-        std::string_view("https://example.com/a%20b/caf\xC3\xA9?x=%2F"), 302, "Found");
+        std::string_view("https://example.com/a%20b/caf\xC3\xA9?x=%2F"), 302);
     RUVIA_CHECK_EQ(response.header("Location"),
                    std::string_view("https://example.com/a%20b/caf%C3%A9?x=%2F"));
 
     // A lone or malformed '%' (not followed by two hex digits) is not a valid
     // escape, so it IS percent-encoded to %25 -- the trailing 'é' forces the pass.
     const auto malformed = context.redirect(
-        std::string_view("https://example.com/100%off/caf\xC3\xA9"), 302, "Found");
+        std::string_view("https://example.com/100%off/caf\xC3\xA9"), 302);
     RUVIA_CHECK_EQ(malformed.header("Location"),
                    std::string_view("https://example.com/100%25off/caf%C3%A9"));
 }
@@ -109,7 +110,7 @@ RUVIA_TEST(context_redirect_rejects_crlf_header_injection) {
     // path straight into the validated header setter).
     bool threw = false;
     try {
-        (void)context.redirect(std::string_view("https://example.com/\r\nX-Injected: y"), 302, "Found");
+        (void)context.redirect(std::string_view("https://example.com/\r\nX-Injected: y"), 302);
     } catch (const std::exception&) {
         threw = true;
     }
@@ -121,6 +122,39 @@ RUVIA_TEST(context_body_sets_body_and_status) {
     const auto response = context.body("hello world", Context::ResponseInit{.status = 201});
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{201});
     RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello world"));
+}
+
+RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
+    {
+        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+        bool threw = false;
+        try {
+            context.status(103);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    {
+        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+        bool threw = false;
+        try {
+            (void)context.body("not final", Context::ResponseInit{.status = 103});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    {
+        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+        bool threw = false;
+        try {
+            context.status(600);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
 }
 
 RUVIA_TEST(context_body_applies_init_headers) {
@@ -149,7 +183,7 @@ RUVIA_TEST(context_response_init_preserves_repeated_set_cookie_headers) {
 
 RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.body(nullptr, std::uint16_t{204}, "No Content");
+    const auto response = context.body(nullptr, std::uint16_t{204});
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
     RUVIA_CHECK(responseBodyBytes(response).empty());
 }
@@ -173,7 +207,7 @@ RUVIA_TEST(context_body_byte_span_copies_into_response_storage) {
 
 RUVIA_TEST(context_text_sets_plain_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.text("hello", 200, "OK");
+    const auto response = context.text("hello", 200);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello"));
@@ -181,7 +215,7 @@ RUVIA_TEST(context_text_sets_plain_content_type) {
 
 RUVIA_TEST(context_html_sets_html_content_type) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
-    const auto response = context.html("<h1>hi</h1>", 200, "OK");
+    const auto response = context.html("<h1>hi</h1>", 200);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
     RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("<h1>hi</h1>"));
@@ -201,7 +235,7 @@ RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
     HttpRequestAccess::setResource(request, memory.resource());
     auto context = ContextAccess::make(
         memory, request, "/p/:slug/:id", names, values, std::size(names),
-        ruvia::HttpMethod::kGet, 0, 0);
+        ruvia::HttpKnownMethod::kGet, 0, 0);
 
     const auto slug = context.req().param("slug");
     RUVIA_CHECK(slug.has_value());

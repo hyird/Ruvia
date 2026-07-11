@@ -11,9 +11,10 @@ enum class HttpTransferCoding : std::uint8_t {
     kDeflate
 };
 
-// One request transfer-coding is allowed before final "chunked" framing. More
-// stacked codings are rejected so streaming stays bounded without staging a
-// full decoded body.
+// One supported compression transfer-coding can be represented before final
+// "chunked" framing, or as the sole coding of a close-delimited response. More
+// stacked codings are rejected so the incremental decoder remains a fixed-size
+// state machine without staging a second decoded body.
 inline constexpr std::size_t kMaxTransferCodings = 1;
 
 struct HttpTransferCodings {

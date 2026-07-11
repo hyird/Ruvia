@@ -6,6 +6,8 @@ namespace {
 
 using ruvia::detail::Http2StreamCloseSource;
 using ruvia::detail::Http2StreamLifecycle;
+using ruvia::detail::Http2LocalMessageKind;
+using ruvia::detail::Http2LocalSendPhase;
 
 }  // namespace
 
@@ -15,6 +17,11 @@ RUVIA_TEST(stream_lifecycle_initial_and_reset_source) {
     RUVIA_CHECK(!lifecycle.bodyEnded());
     RUVIA_CHECK(!lifecycle.peerEndStream());
     RUVIA_CHECK(!lifecycle.localEndStream());
+    RUVIA_CHECK(!lifecycle.localEndStreamCommitted());
+    RUVIA_CHECK(!lifecycle.localTrailersOnly());
+    RUVIA_CHECK(lifecycle.canSubmitLocalHead());
+    RUVIA_CHECK(lifecycle.localSendPhase() == Http2LocalSendPhase::kAwaitingHead);
+    RUVIA_CHECK(lifecycle.localMessageKind() == Http2LocalMessageKind::kNone);
     RUVIA_CHECK(!lifecycle.queued());
     RUVIA_CHECK(!lifecycle.dispatchStarted());
     RUVIA_CHECK(lifecycle.closeSource() == Http2StreamCloseSource::kNone);
@@ -35,15 +42,85 @@ RUVIA_TEST(stream_lifecycle_mark_closed_sets_all_end_flags) {
     RUVIA_CHECK(lifecycle.localEndStream());
     RUVIA_CHECK(lifecycle.bodyEnded());
     RUVIA_CHECK(lifecycle.closeSource() == Http2StreamCloseSource::kPeer);
+
+    Http2StreamLifecycle goawayRejected;
+    goawayRejected.markClosed(Http2StreamCloseSource::kPeerGoaway);
+    RUVIA_CHECK(goawayRejected.reset());
+    RUVIA_CHECK(goawayRejected.closeSource() ==
+        Http2StreamCloseSource::kPeerGoaway);
 }
 
-RUVIA_TEST(stream_lifecycle_tracks_local_end_independently) {
+RUVIA_TEST(stream_lifecycle_tracks_local_send_phase_and_commit_independently) {
     Http2StreamLifecycle lifecycle;
-    lifecycle.markLocalEndStream();
+    lifecycle.markLocalHeadSubmitted(Http2LocalMessageKind::kResponse, false);
+    RUVIA_CHECK(!lifecycle.canSubmitLocalHead());
+    RUVIA_CHECK(lifecycle.localBodyOpen());
+    RUVIA_CHECK(lifecycle.localSendPhase() == Http2LocalSendPhase::kBodyOpen);
+    RUVIA_CHECK(lifecycle.localMessageKind() == Http2LocalMessageKind::kResponse);
+    RUVIA_CHECK(!lifecycle.localEndStream());
+
+    lifecycle.markLocalEndStreamQueued();
     RUVIA_CHECK(lifecycle.localEndStream());
+    RUVIA_CHECK(!lifecycle.localEndStreamCommitted());
+    RUVIA_CHECK(lifecycle.localSendPhase() == Http2LocalSendPhase::kEndStreamQueued);
     RUVIA_CHECK(!lifecycle.peerEndStream());
     RUVIA_CHECK(!lifecycle.bodyEnded());
     RUVIA_CHECK(!lifecycle.reset());
+
+    lifecycle.markLocalEndStreamCommitted();
+    RUVIA_CHECK(lifecycle.localEndStreamCommitted());
+}
+
+RUVIA_TEST(stream_lifecycle_head_can_commit_end_stream_atomically) {
+    Http2StreamLifecycle lifecycle;
+    lifecycle.markLocalHeadSubmitted(Http2LocalMessageKind::kRequest, true);
+    RUVIA_CHECK(lifecycle.localEndStream());
+    RUVIA_CHECK(lifecycle.localEndStreamCommitted());
+    RUVIA_CHECK(!lifecycle.localBodyOpen());
+    RUVIA_CHECK(lifecycle.localSendPhase() == Http2LocalSendPhase::kEndStreamQueued);
+    RUVIA_CHECK(lifecycle.localMessageKind() == Http2LocalMessageKind::kRequest);
+}
+
+RUVIA_TEST(stream_lifecycle_trailers_only_is_not_body_open) {
+    Http2StreamLifecycle lifecycle;
+    lifecycle.markLocalTrailersOnlyHeadSubmitted(
+        Http2LocalMessageKind::kResponse);
+    RUVIA_CHECK(!lifecycle.canSubmitLocalHead());
+    RUVIA_CHECK(!lifecycle.localBodyOpen());
+    RUVIA_CHECK(lifecycle.localTrailersOnly());
+    RUVIA_CHECK(!lifecycle.localEndStream());
+    RUVIA_CHECK(
+        lifecycle.localSendPhase() ==
+        Http2LocalSendPhase::kTrailersOnly);
+    RUVIA_CHECK(
+        lifecycle.localMessageKind() ==
+        Http2LocalMessageKind::kResponse);
+
+    lifecycle.markLocalEndStreamCommitted();
+    RUVIA_CHECK(!lifecycle.localTrailersOnly());
+    RUVIA_CHECK(lifecycle.localEndStream());
+    RUVIA_CHECK(lifecycle.localEndStreamCommitted());
+}
+
+RUVIA_TEST(stream_lifecycle_connect_waits_for_acceptance_before_data) {
+    Http2StreamLifecycle lifecycle;
+    lifecycle.markLocalConnectRequestSubmitted();
+    RUVIA_CHECK(!lifecycle.canSubmitLocalHead());
+    RUVIA_CHECK(!lifecycle.localBodyOpen());
+    RUVIA_CHECK(!lifecycle.localEndStream());
+    RUVIA_CHECK(
+        lifecycle.localSendPhase() == Http2LocalSendPhase::kAwaitingTunnelResponse);
+    RUVIA_CHECK(
+        lifecycle.localMessageKind() == Http2LocalMessageKind::kConnectTunnel);
+    RUVIA_CHECK(lifecycle.openLocalConnectTunnel());
+    RUVIA_CHECK(lifecycle.localBodyOpen());
+
+    Http2StreamLifecycle rejected;
+    rejected.markLocalConnectRequestSubmitted();
+    RUVIA_CHECK(rejected.rejectLocalConnect());
+    RUVIA_CHECK(rejected.localEndStream());
+    RUVIA_CHECK(rejected.localEndStreamCommitted());
+    RUVIA_CHECK(!rejected.localBodyOpen());
 }
 
 RUVIA_TEST(stream_lifecycle_queue_then_dispatch) {

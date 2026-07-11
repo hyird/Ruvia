@@ -7,12 +7,16 @@
 
 namespace {
 
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::detail::RequestTargetView;
+using ruvia::detail::HttpAuthorityPortKind;
 using ruvia::detail::authorityMatchesHost;
+using ruvia::detail::httpUriHostEquals;
 using ruvia::detail::isValidHostHeader;
+using ruvia::detail::isValidHttpHost;
 using ruvia::detail::isValidOriginFormTarget;
 using ruvia::detail::isValidRequestTargetBytes;
+using ruvia::detail::parseHttpAuthority;
 using ruvia::detail::parseRequestTarget;
 
 }  // namespace
@@ -25,16 +29,22 @@ RUVIA_TEST(host_header_accepts_valid) {
     RUVIA_CHECK(isValidHostHeader("192.0.2.1"));
     RUVIA_CHECK(isValidHostHeader("192.0.2.1:443"));
     RUVIA_CHECK(isValidHostHeader("example.com:65535"));   // the maximum valid port is inclusive
+    RUVIA_CHECK(isValidHostHeader("example.com:0"));
+    // RFC 3986 defines port as *DIGIT; RFC 9110 treats an empty HTTP port as
+    // the scheme default rather than an invalid authority.
+    RUVIA_CHECK(isValidHostHeader("example.com:"));
     RUVIA_CHECK(isValidHostHeader("[::1]"));
     RUVIA_CHECK(isValidHostHeader("[::1]:8080"));
+    RUVIA_CHECK(isValidHostHeader("[::1]:"));
     RUVIA_CHECK(isValidHostHeader("[2001:db8::1]"));
     RUVIA_CHECK(isValidHostHeader("[::ffff:192.0.2.128]"));
     RUVIA_CHECK(isValidHostHeader("[2001:db8:0:0:0:0:192.0.2.1]"));
+    RUVIA_CHECK(isValidHostHeader("[v1.future]"));
+    RUVIA_CHECK(isValidHostHeader("[vF.a:b!c]:443"));
 }
 
 RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader(""));
-    RUVIA_CHECK(!isValidHostHeader("example.com:"));        // empty port
     RUVIA_CHECK(!isValidHostHeader("example.com:65536"));   // one past the maximum port
     RUVIA_CHECK(!isValidHostHeader("example.com:70000"));   // port > 65535
     RUVIA_CHECK(!isValidHostHeader("example.com:8o80"));    // non-digit in port
@@ -47,6 +57,10 @@ RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader("[::::]"));              // not a valid IPv6 literal
     RUVIA_CHECK(!isValidHostHeader("[1:2:3:4:5:6:7:8:9]")); // too many 16-bit groups
     RUVIA_CHECK(!isValidHostHeader("[::ffff:999.0.2.128]"));
+    RUVIA_CHECK(!isValidHostHeader("[::ffff:192.168.001.1]")); // IPv4 dec-octet has no leading zero
+    RUVIA_CHECK(!isValidHostHeader("[v.future]"));           // missing version hex digit
+    RUVIA_CHECK(!isValidHostHeader("[v1.]"));                // empty future address
+    RUVIA_CHECK(!isValidHostHeader("[v1.a%20b]"));           // pct-encoding is not IPvFuture grammar
     // A zone/scope id is valid to getaddrinfo but not a legal URI host: it must
     // be rejected so a scoped address can never slip into host matching.
     RUVIA_CHECK(!isValidHostHeader("[fe80::1%eth0]"));
@@ -54,12 +68,58 @@ RUVIA_TEST(host_header_rejects_invalid) {
     RUVIA_CHECK(!isValidHostHeader(std::string_view("example.com\r\nX", 14)));
 }
 
+RUVIA_TEST(http_host_component_reuses_reg_name_and_ipv6_validation) {
+    RUVIA_CHECK(isValidHttpHost("example.com"));
+    RUVIA_CHECK(isValidHttpHost("192.0.2.1"));
+    RUVIA_CHECK(isValidHttpHost("[::1]"));
+    RUVIA_CHECK(isValidHttpHost("[2001:db8::1]"));
+    RUVIA_CHECK(isValidHttpHost("[v1.future]"));
+    RUVIA_CHECK(!isValidHttpHost("::1"));
+    RUVIA_CHECK(!isValidHttpHost("2001:db8::1"));
+    RUVIA_CHECK(!isValidHttpHost("example.com:443"));
+    RUVIA_CHECK(!isValidHttpHost("[::::]"));
+    RUVIA_CHECK(!isValidHttpHost("bad?host"));
+}
+
+RUVIA_TEST(authority_parser_preserves_absent_empty_and_numeric_ports) {
+    const auto absent = parseHttpAuthority("example.com");
+    RUVIA_CHECK(absent.has_value());
+    RUVIA_CHECK(absent->portKind() == HttpAuthorityPortKind::kAbsent);
+    RUVIA_CHECK(!absent->port().has_value());
+    RUVIA_CHECK_EQ(absent->effectivePort(80), std::uint16_t{80});
+
+    const auto empty = parseHttpAuthority("example.com:");
+    RUVIA_CHECK(empty.has_value());
+    RUVIA_CHECK(empty->portKind() == HttpAuthorityPortKind::kEmpty);
+    RUVIA_CHECK(!empty->port().has_value());
+    RUVIA_CHECK_EQ(empty->effectivePort(80), std::uint16_t{80});
+
+    const auto zero = parseHttpAuthority("example.com:00000");
+    RUVIA_CHECK(zero.has_value());
+    RUVIA_CHECK(zero->portKind() == HttpAuthorityPortKind::kValue);
+    RUVIA_CHECK_EQ(*zero->port(), std::uint16_t{0});
+    RUVIA_CHECK_EQ(zero->effectivePort(80), std::uint16_t{0});
+}
+
+RUVIA_TEST(uri_host_comparison_normalizes_only_percent_encoded_unreserved_octets) {
+    RUVIA_CHECK(httpUriHostEquals("EXAMPLE.com", "example.COM"));
+    RUVIA_CHECK(httpUriHostEquals("exa%6Dple.com", "example.com"));
+    RUVIA_CHECK(httpUriHostEquals("%65xample.com", "example.com"));
+    RUVIA_CHECK(httpUriHostEquals("%2f.example", "%2F.example"));
+    RUVIA_CHECK(httpUriHostEquals("[Vf.A:B]", "[vf.a:b]"));
+    RUVIA_CHECK(!httpUriHostEquals("%21example", "!example"));
+    RUVIA_CHECK(!httpUriHostEquals("example.com", "other.example"));
+}
+
 RUVIA_TEST(authority_matches_host_ports_and_case) {
     RUVIA_CHECK(authorityMatchesHost("example.com", "example.com", 80));
     RUVIA_CHECK(authorityMatchesHost("example.com:80", "example.com", 80));  // explicit == default
     RUVIA_CHECK(authorityMatchesHost("example.com", "example.com:80", 80));
+    RUVIA_CHECK(authorityMatchesHost("example.com:", "example.com", 80));
+    RUVIA_CHECK(authorityMatchesHost("exa%6dple.com", "example.com:", 80));
     RUVIA_CHECK(authorityMatchesHost("EXAMPLE.com", "example.COM", 80));     // host is case-insensitive
     RUVIA_CHECK(authorityMatchesHost("[::1]:443", "[::1]", 443));            // IPv6 default port
+    RUVIA_CHECK(authorityMatchesHost("[v1.future]:", "[V1.FUTURE]", 80));
 }
 
 RUVIA_TEST(authority_matches_host_rejects_mismatches) {
@@ -71,11 +131,11 @@ RUVIA_TEST(authority_matches_host_rejects_mismatches) {
 
 RUVIA_TEST(parse_request_target_origin_form) {
     RequestTargetView out;
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "/path?q=1&r=2", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/path?q=1&r=2", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/path"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=1&r=2"));
 
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "/only/path", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/only/path", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/only/path"));
     RUVIA_CHECK_EQ(out.query, std::string_view(""));
 }
@@ -85,69 +145,77 @@ RUVIA_TEST(parse_request_target_absolute_form) {
 
     // Absolute-form (proxy/smuggling surface): authority is split off and the
     // path/query recovered, with the scheme fixing the default port.
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com/path?q=1", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://example.com/path?q=1", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
     RUVIA_CHECK_EQ(out.path, std::string_view("/path"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=1"));
     RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{80});
 
     // No path component defaults the path to "/".
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://example.com", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com"));
     RUVIA_CHECK_EQ(out.path, std::string_view("/"));
     RUVIA_CHECK_EQ(out.query, std::string_view(""));
 
     // A query immediately after the authority still yields path "/".
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "http://example.com?q=1", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://example.com?q=1", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=1"));
 
     // https fixes the default port to 443; an explicit port is kept in the authority.
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "https://example.com:8080/x", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "https://example.com:8080/x", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:8080"));
     RUVIA_CHECK_EQ(out.path, std::string_view("/x"));
     RUVIA_CHECK_EQ(out.defaultPort, std::uint16_t{443});
 
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://example.com:/x", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:"));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "http://[v1.future]/x", out));
+    RUVIA_CHECK_EQ(out.authority, std::string_view("[v1.future]"));
+
     // Unknown scheme, empty authority, and an invalid authority are all rejected.
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "ftp://example.com/x", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "http://", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "http://exa@mple.com/x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "ftp://example.com/x", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "http://exa@mple.com/x", out));
 }
 
 RUVIA_TEST(parse_request_target_connect_authority_form) {
     RequestTargetView out;
 
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kConnect, "example.com:443", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kConnect, "example.com:443", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("example.com:443"));
     RUVIA_CHECK_EQ(out.path, std::string_view("example.com:443"));
     RUVIA_CHECK_EQ(out.query, std::string_view(""));
 
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kConnect, "[::1]:8443", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kConnect, "[::1]:8443", out));
     RUVIA_CHECK_EQ(out.authority, std::string_view("[::1]:8443"));
 
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "/", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "/tunnel", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "example.com", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "http://example.com:443", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kConnect, "*", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "/", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "/tunnel", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "example.com", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "example.com:", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "example.com:0", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "[::1]:0", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "http://example.com:443", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kConnect, "*", out));
 }
 
 RUVIA_TEST(parse_request_target_asterisk_and_rejections) {
     RequestTargetView out;
     // Asterisk-form is valid only for OPTIONS.
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kOptions, "*", out));
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kOptions, "*", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("*"));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "*", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "*", out));
     // Empty, control/whitespace bytes and fragments are rejected.
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "", out));
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/pa th", out));       // space
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/path#frag", out));   // '#' fragment
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad\\path", out));   // backslash
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, std::string_view("/a\r\nb", 5), out));  // CRLF
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad%zz", out));      // malformed pct-encoded
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad%", out));        // truncated pct-encoded
-    RUVIA_CHECK(!parseRequestTarget(HttpMethod::kGet, "/bad%2", out));       // truncated pct-encoded
-    RUVIA_CHECK(parseRequestTarget(HttpMethod::kGet, "/ok%2F?q=%7B%7D", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "", out));
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/pa th", out));       // space
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/path#frag", out));   // '#' fragment
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad\\path", out));   // backslash
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, std::string_view("/a\r\nb", 5), out));  // CRLF
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%zz", out));      // malformed pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%", out));        // truncated pct-encoded
+    RUVIA_CHECK(!parseRequestTarget(HttpKnownMethod::kGet, "/bad%2", out));       // truncated pct-encoded
+    RUVIA_CHECK(parseRequestTarget(HttpKnownMethod::kGet, "/ok%2F?q=%7B%7D", out));
     RUVIA_CHECK_EQ(out.path, std::string_view("/ok%2F"));
     RUVIA_CHECK_EQ(out.query, std::string_view("q=%7B%7D"));
 }

@@ -71,22 +71,17 @@ struct Http2HeaderDecodeContext final {
             return false;
         }
         if (name == ":method") {
-            if (stream.hasMethod()) {
+            if (stream.hasMethod() || !isValidHttpMethodToken(value)) {
                 return false;
             }
-            const auto method = parseMethod(value);
-            if (method == HttpMethod::kUnknown) {
-                return false;
-            }
-            stream.setRequestMethod(method);
-            stream.markMethod();
+            stream.assignRequestMethod(value);
             return true;
         }
         if (name == ":protocol") {
-            if (stream.hasProtocol() || value.empty()) {
+            if (stream.hasProtocol() || !isValidHttpHeaderName(value)) {
                 return false;
             }
-            stream.setProtocol(value == "websocket");
+            stream.setProtocol(value);
             return true;
         }
         if (name == ":scheme") {
@@ -132,6 +127,12 @@ struct Http2HeaderDecodeContext final {
     }
     if (kind == RequestHeaderKind::kCookie) {
         return http2AppendCookieHeaderValue(stream, value);
+    }
+    if (kind == RequestHeaderKind::kExpect) {
+        // Expect is an extensible semantic list, not an HTTP/2 field-block
+        // validity condition. Preserve unsupported members for the Web product's
+        // 417 policy while still accepting the conformant header section.
+        stream.parseRequestExpectationField(value);
     }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {

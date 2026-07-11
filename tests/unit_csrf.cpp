@@ -25,7 +25,7 @@ namespace {
 
 using ruvia::Context;
 using ruvia::HttpHeaderView;
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::HttpRequest;
 using ruvia::Next;
 using ruvia::RequestMemory;
@@ -50,13 +50,13 @@ struct CsrfOutcome final {
 
 // Runs CsrfProtection::handle over a synthesized request and reports whether the
 // chain continued (next called) or was short-circuited with a response.
-CsrfOutcome runCsrf(HttpMethod method, bool withCookie, std::string_view cookieToken,
+CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view cookieToken,
                     bool withHeader, std::string_view headerToken) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
     HttpRequestAccess::reset(request);
-    HttpRequestAccess::setMethod(request, method);
+    HttpRequestAccess::setMethod(request, ruvia::knownHttpMethodToken(method));
     // The header views point into these strings, so they must outlive the context
     // use below -- keep them at function scope, not inside the if-blocks.
     std::string cookie = "XSRF-TOKEN=";
@@ -144,12 +144,12 @@ RUVIA_TEST(csrf_tokens_equal_is_length_checked_and_exact) {
 
 RUVIA_TEST(csrf_unsafe_method_requires_matching_double_submit) {
     // A state-changing method with a cookie and header that match continues the chain.
-    const auto ok = runCsrf(HttpMethod::kPost, true, "abcdef123456", true, "abcdef123456");
+    const auto ok = runCsrf(HttpKnownMethod::kPost, true, "abcdef123456", true, "abcdef123456");
     RUVIA_CHECK(ok.nextInvoked);
     RUVIA_CHECK(!ok.hasResponse);
 
     // A mismatched header is rejected with 403 and the chain is NOT continued.
-    const auto mismatch = runCsrf(HttpMethod::kPost, true, "abcdef123456", true, "DIFFERENTtoken");
+    const auto mismatch = runCsrf(HttpKnownMethod::kPost, true, "abcdef123456", true, "DIFFERENTtoken");
     RUVIA_CHECK(!mismatch.nextInvoked);
     RUVIA_CHECK(mismatch.hasResponse);
     RUVIA_CHECK_EQ(mismatch.status, std::uint16_t{403});
@@ -159,18 +159,18 @@ RUVIA_TEST(csrf_unsafe_method_rejects_empty_or_missing_tokens) {
     // THE critical guard: csrfTokensEqual("","") is true (degenerate), so without the
     // explicit empty check an empty cookie AND empty header would falsely validate.
     // handle() must reject a both-empty double-submit with 403.
-    const auto bothEmpty = runCsrf(HttpMethod::kPost, true, "", true, "");
+    const auto bothEmpty = runCsrf(HttpKnownMethod::kPost, true, "", true, "");
     RUVIA_CHECK(!bothEmpty.nextInvoked);
     RUVIA_CHECK(bothEmpty.hasResponse);
     RUVIA_CHECK_EQ(bothEmpty.status, std::uint16_t{403});
 
     // A cookie with no matching request header is rejected.
-    const auto noHeader = runCsrf(HttpMethod::kPost, true, "abcdef123456", false, {});
+    const auto noHeader = runCsrf(HttpKnownMethod::kPost, true, "abcdef123456", false, {});
     RUVIA_CHECK(!noHeader.nextInvoked);
     RUVIA_CHECK_EQ(noHeader.status, std::uint16_t{403});
 
     // A header with no cookie is rejected.
-    const auto noCookie = runCsrf(HttpMethod::kPost, false, {}, true, "abcdef123456");
+    const auto noCookie = runCsrf(HttpKnownMethod::kPost, false, {}, true, "abcdef123456");
     RUVIA_CHECK(!noCookie.nextInvoked);
     RUVIA_CHECK_EQ(noCookie.status, std::uint16_t{403});
 }
@@ -178,19 +178,19 @@ RUVIA_TEST(csrf_unsafe_method_rejects_empty_or_missing_tokens) {
 RUVIA_TEST(csrf_safe_method_skips_validation) {
     // A safe method never enforces the double-submit: the chain continues even with
     // no tokens at all. (An existing cookie avoids the token-issuing branch.)
-    const auto get = runCsrf(HttpMethod::kGet, true, "abcdef123456", false, {});
+    const auto get = runCsrf(HttpKnownMethod::kGet, true, "abcdef123456", false, {});
     RUVIA_CHECK(get.nextInvoked);
     RUVIA_CHECK(!get.hasResponse);
 
     // Even a mismatch is irrelevant for a safe method.
-    const auto head = runCsrf(HttpMethod::kHead, true, "one", true, "two");
+    const auto head = runCsrf(HttpKnownMethod::kHead, true, "one", true, "two");
     RUVIA_CHECK(head.nextInvoked);
 }
 
 RUVIA_TEST(csrf_safe_method_reseeds_absent_or_empty_cookie) {
     // A safe method with NO cookie issues a fresh token so the client can later
     // send the double-submit pair.
-    const auto absent = runCsrf(HttpMethod::kGet, false, {}, false, {});
+    const auto absent = runCsrf(HttpKnownMethod::kGet, false, {}, false, {});
     RUVIA_CHECK(absent.nextInvoked);
     RUVIA_CHECK(absent.reseeded);
 
@@ -198,13 +198,13 @@ RUVIA_TEST(csrf_safe_method_reseeds_absent_or_empty_cookie) {
     // the empty "XSRF-TOKEN=" is never repaired: the unsafe path rejects an empty
     // cookie with 403, so without this the client is permanently wedged. Issue
     // and validation must treat an empty cookie identically.
-    const auto empty = runCsrf(HttpMethod::kGet, true, "", false, {});
+    const auto empty = runCsrf(HttpKnownMethod::kGet, true, "", false, {});
     RUVIA_CHECK(empty.nextInvoked);
     RUVIA_CHECK(empty.reseeded);
 
     // A valid existing token must NOT be overwritten -- reseeding would rotate a
     // token the client is mid-flight with.
-    const auto present = runCsrf(HttpMethod::kGet, true, "abcdef123456", false, {});
+    const auto present = runCsrf(HttpKnownMethod::kGet, true, "abcdef123456", false, {});
     RUVIA_CHECK(present.nextInvoked);
     RUVIA_CHECK(!present.reseeded);
 }

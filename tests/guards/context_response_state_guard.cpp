@@ -1,5 +1,5 @@
 #include "ruvia/web/detail/http/ContextInternal.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -26,8 +26,8 @@ void check(bool condition) {
 }
 
 [[nodiscard]] ruvia::HttpRequest makeRequest() {
-    ruvia::detail::HttpServerParser parser;
-    const auto parsed = parser.parse("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
+    ruvia::detail::Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
     return parsed.request;
 }
 

@@ -16,6 +16,10 @@ public:
         return ResponseWritePolicy(false, false, false, false);
     }
 
+    [[nodiscard]] static constexpr ResponseWritePolicy zeroLengthContent() noexcept {
+        return ResponseWritePolicy(false, true, false, false);
+    }
+
     [[nodiscard]] static constexpr ResponseWritePolicy notModified() noexcept {
         return ResponseWritePolicy(false, false, true, false);
     }
@@ -60,15 +64,17 @@ private:
     if (statusCode == 204) {
         return ResponseWritePolicy::bodyForbidden();
     }
+    if (statusCode == 205) {
+        // RFC 9110 15.3.6 forbids content in a 205 response. Unlike 1xx/204/304,
+        // HTTP/1.1 message framing does not make 205 self-delimiting from the
+        // status alone, so the writer owns a canonical Content-Length: 0. A
+        // caller-provided length and Transfer-Encoding are filtered instead of
+        // creating a second, potentially contradictory framing declaration.
+        return ResponseWritePolicy::zeroLengthContent();
+    }
     if (statusCode == 304) {
         return ResponseWritePolicy::notModified();
     }
-    // 205 (Reset Content) deliberately falls through to the normal policy: unlike
-    // 1xx/204/304, RFC 9112 §6.3 does NOT list 205 among the responses terminated
-    // by the empty line regardless of headers, so a 205 without a Content-Length or
-    // Transfer-Encoding is read until connection close (rule 8) -- a framing
-    // ambiguity on a persistent connection. Emitting an auto Content-Length: 0 for
-    // its empty body is exactly what RFC 9110 §15.3.6 recommends.
     return ResponseWritePolicy::normal();
 }
 

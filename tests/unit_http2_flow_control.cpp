@@ -10,15 +10,17 @@
 
 namespace {
 
-using ruvia::detail::Http2ReceiveWindowResult;
+using ruvia::detail::Http2ReceiveWindowDebitStatus;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http2WindowUpdateResult;
 using ruvia::detail::http2ApplyStreamWindowUpdate;
 using ruvia::detail::http2ApplyWindowUpdate;
 using ruvia::detail::http2AvailableSendWindow;
-using ruvia::detail::http2ConsumeReceiveWindows;
+using ruvia::detail::http2CreditConnectionReceiveWindow;
+using ruvia::detail::http2CreditStreamReceiveWindow;
 using ruvia::detail::http2ConsumeSendWindow;
-using ruvia::detail::http2RestoreReceiveWindows;
+using ruvia::detail::http2DebitConnectionReceiveWindow;
+using ruvia::detail::http2DebitStreamReceiveWindow;
 using ruvia::detail::http2SendWindowAvailable;
 using ruvia::detail::http2WindowUpdateIncrement;
 
@@ -101,38 +103,50 @@ RUVIA_TEST(flow_consume_send_window_deducts_both) {
     RUVIA_CHECK_EQ(stream.sendWindow(), beforeStream - 200);
 }
 
-RUVIA_TEST(flow_consume_receive_window_enforces_connection_then_stream) {
-    auto stream = makeStream();
+RUVIA_TEST(flow_connection_receive_window_debit_is_transactional) {
     std::int32_t connection = 1000;
-    // More than the connection window is rejected without mutating it.
-    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 2000) ==
-                Http2ReceiveWindowResult::kConnectionExceeded);
+    RUVIA_CHECK(http2DebitConnectionReceiveWindow(connection, 2000) ==
+        Http2ReceiveWindowDebitStatus::kExceeded);
     RUVIA_CHECK_EQ(connection, 1000);
-    // A normal receive deducts the connection window.
-    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 300) ==
-                Http2ReceiveWindowResult::kOk);
+    RUVIA_CHECK(http2DebitConnectionReceiveWindow(connection, 300) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
     RUVIA_CHECK_EQ(connection, 700);
-
-    // Within the connection window but beyond the stream's 1 MiB receive window
-    // is a stream error.
-    auto other = makeStream();
-    std::int32_t bigConnection = 2'000'000;
-    RUVIA_CHECK(http2ConsumeReceiveWindows(bigConnection, other, 1'100'000) ==
-                Http2ReceiveWindowResult::kStreamExceeded);
-    RUVIA_CHECK_EQ(bigConnection, 2'000'000);  // unchanged when the stream is exceeded
+    http2CreditConnectionReceiveWindow(connection, 300);
+    RUVIA_CHECK_EQ(connection, 1000);
 }
 
-RUVIA_TEST(flow_restore_receive_window_reopens_capacity) {
+RUVIA_TEST(flow_stream_receive_window_debit_is_separate_from_connection) {
+    auto stream = makeStream();
+    std::int32_t bigConnection = 2'000'000;
+    constexpr std::int32_t bytes = 1'100'000;
+    RUVIA_CHECK(http2DebitConnectionReceiveWindow(bigConnection, bytes) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
+    RUVIA_CHECK_EQ(bigConnection, 900'000);
+    RUVIA_CHECK(http2DebitStreamReceiveWindow(stream, bytes) ==
+        Http2ReceiveWindowDebitStatus::kExceeded);
+    // A stream failure does not secretly roll back the already accepted connection
+    // debit; the caller explicitly releases it when discarding the frame.
+    RUVIA_CHECK_EQ(bigConnection, 900'000);
+    http2CreditConnectionReceiveWindow(bigConnection, bytes);
+    RUVIA_CHECK_EQ(bigConnection, 2'000'000);
+}
+
+RUVIA_TEST(flow_receive_window_credit_reopens_capacity) {
     auto stream = makeStream();
     std::int32_t connection = 500;
-    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 200) ==
-                Http2ReceiveWindowResult::kOk);
+    RUVIA_CHECK(http2DebitConnectionReceiveWindow(connection, 200) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
+    RUVIA_CHECK(http2DebitStreamReceiveWindow(stream, 200) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
     RUVIA_CHECK_EQ(connection, 300);
-    http2RestoreReceiveWindows(connection, stream, 200);
+    http2CreditConnectionReceiveWindow(connection, 200);
+    http2CreditStreamReceiveWindow(stream, 200);
     RUVIA_CHECK_EQ(connection, 500);
     // The stream window was restored too, so it can receive again.
-    RUVIA_CHECK(http2ConsumeReceiveWindows(connection, stream, 200) ==
-                Http2ReceiveWindowResult::kOk);
+    RUVIA_CHECK(http2DebitConnectionReceiveWindow(connection, 200) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
+    RUVIA_CHECK(http2DebitStreamReceiveWindow(stream, 200) ==
+        Http2ReceiveWindowDebitStatus::kAccepted);
 }
 
 RUVIA_TEST(flow_apply_stream_window_update) {

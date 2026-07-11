@@ -8,12 +8,17 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline HttpErrorInfo normalizeHttpErrorInfo(HttpErrorInfo error) noexcept {
     auto status = error.status();
-    if (status < 100 || status > 999) {
+    if (!httpFinalStatusCodeValid(status)) {
         status = 500;
     }
     auto statusText = error.statusText();
     if (statusText.empty() || !isValidHttpStatusText(statusText)) {
-        statusText = httpStatusText(status);
+        statusText = httpReasonPhrase(status);
+        if (statusText.empty()) {
+            // Application error presentation remains a Web concern. Do not
+            // invent an HTTP/1 reason phrase for an extension status code.
+            statusText = "HTTP Error";
+        }
     }
     auto code = error.code();
     if (code.empty()) {

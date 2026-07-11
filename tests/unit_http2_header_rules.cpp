@@ -9,7 +9,6 @@ namespace {
 using ruvia::detail::http2HeaderNameHasUppercase;
 using ruvia::detail::http2IsForbiddenConnectionHeader;
 using ruvia::detail::http2IsForbiddenTrailerHeader;
-using ruvia::detail::http2IsForbiddenUpgradedRequestHeader;
 using ruvia::detail::http2IsValidRegularHeader;
 
 }  // namespace
@@ -23,7 +22,7 @@ RUVIA_TEST(http2_header_name_uppercase_detection) {
 }
 
 RUVIA_TEST(http2_forbidden_connection_headers) {
-    // Connection-specific fields must not appear in HTTP/2 (RFC 7540 8.1.2.2).
+    // Connection-specific fields must not appear in HTTP/2 (RFC 9113 §8.2.2).
     RUVIA_CHECK(http2IsForbiddenConnectionHeader("connection"));
     RUVIA_CHECK(http2IsForbiddenConnectionHeader("keep-alive"));
     RUVIA_CHECK(http2IsForbiddenConnectionHeader("proxy-connection"));
@@ -34,19 +33,6 @@ RUVIA_TEST(http2_forbidden_connection_headers) {
     RUVIA_CHECK(!http2IsForbiddenConnectionHeader("Connection"));
 }
 
-RUVIA_TEST(http2_forbidden_upgraded_request_headers) {
-    // The h2c-upgrade path strips these case-insensitively.
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Connection"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("upgrade"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("HTTP2-Settings"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Keep-Alive"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Proxy-Connection"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TRANSFER-ENCODING"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("TE"));
-    RUVIA_CHECK(http2IsForbiddenUpgradedRequestHeader("Trailer"));
-    RUVIA_CHECK(!http2IsForbiddenUpgradedRequestHeader("content-type"));
-}
-
 RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(http2IsValidRegularHeader("content-type", "text/html"));
     RUVIA_CHECK(http2IsValidRegularHeader("x-custom", "value"));
@@ -55,7 +41,7 @@ RUVIA_TEST(http2_valid_regular_header) {
     RUVIA_CHECK(!http2IsValidRegularHeader("", "value"));
     // An uppercase name is malformed.
     RUVIA_CHECK(!http2IsValidRegularHeader("Content-Type", "text/html"));
-    // Every connection-specific header is forbidden (RFC 7540 8.1.2.2).
+    // Every connection-specific header is forbidden (RFC 9113 §8.2.2).
     RUVIA_CHECK(!http2IsValidRegularHeader("connection", "close"));
     RUVIA_CHECK(!http2IsValidRegularHeader("keep-alive", "timeout=5"));
     RUVIA_CHECK(!http2IsValidRegularHeader("proxy-connection", "keep-alive"));

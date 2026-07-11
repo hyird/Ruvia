@@ -16,8 +16,7 @@ HttpResponse::HttpResponse(std::pmr::memory_resource* resource)
 HttpResponse::HttpResponse(
     detail::HttpResolvedPmrResourceTag,
     std::pmr::memory_resource* resource)
-    : statusText_(resource),
-      headers_(detail::HttpResolvedPmrResourceTag{}, resource),
+    : headers_(detail::HttpResolvedPmrResourceTag{}, resource),
       body_(resource) {}
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
@@ -26,13 +25,6 @@ std::pmr::memory_resource* HttpResponse::resource() const noexcept {
 
 std::uint16_t HttpResponse::status() const noexcept {
     return statusCode_;
-}
-
-std::string_view HttpResponse::statusText() const noexcept {
-    if (statusText_.empty()) {
-        return detail::httpDefaultStatusText(statusCode_);
-    }
-    return statusText_;
 }
 
 const HttpResponseHeaders& HttpResponse::headers() const noexcept {
@@ -68,23 +60,15 @@ const HttpResponse::FileBody& HttpResponse::fileBody() const {
     return *fileBody_;
 }
 
-void HttpResponse::status(std::uint16_t statusCode, std::string_view statusText) {
-    if (statusCode < 100 || statusCode > 999) {
-        throw std::invalid_argument("invalid HTTP status code");
+void HttpResponse::status(std::uint16_t statusCode) {
+    if (statusCode == 101) {
+        throw std::invalid_argument(
+            "101 Switching Protocols requires a dedicated protocol driver");
+    }
+    if (!detail::httpFinalStatusCodeValid(statusCode)) {
+        throw std::invalid_argument("invalid final HTTP status code");
     }
     statusCode_ = statusCode;
-    if (statusText.empty()) {
-        statusText_.clear();
-        return;
-    }
-    if (!isValidHttpStatusText(statusText)) {
-        throw std::invalid_argument("invalid HTTP status text");
-    }
-    if (statusText == detail::httpDefaultStatusText(statusCode)) {
-        statusText_.clear();
-        return;
-    }
-    statusText_.assign(statusText.data(), statusText.size());
 }
 
 void HttpResponse::setBodyCopy(std::string_view value) {

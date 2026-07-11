@@ -4,7 +4,6 @@
 #include "ruvia/web/detail/server/HttpServerAlpn.h"
 #include "ruvia/web/detail/server/HttpServerCleartextHttp2.h"
 #include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
-#include "ruvia/web/detail/server/HttpServerHttp2UpgradeRoute.h"
 #include "ruvia/web/detail/server/HttpServerIdleWorkSet.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseStreamRoute.h"

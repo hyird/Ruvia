@@ -26,7 +26,7 @@ namespace ruvia::detail {
     const Http2StreamState& stream,
     const HttpRequest& request) noexcept {
     return stream.extendedConnectWebSocket() &&
-        stream.webSocketTunnel() &&
+        stream.connectPending() &&
         !stream.hasContentLength() &&
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketVersion) == "13";
 }
@@ -37,7 +37,6 @@ inline void http2EncodeWebSocketHandshakeHeaders(
     std::string_view extensions = {}) {
     headerBlock.clear();
     HpackEncoder::encodeStatus(headerBlock, 200);
-    HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kServer, "ruvia");
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
     if (!subprotocol.empty()) {
         HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", subprotocol);

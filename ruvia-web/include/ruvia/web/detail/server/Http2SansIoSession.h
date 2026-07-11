@@ -15,7 +15,7 @@
 // body-chunk queue), WebSocket tunnels (RFC 8441), streaming + buffered + file-body
 // responses with compression/CORS via prepareBufferedHttpResponse, access logging,
 // client certificates, connection-scanner inactivity phases, graceful drain on server
-// shutdown, and h2c upgrade seeding (RFC 7540 §3.2).
+// shutdown, TLS ALPN, and cleartext prior-knowledge startup.
 //
 // Lifetime safety: a request/response holds VIEWS into its stream's decoded storage, so
 // before spawning a handler the stream is pinned (see Http2Connection::pinStream) -- a
@@ -42,7 +42,6 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/http/detail/HttpParserInternal.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
@@ -79,14 +78,6 @@
 
 namespace ruvia::detail {
 
-// h2c upgrade seed (RFC 7540 §3.2): the parsed h1 request + its HTTP2-Settings payload
-// and body, handed to Http2Connection::beginUpgraded before the frame loop starts.
-struct Http2SansIoUpgradeSeed final {
-    const HttpServerParseResult* parsed{nullptr};
-    std::string_view settingsPayload{};
-    std::string_view body{};
-};
-
 // Framework wiring for the sans-I/O h2 session. Every field defaults to "absent" so
 // tests can drive the session bare; the accept loop passes the full server context.
 struct Http2SansIoSessionEnv final {
@@ -97,7 +88,6 @@ struct Http2SansIoSessionEnv final {
     ConnectionScanner::Entry* scannerEntry{nullptr};  // null -> unlinked local entry
     std::string_view clientCertificate{};
     const std::atomic_bool* serverStarted{nullptr};   // false -> graceful GOAWAY drain
-    const Http2SansIoUpgradeSeed* upgrade{nullptr};   // h2c upgrade seeding
 };
 
 struct Http2SansIoRouteState final {
@@ -126,16 +116,18 @@ Task<void> runHttp2SansIoSession(
         env.scannerEntry != nullptr ? *env.scannerEntry : localScannerEntry;
     constexpr bool kTlsStream = !std::is_same_v<Stream, asio::ip::tcp::socket>;
 
-    Http2CoreConfig coreConfig;
-    coreConfig.maxStreamBodyBytes = options.maxStreamBodyBytes;
-    coreConfig.maxBufferedBodyBytes = options.maxBufferedBodyBytes;
-    Http2Connection connection(worker.resource(), coreConfig);
+    Http2ConnectionLimits connectionLimits;
+    connectionLimits.maxStreamBodyBytes = options.maxStreamBodyBytes;
+    connectionLimits.maxBufferedBodyBytes = options.maxBufferedBodyBytes;
+    Http2Connection connection(
+        worker.resource(), Http2Role::kServer, connectionLimits);
 
     asio::steady_timer writeSignal(executor);
     int inFlight = 0;       // concurrent handlers not yet finished
-    bool stopping = false;  // reader has finished (EOF/error/closing)
+    bool stopping = false;  // reader has finished (EOF/error/connection error)
     bool writeFailed = false;
     bool writerDone = false;  // writer coroutine has fully exited (level-triggered join)
+    bool initialInputRetained = false;
 
     const auto wakeWriter = [&writeSignal]() noexcept {
         writeSignal.cancel();  // wakes async_wait with operation_aborted
@@ -221,7 +213,7 @@ Task<void> runHttp2SansIoSession(
     };
 
     // Wait until the reader reports this stream's window-blocked remainder drained
-    // (via takeUnblockedStreams -> signal wake). Loops on hasBlockedSend so a false
+    // (via takeDrainedDataStreams -> signal wake). Loops on hasQueuedData so a false
     // wake (a request-body chunk, or another stream's unblock) does NOT let the caller
     // read the next body chunk ahead while still blocked -- that would grow the core's
     // pendingSends_ without bound and defeat the backpressure. Returns false (stop) if
@@ -233,13 +225,42 @@ Task<void> runHttp2SansIoSession(
             if (live == nullptr || live->isReset()) {
                 co_return false;
             }
-            if (!connection.hasBlockedSend(streamId)) {
+            if (!connection.hasQueuedData(streamId)) {
                 co_return true;  // window reopened; the remainder drained
             }
             if (signal == nullptr || signal->ended) {
                 co_return false;
             }
             co_await signal->wait();
+        }
+    };
+
+    // Submit one stable DATA view with explicit ownership. kQueued means the core
+    // copied any unsent suffix, so this call waits for that owned input to drain and
+    // never resubmits it. kBackpressured accepted nothing; after the older queued
+    // input drains, retry this exact view before its owner advances or refills it.
+    auto submitData = [&](std::uint32_t streamId,
+                          std::string_view chunk,
+                          Http2EndStream endStream) -> Task<bool> {
+        for (;;) {
+            const auto result = connection.submitData(streamId, chunk, endStream);
+            wakeWriter();
+            if (result == Http2DataSubmitStatus::kAccepted) {
+                co_return true;
+            }
+            if (result == Http2DataSubmitStatus::kClosed ||
+                result == Http2DataSubmitStatus::kInvalidState ||
+                result == Http2DataSubmitStatus::kContentLengthExceeded ||
+                result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+                co_return false;
+            }
+            if (!(co_await awaitSendWindow(streamId))) {
+                co_return false;
+            }
+            if (result == Http2DataSubmitStatus::kQueued) {
+                co_return true;
+            }
+            // kBackpressured: the input is still caller-owned; retry unchanged.
         }
     };
 
@@ -250,8 +271,24 @@ Task<void> runHttp2SansIoSession(
         if (streamState == nullptr || streamState->isReset()) {
             co_return;
         }
-        const auto writePlan = connection.submitResponseHead(streamId, response);
+        const auto headResult = connection.submitResponseHead(streamId, response);
+        const auto* submittedHead = headResult.submitted();
+        if (submittedHead == nullptr) {
+            if (headResult.failure()->error() !=
+                Http2ResponseHeadSubmitError::kClosed) {
+                // A handler supplied metadata that cannot form a conformant final
+                // HTTP/2 response (for example 426, which would require forbidden
+                // Upgrade metadata). Do not strand the peer waiting forever on an
+                // open stream after the transactional head rejection.
+                (void)connection.submitReset(
+                    streamId,
+                    Http2ErrorCode::kInternalError);
+                wakeWriter();
+            }
+            co_return;
+        }
         wakeWriter();
+        const auto& writePlan = submittedHead->plan();
         if (!writePlan.sendBody()) {
             co_return;
         }
@@ -266,8 +303,7 @@ Task<void> runHttp2SansIoSession(
             if (!ready) {
                 // The advertised content-length can no longer be honoured (file gone
                 // or shrank): abort the stream rather than under-send (RFC 9113 §8.1.1).
-                connection.submitReset(
-                    streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
+                (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 co_return;
             }
@@ -284,21 +320,17 @@ Task<void> runHttp2SansIoSession(
                 input.read(fileChunk.data(), static_cast<std::streamsize>(next));
                 const auto readBytes = input.gcount();
                 if (readBytes <= 0) {
-                    connection.submitReset(
-                        streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
+                    (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                     wakeWriter();
                     co_return;
                 }
                 remaining -= static_cast<std::uint64_t>(readBytes);
-                const auto result = connection.submitData(
+                if (!(co_await submitData(
                     streamId,
                     std::string_view(fileChunk.data(), static_cast<std::size_t>(readBytes)),
-                    remaining == 0);
-                wakeWriter();
-                if (result == Http2SubmitResult::kClosed) {
-                    co_return;
-                }
-                if (result == Http2SubmitResult::kBlocked && !(co_await awaitSendWindow(streamId))) {
+                    remaining == 0
+                        ? Http2EndStream::kEndStream
+                        : Http2EndStream::kKeepOpen))) {
                     co_return;
                 }
             }
@@ -313,16 +345,13 @@ Task<void> runHttp2SansIoSession(
         std::size_t offset = 0;
         while (offset < body.size()) {
             const auto n = std::min<std::size_t>(kSlice, body.size() - offset);
-            const bool last = offset + n == body.size();
-            const auto result = connection.submitData(streamId, body.substr(offset, n), last);
-            wakeWriter();
+            const auto endStream = offset + n == body.size()
+                ? Http2EndStream::kEndStream
+                : Http2EndStream::kKeepOpen;
+            if (!(co_await submitData(streamId, body.substr(offset, n), endStream))) {
+                co_return;
+            }
             offset += n;
-            if (result == Http2SubmitResult::kClosed) {
-                co_return;
-            }
-            if (result == Http2SubmitResult::kBlocked && !(co_await awaitSendWindow(streamId))) {
-                co_return;
-            }
         }
         // An empty write plan returned earlier; submitResponseHead END_STREAM'd it.
         co_return;
@@ -358,6 +387,18 @@ Task<void> runHttp2SansIoSession(
             co_await submitResponse(streamId, response);
             co_return;
         }
+        if (streamState->expectationAction() ==
+            HttpServerExpectationAction::kUnsupported) {
+            // Expect is extensible, so the HTTP/2 decoder accepted and preserved
+            // the field. This Web product supports only 100-continue and applies
+            // its 417 policy through the normal application error handler.
+            auto response = co_await routes.handleError(
+                request, requestMemory,
+                HttpErrorInfo(417, {}, "unsupported Expect header"),
+                baseServices);
+            co_await submitResponse(streamId, response);
+            co_return;
+        }
         const auto* routeState = findRouteState(streamId);
         const RouteResolution resolution =
             routeState != nullptr ? routeState->resolution : RouteResolution{};
@@ -387,10 +428,10 @@ Task<void> runHttp2SansIoSession(
 
         std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
         std::optional<BodyReader> bodyReaderStorage;
-        if (streamState->usesStreamRequestBody() && !streamState->webSocketTunnel()) {
+        if (streamState->usesStreamRequestBody() && !streamState->connectRequest()) {
             if (!streamState->requestBodyEmpty()) {
-                // An h2c-upgrade seeded body (or END_STREAM-on-HEADERS request) was
-                // buffered before dispatch; hand it to the reader as the first chunk.
+                // An END_STREAM-on-HEADERS request can already have a buffered chunk
+                // before dispatch; hand it to the reader first.
                 streamState->enqueueBufferedRequestBodyChunk();
             }
             streamReaderStorage.emplace(connection, streamId, findSignal(streamId));
@@ -406,10 +447,13 @@ Task<void> runHttp2SansIoSession(
             if (http2IsValidWebSocketRequest(*streamState, request)) {
                 // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
                 const auto deflate = webSocketNegotiatePermessageDeflate(request);
-                connection.submitWebSocketHandshake(
+                const auto handshakeStatus = connection.submitWebSocketHandshake(
                     streamId,
                     http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()),
                     webSocketDeflateResponseExtensions(deflate));
+                if (handshakeStatus != Http2SubmitStatus::kAccepted) {
+                    co_return;
+                }
                 wakeWriter();  // flush the 200 before the first tunnel read suspends
                 auto* signal = findSignal(streamId);
                 if (signal == nullptr) {
@@ -423,7 +467,7 @@ Task<void> runHttp2SansIoSession(
                 WebSocketConnection<WsTransport> webSocketConnection(
                     WsTransport(connection, streamId, *signal, writeSignal, executor),
                     scannerEntry,
-                    resolution.webSocketHeartbeat(),
+                    resolution.webSocketLifecycle(),
                     options.maxWebSocketMessageBytes,
                     requestMemory.resource(),
                     /*initialBytes=*/{},
@@ -450,8 +494,7 @@ Task<void> runHttp2SansIoSession(
                     return s == nullptr || s->isReset();
                 });
             if (result.abortedAfterCommit()) {
-                connection.submitReset(
-                    streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
+                (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 recordHttpAccess(
                     options.accessLog, request, remoteAddress, response.status(), requestStart, true);
@@ -495,8 +538,7 @@ Task<void> runHttp2SansIoSession(
             // Last-resort: a dispatch failure must not leak the pin/inFlight count.
             auto* live = connection.stream(streamId);
             if (live != nullptr && !live->isReset()) {
-                connection.submitReset(
-                    streamId, static_cast<std::uint32_t>(Http2ErrorCode::kInternalError));
+                (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
             }
         }
         std::erase_if(streamSignals, [streamId](const auto& entry) {
@@ -512,12 +554,12 @@ Task<void> runHttp2SansIoSession(
     // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
     // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
     const auto resolveStreamRoute = [&routes, &ensureRouteState](Http2StreamState& streamState) {
-        const auto method = Http2RequestBuilder::requestMethod(streamState);
+        const auto method = Http2RequestBuilder::routeMethod(streamState);
         const auto path = Http2RequestBuilder::requestPath(streamState);
         auto& routeState = ensureRouteState(streamState.id());
         routeState.scratch.clear();
         routeState.resolution = {};
-        if (method == HttpMethod::kUnknown || path.empty()) {
+        if (method == HttpKnownMethod::kUnknown || path.empty()) {
             streamState.resetBodyModeToBuffered();
             return;
         }
@@ -529,14 +571,13 @@ Task<void> runHttp2SansIoSession(
         }
         streamState.setBodyMode(httpRequestBodyModeForRoute(resolution.bodyMode()));
         if (streamState.extendedConnectWebSocket() && resolution.isWebSocketResponse()) {
-            streamState.markWebSocketTunnel();
             streamState.setBodyMode(HttpRequestBodyMode::kStream);
         }
     };
 
     // Admit a stream for dispatch: EVERY dispatched stream gets a signal, so response
     // send-window pacing (awaitSendWindow / the streaming sink) can be woken by
-    // takeUnblockedStreams no matter the body kind -- a plain route returning a large
+    // takeDrainedDataStreams no matter the body kind -- a plain route returning a large
     // file or a stream body blocks on the send window exactly like a streaming route,
     // and without a signal its blocked submit could never be woken (truncation + hang).
     const auto admitStream = [&](std::uint32_t streamId) {
@@ -554,63 +595,121 @@ Task<void> runHttp2SansIoSession(
     const auto drainEvents = [&]() {
         for (;;) {
             const auto event = connection.nextEvent();
-            if (event.kind == Http2Event::Kind::kNone) {
+            if (!event.has_value()) {
                 break;
             }
-            auto* streamState = connection.stream(event.streamId);
-            if (streamState == nullptr) {
-                continue;
-            }
-            if (event.kind == Http2Event::Kind::kMessageHead) {
-                resolveStreamRoute(*streamState);
-                const bool wsTunnel = streamState->webSocketTunnel();
-                const bool streamingBody = !wsTunnel &&
-                    streamState->usesStreamRequestBody() && !streamState->bodyEnded();
-                if (wsTunnel || streamingBody) {
-                    // Dispatch NOW; body bytes stream through the stream's chunk queue
-                    // while the handler runs (mirrors queueInitialStreamIfReady).
-                    admitStream(event.streamId);
+            if (const auto* messageHead = event->messageHead()) {
+                const auto streamId = messageHead->streamId();
+                auto* streamState = connection.stream(streamId);
+                if (streamState == nullptr) {
+                    continue;
                 }
-            } else if (event.kind == Http2Event::Kind::kMessageBodyChunk) {
-                if (streamState->webSocketTunnel() || streamState->usesStreamRequestBody()) {
-                    streamState->enqueueBodyChunk(event.bytes);
-                    if (auto* signal = findSignal(event.streamId)) {
+                resolveStreamRoute(*streamState);
+                const auto expectationAction = streamState->expectationAction();
+                if (expectationAction ==
+                    HttpServerExpectationAction::kSend100Continue) {
+                    const auto status = connection.submitInterimResponseHead(
+                        streamId,
+                        HttpInterimResponseHead(100));
+                    if (status == Http2SubmitStatus::kAccepted) {
+                        wakeWriter();
+                    } else {
+                        if (status != Http2SubmitStatus::kClosed) {
+                            (void)connection.submitReset(
+                                streamId,
+                                Http2ErrorCode::kInternalError);
+                            wakeWriter();
+                        }
+                        continue;
+                    }
+                }
+                const bool connectRequest = streamState->connectRequest();
+                const bool streamingBody = !connectRequest &&
+                    streamState->usesStreamRequestBody() && !streamState->bodyEnded();
+                if (expectationAction ==
+                        HttpServerExpectationAction::kUnsupported ||
+                    connectRequest || streamingBody) {
+                    // Dispatch NOW; body bytes stream through the stream's chunk queue
+                    // while the handler runs. Unsupported expectations also need an
+                    // immediate 417: waiting for buffered content would deadlock a
+                    // conforming client that is waiting for the expectation decision.
+                    admitStream(streamId);
+                }
+            } else if (const auto* bodyChunk = event->messageBodyChunk()) {
+                const auto streamId = bodyChunk->streamId();
+                auto* streamState = connection.stream(streamId);
+                if (streamState == nullptr) {
+                    continue;
+                }
+                if (streamState->usesStreamRequestBody()) {
+                    streamState->enqueueBodyChunk(bodyChunk->bytes());
+                    if (auto* signal = findSignal(streamId)) {
                         signal->wake();
                     }
                 } else {
-                    streamState->appendRequestBody(event.bytes);
+                    streamState->appendRequestBody(bodyChunk->bytes());
                 }
-            } else if (event.kind == Http2Event::Kind::kMessageEnd) {
-                if (auto* signal = findSignal(event.streamId)) {
+            } else if (const auto* tunnelData = event->tunnelData()) {
+                const auto streamId = tunnelData->streamId();
+                auto* streamState = connection.stream(streamId);
+                if (streamState == nullptr) {
+                    continue;
+                }
+                streamState->enqueueBodyChunk(tunnelData->bytes());
+                if (auto* signal = findSignal(streamId)) {
+                    signal->wake();
+                }
+            } else if (const auto* tunnelEnd = event->tunnelEnd()) {
+                if (auto* signal = findSignal(tunnelEnd->streamId())) {
+                    signal->wake();
+                }
+            } else if (const auto* messageEnd = event->messageEnd()) {
+                const auto streamId = messageEnd->streamId();
+                if (connection.stream(streamId) == nullptr) {
+                    continue;
+                }
+                if (auto* signal = findSignal(streamId)) {
                     signal->wake();  // bodyEnded was marked by the core before this event
                 } else {
-                    admitStream(event.streamId);  // buffered request: dispatch at end
+                    admitStream(streamId);  // buffered request: dispatch at end
                 }
-            } else if (event.kind == Http2Event::Kind::kStreamClosed) {
-                if (auto* signal = findSignal(event.streamId)) {
+            } else if (const auto* streamClosed = event->streamClosed()) {
+                const auto streamId = streamClosed->streamId();
+                if (auto* signal = findSignal(streamId)) {
                     signal->wake();  // stream is reset; blocked readers/writers see it
                 } else {
-                    eraseRouteState(event.streamId);
+                    // The protocol core can erase an unpinned reset stream before
+                    // this event is drained. Cleanup is keyed by the typed event,
+                    // not by a second lookup of already-removed core state.
+                    eraseRouteState(streamId);
                 }
             }
         }
         // Send-window reopenings drained deferred bodies inside the core; wake the
         // paced response writers so they pull their next chunk.
-        for (const auto streamId : connection.takeUnblockedStreams()) {
+        for (const auto streamId : connection.takeDrainedDataStreams()) {
             if (auto* signal = findSignal(streamId)) {
                 signal->wake();
             }
         }
     };
 
+    // One ownership path for every inbound span. The core can refuse a span while an
+    // earlier zero-copy event is pending; drain that event queue, then retry the exact
+    // same bytes. The enum is the entire ownership result: no byte-count side channel
+    // exists because the core never partially accepts a span.
+    const auto feedAndDrain = [&](std::string_view bytes) {
+        for (;;) {
+            const auto result = connection.feed(bytes);
+            drainEvents();
+            if (result != Http2FeedResult::kEventsPending) {
+                return result;
+            }
+        }
+    };
+
     // --- startup ----------------------------------------------------------------
-    if (env.upgrade != nullptr) {
-        (void)connection.beginUpgraded(
-            *env.upgrade->parsed, env.upgrade->settingsPayload, env.upgrade->body);
-    } else {
-        connection.expectClientPreface();
-        connection.queueLocalSettings();
-    }
+    connection.beginConnection();
 
     // Spawn the writer; it runs concurrently with the reader below. The join below is
     // LEVEL-triggered on writerDone, not on the timer cancel alone: steady_timer::cancel
@@ -627,19 +726,17 @@ Task<void> runHttp2SansIoSession(
             writerFinished.cancel();
         });
 
-    // Drain the h2c seeded request BEFORE feeding any initial bytes: feed() resets the
-    // event queue at entry (its per-feed view contract), which would wipe the seed's
-    // kMessageHead/kMessageEnd when the client pipelined its preface after the
-    // upgrade request. Seed events carry no input views, so draining first is safe.
+    // Establish the feed contract: drain any startup events before initial input.
     drainEvents();
-    if (!connection.closing() && !initialBytes.empty()) {
-        (void)connection.feed(initialBytes);
-        drainEvents();
+    if (!connection.connectionError().has_value() && !initialBytes.empty()) {
+        const auto result = feedAndDrain(initialBytes);
+        initialInputRetained =
+            result == Http2FeedResult::kConnectionNotStarted;
     }
     wakeWriter();
 
     // Reader loop: feed inbound bytes, then act on the drained events.
-    if (!connection.closing()) {
+    if (!connection.connectionError().has_value() && !initialInputRetained) {
         std::array<char, 16384> readBuffer;
         for (;;) {
             // Pick the inactivity phase: mid-header-block -> the tight header timeout;
@@ -668,11 +765,12 @@ Task<void> runHttp2SansIoSession(
                 !env.serverStarted->load(std::memory_order_relaxed)) {
                 connection.beginDrain();
             }
-            (void)connection.feed(std::string_view(readBuffer.data(), bytesRead));
-            drainEvents();
+            const auto result = feedAndDrain(
+                std::string_view(readBuffer.data(), bytesRead));
             wakeWriter();  // feed may have produced ACKs / WINDOW_UPDATEs to flush
-            if (connection.closing() || writeFailed) {
-                break;  // closing, or the write side is dead -- stop admitting work
+            if (result == Http2FeedResult::kConnectionNotStarted ||
+                result == Http2FeedResult::kProtocolFailure || writeFailed) {
+                break;  // retained input, terminal protocol failure, or dead write side
             }
         }
     }

@@ -30,17 +30,434 @@ Protocol primitives report status plus a static diagnostic through `HttpProtocol
 `ruvia-web` translates that signal into its `HttpErrorInfo`/JSON envelope. Router and
 custom error handlers never set HTTP/1 connection persistence; the server runtime applies
 `Connection: close` only after it knows the request-body and keep-alive state.
-For streaming responses, `ruvia-http` returns one `Http1ResponseStreamPlan` that binds
-HTTP version, chunked versus close-delimited framing, persistence, and response signaling;
-`ruvia-web` contributes only an external force-close policy bit and drives the returned plan.
+The HTTP/1 parser first returns one immutable `Http1ServerConnectionPlan`, which binds the
+`Http1ConnectionDisposition` to the response-side signal required by the request version:
+implicit persistence for HTTP/1.1 or explicit `Connection: keep-alive` for opted-in HTTP/1.0.
+Buffered, body-reader, streaming, and WebSocket-failure paths carry or tighten that same
+plan. Typed `Http1RequestBodyConsumption`, request-limit close policy, and an
+application `Connection: close` may only narrow it to close; no runtime branch passes a bare
+`needsKeepAliveSignal` bool or reconstructs the wire signal from the version string.
+Repeated `Connection` field lines are evaluated as one list: any `close` token tightens the
+plan and the finalizer collapses contradictory fields to one `Connection: close`; an HTTP/1.0
+reuse verdict adds `keep-alive` even when another connection option was already present.
+For streaming responses, `ruvia-http` first returns an `Http1ResponseStreamPlan` that binds
+the request connection plan, version/body state, candidate chunked versus close-delimited framing,
+and a typed external close policy. At head commit, `PreparedHttp1ResponseStream` also folds in
+the response method/status and `Connection` options, canonicalizes the wire signal, and returns
+the authoritative connection disposition. Thus an HTTP/1.0 body-allowed stream remains
+close-delimited, while a HEAD/204/205/304 response on an opted-in persistent connection is
+self-delimited and can be reused. The committed sink returns the complete connection plan, so
+its socket disposition cannot drift away from the response signal already emitted on the wire.
+Streaming termination is also one HTTP-owned contract. `ResponseStreamCommitPlan` binds the
+body plan to the exact post-head phase (`body-open`, `trailers-only`, or `message-ended`) and
+the available trailer framing. Application code submits an optional complete trailer section
+only through `ResponseStreamWriter::end(std::span<const HttpHeaderView>)`; there is no incremental
+`addTrailer()` side channel. HTTP/1 accepts that section only for a body-allowed chunked response,
+so HTTP/1.0 close-delimited responses and HEAD/1xx/204/304 reject it instead of dropping it.
+HTTP/2 can keep a content-forbidden response open in the explicit
+`Http2LocalSendPhase::kTrailersOnly` phase and terminate it with trailing HEADERS; it never
+becomes DATA-open or falls back to empty DATA. `Http2Connection::submitResponseTrailerSection()` accepts fields only
+after the final response head, validates the whole section before HPACK mutation, and returns a
+typed `Http2ResponseTrailerSubmitStatus` for closed/wrong-phase/empty/invalid/incomplete-length
+outcomes; `finishResponse()` remains the sole owner of the terminal `END_STREAM` ordering.
+Request methods have two deliberately separate representations. RFC 9110 defines the wire method
+as an extensible, case-sensitive token, so `HttpRequest::method()`, `ContextRequest::method()`,
+`RawRequestClone::method()`, and `AccessLogRecord::method()` preserve that exact token for both
+HTTP/1 and HTTP/2. `HttpKnownMethod` and the corresponding `knownMethod()` accessors are only the
+framework's fixed routing/body-policy classification; `classifyHttpMethod()` does not validate
+syntax, while `isValidHttpMethodToken()` does not require a known classification. Consequently, a
+valid extension such as `PROPFIND` (and a differently cased token such as `get`) is neither an
+HTTP/1 parse failure nor an HTTP/2 stream protocol error. If no fixed framework semantic exists,
+`ruvia-web` renders 501 through the normal error handler; an actually malformed token remains a
+protocol failure. RFC 8441 Extended CONNECT likewise remains `CONNECT` in the request, clone, and
+access log. Only WebSocket route lookup uses `Http2RequestBuilder::routeMethod()` to select an
+existing GET route; it never rewrites the wire method stored in the request.
+The public `Http1RequestParser` is explicitly an HTTP/1 whole-message, zero-copy scanner. Its
+`Http1RequestParseResult` is discriminated: `Http1RequestNeedMore` alone carries an optional exact
+`requiredTotalBytes()` for a partial Content-Length message, `Http1ParsedRequest` alone carries the
+borrowed request, its immutable body plan, the exact framed `wireBody()`, and the first message's
+consumed length, while `Http1RequestParseFailure` alone carries a real protocol error rather than a
+`kNone` sentinel. A known required total is likewise nonzero. A chunked success
+retains the complete chunk-size/data/delimiter/trailer section for the shared decoder instead of
+returning an empty body, and no request can be read from need-more or failure states. The reusable
+`Http1ServerRequestParseState` also names the runtime boundary explicitly:
+`kRequestHeadReady` is the only phase from which Web may dispatch a route, whereas
+`kRequestMessageReady` means the complete framed request was scanned. `kNeedRequestHead` and
+`kNeedRequestBody` remain distinct, `messageBytes` is valid only for message-ready, and optional
+`requiredTotalBytes` belongs only to a fixed-length body that needs more input. The old generic
+`HttpParseStatus` tuple is not part of the API, so head completion cannot masquerade as message
+completion and buffer growth cannot interpret a completed-message boundary as future capacity.
+The parser also emits one immutable `Http1RequestBodyPlan` for every request. It is the only
+contract passed to buffered readers, streaming readers, and WebSocket gates: none, exact
+Content-Length, or final chunked framing; any preceding transfer coding;
+and the typed Expect action travel together instead of as loose scalar arguments. Plans are built
+only through the named `none()`, `knownLength()`, and `chunked()` alternatives; the former
+five-scalar `http1PlanRequestBody(...)` entry no longer permits contradictory framing inputs.
+For RFC 9112 request framing, Ruvia accepts final `chunked` and one supported `gzip` or
+`deflate` coding before it (for example `gzip, chunked`), de-chunks before incrementally
+decoding that coding, maps an unsupported coding to 501, and rejects Transfer-Encoding on
+HTTP/1.0.
+Inbound Expect semantics are shared across protocol versions by the fixed-size
+`HttpRequestExpectations` state. It incrementally parses the RFC 9110 `#expectation` list across
+repeated field lines, ignores recipient-side empty members, recognizes case-insensitive
+`100-continue`, and preserves any extension member as one `kUnsupported` fact. A syntactically
+valid extension is no longer an `HttpParseError::kExpectationFailed` or an HTTP/2 stream error:
+the pure parser reports `HttpServerExpectationAction`, while `ruvia-web` deliberately chooses a
+417 through its normal error handler. HTTP/1.0 suppresses the continue action. When request
+content will follow, the HTTP/1 body reader drives `Http1InterimResponseWriter`; the HTTP/2
+session immediately drives `Http2Connection::submitInterimResponseHead()` before waiting for
+DATA, so a conforming client cannot deadlock while withholding content.
+Protocol version is likewise one typed message-control contract. `HttpProtocolVersion`
+contains `kHttp10`, `kHttp11`, and `kHttp2`; both inbound `HttpRequest` and owning
+`HttpClientResponse` expose it through `protocolVersion()`. The HTTP/1 parsers validate the
+case-sensitive start-line token and convert it once, while the HTTP/2 builder records `kHttp2`
+from the connection protocol instead of inventing a borrowed `"HTTP/2"` wire value. Connection,
+stream-framing, WebSocket, and final-response control consume the same enum. The former
+`HttpRequest::httpVersion()` string view and private `HttpResponseProtocolVersion` duplicate are
+removed, so no layer can compare an arbitrary or dangling version spelling.
+Outbound HTTP/1 request emission is now the matching public sans-I/O boundary.
+`HttpClientRequestContent::none()` is distinct from `bytes("")`: only the latter represents an
+explicit empty content message and causes `Content-Length: 0`. `Http1ClientRequestWriter` validates
+the exact, case-sensitive method, direct-origin request target, every field, header count, and the
+method-specific TRACE/OPTIONS constraints before touching a caller-provided head buffer. It emits
+Host first from the typed `HttpOrigin` and owns the sole generated Content-Length, optional
+`Connection: close`, and `Expect: 100-continue`. `Http1ClientRequestWirePolicy` selects no
+expectation or the 100-continue handshake; a caller-supplied Host, Content-Length,
+Transfer-Encoding, Trailer, or Expect field is rejected instead of reconciling parallel sources.
+Caller-supplied connection fields are one typed contract as well: sender-side `Connection` and
+`Upgrade` lists reject empty or malformed members, and an `Upgrade` or `TE` field is rejected
+unless the logical repeated `Connection` list contains the corresponding option.
+`prepareConnect()` is a dedicated entry: it derives an authority-form target with an explicit
+nonzero port while generating the corresponding Host authority, so a regular origin-form request
+cannot accidentally masquerade as CONNECT.
+
+Preparation returns buffer-too-small, `PreparedHttp1ClientRequest`, or typed failure without
+allocation or partial output. The prepared alternative exposes the head plus one immutable
+`Http1ClientRequestContentPlan`: none, immediate (including explicit empty content), or
+continue-gated. A continue-gated plan requires a separate head write; the external runtime may
+release its borrowed content after 100 Continue or its own finite wait policy, without rescanning
+Expect. `Http1ClientResponseParser` can only be constructed from that Prepared value, so method,
+Upgrade offer, Expect gate, and effective close signal cannot be replaced with caller-reconstructed
+lookalike facts.
+
+Outbound HTTP/1 response-head parsing is a public sans-I/O boundary. One stateful
+`Http1ClientResponseParser` is bound to one Prepared request and remains in use across every
+informational response until the final response, tunnel, or upgrade. An external runtime gives it
+the growing buffer including the terminal CRLF CRLF and receives one
+discriminated `Http1ClientResponseParseResult`: `Http1ClientResponseNeedMore`, an owning parsed
+head, or `Http1ClientResponseParseFailure`. A parsed head owns its `HttpClientResponse` header
+storage through PMR and reports the exact head boundary through `consumedBytes()`, leaving all
+following bytes for the body, tunnel, upgraded protocol, or next informational/final head driver.
+Protocol failures are typed and allocation-free; the owning response is allocated only after the
+whole head and its framing plan validate, so there is no partially mutated response out-parameter
+and no exception for malformed wire input (resource exhaustion while materializing success can
+still throw).
+
+That success alternative carries one immutable `Http1ClientResponsePlan`, not separate
+`hasContentLength`/`isChunked`/`closeAfterResponse` fields. The plan binds none, exact-length,
+final-chunked, close-delimited, and opaque modes to transfer-decoding order and an `await final
+response`/reuse/close/CONNECT-tunnel/protocol-upgrade connection disposition. For a continue-gated
+request it also emits one `Http1ClientRequestContentSignal`: none for unrelated informational
+responses, continue for 100, and exchange-complete when a final response or 101 means pending
+content must no longer be started. Consequently, a body-allowed response without Content-Length
+or final chunked is always close-delimited; HTTP/1.0
+defaults to close unless its response opts into `keep-alive`; and a 2xx CONNECT switches to an
+opaque tunnel instead of being mistaken for a response body. A valid `101 Switching Protocols`
+likewise produces opaque bytes only when the actual request and response both carry
+`Connection: Upgrade`, the selected `Upgrade` protocol was offered by that request, and the 101
+does not carry Content-Length or Transfer-Encoding. Protocol names compare case-insensitively,
+while protocol versions remain exact tokens. When Upgrade and 100-continue are both present, the
+stateful parser rejects a 101 that was not preceded by 100 Continue. A content-bearing request also
+requires the external runtime to acknowledge its completed write through
+`completeRequestContent()` before 101 can be accepted; the returned
+`Http1ClientRequestContentCompletionStatus` keeps duplicate and terminal notifications explicit.
+This prevents switching protocols in the middle of the request message, as required by RFC 9110. A
+parser becomes terminal after a final response or protocol failure, preventing a second response
+from being interpreted as part of the same exchange. Redirect planning
+uses the same exact method-token comparison. In accordance with RFC 9110, 301/302 may rewrite only
+POST to GET, 303 selects GET while preserving HEAD, and 307/308 retain the method; the typed plan
+separately tells the I/O owner whether representation bytes and content-specific fields must be
+dropped. Although RFC 9110 forbids a server from generating content in a 205 response, RFC 9112
+does not place 205 in the HEAD/1xx/204/304 header-terminated framing class: the client plan still
+consumes its declared zero-length/chunked framing, and an unframed 205 is close-delimited, before
+the external runtime can safely reuse the connection.
+Request and response parsers share `HttpContentLengthState`: a comma-combined field such as
+`Content-Length: 5, 5` is accepted only after every decimal member is parsed and found equal,
+while any differing or malformed member rejects the whole message. They also share
+`HttpTransferEncodingState`, which preserves list order across repeated field lines, requires
+chunked to be final when present, and rejects parameters on gzip/deflate/chunked coding names;
+chunk extensions remain a separate grammar on body chunk-size lines.
+HTTP/1 chunked framing has one protocol-owned implementation and two typed consumption views.
+The incremental `Http1ChunkedBodyDecoder` returns a zero-allocation `std::variant` containing
+exactly one of `Http1ChunkDecodeNeedMore`, `Http1ChunkDecodeBodyChunk`, or
+`Http1ChunkDecodeComplete`. Every alternative owns the input prefix consumed by that call, but
+only `Http1ChunkDecodeBodyChunk` exposes borrowed representation bytes. The Web runtime may refill,
+deliver, or finish only by driving those accessors; it does not inspect size lines, delimiters, or
+trailers itself. The whole-message scanner similarly returns `HttpChunkScanNeedMore`,
+`HttpChunkScanComplete`, or `HttpChunkScanFailure`: only complete owns the final consumed message
+boundary, and only failure owns the typed chunk error.
+
+Completion follows
+[RFC 9112 Section 7.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1): a zero-size last
+chunk, the optional trailer section, and its terminating empty line are all required before either
+decoder reports complete. An input that ends before that boundary remains need-more rather than
+becoming an implicitly complete body, matching the incomplete-message rules in
+[RFC 9112 Section 8](https://www.rfc-editor.org/rfc/rfc9112.html#section-8). The former generic
+framer/event tuple is intentionally absent, so need-more and failure cannot accidentally expose a
+plausible whole-message consumption boundary.
+All HTTP/1 connection-control consumers also share `HttpConnectionOptions` and
+`HttpUpgradeProtocols`. Repeated field lines extend one allocation-free state; sender paths reject
+empty members, while recipient paths ignore empty members within the existing bounded header
+budget as required by RFC 9110. The server request parser, client writer, client response parser,
+and server response finalizer therefore cannot disagree about close, keep-alive, Upgrade, or TE.
+The response finalizer supplies a missing `Connection: Upgrade` option and, when the authoritative
+plan closes the connection, emits one `Connection: close, Upgrade` field so a retained Upgrade
+advertisement never loses its required hop-by-hop marker.
+HTTP/1 WebSocket validation derives Connection, every Upgrade offer, and duplicate handshake
+fields from one parsed `HttpRequest`; it no longer accepts a separate flags object that could
+describe different wire bytes or rely on the single-value known-header cache.
+WebSocket close handling follows the same single-owner rule. `ruvia-http`'s `WsConnection`
+exposes one `poll()` input driver. It returns `std::optional<WsEvent>`: `std::nullopt` means that a
+complete event is not yet available because the parser needs more transport bytes, while every
+materialized event is a zero-allocation
+`std::variant` containing exactly one of `WsMessageEvent`, `WsPingEvent`, `WsPongEvent`,
+`WsCloseEvent`, `WsProtocolErrorEvent`, or `WsTransportEndEvent`. There is no `kNone` event and no
+writable `kind + opcode + payload + closeCode` tuple. Borrowed message/control payloads and the
+Close reason remain valid until the next `poll()` call.
+
+The inbound pipeline beneath `poll()` is discriminated end to end. Per
+[RFC 6455 Section 5.2](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2),
+`webSocketTryReadFrame()` returns a `WebSocketFrameReadResult` containing exactly need-input, one
+borrowed frame, or one failure carrying `WebSocketProtocolFailure`; it has no byte-count/EOF side
+channel and never throws for peer bytes. Per
+[RFC 6455 Section 5.4](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.4),
+`WebSocketInboundAssembler::accept()` then returns a `WebSocketInboundResult` containing exactly
+continue-reading, one control frame, one message with its content encoding, or one failure—there is
+no action enum coupled to an output message. Malformed framing/fragmentation, invalid UTF-8, and an
+oversized message carry Close codes 1002, 1007, and 1009 respectively as defined by
+[RFC 6455 Section 7.4.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.4.1).
+`WsConnection` is the sole layer that turns those typed failures into a Close frame and a
+`WsProtocolErrorEvent`.
+
+The typed fields follow the wire semantics rather than exposing an ambiguous raw union. Per
+[RFC 6455 Section 5.5.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.5.1),
+`WsCloseEvent` exposes the parsed status code and UTF-8 reason; an absent status is reported locally
+as 1005 by [RFC 6455 Section 7.1.5](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.5),
+while [Section 7.4.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.4.1) forbids that reserved
+code from appearing on wire. Ping and Pong payloads have their own event types, and the core
+automatically echoes Ping data in the Pong required by
+[RFC 6455 Section 5.5.2](https://www.rfc-editor.org/rfc/rfc6455.html#section-5.5.2).
+
+The immutable `WsOutputPlan` still solely binds opaque frame bytes to a typed
+keep-open/end-transport disposition. `WsTransportEndEvent` only stops the input pump; runtimes must
+drive the plan rather than infer a transport action from that observation. A locally initiated
+Close is therefore flushed without ending the transport; application messages are no longer
+delivered, but the core keeps parsing until the peer Close completes the RFC 6455 handshake. Only
+that completion (or a protocol failure/transport EOF) makes the output plan terminal. The RFC 8441
+adapter maps the terminal disposition to HTTP/2 `END_STREAM`; it never infers END_STREAM merely
+because a Close frame was sent. Heartbeat intervals, Pong timeout, and the close-handshake timeout
+are runtime policy and live only in `ruvia-web` as `WebSocketLifecycleOptions`. The default
+close-handshake timeout is five seconds, zero disables it, and negative route values are rejected
+at registration. A timeout aborts only that WebSocket transport—`RST_STREAM(CANCEL)` for an HTTP/2
+tunnel—rather than closing the multiplexed connection and its unrelated streams.
+
 Buffered and streaming body decisions are also HTTP-owned: `HttpResponseBodyPlan` combines
 the request method with the response status, while `HttpBufferedResponseWritePlan` adds the
 representation length and the final send-body verdict. HTTP/1 and HTTP/2 consume these same
 plans; `ruvia-web` must not recompute them with loose `skipBody` flags. In particular, a HEAD
 response keeps the GET representation metadata (including negotiated content coding and
-content length) but never emits payload bytes or HTTP/2 DATA frames. The HTTP/2 core records
-local `END_STREAM` for requests and responses and rejects later `submitData()` calls, so an
-external runtime cannot accidentally violate the stream lifecycle after the plan is applied.
+content length) but never emits payload bytes or HTTP/2 DATA frames. A 205 Reset Content is
+also suppressed by that shared status plan: HTTP/1 canonicalizes it to `Content-Length: 0`
+without transfer coding, while HTTP/2 ends it on the response HEADERS; caller-provided body
+bytes or contradictory framing fields are never sent.
+Status/control semantics are committed through one `HttpFinalResponseControlPlan`, not inferred
+from the body policy. Outbound HTTP status codes are limited to the RFC 9110 range `100..599`;
+`HttpResponse`, `Context`, and generic buffered/streaming handlers represent final responses only
+(`200..599`). Non-101 1xx progress heads use the immutable, bodyless, borrowed
+`HttpInterimResponseHead`. HTTP/1.1 encodes it only through the allocation-free,
+transactional `Http1InterimResponseWriter::prepare()` entry; HTTP/2 submits it only through
+`Http2Connection::submitInterimResponseHead()`. Its field storage must remain stable through that
+synchronous prepare/submit call; initializer-list and rvalue-container construction are deleted, and
+vectors are not accepted as implicit borrowed storage.
+The response message model is protocol-version neutral: `HttpResponse` and `Context::ResponseInit`
+carry only the numeric status code and expose no `statusText` or custom reason-phrase setter.
+HTTP/1 final and interim writers derive conventional presentation text at serialization time through
+`httpReasonPhrase()`; an unregistered status such as 299 gets an empty phrase, while the status line
+still retains the required SP before CRLF under
+[RFC 9112 §4](https://www.rfc-editor.org/rfc/rfc9112.html#section-4). HTTP/2 serializes only the
+`:status` pseudo-header required by
+[RFC 9113 §8.3.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.3.2) and never consumes a
+reason phrase. `HttpErrorInfo::statusText` remains a `ruvia-web` JSON/error-label concern; it cannot
+alter either protocol's wire response.
+Both writers share validation before touching the output buffer, HPACK block, or stream: malformed
+fields, Content-Length, Transfer-Encoding, Trailer, and repeated singleton fields are rejected.
+The HTTP/1 writer additionally enforces the 64-field/64-KiB head limits, validates Connection/Upgrade,
+reports the exact required buffer size transactionally, and carries `Connection: close` forward as
+`requiresFinalConnectionClose()` because a final response is still required. It encodes exactly the
+fields in the typed head—no hidden field injection. The Web runtime's automatic 100
+Continue path drives this writer and treats socket write failure as transport failure; it contains no
+independent HTTP status-line bytes. HTTP/2 additionally rejects all connection-specific fields.
+Across the HTTP-owned HTTP/1 and HTTP/2 final/interim encoders, a caller-supplied `Server` field is
+preserved, but an absent field stays absent; the dedicated WebSocket handshake paths likewise never
+invent a `Server` product identity. Product-banner policy belongs to the application/Web layer. This
+follows [RFC 9110 §10.2.4](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.4), which makes
+`Server` optional and cautions against exposing needlessly detailed implementation information. This
+does not remove required protocol metadata: final HTTP/1 and HTTP/2 response paths still synthesize
+`Date` when absent, satisfying the clocked-origin requirement for 2xx/3xx/4xx responses in
+[RFC 9110 §6.6.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-6.6.1); non-switching 1xx
+writers remain exact and do not add it.
+Status 101 remains exclusive to a dedicated driver because it transfers connection ownership. A 426
+response over HTTP/1 must contain at least one syntactically valid `Upgrade` protocol before any
+connection/header mutation, after which the finalizer supplies the paired `Connection: Upgrade`.
+HTTP/2 cannot represent 426 because RFC 9110 requires that Upgrade field while RFC 9113 forbids it;
+the core therefore returns `kInvalidMessage` without HPACK or stream mutation, and the Web driver
+resets an otherwise-open stream instead of leaving the peer waiting indefinitely. Actual HTTP/1
+WebSocket 101 and HTTP/2 Extended CONNECT transitions remain owned by their dedicated drivers.
+The HTTP/2 core records
+an explicit local send phase: interim heads leave the initial-head phase open, exactly
+one request/final-response/WebSocket head advances it, and DATA is accepted only while the
+body phase is open. `submitData()` also distinguishes `kQueued` (the core copied and owns the
+unsent suffix) from `kBackpressured` (the core accepted nothing, so the caller must retry after
+the prior submission drains). `Http2LocalContentState` binds a final response's declared
+`Content-Length` to the DATA bytes accepted by the core: overrun and premature END_STREAM are
+rejected before output/window mutation, `finishResponse()` refuses an incomplete exact body,
+and invalid preserved lengths reject the head before HPACK output. Client-role regular request
+heads use `Http2RequestContent` as the single framing contract: `none()`, `knownLength(n)`, and
+`streaming()` deterministically select canonical Content-Length, HEADERS END_STREAM, and the
+same stream-owned content state. A raw `content-length` field is rejected rather than becoming a
+second source of truth. Each request-head API performs validation, odd stream-ID allocation,
+`SETTINGS_MAX_CONCURRENT_STREAMS` admission, and HEADERS emission as one transaction, returning
+one discriminated `Http2RequestHeadSubmitResult`. Its `Http2SubmittedRequestHead` alternative alone
+exposes the allocated nonzero stream ID; `Http2RequestHeadSubmitFailure` alone exposes a typed
+`Http2RequestHeadSubmitError`. There is no accepted/status field paired with a zero stream-ID
+sentinel. Failure consumes no ID, HPACK bytes, or peer concurrency slot. This matches
+[RFC 9113 Section 5.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1.1), where zero is
+reserved for connection control and client-created streams use increasing odd identifiers, while
+[Section 5.1.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-5.1.2) makes concurrent-stream
+admission peer-controlled and
+[Section 6.5.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2) defines that setting as a
+directional creation limit. A submitted stream holds that slot until RST_STREAM or both END_STREAM
+halves complete. There is no public API for preallocating an RFC-idle stream, and request heads are
+rejected until `beginConnection()` has queued the client preface. The explicitly named
+`submitRegularRequestHead()` accepts every valid non-CONNECT method token—including extension
+methods—and rejects malformed tokens, CONNECT, and caller-supplied pseudo-headers. Standard CONNECT
+goes through `submitConnectRequestHead()` with authority-form validation; Extended CONNECT goes
+through `submitExtendedConnectRequestHead()`
+only after the peer advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL=1`. Both remain DATA-closed
+until a final 2xx response; inbound Extended CONNECT is likewise rejected unless the core has
+advertised its own capability through `beginConnection()`. A server accepts a pending tunnel through
+`submitConnectResponseHead()` (the WebSocket specialization uses
+`submitWebSocketHandshake()`). Successful tunnel DATA is surfaced as `kTunnelData`, peer
+`END_STREAM` as `kTunnelEnd`, and each direction remains independently half-open. The core
+rejects request content, trailers, DATA before acceptance, DATA after the peer FIN, and every
+non-management frame on a connected stream. The content state's `accepted` counter moves
+once for the whole `kAccepted`/`kQueued` input, while `committed` moves only as DATA payload is
+materialized; WINDOW_UPDATE drain never double-counts ownership. HEAD/204/205/304 metadata is
+body-forbidden rather than an exact DATA contract, and tunnel bytes remain unbounded. A queued
+terminal marker is tracked separately from a serialized
+`END_STREAM`; reset and rejection transitions discard deferred DATA/trailers before the owner is
+woken. This keeps head ordering, retry ownership, and stream termination inside the sans-I/O
+protocol state machine instead of relying on each runtime driver to reproduce them.
+
+Final response submission is discriminated in the same direction. `submitResponseHead()` returns
+`Http2BufferedResponseHeadSubmitResult`, and `submitStreamingResponseHead()` returns
+`Http2StreamingResponseHeadSubmitResult`. Only the `Http2SubmittedResponseHead<Plan>` alternative
+exposes its immutable buffered write plan or streaming commit plan; only
+`Http2ResponseHeadSubmitFailure` exposes `Http2ResponseHeadSubmitError`. The result itself has no
+status, accepted flag, or plan accessor, so a closed stream, invalid phase, or malformed response
+cannot expose plausible DATA/END_STREAM instructions. Failure is transactional: it emits no
+HEADERS/HPACK bytes and does not advance the stream send phase, while success atomically commits the
+initial response HEADERS and its exact subsequent-content plan. This mirrors
+[RFC 9113 Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), where a response is
+sent on its request stream as a header section followed by content/trailers, and
+[Section 8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1), which defines malformed
+responses. The submitted alternative also owns whether the initial HEADERS carries END_STREAM, as
+specified by [RFC 9113 Section 6.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.2).
+
+HTTP/2 startup has one role-aware, idempotent entry: `beginConnection()`. A client emits the
+connection magic before SETTINGS; a server requires that magic and emits its SETTINGS without it.
+In accordance with RFC 9113 Sections 3.1 and 3.3, TLS selects `h2` through ALPN and cleartext
+HTTP/2 requires prior knowledge plus the client connection preface. The obsolete HTTP/1.1
+Upgrade/`HTTP2-Settings` handshake and synthetic stream-1 seed do not exist in either the core or
+the Web driver.
+One typed `PrefacePhase` represents not-started, client-magic, peer-SETTINGS, and ready states;
+split booleans cannot create impossible combinations. Calling `feed()` before startup returns
+`kConnectionNotStarted` with zero bytes consumed and no state mutation, so the driver retains and
+retries the same input after `beginConnection()`. After the role-specific magic boundary, both
+roles require the peer's first frame to be a non-ACK SETTINGS frame; an ACK cannot complete the
+peer preface, and `receivedPeerSettings()` becomes true only in the ready phase.
+Input and event delivery share one ownership contract. `nextEvent()` returns
+`std::optional<Http2Event>`; `std::nullopt` is the only drained-queue signal, while every
+materialized event is a zero-allocation `std::variant` with exactly one typed payload. There is no
+sentinel event and no writable `kind + streamId + bytes + error` tuple from which callers can form
+invalid combinations. `Http2MessageBodyChunkEvent` and `Http2TunnelDataEvent` carry zero-copy views
+that remain valid until the next input-consuming `feed()`. If any event is still queued, `feed()`
+returns `kEventsPending` with zero bytes consumed and preserves both the event and its body view;
+the owner drains the queue and retries the identical input span. A `kNeedMore` result has the
+opposite ownership: all supplied bytes were consumed into the core, but a partial preface/frame
+remains buffered, and events produced by earlier complete frames still need draining. The in-tree
+Web driver uses one feed-and-drain path for initial and ordinary socket bytes. It also performs
+`Http2StreamClosedEvent` cleanup directly from that event's stream ID, because the protocol core
+may already have erased an unpinned reset stream.
+
+As required by [RFC 9113 Section 6.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.4),
+`Http2StreamClosedEvent` retains the close source and exact `RST_STREAM` error code; local stream
+failures report the same code emitted on the wire. The owner never reconstructs this reason from
+stream state after closure.
+Inbound GOAWAY is also a protocol-core lifecycle transition, not a hint for each driver to
+reinterpret. `peerGoaway()` returns the latest typed last-stream-id/error pair and immediately
+blocks new client requests. For every locally initiated stream above that boundary whose response
+has not started, the core discards deferred DATA/trailers and flow-control debt, releases its peer
+concurrency slot and stream-table storage, then emits an `Http2RequestUnprocessedEvent` so the owner
+can safely retry it on another connection. In accordance with
+[RFC 9113 Section 6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8), the
+`Http2GoawayEvent` owns the connection-level last-stream-id and error; the per-request safe-retry
+event carries only its stream ID instead of duplicating GOAWAY metadata. Repeated GOAWAY frames may
+retain or lower the boundary but never increase it; a boundary that excludes an already decoded
+response head is contradictory and closes the connection with `PROTOCOL_ERROR`. A valid peer GOAWAY
+enters the same idempotent
+`beginDrain()` path to emit the directional reciprocal GOAWAY, but it is not a fatal local error:
+frames already present in the same input batch and established streams continue to completion.
+`connectionError()` is the separate typed optional populated only when this endpoint detects a
+fatal frame-layer error; the Web driver stops reading on that value, not on graceful drain. The
+generic core sans-I/O pump takes an explicit, inlined stop predicate instead of imposing a lossy
+one-boolean lifecycle contract on every protocol. Arbitrary GOAWAY error emission remains internal
+to protocol-error handling.
+`Http2LocalSettings` is the only source for local receive capabilities: the exact SETTINGS bytes,
+accepted frame size, stream and connection receive windows, and bounded stream/ready-queue
+capacity all derive from it. `Http2ConnectionLimits` contains only message-body limits. The
+connection send window starts at the RFC default and changes only in response to peer SETTINGS or
+WINDOW_UPDATE; no runtime configuration knob may impersonate peer flow-control state.
+Every inbound DATA frame not being rejected immediately as a connection error is debited from the
+connection receive window by its entire payload length, including padding fields, before stream
+lookup or any stream-level semantic discard.
+Consequently, DATA for a closed/reset/GOAWAY-discarded stream can still cause the required
+connection `FLOW_CONTROL_ERROR` when shared credit is exhausted. A successful debit for discarded
+DATA is returned exactly once through a stream-0 WINDOW_UPDATE; only a live stream proceeds to a
+separate stream-window debit, and deferred delivery retains both debts until release or close.
+`Http2PeerSettings` is constructed with the local `Http2Role`, so directional requirements are
+not optional caller checks: a client rejects a server's `SETTINGS_ENABLE_PUSH=1`, while a server
+can accept either legal value from a client. Applying one entry returns a discriminated
+`Http2PeerSettingApplyResult`: ordinary valid settings and unknown identifiers expose only
+`Http2PeerSettingApplied`; `SETTINGS_INITIAL_WINDOW_SIZE` exposes only
+`Http2PeerInitialWindowChange::delta()`; invalid values expose only
+`Http2PeerSettingFailure::error()`. There is no status/changed/delta tuple, and
+`Http2Connection` is the sole consumer that maps a failure to GOAWAY or propagates a signed delta
+to every active stream. This keeps unknown-setting handling and value validation aligned with
+[RFC 9113 Section 6.5.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.5.2), and keeps the
+all-stream window adjustment required by
+[Section 6.9.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.2) inseparable from the only
+alternative that owns the delta. The irreversible `SETTINGS_ENABLE_CONNECT_PROTOCOL` transition
+continues to follow [RFC 8441 Section 3](https://www.rfc-editor.org/rfc/rfc8441.html#section-3).
+
+Inbound field blocks have the same single-owner rule: even when a stream was locally reset,
+refused during drain, or rejected for a stream error, the core reassembles every required
+CONTINUATION and HPACK-decodes the complete block into detached scratch before discarding its
+HTTP fields. If an owner closes a live stream mid-block, the partial compressed bytes move to
+that scratch; a locally sent RST remains the last local stream frame. Failure to complete the
+mandatory decompression closes the connection with `COMPRESSION_ERROR`. RFC 9113-deprecated
+priority dependency and weight values are shape-checked and otherwise ignored, so they never
+mutate or reset a stream.
 
 The root `CMakeLists.txt` only coordinates global options, dependency discovery, installation, package export, tests, and examples. Each library owns its own `CMakeLists.txt`, `include/`, and `src/` directory. There is no root-level source `include/`, `src/`, or `fuzz/` tree.
 
@@ -61,7 +478,7 @@ Default build:
 
 ```powershell
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static
 cmake --build build --config Debug
 ```
@@ -72,7 +489,7 @@ dependency feature set):
 ```powershell
 # core only
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_CORE=ON `
   -DRUVIA_BUILD_HTTP=OFF `
@@ -80,7 +497,7 @@ cmake -S . -B build `
 
 # http only
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_CORE=OFF `
   -DRUVIA_BUILD_HTTP=ON `
@@ -91,7 +508,7 @@ Build tests and examples:
 
 ```powershell
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
   -DRUVIA_BUILD_EXAMPLES=ON
@@ -103,7 +520,7 @@ Enable optional web integrations:
 
 ```powershell
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_ENABLE_MARIADB=ON `
   -DRUVIA_ENABLE_REDIS=ON `
@@ -116,6 +533,22 @@ Install:
 
 ```powershell
 cmake --install build --config Debug --prefix build/install
+```
+
+Each library has its own installed CMake export. A component-scoped package install
+therefore installs the selected library component plus the shared `Development`
+metadata; Web additionally needs both lower components:
+
+```powershell
+# Standalone core package
+cmake --install build --config Debug --prefix build/install-core --component core
+cmake --install build --config Debug --prefix build/install-core --component Development
+
+# Complete Web package closure
+cmake --install build --config Debug --prefix build/install-web --component core
+cmake --install build --config Debug --prefix build/install-web --component http
+cmake --install build --config Debug --prefix build/install-web --component web
+cmake --install build --config Debug --prefix build/install-web --component Development
 ```
 
 Consume the full web framework:
@@ -135,7 +568,13 @@ find_package(ruvia CONFIG REQUIRED COMPONENTS http)
 target_link_libraries(protocol_tool PRIVATE ruvia::http)
 ```
 
-When no component is requested, the package loads the built direct targets. New projects should still request the component they use explicitly.
+`find_package()` imports only the requested target closure: `core` and `http` remain
+independent, while `web` imports `core + http + web`. It also derives
+`ruvia_AVAILABLE_COMPONENTS` from the exports actually present in the install prefix,
+so a partial install never advertises or imports a missing library. Missing
+`OPTIONAL_COMPONENTS` remain optional; a missing required component rejects the
+package. When no component is requested, all usable installed components are loaded.
+New projects should still request the component they use explicitly.
 
 ## Minimal Web App
 
@@ -211,9 +650,78 @@ The request hot path uses prebuilt route tables and middleware chains. Public AP
 
 `ruvia::http` is intended to be useful without the web framework or the Ruvia runtime foundation, in the nghttp2 class: a pure, core-free, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and connection semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core (`WebSocketProtocol.h`), HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding (`MultipartParser.h`), SSE formatting (`Sse.h`), content decoding, and opaque protocol body handles. You feed it bytes and drive its events from any runtime.
 
+Multipart parsing uses one RFC contract in both buffered and streaming paths.
+`MultipartBoundary` validates and owns the 1–70 byte boundary once; Content-Type extraction additionally
+enforces MIME token/quoted-string syntax. Every staged decision is discriminated rather than represented
+as a writable status plus unrelated fields: `HttpMultipartBoundaryParseResult` owns either the boundary or
+a typed failure, `HttpMultipartPartHeaderParseResult` owns either parsed header views or a typed failure,
+and `HttpMultipartDelimiterResult` distinguishes no-match, need-input, regular part delimiter, and closing
+delimiter. Only a delimiter candidate exposes its offset, and only a complete regular/closing delimiter
+exposes its line length.
+
+The public `MultipartParser` accepts bytes through `feed()`, receives explicit end-of-input through
+`finishInput()`, and returns a `MultipartPollResult` containing exactly one of `MultipartPollNeedInput`,
+`MultipartStreamPart`, `MultipartPollDone`, or `MultipartPollFailure`; only the part alternative exposes
+borrowed metadata/body and its typed `MultipartChunkPhase`, while only failure owns a
+`MultipartParseError`. Malformed or incomplete wire input is therefore reported without a wire-format
+exception; the Web facade maps that typed failure to the allocation-free `HttpProtocolError` signal. There
+is no `PollStatus + optional part` pair and no throwing part accessor.
+This preserves the boundary grammar required by
+[RFC 7578 Section 4.1](https://www.rfc-editor.org/rfc/rfc7578.html#section-4.1) and prevents a closing
+delimiter split at an I/O boundary from being committed before explicit EOF. In accordance with
+[RFC 2046 Section 5.1.1](https://www.rfc-editor.org/rfc/rfc2046.html#section-5.1.1), the `ruvia::web`
+adapter ignores the epilogue semantically but still drains those HTTP body bytes before allowing connection
+reuse; it only drives typed parser results and never rescans delimiter bytes.
+
 It does not own `App`, `Context`, `Controller`, `Router`, middleware, model validation, DB, Redis, JWT, CORS policy, security-header middleware, static-file product policy, or any socket/TLS I/O. Its `HttpRequest` represents the HTTP message only and therefore never stores peer addresses, TLS state, or client-certificate identity. Reading or writing HTTP headers is not by itself a reason to live in `ruvia::http`: protocol decisions such as framing, keep-alive, upgrade handshakes, and response-head serialization belong here; product decisions such as CORS, sessions, CSRF, rate limits, redirects, and static-root indexing live in `ruvia::web`.
 
-The outbound HTTP client surface is intentionally limited to the low-level, sans-I/O protocol API in `ruvia::http`: `HttpOrigin`, request/response models, response parsing, transfer/content decoding, redirect replay checks, and the HTTP/2 client-role protocol state. It contains no TLS file settings, pools, or runtime timeouts. `ruvia::web` does not provide a socket/TLS client runtime, `fetch`, or reverse-proxy integration; applications that need outbound HTTP drive the protocol API from their own I/O runtime.
+The outbound HTTP client surface is intentionally limited to the low-level, sans-I/O protocol API in `ruvia::http`. `HttpScheme` and the immutable borrowed `HttpOrigin::http()`/`https()` factories bind scheme, host, and normalized numeric port without a transport-flavored TLS boolean or allocation; the borrowed host storage must outlive the value and remain unchanged, and rvalue string factories are deleted. Construction validates one non-empty RFC 3986 `uri-host`, including bracketed IPv6/IPvFuture literals, so authority formatting and redirects no longer repeat origin validation. Host, absolute-form, and redirect parsing share `HttpAuthorityView`, which preserves absent, explicitly empty, and numeric ports; HTTP comparison maps absent/empty ports to the scheme default, folds host case, normalizes percent-encoding hex case, and decodes only percent-encoded unreserved octets. Encoded reserved characters remain distinct from their raw spelling. A numeric port zero remains a distinct syntactic origin for the external transport to accept or reject, while CONNECT still requires a non-empty, nonzero tunnel port. `HttpClientRequest` is a borrowed HTTP message view (method, request target, headers, and typed content). Its HTTP/1 wire representation is prepared transactionally by `Http1ClientRequestWriter`; method and header storage borrowed by the resulting Prepared-bound parser must remain alive and unchanged until the corresponding final response head or protocol-switch decision has been parsed. `HttpClientResponse`/`HttpClientResponseHeader` own parser output through PMR. Runtime promises such as redirect counts, Expect wait duration, stream decode switches, TLS files, pools, and timeouts are deliberately absent because this target has no I/O runtime to honor them. Redirect helpers return a typed request/content plan, distinguish absent, empty, and repeated response fields, and resolve relative Location URI references against the current request target before enforcing same-origin scheme/host/port. A malformed or userinfo-bearing Location authority is an invalid Location; only a syntactically valid unequal authority is classified as a different origin.
+
+Redirect protocol helpers are a public sans-I/O surface in `HttpClientRedirect.h`, not an installed
+`detail` header. `lookupUniqueHttpClientResponseHeader()` returns one
+`HttpClientResponseHeaderLookupResult`: `HttpClientResponseHeaderAbsent`,
+`HttpClientResponseHeaderFound`, or `HttpClientResponseHeaderRepeated`. Only `Found` exposes the
+borrowed value, so a present empty Location remains distinct from absent or repeated Location.
+`resolveHttpClientSameOriginRedirectTarget()` takes a PMR resource and returns one move-only
+`HttpClientRedirectTargetResult`: either an owning `HttpClientRedirectTarget` or an
+`HttpClientRedirectTargetFailure` carrying `HttpClientRedirectTargetError`; it has no mutable output
+parameter and failure cannot leave stale target bytes behind. This matches Location's single
+URI-reference grammar and duplicate-field warning in
+[RFC 9110 Section 10.2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-10.2.2), while relative
+path/query inheritance and dot-segment removal continue to follow
+[RFC 3986 Section 5.2](https://www.rfc-editor.org/rfc/rfc3986.html#section-5.2) and preserve the
+undefined-versus-empty component distinction described by
+[RFC 3986 Section 5.3](https://www.rfc-editor.org/rfc/rfc3986.html#section-5.3).
+
+`Http2Connection::submitRegularRequestHead()` accepts a typed `Http2RequestContent` plan instead of
+an independent Content-Length/END_STREAM pair and deliberately rejects CONNECT. It and the dedicated
+Standard/Extended CONNECT entries return `Http2RequestHeadSubmitResult`, atomically allocate their
+own stream, and enforce the peer's concurrent-stream limit inside the protocol core; owners never
+preallocate idle streams or duplicate that gate. Callers branch on `submitted()` or `failure()`:
+only `Http2SubmittedRequestHead` has `streamId()`, and only
+`Http2RequestHeadSubmitFailure` has `error()`. Extended CONNECT is additionally gated by
+`peerExtendedConnectEnabled()`, and neither CONNECT form permits tunnel DATA before a successful
+response. `beginConnection()` idempotently emits the role-correct preface and advertises the local
+`Http2LocalSettings`; `feed()` is a zero-consumption retry boundary until startup, and the peer
+preface completes only on an initial non-ACK SETTINGS frame. Inbound GOAWAY closes every unprocessed
+higher-numbered request inside the core and reports it through `Http2RequestUnprocessedEvent`;
+external runtimes decide whether and when to replay that typed safe-retry event, but do not
+reconstruct stream ownership from the raw frame. Inbound Extended CONNECT is enabled only after the
+local advertisement and peer preface are established. The library contains no client transport.
+`ruvia::web` does not provide a socket/TLS client runtime, `fetch`, or reverse-proxy integration;
+applications that need outbound HTTP drive the protocol API from their own I/O runtime.
+
+Inbound byte ownership is one direct `Http2FeedResult` enum, never a
+`Http2FeedStatus + consumed` tuple. `kConnectionNotStarted` retains the exact span for retry after
+`beginConnection()`, and `kEventsPending` retains it until `nextEvent()` has drained the prior
+zero-copy events. `kAccepted` and `kNeedInput` both mean that the core accepted the whole span; the
+latter only reports a buffered partial connection preface or frame. `kProtocolFailure` is terminal,
+so the current span is dropped and never retried. These boundaries follow the connection preface in
+[RFC 9113 Section 3.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-3.4) and the fixed nine-octet
+frame header plus variable payload in
+[RFC 9113 Section 4.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-4.1). The Web driver drains
+events and retries the same span only for `kEventsPending`; it neither computes a consumed offset nor
+re-queries `connectionError()` to reinterpret the authoritative feed result.
 
 ## Build Options
 
@@ -245,11 +753,11 @@ installation. Optional MariaDB, Redis, and JWT switches require `RUVIA_BUILD_WEB
 |-- ruvia-http/
 |   |-- CMakeLists.txt
 |   |-- include/ruvia/http/         # HTTP-only public/install namespace
-|   `-- src/{client,http2,parser,server,websocket}/
+|   `-- src/{body,client,http2,parser,server,websocket}/
 |-- ruvia-web/
 |   |-- CMakeLists.txt
 |   |-- include/ruvia/web/          # Web-only public/install namespace
-|   `-- src/{app,http2,server,websocket,db,redis,router}/
+|   `-- src/{app,auth,db,http,redis,router,server}/
 |-- examples/
 |-- tests/
 `-- vcpkg.json
@@ -269,7 +777,7 @@ Common development verification:
 
 ```powershell
 cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE=F:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
   -DVCPKG_TARGET_TRIPLET=x64-windows-static `
   -DRUVIA_BUILD_TESTS=ON `
   -DRUVIA_BUILD_EXAMPLES=ON

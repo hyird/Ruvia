@@ -1,127 +1,349 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/HttpCommonInternal.h"
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/MultipartParser.h"
 
-// A boundary delimiter ends with CRLF (next part) or "--" (close). A lone '-'
-// after the boundary token is NOT a delimiter: "--<boundary>-x" must be skipped,
-// not mistaken for a close delimiter. Regression for the terminator check in
-// httpMultipartBoundaryAt (RFC 2046 §5.1.1).
+namespace {
+
+template <typename T>
+concept HasMultipartStatus = requires(const T& result) {
+    result.status();
+};
+
+template <typename T>
+concept HasMultipartOffset = requires(const T& result) {
+    { result.offset() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasMultipartLineBytes = requires(const T& result) {
+    { result.lineBytes() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasMultipartError = requires(const T& result) {
+    result.error();
+};
+
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::MultipartParser&>().poll()),
+    ruvia::MultipartPollResult>);
+static_assert(!std::default_initializable<ruvia::MultipartPollResult>);
+static_assert(!HasMultipartStatus<ruvia::MultipartPollResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::MultipartPollResult&>().part()),
+    const ruvia::MultipartStreamPart*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::MultipartPollResult&>().failure()),
+    const ruvia::MultipartPollFailure*>);
+static_assert(!HasMultipartError<ruvia::MultipartPollNeedInput>);
+static_assert(!HasMultipartError<ruvia::MultipartStreamPart>);
+static_assert(!HasMultipartError<ruvia::MultipartPollDone>);
+static_assert(HasMultipartError<ruvia::MultipartPollFailure>);
+
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpMultipartDelimiterResult>);
+static_assert(!HasMultipartStatus<
+    ruvia::detail::HttpMultipartDelimiterResult>);
+static_assert(!HasMultipartOffset<
+    ruvia::detail::HttpMultipartDelimiterNoMatch>);
+static_assert(HasMultipartOffset<
+    ruvia::detail::HttpMultipartDelimiterNeedInput>);
+static_assert(!HasMultipartLineBytes<
+    ruvia::detail::HttpMultipartDelimiterNeedInput>);
+static_assert(HasMultipartLineBytes<
+    ruvia::detail::HttpMultipartPartDelimiter>);
+static_assert(HasMultipartLineBytes<
+    ruvia::detail::HttpMultipartCloseDelimiter>);
+
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(!HasMultipartStatus<
+    ruvia::detail::HttpMultipartBoundaryParseResult>);
+static_assert(!HasMultipartError<ruvia::MultipartBoundary>);
+static_assert(HasMultipartError<
+    ruvia::detail::HttpMultipartBoundaryParseFailure>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpMultipartPartHeaderParseResult>);
+static_assert(!HasMultipartError<
+    ruvia::detail::HttpMultipartPartHeaders>);
+static_assert(HasMultipartError<
+    ruvia::detail::HttpMultipartPartHeaderParseFailure>);
+
+}  // namespace
+
+// A lone '-' after the boundary token is not the closing "--" delimiter.
 RUVIA_TEST(multipart_boundary_lone_dash_is_not_a_delimiter) {
-    using ruvia::detail::httpFindMultipartBoundaryPrefix;
-    // The first "\r\n--abc-x" is a false delimiter ('-' then 'x', neither CRLF nor
-    // "--"); the real one is the later "\r\n--abc\r\n". Before the fix this returned 0.
+    using ruvia::detail::httpFindMultipartBodyDelimiter;
     const std::string_view body = "\r\n--abc-x\r\n--abc\r\n";
-    RUVIA_CHECK_EQ(
-        httpFindMultipartBoundaryPrefix(body, "abc"),
-        body.find("\r\n--abc\r\n"));
-    RUVIA_CHECK(httpFindMultipartBoundaryPrefix(body, "abc") != std::size_t{0});
+    const auto match = httpFindMultipartBodyDelimiter(
+        body, ruvia::MultipartBoundary("abc"), /*inputFinished=*/true);
+    const auto* part = match.part();
+    RUVIA_CHECK(part != nullptr);
+    if (part != nullptr) {
+        RUVIA_CHECK_EQ(part->offset(), body.find("\r\n--abc\r\n"));
+    }
 }
 
 RUVIA_TEST(multipart_boundary_prefix_of_longer_token_is_not_a_delimiter) {
-    using ruvia::detail::httpFindMultipartBoundaryLine;
-    using ruvia::detail::httpFindMultipartBoundaryPrefix;
-    // The boundary "abc" appearing as a strict PREFIX of a longer token ("abcXYZ")
-    // must not be mistaken for a delimiter: the byte after the boundary is a letter,
-    // which is neither the CRLF of a next-part delimiter nor the "--" of a close
-    // delimiter. This is the default-reject branch of httpMultipartBoundaryAt,
-    // distinct from the '-'-not-followed-by-'-' case above -- and the core defense
-    // against a field value that merely starts with the boundary string splitting
-    // the stream at the wrong place. The real delimiter is the later "\r\n--abc\r\n".
+    using ruvia::detail::httpFindInitialMultipartDelimiter;
+    using ruvia::detail::httpFindMultipartBodyDelimiter;
     const std::string_view body = "\r\n--abcXYZ\r\n--abc\r\n";
-    RUVIA_CHECK_EQ(httpFindMultipartBoundaryPrefix(body, "abc"), body.find("\r\n--abc\r\n"));
-    // Same for the line form ("--" prefix, no leading CRLF): "--abcXYZ" is skipped.
-    const std::string_view line = "--abcXYZ\r\n--abc\r\n";
-    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine(line, "abc"), line.find("--abc\r\n", 1));
+    const auto bodyMatch = httpFindMultipartBodyDelimiter(
+        body, ruvia::MultipartBoundary("abc"), /*inputFinished=*/true);
+    const auto* bodyPart = bodyMatch.part();
+    RUVIA_CHECK(bodyPart != nullptr);
+    if (bodyPart != nullptr) {
+        RUVIA_CHECK_EQ(bodyPart->offset(), body.find("\r\n--abc\r\n"));
+    }
+
+    // The initial delimiter must begin the entity or a new line; a matching
+    // token embedded in preamble text is not a delimiter.
+    const std::string_view preamble = "prefix--abc\r\ntext\r\n--abc\r\n";
+    const auto initial = httpFindInitialMultipartDelimiter(
+        preamble, ruvia::MultipartBoundary("abc"), /*inputFinished=*/true);
+    const auto* initialPart = initial.part();
+    RUVIA_CHECK(initialPart != nullptr);
+    if (initialPart != nullptr) {
+        RUVIA_CHECK_EQ(initialPart->offset(), preamble.rfind("--abc\r\n"));
+    }
 }
 
 RUVIA_TEST(multipart_boundary_close_delimiter_still_matches) {
-    using ruvia::detail::httpFindMultipartBoundaryLine;
-    using ruvia::detail::httpFindMultipartBoundaryPrefix;
-    // "--" after the boundary (close-delimiter) is a valid terminator.
-    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine("--abc--\r\n", "abc"), std::size_t{0});
+    using ruvia::detail::httpMatchMultipartDelimiterLine;
+    const auto boundary = ruvia::MultipartBoundary("abc");
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc--\r\n", boundary, false)
+            .close() != nullptr);
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc\r\nrest", boundary, false)
+            .part() != nullptr);
+
+    // RFC 2046 transport-padding is accepted on both delimiter forms.
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc \t\r\n", boundary, false)
+            .part() != nullptr);
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc-- \t\r\n", boundary, false)
+            .close() != nullptr);
+
+    // A close delimiter at the current chunk edge is ambiguous until EOF.
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc--", boundary, false)
+            .needInput() != nullptr);
+    RUVIA_CHECK(
+        httpMatchMultipartDelimiterLine("--abc--", boundary, true)
+            .close() != nullptr);
+}
+
+RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
+    const auto throwsOn = [](std::string_view value) {
+        try {
+            (void)ruvia::MultipartBoundary(value);
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
+
+    RUVIA_CHECK_EQ(ruvia::MultipartBoundary("a b").value(), std::string_view("a b"));
     RUVIA_CHECK_EQ(
-        httpFindMultipartBoundaryPrefix("body\r\n--abc--\r\n", "abc"),
-        std::string_view("body\r\n--abc--\r\n").find("\r\n--abc--"));
-    // CRLF after the boundary (next part) is still a valid terminator.
-    RUVIA_CHECK_EQ(httpFindMultipartBoundaryLine("--abc\r\nrest", "abc"), std::size_t{0});
+        ruvia::MultipartBoundary(std::string(70, 'x')).value().size(),
+        std::size_t{70});
+    RUVIA_CHECK(throwsOn(""));
+    RUVIA_CHECK(throwsOn(std::string(71, 'x')));
+    RUVIA_CHECK(throwsOn("trailing "));
+    RUVIA_CHECK(throwsOn("semi;colon"));
+    RUVIA_CHECK(throwsOn("bad\r\nvalue"));
 }
 
-// Boundary extraction from the Content-Type header (RFC 7578).
+// Boundary extraction owns MIME parameter quoting and returns the same typed
+// value consumed by buffered and streaming parsers.
 RUVIA_TEST(multipart_boundary_from_content_type) {
+    using ruvia::detail::HttpMultipartBoundaryParseError;
     using ruvia::detail::httpParseMultipartBoundary;
-    using ruvia::detail::HttpMultipartBoundaryStatus;
-    std::string_view boundary;
-    RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data; boundary=abc123", boundary) ==
-                HttpMultipartBoundaryStatus::kOk);
-    RUVIA_CHECK_EQ(boundary, std::string_view("abc123"));
-    RUVIA_CHECK(httpParseMultipartBoundary(R"(multipart/form-data; boundary="a b")", boundary) ==
-                HttpMultipartBoundaryStatus::kOk);
-    RUVIA_CHECK_EQ(boundary, std::string_view("a b"));  // quotes stripped
+    const auto plain = httpParseMultipartBoundary("multipart/form-data; boundary=abc123");
+    RUVIA_CHECK(plain.boundary() != nullptr);
+    RUVIA_CHECK(plain.failure() == nullptr);
+    RUVIA_CHECK_EQ(plain.boundary()->value(), std::string_view("abc123"));
+
+    const auto quoted = httpParseMultipartBoundary(
+        R"(multipart/form-data; boundary="a b")");
+    RUVIA_CHECK(quoted.boundary() != nullptr);
+    RUVIA_CHECK_EQ(quoted.boundary()->value(), std::string_view("a b"));
+
+    const auto quotedSpecial = httpParseMultipartBoundary(
+        R"(multipart/form-data; boundary="a:b")");
+    RUVIA_CHECK(quotedSpecial.boundary() != nullptr);
+    RUVIA_CHECK_EQ(quotedSpecial.boundary()->value(), std::string_view("a:b"));
+
+    const auto quotedPair = httpParseMultipartBoundary(
+        R"(multipart/form-data; boundary="a\?b")");
+    RUVIA_CHECK(quotedPair.boundary() != nullptr);
+    RUVIA_CHECK_EQ(quotedPair.boundary()->value(), std::string_view("a?b"));
+
     // Wrong media type and a missing boundary parameter are distinct errors.
-    RUVIA_CHECK(httpParseMultipartBoundary("text/plain; boundary=abc", boundary) ==
-                HttpMultipartBoundaryStatus::kInvalidContentType);
-    RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data", boundary) ==
-                HttpMultipartBoundaryStatus::kInvalidBoundary);
-    RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data; charset=utf-8", boundary) ==
-                HttpMultipartBoundaryStatus::kInvalidBoundary);
-    // A present-but-empty boundary value is rejected too (a distinct branch from a
-    // missing parameter): an empty delimiter would match at every "--" in the body.
-    RUVIA_CHECK(httpParseMultipartBoundary("multipart/form-data; boundary=", boundary) ==
-                HttpMultipartBoundaryStatus::kInvalidBoundary);
+    const auto wrongType = httpParseMultipartBoundary(
+        "text/plain; boundary=abc");
+    RUVIA_CHECK(wrongType.failure() != nullptr);
+    if (wrongType.failure() != nullptr) {
+        RUVIA_CHECK(
+            wrongType.failure()->error() ==
+            HttpMultipartBoundaryParseError::kInvalidContentType);
+    }
+    for (const std::string_view invalid : {
+             "multipart/form-data",
+             "multipart/form-data; charset=utf-8",
+             "multipart/form-data; boundary=",
+             "multipart/form-data; boundary=a:b",
+             R"(multipart/form-data; boundary="a;b")",
+             "multipart/form-data; boundary=one; boundary=two"}) {
+        const auto result = httpParseMultipartBoundary(invalid);
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (result.failure() != nullptr) {
+            RUVIA_CHECK(
+                result.failure()->error() ==
+                HttpMultipartBoundaryParseError::kInvalidBoundary);
+        }
+    }
 }
 
-// Part header (Content-Disposition / Content-Type) parsing and its error states.
-RUVIA_TEST(multipart_part_headers_status_codes) {
-    using ruvia::detail::httpParseMultipartPartHeaders;
-    using ruvia::detail::HttpMultipartPartHeaders;
-    using ruvia::detail::HttpMultipartPartHeaderStatus;
+RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
+    ruvia::MultipartParser parser(
+        ruvia::MultipartBoundary("BOUNDARY"),
+        std::pmr::get_default_resource());
+    parser.feed(
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "value\r\n"
+        "--BOUNDARY--");
 
-    HttpMultipartPartHeaders headers;
-    RUVIA_CHECK(httpParseMultipartPartHeaders(
-                    "Content-Disposition: form-data; name=\"field\"; filename=\"f.txt\"\r\n"
-                    "Content-Type: text/plain",
-                    headers) == HttpMultipartPartHeaderStatus::kOk);
-    RUVIA_CHECK_EQ(headers.name, std::string_view("field"));
-    RUVIA_CHECK_EQ(headers.filename, std::string_view("f.txt"));
-    RUVIA_CHECK_EQ(headers.contentType, std::string_view("text/plain"));
+    const auto first = parser.poll();
+    const auto* firstPart = first.part();
+    RUVIA_CHECK(firstPart != nullptr);
+    if (firstPart != nullptr) {
+        RUVIA_CHECK(firstPart->phase() == ruvia::MultipartChunkPhase::kFirst);
+        RUVIA_CHECK_EQ(firstPart->body(), std::string_view("value"));
+    }
+
+    const auto waiting = parser.poll();
+    RUVIA_CHECK(waiting.needInput() != nullptr);
+    RUVIA_CHECK(waiting.part() == nullptr);
+    RUVIA_CHECK(waiting.done() == nullptr);
+
+    parser.finishInput();
+    const auto last = parser.poll();
+    const auto* lastPart = last.part();
+    RUVIA_CHECK(lastPart != nullptr);
+    if (lastPart != nullptr) {
+        RUVIA_CHECK(lastPart->phase() == ruvia::MultipartChunkPhase::kLast);
+        RUVIA_CHECK(lastPart->body().empty());
+    }
+    const auto done = parser.poll();
+    RUVIA_CHECK(done.done() != nullptr);
+    RUVIA_CHECK(done.needInput() == nullptr);
+    RUVIA_CHECK(done.part() == nullptr);
+
+    bool feedAfterFinishThrew = false;
+    try {
+        parser.feed("ignored");
+    } catch (const std::logic_error&) {
+        feedAfterFinishThrew = true;
+    }
+    RUVIA_CHECK(feedAfterFinishThrew);
+}
+
+RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
+    ruvia::MultipartParser parser(
+        ruvia::MultipartBoundary("BOUNDARY"),
+        std::pmr::get_default_resource());
+    parser.feed(
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n"
+        "\r\n"
+        "truncated");
+    parser.finishInput();
+
+    const auto result = parser.poll();
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.needInput() == nullptr);
+    RUVIA_CHECK(result.part() == nullptr);
+    RUVIA_CHECK(result.done() == nullptr);
+    if (result.failure() != nullptr) {
+        RUVIA_CHECK(
+            result.failure()->error() ==
+            ruvia::MultipartParseError::kIncompleteBody);
+        RUVIA_CHECK_EQ(
+            ruvia::multipartParseErrorMessage(result.failure()->error()),
+            std::string_view("incomplete multipart body"));
+    }
+}
+
+// Part header parsing owns either the parsed views or a typed failure.
+RUVIA_TEST(multipart_part_header_result_is_discriminated) {
+    using ruvia::detail::httpParseMultipartPartHeaders;
+    using ruvia::detail::HttpMultipartPartHeaderParseError;
+
+    const auto parsed = httpParseMultipartPartHeaders(
+        "Content-Disposition: form-data; name=\"field\"; filename=\"f.txt\"\r\n"
+        "Content-Type: text/plain");
+    const auto* headers = parsed.headers();
+    RUVIA_CHECK(headers != nullptr);
+    RUVIA_CHECK(parsed.failure() == nullptr);
+    if (headers != nullptr) {
+        RUVIA_CHECK_EQ(headers->name(), std::string_view("field"));
+        RUVIA_CHECK_EQ(headers->filename(), std::string_view("f.txt"));
+        RUVIA_CHECK_EQ(headers->contentType(), std::string_view("text/plain"));
+    }
 
     // form-data with no name parameter.
-    HttpMultipartPartHeaders missingName;
-    RUVIA_CHECK(httpParseMultipartPartHeaders("Content-Disposition: form-data", missingName) ==
-                HttpMultipartPartHeaderStatus::kMissingName);
+    const auto missingName = httpParseMultipartPartHeaders(
+        "Content-Disposition: form-data");
+    RUVIA_CHECK(missingName.failure() != nullptr);
+    if (missingName.failure() != nullptr) {
+        RUVIA_CHECK(
+            missingName.failure()->error() ==
+            HttpMultipartPartHeaderParseError::kMissingName);
+    }
 
     // A non-form-data disposition, and no disposition at all, are invalid.
-    HttpMultipartPartHeaders notFormData;
-    RUVIA_CHECK(httpParseMultipartPartHeaders(
-                    "Content-Disposition: attachment; name=\"x\"", notFormData) ==
-                HttpMultipartPartHeaderStatus::kInvalidDisposition);
-    HttpMultipartPartHeaders noDisposition;
-    RUVIA_CHECK(httpParseMultipartPartHeaders("Content-Type: text/plain", noDisposition) ==
-                HttpMultipartPartHeaderStatus::kInvalidDisposition);
+    for (const std::string_view invalid : {
+             "Content-Disposition: attachment; name=\"x\"",
+             "Content-Type: text/plain"}) {
+        const auto result = httpParseMultipartPartHeaders(invalid);
+        RUVIA_CHECK(result.failure() != nullptr);
+        if (result.failure() != nullptr) {
+            RUVIA_CHECK(
+                result.failure()->error() ==
+                HttpMultipartPartHeaderParseError::kInvalidDisposition);
+        }
+    }
 }
 
 RUVIA_TEST(multipart_part_header_names_are_case_insensitive) {
     using ruvia::detail::httpParseMultipartPartHeaders;
-    using ruvia::detail::HttpMultipartPartHeaders;
-    using ruvia::detail::HttpMultipartPartHeaderStatus;
 
     // HTTP field names are case-insensitive; a part that lowercases them (some
     // clients do) must still be recognized, with name and content type extracted.
-    HttpMultipartPartHeaders headers;
-    RUVIA_CHECK(httpParseMultipartPartHeaders(
-                    "content-disposition: form-data; name=\"field\"\r\n"
-                    "content-type: image/png",
-                    headers) == HttpMultipartPartHeaderStatus::kOk);
-    RUVIA_CHECK_EQ(headers.name, std::string_view("field"));
-    RUVIA_CHECK_EQ(headers.contentType, std::string_view("image/png"));
+    const auto parsed = httpParseMultipartPartHeaders(
+        "content-disposition: form-data; name=\"field\"\r\n"
+        "content-type: image/png");
+    const auto* headers = parsed.headers();
+    RUVIA_CHECK(headers != nullptr);
+    if (headers != nullptr) {
+        RUVIA_CHECK_EQ(headers->name(), std::string_view("field"));
+        RUVIA_CHECK_EQ(headers->contentType(), std::string_view("image/png"));
+    }
 }
 
 RUVIA_TEST(multipart_header_value_in_block_lookup) {
@@ -204,7 +426,7 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
         "file-data\r\n"
         "--BOUNDARY--\r\n";
     const auto parts = ruvia::parseMultipartBody(
-        body, "BOUNDARY", std::pmr::get_default_resource());
+        body, ruvia::MultipartBoundary("BOUNDARY"), std::pmr::get_default_resource());
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
     RUVIA_CHECK_EQ(parts[0].name(), std::string_view("field"));
     RUVIA_CHECK_EQ(parts[0].body(), std::string_view("value"));
@@ -221,7 +443,7 @@ RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
     try {
         (void)ruvia::parseMultipartBody(
             "--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close",
-            "BOUNDARY",
+            ruvia::MultipartBoundary("BOUNDARY"),
             std::pmr::get_default_resource());
     } catch (const std::invalid_argument&) {
         threw = true;

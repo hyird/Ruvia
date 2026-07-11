@@ -53,7 +53,7 @@ private:
     std::pmr::string& compressionScratch) {
     materializeResponseBody(response);
     applyCorsHeaders(request, response, options.cors);
-    const auto bodyPlan = httpResponseBodyPlan(request.method(), response.status());
+    const auto bodyPlan = httpResponseBodyPlan(request.knownMethod(), response.status());
     const bool bodyBorrowsCompressionScratch = compressResponseBodyIfAccepted(
         coding,
         response,

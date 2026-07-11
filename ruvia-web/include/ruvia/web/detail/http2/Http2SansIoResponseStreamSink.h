@@ -9,13 +9,14 @@
 // these via the responseStream*Thunk<Sink> function pointers, so the method set matches.
 //
 // Backpressure: a window-blocked submit parks on the stream's signal until the
-// session's reader reports the core drained the remainder (takeUnblockedStreams), so a
-// slow consumer stalls the producer instead of growing the out-buffer without bound.
+// session's reader reports the core drained the remainder (takeDrainedDataStreams), so
+// a slow consumer stalls the producer instead of growing the out-buffer without bound.
 // Trailers are submitted semantically to the HTTP core, which owns their protocol bytes.
 
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +25,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/http/detail/http2/Http2Connection.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/http2/Http2SansIoWsTransport.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
@@ -78,12 +80,34 @@ public:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit();
+        co_await commit(ResponseTrailerIntent::kNone);
         state_.ensureBodyAllowed();
-        const auto result = connection_.submitData(streamId_, chunk, /*endStream=*/false);
-        wakeWriter();
-        if (result == Http2SubmitResult::kBlocked) {
-            co_await awaitSendWindow();
+        for (;;) {
+            const auto result = connection_.submitData(
+                streamId_, chunk, Http2EndStream::kKeepOpen);
+            wakeWriter();
+            if (result == Http2DataSubmitStatus::kAccepted) {
+                co_return;
+            }
+            if (result == Http2DataSubmitStatus::kClosed) {
+                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            }
+            if (result == Http2DataSubmitStatus::kInvalidState) {
+                throw std::logic_error("invalid HTTP/2 response stream DATA state");
+            }
+            if (result == Http2DataSubmitStatus::kContentLengthExceeded) {
+                throw std::length_error("HTTP/2 response exceeds Content-Length");
+            }
+            if (result == Http2DataSubmitStatus::kContentLengthIncomplete) {
+                throw std::length_error("HTTP/2 response ended before Content-Length");
+            }
+            if (!(co_await awaitSendWindow())) {
+                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            }
+            if (result == Http2DataSubmitStatus::kQueued) {
+                co_return;  // the core already owned and drained this input
+            }
+            // kBackpressured accepted nothing; retry this same stable chunk view.
         }
     }
 
@@ -97,42 +121,93 @@ public:
         }
     }
 
-    // RFC 9113 §8.1 trailers are queued in the HTTP core before the stream ends.
-    void addTrailer(std::string_view name, std::string_view value) {
-        state_.ensureTrailerOpen();
-        connection_.addResponseTrailer(streamId_, name, value);
-    }
+    Task<void> end(std::span<const HttpHeaderView> trailers) {
+        if (state_.ended()) {
+            if (!trailers.empty()) {
+                throw std::logic_error("response stream is already ended");
+            }
+            co_return;
+        }
 
-    Task<void> end() {
+        const auto trailerIntent = trailers.empty()
+            ? ResponseTrailerIntent::kNone
+            : ResponseTrailerIntent::kPresent;
+        if (!trailers.empty() && !responseTrailerSectionValid(trailers)) {
+            throw std::invalid_argument("invalid response trailer section");
+        }
+
+        co_await commit(trailerIntent);
         if (state_.ended()) {
             co_return;
         }
-        co_await commit();
-        if (state_.bodySuppressed()) {
-            state_.markEnded();
-            co_return;
+        if (!trailers.empty()) {
+            state_.ensureTrailersAllowed(
+                ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+            const auto trailerResult =
+                connection_.submitResponseTrailerSection(streamId_, trailers);
+            wakeWriter();
+            switch (trailerResult) {
+                case Http2ResponseTrailerSubmitStatus::kAccepted:
+                    break;
+                case Http2ResponseTrailerSubmitStatus::kClosed:
+                    throw std::system_error(
+                        std::make_error_code(std::errc::connection_reset));
+                case Http2ResponseTrailerSubmitStatus::kInvalidState:
+                case Http2ResponseTrailerSubmitStatus::kEmpty:
+                    throw std::logic_error(
+                        "invalid HTTP/2 response trailer state");
+                case Http2ResponseTrailerSubmitStatus::kInvalidField:
+                    throw std::invalid_argument(
+                        "invalid response trailer section");
+                case Http2ResponseTrailerSubmitStatus::kContentLengthIncomplete:
+                    throw std::length_error(
+                        "HTTP/2 response ended before Content-Length");
+            }
         }
-        if (!connection_.submitResponseTrailers(streamId_)) {
-            (void)connection_.submitData(streamId_, {}, /*endStream=*/true);
-        }
+        const auto result = connection_.finishResponse(streamId_);
         wakeWriter();
+        if (result == Http2FinishSubmitStatus::kClosed) {
+            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+        }
+        if (result == Http2FinishSubmitStatus::kInvalidState) {
+            throw std::logic_error("invalid HTTP/2 response stream finish state");
+        }
+        if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
+            throw std::length_error("HTTP/2 response ended before Content-Length");
+        }
+        if (result == Http2FinishSubmitStatus::kQueued &&
+            !(co_await awaitSendWindow())) {
+            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+        }
         state_.markEnded();
     }
 
 private:
-    Task<void> commit() {
+    Task<void> commit(ResponseTrailerIntent trailerIntent) {
         if (state_.committed()) {
+            if (trailerIntent == ResponseTrailerIntent::kPresent) {
+                state_.ensureTrailersAllowed(
+                    ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+            }
             co_return;
         }
-        const auto bodyPlan = connection_.submitStreamingResponseHead(
+        const auto headResult = connection_.submitStreamingResponseHead(
             streamId_,
             state_.streamingHead(),
-            responseStreamKindForRouteMode(mode_));
-        state_.markCommitted(bodyPlan.bodySuppressed());
-        wakeWriter();
-        if (state_.bodySuppressed()) {
-            state_.markEnded();
+            responseStreamKindForRouteMode(mode_),
+            trailerIntent);
+        const auto* submittedHead = headResult.submitted();
+        if (submittedHead == nullptr) {
+            if (headResult.failure()->error() ==
+                Http2ResponseHeadSubmitError::kClosed) {
+                throw std::system_error(
+                    std::make_error_code(std::errc::connection_reset));
+            }
+            throw std::logic_error(
+                "invalid HTTP/2 response stream head state");
         }
+        state_.markCommitted(submittedHead->plan());
+        wakeWriter();
     }
 
     // Wake the session's single writer so submitted bytes actually flush; without
@@ -147,15 +222,18 @@ private:
     // Park until the reader reports the window-blocked remainder drained. A spurious
     // wake just re-checks; if the stream dies or the session tears down, stop waiting
     // (the dispatch wrapper observes the abort via peerAborted / isReset).
-    Task<void> awaitSendWindow() {
-        while (streamSignal_ != nullptr && !streamSignal_->ended &&
-               connection_.hasBlockedSend(streamId_)) {
+    Task<bool> awaitSendWindow() {
+        while (connection_.hasQueuedData(streamId_)) {
             auto* stream = connection_.stream(streamId_);
-            if (stream == nullptr || stream->isReset()) {
-                co_return;
+            if (stream == nullptr || stream->isReset() || streamSignal_ == nullptr ||
+                streamSignal_->ended) {
+                co_return false;
             }
             co_await streamSignal_->wait();
         }
+        auto* stream = connection_.stream(streamId_);
+        co_return stream != nullptr && !stream->isReset() &&
+            streamSignal_ != nullptr && !streamSignal_->ended;
     }
 
     Http2Connection& connection_;

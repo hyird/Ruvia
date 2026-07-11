@@ -1,27 +1,35 @@
 #pragma once
 
-#include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/HttpConnectionFields.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
+#include "ruvia/http/detail/http1/Http1ServerConnectionPlan.h"
+#include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/HttpResponse.h"
 
-#include <string_view>
+#include <cstdint>
+#include <optional>
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia::detail {
 
-inline constexpr std::string_view kHttp1ContinueResponse =
-    "HTTP/1.1 100 Continue\r\n\r\n";
+// Runtime-owned policy that is independent of HTTP message semantics (for
+// example, a per-connection request limit). A named policy keeps the Web driver
+// from passing an unlabelled bool into the protocol planner.
+enum class Http1ServerClosePolicy : std::uint8_t {
+    kAllowReuse,
+    kCloseAfterResponse
+};
 
-[[nodiscard]] inline bool http1ShouldKeepAlive(const HttpServerParseResult& parsed) noexcept {
-    if (parsed.flags.connectionClose) {
-        return false;
-    }
-    if (parsed.flags.connectionKeepAlive) {
-        return true;
-    }
-    return parsed.request.httpVersion() == "HTTP/1.1";
+[[nodiscard]] inline constexpr Http1ServerConnectionPlan
+http1ApplyRequestBodyConsumption(
+    Http1ServerConnectionPlan plan,
+    Http1RequestBodyConsumption consumption) noexcept {
+    return consumption == Http1RequestBodyConsumption::kComplete
+        ? plan
+        : plan.requireClose();
 }
 
 class Http1ResponseStreamPlan final {
@@ -30,132 +38,232 @@ public:
         return framing_;
     }
 
-    [[nodiscard]] bool requestCanPersist() const noexcept {
-        return requestCanPersist_;
+    [[nodiscard]] Http1ServerConnectionPlan requestConnectionPlan() const noexcept {
+        return requestConnectionPlan_;
     }
 
-    [[nodiscard]] bool connectionWillClose() const noexcept {
-        return connectionWillClose_;
+    [[nodiscard]] Http1ServerClosePolicy closePolicy() const noexcept {
+        return closePolicy_;
     }
 
-    [[nodiscard]] bool needsKeepAliveSignal() const noexcept {
-        return needsKeepAliveSignal_;
-    }
-
-    [[nodiscard]] HttpMethod requestMethod() const noexcept {
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
         return requestMethod_;
     }
 
 private:
     friend Http1ResponseStreamPlan http1PlanResponseStream(
-        const HttpServerParseResult&, bool) noexcept;
+        const Http1ServerRequestParseState&, Http1ServerClosePolicy) noexcept;
 
     Http1ResponseStreamPlan(
         ResponseStreamFraming framing,
-        bool requestCanPersist,
-        bool connectionWillClose,
-        bool needsKeepAliveSignal,
-        HttpMethod requestMethod) noexcept
+        Http1ServerConnectionPlan requestConnectionPlan,
+        Http1ServerClosePolicy closePolicy,
+        HttpKnownMethod requestMethod) noexcept
         : framing_(framing),
-          requestCanPersist_(requestCanPersist),
-          connectionWillClose_(connectionWillClose),
-          needsKeepAliveSignal_(needsKeepAliveSignal),
+          requestConnectionPlan_(requestConnectionPlan),
+          closePolicy_(closePolicy),
           requestMethod_(requestMethod) {}
 
     ResponseStreamFraming framing_;
-    bool requestCanPersist_{false};
-    bool connectionWillClose_{true};
-    bool needsKeepAliveSignal_{false};
-    HttpMethod requestMethod_{HttpMethod::kUnknown};
+    Http1ServerConnectionPlan requestConnectionPlan_{Http1ServerConnectionPlan::close()};
+    Http1ServerClosePolicy closePolicy_{Http1ServerClosePolicy::kCloseAfterResponse};
+    HttpKnownMethod requestMethod_{HttpKnownMethod::kUnknown};
 };
 
-// Pure HTTP/1 response-stream planning. The runtime contributes only its product
-// policy bit (for example, a per-connection request limit); HTTP owns every
-// version/body/framing/persistence decision and returns a combination that cannot
-// represent HTTP/1.0 chunked framing or a reusable close-delimited connection.
+// Pure HTTP/1 response-stream planning. The runtime contributes only its typed
+// product policy (for example, a per-connection request limit); HTTP retains the
+// request disposition and candidate framing until the response status is known.
+// Commit can therefore distinguish a body-allowed HTTP/1.0 stream, which requires
+// close delimiting, from a body-suppressed response that is already self-delimited.
 [[nodiscard]] inline Http1ResponseStreamPlan http1PlanResponseStream(
-    const HttpServerParseResult& parsed,
-    bool closeForServerPolicy) noexcept {
-    const bool isHttp11 = parsed.request.httpVersion() == "HTTP/1.1";
-    const bool requestCanPersist =
-        http1ShouldKeepAlive(parsed) && parsed.contentLength == 0 && !parsed.chunked;
-    const auto framing = isHttp11
+    const Http1ServerRequestParseState& parsed,
+    Http1ServerClosePolicy closePolicy) noexcept {
+    const auto requestConnectionPlan = http1ApplyRequestBodyConsumption(
+        parsed.connectionPlan,
+        parsed.bodyPlan.requiresConsumption()
+            ? Http1RequestBodyConsumption::kIncomplete
+            : Http1RequestBodyConsumption::kComplete);
+    const auto framing =
+        parsed.request.protocolVersion() == HttpProtocolVersion::kHttp11
         ? ResponseStreamFraming::kHttp1Chunked
         : ResponseStreamFraming::kHttp1CloseDelimited;
-    const bool connectionWillClose =
-        !requestCanPersist || !isHttp11 || closeForServerPolicy;
     return Http1ResponseStreamPlan(
         framing,
-        requestCanPersist,
-        connectionWillClose,
-        !isHttp11,
-        parsed.request.method());
+        requestConnectionPlan,
+        closePolicy,
+        parsed.request.knownMethod());
 }
 
-[[nodiscard]] inline bool http1WantsContinue(const HttpServerParseResult& parsed) noexcept {
-    // Only HTTP/1.1 clients understand interim 1xx responses. An HTTP/1.0 client
-    // would read "100 Continue" as the final response, so its Expect flag is ignored.
-    return parsed.flags.expectContinue && parsed.request.httpVersion() == "HTTP/1.1";
-}
-
-[[nodiscard]] inline bool http1ResponseWantsClose(const HttpResponse& response) noexcept {
-    return httpHasToken(responseKnownHeader(response, kResponseHeaderConnection), "close");
-}
-
-inline void http1MarkConnectionClose(HttpResponse& response) {
-    setResponseHeaderStableView(response, "Connection", "close");
-}
-
-inline void http1MarkConnectionCloseIfNeeded(HttpResponse& response, bool keepAlive) {
-    if (!keepAlive) {
-        http1MarkConnectionClose(response);
+// Connection is a list field and a response can contain repeated field lines.
+// Inspect every line: the response's indexed known-header fast path intentionally
+// points at only one occurrence and cannot decide transport lifecycle by itself.
+[[nodiscard]] inline HttpConnectionOptions http1ResponseConnectionOptions(
+    const HttpResponse& response) {
+    HttpConnectionOptions options;
+    for (const auto& header : response.headers()) {
+        if (!httpAsciiEqualsIgnoreCase(header.name(), "Connection")) {
+            continue;
+        }
+        if (options.parseField(
+                header.value(),
+                HttpFieldListRole::kSender) !=
+            HttpFieldListParseStatus::kOk) {
+            throw std::invalid_argument("invalid HTTP Connection header");
+        }
     }
+    return options;
 }
 
-// RFC 9112 section 9.3: HTTP/1.0 defaults to closing the connection, so a server
-// that keeps it open must advertise the keep-alive connection option. HTTP/1.1 is
-// persistent by default and needs no such response header.
-[[nodiscard]] inline bool http1RequestNeedsKeepAliveSignal(std::string_view httpVersion) noexcept {
-    return httpVersion != "HTTP/1.1";
-}
+enum class Http1ConnectionCloseFieldPolicy : std::uint8_t {
+    kCloseOnly,
+    kPreserveUpgrade
+};
 
-inline void http1MarkConnectionKeepAliveIfNeeded(
+inline void http1MarkConnectionClose(
     HttpResponse& response,
-    bool keepAlive,
-    bool needsKeepAliveSignal) {
-    if (keepAlive && needsKeepAliveSignal &&
-        !responseHasKnownHeader(response, kResponseHeaderConnection)) {
-        setResponseHeaderStableView(response, "Connection", "keep-alive");
-    }
+    Http1ConnectionCloseFieldPolicy fieldPolicy =
+        Http1ConnectionCloseFieldPolicy::kCloseOnly) {
+    // A runtime close verdict dominates keep-alive. Collapse repeated fields
+    // after the socket lifecycle is decided, while preserving the Upgrade
+    // option required by any retained Upgrade field.
+    response.header("Connection", std::nullopt);
+    setResponseHeaderStableView(
+        response,
+        "Connection",
+        fieldPolicy == Http1ConnectionCloseFieldPolicy::kPreserveUpgrade
+            ? "close, Upgrade"
+            : "close");
 }
 
 // Finalize response-side HTTP/1 persistence after the runtime has folded in
 // request-body completion and server policy. This is the sole protocol mutation:
 // it honors an application-provided Connection: close and emits the version-
-// appropriate response signal. The returned value is the authoritative reuse verdict.
-[[nodiscard]] inline bool http1FinalizeResponseConnection(
+// appropriate response signal. The returned plan is the authoritative transport
+// lifecycle contract and cannot lose the request-version signal on another branch.
+[[nodiscard]] inline Http1ServerConnectionPlan http1FinalizeResponseConnection(
     HttpResponse& response,
-    bool keepAlive,
-    bool needsKeepAliveSignal) {
-    if (http1ResponseWantsClose(response)) {
-        keepAlive = false;
+    Http1ServerConnectionPlan plan) {
+    const auto controlPlan = httpFinalResponseControlPlan(
+        response,
+        HttpProtocolVersion::kHttp11);
+    switch (controlPlan.status()) {
+        case HttpFinalResponseControlStatus::kOk:
+            break;
+        case HttpFinalResponseControlStatus::kInvalidStatus:
+            throw std::invalid_argument("invalid final HTTP response status");
+        case HttpFinalResponseControlStatus::kInvalidUpgradeField:
+            throw std::invalid_argument("invalid HTTP Upgrade header");
+        case HttpFinalResponseControlStatus::kUpgradeRequired:
+            throw std::invalid_argument("426 response requires an Upgrade protocol");
+        case HttpFinalResponseControlStatus::kUpgradeUnavailable:
+            throw std::invalid_argument("Upgrade is unavailable for this HTTP version");
     }
-    http1MarkConnectionCloseIfNeeded(response, keepAlive);
-    http1MarkConnectionKeepAliveIfNeeded(response, keepAlive, needsKeepAliveSignal);
-    return keepAlive;
+    const auto responseOptions = http1ResponseConnectionOptions(response);
+    const auto& upgradeProtocols = controlPlan.upgradeProtocols();
+    const bool preserveUpgrade = upgradeProtocols.hasField();
+    const bool generateUpgradeOption =
+        preserveUpgrade && !responseOptions.upgrade();
+    if (generateUpgradeOption) {
+        if (responseOptions.hasField()) {
+            response.header(
+                "Connection",
+                "Upgrade",
+                HttpResponse::HeaderOptions{.append = true});
+        } else {
+            setResponseHeaderStableView(response, "Connection", "Upgrade");
+        }
+    }
+    if (responseOptions.close()) {
+        plan = plan.requireClose();
+    }
+    if (plan.disposition() == Http1ConnectionDisposition::kClose) {
+        http1MarkConnectionClose(
+            response,
+            preserveUpgrade
+                ? Http1ConnectionCloseFieldPolicy::kPreserveUpgrade
+                : Http1ConnectionCloseFieldPolicy::kCloseOnly);
+    } else if (plan.responseSignal() ==
+                   Http1ResponseConnectionSignal::kExplicitKeepAlive &&
+               !responseOptions.keepAlive()) {
+        if (responseOptions.hasField() || generateUpgradeOption) {
+            response.header(
+                "Connection",
+                "keep-alive",
+                HttpResponse::HeaderOptions{.append = true});
+        } else {
+            setResponseHeaderStableView(response, "Connection", "keep-alive");
+        }
+    }
+    return plan;
 }
 
-[[nodiscard]] inline ResponseStreamHead prepareHttp1ResponseStreamHead(
+// Commit-time result. This object combines request/version/runtime constraints with
+// the response method/status and Connection options, then binds the exact header
+// bytes to the authoritative connection disposition.
+class PreparedHttp1ResponseStream final {
+public:
+    [[nodiscard]] HttpResponse& response() noexcept {
+        return head_.response();
+    }
+
+    [[nodiscard]] const HttpResponse& response() const noexcept {
+        return head_.response();
+    }
+
+    [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
+        return head_.policy();
+    }
+
+    [[nodiscard]] const ResponseStreamCommitPlan& commitPlan() const noexcept {
+        return head_.commitPlan();
+    }
+
+    [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {
+        return connectionPlan_;
+    }
+
+private:
+    friend PreparedHttp1ResponseStream prepareHttp1ResponseStreamHead(
+        HttpResponse,
+        ResponseStreamKind,
+        const Http1ResponseStreamPlan&,
+        ResponseTrailerIntent);
+
+    PreparedHttp1ResponseStream(
+        ResponseStreamHead head,
+        Http1ServerConnectionPlan connectionPlan) noexcept
+        : head_(std::move(head)),
+          connectionPlan_(connectionPlan) {}
+
+    ResponseStreamHead head_;
+    Http1ServerConnectionPlan connectionPlan_{Http1ServerConnectionPlan::close()};
+};
+
+[[nodiscard]] inline PreparedHttp1ResponseStream prepareHttp1ResponseStreamHead(
     HttpResponse response,
     ResponseStreamKind kind,
-    const Http1ResponseStreamPlan& plan) {
+    const Http1ResponseStreamPlan& plan,
+    ResponseTrailerIntent trailerIntent) {
     const auto bodyPlan = httpResponseBodyPlan(plan.requestMethod(), response.status());
-    return prepareResponseStreamHead(
-        std::move(response),
-        kind,
-        plan.framing(),
-        bodyPlan,
-        plan.connectionWillClose());
+    // HTTP/1.0 cannot delimit an open-ended response stream without closing the
+    // connection, but a response whose method/status forbids payload is already
+    // self-delimited. Make this decision at head commit, when the response status is
+    // finally known, instead of pessimistically baking close into the pre-commit plan.
+    const auto plannedConnection =
+        plan.requestConnectionPlan().disposition() == Http1ConnectionDisposition::kReuse &&
+            plan.closePolicy() == Http1ServerClosePolicy::kAllowReuse &&
+            (plan.framing() != ResponseStreamFraming::kHttp1CloseDelimited ||
+             bodyPlan.bodySuppressed())
+        ? plan.requestConnectionPlan()
+        : plan.requestConnectionPlan().requireClose();
+    const auto connectionPlan = http1FinalizeResponseConnection(
+        response,
+        plannedConnection);
+    auto head = prepareResponseStreamHead(
+        std::move(response), kind, plan.framing(), bodyPlan, trailerIntent);
+    return PreparedHttp1ResponseStream(
+        std::move(head),
+        connectionPlan);
 }
 
 }  // namespace ruvia::detail

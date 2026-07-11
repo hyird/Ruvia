@@ -3,12 +3,14 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
-#include "ruvia/http/detail/HttpBodyFramer.h"
+#include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
+#include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
@@ -22,18 +24,15 @@ public:
         Stream& stream,
         std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initialBodyAndPipeline,
-        std::size_t contentLength,
-        bool chunked,
-        HttpTransferCodings transferCodings,
+        Http1RequestBodyPlan bodyPlan,
         std::size_t maxBodyBytes,
-        ConnectionScanner::Entry& scannerEntry,
-        bool sendContinue = false);
+        ConnectionScanner::Entry& scannerEntry);
     ~StreamBodyReader();
 
     StreamBodyReader(const StreamBodyReader&) = delete;
     StreamBodyReader& operator=(const StreamBodyReader&) = delete;
 
-    [[nodiscard]] bool finished() const noexcept;
+    [[nodiscard]] Http1RequestBodyConsumption consumption() const noexcept;
     void restorePipeline(std::pmr::string& readBuffer, std::size_t& usedBytes);
 
     [[nodiscard]] Task<std::optional<std::string_view>> read();
@@ -64,16 +63,14 @@ private:
     std::pmr::polymorphic_allocator<TransferCodingDecoder> transferDecoderAllocator_;
     TransferCodingDecoder* transferDecoder_{nullptr};
     std::string_view initialBodyAndPipeline_;
-    std::size_t contentLength_;
-    bool chunked_;
+    Http1RequestBodyPlan bodyPlan_;
     std::size_t maxBodyBytes_;
-    HttpChunkedBodyDecoder chunkDecoder_;
+    Http1ChunkedBodyDecoder chunkDecoder_;
     ConnectionScanner::Entry& scannerEntry_;
     std::size_t readCursor_{0};
     std::size_t pendingCompactUntil_{0};
     std::size_t deliveredBytes_{0};
     bool finished_{false};
-    bool sendContinue_{false};
     bool continueSent_{false};
 };
 

@@ -13,8 +13,10 @@
 //   std::string_view pendingOutput() const noexcept;  // bytes to write out
 //   void             consumeOutput(std::size_t) noexcept;
 //   bool             wantsWrite() const noexcept;
-//   bool             closing() const noexcept;
-// and OnReadable is any callable returning Task<void>: co_await onReadable(connection)
+// ShouldStop is an inlinable protocol adapter returning bool. Keeping transport-stop
+// policy explicit avoids forcing every protocol to collapse graceful drain, close
+// handshake, and fatal errors into one ambiguous terminal boolean. OnReadable is any
+// callable returning Task<void>: co_await onReadable(connection)
 // after each feed drains the connection's events and submits responses (which append
 // to the connection's outbound buffer, flushed on the next loop iteration).
 
@@ -30,8 +32,12 @@
 
 namespace ruvia::detail {
 
-template <typename Connection, typename Stream, typename OnReadable>
-Task<void> pumpSansIoConnection(Connection& connection, Stream& stream, OnReadable onReadable) {
+template <typename Connection, typename Stream, typename ShouldStop, typename OnReadable>
+Task<void> pumpSansIoConnection(
+    Connection& connection,
+    Stream& stream,
+    ShouldStop shouldStop,
+    OnReadable onReadable) {
     std::array<char, 16384> readBuffer;
     for (;;) {
         // Flush everything the core has queued before blocking on the next read, so a
@@ -48,7 +54,7 @@ Task<void> pumpSansIoConnection(Connection& connection, Stream& stream, OnReadab
             }
             connection.consumeOutput(out.size());
         }
-        if (connection.closing()) {
+        if (shouldStop(connection)) {
             co_return;
         }
         const auto [ec, bytesRead] = co_await asyncResult<std::size_t>(

@@ -10,9 +10,8 @@ struct MultipartStreamPartAccess final {
         std::string_view filename,
         std::string_view contentType,
         std::string_view body,
-        bool partBegin,
-        bool partEnd) noexcept {
-        return MultipartStreamPart(name, filename, contentType, body, partBegin, partEnd);
+        MultipartChunkPhase phase) noexcept {
+        return MultipartStreamPart(name, filename, contentType, body, phase);
     }
 };
 

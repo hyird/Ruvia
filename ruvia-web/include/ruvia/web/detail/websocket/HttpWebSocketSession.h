@@ -42,8 +42,9 @@ template <typename Connection>
 // handler, and closes cleanly (1000) on success or abnormally (1011) on an
 // unhandled exception, then drains any background heartbeat writes. Keeping the
 // post-handshake chain in one place keeps the two transports identical and the
-// graceful close (RFC 6455 Section 7.1.1) consistent across both. close() is
-// idempotent (guarded by closeSent_), so a handler that closes itself is fine.
+// graceful close (RFC 6455 Sections 5.5.1 and 7.1) consistent across both. close()
+// is idempotent through the protocol core's typed close phase, so a handler that
+// closes itself is fine.
 template <typename Transport>
 Task<void> runWebSocketSession(
     WebSocketConnection<Transport>& connection,

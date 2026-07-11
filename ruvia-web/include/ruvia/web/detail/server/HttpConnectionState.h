@@ -6,7 +6,7 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/detail/server/HttpResponseHeadBuffer.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
@@ -34,8 +34,8 @@ struct ConnectionWorkSet final {
     ResponseHeadBuffer responseHead;
     std::pmr::string fileChunk;
     std::pmr::string compressionScratch;
-    HttpServerParser parser;
-    HttpServerParseResult parsed;
+    Http1ServerRequestParser parser;
+    Http1ServerRequestParseState parsed;
     RouteMatch routeMatch;
     RouteResolution routeResolution;
     alignas(std::max_align_t) std::byte arenaBlock[kWorkSetArenaBytes];
@@ -72,6 +72,6 @@ void compactConnectionReadBuffer(
     std::size_t& usedBytes,
     std::size_t consumedBytes) noexcept;
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const HttpServerParseResult& parsed);
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const Http1ServerRequestParseState& parsed);
 
 }  // namespace ruvia::detail

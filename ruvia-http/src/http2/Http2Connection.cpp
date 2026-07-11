@@ -18,7 +18,7 @@
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/http/detail/http2/Http2WindowUpdate.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/server/HttpFinalResponseControlPlan.h"
 
 namespace ruvia::detail {
 
@@ -38,26 +38,126 @@ constexpr std::uint32_t kHttp2MaxUnprocessedResets = 1000;
 // every output drain (consumeOutput/takeOutput = ACKs flushed), so healthy keepalive
 // never trips and only a peer piling on PINGs faster than we can flush the ACKs does.
 constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
+
+[[nodiscard]] bool http2IsValidOutboundMethod(std::string_view method) noexcept {
+    return method != "CONNECT" && isValidHttpMethodToken(method);
+}
+
+[[nodiscard]] bool http2AreValidOutboundRequestHeaders(
+    std::string_view authority,
+    std::uint16_t defaultPort,
+    std::span<const HttpHeaderView> headers,
+    bool allowHost,
+    bool allowTrailers) noexcept {
+    std::uint32_t singletonHeaders = 0;
+    bool hostSeen = false;
+    for (const auto& header : headers) {
+        if (!http2IsValidRegularHeader(header.name(), header.value())) {
+            return false;
+        }
+        const auto kind = classifyRequestHeader(header.name());
+        // Content-Length belongs exclusively to Http2RequestContent, even when a raw
+        // value happens to match. Accepting both would restore two framing truths.
+        if (kind == RequestHeaderKind::kContentLength) {
+            return false;
+        }
+        if (!allowTrailers &&
+            (header.name() == "te" || header.name() == "trailer")) {
+            return false;
+        }
+        if (kind == RequestHeaderKind::kHost) {
+            if (!allowHost || hostSeen || !isValidHostHeader(header.value()) ||
+                !authorityMatchesHost(authority, header.value(), defaultPort)) {
+                return false;
+            }
+            hostSeen = true;
+        }
+        if (const auto bit = singletonRequestHeaderBit(kind); bit != 0) {
+            if ((singletonHeaders & bit) != 0) {
+                return false;
+            }
+            singletonHeaders |= bit;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool http2IsValidOutboundRegularRequestHead(
+    std::string_view method,
+    std::string_view scheme,
+    std::string_view authority,
+    std::string_view path,
+    std::span<const HttpHeaderView> headers) noexcept {
+    if (!http2IsValidOutboundMethod(method) ||
+        (scheme != "http" && scheme != "https") ||
+        !isValidHostHeader(authority) ||
+        !isValidOriginFormTarget(path)) {
+        return false;
+    }
+    const auto defaultPort = static_cast<std::uint16_t>(scheme == "https" ? 443 : 80);
+    return http2AreValidOutboundRequestHeaders(
+        authority, defaultPort, headers, /*allowHost=*/true, /*allowTrailers=*/true);
+}
+
+[[nodiscard]] bool http2IsValidWebSocketConnectHeaders(
+    std::span<const HttpHeaderView> headers) noexcept {
+    bool sawVersion = false;
+    for (const auto& header : headers) {
+        if (header.name() == "host" ||
+            header.name() == "sec-websocket-key" ||
+            header.name() == "sec-websocket-accept") {
+            return false;
+        }
+        if (header.name() == "sec-websocket-version") {
+            if (sawVersion || header.value() != "13") {
+                return false;
+            }
+            sawVersion = true;
+        }
+    }
+    return sawVersion;
+}
+
+[[nodiscard]] bool http2IsValidConnectResponseHead(
+    const HttpResponse& response) noexcept {
+    if (response.status() < 200 || response.status() >= 300 ||
+        responseBodySize(response) != 0 || responseHasFileBody(response)) {
+        return false;
+    }
+    for (const auto& header : response.headers()) {
+        const auto known = responseHeaderKnownBit(header);
+        if (known == kResponseHeaderContentLength ||
+            known == kResponseHeaderTransferEncoding ||
+            httpAsciiEqualsIgnoreCase(header.name(), "content-length") ||
+            httpAsciiEqualsIgnoreCase(header.name(), "transfer-encoding")) {
+            return false;
+        }
+    }
+    return true;
+}
 }  // namespace
 
 Http2Connection::Http2Connection(
-    std::pmr::memory_resource* resource, Http2CoreConfig config, Http2Role role)
+    std::pmr::memory_resource* resource,
+    Http2Role role,
+    Http2ConnectionLimits limits)
     : resource_(resource),
-      config_(config),
+      limits_(limits),
       input_(resource),
       outBuffer_(resource),
       streams_(resource),
       decoder_(resource),
+      peerSettings_(role),
       events_(resource),
       pendingSends_(resource),
-      unblockedStreams_(resource),
-      takenUnblockedStreams_(resource),
+      drainedDataStreams_(resource),
+      takenDrainedDataStreams_(resource),
       pinnedStreams_(resource),
-      localMaxFrameSize_(config.maxFrameSize),
-      connectionSendWindow_(static_cast<std::int32_t>(config.initialSendWindow)),
-      connectionReceiveWindow_(static_cast<std::int32_t>(config.initialReceiveWindow)),
-      role_(role) {
-    decoder_.setMaxDynamicTableSize(4096);
+      role_(role),
+      connectionSendWindow_(kHttp2DefaultInitialWindowSize),
+      connectionReceiveWindow_(
+          static_cast<std::int32_t>(Http2LocalSettings::kInitialWindowSize)) {
+    decoder_.setMaxDynamicTableSize(Http2LocalSettings::kHeaderTableSize);
 }
 
 // --- outbound byte buffer (batched writes) ------------------------------------
@@ -89,27 +189,28 @@ void Http2Connection::takeOutput(std::pmr::string& into) {
 
 // --- event queue --------------------------------------------------------------
 
-Http2Event Http2Connection::nextEvent() {
+std::optional<Http2Event> Http2Connection::nextEvent() {
     if (eventOffset_ < events_.size()) {
         return events_[eventOffset_++];
     }
     events_.clear();
     eventOffset_ = 0;
-    return {};
+    return std::nullopt;
 }
 
-std::span<const std::uint32_t> Http2Connection::takeUnblockedStreams() noexcept {
-    // Swap-and-clear so each unblock is reported exactly once; the returned span stays
+std::span<const std::uint32_t> Http2Connection::takeDrainedDataStreams() noexcept {
+    // Swap-and-clear so each drain is reported exactly once; the returned span stays
     // valid until the next call (double buffer, no allocation churn).
-    takenUnblockedStreams_.swap(unblockedStreams_);
-    unblockedStreams_.clear();
-    return std::span<const std::uint32_t>(takenUnblockedStreams_.data(), takenUnblockedStreams_.size());
+    takenDrainedDataStreams_.swap(drainedDataStreams_);
+    drainedDataStreams_.clear();
+    return std::span<const std::uint32_t>(
+        takenDrainedDataStreams_.data(), takenDrainedDataStreams_.size());
 }
 
 // =============================================================================
 // Frame processing below is a 1:1 port of the retired coroutine session's pure
 // logic: inline async_write became append-to-outBuffer_, coroutine resume became
-// events / unblockedStreams_ marking. The coroutine stack itself is deleted; this
+// events / drained-data marking. The coroutine stack itself is deleted; this
 // core is the single h2 implementation for both server and client roles.
 // =============================================================================
 
@@ -138,20 +239,20 @@ void Http2Connection::appendGoawayFrame(
 }
 
 void Http2Connection::appendGoaway(Http2ErrorCode error, std::string_view debug) {
-    closing_ = true;
+    connectionError_ = error;
     appendGoawayFrame(lastStreamId_, error, debug);
 }
 
 void Http2Connection::beginDrain() {
     // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
-    // stream id WITHOUT closing -- streams already started keep running, and HEADERS
+    // stream id WITHOUT a connection error -- established streams keep running, and HEADERS
     // for a stream above the advertised id are refused in processHeaders.
-    if (draining_ || closing_) {
+    if (draining_ || connectionError_) {
         return;
     }
     draining_ = true;
     goawayLastStreamId_ = lastStreamId_;
-    appendGoawayFrame(lastStreamId_, Http2ErrorCode::kNoError, "server draining");
+    appendGoawayFrame(lastStreamId_, Http2ErrorCode::kNoError, "connection draining");
 }
 
 bool Http2Connection::applySettingsPayload(std::string_view payload) {
@@ -162,12 +263,15 @@ bool Http2Connection::applySettingsPayload(std::string_view payload) {
     for (std::size_t offset = 0; offset < payload.size(); offset += 6) {
         const auto entry = http2ReadSettingEntry(payload, offset);
         const auto result = peerSettings_.apply(entry.id, entry.value);
-        if (result.status != Http2PeerSettingsStatus::kOk) {
-            appendGoaway(http2PeerSettingsErrorCode(result.status), http2PeerSettingsErrorMessage(result.status));
+        if (const auto* failure = result.failure()) {
+            appendGoaway(
+                http2PeerSettingErrorCode(failure->error()),
+                http2PeerSettingErrorMessage(failure->error()));
             return false;
         }
-        if (result.initialWindowChanged &&
-            !http2ApplyStreamSendWindowDelta(streams_, result.initialWindowDelta)) {
+        const auto* initialWindowChange = result.initialWindowChange();
+        if (initialWindowChange &&
+            !http2ApplyStreamSendWindowDelta(streams_, initialWindowChange->delta())) {
             appendGoaway(Http2ErrorCode::kFlowControlError, "stream window overflow");
             return false;
         }
@@ -185,22 +289,23 @@ bool Http2Connection::processSettings(const Http2FrameHeader& header, std::strin
             appendGoaway(Http2ErrorCode::kFrameSizeError, "SETTINGS ack payload");
             return false;
         }
-        if (role_ == Http2Role::kClient && !receivedFirstSettings_) {
-            // The server preface must be a (possibly empty) non-ACK SETTINGS frame
-            // (RFC 9113 §3.4); an ACK alone does not satisfy it.
+        if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings) {
+            // Each peer preface must start with a (possibly empty) non-ACK SETTINGS
+            // frame (RFC 9113 §3.4); an ACK alone does not satisfy either role.
             appendGoaway(Http2ErrorCode::kProtocolError, "SETTINGS ACK before SETTINGS");
             return false;
         }
-        receivedFirstSettings_ = true;
         return true;
     }
     if (!applySettingsPayload(payload)) {
         return false;
     }
-    receivedFirstSettings_ = true;
+    if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings) {
+        prefacePhase_ = PrefacePhase::kReady;
+    }
     appendFrame(Http2FrameType::kSettings, kHttp2FlagAck, 0, {});
-    // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred bodies
-    // and report the unblocked streams to the owner.
+    // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred DATA
+    // and report streams whose core-owned remainder completed.
     markSendWindowOpened();
     return true;
 }
@@ -214,7 +319,10 @@ void Http2Connection::appendRstStream(std::uint32_t streamId, Http2ErrorCode err
 }
 
 std::size_t Http2Connection::sendDataUpToWindow(
-    Http2StreamState& stream, std::string_view data, std::size_t offset, bool endStream) {
+    Http2StreamState& stream,
+    std::string_view data,
+    std::size_t offset,
+    Http2EndStream endStream) {
     const auto total = data.size();
     while (offset < total) {
         const auto available = http2AvailableSendWindow(connectionSendWindow_, stream);
@@ -227,21 +335,22 @@ std::size_t Http2Connection::sendDataUpToWindow(
         http2ConsumeSendWindow(connectionSendWindow_, stream, chunk);
         appendFrame(
             Http2FrameType::kData,
-            static_cast<std::uint8_t>(endStream && last ? kHttp2FlagEndStream : 0),
+            static_cast<std::uint8_t>(
+                http2EndsStream(endStream) && last ? kHttp2FlagEndStream : 0),
             stream.id(), data.substr(offset, chunk));
+        stream.commitLocalContent(chunk);
         offset += chunk;
     }
     return offset;
 }
 
 void Http2Connection::markSendWindowOpened() {
-    // Drain buffered response bodies now that the window (may have) opened. A body that
-    // fully drains reports its stream as unblocked so the owner pulls the next chunk.
+    // Drain core-owned DATA remainders now that a window may have opened. Completion
+    // reports that the owner may submit the stream's next source chunk.
     for (std::size_t i = 0; i < pendingSends_.size();) {
         auto& pending = pendingSends_[i];
         auto* stream = findStream(pending.streamId);
         if (stream == nullptr || stream->isReset()) {
-            unblockedStreams_.push_back(pending.streamId);
             pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
         }
@@ -255,9 +364,13 @@ void Http2Connection::markSendWindowOpened() {
                 appendResponseHeaderFrames(
                     *stream,
                     std::string_view(pending.trailerBlock.data(), pending.trailerBlock.size()),
-                    /*endStream=*/true);
+                    Http2EndStream::kEndStream);
             }
-            unblockedStreams_.push_back(pending.streamId);
+            if (http2EndsStream(pending.endStream) || !pending.trailerBlock.empty()) {
+                stream->markLocalEndStreamCommitted();
+                releaseLocalRequestStreamIfClosed(*stream);
+            }
+            drainedDataStreams_.push_back(pending.streamId);
             pendingSends_.erase(pendingSends_.begin() + static_cast<std::ptrdiff_t>(i));
         } else {
             ++i;  // still window-blocked; keep the remainder for the next opening
@@ -299,12 +412,18 @@ bool Http2Connection::processWindowUpdate(const Http2FrameHeader& header, std::s
             return true;
         case Http2WindowUpdateResult::kZeroIncrement:
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+            closeStream(
+                header.streamId,
+                Http2StreamCloseSource::kLocal,
+                Http2ErrorCode::kProtocolError);
             markSendWindowOpened();
             return true;
         case Http2WindowUpdateResult::kOverflow:
             appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+            closeStream(
+                header.streamId,
+                Http2StreamCloseSource::kLocal,
+                Http2ErrorCode::kFlowControlError);
             markSendWindowOpened();
             return true;
     }
@@ -332,10 +451,34 @@ void Http2Connection::flushWindowDebt(Http2StreamState& stream) {
     if (debt == 0) {
         return;
     }
-    connectionReceiveWindow_ += static_cast<std::int32_t>(debt);
+    http2CreditConnectionReceiveWindow(
+        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
     char buf[kHttp2WindowUpdateFrameBytes];
     http2WriteWindowUpdate(buf, 0, debt);
     outBuffer_.append(buf, sizeof(buf));
+}
+
+void Http2Connection::detachActiveHeaderBlock(Http2StreamState& stream) {
+    if (!headerContinuation_.matches(stream.id())) {
+        return;
+    }
+    if (headerContinuation_.kind() == Http2HeaderBlockKind::kDiscarded) {
+        // An owner-side terminal transition won the race while an already-invalid
+        // block was still awaiting CONTINUATION. The RST just emitted is now the final
+        // local frame; finish decoding the peer block later without emitting another.
+        discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+        return;
+    }
+    if (discardedHeaderStream_) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "overlapping detached HEADERS state");
+        return;
+    }
+    discardedHeaderStream_.emplace(stream.id(), resource_);
+    // Both strings use the connection resource, so the partial compressed block moves
+    // without allocation. Future CONTINUATION fragments complete it in detached state.
+    discardedHeaderStream_->requestHeaderBlock().swap(stream.requestHeaderBlock());
+    discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+    headerContinuation_.start(stream.id(), Http2HeaderBlockKind::kDiscarded);
 }
 
 void Http2Connection::unpinStream(std::uint32_t streamId) {
@@ -345,40 +488,98 @@ void Http2Connection::unpinStream(std::uint32_t streamId) {
     if (stream == nullptr) {
         return;  // never created, or already removed
     }
-    flushWindowDebt(*stream);
-    readyQueue_.remove(streamId);
-    if (!stream->isReset()) {
-        // Normal completion (no RST arrived while pinned): remember it as locally closed
-        // so any late frame on this id is treated as closed, not idle. This is also the
-        // "connection made real progress" signal that refills the rapid-reset budget.
+    if (stream->isReset()) {
+        // The abnormal terminal transition already returned flow-control debt and
+        // discarded deferred sends. The pin only kept request-view storage alive.
+        releaseLocalRequestStream(*stream);
+        streams_.remove(streamId);
+        return;
+    }
+
+    if (stream->peerEndStream() && stream->localEndStreamCommitted()) {
+        // Both protocol halves are closed and the owner lease is gone: normal
+        // completion can finally release storage and refill the rapid-reset budget.
+        detachActiveHeaderBlock(*stream);
+        discardDeferredStreamState(streamId);
+        flushWindowDebt(*stream);
+        readyQueue_.remove(streamId);
         closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
         ++completedResponses_;
+        releaseLocalRequestStreamIfClosed(*stream);
+        streams_.remove(streamId);
+        return;
     }
-    // An RST that arrived while pinned already recorded closedStreams_ in closeStream.
-    streams_.remove(streamId);
+
+    // Releasing the last owner while either protocol half is still open must not
+    // silently erase the stream. Abort it explicitly so the peer observes a legal
+    // terminal transition and the table cannot leak an ownerless half-open stream.
+    const auto error = stream->localEndStreamCommitted()
+        ? Http2ErrorCode::kNoError
+        : Http2ErrorCode::kCancel;
+    (void)submitReset(streamId, error);
 }
 
-void Http2Connection::closeStream(std::uint32_t streamId, Http2StreamCloseSource source) {
-    auto* stream = streams_.find(streamId);
-    readyQueue_.remove(streamId);
-    if (stream != nullptr) {
-        stream->markClosed(source);
-        events_.push_back(Http2Event{Http2Event::Kind::kStreamClosed, streamId, {}});
-        if (isPinned(streamId)) {
-            // A handler still holds views into this stream's decoded storage. Keep it in
-            // the table (so those views stay valid) but mark it reset so later frames are
-            // dropped; unpinStream frees it (and flushes its window debt) once the
-            // handler finishes. Preserve the close SOURCE (markReset defaults to kLocal,
-            // which would clobber a peer RST -- the owner reads closeSource() to tell a
-            // legitimate peer abort from a local reject, e.g. keeping a complete
-            // response on peer RST_STREAM).
-            stream->markReset(source);
-        } else {
-            flushWindowDebt(*stream);  // return banked receive credit to the connection
-            streams_.remove(streamId);
-        }
+void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
+    pendingSends_.erase(
+        std::remove_if(
+            pendingSends_.begin(), pendingSends_.end(),
+            [streamId](const Http2PendingSend& pending) {
+                return pending.streamId == streamId;
+            }),
+        pendingSends_.end());
+    drainedDataStreams_.erase(
+        std::remove(drainedDataStreams_.begin(), drainedDataStreams_.end(), streamId),
+        drainedDataStreams_.end());
+    if (auto* stream = streams_.find(streamId); stream != nullptr) {
+        http2ReleaseResponseHeaderBlock(*stream);
+        http2ReleaseResponseTrailerBlock(*stream);
     }
+}
+
+bool Http2Connection::closeStreamImpl(
+    std::uint32_t streamId,
+    Http2StreamCloseSource source,
+    Http2ErrorCode error,
+    CloseNotification notification) {
+    auto* stream = streams_.find(streamId);
+    if (stream != nullptr && !stream->isReset()) {
+        detachActiveHeaderBlock(*stream);
+    }
+    readyQueue_.remove(streamId);
+    discardDeferredStreamState(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return false;
+    }
+
+    releaseLocalRequestStream(*stream);
+    stream->markClosed(source);
+    if (notification == CloseNotification::kEmitEvent) {
+        events_.push_back(Http2Event::streamClosed(streamId, source, error));
+    }
+    // A pin protects request views only. Protocol resources and connection-level
+    // flow credit are released immediately even if a sleeping handler retains storage.
+    flushWindowDebt(*stream);
     closedStreams_.remember(streamId, source);
+    if (!isPinned(streamId)) {
+        streams_.remove(streamId);
+    }
+    return true;
+}
+
+bool Http2Connection::closeStream(
+    std::uint32_t streamId,
+    Http2StreamCloseSource source,
+    Http2ErrorCode error) {
+    return closeStreamImpl(
+        streamId, source, error, CloseNotification::kEmitEvent);
+}
+
+bool Http2Connection::closeStreamByOwner(std::uint32_t streamId) {
+    return closeStreamImpl(
+        streamId,
+        Http2StreamCloseSource::kLocal,
+        Http2ErrorCode::kNoError,
+        CloseNotification::kOwnerAlreadyKnows);
 }
 
 bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::string_view payload) {
@@ -395,7 +596,15 @@ bool Http2Connection::processRstStream(const Http2FrameHeader& header, std::stri
         appendGoaway(Http2ErrorCode::kProtocolError, "RST_STREAM on idle stream");
         return false;
     }
-    closeStream(header.streamId, Http2StreamCloseSource::kPeer);
+    if (closedStreams_.source(header.streamId) ==
+        Http2StreamCloseSource::kPeerGoaway) {
+        // The peer already declared this request unprocessed. A trailing reset has no
+        // stream lifecycle left to mutate and must not consume the rapid-reset budget.
+        return true;
+    }
+    const auto error = static_cast<Http2ErrorCode>(http2Read32(
+        reinterpret_cast<const unsigned char*>(payload.data())));
+    closeStream(header.streamId, Http2StreamCloseSource::kPeer, error);
     // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
     // ahead of the responses this connection has actually let complete.
     ++peerResetStreams_;
@@ -415,17 +624,85 @@ bool Http2Connection::processPriority(const Http2FrameHeader& header, std::strin
         appendGoaway(Http2ErrorCode::kProtocolError, "PRIORITY stream id must be nonzero");
         return false;
     }
-    const auto dependency = http2Read31(reinterpret_cast<const unsigned char*>(payload.data()));
-    if (dependency == header.streamId) {
-        // A stream that depends on itself is a protocol error (RFC 9113 §5.3.1). On a
-        // live stream that is a stream error -> RST_STREAM. On an IDLE stream (one never
-        // opened) we must NOT RST -- an RST_STREAM on an idle stream is itself something
-        // the peer MUST treat as a connection error, so we would be provoking a teardown
-        // over a deprecated, purely-advisory PRIORITY frame. Ignore it instead.
-        if (findStream(header.streamId) != nullptr) {
-            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+    // RFC 9113 deprecates the RFC 7540 priority tree. Retain frame-shape validation,
+    // then ignore the advisory dependency and weight on streams in every state.
+    return true;
+}
+
+bool Http2Connection::processGoaway(
+    const Http2FrameHeader& header,
+    std::string_view payload) {
+    if (header.streamId != 0 || payload.size() < 8) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "malformed GOAWAY");
+        return false;
+    }
+
+    const Http2PeerGoaway goaway(
+        http2Read31(reinterpret_cast<const unsigned char*>(payload.data())),
+        static_cast<Http2ErrorCode>(http2Read32(
+            reinterpret_cast<const unsigned char*>(payload.data() + 4))));
+    if (peerGoaway_ &&
+        goaway.lastStreamId() > peerGoaway_->lastStreamId()) {
+        // RFC 9113 §6.8: increasing this value can make an already retried request
+        // ambiguous, so the peer is not allowed to widen it on a later GOAWAY.
+        appendGoaway(Http2ErrorCode::kProtocolError, "GOAWAY last stream id increased");
+        return false;
+    }
+
+    std::array<std::uint32_t, Http2LocalSettings::kMaxConcurrentStreams>
+        unprocessedStreamIds{};
+    std::size_t unprocessedCount = 0;
+    if (role_ == Http2Role::kClient) {
+        bool responseStartedAboveLast = false;
+        streams_.forEach([&](Http2StreamState& stream) {
+            if (stream.id() <= goaway.lastStreamId() || stream.isReset()) {
+                return;
+            }
+            // A response head proves that the peer acted on this request. Claiming
+            // otherwise would make replay unsafe, so reject the contradictory GOAWAY.
+            if (stream.headersDecoded()) {
+                responseStartedAboveLast = true;
+                return;
+            }
+            unprocessedStreamIds[unprocessedCount++] = stream.id();
+        });
+        if (responseStartedAboveLast) {
+            appendGoaway(
+                Http2ErrorCode::kProtocolError,
+                "GOAWAY excludes a started response");
+            return false;
         }
+        std::sort(
+            unprocessedStreamIds.begin(),
+            unprocessedStreamIds.begin() +
+                static_cast<std::ptrdiff_t>(unprocessedCount));
+    }
+
+    peerGoaway_ = goaway;
+    events_.push_back(Http2Event::goaway(goaway));
+
+    // A valid peer GOAWAY is graceful shutdown state, not a local connection error.
+    // Send our directional GOAWAY through the same idempotent drain path, then keep
+    // processing streams within each advertised boundary until they finish.
+    beginDrain();
+
+    if (role_ == Http2Role::kServer) {
+        return true;
+    }
+
+    // Higher locally initiated streams were never processed and can be replayed on a
+    // new connection. Close them inside the protocol core so flow-control debt,
+    // deferred DATA, stream-table storage, and peer concurrency slots cannot leak.
+    for (std::size_t i = 0; i < unprocessedCount; ++i) {
+        const auto streamId = unprocessedStreamIds[i];
+        if (!closeStreamImpl(
+                streamId,
+                Http2StreamCloseSource::kPeerGoaway,
+                goaway.error(),
+                CloseNotification::kOwnerAlreadyKnows)) {
+            continue;
+        }
+        events_.push_back(Http2Event::requestUnprocessed(streamId));
     }
     return true;
 }
@@ -461,6 +738,50 @@ Http2StreamState* Http2Connection::createStream(std::uint32_t streamId) {
     return streams_.create(streamId, peerSettings_.initialWindowSize());
 }
 
+std::optional<Http2RequestHeadSubmitError>
+Http2Connection::localRequestAdmissionError() const noexcept {
+    if (role_ != Http2Role::kClient) {
+        return Http2RequestHeadSubmitError::kInvalidState;
+    }
+    if (prefacePhase_ == PrefacePhase::kNotStarted) {
+        return Http2RequestHeadSubmitError::kConnectionNotStarted;
+    }
+    if (connectionError_ || peerGoaway_.has_value() || nextLocalStreamId_ > 0x7fffffffU) {
+        return Http2RequestHeadSubmitError::kConnectionUnavailable;
+    }
+    if (activeLocalRequestStreams_ >= peerSettings_.maxConcurrentStreams()) {
+        return Http2RequestHeadSubmitError::kPeerStreamLimitReached;
+    }
+    return std::nullopt;
+}
+
+Http2StreamState* Http2Connection::admitLocalRequestStream() {
+    auto* stream = createStream(nextLocalStreamId_);
+    if (stream != nullptr) {
+        nextLocalStreamId_ += 2;
+    }
+    return stream;
+}
+
+void Http2Connection::activateLocalRequestStream(Http2StreamState& stream) noexcept {
+    if (stream.holdPeerConcurrencySlot()) {
+        ++activeLocalRequestStreams_;
+    }
+}
+
+void Http2Connection::releaseLocalRequestStream(Http2StreamState& stream) noexcept {
+    if (stream.releasePeerConcurrencySlot() && activeLocalRequestStreams_ != 0) {
+        --activeLocalRequestStreams_;
+    }
+}
+
+void Http2Connection::releaseLocalRequestStreamIfClosed(Http2StreamState& stream) noexcept {
+    if (stream.isReset() ||
+        (stream.peerEndStream() && stream.localEndStreamCommitted())) {
+        releaseLocalRequestStream(stream);
+    }
+}
+
 bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
     if (role_ == Http2Role::kClient) {
         // No server-initiated streams exist (push is never enabled), so every even id
@@ -468,24 +789,6 @@ bool Http2Connection::isIdleStreamId(std::uint32_t streamId) const noexcept {
         return (streamId & 1U) == 0 || streamId >= nextLocalStreamId_;
     }
     return http2IsIdleStream(streamId, lastStreamId_);
-}
-
-void Http2Connection::queueClientPreface() {
-    outBuffer_.append(kHttp2ClientPreface.data(), kHttp2ClientPreface.size());
-    queueLocalSettings();
-}
-
-std::uint32_t Http2Connection::openLocalStream() {
-    if (role_ != Http2Role::kClient || closing_ || peerGoaway_ || nextLocalStreamId_ > 0x7fffffffU) {
-        return 0;
-    }
-    auto* stream = createStream(nextLocalStreamId_);
-    if (stream == nullptr) {
-        return 0;
-    }
-    const auto streamId = nextLocalStreamId_;
-    nextLocalStreamId_ += 2;
-    return streamId;
 }
 
 void Http2Connection::deferStreamWindowRelease(std::uint32_t streamId) {
@@ -503,11 +806,12 @@ void Http2Connection::releaseStreamWindow(std::uint32_t streamId) {
     if (debt == 0) {
         return;
     }
-    connectionReceiveWindow_ += static_cast<std::int32_t>(debt);
+    http2CreditConnectionReceiveWindow(
+        connectionReceiveWindow_, static_cast<std::int32_t>(debt));
     // Re-advertise the stream window only while the peer can still send on it; a
     // stream-scoped WINDOW_UPDATE on an ended/reset stream can trip a strict peer.
     if (!stream->bodyEnded() && !stream->isReset()) {
-        stream->restoreReceiveWindow(static_cast<std::int32_t>(debt));
+        http2CreditStreamReceiveWindow(*stream, static_cast<std::int32_t>(debt));
         char buf[kHttp2WindowUpdateFrameBytes * 2];
         auto* out = http2WriteDataWindowUpdates(buf, streamId, debt);
         outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
@@ -518,7 +822,7 @@ void Http2Connection::releaseStreamWindow(std::uint32_t streamId) {
     }
 }
 
-bool Http2Connection::hasBlockedSend(std::uint32_t streamId) const noexcept {
+bool Http2Connection::hasQueuedData(std::uint32_t streamId) const noexcept {
     for (const auto& pending : pendingSends_) {
         if (pending.streamId == streamId) {
             return true;
@@ -527,25 +831,59 @@ bool Http2Connection::hasBlockedSend(std::uint32_t streamId) const noexcept {
     return false;
 }
 
-std::uint32_t Http2Connection::peerMaxConcurrentStreams() const noexcept {
-    return peerSettings_.maxConcurrentStreams();
-}
-
-void Http2Connection::submitRequestHead(
-    std::uint32_t streamId,
+Http2RequestHeadSubmitResult Http2Connection::submitRegularRequestHead(
     std::string_view method,
     std::string_view scheme,
     std::string_view authority,
     std::string_view path,
     std::span<const HttpHeaderView> headers,
-    bool endStream) {
-    auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset()) {
-        return;
+    Http2RequestContent content) {
+    if (const auto error = localRequestAdmissionError()) {
+        return Http2RequestHeadSubmitResult::makeFailure(*error);
     }
-    if (const auto parsed = parseMethod(method); parsed != HttpMethod::kUnknown) {
-        stream->setRequestMethod(parsed);  // enables the HEAD content-length exemption
+    // Validate the entire semantic head before touching HPACK storage, outbound
+    // bytes, the stream method, local-content accounting, or lifecycle state.
+    if (!http2IsValidOutboundRegularRequestHead(method, scheme, authority, path, headers)) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
     }
+
+    Http2EndStream endStream = Http2EndStream::kKeepOpen;
+    std::array<char, 20> lengthBuffer{};
+    std::size_t lengthBytes = 0;
+    switch (content.mode()) {
+        case Http2RequestContentMode::kNone:
+            endStream = Http2EndStream::kEndStream;
+            break;
+        case Http2RequestContentMode::kKnownLength:
+            endStream = content.length() == 0
+                ? Http2EndStream::kEndStream
+                : Http2EndStream::kKeepOpen;
+            // 20 bytes always hold the canonical decimal form of uint64_t. Do this
+            // before mutating stream/HPACK state so every rejection is transactional.
+            if (const auto [end, ec] = std::to_chars(
+                    lengthBuffer.data(),
+                    lengthBuffer.data() + lengthBuffer.size(),
+                    content.length());
+                ec == std::errc{}) {
+                lengthBytes = static_cast<std::size_t>(end - lengthBuffer.data());
+            } else {
+                return Http2RequestHeadSubmitResult::makeFailure(
+                    Http2RequestHeadSubmitError::kInvalidMessage);
+            }
+            break;
+        case Http2RequestContentMode::kStreaming:
+            break;
+    }
+
+    auto* stream = admitLocalRequestStream();
+    if (stream == nullptr) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
+    }
+    const auto streamId = stream->id();
+
+    stream->assignRequestMethod(method);
     auto& block = stream->responseHeaderBlock();
     block.clear();
     HpackEncoder::encodeHeader(block, ":method", method);
@@ -555,12 +893,138 @@ void Http2Connection::submitRequestHead(
     for (const auto& header : headers) {
         HpackEncoder::encodeHeader(block, header.name(), header.value());
     }
+    if (content.mode() == Http2RequestContentMode::kKnownLength) {
+        HpackEncoder::encodeHeaderWithNameIndex(
+            block,
+            HpackStaticIndex::kContentLength,
+            std::string_view(lengthBuffer.data(), lengthBytes));
+    }
     appendResponseHeaderFrames(
         *stream, std::string_view(block.data(), block.size()), endStream);
-    if (endStream) {
-        stream->markLocalEndStream();
+    switch (content.mode()) {
+        case Http2RequestContentMode::kNone:
+            stream->beginLocalContentForbidden();
+            break;
+        case Http2RequestContentMode::kKnownLength:
+            stream->beginLocalContentKnownLength(content.length());
+            break;
+        case Http2RequestContentMode::kStreaming:
+            stream->beginLocalContentUnbounded();
+            break;
     }
+    stream->markLocalHeadSubmitted(
+        Http2LocalMessageKind::kRequest,
+        http2EndsStream(endStream));
+    activateLocalRequestStream(*stream);
     http2ReleaseResponseHeaderBlock(*stream);
+    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
+}
+
+Http2RequestHeadSubmitResult Http2Connection::submitConnectRequestHead(
+    std::string_view authority,
+    std::span<const HttpHeaderView> headers) {
+    if (const auto error = localRequestAdmissionError()) {
+        return Http2RequestHeadSubmitResult::makeFailure(*error);
+    }
+
+    RequestTargetView target;
+    if (!parseRequestTarget(HttpKnownMethod::kConnect, authority, target) ||
+        !http2AreValidOutboundRequestHeaders(
+            authority,
+            0,
+            headers,
+            /*allowHost=*/false,
+            /*allowTrailers=*/false)) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+
+    auto* stream = admitLocalRequestStream();
+    if (stream == nullptr) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
+    }
+    const auto streamId = stream->id();
+    (void)stream->markStandardConnectPending();
+
+    auto& block = stream->responseHeaderBlock();
+    block.clear();
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":authority", authority);
+    for (const auto& header : headers) {
+        HpackEncoder::encodeHeader(block, header.name(), header.value());
+    }
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(block.data(), block.size()),
+        Http2EndStream::kKeepOpen);
+    stream->assignRequestMethod("CONNECT");
+    stream->beginLocalContentForbidden();
+    stream->markLocalConnectRequestSubmitted();
+    activateLocalRequestStream(*stream);
+    http2ReleaseResponseHeaderBlock(*stream);
+    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
+}
+
+Http2RequestHeadSubmitResult Http2Connection::submitExtendedConnectRequestHead(
+    std::string_view protocol,
+    std::string_view scheme,
+    std::string_view authority,
+    std::string_view path,
+    std::span<const HttpHeaderView> headers) {
+    if (const auto error = localRequestAdmissionError()) {
+        return Http2RequestHeadSubmitResult::makeFailure(*error);
+    }
+    if (!peerSettings_.enableConnectProtocol()) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kPeerCapabilityUnavailable);
+    }
+
+    const bool websocket = httpAsciiEqualsIgnoreCase(protocol, "websocket");
+    if (!isValidHttpHeaderName(protocol) ||
+        (scheme != "http" && scheme != "https") ||
+        !isValidHostHeader(authority) ||
+        !isValidOriginFormTarget(path) ||
+        !http2AreValidOutboundRequestHeaders(
+            authority,
+            static_cast<std::uint16_t>(scheme == "https" ? 443 : 80),
+            headers,
+            /*allowHost=*/!websocket,
+            /*allowTrailers=*/false) ||
+        (websocket && !http2IsValidWebSocketConnectHeaders(headers))) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kInvalidMessage);
+    }
+
+    auto* stream = admitLocalRequestStream();
+    if (stream == nullptr) {
+        return Http2RequestHeadSubmitResult::makeFailure(
+            Http2RequestHeadSubmitError::kLocalStreamCapacityReached);
+    }
+    const auto streamId = stream->id();
+    (void)stream->markExtendedConnectPending();
+
+    auto& block = stream->responseHeaderBlock();
+    block.clear();
+    HpackEncoder::encodeHeader(block, ":method", "CONNECT");
+    HpackEncoder::encodeHeader(block, ":protocol", protocol);
+    HpackEncoder::encodeHeader(block, ":scheme", scheme);
+    HpackEncoder::encodeHeader(block, ":authority", authority);
+    HpackEncoder::encodeHeader(block, ":path", path);
+    for (const auto& header : headers) {
+        HpackEncoder::encodeHeader(block, header.name(), header.value());
+    }
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(block.data(), block.size()),
+        Http2EndStream::kKeepOpen);
+    stream->assignRequestMethod("CONNECT");
+    stream->setProtocol(protocol);
+    stream->beginLocalContentForbidden();
+    stream->markLocalConnectRequestSubmitted();
+    activateLocalRequestStream(*stream);
+    http2ReleaseResponseHeaderBlock(*stream);
+    return Http2RequestHeadSubmitResult::makeSubmitted(streamId);
 }
 
 HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) {
@@ -579,19 +1043,30 @@ HeaderDecodeStatus Http2Connection::decodeHeaderBlock(Http2StreamState& stream) 
         return HeaderDecodeStatus::kProtocolError;
     }
     if (stream.hasProtocol()) {
-        if (stream.requestMethod() != HttpMethod::kConnect ||
-            !stream.protocolIsWebSocket() ||
+        if (prefacePhase_ != PrefacePhase::kReady ||
+            stream.requestKnownMethod() != HttpKnownMethod::kConnect ||
             !stream.hasScheme() ||
             !stream.hasPath() ||
-            !stream.hasAuthority()) {
+            !stream.hasAuthority() ||
+            stream.hasContentLength()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        stream.markExtendedConnectWebSocket();
-    } else if (stream.requestMethod() == HttpMethod::kConnect) {
-        if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath()) {
+        if (!stream.markExtendedConnectPending()) {
             return HeaderDecodeStatus::kProtocolError;
         }
-        stream.markStandardConnect();
+    } else if (stream.requestKnownMethod() == HttpKnownMethod::kConnect) {
+        RequestTargetView connectTarget;
+        if (!stream.hasAuthority() || stream.hasScheme() || stream.hasPath() ||
+            stream.hasContentLength() ||
+            !parseRequestTarget(
+                HttpKnownMethod::kConnect,
+                stream.requestAuthority(),
+                connectTarget)) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
+        if (!stream.markStandardConnectPending()) {
+            return HeaderDecodeStatus::kProtocolError;
+        }
     } else if (!stream.hasScheme() || !stream.hasPath()) {
         return HeaderDecodeStatus::kProtocolError;
     }
@@ -651,6 +1126,13 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return true;  // interim head: validate only, never stored
     }
     const auto kind = classifyRequestHeader(name);
+    const bool successfulConnect = stream.connectPending() &&
+        context->status >= 200 && context->status < 300;
+    if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
+        // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
+        // response. It describes neither HTTP content nor the following tunnel DATA.
+        return true;
+    }
     if (const auto singletonBit = singletonRequestHeaderBit(kind); singletonBit != 0) {
         if (!stream.markSingletonRequestHeader(singletonBit)) {
             return false;
@@ -698,6 +1180,17 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         return HeaderDecodeStatus::kOk;
     }
     stream.setResponseStatus(context.status);
+    if (stream.connectPending()) {
+        if (context.status >= 200 && context.status < 300) {
+            (void)stream.markConnectTunnelOpen();
+            stream.beginLocalContentUnbounded();
+            (void)stream.openLocalConnectTunnel();
+        } else {
+            (void)stream.markConnectRejected();
+            appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, stream.id(), {});
+            (void)stream.rejectLocalConnect();
+        }
+    }
     stream.markHeadersDecoded();
     return HeaderDecodeStatus::kOk;
 }
@@ -718,6 +1211,81 @@ HeaderDecodeStatus Http2Connection::decodeRefusedHeaderBlock(Http2StreamState& s
     return http2ClassifyHeaderDecodeResult(result);
 }
 
+HeaderDecodeStatus Http2Connection::decodeDiscardedHeaderBlock(Http2StreamState& stream) {
+    // Even a block whose HTTP semantics are no longer observable must be decoded in
+    // full because HPACK's dynamic table is connection-scoped. Keep the decompressed
+    // field-list budget, but deliberately avoid mutating request/response state.
+    Http2HeaderDecodeContext context{stream};
+    const auto result = decoder_.decode(
+        stream.requestHeaderBlock(), &context,
+        [](void* target, std::string_view name, std::string_view value) {
+            return http2AccumulateHeaderListBytes(
+                *static_cast<Http2HeaderDecodeContext*>(target), name, value);
+        });
+    http2ResetHeaderBlock(stream);
+    return http2ClassifyHeaderDecodeResult(result);
+}
+
+bool Http2Connection::startDiscardedHeaderBlock(
+    const Http2FrameHeader& header,
+    std::string_view fragment,
+    DiscardedHeaderAction action) {
+    if (discardedHeaderStream_) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "overlapping discarded HEADERS block");
+        return false;
+    }
+    discardedHeaderStream_.emplace(header.streamId, resource_);
+    discardedHeaderAction_ = action;
+    if (!http2StartHeaderBlock(*discardedHeaderStream_, fragment)) {
+        discardedHeaderStream_.reset();
+        discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
+        return false;
+    }
+    if ((header.flags & kHttp2FlagEndHeaders) != 0) {
+        return finishDiscardedHeaderBlock();
+    }
+    headerContinuation_.start(header.streamId, Http2HeaderBlockKind::kDiscarded);
+    return true;
+}
+
+bool Http2Connection::finishDiscardedHeaderBlock() {
+    if (!discardedHeaderStream_) {
+        appendGoaway(Http2ErrorCode::kProtocolError, "missing discarded HEADERS state");
+        return false;
+    }
+    const auto streamId = discardedHeaderStream_->id();
+    const auto action = discardedHeaderAction_;
+    const auto status = action == DiscardedHeaderAction::kRefuseStream
+        ? decodeRefusedHeaderBlock(*discardedHeaderStream_)
+        : decodeDiscardedHeaderBlock(*discardedHeaderStream_);
+    discardedHeaderStream_.reset();
+    discardedHeaderAction_ = DiscardedHeaderAction::kIgnore;
+
+    if (status == HeaderDecodeStatus::kCompressionError) {
+        appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
+        return false;
+    }
+    if (action == DiscardedHeaderAction::kIgnore) {
+        return true;
+    }
+
+    auto error = Http2ErrorCode::kProtocolError;
+    if (action == DiscardedHeaderAction::kResetStreamClosed) {
+        error = Http2ErrorCode::kStreamClosed;
+    } else if (action == DiscardedHeaderAction::kRefuseStream &&
+               status == HeaderDecodeStatus::kOk) {
+        error = Http2ErrorCode::kRefusedStream;
+    }
+    appendRstStream(streamId, error);
+    if (findStream(streamId) != nullptr) {
+        closeStream(streamId, Http2StreamCloseSource::kLocal, error);
+    } else {
+        closedStreams_.remember(streamId, Http2StreamCloseSource::kLocal);
+    }
+    return true;
+}
+
 HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream) {
     Http2HeaderDecodeContext context{stream};
     const auto result = decoder_.decode(
@@ -735,7 +1303,8 @@ HeaderDecodeStatus Http2Connection::finishTrailerBlock(Http2StreamState& stream)
     }
     stream.markPeerEndStream();
     stream.markBodyEnded();
-    events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, stream.id(), {}});
+    events_.push_back(Http2Event::messageEnd(stream.id()));
+    releaseLocalRequestStreamIfClosed(stream);
     return HeaderDecodeStatus::kOk;
 }
 
@@ -746,7 +1315,10 @@ bool Http2Connection::handleHeaderDecodeFailure(Http2StreamState& stream, Header
     }
     appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
     if (findStream(stream.id()) == &stream) {
-        closeStream(stream.id(), Http2StreamCloseSource::kLocal);  // emits kStreamClosed
+        closeStream(
+            stream.id(),
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kProtocolError);  // emits a typed stream-closed event
     } else {
         stream.markReset();  // refused-stream scratch, not in the table
     }
@@ -760,18 +1332,37 @@ void Http2Connection::emitRequestHeaders(Http2StreamState& stream) {
     // role: HEAD responses and 204/304 are exempt (their content-length describes the
     // body a GET would have had, RFC 9110 §8.6).
     const bool lengthExempt = role_ == Http2Role::kClient &&
-        (stream.requestMethod() == HttpMethod::kHead ||
+        (stream.requestKnownMethod() == HttpKnownMethod::kHead ||
          stream.responseStatus() == 204 || stream.responseStatus() == 304);
     if (stream.peerEndStream() && !lengthExempt && !http2BodyLengthComplete(stream)) {
         appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-        closeStream(stream.id(), Http2StreamCloseSource::kLocal);  // remove, don't leak the slot
+        closeStream(
+            stream.id(),
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kProtocolError);  // remove, don't leak the slot
         return;
     }
-    events_.push_back(Http2Event{Http2Event::Kind::kMessageHead, stream.id(), {}});
-    if (stream.peerEndStream() || stream.standardConnect()) {
+    events_.push_back(Http2Event::messageHead(stream.id()));
+    if (role_ == Http2Role::kServer && stream.connectRequest()) {
+        // CONNECT has no request content, but the peer's wire half remains open for
+        // tunnel DATA after a successful response. Route/accept decisions start from
+        // kMessageHead; kMessageEnd would incorrectly imply END_STREAM was received.
         stream.markBodyEnded();
-        events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, stream.id(), {}});
+        return;
     }
+    if (role_ == Http2Role::kClient && stream.tunnelOpen()) {
+        if (stream.peerEndStream()) {
+            stream.markBodyEnded();
+            events_.push_back(Http2Event::tunnelEnd(stream.id()));
+        }
+        releaseLocalRequestStreamIfClosed(stream);
+        return;
+    }
+    if (stream.peerEndStream()) {
+        stream.markBodyEnded();
+        events_.push_back(Http2Event::messageEnd(stream.id()));
+    }
+    releaseLocalRequestStreamIfClosed(stream);
 }
 
 bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string_view payload) {
@@ -786,197 +1377,126 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
         return false;
     }
 
-    std::uint32_t dependency = 0;
-    if (!http2HeadersPriorityDependency(header, payload, dependency)) {
+    std::string_view fragment;
+    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS priority");
         return false;
     }
-    if ((header.flags & kHttp2FlagPriority) != 0 && dependency == header.streamId) {
-        if (role_ == Http2Role::kServer && header.streamId > lastStreamId_) {
-            lastStreamId_ = header.streamId;
-        }
-        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        if (findStream(header.streamId) != nullptr) {
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);  // owner observes the abort
-        } else {
-            closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
-        }
-        return true;
-    }
 
     Http2StreamState* stream = nullptr;
-    bool refusedStream = false;
-    // A HEADERS block on a stream WE locally closed: decode it (HPACK sync) but discard
-    // the result and RST(STREAM_CLOSED) rather than tearing the connection down.
-    bool discardIntoStream = false;
+    std::optional<DiscardedHeaderAction> discardedAction;
     if (auto* existing = findStream(header.streamId); existing != nullptr) {
-        if (existing->headersDecoded() && !existing->isReset()) {
-            return processTrailerHeaders(*existing, header, payload);
-        }
         if (existing->isReset()) {
             if (existing->closeSource() == Http2StreamCloseSource::kPeer) {
-                appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-                return true;
+                // Frames sent after the peer's own RST are not an in-flight race: the
+                // connection byte stream orders them after that terminal signal.
+                appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS after peer RST_STREAM");
+                return false;
             }
-            // Locally closed (we RST'd on a body cap / content-length mismatch, or the
-            // handler finished): the peer's in-flight HEADERS/trailers are legal (RFC
-            // 9113 §5.1 -- a peer may send frames before observing our RST). Do NOT
-            // GOAWAY the whole connection; decode-and-discard the block into this reset
-            // stream's buffer to keep the connection-global HPACK table in sync, then
-            // RST(STREAM_CLOSED). Handled by the discardIntoStream path below.
-            discardIntoStream = true;
-            stream = existing;
-        }
-        if (role_ == Http2Role::kClient) {
+            // After WE sent RST_STREAM, any peer frames already in flight must be
+            // minimally processed and discarded. Do not send a second RST.
+            discardedAction = DiscardedHeaderAction::kIgnore;
+        } else if (existing->headersDecoded() &&
+                   (existing->tunnelOpen() ||
+                    (role_ == Http2Role::kServer && existing->connectPending()))) {
+            // CONNECT has no request trailers, and an accepted connected stream only
+            // permits DATA/RST_STREAM/WINDOW_UPDATE/PRIORITY. Decode the complete
+            // field block for HPACK synchronization, then reset this stream.
+            return startDiscardedHeaderBlock(
+                header, fragment, DiscardedHeaderAction::kResetProtocolError);
+        } else if (existing->headersDecoded()) {
+            return processTrailerHeaders(*existing, header, fragment);
+        } else if (role_ == Http2Role::kClient) {
             // A 1xx interim head was decoded on this stream; this block is the next
             // (possibly final) response head -- decode it through the shared tail.
             stream = existing;
         } else {
-            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);  // remove, don't leak
-            return true;
+            // A second initial request head is a stream error. Decode its complete
+            // field block before applying the reset so HPACK remains synchronized.
+            discardedAction = DiscardedHeaderAction::kResetProtocolError;
         }
     } else if (role_ == Http2Role::kClient) {
         if (isIdleStreamId(header.streamId)) {
             appendGoaway(Http2ErrorCode::kProtocolError, "HEADERS on idle stream");
             return false;
         }
-        // A head for a stream this endpoint already closed (e.g. cancelled): decode
-        // and discard to keep HPACK in sync; the close was already signalled, so no
-        // RST_STREAM is added on top.
-        refusedStream = true;
-        refusedHeaderStream_.emplace(header.streamId, resource_);
-        stream = &*refusedHeaderStream_;
+        if (closedStreams_.source(header.streamId) == Http2StreamCloseSource::kPeer) {
+            appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS after peer RST_STREAM");
+            return false;
+        }
+        // A locally cancelled/completed or GOAWAY-rejected client stream no longer has
+        // storage. Decode any late block into scratch so HPACK stays synchronized.
+        discardedAction = DiscardedHeaderAction::kIgnore;
     } else {
         if (header.streamId <= lastStreamId_) {
             const auto source = closedStreams_.source(header.streamId);
             if (source == Http2StreamCloseSource::kPeer) {
-                appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-                return true;
-            }
-            if (source == Http2StreamCloseSource::kLocal) {
-                // We locally closed this stream (early response, then the peer's
-                // trailers are still in flight): decode-and-discard through the refused
-                // path to keep HPACK synced, then RST(STREAM_CLOSED) -- NOT GOAWAY,
-                // which would kill every other multiplexed stream in a benign race.
-                refusedStream = true;
-                refusedHeaderStream_.emplace(header.streamId, resource_);
-                stream = &*refusedHeaderStream_;
-            } else {
-                appendGoaway(Http2ErrorCode::kProtocolError, "new stream id lower than previous");
+                appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS after peer RST_STREAM");
                 return false;
             }
-        }
-
-        // A genuinely-new stream (not the locally-closed decode-and-discard case above,
-        // which already resolved `stream`). While draining, a stream above the id we
-        // advertised in GOAWAY must not be processed (RFC 9113 §6.8); route it through
-        // the refused-stream path so its block is still decoded (HPACK sync) then RST'd.
-        if (stream == nullptr) {
+            // Opening a higher peer stream implicitly closes every lower unused ID.
+            // Whether this one was explicitly locally closed or aged out of bounded
+            // history, it is not idle; tolerate the closed-stream frame by decoding and
+            // discarding it so HPACK can never desynchronize.
+            discardedAction = DiscardedHeaderAction::kIgnore;
+        } else {
+            // Record every genuinely new peer stream ID, even when it is malformed or
+            // refused, so a later lower ID cannot be reopened as idle.
+            lastStreamId_ = header.streamId;
             const bool drainRefused = draining_ && header.streamId > goawayLastStreamId_;
             stream = drainRefused ? nullptr : createStream(header.streamId);
-            lastStreamId_ = header.streamId;
-            refusedStream = stream == nullptr;
-            if (refusedStream) {
-                refusedHeaderStream_.emplace(header.streamId, resource_);
-                stream = &*refusedHeaderStream_;
+            if (stream == nullptr) {
+                discardedAction = DiscardedHeaderAction::kRefuseStream;
             }
         }
     }
-    if (discardIntoStream) {
-        // A HEADERS block on the in-table stream we locally reset (case a): decode it
-        // for HPACK consistency, discard the result, and RST(STREAM_CLOSED). A
-        // multi-frame block into a still-pinned reset stream would need continuation-
-        // mode tracking on the live stream, which we do not have -- fall back to the
-        // (safe) connection close only for that rare race; the common single-frame
-        // trailer survives.
-        if ((header.flags & kHttp2FlagEndHeaders) == 0) {
-            appendGoaway(Http2ErrorCode::kStreamClosed, "multi-frame HEADERS on closed stream");
-            return false;
-        }
-        std::string_view fragment;
-        if (!http2DecodeHeadersPayload(header, payload, fragment)) {
-            appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
-            return false;
-        }
-        if (!http2StartHeaderBlock(*stream, fragment)) {
-            appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
-            return false;
-        }
-        if (decodeRefusedHeaderBlock(*stream) == HeaderDecodeStatus::kCompressionError) {
-            appendGoaway(Http2ErrorCode::kCompressionError, "invalid HPACK block");
-            return false;
-        }
-        appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        return true;
+
+    if (discardedAction) {
+        return startDiscardedHeaderBlock(header, fragment, *discardedAction);
     }
 
     if ((header.flags & kHttp2FlagEndStream) != 0) {
         stream->markPeerEndStream();
     }
-
-    std::string_view fragment;
-    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid HEADERS padding");
-        return false;
-    }
     if (!http2StartHeaderBlock(*stream, fragment)) {
         // The block exceeds the header buffer cap. We cannot decode a block we could
         // not fully buffer, and skipping it would desync the connection-global HPACK
         // dynamic table for every later block (RFC 9113 §4.3) -- so this is a
-        // CONNECTION error, not a survivable stream reset.
-        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
+        // COMPRESSION_ERROR, not a survivable stream reset.
+        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
         return false;
     }
 
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeInitialHeaderBlock(*stream);
+        const auto status = decodeInitialHeaderBlock(*stream);
         if (status != HeaderDecodeStatus::kOk) {
-            // Handle the failure BEFORE dropping the refused-stream storage `stream`
-            // may point into (using it after reset() would be use-after-destroy).
-            const bool keepConnection = handleHeaderDecodeFailure(*stream, status);
-            if (refusedStream) {
-                refusedHeaderStream_.reset();
-            }
-            return keepConnection;
+            return handleHeaderDecodeFailure(*stream, status);
         }
-        if (refusedStream) {
-            if (role_ == Http2Role::kServer) {
-                appendRstStream(header.streamId, Http2ErrorCode::kRefusedStream);
-                closedStreams_.remember(header.streamId, Http2StreamCloseSource::kLocal);
-            }
-            refusedHeaderStream_.reset();
-        } else if (stream->headersDecoded()) {
+        if (stream->headersDecoded()) {
             emitRequestHeaders(*stream);  // not yet decoded = a 1xx interim head (client)
         }
     } else {
-        headerContinuation_.start(stream->id(), false);
+        headerContinuation_.start(stream->id(), Http2HeaderBlockKind::kInitial);
     }
     return true;
 }
 
 bool Http2Connection::processTrailerHeaders(
-    Http2StreamState& stream, const Http2FrameHeader& header, std::string_view payload) {
+    Http2StreamState& stream,
+    const Http2FrameHeader& header,
+    std::string_view fragment) {
     if (stream.bodyEnded()) {
-        appendRstStream(stream.id(), Http2ErrorCode::kStreamClosed);
-        closeStream(stream.id(), Http2StreamCloseSource::kLocal);
-        return true;
+        return startDiscardedHeaderBlock(
+            header, fragment, DiscardedHeaderAction::kResetStreamClosed);
     }
     if ((header.flags & kHttp2FlagEndStream) == 0) {
-        appendRstStream(stream.id(), Http2ErrorCode::kProtocolError);
-        closeStream(stream.id(), Http2StreamCloseSource::kLocal);
-        return true;
-    }
-
-    std::string_view fragment;
-    if (!http2DecodeHeadersPayload(header, payload, fragment)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid trailer padding");
-        return false;
+        return startDiscardedHeaderBlock(
+            header, fragment, DiscardedHeaderAction::kResetProtocolError);
     }
     if (!http2StartHeaderBlock(stream, fragment)) {
         // Un-bufferable trailer block: same HPACK-consistency reasoning as HEADERS --
-        // connection error rather than a survivable stream reset.
-        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "trailer block too large");
+        // COMPRESSION_ERROR rather than a survivable stream reset.
+        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
         return false;
     }
 
@@ -986,7 +1506,7 @@ bool Http2Connection::processTrailerHeaders(
             return handleHeaderDecodeFailure(stream, status);
         }
     } else {
-        headerContinuation_.start(stream.id(), true);
+        headerContinuation_.start(stream.id(), Http2HeaderBlockKind::kTrailers);
     }
     return true;
 }
@@ -996,46 +1516,46 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
         appendGoaway(Http2ErrorCode::kProtocolError, "invalid CONTINUATION");
         return false;
     }
-    auto* stream = findStream(header.streamId);
-    if (stream == nullptr) {
-        if (!refusedHeaderStream_ || refusedHeaderStream_->id() != header.streamId) {
-            appendGoaway(Http2ErrorCode::kProtocolError, "missing CONTINUATION stream");
+    const auto kind = headerContinuation_.kind();
+    Http2StreamState* stream = nullptr;
+    if (kind == Http2HeaderBlockKind::kDiscarded) {
+        if (!discardedHeaderStream_ || discardedHeaderStream_->id() != header.streamId) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "missing discarded CONTINUATION state");
             return false;
         }
-        stream = &*refusedHeaderStream_;
+        // Prefer detached storage even when a pinned reset stream with the same ID is
+        // still present. Its request views are owner-held and must remain immutable.
+        stream = &*discardedHeaderStream_;
+    } else {
+        stream = findStream(header.streamId);
+        if (stream == nullptr || stream->isReset()) {
+            appendGoaway(Http2ErrorCode::kProtocolError, "missing live CONTINUATION stream");
+            return false;
+        }
     }
     if (!http2AppendHeaderBlock(*stream, payload)) {
         // The accumulated HEADERS+CONTINUATION block overflowed the buffer cap; the
         // partial block cannot be decoded, so skipping it would desync HPACK for the
-        // whole connection -- a CONNECTION error (RFC 9113 §4.3), not a stream reset.
-        appendGoaway(Http2ErrorCode::kEnhanceYourCalm, "header block too large");
+        // whole connection -- COMPRESSION_ERROR (RFC 9113 §4.3), not a stream reset.
+        appendGoaway(Http2ErrorCode::kCompressionError, "field block not decompressed");
         return false;
     }
     if ((header.flags & kHttp2FlagEndHeaders) != 0) {
-        const bool trailers = headerContinuation_.finishWasTrailers();
-        if (trailers) {
+        const auto completedKind = headerContinuation_.finishKind();
+        if (completedKind == Http2HeaderBlockKind::kDiscarded) {
+            return finishDiscardedHeaderBlock();
+        }
+        if (completedKind == Http2HeaderBlockKind::kTrailers) {
             const auto status = finishTrailerBlock(*stream);
             if (status != HeaderDecodeStatus::kOk) {
                 return handleHeaderDecodeFailure(*stream, status);
             }
         } else {
-            const bool refusedStream = refusedHeaderStream_ && refusedHeaderStream_->id() == stream->id();
-            const auto status = refusedStream ? decodeRefusedHeaderBlock(*stream) : decodeInitialHeaderBlock(*stream);
+            const auto status = decodeInitialHeaderBlock(*stream);
             if (status != HeaderDecodeStatus::kOk) {
-                const bool keepConnection = handleHeaderDecodeFailure(*stream, status);
-                if (refusedStream) {
-                    refusedHeaderStream_.reset();
-                }
-                return keepConnection;
+                return handleHeaderDecodeFailure(*stream, status);
             }
-            if (refusedStream) {
-                const auto refusedId = stream->id();
-                if (role_ == Http2Role::kServer) {
-                    appendRstStream(refusedId, Http2ErrorCode::kRefusedStream);
-                    closedStreams_.remember(refusedId, Http2StreamCloseSource::kLocal);
-                }
-                refusedHeaderStream_.reset();
-            } else if (stream->headersDecoded()) {
+            if (stream->headersDecoded()) {
                 emitRequestHeaders(*stream);
             }
         }
@@ -1043,14 +1563,11 @@ bool Http2Connection::processContinuation(const Http2FrameHeader& header, std::s
     return true;
 }
 
-void Http2Connection::dropDataFrame(std::size_t flowBytes, bool windowConsumed) {
-    // RFC 9113 §6.9.1: DATA counts against the peer's connection send window even when
-    // the frame is in error. Keeping the connection means we must return that credit or
-    // the peer's window drains to zero and stalls. Only the connection window is
-    // re-advertised; the stream is being abandoned.
-    if (windowConsumed) {
-        connectionReceiveWindow_ += static_cast<std::int32_t>(flowBytes);
-    }
+void Http2Connection::releaseDroppedDataConnectionWindow(std::int32_t flowBytes) {
+    // Every structurally valid DATA frame reached this path only after the shared
+    // connection debit succeeded. Return exactly that credit while keeping the
+    // connection; no stream window survives an abandoned stream.
+    http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
     if (flowBytes == 0) {
         return;
     }
@@ -1068,69 +1585,119 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
         appendGoaway(Http2ErrorCode::kProtocolError, "DATA on invalid client stream id");
         return false;
     }
+    std::string_view data;
+    if (!http2DecodeDataPayload(header, payload, data)) {
+        // Invalid padding is a frame-structure error for the connection. Validate it
+        // before any stream-phase shortcut (closed body, pending CONNECT, reset) can
+        // incorrectly downgrade it to a stream error.
+        appendGoaway(Http2ErrorCode::kProtocolError, "invalid DATA padding");
+        return false;
+    }
+    const auto flowBytes = static_cast<std::int32_t>(payload.size());
+    if (http2DebitConnectionReceiveWindow(connectionReceiveWindow_, flowBytes) ==
+        Http2ReceiveWindowDebitStatus::kExceeded) {
+        appendGoaway(
+            Http2ErrorCode::kFlowControlError,
+            "connection flow-control window exceeded");
+        return false;
+    }
+
     auto* stream = findStream(header.streamId);
     if (stream == nullptr) {
+        if (closedStreams_.source(header.streamId) ==
+            Http2StreamCloseSource::kPeerGoaway) {
+            releaseDroppedDataConnectionWindow(flowBytes);
+            return true;
+        }
         if (!isIdleStreamId(header.streamId)) {
             appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-            dropDataFrame(payload.size(), /*windowConsumed=*/false);
+            releaseDroppedDataConnectionWindow(flowBytes);
             return true;
         }
         appendGoaway(Http2ErrorCode::kProtocolError, "DATA before HEADERS");
         return false;
     }
     if (stream->isReset()) {
-        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
     if (!stream->headersDecoded()) {
         appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
-        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        closeStream(
+            header.streamId,
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kProtocolError);
+        releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
-    if (stream->bodyEnded()) {
+    if (stream->peerEndStream()) {
+        // END_STREAM closes only the peer's send half. The opposite half of an
+        // accepted CONNECT tunnel remains usable, but another DATA frame from this
+        // peer is a frame on a half-closed (remote) stream (RFC 9113 5.1/8.5).
         appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
-        closeStream(header.streamId, Http2StreamCloseSource::kLocal);
-        dropDataFrame(payload.size(), /*windowConsumed=*/false);
+        closeStream(
+            header.streamId,
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kStreamClosed);
+        releaseDroppedDataConnectionWindow(flowBytes);
+        return true;
+    }
+    if (role_ == Http2Role::kServer && stream->connectPending()) {
+        appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+        closeStream(
+            header.streamId,
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kProtocolError);
+        releaseDroppedDataConnectionWindow(flowBytes);
+        return true;
+    }
+    const bool tunnelData = stream->tunnelOpen();
+    if (!tunnelData && stream->bodyEnded()) {
+        appendRstStream(header.streamId, Http2ErrorCode::kStreamClosed);
+        closeStream(
+            header.streamId,
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kStreamClosed);
+        releaseDroppedDataConnectionWindow(flowBytes);
         return true;
     }
 
-    const auto flowBytes = static_cast<std::int32_t>(payload.size());
-    switch (http2ConsumeReceiveWindows(connectionReceiveWindow_, *stream, flowBytes)) {
-        case Http2ReceiveWindowResult::kOk:
-            break;
-        case Http2ReceiveWindowResult::kConnectionExceeded:
-            appendGoaway(Http2ErrorCode::kFlowControlError, "connection flow-control window exceeded");
-            return false;
-        case Http2ReceiveWindowResult::kStreamExceeded:
-            // The stream debit was rejected, so the connection window was not touched:
-            // credit the peer back without restoring it locally.
-            appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
-            dropDataFrame(payload.size(), /*windowConsumed=*/false);
-            return true;
+    if (http2DebitStreamReceiveWindow(*stream, flowBytes) ==
+        Http2ReceiveWindowDebitStatus::kExceeded) {
+        appendRstStream(header.streamId, Http2ErrorCode::kFlowControlError);
+        closeStream(
+            header.streamId,
+            Http2StreamCloseSource::kLocal,
+            Http2ErrorCode::kFlowControlError);
+        releaseDroppedDataConnectionWindow(flowBytes);
+        return true;
     }
 
-    std::string_view data;
-    if (!http2DecodeDataPayload(header, payload, data)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid DATA padding");
-        return false;
-    }
-
-    switch (http2AccountDataBody(
-        *stream, data.size(), config_.maxStreamBodyBytes, config_.maxBufferedBodyBytes)) {
-        case Http2BodyAccountingResult::kOk:
-            break;
-        case Http2BodyAccountingResult::kTooLarge:
-            appendRstStream(header.streamId, Http2ErrorCode::kCancel);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
-            dropDataFrame(payload.size(), /*windowConsumed=*/true);
-            return true;
-        case Http2BodyAccountingResult::kContentLengthExceeded:
-            appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
-            dropDataFrame(payload.size(), /*windowConsumed=*/true);
-            return true;
+    if (!tunnelData) {
+        switch (http2AccountDataBody(
+            *stream,
+            data.size(),
+            limits_.maxStreamBodyBytes,
+            limits_.maxBufferedBodyBytes)) {
+            case Http2BodyAccountingResult::kOk:
+                break;
+            case Http2BodyAccountingResult::kTooLarge:
+                appendRstStream(header.streamId, Http2ErrorCode::kCancel);
+                closeStream(
+                    header.streamId,
+                    Http2StreamCloseSource::kLocal,
+                    Http2ErrorCode::kCancel);
+                releaseDroppedDataConnectionWindow(flowBytes);
+                return true;
+            case Http2BodyAccountingResult::kContentLengthExceeded:
+                appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+                closeStream(
+                    header.streamId,
+                    Http2StreamCloseSource::kLocal,
+                    Http2ErrorCode::kProtocolError);
+                releaseDroppedDataConnectionWindow(flowBytes);
+                return true;
+        }
     }
     if (flowBytes > 0) {
         if (stream->deferWindowRelease()) {
@@ -1140,7 +1707,8 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
             stream->addWindowDebt(static_cast<std::uint32_t>(flowBytes));
         } else {
             const auto increment = static_cast<std::uint32_t>(flowBytes);
-            http2RestoreReceiveWindows(connectionReceiveWindow_, *stream, flowBytes);
+            http2CreditConnectionReceiveWindow(connectionReceiveWindow_, flowBytes);
+            http2CreditStreamReceiveWindow(*stream, flowBytes);
             char buf[kHttp2WindowUpdateFrameBytes * 2];
             auto* out = http2WriteDataWindowUpdates(buf, header.streamId, increment);
             outBuffer_.append(buf, static_cast<std::size_t>(out - buf));
@@ -1151,21 +1719,29 @@ bool Http2Connection::processData(const Http2FrameHeader& header, std::string_vi
     // (buffered vs streaming delivery is application policy). Content-length and size caps
     // were already enforced by http2AccountDataBody above. The view is valid until the
     // next feed (input_ is only reclaimed at the start of the following feed).
-    events_.push_back(Http2Event{Http2Event::Kind::kMessageBodyChunk, header.streamId, data});
+    events_.push_back(tunnelData
+        ? Http2Event::tunnelData(header.streamId, data)
+        : Http2Event::messageBodyChunk(header.streamId, data));
     if ((header.flags & kHttp2FlagEndStream) != 0) {
-        if (!http2BodyLengthComplete(*stream)) {
+        if (!tunnelData && !http2BodyLengthComplete(*stream)) {
             appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
-            closeStream(header.streamId, Http2StreamCloseSource::kLocal);
+            closeStream(
+                header.streamId,
+                Http2StreamCloseSource::kLocal,
+                Http2ErrorCode::kProtocolError);
             return true;
         }
         http2MarkBodyEnded(*stream);
-        events_.push_back(Http2Event{Http2Event::Kind::kMessageEnd, header.streamId, {}});
+        events_.push_back(tunnelData
+            ? Http2Event::tunnelEnd(header.streamId)
+            : Http2Event::messageEnd(header.streamId));
+        releaseLocalRequestStreamIfClosed(*stream);
     }
     return true;
 }
 
 bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_view payload) {
-    if (!receivedFirstSettings_ &&
+    if (prefacePhase_ == PrefacePhase::kAwaitingPeerSettings &&
         header.type != static_cast<std::uint8_t>(Http2FrameType::kSettings)) {
         appendGoaway(Http2ErrorCode::kProtocolError, "first frame must be SETTINGS");
         return false;
@@ -1191,28 +1767,27 @@ bool Http2Connection::processFrame(const Http2FrameHeader& header, std::string_v
             return processContinuation(header, payload);
         case Http2FrameType::kData:
             return processData(header, payload);
-        case Http2FrameType::kGoaway: {
-            if (header.streamId != 0 || payload.size() < 8) {
-                appendGoaway(Http2ErrorCode::kProtocolError, "malformed GOAWAY");
-                return false;
-            }
-            peerGoaway_ = true;
-            const auto lastProcessed = http2Read31(
-                reinterpret_cast<const unsigned char*>(payload.data()));
-            // The owner reacts (client: fail streams above lastProcessed, stop opening
-            // new ones; streams at or below it keep running to completion).
-            events_.push_back(Http2Event{Http2Event::Kind::kGoaway, lastProcessed, {}});
-            if (role_ == Http2Role::kServer) {
-                closing_ = true;  // a departing client: drain and stop reading
-            }
-            return true;
-        }
+        case Http2FrameType::kGoaway:
+            return processGoaway(header, payload);
         case Http2FrameType::kPushPromise:
             // Server: clients can never push. Client: we advertise ENABLE_PUSH=0.
             appendGoaway(Http2ErrorCode::kProtocolError, "unexpected PUSH_PROMISE");
             return false;
         default:
-            return true;  // RFC 9113 §4.1: unknown frame types MUST be ignored
+            if (header.streamId != 0) {
+                if (auto* stream = findStream(header.streamId);
+                    stream != nullptr && stream->tunnelOpen()) {
+                    // RFC 9113 8.5 narrows connected streams to DATA and the three
+                    // stream-management frame types, even though unknown frames are
+                    // normally ignored elsewhere.
+                    appendRstStream(header.streamId, Http2ErrorCode::kProtocolError);
+                    closeStream(
+                        header.streamId,
+                        Http2StreamCloseSource::kLocal,
+                        Http2ErrorCode::kProtocolError);
+                }
+            }
+            return true;
     }
 }
 
@@ -1235,7 +1810,7 @@ bool Http2Connection::consumeFrames(std::string_view buffer, std::size_t& offset
             return false;
         }
         offset += kHttp2FrameHeaderBytes + header.length;
-        if (closing_) {
+        if (connectionError_) {
             break;
         }
     }
@@ -1243,12 +1818,28 @@ bool Http2Connection::consumeFrames(std::string_view buffer, std::size_t& offset
 }
 
 Http2FeedResult Http2Connection::feed(std::string_view in) {
+    // Starting the role-specific preface is an explicit ownership boundary. In
+    // particular, do not clear prior events, reclaim input, or copy caller bytes when
+    // the driver forgot beginConnection(); the exact same span remains retryable.
+    if (prefacePhase_ == PrefacePhase::kNotStarted) {
+        return Http2FeedResult::kConnectionNotStarted;
+    }
+    // Event delivery is part of input ownership, not a best-effort side channel. An
+    // unread event may carry a zero-copy view into the previous input, so accepting
+    // another span here would both discard the event and invalidate its bytes.
+    if (eventOffset_ < events_.size()) {
+        return Http2FeedResult::kEventsPending;
+    }
+    if (connectionError_) {
+        return Http2FeedResult::kProtocolFailure;
+    }
+
     // Reclaim the prefix consumed by the PREVIOUS feed now, at the start of this one --
     // not at the end of that feed. A kMessageBodyChunk event carries a view INTO input_
     // (or into the caller's `in` on the fast path), and reclaiming shifts the buffer;
     // deferring the reclaim keeps those views valid until this next feed, matching the
-    // documented contract. The prior feed's events reference now-stale bytes, so reset
-    // the event queue too (the owner must drain events after each feed).
+    // documented contract. All prior events have been pulled (enforced above), so the
+    // exhausted queue and its now-stale views can be reset.
     if (inputOffset_ > 0) {
         input_.erase(0, inputOffset_);
         inputOffset_ = 0;
@@ -1262,15 +1853,20 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
     // input_ on the common case where each read delivers whole frames. Event body views
     // then point into `in`, valid until the next feed -- the same lifetime input_ views
     // have, and both in-tree drivers keep their read buffer alive across a feed.
-    if (input_.empty() && !awaitingClientPreface_) {
+    if (input_.empty() && prefacePhase_ != PrefacePhase::kAwaitingClientMagic) {
         std::size_t offset = 0;
         if (!consumeFrames(in, offset)) {
-            return {in.size(), Http2FeedStatus::kError};
+            return Http2FeedResult::kProtocolFailure;
         }
         if (offset < in.size()) {
             input_.append(in.data() + offset, in.size() - offset);  // partial-frame tail
         }
-        return {in.size(), Http2FeedStatus::kOk};
+        if (connectionError_) {
+            return Http2FeedResult::kProtocolFailure;
+        }
+        return input_.empty()
+            ? Http2FeedResult::kAccepted
+            : Http2FeedResult::kNeedInput;
     }
 
     // SLOW PATH: a buffered partial-frame tail and/or the connection preface is pending.
@@ -1279,25 +1875,31 @@ Http2FeedResult Http2Connection::feed(std::string_view in) {
 
     // Server mode: the 24-byte client connection preface precedes the first frame
     // (RFC 9113 §3.4). Consume + validate it before any frame parsing.
-    if (awaitingClientPreface_) {
-        constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-        if (input_.size() - inputOffset_ < kClientPreface.size()) {
-            return {in.size(), Http2FeedStatus::kNeedMore};  // wait for the full preface
+    if (prefacePhase_ == PrefacePhase::kAwaitingClientMagic) {
+        if (input_.size() - inputOffset_ < kHttp2ClientPreface.size()) {
+            return Http2FeedResult::kNeedInput;  // wait for the full preface
         }
-        if (std::string_view(input_.data() + inputOffset_, kClientPreface.size()) != kClientPreface) {
+        if (std::string_view(
+                input_.data() + inputOffset_, kHttp2ClientPreface.size()) !=
+            kHttp2ClientPreface) {
             appendGoaway(Http2ErrorCode::kProtocolError, "invalid connection preface");
-            return {in.size(), Http2FeedStatus::kError};
+            return Http2FeedResult::kProtocolFailure;
         }
-        inputOffset_ += kClientPreface.size();
-        awaitingClientPreface_ = false;
+        inputOffset_ += kHttp2ClientPreface.size();
+        prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
     }
 
     if (!consumeFrames(std::string_view(input_.data(), input_.size()), inputOffset_)) {
-        return {in.size(), Http2FeedStatus::kError};
+        return Http2FeedResult::kProtocolFailure;
     }
     // NOTE: the consumed prefix is reclaimed at the START of the next feed (see above),
     // so body-chunk views handed out via events stay valid until then.
-    return {in.size(), Http2FeedStatus::kOk};
+    if (connectionError_) {
+        return Http2FeedResult::kProtocolFailure;
+    }
+    return inputOffset_ < input_.size()
+        ? Http2FeedResult::kNeedInput
+        : Http2FeedResult::kAccepted;
 }
 
 Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
@@ -1305,7 +1907,9 @@ Http2StreamState* Http2Connection::stream(std::uint32_t streamId) noexcept {
 }
 
 void Http2Connection::appendResponseHeaderFrames(
-    Http2StreamState& stream, std::string_view headerBlock, bool endStream) {
+    Http2StreamState& stream,
+    std::string_view headerBlock,
+    Http2EndStream endStream) {
     // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
     // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
     // guarantees that ordering (replacing the coroutine writeHeaders' atomic write).
@@ -1316,7 +1920,8 @@ void Http2Connection::appendResponseHeaderFrames(
         const auto chunk = std::min<std::size_t>(headerBlock.size() - offset, maxFrame);
         const bool last = offset + chunk == headerBlock.size();
         const auto flags = static_cast<std::uint8_t>(
-            (last ? kHttp2FlagEndHeaders : 0) | (endStream && last ? kHttp2FlagEndStream : 0));
+            (last ? kHttp2FlagEndHeaders : 0) |
+            (first && http2EndsStream(endStream) ? kHttp2FlagEndStream : 0));
         appendFrame(
             first ? Http2FrameType::kHeaders : Http2FrameType::kContinuation,
             flags, stream.id(), headerBlock.substr(offset, chunk));
@@ -1325,251 +1930,447 @@ void Http2Connection::appendResponseHeaderFrames(
     }
 }
 
-HttpBufferedResponseWritePlan Http2Connection::submitResponseHead(
+Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
     std::uint32_t streamId, const HttpResponse& response) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isReset()) {
-        return httpBufferedResponseWritePlan(HttpMethod::kUnknown, response);
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kClosed);
     }
-    const auto writePlan = httpBufferedResponseWritePlan(stream->requestMethod(), response);
+    const bool successfulConnect =
+        response.status() >= 200 && response.status() < 300 &&
+        stream->connectPending();
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        !stream->canSubmitLocalHead() || successfulConnect) {
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidState);
+    }
+    const auto controlPlan = httpFinalResponseControlPlan(
+        response,
+        HttpProtocolVersion::kHttp2);
+    if (!controlPlan.accepted()) {
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+    }
 
     // A complete HttpResponse is buffered or file-backed, so its size is known.
     // Explicit response streaming uses submitStreamingResponseHead() instead.
-    appendHttp2ResponseHeaders(*stream, response, writePlan.contentLength(), true);
+    auto writePlan = httpBufferedResponseWritePlan(
+        stream->requestKnownMethod(), response);
+    if (appendHttp2ResponseHeaders(*stream, response, writePlan.contentLength(), true) !=
+        Http2ResponseHeaderEncodeStatus::kOk) {
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+    }
+    const auto endStream = writePlan.sendBody()
+        ? Http2EndStream::kKeepOpen
+        : Http2EndStream::kEndStream;
+    if (writePlan.bodySuppressed()) {
+        stream->beginLocalContentForbidden();
+    } else {
+        stream->beginLocalContentKnownLength(writePlan.contentLength());
+    }
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
-        !writePlan.sendBody());
-    if (!writePlan.sendBody()) {
-        stream->markLocalEndStream();
+        endStream);
+    stream->markLocalHeadSubmitted(
+        Http2LocalMessageKind::kResponse,
+        http2EndsStream(endStream));
+    if (stream->connectPending()) {
+        (void)stream->markConnectRejected();
     }
     http2ReleaseResponseHeaderBlock(*stream);
-    return writePlan;
+    return Http2BufferedResponseHeadSubmitResult::makeSubmitted(
+        std::move(writePlan));
 }
 
-HttpResponseBodyPlan Http2Connection::submitStreamingResponseHead(
-    std::uint32_t streamId, HttpResponse head, ResponseStreamKind kind) {
+Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseHead(
+    std::uint32_t streamId,
+    HttpResponse head,
+    ResponseStreamKind kind,
+    ResponseTrailerIntent trailerIntent) {
     auto* stream = findStream(streamId);
-    const auto bodyPlan = httpResponseBodyPlan(
-        stream == nullptr ? HttpMethod::kUnknown : stream->requestMethod(),
-        head.status());
     if (stream == nullptr || stream->isReset()) {
-        return bodyPlan;
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kClosed);
     }
+    const bool successfulConnect =
+        head.status() >= 200 && head.status() < 300 &&
+        stream->connectPending();
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        !stream->canSubmitLocalHead() || successfulConnect) {
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidState);
+    }
+    const auto controlPlan = httpFinalResponseControlPlan(
+        head,
+        HttpProtocolVersion::kHttp2);
+    if (!controlPlan.accepted()) {
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+    }
+    auto bodyPlan = httpResponseBodyPlan(
+        stream->requestKnownMethod(), head.status());
     auto streamHead = prepareResponseStreamHead(
         std::move(head),
         kind,
-        ResponseStreamFraming::kHttp2DataFrames,
-        bodyPlan);
-    // No auto Content-Length for a streaming body (length unknown); mirror the coroutine
-    // sink's commit(). END_STREAM only when the status/method forbids a body.
-    appendHttp2ResponseHeaders(
-        *stream, streamHead.response(), 0, /*emitAutoContentLength=*/false);
+        ResponseStreamFraming::kHttp2Frames,
+        bodyPlan,
+        trailerIntent);
+    const auto& commitPlan = streamHead.commitPlan();
+    // Streaming never invents a length: an explicit value is validated and becomes
+    // the exact DATA contract; absence remains unbounded. A content-forbidden
+    // response either ends on this HEADERS block or enters the explicit
+    // trailers-only phase; it never becomes DATA-open.
+    const auto explicitContentLength =
+        http2ExplicitResponseContentLength(streamHead.response());
+    if (appendHttp2ResponseHeaders(
+            *stream, streamHead.response(), 0, /*emitAutoContentLength=*/false) !=
+        Http2ResponseHeaderEncodeStatus::kOk) {
+        return Http2StreamingResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidMessage);
+    }
+    const auto endStream =
+        commitPlan.headDisposition() == ResponseStreamHeadDisposition::kMessageEnded
+        ? Http2EndStream::kEndStream
+        : Http2EndStream::kKeepOpen;
+    if (bodyPlan.bodySuppressed()) {
+        stream->beginLocalContentForbidden();
+    } else if (explicitContentLength.status ==
+               Http2ExplicitContentLengthStatus::kValid) {
+        stream->beginLocalContentKnownLength(explicitContentLength.value);
+    } else {
+        stream->beginLocalContentUnbounded();
+    }
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
-        bodyPlan.bodySuppressed());
-    if (bodyPlan.bodySuppressed()) {
-        stream->markLocalEndStream();
+        endStream);
+    if (commitPlan.headDisposition() ==
+        ResponseStreamHeadDisposition::kTrailersOnly) {
+        stream->markLocalTrailersOnlyHeadSubmitted(
+            Http2LocalMessageKind::kResponse);
+    } else {
+        stream->markLocalHeadSubmitted(
+            Http2LocalMessageKind::kResponse,
+            http2EndsStream(endStream));
+    }
+    if (stream->connectPending()) {
+        (void)stream->markConnectRejected();
     }
     http2ReleaseResponseHeaderBlock(*stream);
-    return bodyPlan;
+    return Http2StreamingResponseHeadSubmitResult::makeSubmitted(commitPlan);
 }
 
-Http2SubmitResult Http2Connection::submitData(
-    std::uint32_t streamId, std::string_view chunk, bool endStream) {
+Http2SubmitStatus Http2Connection::submitInterimResponseHead(
+    std::uint32_t streamId,
+    const HttpInterimResponseHead& response) {
     auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset() || stream->localEndStream()) {
-        return Http2SubmitResult::kClosed;
+    if (stream == nullptr || stream->isReset()) {
+        return Http2SubmitStatus::kClosed;
     }
-    // If this stream still has a window-blocked body queued, appending preserves DATA
-    // ordering; it drains (with the accumulated END_STREAM) when the window reopens.
-    for (auto& pending : pendingSends_) {
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        !stream->canSubmitLocalHead()) {
+        return Http2SubmitStatus::kInvalidState;
+    }
+    if (appendHttp2InterimResponseHeaders(*stream, response) !=
+        Http2ResponseHeaderEncodeStatus::kOk) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        Http2EndStream::kKeepOpen);
+    http2ReleaseResponseHeaderBlock(*stream);
+    return Http2SubmitStatus::kAccepted;
+}
+
+Http2DataSubmitStatus Http2Connection::submitData(
+    std::uint32_t streamId,
+    std::string_view chunk,
+    Http2EndStream endStream) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return Http2DataSubmitStatus::kClosed;
+    }
+    if (!stream->localBodyOpen()) {
+        return Http2DataSubmitStatus::kInvalidState;
+    }
+    // One queued submission per stream is the hard backpressure boundary. The
+    // current input remains caller-owned and can be retried after the prior one drains.
+    for (const auto& pending : pendingSends_) {
         if (pending.streamId == streamId) {
-            pending.bytes.append(chunk.data(), chunk.size());
-            if (endStream) {
-                pending.endStream = true;
-                stream->markLocalEndStream();
-            }
-            return Http2SubmitResult::kBlocked;
+            return Http2DataSubmitStatus::kBackpressured;
         }
     }
-    if (chunk.empty()) {
-        if (endStream) {
-            appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
-            stream->markLocalEndStream();
+    if (http2EndsStream(endStream) &&
+        stream->localMessageKind() == Http2LocalMessageKind::kResponse &&
+        !stream->responseTrailerBlock().empty()) {
+        // A direct terminal DATA would strand already accepted semantic trailers.
+        // The caller must submit keep-open DATA and use finishResponse(), which
+        // atomically places the terminal trailer section after all DATA.
+        return Http2DataSubmitStatus::kInvalidState;
+    }
+    switch (stream->checkLocalContentAccept(chunk.size(), http2EndsStream(endStream))) {
+        case Http2LocalContentCheck::kAccepted:
+            break;
+        case Http2LocalContentCheck::kForbidden:
+            return Http2DataSubmitStatus::kInvalidState;
+        case Http2LocalContentCheck::kLengthExceeded:
+            return Http2DataSubmitStatus::kContentLengthExceeded;
+        case Http2LocalContentCheck::kLengthIncomplete:
+            return Http2DataSubmitStatus::kContentLengthIncomplete;
+    }
+    // Prepare every allocation needed for a deferred suffix BEFORE accepting the
+    // input or consuming flow-control window. A recoverable allocation failure can
+    // therefore never leave a framed prefix without its core-owned remainder.
+    std::optional<Http2PendingSend> deferred;
+    if (!chunk.empty()) {
+        const auto immediateBytes = std::min(
+            chunk.size(), http2AvailableSendWindow(connectionSendWindow_, *stream));
+        if (immediateBytes < chunk.size()) {
+            std::pmr::string remainder(resource_);
+            remainder.append(
+                chunk.data() + immediateBytes, chunk.size() - immediateBytes);
+            pendingSends_.reserve(pendingSends_.size() + 1);
+            deferred.emplace(Http2PendingSend{
+                streamId,
+                std::move(remainder),
+                0,
+                endStream,
+                std::pmr::string(resource_)});
         }
-        return Http2SubmitResult::kOk;
+    }
+    // Accepted means ownership of the WHOLE input, even when flow control below
+    // can only materialize a prefix and the prepared suffix becomes pending.
+    stream->acceptLocalContent(chunk.size());
+    if (chunk.empty()) {
+        if (http2EndsStream(endStream)) {
+            appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
+            stream->markLocalEndStreamCommitted();
+            releaseLocalRequestStreamIfClosed(*stream);
+        }
+        return Http2DataSubmitStatus::kAccepted;
     }
     const auto consumed = sendDataUpToWindow(*stream, chunk, 0, endStream);
     if (consumed < chunk.size()) {
-        std::pmr::string remainder(resource_);
-        remainder.append(chunk.data() + consumed, chunk.size() - consumed);
-        pendingSends_.push_back(
-            Http2PendingSend{streamId, std::move(remainder), 0, endStream, std::pmr::string(resource_)});
-        if (endStream) {
-            stream->markLocalEndStream();
+        // immediateBytes above is the exact total that sendDataUpToWindow can
+        // consume from the current windows, so a deferred value must exist here.
+        pendingSends_.push_back(std::move(*deferred));
+        if (http2EndsStream(endStream)) {
+            stream->markLocalEndStreamQueued();
         }
-        return Http2SubmitResult::kBlocked;
+        return Http2DataSubmitStatus::kQueued;
     }
-    if (endStream) {
-        stream->markLocalEndStream();
+    if (http2EndsStream(endStream)) {
+        stream->markLocalEndStreamCommitted();
+        releaseLocalRequestStreamIfClosed(*stream);
     }
-    return Http2SubmitResult::kOk;
+    return Http2DataSubmitStatus::kAccepted;
 }
 
-void Http2Connection::submitWebSocketHandshake(
+Http2SubmitStatus Http2Connection::submitConnectResponseHead(
+    std::uint32_t streamId,
+    const HttpResponse& response) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return Http2SubmitStatus::kClosed;
+    }
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        !stream->canSubmitLocalHead() || !stream->connectPending() ||
+        !stream->responseTrailerBlock().empty()) {
+        return Http2SubmitStatus::kInvalidState;
+    }
+    if (!http2IsValidConnectResponseHead(response)) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
+    if (appendHttp2ResponseHeaders(
+            *stream, response, 0, /*emitAutoContentLength=*/false) !=
+        Http2ResponseHeaderEncodeStatus::kOk) {
+        return Http2SubmitStatus::kInvalidMessage;
+    }
+    appendResponseHeaderFrames(
+        *stream,
+        std::string_view(
+            stream->responseHeaderBlock().data(),
+            stream->responseHeaderBlock().size()),
+        Http2EndStream::kKeepOpen);
+    (void)stream->markConnectTunnelOpen();
+    stream->beginLocalContentUnbounded();
+    stream->markLocalHeadSubmitted(
+        Http2LocalMessageKind::kConnectTunnel,
+        /*endStream=*/false);
+    http2ReleaseResponseHeaderBlock(*stream);
+    if (stream->peerEndStream()) {
+        events_.push_back(Http2Event::tunnelEnd(streamId));
+    }
+    return Http2SubmitStatus::kAccepted;
+}
+
+Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
     std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isReset()) {
-        return;
+        return Http2SubmitStatus::kClosed;
+    }
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        !stream->canSubmitLocalHead() ||
+        !stream->extendedConnectWebSocket() || !stream->connectPending() ||
+        !stream->responseTrailerBlock().empty()) {
+        return Http2SubmitStatus::kInvalidState;
     }
     http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol, extensions);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
+        Http2EndStream::kKeepOpen);
+    (void)stream->markConnectTunnelOpen();
+    stream->beginLocalContentUnbounded();
+    stream->markLocalHeadSubmitted(
+        Http2LocalMessageKind::kConnectTunnel,
         /*endStream=*/false);
     http2ReleaseResponseHeaderBlock(*stream);
-}
-
-void Http2Connection::addResponseTrailer(
-    std::uint32_t streamId, std::string_view name, std::string_view value) {
-    auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset() || stream->localEndStream()) {
-        return;
+    if (stream->peerEndStream()) {
+        events_.push_back(Http2Event::tunnelEnd(streamId));
     }
-    appendHttp2ResponseTrailer(*stream, name, value);
+    return Http2SubmitStatus::kAccepted;
 }
 
-bool Http2Connection::submitResponseTrailers(std::uint32_t streamId) {
+Http2ResponseTrailerSubmitStatus Http2Connection::submitResponseTrailerSection(
+    std::uint32_t streamId,
+    std::span<const HttpHeaderView> trailers) {
     auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isReset() || stream->localEndStream() ||
-        stream->responseTrailerBlock().empty()) {
-        return false;
+    if (stream == nullptr || stream->isReset()) {
+        return Http2ResponseTrailerSubmitStatus::kClosed;
+    }
+    if (role_ != Http2Role::kServer || !stream->headersDecoded() ||
+        (!stream->localBodyOpen() && !stream->localTrailersOnly()) ||
+        stream->localMessageKind() != Http2LocalMessageKind::kResponse ||
+        !stream->responseTrailerBlock().empty()) {
+        return Http2ResponseTrailerSubmitStatus::kInvalidState;
+    }
+    if (trailers.empty()) {
+        return Http2ResponseTrailerSubmitStatus::kEmpty;
+    }
+    if (!responseTrailerSectionValid(trailers)) {
+        return Http2ResponseTrailerSubmitStatus::kInvalidField;
+    }
+    if (!stream->localContentLengthComplete()) {
+        return Http2ResponseTrailerSubmitStatus::kContentLengthIncomplete;
+    }
+
+    // Encode into detached storage so a later field/allocation failure can never
+    // attach a prefix of the semantic section to the live stream. All protocol
+    // validation above completes before either HPACK bytes or stream state mutate.
+    std::pmr::string encoded(resource_);
+    for (const auto& trailer : trailers) {
+        appendHttp2ResponseTrailer(encoded, trailer.name(), trailer.value());
+    }
+    stream->responseTrailerBlock().swap(encoded);
+    return Http2ResponseTrailerSubmitStatus::kAccepted;
+}
+
+Http2FinishSubmitStatus Http2Connection::finishResponse(std::uint32_t streamId) {
+    auto* stream = findStream(streamId);
+    if (stream == nullptr || stream->isReset()) {
+        return Http2FinishSubmitStatus::kClosed;
+    }
+    if ((!stream->localBodyOpen() && !stream->localTrailersOnly()) ||
+        stream->localMessageKind() != Http2LocalMessageKind::kResponse) {
+        return Http2FinishSubmitStatus::kInvalidState;
+    }
+    if (!stream->localContentLengthComplete()) {
+        return Http2FinishSubmitStatus::kContentLengthIncomplete;
     }
     auto& headerBlock = stream->responseTrailerBlock();
+    if (stream->localTrailersOnly() && headerBlock.empty()) {
+        // A trailers-only response cannot fall back to DATA(END_STREAM): its
+        // method/status explicitly forbids DATA, including an empty terminal frame.
+        return Http2FinishSubmitStatus::kInvalidState;
+    }
     // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
     // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
     // from the body to the trailer (markSendWindowOpened emits it once the body drains).
     for (auto& pending : pendingSends_) {
         if (pending.streamId == streamId) {
-            pending.endStream = false;  // the trailer now carries END_STREAM
-            pending.trailerBlock.assign(headerBlock.data(), headerBlock.size());
+            if (headerBlock.empty()) {
+                pending.endStream = Http2EndStream::kEndStream;
+            } else {
+                pending.endStream = Http2EndStream::kKeepOpen;
+                pending.trailerBlock.assign(headerBlock.data(), headerBlock.size());
+            }
             http2ReleaseResponseTrailerBlock(*stream);
-            stream->markLocalEndStream();
-            return true;
+            stream->markLocalEndStreamQueued();
+            return Http2FinishSubmitStatus::kQueued;
         }
+    }
+    if (headerBlock.empty()) {
+        appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
+        stream->markLocalEndStreamCommitted();
+        return Http2FinishSubmitStatus::kAccepted;
     }
     appendResponseHeaderFrames(
         *stream,
         std::string_view(headerBlock.data(), headerBlock.size()),
-        /*endStream=*/true);
+        Http2EndStream::kEndStream);
     http2ReleaseResponseTrailerBlock(*stream);
-    stream->markLocalEndStream();
-    return true;
+    stream->markLocalEndStreamCommitted();
+    return Http2FinishSubmitStatus::kAccepted;
 }
 
-void Http2Connection::submitReset(std::uint32_t streamId, std::uint32_t errorCode) {
-    appendRstStream(streamId, static_cast<Http2ErrorCode>(errorCode));
-    if (auto* stream = findStream(streamId); stream != nullptr) {
-        stream->markReset();
+Http2SubmitStatus Http2Connection::submitReset(
+    std::uint32_t streamId,
+    Http2ErrorCode error) {
+    if (streamId == 0) {
+        return Http2SubmitStatus::kInvalidState;
     }
-    // Drop any buffered body for the aborted stream.
-    pendingSends_.erase(
-        std::remove_if(
-            pendingSends_.begin(), pendingSends_.end(),
-            [streamId](const Http2PendingSend& p) { return p.streamId == streamId; }),
-        pendingSends_.end());
-}
-
-void Http2Connection::beginGoaway(std::uint32_t errorCode) {
-    appendGoaway(static_cast<Http2ErrorCode>(errorCode));
-    closing_ = true;
-}
-
-bool Http2Connection::seedUpgradedStream(const HttpServerParseResult& parsed, std::string_view body) {
-    // 1:1 port of the coroutine session's seedUpgradedStream, with queueReady replaced
-    // by emitRequestHeaders (the owner dispatches off the events).
-    auto* stream = createStream(1);
+    auto* stream = findStream(streamId);
     if (stream == nullptr) {
-        return false;
+        return closedStreams_.source(streamId) == Http2StreamCloseSource::kNone
+            ? Http2SubmitStatus::kInvalidState
+            : Http2SubmitStatus::kClosed;
     }
-    lastStreamId_ = 1;
-    stream->setRequestMethod(parsed.request.method());
-    stream->assignRequestPath(parsed.request.target());
-    const auto host = requestKnownHeader(parsed.request, RequestKnownHeader::kHost);
-    if (!host.empty()) {
-        stream->assignRequestAuthority(host);
-        stream->markAuthority();
-        stream->markHost();
+    if (stream->isReset()) {
+        return Http2SubmitStatus::kClosed;
     }
-    stream->markMethod();
-    stream->markScheme(80);
-    stream->markPath();
-    if (!parsed.chunked && parsed.contentLength != 0) {
-        if (body.size() != parsed.contentLength) {
-            return false;
-        }
-        if (!stream->setContentLength(parsed.contentLength)) {
-            return false;
-        }
+    // A client-created stream is still RFC-idle until its request HEADERS are
+    // submitted; RST_STREAM on that state would make the peer close the connection.
+    // A server owner does not own a peer stream until its initial header block has
+    // decoded; rejecting an early reset also preserves the mandatory CONTINUATION run.
+    if ((role_ == Http2Role::kClient && stream->canSubmitLocalHead()) ||
+        (role_ == Http2Role::kServer && !stream->headersDecoded()) ||
+        (stream->peerEndStream() && stream->localEndStreamCommitted())) {
+        return Http2SubmitStatus::kInvalidState;
     }
-    if (!body.empty()) {
-        stream->assignRequestBody(body);
-        stream->setReceivedBodyBytes(body.size());
-    }
-    for (const auto& header : parsed.request.headers()) {
-        if (http2IsForbiddenUpgradedRequestHeader(header.name())) {
-            continue;
-        }
-        if (!stream->appendRequestHeader(
-            header.name(),
-            header.value(),
-            classifyRequestHeader(header.name()))) {
-            return false;
-        }
-    }
-    stream->markHeadersDecoded();
-    stream->markPeerEndStream();
-    stream->markBodyEnded();
-    emitRequestHeaders(*stream);
-    return true;
+    appendRstStream(streamId, error);
+    return closeStreamByOwner(streamId)
+        ? Http2SubmitStatus::kAccepted
+        : Http2SubmitStatus::kClosed;
 }
 
-bool Http2Connection::beginUpgraded(
-    const HttpServerParseResult& parsed, std::string_view settingsPayload, std::string_view body) {
-    // h2c upgrade (RFC 7540 §3.2), mirroring the coroutine runUpgraded: apply the
-    // HTTP2-Settings payload as the peer's initial SETTINGS (the real first SETTINGS
-    // still arrives after the preface, so receivedFirstSettings_ stays false), seed
-    // stream 1 from the upgraded h1 request, answer with our SETTINGS + a SETTINGS
-    // ACK for the upgrade payload, and expect the client connection preface next.
-    if (!applySettingsPayload(settingsPayload)) {
-        return false;  // GOAWAY queued, closing_ set by appendGoaway
+void Http2Connection::beginConnection() {
+    if (prefacePhase_ != PrefacePhase::kNotStarted) {
+        return;
     }
-    if (!seedUpgradedStream(parsed, body)) {
-        appendGoaway(Http2ErrorCode::kProtocolError, "invalid upgraded request");
-        return false;
+    if (role_ == Http2Role::kClient) {
+        outBuffer_.append(kHttp2ClientPreface.data(), kHttp2ClientPreface.size());
+        prefacePhase_ = PrefacePhase::kAwaitingPeerSettings;
+    } else {
+        prefacePhase_ = PrefacePhase::kAwaitingClientMagic;
     }
-    queueLocalSettings();
-    // Deliberately NO SETTINGS ACK for the HTTP2-Settings payload: RFC 7540 §3.2.1 --
-    // the 101 response is the implicit acknowledgement. An unsolicited ACK breaks
-    // clients that did not register those settings as ACK-pending (e.g. curl/nghttp2
-    // fails the whole connection on an ACK it never expected). The coroutine session
-    // sent one; that was a latent bug.
-    expectClientPreface();
-    return true;
-}
 
-void Http2Connection::queueLocalSettings() {
-    // 1:1 port of Http2ServerSession::sendLocalSettings, with the socket write
-    // replaced by an append to the outbound buffer. The frame encoders are pure.
-    std::array<char, kHttp2LocalSettingsFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
+    std::array<char,
+        Http2LocalSettings::kFrameBytes + kHttp2WindowUpdateFrameBytes> buffer;
     auto* out = http2WriteLocalSettingsFrame(buffer.data());
-    if constexpr (kHttp2LocalInitialWindowSize > kHttp2DefaultInitialWindowSize) {
+    if constexpr (
+        Http2LocalSettings::kInitialWindowSize >
+        static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize)) {
         out = http2WriteWindowUpdate(
             out,
             0,
-            kHttp2LocalInitialWindowSize - static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
+            Http2LocalSettings::kInitialWindowSize -
+                static_cast<std::uint32_t>(kHttp2DefaultInitialWindowSize));
     }
     outBuffer_.append(buffer.data(), static_cast<std::size_t>(out - buffer.data()));
 }

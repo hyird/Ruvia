@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/Http2StreamBodyAccounting.h"
 #include "ruvia/http/detail/http2/Http2StreamBodyQueue.h"
 #include "ruvia/http/detail/http2/Http2StreamFlowControl.h"
@@ -16,6 +17,9 @@
 #include "ruvia/http/detail/http2/Http2StreamBodyPolicy.h"
 #include "ruvia/http/detail/http2/Http2StreamRequestData.h"
 #include "ruvia/http/detail/http2/Http2StreamRequestState.h"
+#include "ruvia/http/detail/http2/Http2TunnelState.h"
+#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpExpectations.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
@@ -23,10 +27,13 @@ namespace ruvia::detail {
 class Http2StreamState final {
     std::uint32_t id_{0};
     Http2StreamBodyAccounting bodyAccounting_;
+    Http2LocalContentState localContent_;
     Http2StreamLifecycle lifecycle_;
     Http2StreamBodyQueue bodyQueue_;
     Http2StreamBodyPolicy bodyPolicy_;
+    HttpRequestExpectations expectations_;
     Http2StreamRequestState requestState_;
+    Http2TunnelState tunnelState_;
     Http2StreamFlowControl flowControl_;
     bool deferWindowRelease_{false};
     std::uint32_t windowDebt_{0};
@@ -149,6 +156,56 @@ public:
         return bodyAccounting_.lengthComplete();
     }
 
+    void beginLocalContentForbidden() noexcept {
+        localContent_.beginForbidden();
+    }
+
+    void beginLocalContentUnbounded() noexcept {
+        localContent_.beginUnbounded();
+    }
+
+    void beginLocalContentKnownLength(std::uint64_t length) noexcept {
+        localContent_.beginKnownLength(length);
+    }
+
+    [[nodiscard]] Http2LocalContentCheck checkLocalContentAccept(
+        std::size_t bytes,
+        bool terminal) const noexcept {
+        return localContent_.checkAccept(bytes, terminal);
+    }
+
+    void acceptLocalContent(std::size_t bytes) noexcept {
+        localContent_.accept(bytes);
+    }
+
+    void commitLocalContent(std::size_t bytes) noexcept {
+        localContent_.commit(bytes);
+    }
+
+    [[nodiscard]] Http2LocalContentMode localContentMode() const noexcept {
+        return localContent_.mode();
+    }
+
+    [[nodiscard]] bool localContentHasKnownLength() const noexcept {
+        return localContent_.hasKnownLength();
+    }
+
+    [[nodiscard]] std::uint64_t localContentDeclaredLength() const noexcept {
+        return localContent_.declaredLength();
+    }
+
+    [[nodiscard]] std::uint64_t localContentAcceptedBytes() const noexcept {
+        return localContent_.acceptedBytes();
+    }
+
+    [[nodiscard]] std::uint64_t localContentCommittedBytes() const noexcept {
+        return localContent_.committedBytes();
+    }
+
+    [[nodiscard]] bool localContentLengthComplete() const noexcept {
+        return localContent_.lengthComplete();
+    }
+
     [[nodiscard]] bool isReset() const noexcept {
         return lifecycle_.reset();
     }
@@ -165,6 +222,18 @@ public:
         return lifecycle_.localEndStream();
     }
 
+    [[nodiscard]] bool localEndStreamCommitted() const noexcept {
+        return lifecycle_.localEndStreamCommitted();
+    }
+
+    [[nodiscard]] Http2LocalSendPhase localSendPhase() const noexcept {
+        return lifecycle_.localSendPhase();
+    }
+
+    [[nodiscard]] Http2LocalMessageKind localMessageKind() const noexcept {
+        return lifecycle_.localMessageKind();
+    }
+
     [[nodiscard]] bool queued() const noexcept {
         return lifecycle_.queued();
     }
@@ -175,6 +244,14 @@ public:
 
     [[nodiscard]] Http2StreamCloseSource closeSource() const noexcept {
         return lifecycle_.closeSource();
+    }
+
+    [[nodiscard]] bool holdPeerConcurrencySlot() noexcept {
+        return lifecycle_.holdPeerConcurrencySlot();
+    }
+
+    [[nodiscard]] bool releasePeerConcurrencySlot() noexcept {
+        return lifecycle_.releasePeerConcurrencySlot();
     }
 
     void markReset(Http2StreamCloseSource source = Http2StreamCloseSource::kLocal) noexcept {
@@ -189,8 +266,47 @@ public:
         lifecycle_.markPeerEndStream();
     }
 
-    void markLocalEndStream() noexcept {
-        lifecycle_.markLocalEndStream();
+    [[nodiscard]] bool canSubmitLocalHead() const noexcept {
+        return lifecycle_.canSubmitLocalHead();
+    }
+
+    void markLocalHeadSubmitted(
+        Http2LocalMessageKind kind,
+        bool endStream) noexcept {
+        lifecycle_.markLocalHeadSubmitted(kind, endStream);
+    }
+
+    void markLocalTrailersOnlyHeadSubmitted(
+        Http2LocalMessageKind kind) noexcept {
+        lifecycle_.markLocalTrailersOnlyHeadSubmitted(kind);
+    }
+
+    void markLocalConnectRequestSubmitted() noexcept {
+        lifecycle_.markLocalConnectRequestSubmitted();
+    }
+
+    [[nodiscard]] bool openLocalConnectTunnel() noexcept {
+        return lifecycle_.openLocalConnectTunnel();
+    }
+
+    [[nodiscard]] bool rejectLocalConnect() noexcept {
+        return lifecycle_.rejectLocalConnect();
+    }
+
+    [[nodiscard]] bool localBodyOpen() const noexcept {
+        return lifecycle_.localBodyOpen();
+    }
+
+    [[nodiscard]] bool localTrailersOnly() const noexcept {
+        return lifecycle_.localTrailersOnly();
+    }
+
+    void markLocalEndStreamQueued() noexcept {
+        lifecycle_.markLocalEndStreamQueued();
+    }
+
+    void markLocalEndStreamCommitted() noexcept {
+        lifecycle_.markLocalEndStreamCommitted();
     }
 
     void markBodyEnded() noexcept {
@@ -269,12 +385,31 @@ public:
         bodyPolicy_.setBodyMode(bodyMode);
     }
 
-    [[nodiscard]] HttpMethod requestMethod() const noexcept {
+    void parseRequestExpectationField(std::string_view value) noexcept {
+        expectations_.parseField(value);
+    }
+
+    [[nodiscard]] const HttpRequestExpectations& requestExpectations() const noexcept {
+        return expectations_;
+    }
+
+    [[nodiscard]] HttpServerExpectationAction expectationAction() const noexcept {
+        return expectations_.serverAction(
+            bodyEnded()
+                ? HttpRequestContentIndication::kNone
+                : HttpRequestContentIndication::kWillFollow);
+    }
+
+    [[nodiscard]] std::string_view requestMethod() const noexcept {
         return requestData_.method();
     }
 
-    void setRequestMethod(HttpMethod method) noexcept {
-        requestData_.setMethod(method);
+    [[nodiscard]] HttpKnownMethod requestKnownMethod() const noexcept {
+        return requestData_.knownMethod();
+    }
+
+    void assignRequestMethod(std::string_view method) {
+        requestData_.assignMethod(method);
     }
 
     [[nodiscard]] std::string_view requestAuthority() const noexcept {
@@ -291,6 +426,10 @@ public:
 
     void assignRequestPath(std::string_view value) {
         requestData_.assignPath(value);
+    }
+
+    [[nodiscard]] std::string_view requestProtocol() const noexcept {
+        return requestData_.protocol();
     }
 
     [[nodiscard]] std::string_view requestCookie() const noexcept {
@@ -351,11 +490,7 @@ public:
     }
 
     [[nodiscard]] bool hasMethod() const noexcept {
-        return requestState_.hasMethod();
-    }
-
-    void markMethod() noexcept {
-        requestState_.markMethod();
+        return !requestMethod().empty();
     }
 
     [[nodiscard]] bool hasProtocol() const noexcept {
@@ -363,11 +498,12 @@ public:
     }
 
     [[nodiscard]] bool protocolIsWebSocket() const noexcept {
-        return requestState_.protocolIsWebSocket();
+        return httpAsciiEqualsIgnoreCase(requestProtocol(), "websocket");
     }
 
-    void setProtocol(bool isWebSocket) noexcept {
-        requestState_.setProtocol(isWebSocket);
+    void setProtocol(std::string_view value) {
+        requestData_.assignProtocol(value);
+        requestState_.markProtocol();
     }
 
     [[nodiscard]] bool hasScheme() const noexcept {
@@ -435,27 +571,51 @@ public:
     }
 
     [[nodiscard]] bool standardConnect() const noexcept {
-        return requestState_.standardConnect();
+        return tunnelState_.standard();
     }
 
-    void markStandardConnect() noexcept {
-        requestState_.markStandardConnect();
+    [[nodiscard]] bool extendedConnect() const noexcept {
+        return tunnelState_.extended();
     }
 
     [[nodiscard]] bool extendedConnectWebSocket() const noexcept {
-        return requestState_.extendedConnectWebSocket();
-    }
-
-    void markExtendedConnectWebSocket() noexcept {
-        requestState_.markExtendedConnectWebSocket();
+        return extendedConnect() && protocolIsWebSocket();
     }
 
     [[nodiscard]] bool webSocketTunnel() const noexcept {
-        return requestState_.webSocketTunnel();
+        return tunnelOpen() && extendedConnectWebSocket();
     }
 
-    void markWebSocketTunnel() noexcept {
-        requestState_.markWebSocketTunnel();
+    [[nodiscard]] bool connectRequest() const noexcept {
+        return tunnelState_.isConnect();
+    }
+
+    [[nodiscard]] bool connectPending() const noexcept {
+        return tunnelState_.awaitingResponse();
+    }
+
+    [[nodiscard]] bool tunnelOpen() const noexcept {
+        return tunnelState_.open();
+    }
+
+    [[nodiscard]] bool connectRejected() const noexcept {
+        return tunnelState_.rejected();
+    }
+
+    [[nodiscard]] bool markStandardConnectPending() noexcept {
+        return tunnelState_.begin(Http2ConnectKind::kStandard);
+    }
+
+    [[nodiscard]] bool markExtendedConnectPending() noexcept {
+        return tunnelState_.begin(Http2ConnectKind::kExtended);
+    }
+
+    [[nodiscard]] bool markConnectTunnelOpen() noexcept {
+        return tunnelState_.accept();
+    }
+
+    [[nodiscard]] bool markConnectRejected() noexcept {
+        return tunnelState_.reject();
     }
 
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {

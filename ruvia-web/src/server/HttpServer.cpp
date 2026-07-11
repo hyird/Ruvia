@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/HttpServerBufferedRoute.h"
 #include "ruvia/web/detail/server/HttpServerSessionUtils.h"
-#include "ruvia/http/detail/HttpParserInternal.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/web/detail/router/RouteTable.h"

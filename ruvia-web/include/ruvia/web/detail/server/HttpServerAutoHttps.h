@@ -54,7 +54,7 @@ inline HttpResponse makeAutoHttpsRedirectResponse(
     RequestMemory& memory,
     std::uint16_t httpsPort) {
     HttpResponse response(memory.resource());
-    response.status(308, {});
+    response.status(308);
 
     const auto host = hostWithoutExplicitPort(requestKnownHeader(request, RequestKnownHeader::kHost));
     auto path = request.path();

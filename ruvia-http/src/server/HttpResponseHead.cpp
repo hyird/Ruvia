@@ -14,6 +14,7 @@ namespace ruvia::detail {
 namespace {
 
 struct ResponseHeadFlags {
+    bool bodyAllowed{false};
     bool transferEncodingAllowed{false};
     bool autoContentLengthOwnedByWriter{false};
     bool explicitContentLengthAllowed{false};
@@ -43,18 +44,15 @@ template <typename Sink>
 void emitResponseHead(
     const HttpResponse& response,
     Sink& sink,
-    std::string_view statusLine,
+    std::string_view reasonPhrase,
     std::string_view dateHeader,
     ResponseHeadFlags flags) {
-    if (!statusLine.empty()) {
-        sink.append(statusLine);
-    } else {
-        sink.append(std::string_view("HTTP/1.1 "));
-        sink.appendUnsigned(response.status());
-        sink.append(' ');
-        sink.append(response.statusText());
-        sink.append(std::string_view("\r\n"));
-    }
+    sink.append(std::string_view("HTTP/1.1 "));
+    sink.appendUnsigned(response.status());
+    // RFC 9112 requires this SP even when the optional reason phrase is empty.
+    sink.append(' ');
+    sink.append(reasonPhrase);
+    sink.append(std::string_view("\r\n"));
 
     for (const auto& header : response.headers()) {
         if (flags.filterForbiddenBodyHeaders) {
@@ -72,15 +70,16 @@ void emitResponseHead(
     }
 
     const auto knownBits = responseKnownHeaderBits(response);
-    if ((knownBits & kResponseHeaderServer) == 0) {
-        sink.append(std::string_view("Server: ruvia\r\n"));
-    }
     if ((knownBits & kResponseHeaderDate) == 0) {
         sink.append(dateHeader);
     }
     if (flags.autoContentLengthOwnedByWriter) {
         sink.append(std::string_view("Content-Length: "));
-        sink.appendUnsigned(responseBodySize(response));
+        // HEAD metadata uses the selected representation size because its status
+        // still allows content. A status-level no-content policy that nevertheless
+        // owns framing (currently 205) must always declare the wire content length
+        // as zero, even if the application supplied a body that will be suppressed.
+        sink.appendUnsigned(flags.bodyAllowed ? responseBodySize(response) : 0);
         sink.append(std::string_view("\r\n"));
     }
     sink.append(std::string_view("\r\n"));
@@ -100,12 +99,13 @@ void appendResponseHead(
     const bool autoContentLengthOwnedByWriter =
         policy.autoContentLengthAllowed() &&
         !hasTransferEncoding &&
-        !suppressAutoContentLength;
+        (!suppressAutoContentLength || !policy.bodyAllowed());
     const bool explicitContentLengthAllowed =
         policy.explicitContentLengthAllowed() &&
         !hasTransferEncoding &&
         !autoContentLengthOwnedByWriter;
     const ResponseHeadFlags flags{
+        .bodyAllowed = policy.bodyAllowed(),
         .transferEncodingAllowed = transferEncodingAllowed,
         .autoContentLengthOwnedByWriter = autoContentLengthOwnedByWriter,
         .explicitContentLengthAllowed = explicitContentLengthAllowed,
@@ -114,21 +114,16 @@ void appendResponseHead(
             explicitContentLengthAllowed,
             transferEncodingAllowed)};
 
-    const auto statusLine = httpCachedStatusLine(response.status(), response.statusText());
+    const auto reasonPhrase = httpReasonPhrase(response.status());
     const auto dateHeader = cachedDateHeader();
 
     // Upper bound on emitted bytes (filtered headers are counted anyway; the
     // numeric slots use the 20-digit std::uint64_t worst case). The raw stack
     // sink below emits without per-append bounds checks, so this must never
     // undercount the actual output.
-    std::size_t bound = statusLine.empty()
-        ? 9 + 20 + 1 + response.statusText().size() + 2
-        : statusLine.size();
+    std::size_t bound = 9 + 20 + 1 + reasonPhrase.size() + 2;
     for (const auto& header : response.headers()) {
         bound += header.name().size() + header.value().size() + 4;
-    }
-    if ((knownBits & kResponseHeaderServer) == 0) {
-        bound += 15;
     }
     if ((knownBits & kResponseHeaderDate) == 0) {
         bound += dateHeader.size();
@@ -140,12 +135,12 @@ void appendResponseHead(
 
     if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
         RawHeadSink sink{cursor};
-        emitResponseHead(response, sink, statusLine, dateHeader, flags);
+        emitResponseHead(response, sink, reasonPhrase, dateHeader, flags);
         head.commitStack(sink.out);
         return;
     }
     head.reserveAdditional(bound);
-    emitResponseHead(response, head, statusLine, dateHeader, flags);
+    emitResponseHead(response, head, reasonPhrase, dateHeader, flags);
 }
 
 }  // namespace ruvia::detail

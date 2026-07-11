@@ -32,7 +32,7 @@
 
 namespace {
 
-using ruvia::HttpMethod;
+using ruvia::HttpKnownMethod;
 using ruvia::detail::ControllerMiddlewareDescriptor;
 using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
@@ -43,11 +43,15 @@ ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());
 }
 
+ruvia::Task<void> dummyStreamHandler(void*, ruvia::Context&) {
+    co_return;
+}
+
 std::pmr::string path(std::string_view value) {
     return std::pmr::string(value, std::pmr::get_default_resource());
 }
 
-void addRoute(ruvia::detail::RouterImpl& impl, HttpMethod method, std::string_view route) {
+void addRoute(ruvia::detail::RouterImpl& impl, HttpKnownMethod method, std::string_view route) {
     impl.registerRoute(
         method,
         path(route),
@@ -58,7 +62,7 @@ void addRoute(ruvia::detail::RouterImpl& impl, HttpMethod method, std::string_vi
 }
 
 void addRoute(ruvia::detail::RouterImpl& impl, std::string_view route) {
-    addRoute(impl, HttpMethod::kGet, route);
+    addRoute(impl, HttpKnownMethod::kGet, route);
 }
 
 // Registers the given routes and reports whether finalize() rejects them as a
@@ -77,6 +81,47 @@ bool finalizeConflicts(std::initializer_list<std::string_view> routes) {
     }
 }
 
+RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
+    ruvia::Router invalidRouter;
+    auto& invalid = ruvia::detail::RouterImpl::from(invalidRouter);
+    ruvia::WebSocketRouteOptions invalidOptions;
+    invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(-1);
+    bool rejected = false;
+    try {
+        invalid.registerStreamRoute(
+            HttpKnownMethod::kGet,
+            path("/invalid-ws"),
+            ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+            ruvia::detail::ResponseBodyMode::kWebSocket,
+            std::span<const ControllerMiddlewareDescriptor>{},
+            std::span<const ControllerMiddlewareDescriptor>{},
+            invalidOptions);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    ruvia::WebSocketRouteOptions options;
+    options.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1234);
+    impl.registerStreamRoute(
+        HttpKnownMethod::kGet,
+        path("/ws"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+        ruvia::detail::ResponseBodyMode::kWebSocket,
+        std::span<const ControllerMiddlewareDescriptor>{},
+        std::span<const ControllerMiddlewareDescriptor>{},
+        options);
+    impl.finalize();
+    RouteMatch match;
+    const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/ws", match);
+    RUVIA_CHECK(resolution.found());
+    RUVIA_CHECK_EQ(
+        resolution.webSocketLifecycle().closeHandshakeTimeout.count(),
+        std::int64_t{1234});
+}
+
 struct Router final {
     ruvia::Router router;
     ruvia::detail::RouterImpl& impl = ruvia::detail::RouterImpl::from(router);
@@ -85,14 +130,14 @@ struct Router final {
 
     bool matches(std::string_view p) {
         RouteMatch match;
-        return impl.routeTable().resolve(HttpMethod::kGet, p, match).found();
+        return impl.routeTable().resolve(HttpKnownMethod::kGet, p, match).found();
     }
 
     std::string_view routePathOf(std::string_view p) {
-        return routePathOf(HttpMethod::kGet, p);
+        return routePathOf(HttpKnownMethod::kGet, p);
     }
 
-    std::string_view routePathOf(HttpMethod method, std::string_view p) {
+    std::string_view routePathOf(HttpKnownMethod method, std::string_view p) {
         RouteMatch match;
         const auto res = impl.routeTable().resolve(method, p, match);
         return res.found() ? res.route().path() : "<none>";
@@ -101,7 +146,7 @@ struct Router final {
     // Returns the single captured param value, or "<none>" if unmatched / no param.
     std::string_view paramOf(std::string_view p) {
         RouteMatch match;
-        const auto res = impl.routeTable().resolve(HttpMethod::kGet, p, match);
+        const auto res = impl.routeTable().resolve(HttpKnownMethod::kGet, p, match);
         if (!res.found() || match.size() != 1) {
             return "<none>";
         }
@@ -227,20 +272,20 @@ RUVIA_TEST(routing_allowed_wildcard_overlaps_resolve_to_static_priority_branch) 
 RUVIA_TEST(routing_head_fallback_respects_static_priority_overlap) {
     Router r;
     addRoute(r.impl, "/:section/live");                   // implicit HEAD fallback
-    addRoute(r.impl, HttpMethod::kHead, "/health/:probe"); // explicit HEAD static branch
+    addRoute(r.impl, HttpKnownMethod::kHead, "/health/:probe"); // explicit HEAD static branch
     r.finalize();
 
-    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/health/live"), std::string_view("/health/:probe"));
-    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/users/live"), std::string_view("/:section/live"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/health/live"), std::string_view("/health/:probe"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/users/live"), std::string_view("/:section/live"));
 }
 
 RUVIA_TEST(routing_explicit_dynamic_head_overrides_exact_get_fallback) {
     Router r;
     addRoute(r.impl, "/health/live");                       // implicit exact HEAD fallback
-    addRoute(r.impl, HttpMethod::kHead, "/:section/:probe"); // explicit HEAD route
+    addRoute(r.impl, HttpKnownMethod::kHead, "/:section/:probe"); // explicit HEAD route
     r.finalize();
 
-    RUVIA_CHECK_EQ(r.routePathOf(HttpMethod::kHead, "/health/live"), std::string_view("/:section/:probe"));
+    RUVIA_CHECK_EQ(r.routePathOf(HttpKnownMethod::kHead, "/health/live"), std::string_view("/:section/:probe"));
 }
 
 RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
@@ -250,27 +295,27 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     // method echoed back. This drives the Allow header and was only tested at the
     // RouteResolution value level, never through the route-table computation.
     Router r;
-    addRoute(r.impl, HttpMethod::kGet, "/a");
-    addRoute(r.impl, HttpMethod::kPost, "/a");
-    addRoute(r.impl, HttpMethod::kPut, "/b");
+    addRoute(r.impl, HttpKnownMethod::kGet, "/a");
+    addRoute(r.impl, HttpKnownMethod::kPost, "/a");
+    addRoute(r.impl, HttpKnownMethod::kPut, "/b");
     r.finalize();
 
-    const auto bit = [](HttpMethod m) { return 1U << static_cast<unsigned>(m); };
+    const auto bit = [](HttpKnownMethod m) { return 1U << static_cast<unsigned>(m); };
 
     RouteMatch match;
-    const auto res = r.impl.routeTable().resolve(HttpMethod::kDelete, "/a", match);
+    const auto res = r.impl.routeTable().resolve(HttpKnownMethod::kDelete, "/a", match);
     RUVIA_CHECK(!res.found());
     RUVIA_CHECK(res.methodNotAllowed());                 // /a exists for other methods -> 405, not 404
     const auto mask = res.allowedMethods();
-    RUVIA_CHECK((mask & bit(HttpMethod::kGet)) != 0);
-    RUVIA_CHECK((mask & bit(HttpMethod::kPost)) != 0);
-    RUVIA_CHECK((mask & bit(HttpMethod::kHead)) != 0);    // auto-registered alongside the GET route
-    RUVIA_CHECK((mask & bit(HttpMethod::kPut)) == 0);     // belongs to /b, not /a
-    RUVIA_CHECK((mask & bit(HttpMethod::kDelete)) == 0);  // the requested method is not echoed back
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kGet)) != 0);
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kPost)) != 0);
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kHead)) != 0);    // auto-registered alongside the GET route
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kPut)) == 0);     // belongs to /b, not /a
+    RUVIA_CHECK((mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back
 
     // A path with no route at all is a 404 (not found), never a 405.
     RouteMatch missMatch;
-    const auto missing = r.impl.routeTable().resolve(HttpMethod::kGet, "/nope", missMatch);
+    const auto missing = r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/nope", missMatch);
     RUVIA_CHECK(!missing.found());
     RUVIA_CHECK(!missing.methodNotAllowed());
 }
@@ -281,19 +326,19 @@ RUVIA_TEST(routing_options_only_resource_is_405_not_404) {
     // the resource exists. allowedMethods used to clear the OPTIONS bit and so
     // returned an empty set, making resolve() report not-found.
     Router r;
-    addRoute(r.impl, HttpMethod::kOptions, "/preflight");
+    addRoute(r.impl, HttpKnownMethod::kOptions, "/preflight");
     r.finalize();
-    const auto bit = [](HttpMethod m) { return 1U << static_cast<unsigned>(m); };
+    const auto bit = [](HttpKnownMethod m) { return 1U << static_cast<unsigned>(m); };
 
     RouteMatch match;
-    const auto res = r.impl.routeTable().resolve(HttpMethod::kGet, "/preflight", match);
+    const auto res = r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/preflight", match);
     RUVIA_CHECK(!res.found());
     RUVIA_CHECK(res.methodNotAllowed());  // 405, not 404
-    RUVIA_CHECK((res.allowedMethods() & bit(HttpMethod::kOptions)) != 0);
+    RUVIA_CHECK((res.allowedMethods() & bit(HttpKnownMethod::kOptions)) != 0);
 
     // The explicit OPTIONS route still handles an OPTIONS request to that path.
     RouteMatch optMatch;
-    RUVIA_CHECK(r.impl.routeTable().resolve(HttpMethod::kOptions, "/preflight", optMatch).found());
+    RUVIA_CHECK(r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "/preflight", optMatch).found());
 }
 
 RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
@@ -301,45 +346,45 @@ RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
     // A catch-all OPTIONS route must NOT capture it (the wildcard node otherwise
     // would), so it stays unresolved and dispatch emits the server-wide response.
     Router r;
-    addRoute(r.impl, HttpMethod::kOptions, "/*");
-    addRoute(r.impl, HttpMethod::kGet, "/*");
+    addRoute(r.impl, HttpKnownMethod::kOptions, "/*");
+    addRoute(r.impl, HttpKnownMethod::kGet, "/*");
     r.finalize();
 
     RouteMatch match;
-    RUVIA_CHECK(!r.impl.routeTable().resolve(HttpMethod::kOptions, "*", match).found());
+    RUVIA_CHECK(!r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "*", match).found());
 
     // A normal path still matches the catch-all: the short-circuit is only for "*".
     RouteMatch pathMatch;
-    RUVIA_CHECK(r.impl.routeTable().resolve(HttpMethod::kOptions, "/anything", pathMatch).found());
+    RUVIA_CHECK(r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "/anything", pathMatch).found());
 }
 
 RUVIA_TEST(routing_rejects_duplicate_route_registration) {
     Router r;
-    addRoute(r.impl, HttpMethod::kGet, "/x");
+    addRoute(r.impl, HttpKnownMethod::kGet, "/x");
     // The same method+path registered twice is a duplicate: ambiguous routing is
     // rejected at registration rather than one route silently shadowing the other.
     bool threw = false;
     try {
-        addRoute(r.impl, HttpMethod::kGet, "/x");
+        addRoute(r.impl, HttpKnownMethod::kGet, "/x");
     } catch (const std::invalid_argument&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
     // The SAME path under a DIFFERENT method is not a duplicate.
-    addRoute(r.impl, HttpMethod::kPost, "/x");
+    addRoute(r.impl, HttpKnownMethod::kPost, "/x");
     r.finalize();
     RUVIA_CHECK(r.matches("/x"));
 }
 
 RUVIA_TEST(routing_rejects_registration_after_finalize) {
     Router r;
-    addRoute(r.impl, HttpMethod::kGet, "/x");
+    addRoute(r.impl, HttpKnownMethod::kGet, "/x");
     r.finalize();
     // The route table is immutable once finalized; a late registration must throw
     // rather than mutate the already-built table.
     bool threw = false;
     try {
-        addRoute(r.impl, HttpMethod::kGet, "/y");
+        addRoute(r.impl, HttpKnownMethod::kGet, "/y");
     } catch (const std::logic_error&) {
         threw = true;
     }
@@ -412,7 +457,7 @@ std::string dispatchChain(
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(
-        HttpMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler),
+        HttpKnownMethod::kGet, path("/chain"), RouteHandler(nullptr, &chainHandler),
         RequestBodyMode::kBuffered, controllerMiddlewares, routeMiddlewares);
     impl.finalize();
     const auto& table = impl.routeTable();
@@ -421,7 +466,7 @@ std::string dispatchChain(
     ruvia::RequestMemory memory(worker);
     ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
     ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kGet);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setPath(request, "/chain");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
@@ -449,13 +494,12 @@ ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
     sink->writes.emplace_back(chunk);
     co_return;
 }
-ruvia::Task<void> scEnd(void*) { co_return; }
+ruvia::Task<void> scEnd(void*, std::span<const ruvia::HttpHeaderView>) { co_return; }
 ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
 void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 std::pmr::string& scScratch(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->scratch;
 }
-void scTrailer(void*, std::string_view, std::string_view) {}
 bool scCommitted(void* target) noexcept {
     return static_cast<StreamCaptureSink*>(target)->committedFlag;
 }
@@ -463,7 +507,7 @@ bool scAborted(void*) noexcept { return false; }
 
 ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
-        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scScratch, &scTrailer,
+        &sink, &scWrite, &scEnd, &scSleep, &scBind, &scScratch,
         &scCommitted, &scAborted);
 }
 
@@ -536,7 +580,7 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
     impl.registerStreamRoute(
-        HttpMethod::kGet, path("/s"),
+        HttpKnownMethod::kGet, path("/s"),
         ruvia::detail::RouteStreamHandler(nullptr, &streamCommitThenThrow),
         ruvia::detail::ResponseBodyMode::kStream,
         std::span<const ControllerMiddlewareDescriptor>{},
@@ -548,12 +592,12 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     ruvia::RequestMemory memory(worker);
     ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
     ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kGet);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
     ruvia::detail::HttpRequestAccess::setPath(request, "/s");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
     RouteMatch match;
-    const auto resolution = table.resolve(HttpMethod::kGet, "/s", match);
+    const auto resolution = table.resolve(HttpKnownMethod::kGet, "/s", match);
     RUVIA_CHECK(resolution.found());
 
     StreamCaptureSink sink;
@@ -659,11 +703,15 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     return result;
 }
 
-// Registers GET /x with `handler`, dispatches `method path`, returns the result.
-DispatchResult dispatchOne(RouteHandler handler, HttpMethod method, std::string_view p) {
+// Registers GET /x with `handler`, dispatches the exact wire method token and
+// path, then returns the rendered result.
+DispatchResult dispatchOneToken(
+    RouteHandler handler,
+    std::string_view method,
+    std::string_view p) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(HttpMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
                        std::span<const ControllerMiddlewareDescriptor>{},
                        std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
@@ -685,20 +733,24 @@ DispatchResult dispatchOne(RouteHandler handler, HttpMethod method, std::string_
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
+DispatchResult dispatchOne(RouteHandler handler, HttpKnownMethod method, std::string_view p) {
+    return dispatchOneToken(handler, ruvia::knownHttpMethodToken(method), p);
+}
+
 }  // namespace
 
 RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     // Application and protocol errors retain their status; unknown failures map
     // to 500. Router never injects HTTP/1 Connection policy into any response.
     const auto application = dispatchOne(
-        RouteHandler(nullptr, &throwsHttpErrorHandler), HttpMethod::kGet, "/x");
+        RouteHandler(nullptr, &throwsHttpErrorHandler), HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(application.status, std::uint16_t{403});
     RUVIA_CHECK(application.connection.empty());
     const auto protocol = dispatchOne(
-        RouteHandler(nullptr, &throwsProtocolErrorHandler), HttpMethod::kGet, "/x");
+        RouteHandler(nullptr, &throwsProtocolErrorHandler), HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(protocol.status, std::uint16_t{413});
     RUVIA_CHECK(protocol.connection.empty());
-    const auto generic = dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpMethod::kGet, "/x");
+    const auto generic = dispatchOne(RouteHandler(nullptr, &throwsGenericHandler), HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(generic.status, std::uint16_t{500});
     RUVIA_CHECK(generic.connection.empty());
     // The unexpected exception's message must NOT leak into the response body: a
@@ -709,15 +761,29 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
 
 RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
     // A path with no route -> 404.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/nope").status,
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kGet, "/nope").status,
                    std::uint16_t{404});
     // The path exists but the method does not -> 405 with an Allow header listing GET.
-    const auto notAllowed = dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kPost, "/x");
+    const auto notAllowed = dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kPost, "/x");
     RUVIA_CHECK_EQ(notAllowed.status, std::uint16_t{405});
     RUVIA_CHECK(notAllowed.allow.find("GET") != std::string_view::npos);
     // The registered method still works.
-    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpMethod::kGet, "/x").status,
+    RUVIA_CHECK_EQ(dispatchOne(RouteHandler(nullptr, &okHandler), HttpKnownMethod::kGet, "/x").status,
                    std::uint16_t{200});
+}
+
+RUVIA_TEST(dispatch_produces_501_for_valid_unimplemented_method_token) {
+    const auto extension = dispatchOneToken(
+        RouteHandler(nullptr, &okHandler), "PROPFIND", "/x");
+    RUVIA_CHECK_EQ(extension.status, std::uint16_t{501});
+    RUVIA_CHECK(extension.allow.empty());
+    RUVIA_CHECK(extension.connection.empty());
+
+    // Method tokens are case-sensitive. A lowercase standard spelling is still
+    // syntactically valid but is not the framework's GET semantic class.
+    const auto lowercase = dispatchOneToken(
+        RouteHandler(nullptr, &okHandler), "get", "/x");
+    RUVIA_CHECK_EQ(lowercase.status, std::uint16_t{501});
 }
 
 namespace {
@@ -734,9 +800,9 @@ ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorI
     co_return context.body("custom-error", ruvia::Context::ResponseInit{.status = info.status()});
 }
 
-DispatchResult dispatchWithHandlers(
+DispatchResult dispatchWithHandlersToken(
     RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
-    HttpMethod method, std::string_view p) {
+    std::string_view method, std::string_view p) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
@@ -745,7 +811,7 @@ DispatchResult dispatchWithHandlers(
     if (notFoundH != nullptr) {
         impl.setNotFoundHandler(notFoundH);
     }
-    impl.registerRoute(HttpMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
+    impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
                        std::span<const ControllerMiddlewareDescriptor>{},
                        std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
@@ -767,12 +833,22 @@ DispatchResult dispatchWithHandlers(
     return extractDispatchResult(future.get());  // arena still alive here
 }
 
+DispatchResult dispatchWithHandlers(
+    RouteHandler handler,
+    HttpErrorHandler errorH,
+    HttpNotFoundHandler notFoundH,
+    HttpKnownMethod method,
+    std::string_view p) {
+    return dispatchWithHandlersToken(
+        handler, errorH, notFoundH, ruvia::knownHttpMethodToken(method), p);
+}
+
 }  // namespace
 
 RUVIA_TEST(dispatch_uses_custom_not_found_handler) {
     // A registered not-found handler replaces the default 404 response body.
     const auto result = dispatchWithHandlers(
-        RouteHandler(nullptr, &okHandler), nullptr, &customNotFound, HttpMethod::kGet, "/nope");
+        RouteHandler(nullptr, &okHandler), nullptr, &customNotFound, HttpKnownMethod::kGet, "/nope");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{404});
     RUVIA_CHECK_EQ(result.body, std::string("custom-not-found"));
 }
@@ -780,8 +856,19 @@ RUVIA_TEST(dispatch_uses_custom_not_found_handler) {
 RUVIA_TEST(dispatch_uses_custom_error_handler_with_thrown_status) {
     // A registered error handler renders a thrown HttpError, preserving its status.
     const auto result = dispatchWithHandlers(
-        RouteHandler(nullptr, &throwsHttpErrorHandler), &customError, nullptr, HttpMethod::kGet, "/x");
+        RouteHandler(nullptr, &throwsHttpErrorHandler), &customError, nullptr, HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{403});
+    RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
+}
+
+RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {
+    const auto result = dispatchWithHandlersToken(
+        RouteHandler(nullptr, &okHandler),
+        &customError,
+        nullptr,
+        "PROPFIND",
+        "/x");
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{501});
     RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
 }
 
@@ -790,10 +877,10 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     // listing every method registered anywhere on the server, not per-route.
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
-    impl.registerRoute(HttpMethod::kGet, path("/a"), RouteHandler(nullptr, &okHandler),
+    impl.registerRoute(HttpKnownMethod::kGet, path("/a"), RouteHandler(nullptr, &okHandler),
                        RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
                        std::span<const ControllerMiddlewareDescriptor>{});
-    impl.registerRoute(HttpMethod::kPost, path("/b"), RouteHandler(nullptr, &okHandler),
+    impl.registerRoute(HttpKnownMethod::kPost, path("/b"), RouteHandler(nullptr, &okHandler),
                        RequestBodyMode::kBuffered, std::span<const ControllerMiddlewareDescriptor>{},
                        std::span<const ControllerMiddlewareDescriptor>{});
     impl.finalize();
@@ -803,7 +890,7 @@ RUVIA_TEST(dispatch_options_asterisk_returns_server_wide_allow) {
     ruvia::RequestMemory memory(worker);
     ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
     ruvia::detail::HttpRequestAccess::reset(request);
-    ruvia::detail::HttpRequestAccess::setMethod(request, HttpMethod::kOptions);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "OPTIONS");
     ruvia::detail::HttpRequestAccess::setPath(request, "*");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
