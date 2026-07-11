@@ -2212,6 +2212,9 @@ static_assert(!HasPublicHttp1RequestBodyPlanFactories<
     ruvia::detail::Http1RequestBodyPlan>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1RequestBodyPlan>);
+static_assert(!std::constructible_from<
+    ruvia::detail::Http1RequestBodyPlan,
+    ruvia::detail::HttpRequestExpectations>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1RequestWithoutBody>);
 static_assert(!std::default_initializable<

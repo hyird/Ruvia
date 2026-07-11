@@ -528,6 +528,8 @@ if(_installed_http1_request_body_plan MATCHES "Http1RequestBodyMode" OR
        "Http1RequestBodyPlan::(none|knownLength|chunked)" OR
    _installed_http1_request_body_plan MATCHES
        "static[ \t\r\n]+Http1RequestBodyPlan[ \t\r\n]+(none|knownLength|chunked)" OR
+   _installed_http1_request_body_plan MATCHES
+       "makeWithoutBody|makeKnownLength|makeChunked" OR
    _installed_http1_request_body_plan MATCHES "hasContentLength[(][)]" OR
    _installed_http1_request_body_plan MATCHES "isChunked[(][)]")
     message(FATAL_ERROR "installed HTTP/1 request-body plan restored a mode/payload tuple or public factory")
@@ -548,9 +550,12 @@ if(NOT _installed_http1_request_body_plan MATCHES
        "std::get_if<Http1KnownLengthRequestBody>" OR
    NOT _installed_http1_request_body_plan MATCHES
        "std::get_if<Http1ChunkedRequestBody>" OR
-   NOT _installed_http1_request_body_plan MATCHES "makeWithoutBody" OR
-   NOT _installed_http1_request_body_plan MATCHES "makeKnownLength" OR
-   NOT _installed_http1_request_body_plan MATCHES "makeChunked" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "explicit Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*HttpRequestExpectations[ \t]+expectations" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*std::size_t[ \t]+contentLength" OR
+   NOT _installed_http1_request_body_plan MATCHES
+       "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*HttpTransferCodings[ \t]+transferCodings" OR
    NOT _installed_http1_request_body_plan MATCHES
        "friend class Http1ServerRequestParser")
     message(FATAL_ERROR "installed HTTP/1 request-body plan lost parser-only discriminated framing")

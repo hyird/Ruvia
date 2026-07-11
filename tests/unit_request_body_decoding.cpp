@@ -130,6 +130,9 @@ concept HasPublicRequestBodyPlanFactories = requires {
 };
 
 static_assert(!std::default_initializable<Http1RequestBodyPlan>);
+static_assert(!std::constructible_from<
+    Http1RequestBodyPlan,
+    ruvia::detail::HttpRequestExpectations>);
 static_assert(!std::default_initializable<ruvia::detail::Http1RequestWithoutBody>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1KnownLengthRequestBody>);

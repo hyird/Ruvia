@@ -109,28 +109,25 @@ private:
         Http1KnownLengthRequestBody,
         Http1ChunkedRequestBody>;
 
-    [[nodiscard]] static Http1RequestBodyPlan makeWithoutBody(
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Framing(Http1RequestWithoutBody()),
-            expectations);
-    }
+    explicit Http1RequestBodyPlan(
+        HttpRequestExpectations expectations) noexcept
+        : Http1RequestBodyPlan(
+              Framing(Http1RequestWithoutBody()),
+              expectations) {}
 
-    [[nodiscard]] static Http1RequestBodyPlan makeKnownLength(
+    Http1RequestBodyPlan(
         std::size_t contentLength,
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Framing(Http1KnownLengthRequestBody(contentLength)),
-            expectations);
-    }
+        HttpRequestExpectations expectations) noexcept
+        : Http1RequestBodyPlan(
+              Framing(Http1KnownLengthRequestBody(contentLength)),
+              expectations) {}
 
-    [[nodiscard]] static Http1RequestBodyPlan makeChunked(
+    Http1RequestBodyPlan(
         HttpTransferCodings transferCodings,
-        HttpRequestExpectations expectations = {}) noexcept {
-        return Http1RequestBodyPlan(
-            Framing(Http1ChunkedRequestBody(transferCodings)),
-            expectations);
-    }
+        HttpRequestExpectations expectations) noexcept
+        : Http1RequestBodyPlan(
+              Framing(Http1ChunkedRequestBody(transferCodings)),
+              expectations) {}
 
     Http1RequestBodyPlan(
         Framing framing,

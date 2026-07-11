@@ -27,6 +27,12 @@ struct RawHeadSink {
     char* out;
 
     void append(std::string_view value) noexcept {
+        // A default-constructed empty string_view may carry a null data pointer.
+        // libc annotates memcpy arguments as nonnull even when the byte count is
+        // zero, so avoid passing that representation across the C boundary.
+        if (value.empty()) {
+            return;
+        }
         std::memcpy(out, value.data(), value.size());
         out += value.size();
     }

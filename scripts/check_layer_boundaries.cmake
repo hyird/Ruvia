@@ -65,6 +65,8 @@ set(RULE_STALE_HTTP1_REQUEST_BODY_SPLIT
     "(parsed|result)\\.(contentLength|chunked|transferCodings)|http1WantsContinue|sendContinue_|bool[ \t]+sendContinue|sawChunked[ \t]*&&[ \t]*block\\.transferCodings\\.count[ \t]*>[ \t]*0")
 set(RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE
     "Http1RequestBodyMode|Http1RequestBodyPlan::(none|knownLength|chunked)[ \t]*[(]|bodyPlan_?[.](mode|hasContentLength|contentLength|isChunked|transferCodings)[ \t]*[(]|bodyPlan[(][)][.](mode|hasContentLength|contentLength|isChunked|transferCodings)[ \t]*[(]")
+set(RULE_STALE_HTTP1_REQUEST_BODY_FACTORIES
+    "makeWithoutBody|makeKnownLength|makeChunked")
 set(RULE_STALE_SERVER_EXPECTATION_STATE
     "httpUpdateExpectContinueFlag|kExpectationFailed|http1PlanRequestBody|bool[ \t]+expectContinue|shouldSendContinue[ \t]*\\(|[.]expectsContinue[ \t]*\\(")
 set(RULE_STALE_HTTP_PROTOCOL_VERSION_STATE
@@ -327,6 +329,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("mode/payload HTTP/1 request-body tuple"
         "${RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE}"
         "if (bodyPlan.isChunked()) decode(bodyPlan.transferCodings());")
+    expect_match("publicly discoverable HTTP/1 request-body factory"
+        "${RULE_STALE_HTTP1_REQUEST_BODY_FACTORIES}"
+        "return Http1RequestBodyPlan::makeKnownLength(length);")
     expect_match("parser-owned Expect policy"
         "${RULE_STALE_SERVER_EXPECTATION_STATE}"
         "return HttpParseError::kExpectationFailed;")
@@ -1342,6 +1347,11 @@ check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"
     "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     "${RUVIA_ROOT}/examples/api_surface.cpp")
+check_files_no_match("HTTP/1 request-body plans must use parser-only constructors"
+    "${RULE_STALE_HTTP1_REQUEST_BODY_FACTORIES}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
+    "${RUVIA_ROOT}/ruvia-http/src/parser/Http1RequestParser.cpp")
 check_files_no_match("server Expect semantics must use one cross-version typed state"
     "${RULE_STALE_SERVER_EXPECTATION_STATE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpParseError.h"
@@ -2837,9 +2847,12 @@ else()
        NOT http1_request_body_plan MATCHES "expectationAction" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParseState" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParser" OR
-       NOT http1_request_body_plan MATCHES "makeWithoutBody" OR
-       NOT http1_request_body_plan MATCHES "makeKnownLength" OR
-       NOT http1_request_body_plan MATCHES "makeChunked")
+       NOT http1_request_body_plan MATCHES
+           "explicit Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*HttpRequestExpectations[ \t]+expectations" OR
+       NOT http1_request_body_plan MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*std::size_t[ \t]+contentLength" OR
+       NOT http1_request_body_plan MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*HttpTransferCodings[ \t]+transferCodings")
         boundary_error("HTTP/1 request-body plan lost part of its typed contract"
             "parser-only exclusive framing alternatives, transfer decode order, consumption, and 100-continue must stay bound")
     endif()
@@ -2852,9 +2865,12 @@ set(WEB_HTTP1_BODY_READER_CORE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl")
 if(EXISTS "${HTTP1_SERVER_PARSER}")
     file(READ "${HTTP1_SERVER_PARSER}" http1_server_parser)
-    if(NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeChunked" OR
-       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeKnownLength" OR
-       NOT http1_server_parser MATCHES "Http1RequestBodyPlan::makeWithoutBody" OR
+    if(NOT http1_server_parser MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*block[.]transferEncoding[.]codings[(][)]" OR
+       NOT http1_server_parser MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*block[.]contentLength[.]value[(][)]" OR
+       NOT http1_server_parser MATCHES
+           "Http1RequestBodyPlan[(]expectations[)]" OR
        NOT http1_server_parser MATCHES "bodyPlan[.]chunked[(][)]" OR
        NOT http1_server_parser MATCHES "bodyPlan[.]knownLength[(][)]" OR
        NOT http1_server_parser MATCHES "expectations[.]ignore100Continue")
