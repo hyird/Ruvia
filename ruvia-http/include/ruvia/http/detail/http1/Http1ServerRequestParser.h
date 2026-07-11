@@ -73,7 +73,8 @@ public:
     // a separate fact and is present only in kNeedRequestBody.
     std::size_t messageBytes{0};
     std::optional<std::size_t> requiredTotalBytes;
-    Http1RequestBodyPlan bodyPlan{Http1RequestBodyPlan::makeWithoutBody()};
+    Http1RequestBodyPlan bodyPlan{
+        Http1RequestBodyPlan(HttpRequestExpectations{})};
     Http1ServerConnectionPlan connectionPlan{Http1ServerConnectionPlan::close()};
     HttpContentCoding responseCoding{HttpContentCoding::kNone};
 

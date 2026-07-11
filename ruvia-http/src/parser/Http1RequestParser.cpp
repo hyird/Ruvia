@@ -33,7 +33,7 @@ void Http1ServerRequestParser::parseRequestHead(
     state.headerBytes = 0;
     state.messageBytes = 0;
     state.requiredTotalBytes.reset();
-    state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody();
+    state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
     state.connectionPlan = Http1ServerConnectionPlan::close();
     state.responseCoding = HttpContentCoding::kNone;
     HttpRequestAccess::reset(state.request);
@@ -144,13 +144,13 @@ void Http1ServerRequestParser::parseRequestHead(
         expectations.ignore100Continue();
     }
     if (block.transferEncoding.finalChunked()) {
-        state.bodyPlan = Http1RequestBodyPlan::makeChunked(
+        state.bodyPlan = Http1RequestBodyPlan(
             block.transferEncoding.codings(), expectations);
     } else if (block.contentLength.present()) {
-        state.bodyPlan = Http1RequestBodyPlan::makeKnownLength(
+        state.bodyPlan = Http1RequestBodyPlan(
             block.contentLength.value(), expectations);
     } else {
-        state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody(expectations);
+        state.bodyPlan = Http1RequestBodyPlan(expectations);
     }
     state.connectionPlan = http1PlanRequestConnection(
         protocolVersion, block.connectionOptions);
@@ -177,7 +177,7 @@ void Http1ServerRequestParser::parseMessageBody(
         state.error = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
-        state.bodyPlan = Http1RequestBodyPlan::makeWithoutBody();
+        state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
         state.connectionPlan = Http1ServerConnectionPlan::close();
     };
     const auto needMore = [&state](
@@ -201,7 +201,7 @@ void Http1ServerRequestParser::parseMessageBody(
     const auto* knownLengthBody = bodyPlan.knownLength();
     if (buffer.size() < headerBytes) {
         return needMore(
-            0, Http1RequestBodyPlan::makeWithoutBody(), std::nullopt);
+            0, Http1RequestBodyPlan(HttpRequestExpectations{}), std::nullopt);
     }
     if (chunkedBody != nullptr) {
         const auto chunked = scanHttpChunkedBody(buffer.substr(headerBytes));
