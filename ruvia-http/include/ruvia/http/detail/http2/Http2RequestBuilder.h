@@ -4,7 +4,9 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"

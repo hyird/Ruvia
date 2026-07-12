@@ -5,7 +5,8 @@
 #include <cstring>
 #include <system_error>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"

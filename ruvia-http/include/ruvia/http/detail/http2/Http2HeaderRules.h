@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include <string_view>
 
 #include "ruvia/http/detail/AsciiCase.h"

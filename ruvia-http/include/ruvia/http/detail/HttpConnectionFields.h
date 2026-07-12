@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/AsciiCase.h"
 #include "ruvia/http/detail/HttpOws.h"
 

@@ -6,7 +6,7 @@
 #include "ruvia/http/detail/HttpTransferEncoding.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpParseError.h"
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include <chrono>
 #include <cstdint>
 #include <exception>

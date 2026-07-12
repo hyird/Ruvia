@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "ruvia/http/Http1InterimResponseWriter.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpLimits.h"
 

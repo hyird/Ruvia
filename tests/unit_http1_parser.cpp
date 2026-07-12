@@ -6,7 +6,8 @@
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1RequestParser.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/http/HttpRequest.h"
 

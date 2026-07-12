@@ -1,7 +1,7 @@
 #include "test_harness.h"
 
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/Context.h"

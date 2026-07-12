@@ -1,4 +1,5 @@
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderBits.h"

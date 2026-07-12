@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/http/HttpCommon.h"
 #include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/HttpResponseBody.h"
 

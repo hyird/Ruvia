@@ -67,6 +67,7 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpClient.h
     include/ruvia/http/HttpClientRedirect.h
     include/ruvia/http/HttpCommon.h
+    include/ruvia/http/HttpHeader.h
     include/ruvia/http/Http1InterimResponseWriter.h
     include/ruvia/http/HttpInterimResponse.h
     include/ruvia/http/HttpLimits.h

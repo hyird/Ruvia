@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>

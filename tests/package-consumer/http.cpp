@@ -10,6 +10,7 @@
 #include <utility>
 
 #include <ruvia/http/HttpCache.h>
+#include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>

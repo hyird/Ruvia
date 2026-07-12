@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {

@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2StreamRequestData.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 namespace {
 

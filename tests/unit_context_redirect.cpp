@@ -11,7 +11,8 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
 

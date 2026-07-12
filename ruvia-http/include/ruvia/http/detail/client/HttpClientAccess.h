@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpProtocolVersion.h"
+
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>

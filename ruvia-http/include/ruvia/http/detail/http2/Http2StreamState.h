@@ -17,7 +17,6 @@
 #include "ruvia/http/detail/http2/Http2TunnelState.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpExpectations.h"
-#include "ruvia/http/HttpCommon.h"
 
 namespace ruvia::detail {
 
