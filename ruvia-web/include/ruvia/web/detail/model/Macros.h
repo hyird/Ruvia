@@ -55,15 +55,6 @@
                 ::ruvia::detail::makeFormFieldsRequestObject(fields, resource)); \
         }                                                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
-        [[nodiscard]] ::std::optional<::std::string_view> get(              \
-            ::std::string_view field) const {                               \
-            return body_.get<::std::string_view>(field);                    \
-        }                                                                   \
-        template <typename FieldT>                                           \
-        [[nodiscard]] ::std::optional<FieldT> get(                          \
-            ::std::string_view field) const {                               \
-            return body_.get<FieldT>(field);                                \
-        }                                                                   \
         template <::ruvia::FixedString Field>                                \
         [[nodiscard]] auto get() const {                                    \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_TYPED_GET_BRANCH, T, __VA_ARGS__)      \

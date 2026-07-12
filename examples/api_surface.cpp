@@ -551,6 +551,16 @@ concept HasModelBodyAccessor = requires(const T& model) {
 };
 
 template <typename T>
+concept HasModelDynamicGet = requires(const T& model) {
+    model.get(std::string_view{});
+};
+
+template <typename T>
+concept HasModelTypedDynamicGet = requires(const T& model) {
+    model.template get<ruvia::String>(std::string_view{});
+};
+
+template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
     { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
 };
@@ -1923,6 +1933,8 @@ static_assert(!std::is_constructible_v<
     const ruvia::RequestNameValueList&,
     std::pmr::memory_resource*>);
 static_assert(!HasModelBodyAccessor<ClonePayload>);
+static_assert(!HasModelDynamicGet<ClonePayload>);
+static_assert(!HasModelTypedDynamicGet<ClonePayload>);
 static_assert(!std::is_constructible_v<ClonePayload, ruvia::RequestObject>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
