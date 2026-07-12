@@ -84,6 +84,7 @@ static_assert(!HasLooseRouteResolutionAccessors<
     ruvia::detail::RouteResolution>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::RouteEndpoint>);
+static_assert(!std::is_polymorphic_v<ruvia::detail::RouteTable>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);

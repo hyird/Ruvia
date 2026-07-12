@@ -816,6 +816,9 @@ HEADERS/END_STREAM 状态转换。
   `RouteMethodNotAllowed` 能暴露非零 Allow mask；禁止恢复 top-level `found()`、`route()`、`match()`、
   `allowedMethods()` 或 `RouteDisposition` payload tuple。`resolve()` 自己拥有动态 match scratch 并把
   结果移入 `ResolvedRoute`，HTTP/1、HTTP/2 和其他调用方不得再传入或长期保存第二份 `RouteMatch`。
+- HTTP/1、HTTP/2、response streaming 与 WebSocket 的请求期 lookup/dispatch 必须直接依赖唯一、
+  启动期冻结的 concrete `RouteTable`。禁止恢复只有单一实现的 `RequestDispatcher` 虚接口，禁止为
+  route index 形状解耦而在每请求/每 stream 路径引入 vtable；测试替身也不得反向决定生产调用边界。
 - 路由表、中间件链、controller factory 必须在 worker 启动前构建完成。
 - 请求期不得重建 route index、middleware chain 或 `std::function` 链。
 - 同 method + 同 path 的重复 route 必须启动期报错。

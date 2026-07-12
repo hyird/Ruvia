@@ -104,7 +104,7 @@ struct Http2SansIoSessionEnv final {
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
     Stream& stream,
-    const RequestDispatcher& routes,
+    const RouteTable& routes,
     WorkerMemory& worker,
     std::string_view remoteAddress,
     Http2SansIoSessionEnv env = {},

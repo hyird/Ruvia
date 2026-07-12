@@ -17,7 +17,6 @@
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"
-#include "ruvia/web/detail/router/RequestDispatcher.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteStreamResult.h"
 #include "ruvia/web/Error.h"
@@ -304,7 +303,7 @@ private:
     std::size_t middlewareCount_{0};
 };
 
-class RouteTable final : public RequestDispatcher {
+class RouteTable final {
 public:
     explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;
