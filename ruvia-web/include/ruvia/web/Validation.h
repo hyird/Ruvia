@@ -320,7 +320,7 @@ private:
     { \
         ::std::pmr::string ruviaPath(validator.resource()); \
         ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire}); \
-        const auto ruviaValue = body.field(); \
+        const auto& ruviaValue = body.field(); \
         rules.validate( \
             body.template ruviaFieldState<#field>(), \
             ruviaValue, \

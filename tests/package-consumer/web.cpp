@@ -597,6 +597,10 @@ static_assert(!std::copy_constructible<ruvia::List<ruvia::Int32>>);
 static_assert(!std::is_copy_assignable_v<ruvia::List<ruvia::Int32>>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::List<ruvia::Int32>>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::List<ruvia::Int32>>);
+static_assert(!std::copy_constructible<ruvia::String>);
+static_assert(!std::is_copy_assignable_v<ruvia::String>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::String>);
+static_assert(std::is_nothrow_move_assignable_v<ruvia::String>);
 static_assert(!AcceptsFormValueOutputParameter<ruvia::String>);
 static_assert(!AcceptsFormScalarOutputParameter<bool>);
 static_assert(std::same_as<
@@ -754,6 +758,14 @@ int main() {
         !installedDecodedValue.has_value() ||
         installedDecodedValue->view() != "literal%20form") {
         return 16;
+    }
+    std::string modelStringInput(128, 'o');
+    ruvia::String modelString(modelStringInput, std::pmr::get_default_resource());
+    modelStringInput.assign(modelStringInput.size(), 'x');
+    const std::string expectedModelString(128, 'o');
+    if (modelString.view() != expectedModelString ||
+        modelString.resource() != std::pmr::get_default_resource()) {
+        return 17;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

@@ -209,9 +209,10 @@ private:
         const auto& request = c.req().valid<RegisterRequest>("json");
 
         RegisterResponse response(c);
-        const auto username = request.username();
+        const auto& username = request.username();
         response.username(username->view());
-        if (const auto roles = request.roles()) {
+        const auto& roles = request.roles();
+        if (roles) {
             response.roleCount(ruvia::UInt32{static_cast<std::uint32_t>(roles->size())});
         }
         response.tagsEnsure().emplace_back(ruvia::String("created", c.resource()));
@@ -223,7 +224,7 @@ private:
         const auto& form = c.req().valid<ContactForm>("form");
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
-        const auto name = form.name();
+        const auto& name = form.name();
         body.append(name->view());
         body.push_back('\n');
         co_return c.text(body);
@@ -234,7 +235,7 @@ private:
         const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
-        const auto q = query.q();
+        const auto& q = query.q();
         body.append(q->view());
         body.append("\nquery-shared=");
         const auto queryValue = q->view();
@@ -266,7 +267,7 @@ private:
         const auto& params = c.req().valid<CategoryParams>("param");
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
-        const auto id = params.id();
+        const auto& id = params.id();
         body.append(id->view());
         body.push_back('\n');
         co_return c.text(body);
@@ -276,7 +277,7 @@ private:
         const auto& headers = c.req().valid<RequestHeaders>("header");
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
-        const auto requestId = headers.requestId();
+        const auto& requestId = headers.requestId();
         body.append(requestId->view());
         body.push_back('\n');
         co_return c.text(body);
@@ -286,7 +287,7 @@ private:
         const auto& cookies = c.req().valid<PreferencesCookie>("cookie");
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
-        const auto theme = cookies.theme();
+        const auto& theme = cookies.theme();
         body.append(theme->view());
         body.push_back('\n');
         co_return c.text(body);

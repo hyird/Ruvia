@@ -975,6 +975,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed model List lost PMR element ownership")
     endif()
+    if(NOT _installed_model_types_contract MATCHES
+           "using[ \t]+Storage[ \t]*=[ \t]*std::variant<std::string_view,[ \t]*std::pmr::string>" OR
+       NOT _installed_model_types_contract MATCHES
+           "String[(]const String&[)][ \t]*=[ \t]*delete" OR
+       NOT _installed_model_types_contract MATCHES
+           "std::destroy_at[(]&storage_[)]" OR
+       _installed_model_types_contract MATCHES
+           "ownedActive_|std::string_view[ \t]+view_|std::pmr::string[ \t]+owned_|assignView|resetOwned")
+        message(FATAL_ERROR
+            "installed model String restored parallel or copyable storage")
+    endif()
     if(NOT _installed_form_parser_contract MATCHES
            "enum[ \t]+class[ \t]+FormValueEncoding" OR
        NOT _installed_form_parser_contract MATCHES

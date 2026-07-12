@@ -3108,7 +3108,8 @@ private:
         body.append("\ntext=");
         body.append(clone.body());
         const auto parsed = clone.json<ClonePayload>();
-        if (auto message = parsed.message()) {
+        const auto& message = parsed.message();
+        if (message) {
             body.append("\njson-message=");
             body.append(message->view());
         }
