@@ -237,6 +237,7 @@ enum class Http2ResponseTrailerSubmitStatus : std::uint8_t {
 enum class Http2ResponseHeadSubmitError : std::uint8_t {
     kClosed,
     kInvalidState,
+    kResponsePlanMismatch,
     kInvalidMessage,
 };
 
@@ -386,14 +387,19 @@ public:
     void takeOutput(std::pmr::string& into);
     [[nodiscard]] bool wantsWrite() const noexcept { return outOffset_ < outBuffer_.size(); }
 
-    // Submit a final response for `streamId`. Head first, then data chunks, then
-    // end. Informational status codes and HTTP/2-unrepresentable control semantics
-    // (notably 426, whose mandatory Upgrade field is forbidden here) are rejected
-    // transactionally before HPACK or stream state changes. An exclusive
+    // Submit a final response for `streamId`. The caller must pass the write plan
+    // prepared after its last body/header transformation; method provenance,
+    // status, and representation length are checked against the live stream and
+    // response. A stale/mismatched plan is rejected distinctly before HPACK or
+    // stream mutation. Informational status codes and HTTP/2-unrepresentable
+    // control semantics (notably 426, whose mandatory Upgrade field is forbidden
+    // here) are likewise rejected transactionally. An exclusive
     // Http2ResponseHeadPlan owns canonical, explicit, absent, or forbidden
     // Content-Length metadata before the encoder and local DATA state advance.
     [[nodiscard]] Http2BufferedResponseHeadSubmitResult submitResponseHead(
-        std::uint32_t streamId, const HttpResponse& response);
+        std::uint32_t streamId,
+        const HttpResponse& response,
+        HttpBufferedResponseWritePlan writePlan);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK
     // metadata and all later DATA. With no explicit value the body is unbounded.

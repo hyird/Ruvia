@@ -45,6 +45,12 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
+    RUVIA_CHECK(
+        getPlan.requestMethod() == ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(
+        getPlan.bodyPlan().requestMethod() ==
+        ruvia::HttpKnownMethod::kGet);
+    RUVIA_CHECK(getPlan.matchesResponse(response));
     RUVIA_CHECK_EQ(getPlan.responseStatus(), std::uint16_t{200});
     RUVIA_CHECK_EQ(
         getPlan.bodyPlan().responseStatus(),
@@ -96,6 +102,23 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK(connectPlan.bodySuppressed());
     RUVIA_CHECK(!connectPlan.sendBody());
     RUVIA_CHECK_EQ(connectPlan.contentLength(), static_cast<std::uint64_t>(0));
+}
+
+RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
+    std::pmr::monotonic_buffer_resource resource;
+    ruvia::HttpResponse response(&resource);
+    response.status(207);
+    response.setBodyCopy("old");
+    const auto plan = ruvia::detail::httpBufferedResponseWritePlan(
+        ruvia::HttpKnownMethod::kGet,
+        response);
+    RUVIA_CHECK(plan.matchesResponse(response));
+
+    response.setBodyCopy("longer");
+    RUVIA_CHECK(!plan.matchesResponse(response));
+    response.setBodyCopy("old");
+    response.status(208);
+    RUVIA_CHECK(!plan.matchesResponse(response));
 }
 
 RUVIA_TEST(response_policy_normal_status_allows_everything) {

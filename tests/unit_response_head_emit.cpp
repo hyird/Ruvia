@@ -198,6 +198,23 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
         std::uint16_t{207});
 }
 
+RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.status(207);
+    response.setBodyCopy("old");
+    const auto plan = http1BufferedResponsePlan(
+        ruvia::detail::httpBufferedResponseWritePlan(
+            HttpKnownMethod::kGet,
+            response),
+        connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
+
+    response.setBodyCopy("longer");
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitHead(response, plan.headPlan());
+    }));
+    RUVIA_CHECK_EQ(plan.writePlan().contentLength(), std::uint64_t{3});
+}
+
 RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
     using ruvia::detail::Http1ConnectionDisposition;
     using ruvia::detail::Http1ServerRequestParser;

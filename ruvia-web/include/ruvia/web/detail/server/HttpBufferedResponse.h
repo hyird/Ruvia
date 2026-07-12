@@ -15,6 +15,9 @@ namespace ruvia::detail {
 
 class HttpBufferedResponsePreparation final {
 public:
+    // This is the one HTTP-owned snapshot both protocol drivers must consume;
+    // neither driver may re-plan after Web compression/CORS has finalized the
+    // response representation.
     [[nodiscard]] const HttpBufferedResponseWritePlan& writePlan() const noexcept {
         return writePlan_;
     }

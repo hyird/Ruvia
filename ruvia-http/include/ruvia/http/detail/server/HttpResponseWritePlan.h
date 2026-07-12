@@ -12,6 +12,10 @@ namespace ruvia::detail {
 
 class HttpResponseBodyPlan final {
 public:
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
+        return requestMethod_;
+    }
+
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {
         return responseStatus_;
     }
@@ -34,18 +38,29 @@ public:
         return semantics_;
     }
 
+    [[nodiscard]] std::uint64_t bufferedRepresentationLength(
+        const HttpResponse& response) const noexcept {
+        if (!statusAllowsBody() || semantics_.connectTunnel() != nullptr) {
+            return 0;
+        }
+        return static_cast<std::uint64_t>(responseBody(response).size());
+    }
+
 private:
     friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, std::uint16_t) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
     HttpResponseBodyPlan(
+        HttpKnownMethod requestMethod,
         std::uint16_t responseStatus,
         ResponseWritePolicy policy,
         HttpResponseContentSemantics semantics) noexcept
-        : responseStatus_(responseStatus),
+        : requestMethod_(requestMethod),
+          responseStatus_(responseStatus),
           policy_(policy),
           semantics_(semantics) {}
 
+    HttpKnownMethod requestMethod_;
     std::uint16_t responseStatus_;
     ResponseWritePolicy policy_;
     HttpResponseContentSemantics semantics_;
@@ -56,6 +71,7 @@ private:
     std::uint16_t statusCode) noexcept {
     const auto policy = responseWritePolicy(statusCode);
     return HttpResponseBodyPlan(
+        requestMethod,
         statusCode,
         policy,
         httpResponseContentSemantics(requestMethod, statusCode));
@@ -63,6 +79,10 @@ private:
 
 class HttpBufferedResponseWritePlan final {
 public:
+    [[nodiscard]] HttpKnownMethod requestMethod() const noexcept {
+        return bodyPlan_.requestMethod();
+    }
+
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {
         return bodyPlan_.responseStatus();
     }
@@ -91,6 +111,16 @@ public:
         return !bodySuppressed() && contentLength_ != 0;
     }
 
+    // The response remains mutable after planning. Consumers validate this
+    // snapshot before wire mutation so a changed status/body cannot silently
+    // reuse stale representation metadata.
+    [[nodiscard]] bool matchesResponse(
+        const HttpResponse& response) const noexcept {
+        return responseStatus() == response.status() &&
+            contentLength_ ==
+                bodyPlan_.bufferedRepresentationLength(response);
+    }
+
 private:
     friend HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
         HttpKnownMethod, const HttpResponse&) noexcept;
@@ -110,13 +140,9 @@ private:
     const auto bodyPlan = httpResponseBodyPlan(
         requestMethod,
         response.status());
-    std::uint64_t contentLength = 0;
-    if (bodyPlan.statusAllowsBody() &&
-        bodyPlan.contentSemantics().connectTunnel() == nullptr) {
-        contentLength = static_cast<std::uint64_t>(
-            responseBody(response).size());
-    }
-    return HttpBufferedResponseWritePlan(bodyPlan, contentLength);
+    return HttpBufferedResponseWritePlan(
+        bodyPlan,
+        bodyPlan.bufferedRepresentationLength(response));
 }
 
 }  // namespace ruvia::detail

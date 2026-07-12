@@ -281,6 +281,27 @@ RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
         ruvia::detail::Http2ResponseHeadPlanError::kResponseStatusMismatch);
 }
 
+RUVIA_TEST(http2_response_head_rejects_representation_plan_mismatch) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(207);
+    response.setBodyCopy("old");
+    const auto writePlan =
+        ruvia::detail::httpBufferedResponseWritePlan(
+            ruvia::HttpKnownMethod::kGet,
+            response);
+
+    response.setBodyCopy("longer");
+    const auto result = ruvia::detail::http2BufferedResponseHeadPlan(
+        writePlan,
+        response);
+    RUVIA_CHECK(result.plan() == nullptr);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(
+        result.failure()->error() ==
+        ruvia::detail::Http2ResponseHeadPlanError::
+            kResponseRepresentationMismatch);
+}
+
 RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
     const ruvia::HttpHeaderView fields[] = {
         {"Link", "</style.css>; rel=preload"},
