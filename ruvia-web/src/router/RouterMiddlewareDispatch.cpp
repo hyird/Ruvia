@@ -137,7 +137,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     const RouteEntry& route,
     std::size_t index,
     Context& context,
-    RouteStreamDispatchOutcome& outcome) const {
+    StreamMiddlewareDisposition& disposition) const {
     if (index >= route.middlewareCount()) {
         const auto& endpoint = route.endpoint();
         const auto* responseStream = endpoint.responseStream();
@@ -149,7 +149,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             ? responseStream->handler()
             : webSocket->handler();
         co_await handler(context);
-        outcome = RouteStreamDispatchOutcome::kStreamHandled;
+        disposition = StreamMiddlewareDisposition::kStreamHandled;
         co_return;
     }
 
@@ -162,7 +162,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .table = this,
             .route = &route,
             .context = &context,
-            .outcome = &outcome,
+            .outcome = &disposition,
             .control = &control,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
@@ -179,14 +179,14 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State st
     }
     auto* table = static_cast<const RouteTable*>(state.table);
     auto* route = static_cast<const RouteEntry*>(state.route);
-    auto* outcome = static_cast<RouteStreamDispatchOutcome*>(state.outcome);
+    auto* disposition = static_cast<StreamMiddlewareDisposition*>(state.outcome);
     std::exception_ptr exception;
     try {
         co_await table->invokeStreamMiddlewareAt(
             *route,
             state.index,
             *context,
-            *outcome);
+            *disposition);
     } catch (...) {
         exception = std::current_exception();
     }

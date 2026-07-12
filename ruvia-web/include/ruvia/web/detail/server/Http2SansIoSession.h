@@ -544,29 +544,47 @@ Task<void> runHttp2SansIoSession(
                     auto* s = connection.stream(streamId);
                     return s == nullptr || s->isAborted();
                 });
-            if (result.abortedAfterCommit()) {
+            if (const auto* failed = result.failedAfterCommit()) {
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 recordHttpAccess(
                     options.accessLog,
                     request,
                     remoteAddress,
-                    response.status(),
+                    failed->status(),
                     requestStart);
                 co_return;
             }
-            if (result.streamed() || result.abortedByPeer()) {
-                // Streamed on the wire; log the completed streamed response (status 200).
+            if (result.peerAbortedBeforeCommit() != nullptr) {
+                // No final response head existed, so there is no HTTP status to
+                // report through the response-completion access-log callback.
+                co_return;
+            }
+            if (const auto* peer = result.peerAbortedAfterCommit()) {
                 recordHttpAccess(
                     options.accessLog,
                     request,
                     remoteAddress,
-                    response.status(),
+                    peer->status(),
                     requestStart);
                 co_return;
             }
-            if (result.hasBufferedResponse()) {
-                response = result.takeResponse();
+            if (const auto* completed = result.completed()) {
+                recordHttpAccess(
+                    options.accessLog,
+                    request,
+                    remoteAddress,
+                    completed->status(),
+                    requestStart);
+                co_return;
+            }
+            if (auto* failed = result.failedBeforeCommit()) {
+                response = std::move(*failed).takeResponse();
+            } else if (auto* buffered = result.buffered()) {
+                response = std::move(*buffered).takeResponse();
+            } else {
+                throw std::logic_error(
+                    "response stream dispatch returned no HTTP/2 terminal alternative");
             }
         } else {
             response = co_await routes.dispatchBuffered(

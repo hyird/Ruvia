@@ -35,6 +35,36 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_installed_response_stream_commit_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(_installed_http1_response_stream_path
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+if(NOT EXISTS "${_installed_response_stream_commit_path}" OR
+   NOT EXISTS "${_installed_http1_response_stream_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing its response-stream commit contract")
+endif()
+file(READ "${_installed_response_stream_commit_path}"
+    _installed_response_stream_commit)
+file(READ "${_installed_http1_response_stream_path}"
+    _installed_http1_response_stream)
+if(NOT _installed_response_stream_commit MATCHES
+       "std::uint16_t responseStatus[(][)] const noexcept" OR
+   NOT _installed_response_stream_commit MATCHES
+       "ResponseStreamFraming framing[(][)] const noexcept" OR
+   NOT _installed_response_stream_commit MATCHES
+       "HttpKnownMethod requestMethod" OR
+   NOT _installed_response_stream_commit MATCHES
+       "response[.]status[(][)] != commitPlan[.]responseStatus[(][)]" OR
+   NOT _installed_http1_response_stream MATCHES
+       "httpResponseStreamCommitPlan" OR
+   NOT _installed_http1_response_stream MATCHES
+       "plan[.]framing[(][)]" OR
+   NOT _installed_http1_response_stream MATCHES
+       "response[.]status[(][)]")
+    message(FATAL_ERROR
+        "installed HTTP response-stream plan lost status/framing/body coherence")
+endif()
 string(CONCAT _removed_response_stream_header
     "${_install_prefix}/include/ruvia/http/HttpBody" "Stream.h")
 if(EXISTS "${_removed_response_stream_header}")
@@ -735,6 +765,76 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "bool[ \t]+modeSelected_")
         message(FATAL_ERROR
             "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
+    endif()
+
+    set(_installed_route_stream_result_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteStreamResult.h")
+    set(_installed_response_stream_dispatch_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
+    set(_installed_response_stream_state_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamState.h")
+    set(_installed_http1_stream_route_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
+    set(_installed_http1_stream_session_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+    set(_installed_http2_stream_session_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    foreach(_response_stream_status_contract IN ITEMS
+            "${_installed_route_stream_result_path}"
+            "${_installed_response_stream_dispatch_path}"
+            "${_installed_response_stream_state_path}"
+            "${_installed_http1_stream_route_path}"
+            "${_installed_http1_stream_session_path}"
+            "${_installed_http2_stream_session_path}")
+        if(NOT EXISTS "${_response_stream_status_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing response-stream status ownership")
+        endif()
+    endforeach()
+    file(READ "${_installed_route_stream_result_path}"
+        _installed_route_stream_result)
+    file(READ "${_installed_response_stream_dispatch_path}"
+        _installed_response_stream_dispatch)
+    file(READ "${_installed_response_stream_state_path}"
+        _installed_response_stream_state)
+    file(READ "${_installed_http1_stream_route_path}"
+        _installed_http1_stream_route)
+    file(READ "${_installed_http1_stream_session_path}"
+        _installed_http1_stream_session)
+    file(READ "${_installed_http2_stream_session_path}"
+        _installed_http2_stream_session)
+    if(_installed_route_stream_result MATCHES
+           "RouteStreamDispatchOutcome|streamHandled[(][)]|HttpResponse response_[ \t]*;[ \t\r\n]*Route" OR
+       _installed_response_stream_dispatch MATCHES
+           "result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ \t]*[(]" OR
+       _installed_response_stream_state MATCHES "trailerFraming_" OR
+       _installed_http1_stream_session MATCHES "responseStreamDispatched" OR
+       NOT _installed_route_stream_result MATCHES "StreamRouteHandled" OR
+       NOT _installed_route_stream_result MATCHES "StreamRouteBufferedResponse" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "ResponseStreamPeerAbortedBeforeCommit" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "ResponseStreamPeerAbortedAfterCommit" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "ResponseStreamFailedAfterCommit" OR
+       NOT _installed_response_stream_dispatch MATCHES
+           "committedResponseStreamStatus" OR
+       NOT _installed_response_stream_state MATCHES
+           "std::optional<CommittedState> committed_" OR
+       NOT _installed_http1_stream_route MATCHES
+           "HttpResponseStreamCommittedRoute" OR
+       NOT _installed_http1_stream_session MATCHES
+           "std::optional<std::uint16_t> committedStreamStatus" OR
+       NOT _installed_http1_stream_session MATCHES
+           "[*]committedStreamStatus, requestStart" OR
+       NOT _installed_http2_stream_session MATCHES
+           "completed->status[(][)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "peer->status[(][)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "failed->status[(][)]")
+        message(FATAL_ERROR
+            "installed Web package restored reconstructed response-stream status")
     endif()
 
     set(_installed_access_log_model_path

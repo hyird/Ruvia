@@ -61,6 +61,10 @@ public:
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
+    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+        return state_.commitPlan();
+    }
+
     [[nodiscard]] bool aborted() const noexcept {
         auto* stream = connection_.stream(streamId_);
         return stream == nullptr || stream->isAborted();

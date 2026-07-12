@@ -2121,14 +2121,15 @@ Http2StreamingResponseHeadSubmitResult Http2Connection::submitStreamingResponseH
         return Http2StreamingResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
-    auto bodyPlan = httpResponseBodyPlan(
-        stream->requestKnownMethod(), head.status());
+    auto preparedCommitPlan = httpResponseStreamCommitPlan(
+        ResponseStreamFraming::kHttp2Frames,
+        stream->requestKnownMethod(),
+        head.status(),
+        trailerIntent);
     auto streamHead = prepareResponseStreamHead(
         std::move(head),
         kind,
-        ResponseStreamFraming::kHttp2Frames,
-        bodyPlan,
-        trailerIntent);
+        std::move(preparedCommitPlan));
     const auto& commitPlan = streamHead.commitPlan();
     // One prepared plan owns both the encoded Content-Length metadata and the
     // local DATA accounting contract. Explicit length is parsed exactly once;

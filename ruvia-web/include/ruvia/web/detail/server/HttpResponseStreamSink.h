@@ -49,6 +49,10 @@ public:
 
     [[nodiscard]] bool committed() const noexcept { return state_.committed(); }
 
+    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+        return state_.commitPlan();
+    }
+
     [[nodiscard]] bool aborted() const noexcept { return aborted_; }
 
     [[nodiscard]] Http1ServerConnectionPlan connectionPlan() const noexcept {

@@ -280,9 +280,11 @@ RUVIA_TEST(sse_stream_head_defaults_cache_control_but_honors_a_caller_value) {
         auto streamHead = prepareResponseStreamHead(
             std::move(response),
             ResponseStreamKind::kSse,
-            ResponseStreamFraming::kHttp1Chunked,
-            ruvia::detail::httpResponseBodyPlan(HttpKnownMethod::kGet, 200),
-            ResponseTrailerIntent::kNone);
+            ruvia::detail::httpResponseStreamCommitPlan(
+                ResponseStreamFraming::kHttp1Chunked,
+                HttpKnownMethod::kGet,
+                200,
+                ResponseTrailerIntent::kNone));
         return std::string(streamHead.response().header("Cache-Control"));
     };
 

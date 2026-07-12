@@ -103,6 +103,14 @@ concept HasResponseHeadErrorAccessor = requires(const T& result) {
         std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
+template <typename BodyPlan>
+concept AcceptsLooseResponseStreamBodyPlan = requires(BodyPlan bodyPlan) {
+    ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        bodyPlan,
+        ruvia::detail::ResponseTrailerIntent::kNone);
+};
+
 template <typename T>
 concept HasPeerSettingStatusField = requires(const T& result) {
     result.status;
@@ -1312,6 +1320,33 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http2SubmittedStreamingResponseHead&>().plan()),
     const ruvia::detail::ResponseStreamCommitPlan&>);
+using ResponseStreamCommitPlanner =
+    ruvia::detail::ResponseStreamCommitPlan (*)(
+        ruvia::detail::ResponseStreamFraming,
+        ruvia::HttpKnownMethod,
+        std::uint16_t,
+        ruvia::detail::ResponseTrailerIntent) noexcept;
+using ResponseStreamHeadPreparer =
+    ruvia::detail::ResponseStreamHead (*)(
+        ruvia::HttpResponse,
+        ruvia::detail::ResponseStreamKind,
+        ruvia::detail::ResponseStreamCommitPlan);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::httpResponseStreamCommitPlan),
+    ResponseStreamCommitPlanner>);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::prepareResponseStreamHead),
+    ResponseStreamHeadPreparer>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>()
+                 .responseStatus()),
+    std::uint16_t>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>()
+                 .framing()),
+    ruvia::detail::ResponseStreamFraming>);
+static_assert(!AcceptsLooseResponseStreamBodyPlan<
+    ruvia::detail::HttpResponseBodyPlan>);
 static_assert(HasResponseHeadPlanAccessor<
     ruvia::detail::Http2SubmittedBufferedResponseHead>);
 static_assert(!HasResponseHeadErrorAccessor<

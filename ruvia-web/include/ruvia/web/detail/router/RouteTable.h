@@ -489,7 +489,7 @@ private:
         const RouteEntry& route,
         std::size_t index,
         Context& context,
-        RouteStreamDispatchOutcome& outcome) const;
+        StreamMiddlewareDisposition& disposition) const;
     [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(Next::State state);
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
         Context& context,

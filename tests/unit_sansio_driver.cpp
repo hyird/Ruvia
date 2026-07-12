@@ -953,11 +953,28 @@ namespace {
 // Streaming handler that atomically ends with a trailer section: the h2 stream must
 // end with trailing HEADERS (END_STREAM) instead of an empty DATA frame.
 ruvia::Task<void> streamTrailerHandler(void*, ruvia::Context& c) {
+    c.status(207);
     auto& stream = c.streamText();
     co_await stream.write("body-part");
     const std::array<ruvia::HttpHeaderView, 1> trailers{
         ruvia::HttpHeaderView{"x-checksum", "abc123"}};
     co_await stream.end(trailers);
+}
+
+struct StreamAccessObservation final {
+    std::size_t calls{0};
+    std::uint16_t status{0};
+    ruvia::HttpProtocolVersion protocolVersion{
+        ruvia::HttpProtocolVersion::kHttp11};
+};
+
+void captureStreamAccess(
+    void* target,
+    const ruvia::AccessLogRecord& record) noexcept {
+    auto& observation = *static_cast<StreamAccessObservation*>(target);
+    ++observation.calls;
+    observation.status = record.status();
+    observation.protocolVersion = record.protocolVersion();
 }
 
 // Streaming handler pushing one large chunk; used to exercise send-window pacing.
@@ -1146,8 +1163,10 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
     tcp::acceptor acceptor(io, tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0));
     const std::uint16_t port = acceptor.local_endpoint().port();
     std::string body;
+    std::string headFields;
     std::string trailerFields;
     bool trailerEndStream = false;
+    StreamAccessObservation accessObservation;
 
     asio::co_spawn(
         io,
@@ -1163,8 +1182,17 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBarePlainHttp2SansIoSession(
-                sock, impl.routeTable(), worker, "127.0.0.1"));
+            ruvia::test::Http2SansIoSessionFixture fixture;
+            fixture.options.accessLog.callback = &captureStreamAccess;
+            fixture.options.accessLog.user = &accessObservation;
+            co_await ruvia::detail::taskAsAwaitable(
+                ruvia::detail::runHttp2SansIoSession(
+                    sock,
+                    impl.routeTable(),
+                    worker,
+                    fixture.context(
+                        ruvia::detail::ContextServices{}
+                            .withPlainTransport("127.0.0.1"))));
         },
         asio::detached);
 
@@ -1214,6 +1242,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                     (void)decoder.decode(payload, &collect, &HpackCollect::onHeader);
                     if (!sawHead) {
                         sawHead = true;
+                        headFields = collect.joined;
                     } else {
                         trailerFields = collect.joined;  // the trailing HEADERS block
                         trailerEndStream =
@@ -1232,8 +1261,15 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
 
     io.run();
     RUVIA_CHECK(body == "body-part");
+    RUVIA_CHECK(
+        headFields.find(":status=207;") != std::string::npos);
     RUVIA_CHECK(trailerFields == "x-checksum=abc123;");
     RUVIA_CHECK(trailerEndStream);
+    RUVIA_CHECK_EQ(accessObservation.calls, std::size_t{1});
+    RUVIA_CHECK_EQ(accessObservation.status, std::uint16_t{207});
+    RUVIA_CHECK(
+        accessObservation.protocolVersion ==
+        ruvia::HttpProtocolVersion::kHttp2);
 }
 
 // permessage-deflate over h2 Extended CONNECT: the handshake echoes the negotiated

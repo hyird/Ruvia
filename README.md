@@ -69,11 +69,13 @@ message-length rules in
 close-delimited, while a HEAD/204/205/304 response on an opted-in persistent connection is
 self-delimited and can be reused. The committed sink returns the complete connection plan, so
 its socket disposition cannot drift away from the version and Connection field already emitted.
-Streaming termination is also one HTTP-owned contract. `ResponseStreamCommitPlan` binds the
-body plan to the exact post-head phase (`body-open`, `trailers-only`, or `message-ended`) and
-the available trailer framing. Application code submits an optional complete trailer section
-only through `ResponseStreamWriter::end(std::span<const HttpHeaderView>)`; there is no incremental
-`addTrailer()` side channel. HTTP/1 accepts that section only for a body-allowed chunked response,
+Streaming termination is also one HTTP-owned contract. `ResponseStreamCommitPlan` binds the exact
+numeric response status and selected framing to the method-derived body plan, post-head phase
+(`body-open`, `trailers-only`, or `message-ended`), and available trailer framing. The prepared
+head rejects a plan for a different status, and the Web sink retains that one committed plan
+instead of decomposing it into parallel flags. Application code submits an optional complete
+trailer section only through `ResponseStreamWriter::end(std::span<const HttpHeaderView>)`; there is
+no incremental `addTrailer()` side channel. HTTP/1 accepts that section only for a body-allowed chunked response,
 so HTTP/1.0 close-delimited responses and HEAD/1xx/204/304 reject it instead of dropping it.
 HTTP/2 can keep a content-forbidden response open in the explicit
 `Http2LocalResponseTrailersOnly` alternative of `Http2LocalSendState` and terminate it with
@@ -82,6 +84,13 @@ becomes DATA-open or falls back to empty DATA. `Http2Connection::submitResponseT
 after the final response head, validates the whole section before HPACK mutation, and returns a
 typed `Http2ResponseTrailerSubmitStatus` for closed/wrong-phase/empty/invalid/incomplete-length
 outcomes; `finishResponse()` remains the sole owner of the terminal `END_STREAM` ordering.
+Router and runtime completion are discriminated too: handled routes own no dummy `HttpResponse`,
+buffered fallbacks own the response, committed/failed streams own the status from the commit plan,
+and a peer abort before commit owns no fictitious status. Consequently HTTP/1 close-delimited
+streams are logged before the socket closes, and HTTP/1 or HTTP/2 custom streaming statuses cannot
+be reconstructed as the former default 200. Automatic stream termination runs inside the route
+coroutine while its bound `Context` is still alive; the outer transport driver only consumes the
+committed plan and never dereferences a retained Context pointer after route completion.
 Request methods have two deliberately separate representations. RFC 9110 defines the wire method
 as an extensible, case-sensitive token, so `HttpRequest::method()`, `ContextRequest::method()`,
 `RawRequestClone::method()`, and `AccessLogRecord::method()` preserve that exact token for both
@@ -151,6 +160,9 @@ Access logging consumes that same message value. `AccessLogRecord` borrows the o
 HTTP/1.0 request remains distinguishable from HTTP/1.1, HTTP/2 remains `kHttp2`, and log metadata
 cannot disagree with the request that was actually parsed. The former `http2()` boolean and copied
 request-field tuple are removed without adding allocation or type-erasure.
+For streaming responses, its status is taken from the same `ResponseStreamCommitPlan` that emitted
+the final head; a pre-commit peer abort has no final response and therefore does not invoke this
+response-completion hook with an invented status.
 
 Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
 `HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,
