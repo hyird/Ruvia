@@ -929,10 +929,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/ModelTypes.h")
     set(_installed_form_parser_path
         "${_install_prefix}/include/ruvia/web/detail/model/FormParser.h")
+    set(_installed_model_macros_path
+        "${_install_prefix}/include/ruvia/web/detail/model/Macros.h")
+    set(_installed_model_field_ops_path
+        "${_install_prefix}/include/ruvia/web/detail/model/MacroFieldOps.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
        NOT EXISTS "${_installed_json_model_parser_path}" OR
        NOT EXISTS "${_installed_model_types_path}" OR
-       NOT EXISTS "${_installed_form_parser_path}")
+       NOT EXISTS "${_installed_form_parser_path}" OR
+       NOT EXISTS "${_installed_model_macros_path}" OR
+       NOT EXISTS "${_installed_model_field_ops_path}")
         message(FATAL_ERROR
             "installed Web package is missing transactional JSON parsing")
     endif()
@@ -944,6 +950,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_model_types_contract)
     file(READ "${_installed_form_parser_path}"
         _installed_form_parser_contract)
+    file(READ "${_installed_model_macros_path}"
+        _installed_model_macros_contract)
+    file(READ "${_installed_model_field_ops_path}"
+        _installed_model_field_ops_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -994,6 +1004,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "parseDecodedFormValue|withDecodedFormView|bool[ \t\r\n]+parseForm(Bool|Number|Value)|parseFormValue[ \t\r\n]*[(][^)]*T[ \t]*&[ \t]*value")
         message(FATAL_ERROR
             "installed form model parser restored mutable partial outputs")
+    endif()
+    if(NOT _installed_model_macros_contract MATCHES
+           "ruviaMaterializeRequest" OR
+       NOT _installed_model_macros_contract MATCHES
+           "if[ \t]*[(]!request[.]ruviaMaterialize[(][)][)]" OR
+       _installed_model_macros_contract MATCHES
+           "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState" OR
+       _installed_model_field_ops_contract MATCHES
+           "mutable[ \t]+::ruvia::detail::ModelFieldState|mutable[ \t]+::std::optional")
+        message(FATAL_ERROR
+            "installed generated models restored lazy mutable parse state")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")

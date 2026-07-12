@@ -104,6 +104,39 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
 
 }  // namespace
 
+RUVIA_TEST(model_factory_materializes_before_publication) {
+    const auto parsed = AccessorSurfaceModel::ruviaParseJsonBody(
+        R"({"message":"ready"})",
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(parsed.has_value());
+    if (parsed.has_value()) {
+        const AccessorSurfaceModel& model = *parsed;
+        RUVIA_CHECK(model.message().has_value());
+        if (model.message().has_value()) {
+            RUVIA_CHECK_EQ(model.message()->view(), std::string_view("ready"));
+        }
+        RUVIA_CHECK(
+            model.ruviaFieldState<"message">() ==
+            ruvia::detail::ModelFieldState::kParsed);
+    }
+
+    const auto invalidField = AccessorSurfaceModel::ruviaParseJsonBody(
+        R"({"message":42})",
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(invalidField.has_value());
+    if (invalidField.has_value()) {
+        RUVIA_CHECK(!invalidField->message().has_value());
+        RUVIA_CHECK(
+            invalidField->ruviaFieldState<"message">() ==
+            ruvia::detail::ModelFieldState::kInvalidType);
+    }
+
+    const auto malformed = AccessorSurfaceModel::ruviaParseJsonBody(
+        R"({"message":"incomplete")",
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(!malformed.has_value());
+}
+
 // --- Semicolon parameters: quoted-string awareness -----------------------
 RUVIA_TEST(semicolon_params_quoted_semicolon_in_value) {
     using ruvia::detail::httpFindSemicolonParameterQuoted;

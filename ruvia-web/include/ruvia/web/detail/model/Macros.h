@@ -12,9 +12,7 @@
     public:                                                                 \
         RUVIA_MODEL_FIELD_COUNT_GUARD(__VA_ARGS__)                           \
         explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \
-            : body_(::ruvia::detail::makeJsonRequestObject(::std::string_view{"{}"}, resource)) { \
-            ruviaParsed_ = true;                                             \
-        }                                                                   \
+            : body_(::ruvia::detail::makeJsonRequestObject(::std::string_view{"{}"}, resource)) {} \
         template <typename RuviaResourceOwnerT>                               \
             requires requires(RuviaResourceOwnerT& owner) {                   \
                 { owner.resource() } -> ::std::convertible_to<::std::pmr::memory_resource*>; \
@@ -37,11 +35,8 @@
             if (!json) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::detail::makeJsonRequestObject(json->view(), resource)}; \
-            if (!request.ruviaEnsureParsed()) {                              \
-                return ::std::nullopt;                                      \
-            }                                                               \
-            return ::std::move(request);                                     \
+            return ruviaMaterializeRequest(                                  \
+                ::ruvia::detail::makeJsonRequestObject(json->view(), resource)); \
         }                                                                   \
         static ::std::optional<T> ruviaParseFormBody(                        \
             ::std::string_view body,                                        \
@@ -50,35 +45,23 @@
             if (!form) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            T request{::ruvia::detail::makeFormRequestObject(form->view(), resource)}; \
-            if (!request.ruviaEnsureParsed()) {                              \
-                return ::std::nullopt;                                      \
-            }                                                               \
-            return ::std::move(request);                                     \
+            return ruviaMaterializeRequest(                                  \
+                ::ruvia::detail::makeFormRequestObject(form->view(), resource)); \
         }                                                                   \
         static ::std::optional<T> ruviaParseFormFields(                      \
             const ::ruvia::RequestNameValueList& fields,                    \
             ::std::pmr::memory_resource* resource) {                        \
-            T request{::ruvia::detail::makeFormFieldsRequestObject(fields, resource)}; \
-            if (!request.ruviaEnsureParsed()) {                              \
-                return ::std::nullopt;                                      \
-            }                                                               \
-            return ::std::move(request);                                     \
+            return ruviaMaterializeRequest(                                  \
+                ::ruvia::detail::makeFormFieldsRequestObject(fields, resource)); \
         }                                                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
         [[nodiscard]] ::std::optional<::std::string_view> get(              \
             ::std::string_view field) const {                               \
-            if (!ruviaEnsureParsed()) {                                      \
-                return ::std::nullopt;                                      \
-            }                                                               \
             return body_.get<::std::string_view>(field);                    \
         }                                                                   \
         template <typename FieldT>                                           \
         [[nodiscard]] ::std::optional<FieldT> get(                          \
             ::std::string_view field) const {                               \
-            if (!ruviaEnsureParsed()) {                                      \
-                return ::std::nullopt;                                      \
-            }                                                               \
             return body_.get<FieldT>(field);                                \
         }                                                                   \
         template <::ruvia::FixedString Field>                                \
@@ -92,7 +75,6 @@
         }                                                                   \
         template <::ruvia::FixedString Field>                                \
         [[nodiscard]] ::ruvia::detail::ModelFieldState ruviaFieldState() const { \
-            ruviaEnsureParsed();                                             \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_STATE_BRANCH, T, __VA_ARGS__)    \
             {                                                               \
                 static_assert(                                              \
@@ -101,28 +83,29 @@
             }                                                               \
         }                                                                   \
         void ruviaAppendJson(::std::pmr::string& output) const {             \
-            ruviaEnsureParsed();                                             \
             output.push_back('{');                                          \
             bool first = true;                                              \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_APPEND_JSON_FIELD, T, __VA_ARGS__)     \
             output.push_back('}');                                          \
         }                                                                   \
         [[nodiscard]] ::std::size_t ruviaJsonSizeHint() const {              \
-            ruviaEnsureParsed();                                             \
             ::std::size_t size = 2;                                         \
             bool first = true;                                              \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_JSON_SIZE_FIELD, T, __VA_ARGS__)       \
             return size;                                                    \
         }                                                                   \
     private:                                                                \
-        explicit T(::ruvia::RequestObject body) noexcept : body_(body) {}     \
-        bool ruviaEnsureParsed() const {                                     \
-            if (ruviaParsed_) {                                              \
-                return !ruviaInvalid_;                                       \
+        explicit T(::ruvia::RequestObject body) noexcept                     \
+            : body_(::std::move(body)) {}                                    \
+        static ::std::optional<T> ruviaMaterializeRequest(                  \
+            ::ruvia::RequestObject body) {                                  \
+            T request{::std::move(body)};                                    \
+            if (!request.ruviaMaterialize()) {                              \
+                return ::std::nullopt;                                      \
             }                                                               \
-            ruviaParsed_ = true;                                             \
-            ruviaInvalid_ = false;                                           \
-            RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_RESET_FIELD, T, __VA_ARGS__)           \
+            return ::std::move(request);                                     \
+        }                                                                   \
+        bool ruviaMaterialize() {                                           \
             auto* const ruviaResource = body_.resource();                    \
             bool ruviaValid = true;                                          \
             if (body_.kind() == ::ruvia::RequestObjectKind::kJson) {         \
@@ -147,15 +130,9 @@
             if (ruviaValid) {                                                \
                 RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_APPLY_DEFAULT_FIELD, T, __VA_ARGS__) \
             }                                                               \
-            if (!ruviaValid) {                                               \
-                ruviaInvalid_ = true;                                        \
-                RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_RESET_FIELD, T, __VA_ARGS__)       \
-            }                                                               \
             return ruviaValid;                                               \
         }                                                                   \
         ::ruvia::RequestObject body_;                                        \
-        mutable bool ruviaParsed_{false};                                    \
-        mutable bool ruviaInvalid_{false};                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_STORAGE, T, __VA_ARGS__)               \
     };                                                                      \
     static_assert(::ruvia::JsonBody<T>::value, "RUVIA_MODEL registered " #T)
