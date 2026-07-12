@@ -927,9 +927,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/model/JsonParser.h")
     set(_installed_model_types_path
         "${_install_prefix}/include/ruvia/web/ModelTypes.h")
+    set(_installed_form_parser_path
+        "${_install_prefix}/include/ruvia/web/detail/model/FormParser.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
        NOT EXISTS "${_installed_json_model_parser_path}" OR
-       NOT EXISTS "${_installed_model_types_path}")
+       NOT EXISTS "${_installed_model_types_path}" OR
+       NOT EXISTS "${_installed_form_parser_path}")
         message(FATAL_ERROR
             "installed Web package is missing transactional JSON parsing")
     endif()
@@ -939,6 +942,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_json_model_parser_contract)
     file(READ "${_installed_model_types_path}"
         _installed_model_types_contract)
+    file(READ "${_installed_form_parser_path}"
+        _installed_form_parser_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -969,6 +974,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "List[(]List&&[^;]*=[ \t]*default|operator=[(]List&&[^;]*=[ \t]*default|void[ \t]+clear[(][)] noexcept[ \t\r\n]*[{][ \t\r\n]*items_[.]clear")
         message(FATAL_ERROR
             "installed model List lost PMR element ownership")
+    endif()
+    if(NOT _installed_form_parser_contract MATCHES
+           "enum[ \t]+class[ \t]+FormValueEncoding" OR
+       NOT _installed_form_parser_contract MATCHES
+           "std::optional<T>[ \t\r\n]+parseFormValue" OR
+       _installed_form_parser_contract MATCHES
+           "parseDecodedFormValue|withDecodedFormView|bool[ \t\r\n]+parseForm(Bool|Number|Value)|parseFormValue[ \t\r\n]*[(][^)]*T[ \t]*&[ \t]*value")
+        message(FATAL_ERROR
+            "installed form model parser restored mutable partial outputs")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")
