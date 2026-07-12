@@ -74,6 +74,20 @@ asio::awaitable<void> cloneParseArrayForm(
     }
 }
 
+asio::awaitable<void> cloneParseAllRepeatedScalar(
+    ruvia::Context& context,
+    std::size_t& valueCount,
+    std::string& selectedValue) {
+    auto clone = co_await ruvia::detail::taskAsAwaitable(
+        ruvia::cloneRawRequest(context.req()));
+    const auto form = clone.parseBody({.all = true});
+    const auto value = form.get("x");
+    valueCount = value.size();
+    if (const auto selected = value.value()) {
+        selectedValue.assign(selected->data(), selected->size());
+    }
+}
+
 asio::awaitable<void> cloneParseMultipart(
     ruvia::Context& context,
     std::string& nameValue,
@@ -349,6 +363,33 @@ RUVIA_TEST(context_parse_body_groups_arrays_and_compacts_repeated_scalars) {
     RUVIA_CHECK(tagsArray);                      // flagged as an array
     RUVIA_CHECK_EQ(xSize, std::size_t{1});       // repeated scalar compacted to one
     RUVIA_CHECK_EQ(xValue, std::string("2"));    // last value wins
+}
+
+RUVIA_TEST(context_parse_body_all_retains_duplicates_and_selects_last_value) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "application/x-www-form-urlencoded"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(request, "x=first&x=last");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    std::size_t valueCount = 0;
+    std::string selectedValue;
+    asio::io_context io;
+    asio::co_spawn(
+        io,
+        cloneParseAllRepeatedScalar(context, valueCount, selectedValue),
+        asio::detached);
+    io.run();
+
+    RUVIA_CHECK_EQ(valueCount, std::size_t{2});
+    RUVIA_CHECK_EQ(selectedValue, std::string("last"));
 }
 
 RUVIA_TEST(context_parse_body_multipart_yields_text_field_and_file_blob) {

@@ -170,7 +170,11 @@ concept HasRawRequestCloneCanonicalReadAccessors = requires(const T& request) {
     { request.bytes() } -> std::same_as<std::span<const std::byte>>;
     { request.blob() } -> std::same_as<ruvia::ContextRequest::RequestBlob>;
     { request.parseBody() } -> std::same_as<ruvia::ContextRequest::RequestFormData>;
-    { request.formData() } -> std::same_as<ruvia::ContextRequest::RequestFormData>;
+};
+
+template <typename T>
+concept HasRequestFormDataAlias = requires(const T& request) {
+    request.formData();
 };
 
 template <typename T>
@@ -1873,6 +1877,8 @@ static_assert(!std::is_constructible_v<
     std::string_view,
     std::string_view>);
 static_assert(!HasRawRequestCloneArrayBufferAlias<ruvia::ContextRequest::RawRequestClone>);
+static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRawRequestCloneMethodEnumAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRawRequestCloneHeadersAlias<ruvia::ContextRequest::RawRequestClone>);
 static_assert(!HasRawRequestCloneTargetAlias<ruvia::ContextRequest::RawRequestClone>);
@@ -1927,8 +1933,7 @@ static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormData::Entry,
     std::pmr::memory_resource*,
     std::string_view,
-    bool,
-    ruvia::ContextRequest::RequestFormData::SingleValueSelection>);
+    bool>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormData::Value,
     const ruvia::ContextRequest::RequestFormData::Entry*>);
@@ -1937,8 +1942,7 @@ static_assert(!std::is_constructible_v<
     const ruvia::ContextRequest::RequestFormData::Entry*>);
 static_assert(!std::is_constructible_v<
     ruvia::ContextRequest::RequestFormData::PathValue,
-    std::pmr::vector<const ruvia::ContextRequest::RequestFormField*>&&,
-    ruvia::ContextRequest::RequestFormData::SingleValueSelection>);
+    std::pmr::vector<const ruvia::ContextRequest::RequestFormField*>&&>);
 static_assert(!HasFormFieldBooleanMethodAliases<ruvia::ContextRequest::RequestFormField>);
 #ifndef _MSC_VER
 static_assert(!HasFormFieldPublicFields<ruvia::ContextRequest::RequestFormField>);
@@ -2745,7 +2749,6 @@ public:
     RUVIA_GET("/res-assigned-prepared", assignedPreparedResponse);
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
-    RUVIA_POST("/form-data", formDataBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/json-object", jsonValueBody);
@@ -3110,45 +3113,6 @@ private:
         co_return c.text(body);
     }
 
-    ruvia::Task<ruvia::HttpResponse> formDataBody(ruvia::Context& c) {
-        auto form = co_await c.req().formData();
-        auto tags = form.get("tag");
-        std::pmr::string body(c.allocator<char>());
-        body.append("fields=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nentries=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\ngroups=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nkeys=");
-        appendUnsigned(body, form.groups().size());
-        body.append("\nvalues=");
-        appendUnsigned(body, form.fields().size());
-        body.append("\nfirst-value-file=");
-        body.append(!form.fields().empty() && form.fields().front().file() ? "true" : "false");
-        body.append("\nhas-title=");
-        body.append(static_cast<bool>(form.get("title")) ? "true" : "false");
-        body.append("\ntag-count=");
-        appendUnsigned(body, tags.size());
-        if (auto tag = form.get("tag").value()) {
-            body.append("\ntag-single=");
-            body.append(*tag);
-        }
-        body.append("\ntag-array-count=");
-        appendUnsigned(body, form.count("tag[]"));
-        const auto title = form.get("title");
-        if (auto titleText = title.value()) {
-            body.append("\ntitle=");
-            body.append(*titleText);
-        }
-        if (auto literalDot = form.get("obj.key1").value()) {
-            body.append("\nliteral-obj-key1=");
-            body.append(*literalDot);
-        }
-        body.push_back('\n');
-        co_return c.text(body);
-    }
-
     ruvia::Task<ruvia::HttpResponse> bytesBody(ruvia::Context& c) {
         const auto bytes = co_await c.req().bytes();
         std::pmr::string body(c.allocator<char>());
@@ -3221,8 +3185,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> cloneRawFormRequest(ruvia::Context& c) {
         const auto consumed = co_await c.req().text();
         auto clone = co_await ruvia::cloneRawRequest(c.req());
-        auto form = clone.formData();
-        auto parsed = clone.parseBody({.all = true, .dot = true});
+        auto form = clone.parseBody({.all = true, .dot = true});
         std::pmr::string body(c.allocator<char>());
         body.append("fields=");
         appendUnsigned(body, form.fields().size());
@@ -3236,7 +3199,7 @@ private:
         appendUnsigned(body, form.count("tag"));
         body.append("\ntag-array-count=");
         appendUnsigned(body, form.count("tag[]"));
-        if (auto nested = parsed.object("obj").at("key1").value()) {
+        if (auto nested = form.object("obj").at("key1").value()) {
             body.append("\nobj.key1=");
             body.append(*nested);
         }

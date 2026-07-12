@@ -4329,6 +4329,8 @@ set(WEB_CONTEXT_INLINE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/Context.inl")
 set(WEB_CONTEXT_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextModel.inl")
+set(WEB_CONTEXT_REQUEST_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
 set(WEB_CONTEXT_RESPONSE_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
 set(WEB_ERROR_NORMALIZE
@@ -4372,10 +4374,24 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
         boundary_error("binary request bodies regained a parallel name"
             "ContextRequest, RawRequestClone and RequestBlob must use bytes()")
     endif()
+    if(web_context_public_header MATCHES "formData[(]" OR
+       web_context_public_header MATCHES "SingleValueSelection")
+        boundary_error("form body parsing regained entry-dependent semantics"
+            "parseBody() must be the only RequestFormData constructor path and duplicate scalar lookup must select the last value")
+    endif()
     if(NOT web_validation_target_header MATCHES
            "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
         boundary_error("validation targets lost their typed contract"
             "Context and controller validation must share ValidationTarget")
+    endif()
+endif()
+if(EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}")
+    file(READ "${WEB_CONTEXT_REQUEST_SOURCE}"
+        web_context_request_source)
+    if(web_context_request_source MATCHES "RawRequestClone::formData" OR
+       web_context_request_source MATCHES "SingleValueSelection")
+        boundary_error("form body runtime regained split selection policy"
+            "ContextRequest.cpp must produce one last-wins RequestFormData representation")
     endif()
 endif()
 
