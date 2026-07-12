@@ -239,7 +239,7 @@ App& App::setGlobalRateLimit(RateLimitRule rule) {
         });
 }
 
-App& App::onAccess(HttpServerOptions::AccessLog::Callback callback, void* user) {
+App& App::onAccess(AccessLogCallback callback, void* user) {
     return detail::mutateStoppedApp(
         *this,
         *state_,

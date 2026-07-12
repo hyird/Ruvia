@@ -28,8 +28,8 @@ void addShutdownSignals(asio::signal_set& signals) {
 #endif
 }
 
-[[nodiscard]] HttpServerOptions makeListenerOptions(
-    const HttpServerOptions& base,
+[[nodiscard]] detail::HttpServerOptions makeListenerOptions(
+    const detail::HttpServerOptions& base,
     bool tlsEnabled,
     bool autoHttpsEnabled,
     std::uint16_t httpsPort,

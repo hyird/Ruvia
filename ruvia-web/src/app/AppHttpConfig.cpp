@@ -62,7 +62,7 @@ App& App::addTlsCertificate(std::string_view host, TlsConfig config) {
                 throw std::invalid_argument("TLS private key file must not be empty");
             }
 
-            HttpServerOptions::Tls::SniCertificate cert;
+            detail::HttpServerOptions::Tls::SniCertificate cert;
             cert.host.assign(host.data(), host.size());
             assignTlsFileName(cert.certificateChainFile, config.certificateChainFile);
             assignTlsFileName(cert.privateKeyFile, config.privateKeyFile);

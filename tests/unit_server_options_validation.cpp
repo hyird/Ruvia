@@ -8,7 +8,7 @@
 
 namespace {
 
-using ruvia::HttpServerOptions;
+using ruvia::detail::HttpServerOptions;
 using ruvia::detail::validateHttpServerOptions;
 
 template <typename Fn>

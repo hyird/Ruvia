@@ -71,7 +71,7 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {

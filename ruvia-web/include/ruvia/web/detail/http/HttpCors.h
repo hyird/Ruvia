@@ -2,7 +2,7 @@
 
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/ServerConfig.h"
 
 namespace ruvia::detail {
 

@@ -19,12 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/App.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
 #include "ruvia/web/detail/server/RateLimiter.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 #include "ruvia/web/detail/server/RateLimitDecision.h"

@@ -926,6 +926,18 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_removed_public_server_options
+        "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
+    set(_installed_server_config
+        "${_install_prefix}/include/ruvia/web/ServerConfig.h")
+    set(_installed_server_options
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerOptions.h")
+    if(EXISTS "${_removed_public_server_options}" OR
+       NOT EXISTS "${_installed_server_config}" OR
+       NOT EXISTS "${_installed_server_options}")
+        message(FATAL_ERROR
+            "installed Web package lost the public-config/runtime-options boundary")
+    endif()
     set(_removed_server_session_umbrella
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerSessionUtils.h")
     if(EXISTS "${_removed_server_session_umbrella}")
@@ -1519,7 +1531,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endif()
 
     set(_installed_access_log_model_path
-        "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
+        "${_install_prefix}/include/ruvia/web/ServerConfig.h")
     set(_installed_access_log_access_path
         "${_install_prefix}/include/ruvia/web/detail/app/AppAccess.h")
     set(_installed_access_log_recorder_path
@@ -1567,10 +1579,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "return request_[.]knownMethod[(][)]" OR
        NOT _installed_access_log_model MATCHES
            "return request_[.]path[(][)]" OR
+       NOT _installed_access_log_model MATCHES "using AccessLogCallback" OR
        NOT _installed_access_log_access MATCHES
            "const HttpRequest& request" OR
        NOT _installed_access_log_recorder MATCHES
            "AccessLogRecordAccess::make[(][ \t\r\n]*request" OR
+       NOT _installed_access_log_recorder MATCHES "const AccessLogSink&" OR
        _installed_access_log_http1 MATCHES
            "recordHttpAccess[(][^;]*(true|false)[)]" OR
        _installed_access_log_http2 MATCHES

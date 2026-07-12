@@ -21,7 +21,7 @@ public:
             workerRunning);
     }
 
-    HttpServerOptions options;
+    detail::HttpServerOptions options;
     detail::ConnectionScanner::Entry scannerEntry;
     bool workerRunning{true};
 };

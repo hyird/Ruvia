@@ -2,6 +2,7 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/Task.h"

@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpParseError.h"
 #include "ruvia/core/detail/AsioAwait.h"

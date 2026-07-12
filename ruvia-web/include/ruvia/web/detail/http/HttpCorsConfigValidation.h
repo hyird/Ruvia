@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/ServerConfig.h"
 #include "ruvia/http/HttpHeader.h"
 
 namespace ruvia::detail {

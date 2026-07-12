@@ -3,7 +3,8 @@
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/ServerConfig.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 
 #include <array>
@@ -21,7 +22,7 @@ using ruvia::AccessLogRecord;
 using ruvia::HttpKnownMethod;
 using ruvia::HttpProtocolVersion;
 using ruvia::HttpRequest;
-using ruvia::HttpServerOptions;
+using ruvia::detail::AccessLogSink;
 using ruvia::detail::HttpRequestAccess;
 using ruvia::detail::recordHttpAccess;
 
@@ -31,7 +32,7 @@ concept HasLegacyHttp2Flag = requires(const Record& record) {
 };
 
 using RecordHttpAccessFunction = void (*)(
-    const HttpServerOptions::AccessLog&,
+    const AccessLogSink&,
     const HttpRequest&,
     std::string_view,
     std::uint16_t,
@@ -94,7 +95,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
         "/collection",
         HttpProtocolVersion::kHttp10);
     AccessLogObservation observation;
-    HttpServerOptions::AccessLog accessLog;
+    AccessLogSink accessLog;
     accessLog.callback = &observeAccessLog;
     accessLog.user = &observation;
 
@@ -119,7 +120,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
 
 RUVIA_TEST(access_log_preserves_all_protocol_versions_without_transport_bool) {
     AccessLogObservation observation;
-    HttpServerOptions::AccessLog accessLog;
+    AccessLogSink accessLog;
     accessLog.callback = &observeAccessLog;
     accessLog.user = &observation;
     constexpr std::array versions{

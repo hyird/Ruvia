@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/ServerConfig.h"
 
 namespace ruvia::detail {
 

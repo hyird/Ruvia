@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/web/detail/app/AppAccess.h"
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
@@ -15,7 +15,7 @@ namespace ruvia::detail {
 // stays off the cost ledger of servers that do not observe. `status` comes from
 // the committed protocol plan; duration is measured from `start`.
 inline void recordHttpAccess(
-    const HttpServerOptions::AccessLog& accessLog,
+    const AccessLogSink& accessLog,
     const HttpRequest& request,
     std::string_view remoteAddress,
     std::uint16_t status,

@@ -14,6 +14,7 @@
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 

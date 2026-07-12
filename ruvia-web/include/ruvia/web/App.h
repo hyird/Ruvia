@@ -5,18 +5,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <memory_resource>
-#include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/web/AppHook.h"
 #include "ruvia/web/Dotenv.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/ErrorHandlers.h"
-#include "ruvia/http/HttpLimits.h"
-#include "ruvia/web/HttpServerOptions.h"
-#include "ruvia/web/StaticFiles.h"
+#include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -29,18 +24,6 @@
 
 namespace ruvia {
 
-
-struct TlsConfig final {
-    std::filesystem::path certificateChainFile;
-    std::filesystem::path privateKeyFile;
-    std::pmr::string privateKeyPassword;
-    std::filesystem::path verifyFile;
-};
-
-struct DocumentRootConfig final {
-    std::filesystem::path root;
-    StaticRootOptions staticOptions;
-};
 
 namespace detail {
 
@@ -84,7 +67,7 @@ public:
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     App& setGlobalRateLimit(RateLimitRule rule);
-    App& onAccess(HttpServerOptions::AccessLog::Callback callback, void* user = nullptr);
+    App& onAccess(AccessLogCallback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_MARIADB
