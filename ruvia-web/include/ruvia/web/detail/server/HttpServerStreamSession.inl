@@ -154,7 +154,8 @@ Task<void> HttpServer::handleStreamSession(
                 if (resolved == nullptr) {
                     if (contentLengthExceedsLimit(
                             parsed.bodyPlan,
-                            options_.maxBufferedBodyBytes)) {
+                            HttpBodyByteLimit::limited(
+                                options_.maxBufferedBodyBytes))) {
                         response = co_await routes.handleError(
                             parsed.request,
                             requestMemory,

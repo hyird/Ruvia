@@ -87,6 +87,6 @@ int main() {
         .setHttpListenPort(8082)
         .setThreadNum(2)
         .setMaxBufferedBodyBytes(16 * 1024 * 1024)
-        .setMaxStreamBodyBytes(0)
+        .setMaxStreamBodyBytes(std::nullopt)
         .run();
 }

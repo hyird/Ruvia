@@ -3,13 +3,13 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/HttpBodyByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
 namespace ruvia::detail {
@@ -22,8 +22,8 @@ enum class Http1ChunkDelimiterStatus : std::uint8_t {
 
 class Http1ChunkDecoder final {
 public:
-    explicit Http1ChunkDecoder(std::size_t maxBodyBytes) noexcept
-        : maxBodyBytes_(maxBodyBytes) {}
+    explicit Http1ChunkDecoder(HttpBodyByteLimit bodyLimit) noexcept
+        : bodyLimit_(bodyLimit) {}
 
     [[nodiscard]] std::size_t remaining() const noexcept {
         return remaining_;
@@ -53,9 +53,7 @@ public:
         if (chunkSize == 0) {
             return false;
         }
-        if (exceedsLimit(chunkSize) ||
-            (maxBodyBytes_ != 0 && decodedBytes_ > maxBodyBytes_ - chunkSize) ||
-            chunkSize > (std::numeric_limits<std::size_t>::max)() - decodedBytes_) {
+        if (bodyLimit_.additionExceeds(decodedBytes_, chunkSize)) {
             throw HttpProtocolError(413, "request body is too large");
         }
         decodedBytes_ += chunkSize;
@@ -78,21 +76,17 @@ public:
     }
 
 private:
-    [[nodiscard]] bool exceedsLimit(std::size_t bytes) const noexcept {
-        return maxBodyBytes_ != 0 && bytes > maxBodyBytes_;
-    }
-
     void consumeFramingBytes(std::size_t bytes) {
-        if (maxBodyBytes_ == 0 || bytes == 0) {
+        if (!bodyLimit_.isLimited() || bytes == 0) {
             return;
         }
-        if (bytes > maxBodyBytes_ || encodedOverheadBytes_ > maxBodyBytes_ - bytes) {
+        if (bodyLimit_.additionExceeds(encodedOverheadBytes_, bytes)) {
             throw HttpProtocolError(413, "request body framing is too large");
         }
         encodedOverheadBytes_ += bytes;
     }
 
-    std::size_t maxBodyBytes_{0};
+    HttpBodyByteLimit bodyLimit_;
     std::size_t remaining_{0};
     std::size_t decodedBytes_{0};
     std::size_t encodedOverheadBytes_{0};
@@ -217,8 +211,8 @@ private:
 // remain protocol-owned; a runtime only refills input on a need-more result.
 class Http1ChunkedBodyDecoder final {
 public:
-    explicit Http1ChunkedBodyDecoder(std::size_t maxBodyBytes) noexcept
-        : chunks_(maxBodyBytes) {}
+    explicit Http1ChunkedBodyDecoder(HttpBodyByteLimit bodyLimit) noexcept
+        : chunks_(bodyLimit) {}
 
     [[nodiscard]] Http1ChunkDecodeResult decode(
         std::string_view available) {

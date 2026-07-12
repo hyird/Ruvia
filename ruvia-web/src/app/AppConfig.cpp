@@ -188,12 +188,15 @@ App& App::setMaxBufferedBodyBytes(std::size_t bytes) {
         });
 }
 
-App& App::setMaxStreamBodyBytes(std::size_t bytes) {
+App& App::setMaxStreamBodyBytes(std::optional<std::size_t> bytes) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change stream body limit while app is running",
         [bytes](detail::AppState& state) {
+            detail::ensurePositiveOptionalSize(
+                bytes,
+                "configured stream body limit must be greater than zero");
             state.options.maxStreamBodyBytes = bytes;
         });
 }

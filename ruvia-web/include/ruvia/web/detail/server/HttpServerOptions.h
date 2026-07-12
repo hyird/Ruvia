@@ -63,8 +63,8 @@ struct HttpServerOptions final {
     // Buffered routes materialize body data; the same cap applies again after
     // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
-    // Stream routes are explicit; 0 disables the stream body limit.
-    std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};
+    // Stream routes are explicit; absence disables the stream body limit.
+    std::optional<std::size_t> maxStreamBodyBytes;
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     Tls tls;

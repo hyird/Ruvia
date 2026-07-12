@@ -12,6 +12,7 @@
 
 #include <ruvia/http/HttpCache.h>
 #include <ruvia/http/Cookies.h>
+#include <ruvia/http/HttpBodyByteLimit.h>
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
@@ -1677,6 +1678,11 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http1ChunkedBodyDecoder&>().decode(
         std::string_view{})),
     ruvia::detail::Http1ChunkDecodeResult>);
+static_assert(std::default_initializable<ruvia::HttpBodyByteLimit>);
+static_assert(!std::constructible_from<ruvia::HttpBodyByteLimit, std::size_t>);
+static_assert(std::same_as<
+    decltype(ruvia::HttpBodyByteLimit::limited(std::size_t{1})),
+    ruvia::HttpBodyByteLimit>);
 static_assert(!std::default_initializable<ruvia::detail::Http1ChunkDecodeResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http1ChunkDecodeResult&>()

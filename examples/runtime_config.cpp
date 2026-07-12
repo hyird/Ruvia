@@ -76,7 +76,7 @@ int main() {
         .setMaxConnectionsPerWorker(10000)
         .setKeepaliveRequests(1000)
         .setMaxBufferedBodyBytes(16 * 1024 * 1024)
-        .setMaxStreamBodyBytes(0)
+        .setMaxStreamBodyBytes(std::nullopt)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .setMemoryPoolConfig(memory)
         .setCompression(std::move(compression))
