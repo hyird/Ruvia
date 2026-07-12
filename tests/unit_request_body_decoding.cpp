@@ -20,6 +20,7 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/memory/MemoryPool.h"
+#include "ruvia/http/HttpBodyByteLimit.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
@@ -33,6 +34,7 @@
 
 namespace {
 
+using ruvia::HttpBodyByteLimit;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::HttpContentEncodeError;
 using ruvia::detail::HttpContentEncodeFailure;
@@ -666,7 +668,10 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     HttpTransferCodings codings{};
     codings.values[0] = HttpTransferCoding::kGzip;
     codings.count = 1;
-    TransferCodingDecoder decoder(codings, std::pmr::polymorphic_allocator<char>(resource), 1u << 20);
+    TransferCodingDecoder decoder(
+        codings,
+        std::pmr::polymorphic_allocator<char>(resource),
+        HttpBodyByteLimit::limited(1u << 20));
 
     const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
     const std::string gz = gzipCompress(plain);
@@ -700,11 +705,11 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     RUVIA_CHECK_EQ(chunkedBody->transferCodings().count, std::size_t{1});
 
     auto* resource = std::pmr::get_default_resource();
-    Http1ChunkedBodyDecoder chunks(1u << 20);
+    Http1ChunkedBodyDecoder chunks(HttpBodyByteLimit::limited(1u << 20));
     TransferCodingDecoder transfer(
         chunkedBody->transferCodings(),
         std::pmr::polymorphic_allocator<char>(resource),
-        1u << 20);
+        HttpBodyByteLimit::limited(1u << 20));
     std::pmr::string output(resource);
     std::string_view pending(wireBody);
     bool complete = false;
@@ -735,7 +740,10 @@ RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     codings.count = 1;
     // A 1 MiB body compresses to a tiny gzip; the decoder must abort the
     // expansion once it passes the small cap, not stage the whole megabyte.
-    TransferCodingDecoder decoder(codings, std::pmr::polymorphic_allocator<char>(resource), 1024);
+    TransferCodingDecoder decoder(
+        codings,
+        std::pmr::polymorphic_allocator<char>(resource),
+        HttpBodyByteLimit::limited(1024));
 
     const std::string big(1u << 20, 'a');
     const std::string gz = gzipCompress(big);

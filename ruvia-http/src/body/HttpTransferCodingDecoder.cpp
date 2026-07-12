@@ -15,11 +15,11 @@ void throwRequestBodyTooLarge() {
 TransferCodingDecoder::TransferCodingDecoder(
     HttpTransferCodings codings,
     std::pmr::polymorphic_allocator<char> allocator,
-    std::size_t maxBodyBytes)
+    HttpBodyByteLimit bodyLimit)
     : codings_(codings),
       output_(allocator),
       resource_(allocator.resource()),
-      maxBodyBytes_(maxBodyBytes) {
+      bodyLimit_(bodyLimit) {
     if (codings_.count > kMaxTransferCodings) {
         throw std::invalid_argument("invalid Transfer-Encoding header");
     }
@@ -81,7 +81,8 @@ std::string_view TransferCodingDecoder::produce() {
 
 void TransferCodingDecoder::decodeAppend(std::string_view input, std::pmr::string& target) {
     if (codings_.count == 0) {
-        if (maxBodyBytes_ != 0 && (input.size() > maxBodyBytes_ || target.size() > maxBodyBytes_ - input.size())) {
+        if (bodyLimit_.additionExceeds(target.size(), input.size()) ||
+            bodyLimit_.additionExceeds(decodedBytes_, input.size())) {
             throwRequestBodyTooLarge();
         }
         target.append(input.data(), input.size());
@@ -197,10 +198,7 @@ void TransferCodingDecoder::checkProducedLimit(std::size_t produced) const {
     if (produced == 0) {
         return;
     }
-    if (maxBodyBytes_ != 0 && (produced > maxBodyBytes_ || decodedBytes_ > maxBodyBytes_ - produced)) {
-        throwRequestBodyTooLarge();
-    }
-    if (decodedBytes_ > (std::numeric_limits<std::size_t>::max)() - produced) {
+    if (bodyLimit_.additionExceeds(decodedBytes_, produced)) {
         throwRequestBodyTooLarge();
     }
 }

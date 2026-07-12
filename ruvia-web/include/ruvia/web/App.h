@@ -57,7 +57,7 @@ public:
     App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
     App& setKeepaliveRequests(std::optional<std::size_t> maxRequests);
     App& setMaxBufferedBodyBytes(std::size_t bytes);
-    App& setMaxStreamBodyBytes(std::size_t bytes);
+    App& setMaxStreamBodyBytes(std::optional<std::size_t> bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
     App& useTls(TlsConfig config);
     App& addTlsCertificate(std::string_view host, TlsConfig config);

@@ -49,7 +49,10 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
             memory.allocator<char>(),
             bodyAndPipeline,
             parsed.bodyPlan,
-            options.maxStreamBodyBytes,
+            requestBodyByteLimit(
+                RequestBodyMode::kStream,
+                options.maxStreamBodyBytes,
+                options.maxBufferedBodyBytes),
             scannerEntry);
         emplaceBodyReaderFacade(bodyReader, *streamReader);
         response = co_await routes.dispatch(

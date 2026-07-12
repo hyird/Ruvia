@@ -14,14 +14,14 @@ public:
         std::pmr::memory_resource* requestResource,
         std::string_view initialBodyAndPipeline,
         Http1RequestBodyPlan bodyPlan,
-        std::size_t maxBodyBytes,
+        HttpBodyByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry)
         : reader_(
               stream,
               workerAllocator,
               initialBodyAndPipeline,
               bodyPlan,
-              maxBodyBytes,
+              bodyLimit,
               scannerEntry),
           body_(pmrResourceOrDefault(requestResource)) {}
 

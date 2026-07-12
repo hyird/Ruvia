@@ -17,6 +17,9 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
         options.sendTimeout);
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
+    ensurePositiveOptionalSize(
+        options.maxStreamBodyBytes,
+        "configured stream body limit must be greater than zero");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
     ensurePositiveOptionalSize(
         options.maxConnections,

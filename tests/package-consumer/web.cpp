@@ -12,6 +12,7 @@
 
 #include <asio/io_context.hpp>
 
+#include <ruvia/http/HttpBodyByteLimit.h>
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
 #include <ruvia/web/ConnInfo.h>
@@ -475,6 +476,10 @@ static_assert(std::same_as<
     decltype(static_cast<AppSetOptionalSizeFunction>(
         &ruvia::App::setKeepaliveRequests)),
     AppSetOptionalSizeFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetOptionalSizeFunction>(
+        &ruvia::App::setMaxStreamBodyBytes)),
+    AppSetOptionalSizeFunction>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<
@@ -494,6 +499,9 @@ static_assert(std::same_as<
     std::optional<std::size_t>>);
 static_assert(std::same_as<
     decltype(ruvia::detail::HttpServerOptions{}.keepaliveRequests),
+    std::optional<std::size_t>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpServerOptions{}.maxStreamBodyBytes),
     std::optional<std::size_t>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
@@ -759,7 +767,7 @@ static_assert(std::same_as<
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),
-        std::size_t{},
+        ruvia::HttpBodyByteLimit::unlimited(),
         std::size_t{})),
     ruvia::detail::Http2RequestBodyStoreResult>);
 static_assert(!HasDirectHttp2BeginDispatch<
@@ -901,10 +909,14 @@ int main() {
     if (error.status() != 500) {
         return 2;
     }
+    const ruvia::detail::HttpServerOptions defaultOptions;
+    if (defaultOptions.maxStreamBodyBytes.has_value()) {
+        return 3;
+    }
     const ruvia::WebSocketRouteOptions webSocketOptions;
     if (webSocketOptions.lifecycle.closeHandshakeTimeout !=
         std::optional<std::chrono::milliseconds>(std::chrono::seconds(5))) {
-        return 3;
+        return 4;
     }
     ruvia::detail::Http2SansIoStreamRuntime standaloneRuntime(
         3, std::pmr::get_default_resource());
@@ -916,7 +928,8 @@ int main() {
     auto& body = standaloneRuntime.body();
     if (body.selectedMode() == nullptr ||
         *body.selectedMode() != ruvia::detail::RequestBodyMode::kStream ||
-        body.store("web-owned", 0, 1024) !=
+        body.store(
+            "web-owned", ruvia::HttpBodyByteLimit::unlimited(), 1024) !=
             ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
         body.queue().pop() != "web-owned") {
         return 4;

@@ -8,15 +8,15 @@ StreamBodyReader<Stream>::StreamBodyReader(
     std::pmr::polymorphic_allocator<char> allocator,
     std::string_view initialBodyAndPipeline,
     Http1RequestBodyPlan bodyPlan,
-    std::size_t maxBodyBytes,
+    HttpBodyByteLimit bodyLimit,
     ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
       transferDecoderAllocator_(allocator.resource()),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
-      maxBodyBytes_(maxBodyBytes),
-      chunkDecoder_(maxBodyBytes),
+      bodyLimit_(bodyLimit),
+      chunkDecoder_(bodyLimit),
       scannerEntry_(scannerEntry),
       finished_(!bodyPlan_.requiresConsumption()) {
     const auto* chunked = bodyPlan_.chunked();
@@ -27,7 +27,7 @@ StreamBodyReader<Stream>::StreamBodyReader(
                 transferDecoder_,
                 chunked->transferCodings(),
                 allocator,
-                maxBodyBytes);
+                bodyLimit);
         } catch (...) {
             transferDecoderAllocator_.deallocate(transferDecoder_, 1);
             transferDecoder_ = nullptr;
@@ -92,7 +92,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
         if (transferDecoder_ != nullptr) {
             transferDecoder_->decodeAppend(*chunk, body);
         } else {
-            if (maxBodyBytes_ != 0 && (chunk->size() > maxBodyBytes_ || body.size() > maxBodyBytes_ - chunk->size())) {
+            if (bodyLimit_.additionExceeds(body.size(), chunk->size())) {
                 throwRequestBodyTooLarge();
             }
             body.append(chunk->data(), chunk->size());
@@ -120,7 +120,7 @@ Task<void> StreamBodyReader<Stream>::readMore() {
     const auto oldSize = buffer_.size();
     const auto hardLimit = bodyPlan_.chunked() != nullptr
         ? kChunkedEncodedBufferBytes
-        : (maxBodyBytes_ == 0 ? (std::numeric_limits<std::size_t>::max)() : maxBodyBytes_);
+        : bodyLimit_.readCeiling();
     if (oldSize >= hardLimit) {
         throwRequestBodyTooLarge();
     }
@@ -152,7 +152,7 @@ Task<void> StreamBodyReader<Stream>::readMore() {
 
 template <typename Stream>
 bool StreamBodyReader<Stream>::exceedsLimit(std::size_t bytes) const noexcept {
-    return maxBodyBytes_ != 0 && bytes > maxBodyBytes_;
+    return bodyLimit_.exceeds(bytes);
 }
 
 template <typename Stream>

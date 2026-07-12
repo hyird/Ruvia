@@ -63,6 +63,7 @@ ruvia_install_target(ruvia-http http)
 
 ruvia_install_public_headers(http
     include/ruvia/http/Cookies.h
+    include/ruvia/http/HttpBodyByteLimit.h
     include/ruvia/http/HttpProtocolError.h
     include/ruvia/http/HttpCache.h
     include/ruvia/http/HttpClient.h

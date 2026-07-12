@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -17,6 +18,7 @@
 
 namespace {
 
+using ruvia::HttpBodyByteLimit;
 using ruvia::detail::appendHttpsPort;
 using ruvia::detail::appendResponseHead;
 using ruvia::detail::contentLengthExceedsLimit;
@@ -26,6 +28,8 @@ using ruvia::detail::Http1ServerClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::http1PlanResponseStream;
 using ruvia::detail::prepareHttp1ResponseStreamHead;
+using ruvia::detail::requestBodyByteLimit;
+using ruvia::detail::RequestBodyMode;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::ResponseStreamFraming;
 using ruvia::detail::ResponseStreamHeadDisposition;
@@ -43,6 +47,22 @@ std::string withHttpsPort(std::string_view base, std::uint16_t port) {
 
 }  // namespace
 
+RUVIA_TEST(request_body_limit_distinguishes_absence_from_finite_values) {
+    const auto unlimited = requestBodyByteLimit(
+        RequestBodyMode::kStream, std::nullopt, 1024);
+    RUVIA_CHECK(!unlimited.isLimited());
+
+    const auto streamLimit = requestBodyByteLimit(
+        RequestBodyMode::kStream, std::size_t{512}, 1024);
+    RUVIA_CHECK(streamLimit.maximum() != nullptr);
+    RUVIA_CHECK_EQ(*streamLimit.maximum(), std::size_t{512});
+
+    const auto bufferedLimit = requestBodyByteLimit(
+        RequestBodyMode::kBuffered, std::nullopt, 1024);
+    RUVIA_CHECK(bufferedLimit.maximum() != nullptr);
+    RUVIA_CHECK_EQ(*bufferedLimit.maximum(), std::size_t{1024});
+}
+
 RUVIA_TEST(request_state_content_length_exceeds_limit) {
     Http1ServerRequestParser parser;
     const auto over = parser.parseMessage(
@@ -53,10 +73,14 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n").bodyPlan;
     const auto chunked = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n").bodyPlan;
-    RUVIA_CHECK(contentLengthExceedsLimit(over, 100));
-    RUVIA_CHECK(!contentLengthExceedsLimit(exact, 100));
-    RUVIA_CHECK(!contentLengthExceedsLimit(unlimited, 0));
-    RUVIA_CHECK(!contentLengthExceedsLimit(chunked, 1));
+    RUVIA_CHECK(contentLengthExceedsLimit(
+        over, HttpBodyByteLimit::limited(100)));
+    RUVIA_CHECK(!contentLengthExceedsLimit(
+        exact, HttpBodyByteLimit::limited(100)));
+    RUVIA_CHECK(!contentLengthExceedsLimit(
+        unlimited, HttpBodyByteLimit::unlimited()));
+    RUVIA_CHECK(!contentLengthExceedsLimit(
+        chunked, HttpBodyByteLimit::limited(1)));
 }
 
 RUVIA_TEST(request_state_keep_alive_by_connection_header) {
