@@ -35,7 +35,8 @@ void validateOptions(const StaticRootOptions& options) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (const auto& mime : options.mimeTypes) {
-        if (mime.extension.empty() || !validHeaderValue(mime.contentType)) {
+        if (mime.extension.empty() || mime.contentType.empty() ||
+            !validHeaderValue(mime.contentType)) {
             throw std::invalid_argument("invalid static file mime type");
         }
     }

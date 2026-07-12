@@ -11,6 +11,7 @@
 #include "ruvia/web/detail/StaticPathNormalization.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/UrlEncoding.h"
 
 #include <cstddef>
@@ -18,9 +19,11 @@
 #include <ctime>
 #include <filesystem>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <variant>
 
 namespace ruvia {
 namespace {
@@ -117,10 +120,110 @@ struct FileConditionalHeaders final {
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kIfRange)};
 }
 
-struct FileResponsePath final {
-    const std::filesystem::path* path{nullptr};
-    const detail::NativePathChar* nativePath{nullptr};
-    bool borrowNativePath{false};
+class FileResponseCopiedPath final {
+public:
+    [[nodiscard]] const std::filesystem::path& path() const noexcept {
+        return *path_;
+    }
+
+private:
+    friend class FileResponsePath;
+
+    explicit FileResponseCopiedPath(
+        const std::filesystem::path& path) noexcept
+        : path_(&path) {}
+
+    const std::filesystem::path* path_;
+};
+
+class FileResponseBorrowedNativePath final {
+public:
+    [[nodiscard]] const detail::NativePathChar* path() const noexcept {
+        return path_;
+    }
+
+private:
+    friend class FileResponsePath;
+
+    explicit FileResponseBorrowedNativePath(
+        const detail::NativePathChar* path) noexcept
+        : path_(path) {}
+
+    const detail::NativePathChar* path_;
+};
+
+// Exactly one path-lifetime policy travels with a file response. Context::file
+// copies its caller-owned filesystem path into HttpResponse; an indexed static
+// entry instead borrows the immutable process-lifetime native path.
+class FileResponsePath final {
+public:
+    [[nodiscard]] static FileResponsePath copying(
+        const std::filesystem::path& path) noexcept {
+        return FileResponsePath(FileResponseCopiedPath(path));
+    }
+
+    [[nodiscard]] static FileResponsePath borrowing(
+        const detail::NativePathChar* path) {
+        if (path == nullptr || *path == detail::NativePathChar{}) {
+            throw std::logic_error("static file entry has no native path");
+        }
+        return FileResponsePath(FileResponseBorrowedNativePath(path));
+    }
+
+    [[nodiscard]] std::string_view guessedContentType() const noexcept {
+        if (const auto* copied =
+                std::get_if<FileResponseCopiedPath>(&value_)) {
+            return detail::guessStaticFileContentType(copied->path());
+        }
+        const auto* borrowed =
+            std::get_if<FileResponseBorrowedNativePath>(&value_);
+        return detail::guessStaticFileContentTypeFromPathView(
+            std::basic_string_view<detail::NativePathChar>(borrowed->path()));
+    }
+
+    void setBody(
+        HttpResponse& response,
+        std::uint64_t size,
+        std::uint64_t offset,
+        std::uint64_t length) const {
+        if (const auto* copied =
+                std::get_if<FileResponseCopiedPath>(&value_)) {
+            detail::setResponseFileBody(
+                response,
+                copied->path(),
+                size,
+                offset,
+                length);
+            return;
+        }
+        const auto* borrowed =
+            std::get_if<FileResponseBorrowedNativePath>(&value_);
+        detail::setResponseBorrowedNativeFileBody(
+            response,
+            borrowed->path(),
+            size,
+            offset,
+            length);
+    }
+
+    void setFullBody(
+        HttpResponse& response,
+        std::uint64_t size) const {
+        setBody(response, size, 0, size);
+    }
+
+private:
+    using Value = std::variant<
+        FileResponseCopiedPath,
+        FileResponseBorrowedNativePath>;
+
+    explicit FileResponsePath(FileResponseCopiedPath path) noexcept
+        : value_(path) {}
+
+    explicit FileResponsePath(FileResponseBorrowedNativePath path) noexcept
+        : value_(path) {}
+
+    Value value_;
 };
 
 template <typename ApplyResponseState>
@@ -135,7 +238,7 @@ template <typename ApplyResponseState>
     bool enableValidators,
     std::string_view precomputedEtag,
     std::string_view precomputedLastModified,
-    std::string_view contentEncoding,
+    detail::HttpContentCoding contentCoding,
     bool negotiatesEncoding,
     ApplyResponseState applyResponseState) {
     std::pmr::string etagStorage(context.resource());
@@ -160,7 +263,9 @@ template <typename ApplyResponseState>
         detail::reserveResponseHeaders(response, kFileResponseHeaderReserve);
         if (contentType.empty()) {
             detail::setResponseHeaderStableView(
-                response, "Content-Type", detail::guessStaticFileContentType(*filePath.path));
+                response,
+                "Content-Type",
+                filePath.guessedContentType());
         } else {
             response.header("Content-Type", contentType);
         }
@@ -169,8 +274,13 @@ template <typename ApplyResponseState>
         }
         // A precompressed variant carries the original Content-Type with the
         // encoding declared here.
+        const auto contentEncoding =
+            detail::httpContentCodingToken(contentCoding);
         if (!contentEncoding.empty()) {
-            detail::setResponseHeaderStableView(response, "Content-Encoding", contentEncoding);
+            detail::setResponseHeaderStableView(
+                response,
+                "Content-Encoding",
+                contentEncoding);
         }
         // Declare Vary: Accept-Encoding on every response from an endpoint that
         // negotiates the representation by Accept-Encoding -- even when the
@@ -191,18 +301,10 @@ template <typename ApplyResponseState>
         }
     };
     auto setFileBody = [&](HttpResponse& response, std::uint64_t offset, std::uint64_t length) {
-        if (filePath.borrowNativePath) {
-            detail::setResponseBorrowedNativeFileBody(response, filePath.nativePath, size, offset, length);
-        } else {
-            detail::setResponseFileBody(response, *filePath.path, size, offset, length);
-        }
+        filePath.setBody(response, size, offset, length);
     };
     auto setFullFileBody = [&](HttpResponse& response) {
-        if (filePath.borrowNativePath) {
-            detail::setResponseBorrowedNativeFileBody(response, filePath.nativePath, size);
-        } else {
-            detail::setResponseFileBody(response, *filePath.path, size);
-        }
+        filePath.setFullBody(response, size);
     };
     auto makeHeaderOnlyResponse = [&](std::uint16_t statusCode) {
         HttpResponse response(context.resource());
@@ -316,7 +418,7 @@ HttpResponse Context::file(
     };
     return makeFileResponse(
         *this,
-        FileResponsePath{.path = &path, .nativePath = path.c_str(), .borrowNativePath = false},
+        FileResponsePath::copying(path),
         static_cast<std::uint64_t>(size),
         modified,
         contentType,
@@ -325,7 +427,7 @@ HttpResponse Context::file(
         true,
         {},
         {},
-        {},
+        detail::HttpContentCoding::kNone,
         false,  // Context::file serves one path with no Accept-Encoding negotiation
         applyState);
 }
@@ -335,17 +437,44 @@ HttpResponse Context::file(
 // ties resolve br > zstd > gzip. The served bytes are the variant's, so its
 // size/etag/modified describe the wire representation; the caller keeps the
 // original Content-Type. Index lookups only (no per-request filesystem stat).
-[[nodiscard]] bool selectStaticEncodingVariant(
+class StaticFileRepresentation final {
+public:
+    StaticFileRepresentation(
+        detail::StaticRootEntryView entry,
+        detail::HttpContentCoding contentCoding)
+        : entry_(entry),
+          contentCoding_(contentCoding) {
+        if (!entry_.found()) {
+            throw std::logic_error("static file representation has no entry");
+        }
+    }
+
+    [[nodiscard]] const detail::StaticRootEntryView& entry() const noexcept {
+        return entry_;
+    }
+
+    [[nodiscard]] detail::HttpContentCoding contentCoding() const noexcept {
+        return contentCoding_;
+    }
+
+private:
+    detail::StaticRootEntryView entry_;
+    detail::HttpContentCoding contentCoding_;
+};
+
+[[nodiscard]] StaticFileRepresentation selectStaticFileRepresentation(
     const StaticRoot& root,
     std::string_view relative,
     const HttpRequest& request,
     std::pmr::memory_resource* resource,
-    detail::StaticRootEntryView& variant,
-    std::string_view& contentEncoding) {
+    detail::StaticRootEntryView identity) {
+    StaticFileRepresentation selected(
+        identity,
+        detail::HttpContentCoding::kNone);
     const auto acceptEncoding =
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding);
     if (acceptEncoding.empty()) {
-        return false;
+        return selected;
     }
     detail::HttpAcceptedEncodingQuality brotli;
     detail::HttpAcceptedEncodingQuality zstd;
@@ -354,17 +483,22 @@ HttpResponse Context::file(
 
     struct Candidate final {
         std::string_view suffix;
-        std::string_view encoding;
+        detail::HttpContentCoding contentCoding;
         int score;
     };
     const Candidate candidates[] = {
-        {".br", "br", detail::httpAcceptedEncodingScore(brotli)},
-        {".zst", "zstd", detail::httpAcceptedEncodingScore(zstd)},
-        {".gz", "gzip", detail::httpAcceptedEncodingScore(gzip)},
+        {".br",
+         detail::HttpContentCoding::kBrotli,
+         detail::httpAcceptedEncodingScore(brotli)},
+        {".zst",
+         detail::HttpContentCoding::kZstd,
+         detail::httpAcceptedEncodingScore(zstd)},
+        {".gz",
+         detail::HttpContentCoding::kGzip,
+         detail::httpAcceptedEncodingScore(gzip)},
     };
 
     int best = 0;
-    bool found = false;
     for (const auto& candidate : candidates) {
         if (candidate.score <= best) {
             continue;
@@ -373,14 +507,16 @@ HttpResponse Context::file(
         variantPath.reserve(relative.size() + candidate.suffix.size());
         variantPath.assign(relative.data(), relative.size());
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
-        if (const auto entry = detail::StaticRootAccess::find(root, variantPath); entry.found()) {
+        if (const auto entry =
+                detail::StaticRootAccess::find(root, variantPath);
+            entry.found()) {
             best = candidate.score;
-            variant = entry;
-            contentEncoding = candidate.encoding;
-            found = true;
+            selected = StaticFileRepresentation(
+                entry,
+                candidate.contentCoding);
         }
     }
-    return found;
+    return selected;
 }
 
 HttpResponse Context::staticFile(
@@ -425,27 +561,29 @@ HttpResponse Context::staticFile(
 
     // Serve a precompressed sidecar when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
-    detail::StaticRootEntryView variant;
-    std::string_view contentEncoding;
-    const auto& served = selectStaticEncodingVariant(root, relative, request_, resource(), variant, contentEncoding)
-        ? variant
-        : entry;
+    const auto served = selectStaticFileRepresentation(
+        root,
+        relative,
+        request_,
+        resource(),
+        entry);
+    const auto& servedEntry = served.entry();
 
     const auto applyState = [this](HttpResponse& response, std::uint16_t statusCode) {
         applyResponseState(response, statusCode, {});
     };
     return makeFileResponse(
         *this,
-        FileResponsePath{.nativePath = served.filePath, .borrowNativePath = true},
-        served.size,
-        served.modified,
+        FileResponsePath::borrowing(servedEntry.filePath),
+        servedEntry.size,
+        servedEntry.modified,
         contentType.empty() ? entry.contentType : contentType,
         entry.cacheControl,
         entry.enableRanges,
         entry.enableValidators,
-        served.etag,
-        served.lastModified,
-        contentEncoding,
+        servedEntry.etag,
+        servedEntry.lastModified,
+        served.contentCoding(),
         true,  // staticFile negotiates the representation by Accept-Encoding
         applyState);
 }

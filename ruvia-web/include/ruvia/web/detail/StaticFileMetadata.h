@@ -71,9 +71,10 @@ template <typename Char>
     return extension;
 }
 
-[[nodiscard]] inline std::string_view guessStaticFileContentType(
-    const std::filesystem::path& path) noexcept {
-    const auto extension = staticFileExtension(httpNativePathView(path));
+template <typename Char>
+[[nodiscard]] inline std::string_view guessStaticFileContentTypeFromPathView(
+    std::basic_string_view<Char> path) noexcept {
+    const auto extension = staticFileExtension(path);
     if (staticFileExtensionEquals(extension, ".html") ||
         staticFileExtensionEquals(extension, ".htm")) {
         return "text/html; charset=utf-8";
@@ -109,6 +110,11 @@ template <typename Char>
         return "application/wasm";
     }
     return "application/octet-stream";
+}
+
+[[nodiscard]] inline std::string_view guessStaticFileContentType(
+    const std::filesystem::path& path) noexcept {
+    return guessStaticFileContentTypeFromPathView(httpNativePathView(path));
 }
 
 inline void appendStaticFileUnsigned(std::pmr::string& output, std::uint64_t value) {
