@@ -271,8 +271,11 @@ request 允许持久化且外部策略未强制关闭时是 self-delimited，必
 
 response trailer 只能作为 `ResponseStreamWriter::end(std::span<const HttpHeaderView>)` 的完整
 终止 section 提交，禁止恢复逐字段 `addTrailer()` 或在 runtime 先接收、结束时静默丢弃。
-`ruvia-http` 的 `ResponseStreamCommitPlan` 必须把 `HttpResponseBodyPlan`、head 后的
-body-open/trailers-only/message-ended phase 与实际 trailer framing 绑定为一个结论：HTTP/1 仅
+`ruvia-http` 的 `ResponseStreamCommitPlan` 必须把最终数值 status、选定 framing、
+method/status 派生的 `HttpResponseBodyPlan`、head 后的 body-open/trailers-only/message-ended
+phase 与实际 trailer framing 绑定为一个结论；`prepareResponseStreamHead()` 必须拒绝 status
+与 plan 不一致的 response，Web sink 必须保留完整 committed plan，不得再拆成
+`trailerFraming_` 等平行字段。HTTP/1 仅
 body-allowed chunked response 可发送 trailer，HTTP/1.0 close-delimited 和 HEAD/1xx/204/304
 必须报告 unavailable；HTTP/2 必须用 `Http2LocalSendState` 的显式
 `Http2LocalResponseTrailersOnly` alternative 为禁止 DATA 的 response 保留 trailer 终止能力，以
@@ -281,6 +284,15 @@ trailing HEADERS 携带 `END_STREAM`，不得把它标成 body-open
 head 后原子接管非空 section，必须先验证全部字段及 Content-Length 完成状态再修改 HPACK/stream
 状态，并以 `Http2ResponseTrailerSubmitStatus` 显式报告 closed、wrong phase、empty、invalid field
 或 incomplete length；`finishResponse()` 仍是终止帧顺序的唯一 owner。
+
+stream route 与 runtime completion 必须使用互斥 alternative：handled route 不得携带 dummy
+`HttpResponse`，buffered/failure-before-commit 才拥有 response；completed、peer-aborted-after-commit
+与 failed-after-commit 只能携带 committed plan 的真实 status；peer-aborted-before-commit 不得伪造
+status。HTTP/1 close-delimited stream 必须先记录 access log 再关闭 socket，HTTP/1/HTTP/2 都不得从
+默认 response 重建 200。禁止恢复 `RouteStreamDispatchOutcome + HttpResponse` tuple、
+`responseStreamDispatched`、`result.streamed()`/`hasBufferedResponse()` 这类松散调用链。
+自动 `ResponseStreamWriter::end()` 必须在 route coroutine 内、所绑定 `Context` 仍存活时执行；外层
+transport driver 只能消费 committed plan，不得在 route 返回后通过 sink 保存的 `Context*` 再构造 head。
 
 HTTP/2 本地发帧权限必须由一个 `Http2LocalSendState` 独占，并且只能是
 `Http2LocalHeadPending`、`Http2LocalRequestContentOpen`、`Http2LocalResponseContentOpen`、
@@ -382,6 +394,8 @@ access log 也必须消费同一个 message control value。`AccessLogRecord` �
 remote address 仍由 Web transport 单独提供。`recordHttpAccess()` 禁止接收 `bool http2` 或另一个版本
 参数，HTTP/1 与 HTTP/2 调用点都不得重建版本。禁止恢复 `http2()`、`http2_` 或复制
 `method_ + knownMethod_ + path_` 的平行 tuple；该日志边界不得增加分配、虚调用或 type-erasure。
+streaming status 必须来自提交 response head 的同一个 `ResponseStreamCommitPlan`；在 final head 前被
+peer abort 的请求没有 HTTP status，不得用默认 200 调用 response-completion access log。
 
 公开整消息入口只允许 `Http1RequestParser`，其 `Http1RequestParseResult` 必须以
 `Http1RequestNeedMore`、`Http1ParsedRequest`、`Http1RequestParseFailure` 三个互斥 alternative

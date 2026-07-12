@@ -60,7 +60,7 @@ Task<void> HttpServer::handleStreamSession(
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
         auto connectionPlan = Http1ServerConnectionPlan::http11Close();
-        bool responseStreamDispatched = false;
+        std::optional<std::uint16_t> committedStreamStatus;
         bool bufferAlreadyCompacted = false;
         std::size_t consumedBytes = 0;
         std::size_t headerSearchOffset = 0;
@@ -246,11 +246,8 @@ Task<void> HttpServer::handleStreamSession(
                         response,
                         connectionPlan,
                         requestCount);
-                    if (streamResult.finishedSession()) {
-                        co_return;
-                    }
-                    if (streamResult.didDispatchStream()) {
-                        responseStreamDispatched = true;
+                    if (const auto* committed = streamResult.committed()) {
+                        committedStreamStatus = committed->status();
                         bufferAlreadyCompacted = false;
                     }
                     break;
@@ -347,7 +344,7 @@ Task<void> HttpServer::handleStreamSession(
             scannerEntry.touch();
         }
 
-        if (!responseStreamDispatched) {
+        if (!committedStreamStatus.has_value()) {
             std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             const auto responsePreparation = prepareBufferedHttpResponse(
@@ -383,8 +380,10 @@ Task<void> HttpServer::handleStreamSession(
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
-                response.status(), requestStart);
-            if (!started_.load(std::memory_order_relaxed)) {
+                *committedStreamStatus, requestStart);
+            if (connectionPlan.disposition() ==
+                    Http1ConnectionDisposition::kClose ||
+                !started_.load(std::memory_order_relaxed)) {
                 co_return;
             }
         }

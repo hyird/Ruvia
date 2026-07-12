@@ -183,6 +183,10 @@ set(RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL
     "[.]addTrailer[ 	]*\\(|addResponseTrailer[ 	]*\\(|ensureTrailerOpen")
 set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
     "markCommitted[ 	]*\\([ 	]*(true|false)|bodySuppressed_")
+set(RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT
+    "RouteStreamDispatchOutcome|responseStreamDispatched|trailerFraming_|ResponseStreamDispatchResult::(streamed|abortedByPeer|abortedAfterCommit)[ 	]*\\([ 	]*HttpResponse|result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ 	]*\\(")
+set(RULE_LATE_RESPONSE_STREAM_END
+    "co_await[ 	]+responseStream[.]end|HttpResponse[ 	]+response[ 	]*[(][ 	]*requestMemory[.]resource[(][)]")
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
@@ -590,6 +594,18 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("stale response-stream commit boolean"
         "${RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL}"
         "state.markCommitted(true);")
+    expect_match("response stream reconstructed status from a dummy response"
+        "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
+        "if (result.streamed()) record(response.status());")
+    expect_match("response stream route outcome/payload tuple"
+        "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
+        "RouteStreamDispatchOutcome outcome;")
+    expect_match("response stream ended after its bound Context lifetime"
+        "${RULE_LATE_RESPONSE_STREAM_END}"
+        "co_await responseStream.end();")
+    expect_match("handled response stream constructed a dummy response"
+        "${RULE_LATE_RESPONSE_STREAM_END}"
+        "HttpResponse response(requestMemory.resource());")
     expect_match("stale HTTP/2 field-block state" "${RULE_STALE_H2_FIELD_BLOCK_STATE}"
         "if (dependency == header.streamId) appendRstStream(streamId, error);")
     expect_match("stale HTTP/2 CONNECT marker state" "${RULE_STALE_H2_CONNECT_STATE}"
@@ -2382,6 +2398,207 @@ check_files_no_match("response-stream runtime must consume the typed commit plan
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+check_files_no_match("response-stream status must follow exclusive commit results"
+    "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+check_files_no_match("response stream must end in Context scope without dummy payload"
+    "${RULE_LATE_RESPONSE_STREAM_END}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
+
+set(HTTP_RESPONSE_STREAM_COMMIT_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
+set(HTTP1_RESPONSE_STREAM_COMMIT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
+set(HTTP2_RESPONSE_STREAM_COMMIT
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(WEB_ROUTE_STREAM_RESULT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h")
+set(WEB_ROUTE_STREAM_DISPATCH_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
+set(WEB_RESPONSE_STREAM_DISPATCH_RESULT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
+set(WEB_RESPONSE_STREAM_STATE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h")
+set(WEB_HTTP1_RESPONSE_STREAM_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
+set(WEB_HTTP1_STREAM_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_HTTP2_STREAM_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(RESPONSE_STREAM_STATUS_TEST
+    "${RUVIA_ROOT}/tests/unit_response_stream_dispatch.cpp")
+set(RESPONSE_STREAM_H2_RUNTIME_TEST
+    "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+set(RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+set(RESPONSE_STREAM_WEB_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(response_stream_status_contract IN ITEMS
+        "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}"
+        "${HTTP1_RESPONSE_STREAM_COMMIT}"
+        "${HTTP2_RESPONSE_STREAM_COMMIT}"
+        "${WEB_ROUTE_STREAM_RESULT}"
+        "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}"
+        "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}"
+        "${WEB_RESPONSE_STREAM_STATE}"
+        "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}"
+        "${WEB_HTTP1_STREAM_SESSION}"
+        "${WEB_HTTP2_STREAM_SESSION}"
+        "${RESPONSE_STREAM_STATUS_TEST}"
+        "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
+        "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}"
+        "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${response_stream_status_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${response_stream_status_contract}")
+        boundary_error("response-stream status contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
+   EXISTS "${HTTP1_RESPONSE_STREAM_COMMIT}" AND
+   EXISTS "${HTTP2_RESPONSE_STREAM_COMMIT}" AND
+   EXISTS "${WEB_ROUTE_STREAM_RESULT}" AND
+   EXISTS "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}" AND
+   EXISTS "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}" AND
+   EXISTS "${WEB_RESPONSE_STREAM_STATE}" AND
+   EXISTS "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}" AND
+   EXISTS "${WEB_HTTP1_STREAM_SESSION}" AND
+   EXISTS "${WEB_HTTP2_STREAM_SESSION}" AND
+   EXISTS "${RESPONSE_STREAM_STATUS_TEST}" AND
+   EXISTS "${RESPONSE_STREAM_H2_RUNTIME_TEST}" AND
+   EXISTS "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}" AND
+   EXISTS "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}"
+        response_stream_commit_plan)
+    file(READ "${HTTP1_RESPONSE_STREAM_COMMIT}"
+        http1_response_stream_commit)
+    file(READ "${HTTP2_RESPONSE_STREAM_COMMIT}"
+        http2_response_stream_commit)
+    file(READ "${WEB_ROUTE_STREAM_RESULT}"
+        web_route_stream_result)
+    file(READ "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}"
+        web_route_stream_dispatch_source)
+    file(READ "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}"
+        web_response_stream_dispatch_result)
+    file(READ "${WEB_RESPONSE_STREAM_STATE}"
+        web_response_stream_state)
+    file(READ "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}"
+        web_http1_response_stream_route)
+    file(READ "${WEB_HTTP1_STREAM_SESSION}"
+        web_http1_stream_session)
+    file(READ "${WEB_HTTP2_STREAM_SESSION}"
+        web_http2_stream_session)
+    file(READ "${RESPONSE_STREAM_STATUS_TEST}"
+        response_stream_status_test)
+    file(READ "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
+        response_stream_h2_runtime_test)
+    file(READ "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}"
+        response_stream_http_package_consumer)
+    file(READ "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}"
+        response_stream_web_package_consumer)
+
+    if(NOT response_stream_commit_plan MATCHES
+           "std::uint16_t responseStatus[(][)] const noexcept" OR
+       NOT response_stream_commit_plan MATCHES
+           "ResponseStreamFraming framing[(][)] const noexcept" OR
+       NOT response_stream_commit_plan MATCHES
+           "HttpKnownMethod requestMethod" OR
+       NOT response_stream_commit_plan MATCHES
+           "response[.]status[(][)] != commitPlan[.]responseStatus[(][)]" OR
+       NOT http1_response_stream_commit MATCHES
+           "httpResponseStreamCommitPlan" OR
+       NOT http1_response_stream_commit MATCHES
+           "plan[.]framing[(][)]" OR
+       NOT http1_response_stream_commit MATCHES
+           "response[.]status[(][)]" OR
+       NOT http2_response_stream_commit MATCHES
+           "ResponseStreamFraming::kHttp2Frames" OR
+       NOT http2_response_stream_commit MATCHES
+           "head[.]status[(][)]")
+        boundary_error("response-stream protocol commit lost the final status"
+            "the HTTP commit plan must bind response status, framing, method-derived body semantics, and the prepared head")
+    endif()
+
+    if(NOT web_route_stream_result MATCHES
+           "StreamRouteHandled" OR
+       NOT web_route_stream_result MATCHES
+           "StreamRouteBufferedResponse" OR
+       NOT web_route_stream_result MATCHES
+           "std::variant" OR
+       NOT web_route_stream_dispatch_source MATCHES
+           "responseStreamOutput->writer[(][)][.]end[(][)]" OR
+       NOT web_route_stream_dispatch_source MATCHES
+           "Context is local to this coroutine" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "ResponseStreamPeerAbortedBeforeCommit" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "ResponseStreamPeerAbortedAfterCommit" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "ResponseStreamFailedAfterCommit" OR
+       NOT web_response_stream_dispatch_result MATCHES
+           "committedResponseStreamStatus" OR
+       NOT web_response_stream_state MATCHES
+           "std::optional<CommittedState> committed_" OR
+       NOT web_response_stream_state MATCHES
+           "const ResponseStreamCommitPlan[*] commitPlan[(][)] const noexcept" OR
+       NOT web_http1_response_stream_route MATCHES
+           "HttpResponseStreamCommittedRoute" OR
+       NOT web_http1_response_stream_route MATCHES
+           "completed->status[(][)]")
+        boundary_error("Web response-stream outcomes restored a status/payload tuple"
+            "handled, buffered, committed, pre-commit abort, and committed failure must remain exclusive alternatives")
+    endif()
+
+    if(NOT web_http1_stream_session MATCHES
+           "std::optional<std::uint16_t> committedStreamStatus" OR
+       NOT web_http1_stream_session MATCHES
+           "[*]committedStreamStatus, requestStart" OR
+       NOT web_http1_stream_session MATCHES
+           "Http1ConnectionDisposition::kClose" OR
+       NOT web_http2_stream_session MATCHES
+           "failed->status[(][)]" OR
+       NOT web_http2_stream_session MATCHES
+           "peer->status[(][)]" OR
+       NOT web_http2_stream_session MATCHES
+           "completed->status[(][)]" OR
+       web_http2_stream_session MATCHES
+           "completed streamed response [(]status 200[)]")
+        boundary_error("server runtime re-derived streamed access-log status"
+            "H1/H2 must log the exact committed status before close/reset and never fabricate 200")
+    endif()
+
+    if(NOT response_stream_status_test MATCHES
+           "response_stream_dispatch_preserves_exact_committed_status" OR
+       NOT response_stream_status_test MATCHES
+           "response_stream_dispatch_distinguishes_precommit_peer_abort" OR
+       NOT response_stream_status_test MATCHES
+           "response_stream_dispatch_distinguishes_committed_peer_abort" OR
+       NOT response_stream_status_test MATCHES
+           "response_stream_dispatch_end_commits_bodyless_status" OR
+       NOT response_stream_status_test MATCHES
+           "response_stream_dispatch_preserves_committed_failure_status" OR
+       NOT response_stream_h2_runtime_test MATCHES
+           "sansio_driver_h2_stream_trailers_emitted" OR
+       NOT response_stream_h2_runtime_test MATCHES
+           ":status=207;" OR
+       NOT response_stream_h2_runtime_test MATCHES
+           "accessObservation[.]status" OR
+       NOT response_stream_http_package_consumer MATCHES
+           "ResponseStreamCommitPlanner" OR
+       NOT response_stream_web_package_consumer MATCHES
+           "HasLegacyStreamedPredicate")
+        boundary_error("response-stream status propagation lacks regression coverage"
+            "unit and installed-package checks must pin exact status and exclusive terminal alternatives")
+    endif()
+endif()
 check_files_no_match("HTTP/2 must not restore split discard state or deprecated priority semantics"
     "${RULE_STALE_H2_FIELD_BLOCK_STATE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
@@ -5576,10 +5793,16 @@ foreach(boundary_doc IN ITEMS
     if(NOT boundary_doc_content MATCHES "ResponseStreamCommitPlan" OR
        NOT boundary_doc_content MATCHES "ResponseStreamWriter::end" OR
        NOT boundary_doc_content MATCHES "submitResponseTrailerSection" OR
-       NOT boundary_doc_content MATCHES "Http2ResponseTrailerSubmitStatus")
+       NOT boundary_doc_content MATCHES "Http2ResponseTrailerSubmitStatus" OR
+       NOT boundary_doc_content MATCHES "status" OR
+       NOT boundary_doc_content MATCHES "framing" OR
+       NOT boundary_doc_content MATCHES "peer[^\r\n]*before[^\r\n]*commit" OR
+       NOT boundary_doc_content MATCHES "dummy" OR
+       NOT boundary_doc_content MATCHES "access log" OR
+       NOT boundary_doc_content MATCHES "200")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("response trailer terminal contract is undocumented"
-            "${relative} must document commit capability, terminal API, and typed H2 ownership")
+            "${relative} must document commit status/framing ownership, exclusive runtime outcomes, terminal API, exact access-log propagation, and typed H2 ownership")
     endif()
     if(NOT boundary_doc_content MATCHES "205 Reset Content" OR
        NOT boundary_doc_content MATCHES "Content-Length: 0")

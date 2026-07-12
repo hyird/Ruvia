@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -56,6 +57,14 @@ enum class ResponseStreamHeadDisposition : std::uint8_t {
 
 class ResponseStreamCommitPlan final {
 public:
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return responseStatus_;
+    }
+
+    [[nodiscard]] ResponseStreamFraming framing() const noexcept {
+        return framing_;
+    }
+
     [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
         return bodyPlan_;
     }
@@ -71,17 +80,24 @@ public:
 private:
     friend ResponseStreamCommitPlan httpResponseStreamCommitPlan(
         ResponseStreamFraming,
-        HttpResponseBodyPlan,
+        HttpKnownMethod,
+        std::uint16_t,
         ResponseTrailerIntent) noexcept;
 
     ResponseStreamCommitPlan(
+        std::uint16_t responseStatus,
+        ResponseStreamFraming framing,
         HttpResponseBodyPlan bodyPlan,
         ResponseStreamTrailerFraming trailerFraming,
         ResponseStreamHeadDisposition headDisposition) noexcept
-        : bodyPlan_(bodyPlan),
+        : responseStatus_(responseStatus),
+          framing_(framing),
+          bodyPlan_(bodyPlan),
           trailerFraming_(trailerFraming),
           headDisposition_(headDisposition) {}
 
+    std::uint16_t responseStatus_{0};
+    ResponseStreamFraming framing_{ResponseStreamFraming::kHttp2Frames};
     HttpResponseBodyPlan bodyPlan_;
     ResponseStreamTrailerFraming trailerFraming_{ResponseStreamTrailerFraming::kUnavailable};
     ResponseStreamHeadDisposition headDisposition_{ResponseStreamHeadDisposition::kMessageEnded};
@@ -89,10 +105,14 @@ private:
 
 [[nodiscard]] inline ResponseStreamCommitPlan httpResponseStreamCommitPlan(
     ResponseStreamFraming framing,
-    HttpResponseBodyPlan bodyPlan,
+    HttpKnownMethod requestMethod,
+    std::uint16_t responseStatus,
     ResponseTrailerIntent trailerIntent) noexcept {
+    const auto bodyPlan = httpResponseBodyPlan(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
         return ResponseStreamCommitPlan(
+            responseStatus,
+            framing,
             bodyPlan,
             ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
             bodyPlan.bodySuppressed()
@@ -103,6 +123,8 @@ private:
     }
 
     return ResponseStreamCommitPlan(
+        responseStatus,
+        framing,
         bodyPlan,
         framing == ResponseStreamFraming::kHttp1Chunked && !bodyPlan.bodySuppressed()
             ? ResponseStreamTrailerFraming::kHttp1Chunked
@@ -116,7 +138,7 @@ class ResponseStreamHead final {
 public:
     ResponseStreamHead(HttpResponse response, ResponseStreamCommitPlan commitPlan)
         : response_(std::move(response)),
-          commitPlan_(commitPlan) {}
+          commitPlan_(std::move(commitPlan)) {}
 
     [[nodiscard]] HttpResponse& response() noexcept {
         return response_;
@@ -138,11 +160,13 @@ private:
 [[nodiscard]] inline ResponseStreamHead prepareResponseStreamHead(
     HttpResponse response,
     ResponseStreamKind kind,
-    ResponseStreamFraming framing,
-    HttpResponseBodyPlan bodyPlan,
-    ResponseTrailerIntent trailerIntent) {
-    const auto commitPlan = httpResponseStreamCommitPlan(
-        framing, bodyPlan, trailerIntent);
+    ResponseStreamCommitPlan commitPlan) {
+    if (response.status() != commitPlan.responseStatus()) {
+        throw std::invalid_argument(
+            "response stream commit plan status does not match response");
+    }
+    const auto framing = commitPlan.framing();
+    const auto& bodyPlan = commitPlan.bodyPlan();
     const auto& policy = bodyPlan.policy();
     const bool writerOwnsHttp1Chunked =
         framing == ResponseStreamFraming::kHttp1Chunked &&
@@ -197,7 +221,7 @@ private:
         setResponseHeaderStableView(response, "Cache-Control", "no-store");
     }
 
-    return ResponseStreamHead(std::move(response), commitPlan);
+    return ResponseStreamHead(std::move(response), std::move(commitPlan));
 }
 
 }  // namespace ruvia::detail

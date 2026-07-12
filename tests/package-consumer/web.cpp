@@ -1,5 +1,6 @@
 #include <atomic>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <span>
@@ -28,8 +29,12 @@
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
+#include <ruvia/web/detail/router/RouteStreamResult.h>
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
+#include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
+#include <ruvia/web/detail/server/HttpResponseStreamState.h>
+#include <ruvia/web/detail/server/HttpServerResponseStreamRoute.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -123,6 +128,21 @@ concept HasLegacyAccessLogHttp2Flag = requires(const Record& record) {
     record.http2();
 };
 
+template <typename Result>
+concept HasLegacyStreamedPredicate = requires(const Result& result) {
+    result.streamed();
+};
+
+template <typename Result>
+concept HasLegacySharedStreamResponse = requires(Result& result) {
+    result.takeResponse();
+};
+
+template <typename Result>
+concept HasLegacyStreamHandledPredicate = requires(const Result& result) {
+    result.streamHandled();
+};
+
 using RecordHttpAccessFunction = void (*)(
     const ruvia::HttpServerOptions::AccessLog&,
     const ruvia::HttpRequest&,
@@ -154,6 +174,44 @@ static_assert(std::is_same_v<
 static_assert(std::is_nothrow_copy_constructible_v<
     ruvia::AccessLogRecord>);
 static_assert(!std::is_copy_assignable_v<ruvia::AccessLogRecord>);
+static_assert(!std::default_initializable<
+    ruvia::detail::StreamDispatchResult>);
+static_assert(!HasLegacyStreamHandledPredicate<
+    ruvia::detail::StreamDispatchResult>);
+static_assert(!HasLegacySharedStreamResponse<
+    ruvia::detail::StreamDispatchResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
+                 .handled()),
+    const ruvia::detail::StreamRouteHandled*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
+                 .buffered()),
+    const ruvia::detail::StreamRouteBufferedResponse*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseStreamDispatchResult>);
+static_assert(!HasLegacyStreamedPredicate<
+    ruvia::detail::ResponseStreamDispatchResult>);
+static_assert(!HasLegacySharedStreamResponse<
+    ruvia::detail::ResponseStreamDispatchResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        ResponseStreamDispatchResult&>().completed()),
+    const ruvia::detail::ResponseStreamCompleted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        ResponseStreamDispatchResult&>().peerAbortedBeforeCommit()),
+    const ruvia::detail::ResponseStreamPeerAbortedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
+                 .commitPlan()),
+    const ruvia::detail::ResponseStreamCommitPlan*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpResponseStreamRouteResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpResponseStreamRouteResult&>().committed()),
+    const ruvia::detail::HttpResponseStreamCommittedRoute*>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),

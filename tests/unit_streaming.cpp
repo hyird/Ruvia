@@ -6,10 +6,12 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/web/detail/http/StreamingInternal.h"
@@ -281,8 +283,30 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     ResponseStreamState open;
     open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
-        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kGet, 200),
+        ruvia::HttpKnownMethod::kGet,
+        207,
         ruvia::detail::ResponseTrailerIntent::kNone));
+    RUVIA_CHECK(open.commitPlan() != nullptr);
+    RUVIA_CHECK_EQ(
+        open.commitPlan()->responseStatus(),
+        std::uint16_t{207});
+    RUVIA_CHECK(
+        open.commitPlan()->framing() ==
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked);
+    bool recommitRejected = false;
+    try {
+        open.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
+            ruvia::detail::ResponseStreamFraming::kHttp2Frames,
+            ruvia::HttpKnownMethod::kGet,
+            418,
+            ruvia::detail::ResponseTrailerIntent::kNone));
+    } catch (const std::logic_error&) {
+        recommitRejected = true;
+    }
+    RUVIA_CHECK(recommitRejected);
+    RUVIA_CHECK_EQ(
+        open.commitPlan()->responseStatus(),
+        std::uint16_t{207});
     open.ensureBodyAllowed();  // no throw
     open.ensureTrailersAllowed(
         ruvia::detail::ResponseStreamTrailerFraming::kHttp1Chunked);
@@ -311,7 +335,8 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     ResponseStreamState suppressed;
     suppressed.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
-        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kHead, 200),
+        ruvia::HttpKnownMethod::kHead,
+        200,
         ruvia::detail::ResponseTrailerIntent::kNone));
     bool bodyRejected = false;
     try {
@@ -326,7 +351,8 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     ResponseStreamState trailersOnly;
     trailersOnly.markCommitted(ruvia::detail::httpResponseStreamCommitPlan(
         ruvia::detail::ResponseStreamFraming::kHttp2Frames,
-        ruvia::detail::httpResponseBodyPlan(ruvia::HttpKnownMethod::kHead, 200),
+        ruvia::HttpKnownMethod::kHead,
+        200,
         ruvia::detail::ResponseTrailerIntent::kPresent));
     RUVIA_CHECK(trailersOnly.committed());
     RUVIA_CHECK(!trailersOnly.ended());
@@ -339,4 +365,24 @@ RUVIA_TEST(response_stream_state_drives_typed_post_head_phases) {
     RUVIA_CHECK(trailersOnlyBodyRejected);
     trailersOnly.ensureTrailersAllowed(
         ruvia::detail::ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
+}
+
+RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
+    ruvia::HttpResponse response(std::pmr::get_default_resource());
+    response.status(201);
+    auto plan = ruvia::detail::httpResponseStreamCommitPlan(
+        ruvia::detail::ResponseStreamFraming::kHttp1Chunked,
+        ruvia::HttpKnownMethod::kGet,
+        202,
+        ruvia::detail::ResponseTrailerIntent::kNone);
+    bool rejected = false;
+    try {
+        (void)ruvia::detail::prepareResponseStreamHead(
+            std::move(response),
+            ruvia::detail::ResponseStreamKind::kGeneric,
+            std::move(plan));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }

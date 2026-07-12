@@ -3,7 +3,9 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 
@@ -14,11 +16,16 @@ namespace detail {
 class ResponseStreamState final {
 public:
     [[nodiscard]] bool committed() const noexcept {
-        return phase_ != Phase::kUncommitted;
+        return committed_.has_value();
     }
 
     [[nodiscard]] bool ended() const noexcept {
-        return phase_ == Phase::kEnded;
+        return committed_.has_value() &&
+            committed_->phase == Phase::kEnded;
+    }
+
+    [[nodiscard]] const ResponseStreamCommitPlan* commitPlan() const noexcept {
+        return committed_.has_value() ? &committed_->plan : nullptr;
     }
 
     using StreamingHeadThunk = HttpResponse (*)(Context&);
@@ -38,30 +45,38 @@ public:
         return streamingHead_(*context_);
     }
 
-    void markCommitted(const ResponseStreamCommitPlan& plan) noexcept {
-        trailerFraming_ = plan.trailerFraming();
+    void markCommitted(ResponseStreamCommitPlan plan) {
+        if (committed_.has_value()) {
+            throw std::logic_error("response stream is already committed");
+        }
+        Phase phase = Phase::kEnded;
         switch (plan.headDisposition()) {
             case ResponseStreamHeadDisposition::kBodyOpen:
-                phase_ = Phase::kBodyOpen;
+                phase = Phase::kBodyOpen;
                 break;
             case ResponseStreamHeadDisposition::kTrailersOnly:
-                phase_ = Phase::kTrailersOnly;
+                phase = Phase::kTrailersOnly;
                 break;
             case ResponseStreamHeadDisposition::kMessageEnded:
-                phase_ = Phase::kEnded;
+                phase = Phase::kEnded;
                 break;
         }
+        committed_.emplace(std::move(plan), phase);
     }
 
-    void markEnded() noexcept {
-        phase_ = Phase::kEnded;
+    void markEnded() {
+        if (!committed_.has_value()) {
+            throw std::logic_error("response stream is not committed");
+        }
+        committed_->phase = Phase::kEnded;
     }
 
     void ensureBodyAllowed() const {
         if (ended()) {
             throw std::logic_error("response stream is already ended");
         }
-        if (phase_ != Phase::kBodyOpen) {
+        if (!committed_.has_value() ||
+            committed_->phase != Phase::kBodyOpen) {
             throw std::logic_error("response does not allow a stream body");
         }
     }
@@ -70,24 +85,33 @@ public:
         if (ended()) {
             throw std::logic_error("response stream is already ended");
         }
-        if (phase_ == Phase::kUncommitted || trailerFraming_ != requiredFraming) {
+        if (!committed_.has_value() ||
+            committed_->plan.trailerFraming() != requiredFraming) {
             throw std::logic_error("response framing does not support trailers");
         }
     }
 
 private:
     enum class Phase : std::uint8_t {
-        kUncommitted,
         kBodyOpen,
         kTrailersOnly,
         kEnded
     };
 
+    struct CommittedState final {
+        CommittedState(
+            ResponseStreamCommitPlan commitPlan,
+            Phase committedPhase) noexcept
+            : plan(std::move(commitPlan)),
+              phase(committedPhase) {}
+
+        ResponseStreamCommitPlan plan;
+        Phase phase;
+    };
+
     Context* context_{nullptr};
     StreamingHeadThunk streamingHead_{nullptr};
-    ResponseStreamTrailerFraming trailerFraming_{
-        ResponseStreamTrailerFraming::kUnavailable};
-    Phase phase_{Phase::kUncommitted};
+    std::optional<CommittedState> committed_;
 };
 
 }  // namespace detail

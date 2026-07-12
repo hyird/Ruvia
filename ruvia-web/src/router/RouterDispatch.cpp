@@ -182,7 +182,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     RequestMemory& memory,
     ContextServices services) const {
     const auto& route = resolved.route();
-    auto outcome = RouteStreamDispatchOutcome::kBufferedResponse;
+    auto disposition = StreamMiddlewareDisposition::kBufferedResponse;
     auto context = makeRouteContext(
         memory,
         request,
@@ -207,17 +207,22 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
                 ? responseStream->handler()
                 : webSocket->handler();
             co_await handler(context);
-            co_return StreamDispatchResult(
-                HttpResponse(context.resource()),
-                RouteStreamDispatchOutcome::kStreamHandled);
-        }
-        co_await invokeStreamMiddlewareAt(route, 0, context, outcome);
-        if (!detail::ContextAccess::hasResponse(context)) {
-            if (auto contextException = context.error()) {
-                std::rethrow_exception(contextException);
-            }
-            if (outcome != RouteStreamDispatchOutcome::kStreamHandled) {
-                throw std::logic_error("context is not finalized; stream middleware must set a response, write the stream, or await next()");
+            disposition = StreamMiddlewareDisposition::kStreamHandled;
+        } else {
+            co_await invokeStreamMiddlewareAt(route, 0, context, disposition);
+            if (!detail::ContextAccess::hasResponse(context)) {
+                if (auto contextException = context.error()) {
+                    std::rethrow_exception(contextException);
+                }
+                const bool streamCommitted =
+                    responseStreamOutput != nullptr &&
+                    detail::StreamingAccess::committed(
+                        responseStreamOutput->writer());
+                if (disposition !=
+                        StreamMiddlewareDisposition::kStreamHandled &&
+                    !streamCommitted) {
+                    throw std::logic_error("context is not finalized; stream middleware must set a response, write the stream, or await next()");
+                }
             }
         }
     } catch (...) {
@@ -231,9 +236,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             std::rethrow_exception(exception);
         }
         auto response = co_await handleException(context, exception);
-        co_return StreamDispatchResult(
-            std::move(response),
-            RouteStreamDispatchOutcome::kBufferedResponse);
+        co_return StreamDispatchResult::makeBuffered(std::move(response));
     }
 
     // The middleware chain converts a handler exception into a buffered error
@@ -252,12 +255,25 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         }
     }
 
-    auto response = detail::ContextAccess::hasResponse(context)
-        ? detail::ContextAccess::takeResponse(context)
-        : HttpResponse(context.resource());
-    co_return StreamDispatchResult(
-        std::move(response),
-        outcome);
+    const bool streamCommitted =
+        responseStreamOutput != nullptr &&
+        detail::StreamingAccess::committed(
+            responseStreamOutput->writer());
+    if (disposition == StreamMiddlewareDisposition::kStreamHandled ||
+        streamCommitted) {
+        // The bound Context is local to this coroutine. Finish a response stream
+        // before it is destroyed so an empty/bodyless handler cannot leave the
+        // sink with a dangling Context* that a higher layer later dereferences.
+        // Reaching this common point gives middleware post-processing its full
+        // chance to adjust an uncommitted head; an already committed writer no
+        // longer needs the Context.
+        if (responseStreamOutput != nullptr) {
+            co_await responseStreamOutput->writer().end();
+        }
+        co_return StreamDispatchResult::makeHandled();
+    }
+    co_return StreamDispatchResult::makeBuffered(
+        detail::ContextAccess::takeResponse(context));
 }
 
 Task<HttpResponse> detail::RouteTable::dispatch(

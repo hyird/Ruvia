@@ -13,43 +13,74 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <stdexcept>
 #include <utility>
+#include <variant>
 
 namespace ruvia::detail {
 
-class HttpResponseStreamRouteResult final {
+class HttpResponseStreamBufferedRoute final {
+private:
+    friend class HttpResponseStreamRouteResult;
+
+    constexpr HttpResponseStreamBufferedRoute() noexcept = default;
+};
+
+class HttpResponseStreamCommittedRoute final {
 public:
-    [[nodiscard]] static constexpr HttpResponseStreamRouteResult writeBufferedResponse() noexcept {
-        return HttpResponseStreamRouteResult(Outcome::kWriteBufferedResponse);
-    }
-
-    [[nodiscard]] static constexpr HttpResponseStreamRouteResult streamDispatched() noexcept {
-        return HttpResponseStreamRouteResult(Outcome::kStreamDispatched);
-    }
-
-    [[nodiscard]] static constexpr HttpResponseStreamRouteResult sessionFinished() noexcept {
-        return HttpResponseStreamRouteResult(Outcome::kSessionFinished);
-    }
-
-    [[nodiscard]] constexpr bool didDispatchStream() const noexcept {
-        return outcome_ == Outcome::kStreamDispatched;
-    }
-
-    [[nodiscard]] constexpr bool finishedSession() const noexcept {
-        return outcome_ == Outcome::kSessionFinished;
+    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
+        return status_;
     }
 
 private:
-    enum class Outcome {
-        kWriteBufferedResponse,
-        kStreamDispatched,
-        kSessionFinished
-    };
+    friend class HttpResponseStreamRouteResult;
 
-    explicit constexpr HttpResponseStreamRouteResult(Outcome outcome) noexcept
-        : outcome_(outcome) {}
+    explicit constexpr HttpResponseStreamCommittedRoute(
+        std::uint16_t status) noexcept
+        : status_(status) {}
 
-    Outcome outcome_;
+    std::uint16_t status_;
+};
+
+// The H1 route either leaves one buffered response for the session writer or has
+// already committed a stream head with the exact wire status. Connection reuse is
+// carried separately by the HTTP-owned connection plan output.
+class HttpResponseStreamRouteResult final {
+public:
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult
+    makeBuffered() noexcept {
+        return HttpResponseStreamRouteResult(
+            HttpResponseStreamBufferedRoute{});
+    }
+
+    [[nodiscard]] static constexpr HttpResponseStreamRouteResult
+    makeCommitted(std::uint16_t status) noexcept {
+        return HttpResponseStreamRouteResult(
+            HttpResponseStreamCommittedRoute(status));
+    }
+
+    [[nodiscard]] constexpr const HttpResponseStreamBufferedRoute*
+    buffered() const noexcept {
+        return std::get_if<HttpResponseStreamBufferedRoute>(&value_);
+    }
+
+    [[nodiscard]] constexpr const HttpResponseStreamCommittedRoute*
+    committed() const noexcept {
+        return std::get_if<HttpResponseStreamCommittedRoute>(&value_);
+    }
+
+private:
+    using Value = std::variant<
+        HttpResponseStreamBufferedRoute,
+        HttpResponseStreamCommittedRoute>;
+
+    template <typename Alternative>
+    explicit constexpr HttpResponseStreamRouteResult(
+        Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    Value value_;
 };
 
 template <typename Stream>
@@ -92,26 +123,43 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });
 
-    if (result.aborted()) {
-        co_return HttpResponseStreamRouteResult::sessionFinished();
+    if (const auto* failed = result.failedAfterCommit()) {
+        connectionPlan = responseSink.connectionPlan().requireClose();
+        co_return HttpResponseStreamRouteResult::makeCommitted(
+            failed->status());
     }
-    if (result.failedBeforeCommit()) {
-        response = result.takeResponse();
+    if (const auto* peer = result.peerAbortedAfterCommit()) {
+        connectionPlan = responseSink.connectionPlan().requireClose();
+        co_return HttpResponseStreamRouteResult::makeCommitted(
+            peer->status());
+    }
+    if (result.peerAbortedBeforeCommit() != nullptr) {
+        throw std::logic_error(
+            "HTTP/1 response stream reported an impossible peer-abort predicate");
+    }
+    if (auto* failed = result.failedBeforeCommit()) {
+        response = std::move(*failed).takeResponse();
         connectionPlan = http1FinalizeResponseConnection(
             response,
             streamPlan.requestConnectionPlan().requireClose());
         scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+        co_return HttpResponseStreamRouteResult::makeBuffered();
     }
-    if (result.buffered()) {
-        response = result.takeResponse();
+    if (auto* buffered = result.buffered()) {
+        response = std::move(*buffered).takeResponse();
         connectionPlan = finalizeBufferedRouteResponse(
             response,
             connectionPlan,
             requestCount,
             options.keepaliveRequests);
         scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::writeBufferedResponse();
+        co_return HttpResponseStreamRouteResult::makeBuffered();
+    }
+
+    const auto* completed = result.completed();
+    if (completed == nullptr) {
+        throw std::logic_error(
+            "response stream dispatch returned no H1 terminal alternative");
     }
 
     // The pre-commit close policy already included this completed request in the
@@ -120,10 +168,8 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     // the matching Connection signal.
     ++requestCount;
     connectionPlan = responseSink.connectionPlan();
-    if (connectionPlan.disposition() == Http1ConnectionDisposition::kClose) {
-        co_return HttpResponseStreamRouteResult::sessionFinished();
-    }
-    co_return HttpResponseStreamRouteResult::streamDispatched();
+    co_return HttpResponseStreamRouteResult::makeCommitted(
+        completed->status());
 }
 
 }  // namespace ruvia::detail
