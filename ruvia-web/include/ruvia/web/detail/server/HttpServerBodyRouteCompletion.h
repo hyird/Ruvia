@@ -112,8 +112,7 @@ completeSuccessfulHttpBodyRoute(
     ConnectionScanner::Entry& scannerEntry,
     HttpResponse& response,
     Http1ServerConnectionPlan connectionPlan,
-    std::size_t& requestCount,
-    std::size_t keepaliveRequests,
+    Http1RequestSequence& requestSequence,
     Http1RequestBodyConsumption bodyConsumption,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
@@ -121,8 +120,7 @@ completeSuccessfulHttpBodyRoute(
     connectionPlan = finalizeBodyRouteResponse(
         response,
         connectionPlan,
-        requestCount,
-        keepaliveRequests,
+        requestSequence,
         bodyConsumption);
     if (connectionPlan.disposition() == Http1ConnectionDisposition::kReuse) {
         restorePipeline(readBuffer, usedBytes);

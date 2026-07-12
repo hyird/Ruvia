@@ -922,6 +922,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
     set(_installed_http1_request_completion_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h")
+    set(_installed_http1_request_sequence_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http1RequestSequence.h")
     set(_installed_http1_body_completion_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h")
     set(_installed_http1_buffered_body_route_path
@@ -942,6 +944,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_response_stream_state_path}"
             "${_installed_http1_stream_route_path}"
             "${_installed_http1_request_completion_path}"
+            "${_installed_http1_request_sequence_path}"
             "${_installed_http1_body_completion_path}"
             "${_installed_http1_buffered_body_route_path}"
             "${_installed_http1_stream_body_route_path}"
@@ -964,6 +967,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_http1_stream_route)
     file(READ "${_installed_http1_request_completion_path}"
         _installed_http1_request_completion)
+    file(READ "${_installed_http1_request_sequence_path}"
+        _installed_http1_request_sequence)
     file(READ "${_installed_http1_body_completion_path}"
         _installed_http1_body_completion)
     file(READ "${_installed_http1_buffered_body_route_path}"
@@ -1000,6 +1005,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "Task<Http1SessionRequestCompletion>" OR
        NOT _installed_http1_stream_route MATCHES
            "makeCommittedStream" OR
+       NOT _installed_http1_stream_route MATCHES
+           "requestSequence[.]nextResponseClosePolicy[(][)]" OR
+       NOT _installed_http1_stream_route MATCHES
+           "requestSequence[.]completeCommittedResponse[(]connectionPlan[)]" OR
+       NOT _installed_http1_request_sequence MATCHES
+           "class Http1RequestSequence final" OR
+       NOT _installed_http1_request_sequence MATCHES
+           "completeUncommittedResponse" OR
+       NOT _installed_http1_request_sequence MATCHES
+           "completeCommittedResponse" OR
        NOT _installed_http1_request_completion MATCHES
            "class Http1SessionRequestCompletion final" OR
        NOT _installed_http1_request_completion MATCHES
@@ -1059,6 +1074,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "HttpResponseStream(RouteResult|BufferedRoute|CommittedRoute)" OR
        _installed_http1_stream_session MATCHES
            "committedStreamStatus|bufferAlreadyCompacted" OR
+       _installed_http1_stream_session MATCHES
+           "std::size_t[ 	]+requestCount" OR
+       _installed_http1_stream_route MATCHES
+           "nextHttp1ResponseClosePolicy|[+][+][ 	]*requestCount" OR
+       _installed_http1_body_completion MATCHES
+           "std::size_t[ 	]*&[ 	]*requestCount|std::size_t[ 	]+keepaliveRequests" OR
        _installed_http1_body_completion MATCHES
            "std::size_t&[ 	]+consumedBytes|bool&[ 	]+bufferAlreadyCompacted" OR
        _installed_http1_buffered_body_route MATCHES
