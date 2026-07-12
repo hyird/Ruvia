@@ -24,6 +24,7 @@ namespace {
 
 using ruvia::RedisValue;
 using ruvia::detail::appendRespCommand;
+using ruvia::detail::appendRedisScanOptions;
 using ruvia::detail::hiredisReplyToValue;
 using ruvia::detail::RedisTypesAccess;
 using ruvia::detail::parseRedisBlockingPopReply;
@@ -317,6 +318,28 @@ RUVIA_TEST(resp_command_rejects_empty_argument_list) {
     RUVIA_CHECK(threw);
 }
 
+RUVIA_TEST(redis_scan_count_distinguishes_absence_from_configured_zero) {
+    auto* resource = std::pmr::get_default_resource();
+    std::pmr::vector<std::pmr::string> args(resource);
+
+    appendRedisScanOptions(args, ruvia::RedisScanOptions{}, resource);
+    RUVIA_CHECK(args.empty());
+
+    ruvia::RedisScanOptions configured;
+    configured.count = 25;
+    appendRedisScanOptions(args, configured, resource);
+    RUVIA_CHECK_EQ(args.size(), std::size_t{2});
+    RUVIA_CHECK_EQ(std::string_view(args[0]), std::string_view("COUNT"));
+    RUVIA_CHECK_EQ(std::string_view(args[1]), std::string_view("25"));
+
+    ruvia::RedisScanOptions zero;
+    zero.match = "user:*";
+    zero.count = 0;
+    const auto sizeBeforeFailure = args.size();
+    RUVIA_CHECK(throwsOn([&] { appendRedisScanOptions(args, zero, resource); }));
+    RUVIA_CHECK_EQ(args.size(), sizeBeforeFailure);
+}
+
 RUVIA_TEST(redis_config_validation_checks_every_field) {
     using ruvia::RedisConfig;
     using ruvia::detail::validateRedisConfig;
@@ -331,6 +354,9 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     static_assert(std::same_as<
                   decltype(RedisConfig{}.acquireTimeout),
                   std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(RedisConfig{}.maxReplyBytes),
+                  std::optional<std::size_t>>);
 
     // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));
@@ -340,6 +366,7 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.port = 0; validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.poolSizePerWorker = 0; validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxArrayDepth = 0; validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxReplyBytes = 0; validateRedisConfig(c); }));
 
     // Every configured timeout must be positive. Zero cannot silently recover the
     // former sentinel convention, and the whole fold must validate every field.

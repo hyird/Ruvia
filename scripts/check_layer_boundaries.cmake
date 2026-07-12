@@ -7534,6 +7534,43 @@ if(EXISTS "${WEB_DB_TIMEOUT_MODEL}" AND
     endif()
 endif()
 
+set(WEB_REDIS_OPTIONAL_LIMIT_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
+set(WEB_REDIS_OPTIONAL_LIMIT_ARGS
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisCommandArgs.cpp")
+set(WEB_REDIS_OPTIONAL_LIMIT_IO
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolIo.cpp")
+set(WEB_REDIS_OPTIONAL_LIMIT_TEST
+    "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+set(WEB_REDIS_OPTIONAL_LIMIT_PACKAGE
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+if(EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_MODEL}" AND
+   EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_ARGS}" AND
+   EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_IO}" AND
+   EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_TEST}" AND
+   EXISTS "${WEB_REDIS_OPTIONAL_LIMIT_PACKAGE}")
+    file(READ "${WEB_REDIS_OPTIONAL_LIMIT_MODEL}" web_redis_optional_limit_model)
+    file(READ "${WEB_REDIS_OPTIONAL_LIMIT_ARGS}" web_redis_optional_limit_args)
+    file(READ "${WEB_REDIS_OPTIONAL_LIMIT_IO}" web_redis_optional_limit_io)
+    file(READ "${WEB_REDIS_OPTIONAL_LIMIT_TEST}" web_redis_optional_limit_test)
+    file(READ "${WEB_REDIS_OPTIONAL_LIMIT_PACKAGE}"
+        web_redis_optional_limit_package)
+    if(NOT web_redis_optional_limit_model MATCHES
+           "std::optional<std::size_t>[ 	]+maxReplyBytes" OR
+       NOT web_redis_optional_limit_model MATCHES
+           "std::optional<std::uint64_t>[ 	]+count" OR
+       web_redis_optional_limit_args MATCHES "options[.]count[ 	]*!=[ 	]*0" OR
+       web_redis_optional_limit_io MATCHES
+           "replyBytes[ 	]*[+][ 	]*bytesRead[ 	]*>" OR
+       NOT web_redis_optional_limit_test MATCHES
+           "redis_scan_count_distinguishes_absence_from_configured_zero" OR
+       NOT web_redis_optional_limit_package MATCHES
+           "decltype[(]ruvia::RedisScanOptions[{][}][.]count[)]")
+        boundary_error("Redis optional limits regained zero sentinels"
+            "reply byte limits and SCAN count hints must preserve absence, reject configured zero, and avoid overflowing cumulative checks")
+    endif()
+endif()
+
 set(CONNECTION_TIMEOUT_CORE_MODEL
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/ConnectionScanner.h")
 set(CONNECTION_TIMEOUT_CORE_RUNTIME

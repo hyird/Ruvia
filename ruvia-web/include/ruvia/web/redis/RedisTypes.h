@@ -38,8 +38,8 @@ struct RedisConfig {
     std::optional<std::chrono::milliseconds> connectTimeout;
     std::optional<std::chrono::milliseconds> commandTimeout;
     std::optional<std::chrono::milliseconds> acquireTimeout;
-    // Set to 0 to disable the reply byte limit.
-    std::size_t maxReplyBytes{64 * 1024 * 1024};
+    // Absence disables the reply byte limit.
+    std::optional<std::size_t> maxReplyBytes{64 * 1024 * 1024};
     // Must be greater than zero.
     std::size_t maxArrayDepth{64};
     bool tcpNoDelay{true};
@@ -102,7 +102,7 @@ struct RedisSetOptions final {
 struct RedisScanOptions {
     std::uint64_t cursor{0};
     std::string_view match;
-    std::uint64_t count{0};
+    std::optional<std::uint64_t> count;
 };
 
 namespace detail {

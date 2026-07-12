@@ -131,7 +131,9 @@ Task<RedisValue> RedisPool::readReply(
             }
             throw RedisError(RedisError::Code::kIoError, readEc.message());
         }
-        if (config_.maxReplyBytes > 0 && connection.replyBytes + bytesRead > config_.maxReplyBytes) {
+        if (config_.maxReplyBytes.has_value() &&
+            (bytesRead > *config_.maxReplyBytes ||
+             connection.replyBytes > *config_.maxReplyBytes - bytesRead)) {
             throw RedisError(RedisError::Code::kProtocolError, "redis reply exceeds configured limit");
         }
         connection.replyBytes += bytesRead;
