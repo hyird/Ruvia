@@ -173,6 +173,10 @@ if(RUVIA_BUILD_CORE)
     add_executable(ruvia_smoke_core_target smoke_core_target.cpp)
     target_link_libraries(ruvia_smoke_core_target PRIVATE ruvia::core)
     add_test(NAME ruvia_smoke_core_target COMMAND ruvia_smoke_core_target)
+
+    add_executable(ruvia_connection_scanner_lifetime connection_scanner_lifetime.cpp)
+    target_link_libraries(ruvia_connection_scanner_lifetime PRIVATE ruvia::core)
+    add_test(NAME ruvia_connection_scanner_lifetime COMMAND ruvia_connection_scanner_lifetime)
 endif()
 
 if(RUVIA_BUILD_HTTP)

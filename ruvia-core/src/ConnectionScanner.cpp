@@ -80,15 +80,15 @@ bool ConnectionScanner::Entry::tickLongLived(std::int64_t now) noexcept {
 }
 
 ConnectionScanner::Guard::Guard(ConnectionScanner* scanner, Entry& entry, asio::ip::tcp::socket& socket)
-    : scanner_(scanner), entry_(&entry) {
-    if (scanner_ != nullptr) {
-        scanner_->registerEntry(*entry_, socket);
+    : entry_(scanner != nullptr ? &entry : nullptr) {
+    if (scanner != nullptr) {
+        scanner->registerEntry(*entry_, socket);
     }
 }
 
 ConnectionScanner::Guard::~Guard() {
-    if (scanner_ != nullptr && entry_ != nullptr) {
-        scanner_->unregisterEntry(*entry_);
+    if (entry_ != nullptr) {
+        ConnectionScanner::detachEntry(*entry_);
     }
 }
 
@@ -96,6 +96,13 @@ ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, ConnectionS
     : timer_(std::move(executor)), options_(options), cachedNowMs_(steadyNowMs()) {
     sentinel_.prev_ = &sentinel_;
     sentinel_.next_ = &sentinel_;
+}
+
+ConnectionScanner::~ConnectionScanner() noexcept {
+    stop();
+    // Entries and their guards may be owned by longer-lived connection objects.
+    // Remove every scanner-owned pointer before the sentinel and timestamp die.
+    detachAllEntries();
 }
 
 void ConnectionScanner::start() {
@@ -134,6 +141,10 @@ void ConnectionScanner::registerEntry(Entry& entry, asio::ip::tcp::socket& socke
 }
 
 void ConnectionScanner::unregisterEntry(Entry& entry) noexcept {
+    detachEntry(entry);
+}
+
+void ConnectionScanner::detachEntry(Entry& entry) noexcept {
     if (!entry.linked()) {
         return;
     }
@@ -145,6 +156,12 @@ void ConnectionScanner::unregisterEntry(Entry& entry) noexcept {
     entry.socket_ = nullptr;
     entry.nowMs_ = nullptr;
     entry.periodicChecks_ = {};
+}
+
+void ConnectionScanner::detachAllEntries() noexcept {
+    while (sentinel_.next_ != &sentinel_) {
+        detachEntry(*sentinel_.next_);
+    }
 }
 
 void ConnectionScanner::closeAll() noexcept {

@@ -74,11 +74,11 @@ public:
         Guard& operator=(const Guard&) = delete;
 
     private:
-        ConnectionScanner* scanner_;
         Entry* entry_;
     };
 
     ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options);
+    ~ConnectionScanner() noexcept;
 
     void start();
     void stop() noexcept;
@@ -88,6 +88,8 @@ public:
     void closeAll() noexcept;
 
 private:
+    static void detachEntry(Entry& entry) noexcept;
+    void detachAllEntries() noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
     void schedule();
     void scan() noexcept;
