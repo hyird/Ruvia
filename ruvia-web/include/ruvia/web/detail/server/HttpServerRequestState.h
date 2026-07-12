@@ -9,7 +9,7 @@ namespace ruvia::detail {
 
 inline bool contentLengthExceedsLimit(
     const Http1RequestBodyPlan& bodyPlan,
-    HttpBodyByteLimit limit) noexcept {
+    ProtocolByteLimit limit) noexcept {
     const auto* knownLength = bodyPlan.knownLength();
     return knownLength != nullptr &&
         limit.exceeds(knownLength->contentLength());

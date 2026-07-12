@@ -40,7 +40,7 @@ public:
         Transport transport,
         ConnectionScanner::Entry& scannerEntry,
         WebSocketLifecycleOptions lifecycleOptions,
-        std::size_t maxMessageBytes,
+        ProtocolByteLimit messageLimit,
         std::pmr::memory_resource* resource,
         std::string_view initialBytes = {},
         WebSocketDeflateNegotiation deflate =
@@ -49,7 +49,7 @@ public:
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
-          protocol_(buffer_, maxMessageBytes, deflate),
+          protocol_(buffer_, messageLimit, deflate),
           backgroundWriteTimer_(transport_.executor()) {
         backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
         buffer_.append(initialBytes.data(), initialBytes.size());

@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/detail/websocket/WsEvent.h"
@@ -76,7 +77,7 @@ class WsConnection final {
 public:
     explicit WsConnection(
         std::pmr::string& input,
-        std::size_t maxMessageBytes = 0,
+        ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited(),
         WebSocketDeflateNegotiation deflate =
             WebSocketDeflateNegotiation::kDisabled);
 
@@ -123,7 +124,7 @@ private:
     void receivePeerClose() noexcept;
 
     std::pmr::string* input_;
-    std::size_t maxMessageBytes_;
+    ProtocolByteLimit messageLimit_;
     std::size_t inputOffset_{0};
     std::size_t pendingCompactUntil_{0};
 

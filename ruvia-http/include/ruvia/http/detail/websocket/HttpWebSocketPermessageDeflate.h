@@ -7,6 +7,7 @@
 
 #include <zlib.h>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpRequest.h"
 
@@ -77,21 +78,34 @@ public:
     }
 
     // Decompresses a whole message: appends the 0x00 0x00 0xFF 0xFF marker that
-    // the sender stripped, then raw-inflates into `out`, bounded by `maxBytes`
-    // (0 = unbounded) to defuse decompression bombs (RFC 7692 §7.2.2).
-    WebSocketInflateResult decompress(std::string_view input, std::pmr::string& out, std::size_t maxBytes) {
+    // the sender stripped, then raw-inflates into `out`, bounded by one explicit
+    // message limit to defuse decompression bombs (RFC 7692 §7.2.2).
+    WebSocketInflateResult decompress(
+        std::string_view input,
+        std::pmr::string& out,
+        ProtocolByteLimit messageLimit) {
         if (!inflateOk_ || inflateReset(&inflate_) != Z_OK) {
             return WebSocketInflateResult::kError;
         }
         static constexpr unsigned char kFlushMarker[4] = {0x00, 0x00, 0xFF, 0xFF};
-        if (const auto r = inflateChunk(input.data(), input.size(), out, maxBytes); r != WebSocketInflateResult::kOk) {
+        if (const auto r = inflateChunk(
+                input.data(), input.size(), out, messageLimit);
+            r != WebSocketInflateResult::kOk) {
             return r;
         }
-        return inflateChunk(reinterpret_cast<const char*>(kFlushMarker), sizeof(kFlushMarker), out, maxBytes);
+        return inflateChunk(
+            reinterpret_cast<const char*>(kFlushMarker),
+            sizeof(kFlushMarker),
+            out,
+            messageLimit);
     }
 
 private:
-    WebSocketInflateResult inflateChunk(const char* data, std::size_t size, std::pmr::string& out, std::size_t maxBytes) {
+    WebSocketInflateResult inflateChunk(
+        const char* data,
+        std::size_t size,
+        std::pmr::string& out,
+        ProtocolByteLimit messageLimit) {
         inflate_.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(data));
         inflate_.avail_in = static_cast<uInt>(size);
         char buffer[8192];
@@ -103,7 +117,7 @@ private:
                 return WebSocketInflateResult::kError;
             }
             const auto produced = sizeof(buffer) - inflate_.avail_out;
-            if (maxBytes != 0 && produced > maxBytes - out.size()) {
+            if (messageLimit.additionExceeds(out.size(), produced)) {
                 return WebSocketInflateResult::kTooLarge;
             }
             out.append(buffer, produced);

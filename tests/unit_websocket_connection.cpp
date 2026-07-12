@@ -12,6 +12,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSocketTransport.h"
 #include "ruvia/core/detail/AsioAwait.h"
@@ -124,7 +125,7 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
         RecordingTransport(io, state),
         scannerEntry,
         lifecycle,
-        1024,
+        ruvia::ProtocolByteLimit::limited(1024),
         memory.resource());
 
     RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 10));
@@ -162,7 +163,7 @@ RUVIA_TEST(websocket_socket_bridge_ping_fragment_echo_and_close) {
                 WebSocketSocketTransport<tcp::socket>(socket),
                 scannerEntry,
                 {},
-                1024,
+                ruvia::ProtocolByteLimit::limited(1024),
                 memory.resource());
             const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
             serverSawMessage = message.has_value() && message->payload() == "hello";
@@ -229,7 +230,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
                 WebSocketSocketTransport<tcp::socket>(socket),
                 scannerEntry,
                 {},
-                1024,
+                ruvia::ProtocolByteLimit::limited(1024),
                 memory.resource(),
                 {},
                 WebSocketDeflateNegotiation::kAccepted);
@@ -269,7 +270,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
             const auto result = decoder.decompress(
                 std::string_view(response.data() + 2, response.size() - 2),
                 decoded,
-                1024);
+                ruvia::ProtocolByteLimit::limited(1024));
             clientDecoded = result == ruvia::detail::WebSocketInflateResult::kOk &&
                 std::string_view(decoded.data(), decoded.size()) == original;
             (void)(co_await readShortServerFrame(socket));
@@ -300,7 +301,7 @@ RUVIA_TEST(websocket_socket_bridge_protocol_error_flushes_core_close) {
                 WebSocketSocketTransport<tcp::socket>(socket),
                 scannerEntry,
                 {},
-                1024,
+                ruvia::ProtocolByteLimit::limited(1024),
                 memory.resource());
             const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
             serverEnded = !message.has_value();

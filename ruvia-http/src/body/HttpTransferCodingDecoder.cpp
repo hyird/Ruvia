@@ -15,7 +15,7 @@ void throwRequestBodyTooLarge() {
 TransferCodingDecoder::TransferCodingDecoder(
     HttpTransferCodings codings,
     std::pmr::polymorphic_allocator<char> allocator,
-    HttpBodyByteLimit bodyLimit)
+    ProtocolByteLimit bodyLimit)
     : codings_(codings),
       output_(allocator),
       resource_(allocator.resource()),

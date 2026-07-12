@@ -17,7 +17,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/core/memory/PmrObject.h"
 #include "ruvia/core/memory/PmrResource.h"
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/web/detail/router/RouteModes.h"
@@ -186,7 +186,7 @@ public:
 
     [[nodiscard]] Http2RequestBodyStoreResult store(
         std::string_view data,
-        HttpBodyByteLimit totalLimit,
+        ProtocolByteLimit totalLimit,
         std::size_t streamingBacklogLimit) {
         if (!mode_) {
             return Http2RequestBodyStoreResult::kModeNotSelected;

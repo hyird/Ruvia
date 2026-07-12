@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpProtocolError.h"
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 
 namespace ruvia::detail {
@@ -22,7 +22,7 @@ enum class Http1ChunkDelimiterStatus : std::uint8_t {
 
 class Http1ChunkDecoder final {
 public:
-    explicit Http1ChunkDecoder(HttpBodyByteLimit bodyLimit) noexcept
+    explicit Http1ChunkDecoder(ProtocolByteLimit bodyLimit) noexcept
         : bodyLimit_(bodyLimit) {}
 
     [[nodiscard]] std::size_t remaining() const noexcept {
@@ -86,7 +86,7 @@ private:
         encodedOverheadBytes_ += bytes;
     }
 
-    HttpBodyByteLimit bodyLimit_;
+    ProtocolByteLimit bodyLimit_;
     std::size_t remaining_{0};
     std::size_t decodedBytes_{0};
     std::size_t encodedOverheadBytes_{0};
@@ -211,7 +211,7 @@ private:
 // remain protocol-owned; a runtime only refills input on a need-more result.
 class Http1ChunkedBodyDecoder final {
 public:
-    explicit Http1ChunkedBodyDecoder(HttpBodyByteLimit bodyLimit) noexcept
+    explicit Http1ChunkedBodyDecoder(ProtocolByteLimit bodyLimit) noexcept
         : chunks_(bodyLimit) {}
 
     [[nodiscard]] Http1ChunkDecodeResult decode(

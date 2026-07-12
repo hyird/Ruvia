@@ -8,7 +8,7 @@
 #include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
@@ -27,7 +27,7 @@ public:
         std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initialBodyAndPipeline,
         Http1RequestBodyPlan bodyPlan,
-        HttpBodyByteLimit bodyLimit,
+        ProtocolByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry);
     ~StreamBodyReader();
 
@@ -69,7 +69,7 @@ private:
     TransferCodingDecoder* transferDecoder_{nullptr};
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;
-    HttpBodyByteLimit bodyLimit_;
+    ProtocolByteLimit bodyLimit_;
     Http1ChunkedBodyDecoder chunkDecoder_;
     ConnectionScanner::Entry& scannerEntry_;
     std::size_t readCursor_{0};

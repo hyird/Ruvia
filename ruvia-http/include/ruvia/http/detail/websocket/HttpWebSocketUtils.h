@@ -11,6 +11,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketMessageAccess.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
@@ -84,25 +85,24 @@ struct WebSocketFrameStart final {
 
 [[nodiscard]] inline bool webSocketMessageExceedsLimit(
     std::size_t payloadSize,
-    std::size_t maxMessageBytes) noexcept {
-    return maxMessageBytes != 0 && payloadSize > maxMessageBytes;
+    ProtocolByteLimit messageLimit) noexcept {
+    return messageLimit.exceeds(payloadSize);
 }
 
 [[nodiscard]] inline bool webSocketAppendExceedsLimit(
     std::size_t currentSize,
     std::size_t appendSize,
-    std::size_t maxMessageBytes) noexcept {
-    return maxMessageBytes != 0 &&
-        (appendSize > maxMessageBytes || currentSize > maxMessageBytes - appendSize);
+    ProtocolByteLimit messageLimit) noexcept {
+    return messageLimit.additionExceeds(currentSize, appendSize);
 }
 
 [[nodiscard]] inline bool webSocketFrameLengthExceedsLimit(
     std::uint64_t payloadSize,
-    std::size_t maxMessageBytes) noexcept {
+    ProtocolByteLimit messageLimit) noexcept {
     if (payloadSize > static_cast<std::uint64_t>((std::numeric_limits<std::size_t>::max)())) {
         return true;
     }
-    return webSocketMessageExceedsLimit(static_cast<std::size_t>(payloadSize), maxMessageBytes);
+    return messageLimit.exceeds(static_cast<std::size_t>(payloadSize));
 }
 
 // A control frame (Close/Ping/Pong) is capped at 125 bytes by RFC 6455 §5.5 and
@@ -114,9 +114,9 @@ struct WebSocketFrameStart final {
 [[nodiscard]] inline bool webSocketFrameExceedsMessageLimit(
     WebSocketOpcode opcode,
     std::uint64_t payloadSize,
-    std::size_t maxMessageBytes) noexcept {
+    ProtocolByteLimit messageLimit) noexcept {
     return !isWebSocketControlOpcode(opcode) &&
-        webSocketFrameLengthExceedsLimit(payloadSize, maxMessageBytes);
+        webSocketFrameLengthExceedsLimit(payloadSize, messageLimit);
 }
 
 [[nodiscard]] inline bool webSocketMaskedFrameReadSizeOverflows(
@@ -398,7 +398,7 @@ public:
 
     [[nodiscard]] WebSocketInboundResult accept(
         const WebSocketFrameView& frame,
-        std::size_t maxMessageBytes) {
+        ProtocolByteLimit messageLimit) {
         if (frame.opcode == WebSocketOpcode::kPing ||
             frame.opcode == WebSocketOpcode::kPong ||
             frame.opcode == WebSocketOpcode::kClose) {
@@ -411,7 +411,7 @@ public:
                     WebSocketProtocolFailure::kProtocolError);
             }
             if (webSocketAppendExceedsLimit(
-                    message_.size(), frame.payload.size(), maxMessageBytes)) {
+                    message_.size(), frame.payload.size(), messageLimit)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kMessageTooLarge);
             }
@@ -444,7 +444,7 @@ public:
                     WebSocketProtocolFailure::kProtocolError);
             }
             if (webSocketMessageExceedsLimit(
-                    frame.payload.size(), maxMessageBytes)) {
+                    frame.payload.size(), messageLimit)) {
                 return WebSocketInboundResult::makeFailure(
                     WebSocketProtocolFailure::kMessageTooLarge);
             }
@@ -529,7 +529,7 @@ private:
         std::pmr::string&,
         std::size_t&,
         std::size_t&,
-        std::size_t,
+        ProtocolByteLimit,
         bool);
 
     using Value = std::variant<
@@ -568,7 +568,7 @@ private:
     std::pmr::string& buffer,
     std::size_t& offset,
     std::size_t& pendingCompactUntil,
-    std::size_t maxMessageBytes,
+    ProtocolByteLimit messageLimit,
     bool permessageDeflate) {
     compactWebSocketReadBuffer(buffer, offset, pendingCompactUntil);
     const auto available = buffer.size() - offset;
@@ -606,7 +606,7 @@ private:
         return WebSocketFrameReadResult::makeFailure(
             WebSocketProtocolFailure::kProtocolError);
     }
-    if (webSocketFrameExceedsMessageLimit(frameStart.opcode, length, maxMessageBytes)) {
+    if (webSocketFrameExceedsMessageLimit(frameStart.opcode, length, messageLimit)) {
         return WebSocketFrameReadResult::makeFailure(
             WebSocketProtocolFailure::kMessageTooLarge);
     }

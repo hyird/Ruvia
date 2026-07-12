@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/body/HttpStreamBodyReader.h"
 
@@ -33,7 +33,7 @@ RUVIA_TEST(http1_without_body_plan_preserves_the_entire_pipeline) {
         std::pmr::polymorphic_allocator<char>(&resource),
         "GET /next HTTP/1.1\r\nHost: x\r\n\r\n",
         plan,
-        ruvia::HttpBodyByteLimit::limited(1024),
+        ruvia::ProtocolByteLimit::limited(1024),
         scannerEntry);
     RUVIA_CHECK(
         reader.consumption() ==

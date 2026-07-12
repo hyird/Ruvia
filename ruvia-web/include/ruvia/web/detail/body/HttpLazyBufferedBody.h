@@ -14,7 +14,7 @@ public:
         std::pmr::memory_resource* requestResource,
         std::string_view initialBodyAndPipeline,
         Http1RequestBodyPlan bodyPlan,
-        HttpBodyByteLimit bodyLimit,
+        ProtocolByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry)
         : reader_(
               stream,

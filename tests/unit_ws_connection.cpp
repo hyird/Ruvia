@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -8,10 +9,12 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
 namespace {
 
+using ruvia::ProtocolByteLimit;
 using ruvia::WebSocketOpcode;
 using ruvia::detail::WebSocketDeflateNegotiation;
 using ruvia::detail::WsConnection;
@@ -51,6 +54,14 @@ static_assert(std::same_as<
     std::optional<WsEvent>>);
 static_assert(!std::default_initializable<WsEvent>);
 static_assert(!HasLooseWsEventFields<WsEvent>);
+static_assert(!std::constructible_from<
+    WsConnection,
+    std::pmr::string&,
+    std::size_t>);
+static_assert(std::constructible_from<
+    WsConnection,
+    std::pmr::string&,
+    ProtocolByteLimit>);
 static_assert(!HasWsCloseCode<WsMessageEvent>);
 static_assert(HasWsCloseCode<WsCloseEvent>);
 static_assert(HasWsCloseCode<WsProtocolErrorEvent>);
@@ -272,7 +283,7 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
     std::pmr::string input(&resource);
     WsConnection conn(
         input,
-        0,
+        ProtocolByteLimit::unlimited(),
         WebSocketDeflateNegotiation::kAccepted);
 
     ruvia::detail::WebSocketDeflate encoder;
@@ -294,7 +305,7 @@ RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     std::pmr::string input(&resource);
     WsConnection conn(
         input,
-        0,
+        ProtocolByteLimit::unlimited(),
         WebSocketDeflateNegotiation::kAccepted);
 
     const std::pmr::string repetitive(200, 'a', &resource);
