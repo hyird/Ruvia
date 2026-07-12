@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ruvia/web/detail/body/HttpRequestBody.h"
+#include "ruvia/web/detail/body/HttpLazyBufferedBody.h"
+#include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"

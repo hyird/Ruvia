@@ -932,6 +932,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "removed Web server session aggregation header was installed")
     endif()
+    set(_removed_request_body_umbrella
+        "${_install_prefix}/include/ruvia/web/detail/body/HttpRequestBody.h")
+    if(EXISTS "${_removed_request_body_umbrella}")
+        message(FATAL_ERROR
+            "removed Web request-body aggregation header was installed")
+    endif()
     set(_installed_middleware_public_path
         "${_install_prefix}/include/ruvia/web/Middleware.h")
     set(_installed_middleware_descriptor_path
