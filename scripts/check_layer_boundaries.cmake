@@ -95,6 +95,8 @@ set(RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE
     "HttpClientRequestContentMode|Http1ClientRequestContentDisposition|Http2RequestContentMode")
 set(RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT
     "sawContentLength|parsedContentLength")
+set(RULE_STALE_HTTP_CONTENT_DECODE_CHAIN
+    "decodeRequestContentEncoding|inline[ \t]+void[ \t\r\n]+decodeHttpClientResponseContentEncoding|kMaxDecodedRequestBodyBytes|zlibInflateRequestBody|brotliInflateRequestBody|zstdInflateRequestBody|StreamingContentDecoder|HttpStreamingDecoder[.]h")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -455,6 +457,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("split Content-Length parser state"
         "${RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT}"
         "bool sawContentLength = false;")
+    expect_match("request-only bool/out-parameter content decoder"
+        "${RULE_STALE_HTTP_CONTENT_DECODE_CHAIN}"
+        "decodeRequestContentEncoding(coding, input, output, limit)")
+    expect_match("duplicate streaming content decoder"
+        "${RULE_STALE_HTTP_CONTENT_DECODE_CHAIN}"
+        "class StreamingContentDecoder final {};")
+    expect_match("in-place client response content decoding"
+        "${RULE_STALE_HTTP_CONTENT_DECODE_CHAIN}"
+        "inline void decodeHttpClientResponseContentEncoding() {}")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -1408,6 +1419,28 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
     endif()
 endif()
 
+set(WEB_CONTENT_DECODE_SERVER_ENTRY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerSessionEntry.inl")
+if(EXISTS "${WEB_CONTENT_DECODE_SERVER_ENTRY}" AND
+   EXISTS "${WEB_CONTEXT_SERVICES}" AND
+   EXISTS "${WEB_CONTEXT_INTERNAL}" AND
+   EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}")
+    file(READ "${WEB_CONTENT_DECODE_SERVER_ENTRY}"
+        web_content_decode_server_entry)
+    if(NOT web_content_decode_server_entry MATCHES
+           "options_[.]maxBufferedBodyBytes" OR
+       NOT web_context_services MATCHES "maxDecodedBodyBytes" OR
+       NOT web_context_internal MATCHES
+           "maxDecodedBodyBytes_[(]services[.]maxDecodedBodyBytes[(][)][)]" OR
+       NOT web_context_request_source MATCHES
+           "decodeHttpContent" OR
+       NOT web_context_request_source MATCHES
+           "maxDecodedBodyBytes_")
+        boundary_error("Web decoded-body limit is not wired end to end"
+            "the configured buffered-body limit must reach the HTTP decoder through ContextServices")
+    endif()
+endif()
+
 set(WEB_CONN_INFO
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ConnInfo.h")
 set(WEB_CONN_CONTEXT_SERVICES
@@ -2141,6 +2174,19 @@ check_files_no_match("HTTP/1 request-body framing must use one typed plan"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerRequestState.h"
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+check_files_no_match("HTTP content decoding must use one owning typed result"
+    "${RULE_STALE_HTTP_CONTENT_DECODE_CHAIN}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentCoding.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/RequestBodyDecoding.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientContentEncoding.h"
+    "${RUVIA_ROOT}/ruvia-http/src/HttpContentCoding.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+if(EXISTS
+       "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpStreamingDecoder.h")
+    boundary_error(
+        "HTTP content decoding must have one implementation owner"
+        "stale HttpStreamingDecoder.h exists")
+endif()
 check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"
     "${RULE_STALE_HTTP1_REQUEST_BODY_MODE_TUPLE}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"

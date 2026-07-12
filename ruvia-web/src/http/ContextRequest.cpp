@@ -679,16 +679,40 @@ Task<std::string_view> Context::requestBody() const {
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto coding = detail::requestContentCoding(request_);
-    if (coding == detail::HttpContentCoding::kNone || raw.empty()) {
+    if (coding == detail::HttpContentCoding::kNone) {
         co_return raw;
     }
+    auto decodeResult = detail::decodeHttpContent(
+        coding,
+        raw,
+        maxDecodedBodyBytes_,
+        resource());
+    auto* decodedContent = decodeResult.decoded();
+    if (decodedContent == nullptr) {
+        switch (decodeResult.failure()->error()) {
+            case detail::HttpContentDecodeError::kDecodedSizeExceeded:
+                throw HttpError(
+                    413,
+                    "payload_too_large",
+                    "request body is too large");
+            case detail::HttpContentDecodeError::kInvalidContent:
+                throw HttpError(
+                    400,
+                    "bad_request",
+                    "failed to decode request body");
+            case detail::HttpContentDecodeError::kDecoderFailure:
+                throw std::runtime_error("request content decoder failed");
+            case detail::HttpContentDecodeError::kUnsupportedCoding:
+                throw std::logic_error(
+                    "request content decoder received an unsupported coding");
+        }
+    }
     auto& decoded = decodedBody();
-    decoded.clear();
-    // Keep the decoded buffer in the arena (not inline SSO) so the returned view
-    // survives the Context if a handler hands it to c.text(). See assignStableString.
-    decoded.reserve(32);
-    if (!detail::decodeRequestContentEncoding(coding, raw, decoded, detail::kMaxDecodedRequestBodyBytes)) {
-        throw HttpError(400, "bad_request", "failed to decode request body");
+    decoded = std::move(*decodedContent).takeBytes();
+    // Keep short content in the arena (not inline SSO) so the returned view
+    // survives the Context if a handler hands it to c.text().
+    if (decoded.size() < 32) {
+        decoded.reserve(32);
     }
     bodyDecoded_ = true;
     co_return std::string_view(decoded.data(), decoded.size());

@@ -3,7 +3,9 @@
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
+#include "ruvia/http/HttpLimits.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -21,10 +23,13 @@ public:
     constexpr ContextServices(
         DbRegistry* db,
         RedisRegistry* redis,
-        RateLimiter* rateLimiter = nullptr) noexcept
+        RateLimiter* rateLimiter = nullptr,
+        std::size_t maxDecodedBodyBytes =
+            kDefaultMaxBufferedBodyBytes) noexcept
         : db_(db),
           redis_(redis),
           rateLimiter_(rateLimiter),
+          maxDecodedBodyBytes_(maxDecodedBodyBytes),
           connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
@@ -37,6 +42,10 @@ public:
 
     [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
         return rateLimiter_;
+    }
+
+    [[nodiscard]] constexpr std::size_t maxDecodedBodyBytes() const noexcept {
+        return maxDecodedBodyBytes_;
     }
 
     [[nodiscard]] HttpErrorHandler errorHandler() const noexcept {
@@ -136,6 +145,7 @@ private:
     DbRegistry* db_{nullptr};
     RedisRegistry* redis_{nullptr};
     RateLimiter* rateLimiter_{nullptr};
+    std::size_t maxDecodedBodyBytes_{kDefaultMaxBufferedBodyBytes};
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 
