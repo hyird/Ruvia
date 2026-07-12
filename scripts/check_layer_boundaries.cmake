@@ -1401,11 +1401,42 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
             "distinct macro paths and value-level endpoint/resolution tests must remain")
     endif()
 endif()
+set(WEB_CONTROLLER_DESCRIPTORS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/controller/ControllerDescriptors.h")
 set(WEB_CONTROLLER_RUNTIME
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerRuntime.h")
-if(EXISTS "${WEB_CONTROLLER_MACROS}" AND EXISTS "${WEB_CONTROLLER_RUNTIME}")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/controller/ControllerRuntime.h")
+set(WEB_CONTROLLER_REGISTRY
+    "${RUVIA_ROOT}/ruvia-web/src/router/ControllerRegistry.cpp")
+set(WEB_CONTROLLER_CMAKE
+    "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt")
+foreach(stale_controller_file IN ITEMS
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerDescriptors.h"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerRuntime.h"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerTypes.h"
+        "${RUVIA_ROOT}/ruvia-web/src/http/Controller.cpp")
+    if(EXISTS "${stale_controller_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${stale_controller_file}")
+        boundary_error("Controller internals escaped their detail/router ownership"
+            "${relative} must not restore the removed public-root or HTTP-layer path")
+    endif()
+endforeach()
+if(NOT EXISTS "${WEB_CONTROLLER_DESCRIPTORS}" OR
+   NOT EXISTS "${WEB_CONTROLLER_RUNTIME}" OR
+   NOT EXISTS "${WEB_CONTROLLER_REGISTRY}" OR
+   NOT EXISTS "${WEB_CONTROLLER_CMAKE}")
+    boundary_error("Controller internal ownership is incomplete"
+        "detail/controller headers and src/router/ControllerRegistry.cpp must remain")
+elseif(EXISTS "${WEB_CONTROLLER_MACROS}")
+    file(READ "${WEB_CONTROLLER_MACROS}" web_controller_macros)
     file(READ "${WEB_CONTROLLER_RUNTIME}" web_controller_runtime)
+    file(READ "${WEB_CONTROLLER_CMAKE}" web_controller_cmake)
     if(NOT web_controller_macros MATCHES
+           "ruvia/web/detail/controller/ControllerRuntime[.]h" OR
+       NOT web_controller_runtime MATCHES
+           "ruvia/web/detail/controller/ControllerDescriptors[.]h" OR
+       NOT web_controller_cmake MATCHES
+           "src/router/ControllerRegistry[.]cpp" OR
+       NOT web_controller_macros MATCHES
            "using RuviaControllerAccess" OR
        NOT web_controller_macros MATCHES
            "friend class ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>" OR
@@ -1423,8 +1454,8 @@ endif()
 check_files_no_match("Web routing restored split endpoint or resolution APIs"
     "${RULE_STALE_ROUTE_MODE_SPLIT}|${RULE_STALE_ROUTE_RESOLUTION_TUPLE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Controller.h"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerDescriptors.h"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerRuntime.h"
+    "${WEB_CONTROLLER_DESCRIPTORS}"
+    "${WEB_CONTROLLER_RUNTIME}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouterInternal.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"

@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/ControllerTypes.h"
+#include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/core/detail/NativePath.h"
 #include "ruvia/web/detail/server/HttpServer.h"

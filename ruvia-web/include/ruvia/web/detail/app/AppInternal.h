@@ -11,7 +11,7 @@
 #include "ruvia/web/detail/app/AppResource.h"
 #include "ruvia/web/detail/app/DotenvInternal.h"
 #include "ruvia/core/detail/NativePath.h"
-#include "ruvia/web/ControllerDescriptors.h"
+#include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/detail/db/DbInternal.h"
 #include "ruvia/web/detail/redis/RedisInternal.h"
 

@@ -1,5 +1,7 @@
 #pragma once
 
+// Internal startup-time controller registration contracts.
+
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
