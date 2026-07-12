@@ -21,7 +21,7 @@
 #include <ruvia/web/HttpServerOptions.h>
 #include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
-#include <ruvia/web/RouteModes.h>
+#include <ruvia/web/detail/router/RouteModes.h>
 #include <ruvia/web/Streaming.h>
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>

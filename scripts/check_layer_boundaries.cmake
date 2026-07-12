@@ -1277,7 +1277,9 @@ if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND
 endif()
 
 set(WEB_ROUTE_MODES
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RouteModes.h")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteModes.h")
+set(WEB_ROUTE_LIMITS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteLimits.h")
 set(WEB_ROUTE_RESOLUTION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteResolution.h")
 set(WEB_ROUTE_TABLE
@@ -1298,6 +1300,7 @@ set(WEB_ROUTE_RESOLUTION_TEST
     "${RUVIA_ROOT}/tests/unit_route_resolution.cpp")
 foreach(route_contract_file IN ITEMS
         "${WEB_ROUTE_MODES}"
+        "${WEB_ROUTE_LIMITS}"
         "${WEB_ROUTE_RESOLUTION}"
         "${WEB_ROUTE_TABLE}"
         "${WEB_CONTROLLER_MACROS}"
@@ -1319,13 +1322,19 @@ if(EXISTS "${WEB_STALE_REQUEST_DISPATCHER}")
     boundary_error("request-time virtual route dispatcher was restored"
         "HTTP/1, HTTP/2, streaming, and WebSocket dispatch must call the concrete RouteTable directly")
 endif()
-if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
+if(EXISTS "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RouteModes.h")
+    boundary_error("route internals escaped detail/router ownership"
+        "ruvia-web/include/ruvia/web/RouteModes.h must not restore the removed public-root path")
+endif()
+if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
+   EXISTS "${WEB_ROUTE_RESOLUTION}" AND
    EXISTS "${WEB_ROUTE_TABLE}" AND
    EXISTS "${WEB_CONTROLLER_MACROS}" AND EXISTS "${WEB_ROUTE_HTTP2_SESSION}" AND
    EXISTS "${WEB_ROUTE_RESPONSE_STREAM_DISPATCH}" AND
    EXISTS "${WEB_ROUTE_WEBSOCKET_SESSION}" AND
    EXISTS "${WEB_ROUTE_RESOLUTION_TEST}")
     file(READ "${WEB_ROUTE_MODES}" web_route_modes)
+    file(READ "${WEB_ROUTE_LIMITS}" web_route_limits)
     file(READ "${WEB_ROUTE_RESOLUTION}" web_route_resolution)
     file(READ "${WEB_ROUTE_TABLE}" web_route_table)
     file(READ "${WEB_CONTROLLER_MACROS}" web_controller_macros)
@@ -1335,7 +1344,12 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
     file(READ "${WEB_ROUTE_WEBSOCKET_SESSION}"
         web_route_websocket_session)
     file(READ "${WEB_ROUTE_RESOLUTION_TEST}" web_route_resolution_test)
-    if(web_route_modes MATCHES "ResponseBodyMode" OR
+    if(NOT web_route_modes MATCHES "enum class RequestBodyMode" OR
+       web_route_modes MATCHES "kMaxRouteParams" OR
+       NOT web_route_limits MATCHES
+           "inline constexpr std::size_t kMaxRouteParams" OR
+       web_route_limits MATCHES "namespace ruvia[ \t\r\n]*[{]" OR
+       web_route_modes MATCHES "ResponseBodyMode" OR
        web_route_resolution MATCHES "RouteDisposition" OR
        web_route_table MATCHES "ResponseBodyMode" OR
        web_route_table MATCHES

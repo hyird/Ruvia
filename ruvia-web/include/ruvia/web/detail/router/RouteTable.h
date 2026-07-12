@@ -18,6 +18,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
+#include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/router/RouteStreamResult.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"

@@ -11,7 +11,7 @@
 #include <asio/detached.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/web/RouteModes.h"
+#include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 
 namespace {

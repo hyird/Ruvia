@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/RouteModes.h"
+#include "ruvia/web/detail/router/RouteLimits.h"
 
 // Lightweight, self-contained route-resolution result types. A materialized
 // resolution is exactly one of resolved, method-not-allowed, or not-found; the

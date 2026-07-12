@@ -2,6 +2,7 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/router/RouteLimits.h"
 
 #include <cstddef>
 #include <exception>
@@ -33,7 +34,10 @@ inline Context::Context(
       routeMethod_(routeMethod),
       paramNames_(paramNames),
       paramValues_(paramValues),
-      paramCount_(paramCount < kMaxRouteParams ? paramCount : kMaxRouteParams),
+      paramCount_(
+          paramCount < detail::kMaxRouteParams
+              ? paramCount
+              : detail::kMaxRouteParams),
       routeMiddlewareCount_(routeMiddlewareCount),
       db_(services.db()),
       redis_(services.redis()),
