@@ -10,10 +10,10 @@
 
 namespace ruvia::detail {
 
-// Invokes the per-request access-log callback once a response has completed.
-// A no-op (single null check) when unset, so it stays off the cost ledger of
-// servers that do not observe. status is the response status (200 for streams);
-// duration is measured from `start`.
+// Invokes the per-request access-log callback for a terminal outcome whose final
+// response status was committed. A no-op (single null check) when unset, so it
+// stays off the cost ledger of servers that do not observe. `status` comes from
+// the committed protocol plan; duration is measured from `start`.
 inline void recordHttpAccess(
     const HttpServerOptions::AccessLog& accessLog,
     const HttpRequest& request,

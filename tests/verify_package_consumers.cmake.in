@@ -871,6 +871,53 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed buffered response status ownership was split or reconstructed")
     endif()
 
+    set(_installed_http1_buffered_response_result_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http1BufferedResponseWrite.h")
+    set(_installed_http1_buffered_response_writer_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseWriter.h")
+    foreach(_http1_buffered_completion_contract IN ITEMS
+            "${_installed_http1_buffered_response_result_path}"
+            "${_installed_http1_buffered_response_writer_path}"
+            "${_installed_http1_stream_session_path}")
+        if(NOT EXISTS "${_http1_buffered_completion_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing installed HTTP/1 buffered response completion ownership")
+        endif()
+    endforeach()
+    file(READ "${_installed_http1_buffered_response_result_path}"
+        _installed_http1_buffered_response_result)
+    file(READ "${_installed_http1_buffered_response_writer_path}"
+        _installed_http1_buffered_response_writer)
+    if(NOT _installed_http1_buffered_response_result MATCHES
+           "Http1BufferedResponseWriteCompleted" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "Http1BufferedResponseWriteFailedBeforeCommit" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "Http1BufferedResponseWriteFailedAfterCommit" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "using Value = std::variant" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "plan[.]writePlan[(][)][.]responseStatus[(][)]" OR
+       NOT _installed_http1_buffered_response_writer MATCHES
+           "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
+       NOT _installed_http1_buffered_response_writer MATCHES
+           "asyncResult<std::size_t>" OR
+       NOT _installed_http1_stream_session MATCHES
+           "writeResult[.]completed[(][)]" OR
+       NOT _installed_http1_stream_session MATCHES
+           "writeResult[.]failedBeforeCommit[(][)]" OR
+       NOT _installed_http1_stream_session MATCHES
+           "writeResult[.]failedAfterCommit[(][)]" OR
+       _installed_http1_stream_session MATCHES
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart" OR
+       _installed_http1_buffered_response_writer MATCHES
+           "Task<void>[ \t\r\n]+writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(]" OR
+       _installed_http1_buffered_response_writer MATCHES
+           "writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(][^)]*std::error_code[ \t]*&")
+        message(FATAL_ERROR
+            "installed HTTP/1 buffered response completion ownership was split or reconstructed")
+    endif()
+
     set(_installed_access_log_model_path
         "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
     set(_installed_access_log_access_path

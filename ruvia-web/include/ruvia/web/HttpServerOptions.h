@@ -24,10 +24,11 @@ namespace detail {
 struct AccessLogRecordAccess;
 }  // namespace detail
 
-// One response completion, passed to the access-log callback after a buffered
-// response write is attempted or a stream head is committed. The record borrows
-// the immutable request and connection-owned remote address; the record and all
-// returned views are valid only for the callback.
+// One terminal response outcome with a committed final status, passed to the
+// access-log callback after a complete buffered response head has reached the
+// transport or a stream head is committed. The record borrows the immutable
+// request and connection-owned remote address; the record and all returned views
+// are valid only for the callback.
 class AccessLogRecord final {
 public:
     [[nodiscard]] std::string_view method() const noexcept {
@@ -121,8 +122,8 @@ struct HttpServerOptions final {
     // Per-request observability hook. A raw function pointer plus user context
     // (no captures, no type erasure) so it is zero-cost on the request path when
     // unset and never allocates. Invoked once after a final response head is
-    // committed or a buffered response write is attempted; a peer abort before
-    // any final response has no HTTP status and does not invoke this hook.
+    // committed. A peer/transport failure before the complete final head has
+    // reached the wire has no HTTP status and does not invoke this hook.
     struct AccessLog final {
         using Callback = void (*)(void* user, const AccessLogRecord& record) noexcept;
         Callback callback{nullptr};

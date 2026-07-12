@@ -403,6 +403,12 @@ remote address 仍由 Web transport 单独提供。`recordHttpAccess()` 禁止�
 `method_ + knownMethod_ + path_` 的平行 tuple；该日志边界不得增加分配、虚调用或 type-erasure。
 streaming status 必须来自提交 response head 的同一个 `ResponseStreamCommitPlan`；buffered HTTP/2
 status 必须来自 `Http2SubmittedResponseHead<HttpBufferedResponseWritePlan>` 持有的同一 write plan。
+buffered HTTP/1 写出必须返回 `Http1BufferedResponseWriteResult`，并且只能是 completed、
+failed-before-commit 或 failed-after-commit：completed 与 failed-after-commit 的 status 必须来自实际
+序列化 head 的 `Http1BufferedResponsePlan`，failed-before-commit 只能携带 transport error，不能携带
+status。只有 composed write 的累计 bytes 覆盖完整 response head 才算 committed；部分 status line/header
+不是 HTTP response。禁止恢复 `Task<void> + std::error_code&` writer、写出后读取
+`HttpResponse::status()` 或“只要尝试 write 就记 response-completion log”的调用链。
 `ruvia-web` 必须用 `Http2BufferedResponseDispatchResult` 的 completed、peer-aborted-before-commit、
 peer-aborted-after-commit、failed-before-commit、failed-after-commit 互斥 alternatives 表达完成状态，
 只有 post-commit alternatives 可以携带 status。所有有效 buffered 分支（包括提前产生的 417/429）

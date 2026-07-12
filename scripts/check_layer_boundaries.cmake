@@ -191,6 +191,8 @@ set(RULE_LOOSE_BUFFERED_RESPONSE_PLAN
     "httpBufferedResponseWritePlan[ \t\r\n]*[(][ \t\r\n]*(const[ \t]+HttpResponseBodyPlan[&]|bodyPlan[ \t\r\n]*,|[A-Za-z_][A-Za-z0-9_]*BodyPlan[ \t\r\n]*,)")
 set(RULE_STALE_H2_BUFFERED_COMPLETION
     "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart|submitResponse[ \t]*=[^\n]*Task<void>")
+set(RULE_STALE_H1_BUFFERED_COMPLETION
+    "Task<void>[ \t\r\n]+writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(]|writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(][^)]*std::error_code[ \t]*&|response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
@@ -616,6 +618,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HTTP/2 buffered access log reconstructed response status"
         "${RULE_STALE_H2_BUFFERED_COMPLETION}"
         "recordHttpAccess(log, request, remote, response.status(), requestStart);")
+    expect_match("HTTP/1 buffered writer restored void plus error side channel"
+        "${RULE_STALE_H1_BUFFERED_COMPLETION}"
+        "Task<void> writeResponse(Stream&, std::error_code& ec);")
     expect_match("stale HTTP/2 field-block state" "${RULE_STALE_H2_FIELD_BLOCK_STATE}"
         "if (dependency == header.streamId) appendRstStream(streamId, error);")
     expect_match("stale HTTP/2 CONNECT marker state" "${RULE_STALE_H2_CONNECT_STATE}"
@@ -2617,6 +2622,10 @@ check_files_no_match("buffered response planning must derive body semantics from
 check_files_no_match("HTTP/2 buffered completion must not reconstruct status from HttpResponse"
     "${RULE_STALE_H2_BUFFERED_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+check_files_no_match("HTTP/1 buffered completion must own its commit boundary and plan status"
+    "${RULE_STALE_H1_BUFFERED_COMPLETION}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 
 set(HTTP_BUFFERED_RESPONSE_WRITE_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
@@ -2630,10 +2639,18 @@ set(WEB_HTTP2_BUFFERED_RESPONSE_RESULT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2BufferedResponseDispatch.h")
 set(WEB_HTTP2_BUFFERED_RESPONSE_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_HTTP1_BUFFERED_RESPONSE_RESULT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1BufferedResponseWrite.h")
+set(WEB_HTTP1_BUFFERED_RESPONSE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
+set(WEB_HTTP1_BUFFERED_RESPONSE_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 set(BUFFERED_RESPONSE_PLAN_TEST
     "${RUVIA_ROOT}/tests/unit_response_head_policy.cpp")
 set(BUFFERED_RESPONSE_H1_TEST
     "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+set(BUFFERED_RESPONSE_H1_RESULT_TEST
+    "${RUVIA_ROOT}/tests/unit_http1_buffered_response_write.cpp")
 set(BUFFERED_RESPONSE_H2_PLAN_TEST
     "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
 set(BUFFERED_RESPONSE_H2_RESULT_TEST
@@ -2653,8 +2670,12 @@ foreach(buffered_response_status_contract IN ITEMS
         "${HTTP2_BUFFERED_RESPONSE_HEADERS}"
         "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}"
         "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}"
+        "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}"
+        "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}"
+        "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}"
         "${BUFFERED_RESPONSE_PLAN_TEST}"
         "${BUFFERED_RESPONSE_H1_TEST}"
+        "${BUFFERED_RESPONSE_H1_RESULT_TEST}"
         "${BUFFERED_RESPONSE_H2_PLAN_TEST}"
         "${BUFFERED_RESPONSE_H2_RESULT_TEST}"
         "${BUFFERED_RESPONSE_H2_RUNTIME_TEST}"
@@ -2674,8 +2695,12 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
    EXISTS "${HTTP2_BUFFERED_RESPONSE_HEADERS}" AND
    EXISTS "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}" AND
    EXISTS "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}" AND
+   EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}" AND
+   EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}" AND
+   EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}" AND
    EXISTS "${BUFFERED_RESPONSE_PLAN_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H1_TEST}" AND
+   EXISTS "${BUFFERED_RESPONSE_H1_RESULT_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H2_PLAN_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H2_RESULT_TEST}" AND
    EXISTS "${BUFFERED_RESPONSE_H2_RUNTIME_TEST}" AND
@@ -2694,10 +2719,18 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
         buffered_response_h2_result)
     file(READ "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}"
         buffered_response_h2_session)
+    file(READ "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}"
+        buffered_response_h1_result)
+    file(READ "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}"
+        buffered_response_h1_writer)
+    file(READ "${WEB_HTTP1_BUFFERED_RESPONSE_SESSION}"
+        buffered_response_h1_session)
     file(READ "${BUFFERED_RESPONSE_PLAN_TEST}"
         buffered_response_plan_test)
     file(READ "${BUFFERED_RESPONSE_H1_TEST}"
         buffered_response_h1_test)
+    file(READ "${BUFFERED_RESPONSE_H1_RESULT_TEST}"
+        buffered_response_h1_result_test)
     file(READ "${BUFFERED_RESPONSE_H2_PLAN_TEST}"
         buffered_response_h2_plan_test)
     file(READ "${BUFFERED_RESPONSE_H2_RESULT_TEST}"
@@ -2755,10 +2788,46 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
             "all valid buffered responses must share preparation and exclusive pre/post-commit outcomes")
     endif()
 
+    if(NOT buffered_response_h1_result MATCHES
+           "Http1BufferedResponseWriteCompleted" OR
+       NOT buffered_response_h1_result MATCHES
+           "Http1BufferedResponseWriteFailedBeforeCommit" OR
+       NOT buffered_response_h1_result MATCHES
+           "Http1BufferedResponseWriteFailedAfterCommit" OR
+       NOT buffered_response_h1_result MATCHES
+           "using Value = std::variant" OR
+       NOT buffered_response_h1_result MATCHES
+           "plan[.]writePlan[(][)][.]responseStatus[(][)]" OR
+       NOT buffered_response_h1_writer MATCHES
+           "Task<Http1BufferedResponseWriteResult> writeResponseWithScratch" OR
+       NOT buffered_response_h1_writer MATCHES
+           "asyncResult<std::size_t>" OR
+       NOT buffered_response_h1_writer MATCHES
+           "classifyHttp1BufferedResponseWrite" OR
+       NOT buffered_response_h1_session MATCHES
+           "writeResult[.]completed[(][)]" OR
+       NOT buffered_response_h1_session MATCHES
+           "writeResult[.]failedBeforeCommit[(][)]" OR
+       NOT buffered_response_h1_session MATCHES
+           "writeResult[.]failedAfterCommit[(][)]" OR
+       buffered_response_h1_session MATCHES
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
+        boundary_error("HTTP/1 buffered completion restored a loose write/error/status path"
+            "the writer must classify the complete-head byte boundary and logging must consume only committed plan status")
+    endif()
+
     if(NOT buffered_response_plan_test MATCHES
            "AcceptsLooseBufferedResponseBodyPlan" OR
        NOT buffered_response_h1_test MATCHES
            "http1_response_head_rejects_status_plan_mismatch" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_write_partial_head_has_no_status" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_write_body_failure_keeps_committed_status" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_scatter_write_keeps_committed_status" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_write_cannot_complete_without_a_full_head" OR
        NOT buffered_response_h2_plan_test MATCHES
            "http2_response_head_rejects_status_plan_mismatch" OR
        NOT buffered_response_h2_result_test MATCHES
@@ -2775,8 +2844,12 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "AcceptsLooseBufferedResponseBodyPlan" OR
        NOT buffered_response_web_package_consumer MATCHES
            "Http2BufferedResponseDispatchResult" OR
+       NOT buffered_response_web_package_consumer MATCHES
+           "Http1BufferedResponseWriteResult" OR
        NOT buffered_response_package_verify MATCHES
-           "installed buffered response status ownership")
+           "installed buffered response status ownership" OR
+       NOT buffered_response_package_verify MATCHES
+           "installed HTTP/1 buffered response completion ownership")
         boundary_error("buffered response status ownership lacks regression coverage"
             "unit, integration, source-boundary, and installed-package checks must pin the exact committed status path")
     endif()

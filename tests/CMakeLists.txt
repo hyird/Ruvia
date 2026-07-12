@@ -93,6 +93,7 @@ add_executable(ruvia_unit_tests
     unit_http2_request_headers.cpp
     unit_http1_parser.cpp
     unit_http1_chunked_framing.cpp
+    unit_http1_buffered_response_write.cpp
     unit_response_header_access.cpp
     unit_date_cache.cpp
     unit_error.cpp
