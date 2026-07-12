@@ -581,6 +581,14 @@ concept HasModelNonConstMessageGetter = requires {
 };
 
 template <typename T>
+concept HasModelPublicJsonWriterHooks = requires(
+    const T& model,
+    std::pmr::string& output) {
+    model.ruviaAppendJson(output);
+    model.ruviaJsonSizeHint();
+};
+
+template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
     { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
 };
@@ -1957,6 +1965,7 @@ static_assert(!HasModelTypedDynamicGet<ClonePayload>);
 static_assert(!HasModelPublicJsonDepthHook<ClonePayload>);
 static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
+static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
 static_assert(!std::is_constructible_v<ClonePayload, ruvia::detail::ModelInput>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);

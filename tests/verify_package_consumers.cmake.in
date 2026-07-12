@@ -937,6 +937,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/ModelObject.h")
     set(_installed_model_input_visitors_path
         "${_install_prefix}/include/ruvia/web/detail/model/ModelInputVisitors.h")
+    set(_installed_model_json_writer_path
+        "${_install_prefix}/include/ruvia/web/detail/model/JsonWriter.h")
     set(_installed_stale_request_object_visitors_path
         "${_install_prefix}/include/ruvia/web/detail/model/RequestObjectVisitors.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
@@ -947,6 +949,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT EXISTS "${_installed_model_field_ops_path}" OR
        NOT EXISTS "${_installed_model_object_path}" OR
        NOT EXISTS "${_installed_model_input_visitors_path}" OR
+       NOT EXISTS "${_installed_model_json_writer_path}" OR
        EXISTS "${_installed_stale_request_object_visitors_path}")
         message(FATAL_ERROR
             "installed Web model parsing headers are incomplete or stale")
@@ -967,6 +970,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_model_object_contract)
     file(READ "${_installed_model_input_visitors_path}"
         _installed_model_input_visitors_contract)
+    file(READ "${_installed_model_json_writer_path}"
+        _installed_model_json_writer_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -1044,6 +1049,18 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "friend[ \t]+struct[ \t]+::ruvia::JsonBody" OR
        NOT _installed_model_macros_contract MATCHES
            "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
+       NOT _installed_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::detail::ModelJsonAccess" OR
+       NOT _installed_model_json_writer_contract MATCHES
+           "struct[ \t]+ModelJsonAccess[ \t]+final" OR
+       NOT _installed_model_json_writer_contract MATCHES
+           "JsonBody<T>::value" OR
+       NOT _installed_model_json_writer_contract MATCHES
+           "ModelJsonAccess::sizeHint[(]value[)]" OR
+       NOT _installed_model_json_writer_contract MATCHES
+           "ModelJsonAccess::append[(]output,[ \t]*value[)]" OR
+       _installed_model_json_writer_contract MATCHES
+           "requires[ \t]*[{][ \t]*value[.]ruvia|value[.]ruvia(JsonSizeHint|AppendJson)" OR
        NOT _installed_model_object_contract MATCHES
            "enum[ \t]+class[ \t]+ModelInputKind" OR
        NOT _installed_model_object_contract MATCHES
@@ -1057,7 +1074,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_model_macros_contract MATCHES "RequestObject" OR
        _installed_model_input_visitors_contract MATCHES "RequestObject")
         message(FATAL_ERROR
-            "installed model input escaped detail::ModelInput or restored stale RequestObject parsing")
+            "installed generated model input or JSON writer contracts regressed")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")

@@ -127,6 +127,8 @@ set(RULE_STALE_MODEL_REQUEST_OBJECT
     "RequestObject")
 set(RULE_STALE_MODEL_NONCONST_FIELD_GETTER
     "field[(][)][ \t\r\n]*[{]")
+set(RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING
+    "requires[ \t]*[{][ \t]*value[.]ruvia|value[.]ruvia(JsonSizeHint|AppendJson)")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -601,6 +603,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("generated model restored duplicate non-const field getter"
         "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}"
         "const std::optional<T>& field() { return value_; }")
+    expect_match("model JSON writer restored public hook duck-typing"
+        "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}"
+        "requires { value.ruviaJsonSizeHint(); }")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2582,6 +2587,8 @@ set(WEB_MODEL_HEADER_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Model.h")
 set(WEB_MODEL_INPUT_VISITORS_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/ModelInputVisitors.h")
+set(WEB_MODEL_JSON_WRITER_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/JsonWriter.h")
 set(WEB_STALE_REQUEST_OBJECT_VISITORS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestObjectVisitors.h")
 if(EXISTS "${WEB_STALE_REQUEST_OBJECT_VISITORS}")
@@ -2597,6 +2604,9 @@ check_files_no_match("generated model fields must remain const-correct"
 check_files_no_match("generated model fields must expose one const getter"
     "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+check_files_no_match("model JSON writing must use the typed JsonBody boundary"
+    "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}"
+    "${WEB_MODEL_JSON_WRITER_CONTRACT}")
 check_files_no_match("generated models must not rescan raw bodies through dynamic get"
     "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
     "${WEB_MODEL_MACROS_CONTRACT}"
@@ -2623,6 +2633,7 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_HEADER_CONTRACT}" AND
    EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
    EXISTS "${WEB_MODEL_INPUT_VISITORS_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_JSON_WRITER_CONTRACT}" AND
    EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
     file(READ "${WEB_MODEL_MACROS_CONTRACT}"
         web_model_macros_contract)
@@ -2636,6 +2647,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
         web_model_object_contract)
     file(READ "${WEB_MODEL_INPUT_VISITORS_CONTRACT}"
         web_model_input_visitors_contract)
+    file(READ "${WEB_MODEL_JSON_WRITER_CONTRACT}"
+        web_model_json_writer_contract)
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT web_model_macros_contract MATCHES
@@ -2660,6 +2673,18 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "friend[ \t]+struct[ \t]+::ruvia::JsonBody" OR
        NOT web_model_macros_contract MATCHES
            "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
+       NOT web_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::detail::ModelJsonAccess" OR
+       NOT web_model_json_writer_contract MATCHES
+           "struct[ \t]+ModelJsonAccess[ \t]+final" OR
+       NOT web_model_json_writer_contract MATCHES
+           "JsonBody<T>::value" OR
+       NOT web_model_json_writer_contract MATCHES
+           "ModelJsonAccess::sizeHint[(]value[)]" OR
+       NOT web_model_json_writer_contract MATCHES
+           "ModelJsonAccess::append[(]output,[ \t]*value[)]" OR
+       web_model_json_writer_contract MATCHES
+           "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}" OR
        NOT web_model_object_contract MATCHES
            "enum[ \t]+class[ \t]+ModelInputKind" OR
        NOT web_model_object_contract MATCHES
@@ -2685,6 +2710,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_api_surface MATCHES
            "!HasModelNonConstMessageGetter<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
+           "!HasModelPublicJsonWriterHooks<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
            "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
            "RUVIA_MODEL[(]InstalledPackageModel" OR
@@ -2701,11 +2728,17 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "ruvia::toJson" OR
+       NOT web_json_package_consumer MATCHES
+           "installedModelJson[ \t]*!=[ \t]*R" OR
+       NOT web_json_package_consumer MATCHES
            "std::default_initializable<ruvia::detail::ModelInput>" OR
        NOT web_json_package_consumer MATCHES
            "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
         boundary_error("generated model schema boundary regressed"
-            "detail::ModelInput must remain transient while generated models retain only their PMR resource and schema fields")
+            "detail::ModelInput must remain transient and ModelJsonAccess must serialize only typed JsonBody models")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

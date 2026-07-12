@@ -53,6 +53,12 @@
                     "unknown RUVIA_MODEL field");                           \
             }                                                               \
         }                                                                   \
+    private:                                                                \
+        template <typename, typename>                                        \
+        friend struct ::ruvia::JsonBody;                                    \
+        template <typename, typename>                                        \
+        friend struct ::ruvia::FormBody;                                    \
+        friend struct ::ruvia::detail::ModelJsonAccess;                     \
         void ruviaAppendJson(::std::pmr::string& output) const {             \
             output.push_back('{');                                          \
             bool first = true;                                              \
@@ -65,11 +71,6 @@
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_JSON_SIZE_FIELD, T, __VA_ARGS__)       \
             return size;                                                    \
         }                                                                   \
-    private:                                                                \
-        template <typename, typename>                                        \
-        friend struct ::ruvia::JsonBody;                                    \
-        template <typename, typename>                                        \
-        friend struct ::ruvia::FormBody;                                    \
         static ::std::optional<T> ruviaParseJsonBodyDepth(                   \
             ::std::string_view body,                                        \
             ::std::pmr::memory_resource* resource,                          \
