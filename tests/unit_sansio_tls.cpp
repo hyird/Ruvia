@@ -42,7 +42,24 @@ using ruvia::detail::HpackEncoder;
 
 constexpr std::string_view kClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
-ruvia::Task<ruvia::HttpResponse> tlsPongHandler(void*, ruvia::Context& ctx) {
+struct TlsConnectionObservation final {
+    bool sawPlain{false};
+    bool sawTls{false};
+    bool clientCertificateEmpty{false};
+    std::string_view remoteAddress;
+};
+
+ruvia::Task<ruvia::HttpResponse> tlsPongHandler(
+    void* state,
+    ruvia::Context& ctx) {
+    auto& observation = *static_cast<TlsConnectionObservation*>(state);
+    const auto info = ruvia::getConnInfo(ctx);
+    observation.sawPlain = info.plain() != nullptr;
+    observation.sawTls = info.tls() != nullptr;
+    observation.clientCertificateEmpty =
+        info.tls() != nullptr &&
+        info.tls()->clientCertificateSubject().empty();
+    observation.remoteAddress = info.remote().address();
     co_return ctx.text("tls-pong");
 }
 
@@ -111,7 +128,8 @@ int serverAlpnSelect(
 // End-to-end proof of the production TLS-ALPN h2 path: a real TLS handshake over
 // loopback with the server advertising h2 via ALPN and the client offering it, then
 // isHttp2AlpnSelected() must be true and runHttp2SansIoSession over the TLS stream
-// answers a GET. Covers the accept-loop branch (HttpServerSessionEntry.inl) and the
+// answers a GET. It exercises the same successful-handshake -> typed TLS transport
+// -> ALPN HTTP/2 boundary used by HttpServerSessionEntry.inl, plus the production
 // selector (HttpServerAlpn.h) that no other test exercises.
 RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
     const auto pem = makeSelfSignedPem();
@@ -121,6 +139,7 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
     const std::uint16_t port = acceptor.local_endpoint().port();
     bool alpnWasH2 = false;
     std::string body;
+    TlsConnectionObservation connectionObservation;
 
     asio::co_spawn(
         io,
@@ -147,13 +166,19 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
             impl.registerRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ping", std::pmr::get_default_resource()),
-                ruvia::detail::RouteHandler(nullptr, &tlsPongHandler),
+                ruvia::detail::RouteHandler(
+                    &connectionObservation,
+                    &tlsPongHandler),
                 ruvia::detail::RequestBodyMode::kBuffered,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
-                tls, impl.routeTable(), worker, "127.0.0.1"));
+                tls,
+                impl.routeTable(),
+                worker,
+                ruvia::detail::ContextServices{}.withTlsTransport(
+                    "127.0.0.1")));
         },
         asio::detached);
 
@@ -219,4 +244,9 @@ RUVIA_TEST(sansio_tls_alpn_h2_round_trip) {
     io.run();
     RUVIA_CHECK(alpnWasH2);           // the production selector saw h2
     RUVIA_CHECK(body == "tls-pong");  // and the session answered over TLS
+    RUVIA_CHECK(!connectionObservation.sawPlain);
+    RUVIA_CHECK(connectionObservation.sawTls);
+    RUVIA_CHECK(connectionObservation.clientCertificateEmpty);
+    RUVIA_CHECK(
+        connectionObservation.remoteAddress == std::string_view("127.0.0.1"));
 }

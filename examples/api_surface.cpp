@@ -276,8 +276,20 @@ concept HasRequestIsSecureAlias = requires(const T& request) {
 template <typename T>
 concept HasConnInfoCanonicalReadAccessors = requires(const T& info) {
     { info.remote().address() } -> std::same_as<std::string_view>;
-    { info.clientCertificateSubject() } -> std::same_as<std::string_view>;
-    { info.secure() } -> std::same_as<bool>;
+    { info.plain() } -> std::same_as<const ruvia::PlainConnectionTransport*>;
+    { info.tls() } -> std::same_as<const ruvia::TlsConnectionTransport*>;
+};
+
+template <typename T>
+concept HasLegacyConnInfoScalarAccessors = requires(const T& info) {
+    info.secure();
+    info.clientCertificateSubject();
+};
+
+template <typename T>
+concept HasRvalueConnInfoTransportAccess = requires {
+    std::declval<const T&&>().plain();
+    std::declval<const T&&>().tls();
 };
 
 template <typename T>
@@ -1781,8 +1793,14 @@ static_assert(!HasRequestRemoteAddressAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestClientCertificateAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestIsSecureAlias<ruvia::ContextRequest>);
 static_assert(HasConnInfoCanonicalReadAccessors<ruvia::ConnInfo>);
+static_assert(!HasLegacyConnInfoScalarAccessors<ruvia::ConnInfo>);
+static_assert(!HasRvalueConnInfoTransportAccess<ruvia::ConnInfo>);
 static_assert(HasGetConnInfo<ruvia::Context>);
 static_assert(!std::is_default_constructible_v<ruvia::ConnInfo>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::PlainConnectionTransport>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::TlsConnectionTransport>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::Value>);
 static_assert(!HasFormValueToStringView<ruvia::ContextRequest::RequestFormData::PathValue>);
 static_assert(!HasFormValueTextAlias<ruvia::ContextRequest::RequestFormData::Value>);

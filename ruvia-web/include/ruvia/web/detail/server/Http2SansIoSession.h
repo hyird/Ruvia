@@ -31,7 +31,6 @@
 #include <ios>
 #include <optional>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 
 #include <asio/bind_allocator.hpp>
@@ -86,15 +85,11 @@ public:
         ContextServices services,
         const HttpServerOptions& options,
         ConnectionScanner::Entry& scannerEntry,
-        const std::atomic_bool& serverStarted,
-        std::string_view remoteAddress,
-        std::string_view clientCertificate = {}) noexcept
+        const std::atomic_bool& serverStarted) noexcept
         : services_(services),
           options_(&options),
           scannerEntry_(&scannerEntry),
-          serverStarted_(&serverStarted),
-          remoteAddress_(remoteAddress),
-          clientCertificate_(clientCertificate) {}
+          serverStarted_(&serverStarted) {}
 
     [[nodiscard]] const HttpServerOptions& options() const noexcept {
         return *options_;
@@ -108,17 +103,8 @@ public:
         return *serverStarted_;
     }
 
-    [[nodiscard]] std::string_view remoteAddress() const noexcept {
-        return remoteAddress_;
-    }
-
-    [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
-        return services_.rateLimiter();
-    }
-
-    [[nodiscard]] ContextServices routeServices(bool secure) const noexcept {
-        return services_.withTransport(
-            remoteAddress_, clientCertificate_, secure);
+    [[nodiscard]] const ContextServices& services() const noexcept {
+        return services_;
     }
 
 private:
@@ -126,8 +112,6 @@ private:
     const HttpServerOptions* options_;
     ConnectionScanner::Entry* scannerEntry_;
     const std::atomic_bool* serverStarted_;
-    std::string_view remoteAddress_;
-    std::string_view clientCertificate_;
 };
 
 [[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
@@ -151,8 +135,8 @@ Task<void> runHttp2SansIoSession(
     auto executor = stream.get_executor();
     const auto& options = session.options();
     auto& scannerEntry = session.scannerEntry();
-    const auto remoteAddress = session.remoteAddress();
-    constexpr bool kTlsStream = !std::is_same_v<Stream, asio::ip::tcp::socket>;
+    const auto& baseServices = session.services();
+    const auto remoteAddress = baseServices.connInfo().remote().address();
 
     Http2Connection connection(worker.resource(), Http2Role::kServer);
 
@@ -417,8 +401,6 @@ Task<void> runHttp2SansIoSession(
             wakeWriter();
             co_return;
         }
-        const auto baseServices = session.routeServices(kTlsStream);
-
         HttpRequest request = HttpRequestAccess::make();
         if (!Http2RequestBuilder::build(
                 *streamState,
@@ -457,7 +439,7 @@ Task<void> runHttp2SansIoSession(
         const auto* resolved = resolution.resolved();
 
         const auto appRateLimit = rateLimitRequestAllowed(
-            session.rateLimiter(), remoteAddress);
+            baseServices.rateLimiter(), remoteAddress);
         if (!appRateLimit.allowed) {
             auto response = co_await routes.handleError(
                 request, requestMemory,

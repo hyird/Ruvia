@@ -125,6 +125,8 @@ set(RULE_STALE_REQUEST_DISPATCHER
     "RequestDispatcher|virtual[ \t\r\n]+(RouteResolution|Task[ \t]*[<])|virtual[ \t\r\n]+~")
 set(RULE_STALE_CONTEXT_CAPABILITY_SPLIT
     "withBodyReader|withBodyLoader|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_")
+set(RULE_STALE_CONN_INFO_SCALARS
+    "withTransport[ \t\r\n]*[(]|routeServices[ \t\r\n]*[(]|bool[ \t]+secure|secure_|remoteAddress_|clientCertificateSubject_|clientCertificate_|kTlsStream")
 set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
     "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
 set(RULE_STALE_HTTP2_SESSION_ENV
@@ -434,6 +436,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("two-stage HttpResponse file-body read"
         "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}"
         "if (responseHasFileBody(response)) use(responseFileBody(response));")
+    expect_match("split connection transport metadata"
+        "${RULE_STALE_CONN_INFO_SCALARS}"
+        "std::string_view clientCertificateSubject_; bool secure_;")
+    expect_match("boolean connection transport refinement"
+        "${RULE_STALE_CONN_INFO_SCALARS}"
+        "services.withTransport(remote, certificate, secure);")
     expect_match("duplicated HTTP/2 response plan in Web runtime"
         "${RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION}"
         "const auto policy = responseWritePolicy(response.status());")
@@ -1290,6 +1298,197 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
             "unit and installed-package tests must pin exclusivity, propagation, and removal of split accessors")
     endif()
 endif()
+
+set(WEB_CONN_INFO
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ConnInfo.h")
+set(WEB_CONN_CONTEXT_SERVICES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextServices.h")
+set(WEB_CONN_CONTEXT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+set(WEB_CONN_CONTEXT_INTERNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextInternal.h")
+set(WEB_CONN_CONTEXT_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+set(WEB_CONN_SERVER_ENTRY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerSessionEntry.inl")
+set(WEB_CONN_HTTP1_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_CONN_HTTP2_ENTRY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
+set(WEB_CONN_HTTP2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_CONN_TEST "${RUVIA_ROOT}/tests/unit_conn_info.cpp")
+set(WEB_CONN_TLS_TEST "${RUVIA_ROOT}/tests/unit_sansio_tls.cpp")
+set(WEB_CONN_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+set(WEB_CONN_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
+foreach(conn_info_contract_file IN ITEMS
+        "${WEB_CONN_INFO}"
+        "${WEB_CONN_CONTEXT_SERVICES}"
+        "${WEB_CONN_CONTEXT}"
+        "${WEB_CONN_CONTEXT_INTERNAL}"
+        "${WEB_CONN_CONTEXT_SOURCE}"
+        "${WEB_CONN_SERVER_ENTRY}"
+        "${WEB_CONN_HTTP1_SESSION}"
+        "${WEB_CONN_HTTP2_ENTRY}"
+        "${WEB_CONN_HTTP2_SESSION}"
+        "${WEB_CONN_TEST}"
+        "${WEB_CONN_TLS_TEST}"
+        "${WEB_CONN_PACKAGE_CONSUMER}"
+        "${WEB_CONN_API_SURFACE}")
+    if(NOT EXISTS "${conn_info_contract_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${conn_info_contract_file}")
+        boundary_error("typed connection metadata contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_CONN_INFO}" AND
+   EXISTS "${WEB_CONN_CONTEXT_SERVICES}" AND
+   EXISTS "${WEB_CONN_CONTEXT}" AND
+   EXISTS "${WEB_CONN_CONTEXT_INTERNAL}" AND
+   EXISTS "${WEB_CONN_CONTEXT_SOURCE}" AND
+   EXISTS "${WEB_CONN_SERVER_ENTRY}" AND
+   EXISTS "${WEB_CONN_HTTP1_SESSION}" AND
+   EXISTS "${WEB_CONN_HTTP2_ENTRY}" AND
+   EXISTS "${WEB_CONN_HTTP2_SESSION}" AND
+   EXISTS "${WEB_CONN_TEST}" AND
+   EXISTS "${WEB_CONN_TLS_TEST}" AND
+   EXISTS "${WEB_CONN_PACKAGE_CONSUMER}" AND
+   EXISTS "${WEB_CONN_API_SURFACE}")
+    file(READ "${WEB_CONN_INFO}" web_conn_info)
+    file(READ "${WEB_CONN_CONTEXT_SERVICES}" web_conn_services)
+    file(READ "${WEB_CONN_CONTEXT}" web_conn_context)
+    file(READ "${WEB_CONN_CONTEXT_INTERNAL}" web_conn_context_internal)
+    file(READ "${WEB_CONN_CONTEXT_SOURCE}" web_conn_context_source)
+    file(READ "${WEB_CONN_SERVER_ENTRY}" web_conn_server_entry)
+    file(READ "${WEB_CONN_HTTP1_SESSION}" web_conn_http1_session)
+    file(READ "${WEB_CONN_HTTP2_ENTRY}" web_conn_http2_entry)
+    file(READ "${WEB_CONN_HTTP2_SESSION}" web_conn_http2_session)
+    file(READ "${WEB_CONN_TEST}" web_conn_test)
+    file(READ "${WEB_CONN_TLS_TEST}" web_conn_tls_test)
+    file(READ "${WEB_CONN_PACKAGE_CONSUMER}" web_conn_package_consumer)
+    file(READ "${WEB_CONN_API_SURFACE}" web_conn_api_surface)
+    if(NOT web_conn_info MATCHES
+           "class PlainConnectionTransport final" OR
+       NOT web_conn_info MATCHES
+           "class TlsConnectionTransport final" OR
+       NOT web_conn_info MATCHES "class ConnInfo final" OR
+       NOT web_conn_info MATCHES
+           "std::variant<PlainConnectionTransport, TlsConnectionTransport>" OR
+       NOT web_conn_info MATCHES
+           "std::get_if<PlainConnectionTransport>" OR
+       NOT web_conn_info MATCHES
+           "std::get_if<TlsConnectionTransport>" OR
+       NOT web_conn_info MATCHES
+           "TlsConnectionTransport[\t\r\n ]+transport" OR
+       web_conn_info MATCHES "secure[ \t\r\n]*[(]" OR
+       web_conn_info MATCHES
+           "std::(function|shared_ptr|unique_ptr)")
+        boundary_error("ConnInfo lost its exclusive transport alternatives"
+            "plain or TLS must be one allocation-free discriminated value, with certificate identity owned only by TLS")
+    endif()
+    string(REGEX MATCHALL "const && = delete"
+        conn_deleted_rvalue_accessors "${web_conn_info}")
+    list(LENGTH conn_deleted_rvalue_accessors
+        conn_deleted_rvalue_accessor_count)
+    if(conn_deleted_rvalue_accessor_count LESS 2 OR
+       NOT web_conn_test MATCHES "ExposesRvalueTransportPointer" OR
+       NOT web_conn_package_consumer MATCHES
+           "ExposesRvalueTransportPointer" OR
+       NOT web_conn_api_surface MATCHES
+           "HasRvalueConnInfoTransportAccess")
+        boundary_error("ConnInfo exposes alternative pointers from temporaries"
+            "plain/tls pointer access must remain lvalue-only in source, installed consumers, and the public API surface")
+    endif()
+    if(web_conn_services MATCHES "${RULE_STALE_CONN_INFO_SCALARS}" OR
+       web_conn_context MATCHES "${RULE_STALE_CONN_INFO_SCALARS}" OR
+       web_conn_context_internal MATCHES
+           "${RULE_STALE_CONN_INFO_SCALARS}" OR
+       web_conn_context_source MATCHES
+           "${RULE_STALE_CONN_INFO_SCALARS}" OR
+       NOT web_conn_services MATCHES "const ConnInfo& connInfo" OR
+       NOT web_conn_services MATCHES "withPlainTransport" OR
+       NOT web_conn_services MATCHES "withTlsTransport" OR
+       NOT web_conn_services MATCHES "ConnInfo connInfo_" OR
+       NOT web_conn_context MATCHES "ConnInfo connInfo_" OR
+       NOT web_conn_context_internal MATCHES
+           "connInfo_[(]services[.]connInfo[(][)][)]" OR
+       NOT web_conn_context_source MATCHES
+           "return context[.]connInfo_")
+        boundary_error("Context restored split connection metadata"
+            "ContextServices, Context, and getConnInfo must pass one ConnInfo value without scalar reconstruction")
+    endif()
+    string(REGEX MATCHALL
+        "std::basic_string<char, Traits, Allocator>&&"
+        conn_deleted_rvalue_refinements
+        "${web_conn_services}")
+    list(LENGTH conn_deleted_rvalue_refinements
+        conn_deleted_rvalue_refinement_count)
+    if(conn_deleted_rvalue_refinement_count LESS 3 OR
+       NOT web_conn_test MATCHES "AcceptsRvaluePlainTransport" OR
+       NOT web_conn_test MATCHES "AcceptsRvalueTlsAddress" OR
+       NOT web_conn_test MATCHES "AcceptsRvalueTlsCertificate" OR
+       NOT web_conn_package_consumer MATCHES
+           "AcceptsRvaluePlainTransport" OR
+       NOT web_conn_package_consumer MATCHES
+           "AcceptsRvalueTlsAddress" OR
+       NOT web_conn_package_consumer MATCHES
+           "AcceptsRvalueTlsCertificate")
+        boundary_error("borrowed connection metadata accepts temporary owners"
+            "plain/TLS address and certificate rvalue owning strings must remain deleted in source and installed consumers")
+    endif()
+    string(REGEX MATCHALL "remote_endpoint[(]" conn_remote_reads
+        "${web_conn_server_entry}")
+    list(LENGTH conn_remote_reads conn_remote_read_count)
+    if(NOT conn_remote_read_count EQUAL 1 OR
+       NOT web_conn_server_entry MATCHES "withPlainTransport" OR
+       NOT web_conn_server_entry MATCHES "withTlsTransport" OR
+       web_conn_http1_session MATCHES "remote_endpoint[(]" OR
+       web_conn_http2_entry MATCHES "remote_endpoint[(]" OR
+       web_conn_http2_session MATCHES "remote_endpoint[(]" OR
+       NOT web_conn_http1_session MATCHES
+           "ContextServices baseRouteServices" OR
+       NOT web_conn_http1_session MATCHES
+           "baseRouteServices[.]connInfo[(][)][.]remote[(][)][.]address[(][)]" OR
+       NOT web_conn_http2_entry MATCHES "ContextServices services" OR
+       NOT web_conn_http2_session MATCHES
+           "const ContextServices& services[(][)]" OR
+       NOT web_conn_http2_session MATCHES
+           "const auto& baseServices = session[.]services[(][)]")
+        boundary_error("server runtimes re-derived connection identity"
+            "the accepted socket/handshake must classify one ConnInfo reused by HTTP/1, cleartext HTTP/2, and ALPN HTTP/2")
+    endif()
+    if(NOT web_conn_test MATCHES
+           "conn_info_transport_has_one_active_alternative" OR
+       NOT web_conn_test MATCHES
+           "context_preserves_typed_connection_info_for_url_and_handler" OR
+       NOT web_conn_test MATCHES
+           "HasBooleanTransportRefinement" OR
+       NOT web_conn_tls_test MATCHES "TlsConnectionObservation" OR
+       NOT web_conn_tls_test MATCHES "withTlsTransport" OR
+       NOT web_conn_tls_test MATCHES "info[.]tls[(][)]" OR
+       NOT web_conn_package_consumer MATCHES
+           "HasLegacyConnInfoScalarAccessors" OR
+       NOT web_conn_package_consumer MATCHES
+           "PlainConnectionTransport" OR
+       NOT web_conn_package_consumer MATCHES
+           "TlsConnectionTransport" OR
+       NOT web_conn_api_surface MATCHES
+           "HasLegacyConnInfoScalarAccessors")
+        boundary_error("typed connection metadata lacks regression coverage"
+            "unit, installed-package, and public API checks must pin alternatives, propagation, and removed scalar access")
+    endif()
+endif()
+check_files_no_match("Web connection metadata restored scalar transport state"
+    "${RULE_STALE_CONN_INFO_SCALARS}"
+    "${WEB_CONN_CONTEXT_SERVICES}"
+    "${WEB_CONN_CONTEXT}"
+    "${WEB_CONN_CONTEXT_INTERNAL}"
+    "${WEB_CONN_CONTEXT_SOURCE}"
+    "${WEB_CONN_HTTP1_SESSION}"
+    "${WEB_CONN_HTTP2_ENTRY}"
+    "${WEB_CONN_HTTP2_SESSION}")
 
 set(HTTP_PROTOCOL_VERSION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpProtocolVersion.h")
@@ -4185,20 +4384,23 @@ else()
            "ConnectionScanner::Entry& scannerEntry" OR
        NOT web_http2_session MATCHES
            "const std::atomic_bool& serverStarted" OR
-       NOT web_http2_session MATCHES "routeServices[(]bool secure[)]" OR
+       NOT web_http2_session MATCHES
+           "const ContextServices& services[(][)]" OR
        NOT web_http2_session MATCHES
            "Http2SansIoSessionContext session" OR
        web_http2_session MATCHES "${RULE_STALE_HTTP2_SESSION_ENV}" OR
        NOT web_http2_server_entry MATCHES
            "Http2SansIoSessionContext[(]" OR
        NOT web_http2_server_entry MATCHES
-           "ContextServices[(]&databases, &redis, rateLimiter[)]" OR
+           "ContextServices services" OR
        web_http2_server_entry MATCHES
            "${RULE_STALE_HTTP2_SESSION_ENV}" OR
        NOT web_http2_session_fixture MATCHES
            "class Http2SansIoSessionFixture final" OR
        NOT web_http2_session_fixture MATCHES
            "runBareHttp2SansIoSession" OR
+       NOT web_http2_session_fixture MATCHES
+           "runBarePlainHttp2SansIoSession" OR
        NOT web_http2_package_consumer MATCHES
            "!std::is_default_constructible_v<[ \t\r\n]*ruvia::detail::Http2SansIoSessionContext")
         boundary_error("HTTP/2 session restored nullable or test-shaped wiring"
@@ -5060,6 +5262,20 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("typed Context capability contract is undocumented"
             "${relative} must document both alternative sets and removal of the nullable refinement API")
+    endif()
+    if(NOT boundary_doc_content MATCHES "ConnInfo" OR
+       NOT boundary_doc_content MATCHES "PlainConnectionTransport" OR
+       NOT boundary_doc_content MATCHES "TlsConnectionTransport" OR
+       NOT boundary_doc_content MATCHES "getConnInfo" OR
+       NOT boundary_doc_content MATCHES "clientCertificateSubject" OR
+       NOT boundary_doc_content MATCHES "secure[(][)]" OR
+       NOT boundary_doc_content MATCHES "withTransport" OR
+       NOT boundary_doc_content MATCHES "rvalue" OR
+       NOT boundary_doc_content MATCHES "lvalue" OR
+       NOT boundary_doc_content MATCHES "ContextServices")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("typed connection metadata contract is undocumented"
+            "${relative} must document plain/TLS alternatives, single construction/propagation, and removed scalar APIs")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2SansIoSessionContext" OR
        NOT boundary_doc_content MATCHES "Http2SansIoSessionEnv" OR

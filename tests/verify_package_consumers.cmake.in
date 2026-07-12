@@ -859,6 +859,101 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_route_response_stream_dispatch)
     file(READ "${_installed_route_websocket_session_path}"
         _installed_route_websocket_session)
+    set(_installed_conn_info_path
+        "${_install_prefix}/include/ruvia/web/ConnInfo.h")
+    set(_installed_context_internal_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextInternal.h")
+    set(_installed_server_session_entry_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerSessionEntry.inl")
+    set(_installed_http1_session_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+    foreach(_conn_info_contract IN ITEMS
+            "${_installed_conn_info_path}"
+            "${_installed_context_internal_path}"
+            "${_installed_server_session_entry_path}"
+            "${_installed_http1_session_path}")
+        if(NOT EXISTS "${_conn_info_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing typed connection metadata")
+        endif()
+    endforeach()
+    file(READ "${_installed_conn_info_path}" _installed_conn_info)
+    file(READ "${_installed_context_internal_path}"
+        _installed_context_internal)
+    file(READ "${_installed_server_session_entry_path}"
+        _installed_server_session_entry)
+    file(READ "${_installed_http1_session_path}"
+        _installed_http1_session)
+    if(NOT _installed_conn_info MATCHES
+           "class PlainConnectionTransport final" OR
+       NOT _installed_conn_info MATCHES
+           "class TlsConnectionTransport final" OR
+       NOT _installed_conn_info MATCHES "class ConnInfo final" OR
+       NOT _installed_conn_info MATCHES
+           "std::variant<PlainConnectionTransport, TlsConnectionTransport>" OR
+       NOT _installed_conn_info MATCHES
+           "std::get_if<PlainConnectionTransport>" OR
+       NOT _installed_conn_info MATCHES
+           "std::get_if<TlsConnectionTransport>" OR
+       _installed_conn_info MATCHES "secure[ \t\r\n]*[(]" OR
+       _installed_context_services MATCHES
+           "withTransport[ \t\r\n]*[(]|bool[ \t]+secure|secure_|remoteAddress_|clientCertificateSubject_" OR
+       _installed_context_header MATCHES
+           "bool[ \t]+secure|secure_|remoteAddress_|clientCertificateSubject_" OR
+       _installed_context_internal MATCHES
+           "bool[ \t]+secure|secure_|remoteAddress_|clientCertificateSubject_" OR
+       NOT _installed_context_services MATCHES
+           "const ConnInfo& connInfo" OR
+       NOT _installed_context_services MATCHES "withPlainTransport" OR
+       NOT _installed_context_services MATCHES "withTlsTransport" OR
+       NOT _installed_context_services MATCHES "ConnInfo connInfo_" OR
+       NOT _installed_context_header MATCHES "ConnInfo connInfo_" OR
+       NOT _installed_context_internal MATCHES
+           "connInfo_[(]services[.]connInfo[(][)][)]")
+        message(FATAL_ERROR
+            "installed Web package restored split connection metadata")
+    endif()
+    string(REGEX MATCHALL "const && = delete"
+        _installed_deleted_conn_rvalue_accessors
+        "${_installed_conn_info}")
+    list(LENGTH _installed_deleted_conn_rvalue_accessors
+        _installed_deleted_conn_rvalue_accessor_count)
+    if(_installed_deleted_conn_rvalue_accessor_count LESS 2)
+        message(FATAL_ERROR
+            "installed ConnInfo exposes alternative pointers from temporaries")
+    endif()
+    string(REGEX MATCHALL
+        "std::basic_string<char, Traits, Allocator>&&"
+        _installed_deleted_conn_rvalue_refinements
+        "${_installed_context_services}")
+    list(LENGTH _installed_deleted_conn_rvalue_refinements
+        _installed_deleted_conn_rvalue_refinement_count)
+    if(_installed_deleted_conn_rvalue_refinement_count LESS 3)
+        message(FATAL_ERROR
+            "installed connection metadata accepts temporary owning strings")
+    endif()
+    string(REGEX MATCHALL "remote_endpoint[(]"
+        _installed_remote_endpoint_reads
+        "${_installed_server_session_entry}")
+    list(LENGTH _installed_remote_endpoint_reads
+        _installed_remote_endpoint_read_count)
+    if(NOT _installed_remote_endpoint_read_count EQUAL 1 OR
+       NOT _installed_server_session_entry MATCHES "withPlainTransport" OR
+       NOT _installed_server_session_entry MATCHES "withTlsTransport" OR
+       _installed_http1_session MATCHES "remote_endpoint[(]" OR
+       _installed_route_http2_session MATCHES "remote_endpoint[(]" OR
+       _installed_http2_server_entry MATCHES "remote_endpoint[(]" OR
+       NOT _installed_http1_session MATCHES
+           "ContextServices baseRouteServices" OR
+       NOT _installed_route_http2_session MATCHES
+           "const ContextServices& services[(][)]" OR
+       NOT _installed_http2_server_entry MATCHES
+           "ContextServices services" OR
+       _installed_route_http2_session MATCHES
+           "routeServices[ \t\r\n]*[(]|kTlsStream|remoteAddress_|clientCertificate_")
+        message(FATAL_ERROR
+            "installed server runtimes re-derived connection identity")
+    endif()
     if(_installed_route_modes MATCHES "ResponseBodyMode" OR
        _installed_route_resolution MATCHES "RouteDisposition" OR
        _installed_route_resolution MATCHES
@@ -937,7 +1032,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_route_http2_session MATCHES
            "Http2SansIoSessionContext session" OR
        NOT _installed_route_http2_session MATCHES
-           "routeServices[(]bool secure[)]" OR
+           "const ContextServices& services[(][)]" OR
        _installed_route_http2_session MATCHES
            "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](options|scannerEntry|serverStarted)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]" OR
        NOT _installed_http2_server_entry MATCHES

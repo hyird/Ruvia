@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -78,6 +79,44 @@ concept HasLegacyContextBodyRefinement = requires(
     services.withBodyLoader(loader);
 };
 
+template <typename Info>
+concept HasLegacyConnInfoScalarAccessors = requires(const Info& info) {
+    info.secure();
+    info.clientCertificateSubject();
+};
+
+template <typename Services>
+concept HasBooleanTransportRefinement = requires(
+    const Services& services,
+    std::string_view remoteAddress,
+    std::string_view certificate,
+    bool secure) {
+    services.withTransport(remoteAddress, certificate, secure);
+};
+
+template <typename Services>
+concept AcceptsRvaluePlainTransport = requires(const Services& services) {
+    services.withPlainTransport(std::string("temporary"));
+};
+
+template <typename Services>
+concept AcceptsRvalueTlsAddress = requires(const Services& services) {
+    services.withTlsTransport(std::string("temporary"));
+};
+
+template <typename Services>
+concept AcceptsRvalueTlsCertificate = requires(const Services& services) {
+    services.withTlsTransport(
+        std::string_view("stable"),
+        std::string("temporary"));
+};
+
+template <typename Info>
+concept ExposesRvalueTransportPointer = requires {
+    std::declval<const Info&&>().plain();
+    std::declval<const Info&&>().tls();
+};
+
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -134,9 +173,32 @@ static_assert(std::is_nothrow_constructible_v<
     ruvia::detail::ContextServices,
     const ruvia::HttpServerOptions&,
     ruvia::detail::ConnectionScanner::Entry&,
-    const std::atomic_bool&,
-    std::string_view,
-    std::string_view>);
+    const std::atomic_bool&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ConnInfo&>().plain()),
+    const ruvia::PlainConnectionTransport*>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ConnInfo&>().tls()),
+    const ruvia::TlsConnectionTransport*>);
+static_assert(!HasLegacyConnInfoScalarAccessors<ruvia::ConnInfo>);
+static_assert(!HasBooleanTransportRefinement<
+    ruvia::detail::ContextServices>);
+static_assert(!AcceptsRvaluePlainTransport<
+    ruvia::detail::ContextServices>);
+static_assert(!AcceptsRvalueTlsAddress<
+    ruvia::detail::ContextServices>);
+static_assert(!AcceptsRvalueTlsCertificate<
+    ruvia::detail::ContextServices>);
+static_assert(!ExposesRvalueTransportPointer<ruvia::ConnInfo>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::PlainConnectionTransport>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::TlsConnectionTransport>);
+static_assert(!std::is_default_constructible_v<ruvia::ConnInfo>);
+static_assert(std::is_nothrow_copy_constructible_v<ruvia::ConnInfo>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::ConnInfo>);
+static_assert(std::is_nothrow_copy_assignable_v<ruvia::ConnInfo>);
+static_assert(std::is_nothrow_move_assignable_v<ruvia::ConnInfo>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);
@@ -194,8 +256,20 @@ int main() {
         contextServices.requestBodySource().streaming() != nullptr ||
         contextServices.responseOutput().buffered() == nullptr ||
         contextServices.responseOutput().responseStream() != nullptr ||
-        contextServices.responseOutput().webSocket() != nullptr) {
+        contextServices.responseOutput().webSocket() != nullptr ||
+        contextServices.connInfo().plain() == nullptr ||
+        contextServices.connInfo().tls() != nullptr) {
         return 8;
+    }
+    const auto tlsServices = contextServices.withTlsTransport(
+        "198.51.100.9",
+        "CN=package-client");
+    const auto* tls = tlsServices.connInfo().tls();
+    if (tlsServices.connInfo().plain() != nullptr ||
+        tls == nullptr ||
+        tlsServices.connInfo().remote().address() != "198.51.100.9" ||
+        tls->clientCertificateSubject() != "CN=package-client") {
+        return 9;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

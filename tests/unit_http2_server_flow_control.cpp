@@ -82,7 +82,7 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBareHttp2SansIoSession(
+                ruvia::test::runBarePlainHttp2SansIoSession(
                     sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -172,7 +172,7 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBareHttp2SansIoSession(
+                ruvia::test::runBarePlainHttp2SansIoSession(
                     sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -278,7 +278,7 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             ruvia::detail::RouteTable routes(worker.resource());
             routes.setNotFoundHandler(&largeHeaderNotFoundHandler);
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBareHttp2SansIoSession(
+                ruvia::test::runBarePlainHttp2SansIoSession(
                     sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
@@ -402,7 +402,7 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             ruvia::detail::RouteTable routes(worker.resource());
             routes.setNotFoundHandler(handler);
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::test::runBareHttp2SansIoSession(
+                ruvia::test::runBarePlainHttp2SansIoSession(
                     sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);

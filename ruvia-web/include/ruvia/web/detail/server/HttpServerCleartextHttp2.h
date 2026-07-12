@@ -89,14 +89,10 @@ Task<void> runHttp2ServerSession(
     asio::ip::tcp::socket& socket,
     WorkerMemory& memory,
     const RouteTable& routes,
-    DbRegistry& databases,
-    RedisRegistry& redis,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
-    std::string_view remoteAddress,
-    RateLimiter* rateLimiter,
+    ContextServices services,
     const std::atomic_bool& serverStarted,
-    std::string_view clientCertificate = {},
     std::string_view initialBytes = {}) {
     (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
     co_await runHttp2SansIoSession(
@@ -104,12 +100,10 @@ Task<void> runHttp2ServerSession(
         routes,
         memory,
         Http2SansIoSessionContext(
-            ContextServices(&databases, &redis, rateLimiter),
+            services,
             options,
             scannerEntry,
-            serverStarted,
-            remoteAddress,
-            clientCertificate),
+            serverStarted),
         initialBytes);
 }
 
@@ -119,12 +113,9 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     asio::ip::tcp::socket& socket,
     WorkerMemory& memory,
     const RouteTable& routes,
-    DbRegistry& databases,
-    RedisRegistry& redis,
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
-    std::string_view remoteAddress,
-    RateLimiter* rateLimiter,
+    const ContextServices& services,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     const std::atomic_bool& serverStarted) {
@@ -138,14 +129,10 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             socket,
             memory,
             routes,
-            databases,
-            redis,
             options,
             scannerEntry,
-            remoteAddress,
-            rateLimiter,
+            services,
             serverStarted,
-            {},
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
