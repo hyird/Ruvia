@@ -3,7 +3,8 @@
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <array>

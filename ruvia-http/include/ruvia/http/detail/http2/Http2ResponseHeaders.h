@@ -21,7 +21,7 @@
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/HttpInterimResponse.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/detail/PmrString.h"
 
 namespace ruvia::detail {

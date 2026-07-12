@@ -4,7 +4,7 @@
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/HttpServerOptions.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

@@ -6,7 +6,8 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/http/HttpCors.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

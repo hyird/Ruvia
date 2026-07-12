@@ -1,7 +1,8 @@
 #pragma once
 
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/HttpServerOptions.h"
-#include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
 

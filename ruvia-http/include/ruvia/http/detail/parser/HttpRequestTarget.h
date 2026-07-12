@@ -1,10 +1,10 @@
 #pragma once
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpTypes.h"
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string_view>
 

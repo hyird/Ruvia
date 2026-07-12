@@ -7,7 +7,7 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/WebSocket.h"
 
 namespace ruvia::detail {

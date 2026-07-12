@@ -3,7 +3,6 @@
 #include <string_view>
 
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
-#include "ruvia/http/HttpTypes.h"
 
 namespace {
 

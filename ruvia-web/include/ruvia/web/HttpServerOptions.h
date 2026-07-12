@@ -12,7 +12,6 @@
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
-#include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/StaticFiles.h"
 

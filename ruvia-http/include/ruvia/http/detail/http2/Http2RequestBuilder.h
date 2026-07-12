@@ -11,7 +11,7 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/parser/HttpRequestTarget.h"
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 

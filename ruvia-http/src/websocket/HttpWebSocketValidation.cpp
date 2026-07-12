@@ -8,7 +8,7 @@
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
 
 namespace ruvia::detail {
 namespace {

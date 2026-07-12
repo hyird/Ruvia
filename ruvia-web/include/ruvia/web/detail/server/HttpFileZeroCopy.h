@@ -2,7 +2,6 @@
 
 #include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpTypes.h"
 
 #include <asio/ip/tcp.hpp>
 #include <system_error>

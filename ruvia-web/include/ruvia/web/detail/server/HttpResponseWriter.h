@@ -17,7 +17,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace ruvia::detail {

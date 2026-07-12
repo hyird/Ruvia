@@ -5,7 +5,6 @@
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/HttpTypes.h"
 
 #include <cstddef>
 #include <cstdint>
