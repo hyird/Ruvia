@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -24,6 +25,7 @@
 #include <ruvia/web/Streaming.h>
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>
+#include <ruvia/web/detail/StaticFilesInternal.h>
 #include <ruvia/web/detail/ValidatedValues.h>
 #include <ruvia/web/detail/http/ContextCapabilities.h>
 #include <ruvia/web/detail/http/ContextServices.h>
@@ -75,6 +77,11 @@ concept HasLooseRouteResolutionAccessors = requires(
     resolution.route();
     resolution.match();
     resolution.allowedMethods();
+};
+
+template <typename Entry>
+concept HasStaticRootEntryFoundFlag = requires(const Entry& entry) {
+    entry.found();
 };
 
 template <typename Services>
@@ -512,6 +519,15 @@ static_assert(std::is_nothrow_move_assignable_v<ruvia::ConnInfo>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::StaticRootEntryView>);
+static_assert(!HasStaticRootEntryFoundFlag<
+    ruvia::detail::StaticRootEntryView>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::StaticRootAccess::find(
+        std::declval<const ruvia::StaticRoot&>(),
+        std::string_view{})),
+    std::optional<ruvia::detail::StaticRootEntryView>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();

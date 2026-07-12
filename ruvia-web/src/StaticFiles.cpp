@@ -244,25 +244,25 @@ bool detail::StaticRootAccess::hasDirectoryIndex(const StaticRoot& root) noexcep
     return !root.state_->indexFile.empty();
 }
 
-detail::StaticRootEntryView detail::StaticRootAccess::find(
+std::optional<detail::StaticRootEntryView> detail::StaticRootAccess::find(
     const StaticRoot& root,
     std::string_view relativePath) noexcept {
     const auto& state = *root.state_;
     const auto& entries = state.entries;
     const auto* const entry = findStaticRootEntry(entries, relativePath);
     if (entry == nullptr) {
-        return {};
+        return std::nullopt;
     }
-    return detail::StaticRootEntryView{
-        .filePath = entry->filePath.c_str(),
-        .contentType = entry->contentType,
-        .cacheControl = state.cacheControl,
-        .etag = entry->etag,
-        .lastModified = entry->lastModified,
-        .size = entry->size,
-        .modified = entry->modified,
-        .enableRanges = state.enableRanges,
-        .enableValidators = state.enableValidators};
+    return detail::StaticRootEntryView(
+        entry->filePath.c_str(),
+        entry->contentType,
+        state.cacheControl,
+        entry->etag,
+        entry->lastModified,
+        entry->size,
+        entry->modified,
+        state.enableRanges,
+        state.enableValidators);
 }
 
 bool detail::StaticRootAccess::isIndexedDirectory(

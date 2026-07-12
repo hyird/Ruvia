@@ -100,7 +100,7 @@ set(RULE_STALE_HTTP_CONTENT_DECODE_CHAIN
 set(RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN
     "bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&|compressResponseBodyIfAccepted|bodyBorrowsCompressionScratch|compressionScratch|response[.]setBodyView[ \t]*[(]")
 set(RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT
-    "borrowNativePath|selectStaticEncodingVariant|std::string_view[ \t]*&[ \t]*contentEncoding")
+    "borrowNativePath|selectStaticEncodingVariant|std::string_view[ \t]*&[ \t]*contentEncoding|struct[ \t]+StaticRootEntryView|[.]found[(][)]")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -485,6 +485,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("static encoding selection returned split output parameters"
         "${RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT}"
         "bool selectStaticEncodingVariant(View, Entry& variant, std::string_view& contentEncoding);")
+    expect_match("static index encoded absence inside a default view"
+        "${RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT}"
+        "struct StaticRootEntryView { bool found() const; };")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2254,20 +2257,31 @@ set(WEB_STATIC_FILE_RESPONSE_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp")
 set(WEB_STATIC_FILE_INDEX_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/StaticFiles.cpp")
+set(WEB_STATIC_FILE_INDEX_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/StaticFilesInternal.h")
 set(WEB_STATIC_FILE_REPRESENTATION_TEST
     "${RUVIA_ROOT}/tests/unit_content_range.cpp")
+set(WEB_STATIC_FILE_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 check_files_no_match("static file representation must use one typed selection"
     "${RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT}"
-    "${WEB_STATIC_FILE_RESPONSE_SOURCE}")
+    "${WEB_STATIC_FILE_RESPONSE_SOURCE}"
+    "${WEB_STATIC_FILE_INDEX_CONTRACT}")
 if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
    EXISTS "${WEB_STATIC_FILE_INDEX_SOURCE}" AND
-   EXISTS "${WEB_STATIC_FILE_REPRESENTATION_TEST}")
+   EXISTS "${WEB_STATIC_FILE_INDEX_CONTRACT}" AND
+   EXISTS "${WEB_STATIC_FILE_REPRESENTATION_TEST}" AND
+   EXISTS "${WEB_STATIC_FILE_PACKAGE_CONSUMER}")
     file(READ "${WEB_STATIC_FILE_RESPONSE_SOURCE}"
         web_static_file_response_source)
     file(READ "${WEB_STATIC_FILE_INDEX_SOURCE}"
         web_static_file_index_source)
+    file(READ "${WEB_STATIC_FILE_INDEX_CONTRACT}"
+        web_static_file_index_contract)
     file(READ "${WEB_STATIC_FILE_REPRESENTATION_TEST}"
         web_static_file_representation_test)
+    file(READ "${WEB_STATIC_FILE_PACKAGE_CONSUMER}"
+        web_static_file_package_consumer)
     if(NOT web_static_file_response_source MATCHES
            "std::variant<[ \t\r\n]*FileResponseCopiedPath,[ \t\r\n]*FileResponseBorrowedNativePath>" OR
        NOT web_static_file_response_source MATCHES
@@ -2276,12 +2290,20 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "HttpContentCoding contentCoding_" OR
        NOT web_static_file_response_source MATCHES
            "httpContentCodingToken[(]contentCoding[)]" OR
+       NOT web_static_file_index_contract MATCHES
+           "class StaticRootEntryView final" OR
+       NOT web_static_file_index_contract MATCHES
+           "std::optional<StaticRootEntryView>" OR
        NOT web_static_file_index_source MATCHES
            "mime[.]contentType[.]empty[(][)]" OR
        NOT web_static_file_representation_test MATCHES
            "static_file_selects_precompressed_representation_atomically" OR
        NOT web_static_file_representation_test MATCHES
-           "static_root_rejects_empty_custom_mime_type")
+           "static_root_rejects_empty_custom_mime_type" OR
+       NOT web_static_file_package_consumer MATCHES
+           "!std::default_initializable<[ \t\r\n]*ruvia::detail::StaticRootEntryView>" OR
+       NOT web_static_file_package_consumer MATCHES
+           "std::optional<ruvia::detail::StaticRootEntryView>")
         boundary_error("static file representation ownership was split"
             "path lifetime, selected entry, and HTTP content coding must remain typed and atomically tested")
     endif()
