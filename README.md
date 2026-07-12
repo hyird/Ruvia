@@ -495,6 +495,12 @@ describes capacity the receiver is prepared to accept, and
 sent as consumed data frees that capacity.
 
 Buffered/streamed request storage is therefore Web runtime state, not HTTP/2 protocol state.
+The connection coroutine also requires a complete `Http2SansIoSessionContext` value. It binds the
+server options, `ConnectionScanner::Entry`, graceful-shutdown atomic, remote endpoint metadata, and
+explicit `ContextServices` integrations before the coroutine starts. The former default-constructed
+`Http2SansIoSessionEnv` pointer bag is removed: an installed caller cannot silently fall back to
+default options, an unlinked local scanner, or a session that ignores shutdown. Bare defaults used
+by socket tests now live only in a test fixture.
 `ruvia-web` owns a PMR-stable `Http2SansIoStreamRuntimeTable`; each entry owns one
 `Http2RequestBodyRuntime`, its `Http2SansIoBodyQueue`, and the optional
 `Http2SansIoStreamSignal` that is also the stream's dispatch lease. The table increments

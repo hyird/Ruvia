@@ -95,19 +95,22 @@ Task<void> runHttp2ServerSession(
     ConnectionScanner::Entry& scannerEntry,
     std::string_view remoteAddress,
     RateLimiter* rateLimiter,
+    const std::atomic_bool& serverStarted,
     std::string_view clientCertificate = {},
-    std::string_view initialBytes = {},
-    const std::atomic_bool* serverStarted = nullptr) {
+    std::string_view initialBytes = {}) {
     (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
-    Http2SansIoSessionEnv env;
-    env.databases = &databases;
-    env.redis = &redis;
-    env.rateLimiter = rateLimiter;
-    env.options = &options;
-    env.scannerEntry = &scannerEntry;
-    env.clientCertificate = clientCertificate;
-    env.serverStarted = serverStarted;
-    co_await runHttp2SansIoSession(stream, routes, memory, remoteAddress, env, initialBytes);
+    co_await runHttp2SansIoSession(
+        stream,
+        routes,
+        memory,
+        Http2SansIoSessionContext(
+            ContextServices(&databases, &redis, rateLimiter),
+            options,
+            scannerEntry,
+            serverStarted,
+            remoteAddress,
+            clientCertificate),
+        initialBytes);
 }
 
 template <typename Stream>
@@ -124,7 +127,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     RateLimiter* rateLimiter,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
-    const std::atomic_bool* serverStarted = nullptr) {
+    const std::atomic_bool& serverStarted) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
     case CleartextHttp2Probe::kHttp1:
@@ -141,9 +144,9 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             scannerEntry,
             remoteAddress,
             rateLimiter,
+            serverStarted,
             {},
-            current,
-            serverStarted);
+            current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {
         scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);

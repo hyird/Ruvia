@@ -745,6 +745,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/router/RouteTable.h")
     set(_installed_route_http2_session_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    set(_installed_http2_server_entry_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
     set(_installed_route_response_stream_dispatch_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
     set(_installed_route_websocket_session_path
@@ -758,6 +760,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_route_resolution_path}"
             "${_installed_route_table_path}"
             "${_installed_route_http2_session_path}"
+            "${_installed_http2_server_entry_path}"
             "${_installed_route_response_stream_dispatch_path}"
             "${_installed_route_websocket_session_path}")
         if(NOT EXISTS "${_route_contract}")
@@ -779,6 +782,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     file(READ "${_installed_route_table_path}" _installed_route_table)
     file(READ "${_installed_route_http2_session_path}"
         _installed_route_http2_session)
+    file(READ "${_installed_http2_server_entry_path}"
+        _installed_http2_server_entry)
     file(READ "${_installed_route_response_stream_dispatch_path}"
         _installed_route_response_stream_dispatch)
     file(READ "${_installed_route_websocket_session_path}"
@@ -847,6 +852,29 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_route_websocket_session MATCHES "RequestDispatcher")
         message(FATAL_ERROR
             "installed Web runtimes do not dispatch through the concrete RouteTable")
+    endif()
+    if(NOT _installed_route_http2_session MATCHES
+           "class Http2SansIoSessionContext final" OR
+       NOT _installed_route_http2_session MATCHES
+           "ContextServices services" OR
+       NOT _installed_route_http2_session MATCHES
+           "const HttpServerOptions& options" OR
+       NOT _installed_route_http2_session MATCHES
+           "ConnectionScanner::Entry& scannerEntry" OR
+       NOT _installed_route_http2_session MATCHES
+           "const std::atomic_bool& serverStarted" OR
+       NOT _installed_route_http2_session MATCHES
+           "Http2SansIoSessionContext session" OR
+       NOT _installed_route_http2_session MATCHES
+           "routeServices[(]bool secure[)]" OR
+       _installed_route_http2_session MATCHES
+           "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](options|scannerEntry|serverStarted)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]" OR
+       NOT _installed_http2_server_entry MATCHES
+           "Http2SansIoSessionContext[(]" OR
+       _installed_http2_server_entry MATCHES
+           "Http2SansIoSessionEnv|const[ \t]+std::atomic_bool[*][ \t]+serverStarted[ \t]*=[ \t]*nullptr")
+        message(FATAL_ERROR
+            "installed HTTP/2 session restored nullable or default production wiring")
     endif()
 endif()
 if(NOT EXISTS "${_installed_http2_remote_content_path}")
