@@ -34,10 +34,14 @@
 namespace {
 
 using ruvia::detail::HttpContentCoding;
+using ruvia::detail::HttpContentEncodeError;
+using ruvia::detail::HttpContentEncodeFailure;
+using ruvia::detail::HttpContentEncodeResult;
 using ruvia::detail::HttpContentDecodeError;
 using ruvia::detail::HttpContentDecodeFailure;
 using ruvia::detail::HttpContentDecodeResult;
 using ruvia::detail::HttpDecodedContent;
+using ruvia::detail::HttpEncodedContent;
 using ruvia::detail::Http1ChunkedBodyDecoder;
 using ruvia::detail::Http1RequestBodyPlan;
 using ruvia::detail::Http1ServerRequestParser;
@@ -46,6 +50,7 @@ using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
 using ruvia::detail::decodeHttpContent;
+using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
 
 inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
@@ -252,6 +257,16 @@ concept HasPublicRequestBodyPlanFactories = requires {
     T::makeChunked(HttpTransferCodings{});
 };
 
+template <typename T>
+concept ExposesRvalueEncodedContent = requires(T&& result) {
+    std::move(result).encoded();
+};
+
+template <typename T>
+concept ExposesRvalueEncodeFailure = requires(const T&& result) {
+    std::move(result).failure();
+};
+
 static_assert(!std::default_initializable<Http1RequestBodyPlan>);
 static_assert(!std::constructible_from<
     Http1RequestBodyPlan,
@@ -306,6 +321,30 @@ static_assert(std::same_as<
         std::size_t{},
         static_cast<std::pmr::memory_resource*>(nullptr))),
     HttpContentDecodeResult>);
+static_assert(!std::default_initializable<HttpContentEncodeResult>);
+static_assert(!std::copy_constructible<HttpContentEncodeResult>);
+static_assert(std::move_constructible<HttpContentEncodeResult>);
+static_assert(!std::is_move_assignable_v<HttpContentEncodeResult>);
+static_assert(!std::default_initializable<HttpEncodedContent>);
+static_assert(!std::default_initializable<HttpContentEncodeFailure>);
+static_assert(!ExposesRvalueEncodedContent<HttpContentEncodeResult>);
+static_assert(!ExposesRvalueEncodeFailure<HttpContentEncodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<HttpContentEncodeResult&>().encoded()),
+    HttpEncodedContent*>);
+static_assert(std::same_as<
+    decltype(std::declval<const HttpContentEncodeResult&>().failure()),
+    const HttpContentEncodeFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<HttpEncodedContent&&>().takeBytes()),
+    std::pmr::string>);
+static_assert(std::same_as<
+    decltype(encodeHttpContent(
+        HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        static_cast<std::pmr::memory_resource*>(nullptr))),
+    HttpContentEncodeResult>);
 
 }  // namespace
 
@@ -482,18 +521,76 @@ RUVIA_TEST(http_zstd_content_rejects_window_above_rfc9659_limit) {
             plain.size()) ==
         HttpContentDecodeError::kInvalidContent);
 
-    std::pmr::string conformant(std::pmr::get_default_resource());
-    RUVIA_CHECK(ruvia::detail::encodeHttpContent(
+    auto conformant = encodeHttpContent(
         HttpContentCoding::kZstd,
         plain,
-        conformant,
-        plain.size()));
-    RUVIA_CHECK_EQ(
-        decoded(
-            HttpContentCoding::kZstd,
-            conformant,
-            plain.size()),
-        plain);
+        plain.size(),
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(conformant.encoded() != nullptr);
+    if (const auto* content = conformant.encoded()) {
+        RUVIA_CHECK_EQ(
+            decoded(
+                HttpContentCoding::kZstd,
+                content->bytes(),
+                plain.size()),
+            plain);
+    }
+}
+
+RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
+    const std::string input(2048, 'e');
+    for (const auto coding : {
+             HttpContentCoding::kGzip,
+             HttpContentCoding::kBrotli,
+             HttpContentCoding::kZstd}) {
+        const auto full = encodeHttpContent(
+            coding,
+            input,
+            input.size(),
+            std::pmr::get_default_resource());
+        RUVIA_CHECK(full.encoded() != nullptr);
+        if (full.encoded() == nullptr) {
+            continue;
+        }
+        const auto encodedSize = full.encoded()->bytes().size();
+        RUVIA_CHECK(encodedSize > 1);
+
+        const auto exact = encodeHttpContent(
+            coding,
+            input,
+            encodedSize,
+            std::pmr::get_default_resource());
+        RUVIA_CHECK(exact.encoded() != nullptr);
+        if (const auto* encoded = exact.encoded()) {
+            RUVIA_CHECK_EQ(encoded->bytes().size(), encodedSize);
+        }
+
+        const auto tooSmall = encodeHttpContent(
+            coding,
+            input,
+            encodedSize - 1,
+            std::pmr::get_default_resource());
+        RUVIA_CHECK(tooSmall.encoded() == nullptr);
+        RUVIA_CHECK(tooSmall.failure() != nullptr);
+        if (const auto* failure = tooSmall.failure()) {
+            RUVIA_CHECK(
+                failure->error() ==
+                HttpContentEncodeError::kEncodedSizeExceeded);
+        }
+    }
+
+    const auto unsupported = encodeHttpContent(
+        HttpContentCoding::kNone,
+        {},
+        0,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(unsupported.encoded() == nullptr);
+    RUVIA_CHECK(unsupported.failure() != nullptr);
+    if (const auto* failure = unsupported.failure()) {
+        RUVIA_CHECK(
+            failure->error() ==
+            HttpContentEncodeError::kUnsupportedCoding);
+    }
 }
 
 RUVIA_TEST(http_content_decode_rejects_empty_or_unsupported_encoded_input) {

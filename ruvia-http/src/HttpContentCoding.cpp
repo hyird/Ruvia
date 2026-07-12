@@ -19,6 +19,8 @@
 namespace ruvia::detail {
 namespace {
 
+using ContentEncodeAttempt =
+    std::variant<std::pmr::string, HttpContentEncodeError>;
 using ContentDecodeAttempt =
     std::variant<std::pmr::string, HttpContentDecodeError>;
 
@@ -287,48 +289,93 @@ void gzipZfree(voidpf, voidpf address) noexcept {
     header->resource->deallocate(raw, header->bytes, alignof(ZlibAllocationHeader));
 }
 
-bool gzipCompress(std::string_view input, std::pmr::string& output, std::size_t maxOutputBytes) {
+[[nodiscard]] ContentEncodeAttempt encodeGzipContent(
+    std::string_view input,
+    std::size_t maxEncodedBytes,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(httpPmrResourceOrDefault(resource));
     z_stream stream{};
     stream.zalloc = &gzipZalloc;
     stream.zfree = &gzipZfree;
     stream.opaque = output.get_allocator().resource();
     if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
-        return false;
+        return HttpContentEncodeError::kEncoderFailure;
     }
     struct Guard final {
         z_stream* stream;
         ~Guard() { (void)deflateEnd(stream); }
     } guard{&stream};
 
-    stream.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
-    stream.avail_in = static_cast<uInt>(input.size());
-    int status = Z_OK;
-    while (status == Z_OK) {
-        if (output.size() >= maxOutputBytes) {
-            return false;
+    std::size_t supplied = 0;
+    const auto refill = [&]() noexcept {
+        if (stream.avail_in != 0 || supplied == input.size()) {
+            return;
+        }
+        const auto count = static_cast<uInt>(std::min<std::size_t>(
+            input.size() - supplied,
+            (std::numeric_limits<uInt>::max)()));
+        stream.next_in = reinterpret_cast<Bytef*>(
+            const_cast<char*>(input.data() + supplied));
+        stream.avail_in = count;
+        supplied += count;
+    };
+
+    for (;;) {
+        refill();
+        if (output.size() == maxEncodedBytes) {
+            if (stream.avail_in == 0 && supplied == input.size()) {
+                Bytef probe{};
+                stream.next_out = &probe;
+                stream.avail_out = 1;
+                const auto status = deflate(&stream, Z_FINISH);
+                if (status == Z_STREAM_END && stream.avail_out == 1) {
+                    return output;
+                }
+                if (status == Z_MEM_ERROR) {
+                    return HttpContentEncodeError::kEncoderFailure;
+                }
+            }
+            return HttpContentEncodeError::kEncodedSizeExceeded;
         }
         const auto offset = output.size();
-        const auto writable = std::min<std::size_t>(8192, maxOutputBytes - offset);
+        const auto writable = std::min<std::size_t>(
+            8192,
+            maxEncodedBytes - offset);
+        const auto beforeInput = stream.avail_in;
+        int status = Z_OK;
         output.resize_and_overwrite(
             offset + writable,
             [&stream, &status, offset](char* data, std::size_t count) noexcept {
                 const auto available = count - offset;
                 stream.next_out = reinterpret_cast<Bytef*>(data + offset);
                 stream.avail_out = static_cast<uInt>(available);
-                status = deflate(&stream, Z_FINISH);
+                status = deflate(
+                    &stream,
+                    stream.avail_in == 0 ? Z_FINISH : Z_NO_FLUSH);
                 return offset + (available - stream.avail_out);
             });
-        if (status != Z_OK && status != Z_STREAM_END) {
-            return false;
+        if (status == Z_STREAM_END) {
+            return output;
+        }
+        if (status == Z_MEM_ERROR) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+        if (status != Z_OK ||
+            (output.size() == offset && stream.avail_in == beforeInput)) {
+            return HttpContentEncodeError::kEncoderFailure;
         }
     }
-    return status == Z_STREAM_END;
 }
 
-bool brotliCompress(std::string_view input, std::pmr::string& output, std::size_t maxOutputBytes) {
+[[nodiscard]] ContentEncodeAttempt encodeBrotliContent(
+    std::string_view input,
+    std::size_t maxEncodedBytes,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(httpPmrResourceOrDefault(resource));
+    const auto bound = BrotliEncoderMaxCompressedSize(input.size());
     bool ok = false;
     output.resize_and_overwrite(
-        maxOutputBytes,
+        maxEncodedBytes,
         [&input, &ok](char* data, std::size_t count) noexcept {
             std::size_t encodedSize = count;
             ok = BrotliEncoderCompress(
@@ -341,13 +388,22 @@ bool brotliCompress(std::string_view input, std::pmr::string& output, std::size_
                      reinterpret_cast<std::uint8_t*>(data)) == BROTLI_TRUE;
             return ok ? encodedSize : std::size_t{0};
         });
-    return ok;
+    if (ok) {
+        return output;
+    }
+    return bound != 0 && bound > maxEncodedBytes
+        ? ContentEncodeAttempt(HttpContentEncodeError::kEncodedSizeExceeded)
+        : ContentEncodeAttempt(HttpContentEncodeError::kEncoderFailure);
 }
 
-bool zstdCompress(std::string_view input, std::pmr::string& output, std::size_t maxOutputBytes) {
+[[nodiscard]] ContentEncodeAttempt encodeZstdContent(
+    std::string_view input,
+    std::size_t maxEncodedBytes,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(httpPmrResourceOrDefault(resource));
     auto* context = ZSTD_createCCtx();
     if (context == nullptr) {
-        return false;
+        return HttpContentEncodeError::kEncoderFailure;
     }
     struct Guard final {
         ZSTD_CCtx* context;
@@ -361,22 +417,61 @@ bool zstdCompress(std::string_view input, std::pmr::string& output, std::size_t 
             context,
             ZSTD_c_windowLog,
             kHttpZstdWindowLogMax)) != 0) {
-        return false;
+        return HttpContentEncodeError::kEncoderFailure;
     }
-    bool ok = false;
-    output.resize_and_overwrite(
-        maxOutputBytes,
-        [&input, &ok, context](char* data, std::size_t count) noexcept {
-            const auto result = ZSTD_compress2(
+    ZSTD_inBuffer in{input.data(), input.size(), 0};
+    for (;;) {
+        if (output.size() == maxEncodedBytes) {
+            char probe{};
+            ZSTD_outBuffer out{&probe, 1, 0};
+            const auto result = ZSTD_compressStream2(
                 context,
-                data,
-                count,
-                input.data(),
-                input.size());
-            ok = ZSTD_isError(result) == 0;
-            return ok ? result : std::size_t{0};
-        });
-    return ok;
+                &out,
+                &in,
+                ZSTD_e_end);
+            if (ZSTD_isError(result) != 0) {
+                return HttpContentEncodeError::kEncoderFailure;
+            }
+            if (result == 0 && out.pos == 0 && in.pos == in.size) {
+                return output;
+            }
+            return HttpContentEncodeError::kEncodedSizeExceeded;
+        }
+
+        const auto offset = output.size();
+        const auto writable = std::min<std::size_t>(
+            8192,
+            maxEncodedBytes - offset);
+        const auto beforeInput = in.pos;
+        std::size_t result = 0;
+        std::size_t produced = 0;
+        output.resize_and_overwrite(
+            offset + writable,
+            [&in, &produced, &result, context, offset](
+                char* data,
+                std::size_t count) noexcept {
+                ZSTD_outBuffer out{
+                    data + offset,
+                    count - offset,
+                    0};
+                result = ZSTD_compressStream2(
+                    context,
+                    &out,
+                    &in,
+                    ZSTD_e_end);
+                produced = out.pos;
+                return offset + out.pos;
+            });
+        if (ZSTD_isError(result) != 0) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+        if (result == 0 && in.pos == in.size) {
+            return output;
+        }
+        if (produced == 0 && in.pos == beforeInput) {
+            return HttpContentEncodeError::kEncoderFailure;
+        }
+    }
 }
 
 }  // namespace
@@ -449,22 +544,39 @@ HttpContentDecodeResult decodeHttpContent(
         std::get<HttpContentDecodeError>(attempt));
 }
 
-bool encodeHttpContent(
+HttpContentEncodeResult encodeHttpContent(
     HttpContentCoding coding,
     std::string_view input,
-    std::pmr::string& output,
-    std::size_t maxOutputBytes) {
+    std::size_t maxEncodedBytes,
+    std::pmr::memory_resource* resource) {
+    ContentEncodeAttempt attempt = HttpContentEncodeError::kUnsupportedCoding;
     switch (coding) {
         case HttpContentCoding::kBrotli:
-            return brotliCompress(input, output, maxOutputBytes);
+            attempt = encodeBrotliContent(
+                input,
+                maxEncodedBytes,
+                resource);
+            break;
         case HttpContentCoding::kZstd:
-            return zstdCompress(input, output, maxOutputBytes);
+            attempt = encodeZstdContent(
+                input,
+                maxEncodedBytes,
+                resource);
+            break;
         case HttpContentCoding::kGzip:
-            return gzipCompress(input, output, maxOutputBytes);
+            attempt = encodeGzipContent(
+                input,
+                maxEncodedBytes,
+                resource);
+            break;
         case HttpContentCoding::kNone:
-            return false;
+            break;
     }
-    return false;
+    if (auto* encoded = std::get_if<std::pmr::string>(&attempt)) {
+        return HttpContentEncodeResult::makeEncoded(std::move(*encoded));
+    }
+    return HttpContentEncodeResult::makeFailure(
+        std::get<HttpContentEncodeError>(attempt));
 }
 
 }  // namespace ruvia::detail

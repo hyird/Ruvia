@@ -148,10 +148,18 @@ if(NOT _installed_http_content_coding_contract MATCHES
        "using Value = std::variant" OR
    NOT _installed_http_content_coding_contract MATCHES
        "decodeHttpContent" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpEncodedContent final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpContentEncodeFailure final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpContentEncodeResult final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "encodeHttpContent" OR
    _installed_http_content_coding_contract MATCHES
-       "decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes")
+       "decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes|bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&")
     message(FATAL_ERROR
-        "installed HTTP content decoder lost its owning discriminated contract")
+        "installed HTTP content coding lost its owning discriminated contract")
 endif()
 set(_removed_loose_http_parser_header
     "${_install_prefix}/include/ruvia/http/HttpParser.h")
@@ -965,6 +973,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
     set(_installed_http2_stream_session_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    set(_installed_buffered_response_preparation_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpBufferedResponse.h")
+    set(_installed_response_compression_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseCompression.h")
+    set(_installed_connection_state_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpConnectionState.h")
     set(_installed_http2_response_stream_sink_path
         "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
     foreach(_response_stream_status_contract IN ITEMS
@@ -980,6 +994,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_http1_websocket_route_path}"
             "${_installed_http1_stream_session_path}"
             "${_installed_http2_stream_session_path}"
+            "${_installed_buffered_response_preparation_path}"
+            "${_installed_response_compression_path}"
+            "${_installed_connection_state_path}"
             "${_installed_http2_response_stream_sink_path}")
         if(NOT EXISTS "${_response_stream_status_contract}")
             message(FATAL_ERROR
@@ -1010,8 +1027,29 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_http1_stream_session)
     file(READ "${_installed_http2_stream_session_path}"
         _installed_http2_stream_session)
+    file(READ "${_installed_buffered_response_preparation_path}"
+        _installed_buffered_response_preparation)
+    file(READ "${_installed_response_compression_path}"
+        _installed_response_compression)
+    file(READ "${_installed_connection_state_path}"
+        _installed_connection_state)
     file(READ "${_installed_http2_response_stream_sink_path}"
         _installed_http2_response_stream_sink)
+    if(NOT _installed_response_compression MATCHES
+           "void[ \t\r\n]+applyResponseCompression" OR
+       NOT _installed_buffered_response_preparation MATCHES
+           "applyResponseCompression" OR
+       _installed_response_compression MATCHES
+           "compressResponseBodyIfAccepted|compressionScratch" OR
+       _installed_buffered_response_preparation MATCHES
+           "bodyBorrowsCompressionScratch|compressionScratch" OR
+       _installed_connection_state MATCHES "compressionScratch" OR
+       _installed_http1_stream_session MATCHES
+           "bodyBorrowsCompressionScratch|compressionScratch" OR
+       _installed_http2_stream_session MATCHES "compressionScratch")
+        message(FATAL_ERROR
+            "installed Web response compression restored external scratch ownership")
+    endif()
     if(_installed_route_stream_result MATCHES
            "RouteStreamDispatchOutcome|streamHandled[(][)]|HttpResponse response_[ \t]*;[ \t\r\n]*Route" OR
        _installed_response_stream_dispatch MATCHES

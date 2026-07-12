@@ -35,7 +35,6 @@ struct ConnectionWorkSet final {
     std::pmr::string readBuffer;
     ResponseHeadBuffer responseHead;
     std::pmr::string fileChunk;
-    std::pmr::string compressionScratch;
     Http1ServerRequestParser parser;
     Http1ServerRequestParseState parsed;
     RouteResolution routeResolution;

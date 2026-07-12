@@ -79,6 +79,16 @@ concept ExposesRvalueDecodeFailure = requires(const T&& result) {
 };
 
 template <typename T>
+concept ExposesRvalueEncodedContent = requires(T&& result) {
+    std::move(result).encoded();
+};
+
+template <typename T>
+concept ExposesRvalueEncodeFailure = requires(const T&& result) {
+    std::move(result).failure();
+};
+
+template <typename T>
 concept HasRequestHeadStatusAccessor = requires(const T& result) {
     result.status();
 };
@@ -1772,8 +1782,45 @@ static_assert(std::same_as<
         std::size_t{},
         std::declval<std::pmr::memory_resource*>())),
     ruvia::detail::HttpContentDecodeResult>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(std::move_constructible<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(!ExposesRvalueEncodedContent<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(!ExposesRvalueEncodeFailure<
+    ruvia::detail::HttpContentEncodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<
+        ruvia::detail::HttpContentEncodeResult&>().encoded()),
+    ruvia::detail::HttpEncodedContent*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpContentEncodeResult&>().failure()),
+    const ruvia::detail::HttpContentEncodeFailure*>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::detail::HttpContentEncodeResult>);
 
 int main() {
+    auto encodedContent = ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        "installed content encoder",
+        1024,
+        std::pmr::get_default_resource());
+    if (encodedContent.encoded() == nullptr ||
+        encodedContent.failure() != nullptr ||
+        encodedContent.encoded()->bytes().empty()) {
+        return 50;
+    }
     const auto unsupportedDecode = ruvia::detail::decodeHttpContent(
         ruvia::detail::HttpContentCoding::kNone,
         {},

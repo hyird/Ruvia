@@ -651,16 +651,13 @@ Task<void> runHttp2SansIoSession(
             }
         } while (false);
 
-        // One request-local scratch owns a compressed body until the protocol core
-        // has accepted every DATA byte. All valid buffered branches converge here,
-        // and the exact post-transformation plan is submitted without re-planning.
-        std::pmr::string responseCompressionScratch(
-            requestMemory.resource());
+        // All valid buffered branches converge here. Preparation moves any
+        // compressed representation into the response itself, and the exact
+        // post-transformation plan is submitted without re-planning.
         const auto responsePreparation = prepareBufferedHttpResponse(
             request,
             response,
-            options,
-            responseCompressionScratch);
+            options);
         const auto result = co_await submitResponse(
             streamId,
             response,

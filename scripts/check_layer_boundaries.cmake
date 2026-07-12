@@ -97,6 +97,8 @@ set(RULE_STALE_HTTP_CONTENT_LENGTH_SPLIT
     "sawContentLength|parsedContentLength")
 set(RULE_STALE_HTTP_CONTENT_DECODE_CHAIN
     "decodeRequestContentEncoding|inline[ \t]+void[ \t\r\n]+decodeHttpClientResponseContentEncoding|kMaxDecodedRequestBodyBytes|zlibInflateRequestBody|brotliInflateRequestBody|zstdInflateRequestBody|StreamingContentDecoder|HttpStreamingDecoder[.]h")
+set(RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN
+    "bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&|compressResponseBodyIfAccepted|bodyBorrowsCompressionScratch|compressionScratch|response[.]setBodyView[ \t]*[(]")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -466,6 +468,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("in-place client response content decoding"
         "${RULE_STALE_HTTP_CONTENT_DECODE_CHAIN}"
         "inline void decodeHttpClientResponseContentEncoding() {}")
+    expect_match("bool/out-parameter HTTP content encoder"
+        "${RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN}"
+        "bool encodeHttpContent(Coding, View, std::pmr::string& output, std::size_t limit);")
+    expect_match("response compression scratch lifetime side channel"
+        "${RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN}"
+        "if (preparation.bodyBorrowsCompressionScratch()) compressionScratch.clear();")
+    expect_match("compressed response body borrowing external storage"
+        "${RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN}"
+        "response.setBodyView(encodedBytes);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2181,6 +2192,50 @@ check_files_no_match("HTTP content decoding must use one owning typed result"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientContentEncoding.h"
     "${RUVIA_ROOT}/ruvia-http/src/HttpContentCoding.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+check_files_no_match("HTTP content encoding must own its result and response lifetime"
+    "${RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentCoding.h"
+    "${RUVIA_ROOT}/ruvia-http/src/HttpContentCoding.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseCompression.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpBufferedResponse.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpConnectionState.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpConnectionState.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(HTTP_CONTENT_CODING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentCoding.h")
+set(WEB_RESPONSE_COMPRESSION_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp")
+set(WEB_RESPONSE_COMPRESSION_TEST
+    "${RUVIA_ROOT}/tests/unit_response_compression.cpp")
+if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
+   EXISTS "${WEB_RESPONSE_COMPRESSION_SOURCE}" AND
+   EXISTS "${WEB_RESPONSE_COMPRESSION_TEST}")
+    file(READ "${HTTP_CONTENT_CODING_CONTRACT}"
+        http_content_coding_contract)
+    file(READ "${WEB_RESPONSE_COMPRESSION_SOURCE}"
+        web_response_compression_source)
+    file(READ "${WEB_RESPONSE_COMPRESSION_TEST}"
+        web_response_compression_test)
+    if(NOT http_content_coding_contract MATCHES
+           "class HttpEncodedContent final" OR
+       NOT http_content_coding_contract MATCHES
+           "class HttpContentEncodeFailure final" OR
+       NOT http_content_coding_contract MATCHES
+           "class HttpContentEncodeResult final" OR
+       NOT http_content_coding_contract MATCHES
+           "std::variant<HttpEncodedContent, HttpContentEncodeFailure>" OR
+       NOT web_response_compression_source MATCHES
+           "setResponseBodyOwned" OR
+       NOT web_response_compression_source MATCHES
+           "takeBytes[(][)]" OR
+       NOT web_response_compression_test MATCHES
+           "responseBody[(]response[)][.]ownedBytes[(][)]")
+        boundary_error("HTTP response compression lost encoded-byte ownership"
+            "the HTTP encoder must return one owning alternative and Web must move it into HttpResponse")
+    endif()
+endif()
 if(EXISTS
        "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpStreamingDecoder.h")
     boundary_error(

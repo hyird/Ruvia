@@ -5,19 +5,12 @@
 #include "ruvia/web/HttpServerOptions.h"
 #include "ruvia/http/HttpTypes.h"
 
-#include <cstddef>
-#include <memory_resource>
-#include <string>
-
 namespace ruvia::detail {
 
-inline constexpr std::size_t kCompressionScratchRetainedBytes = 256 * 1024;
-
-bool compressResponseBodyIfAccepted(
+void applyResponseCompression(
     HttpContentCoding coding,
     HttpKnownMethod requestMethod,
     HttpResponse& response,
-    const HttpServerOptions::Compression& options,
-    std::pmr::string& compressionScratch);
+    const HttpServerOptions::Compression& options);
 
 }  // namespace ruvia::detail

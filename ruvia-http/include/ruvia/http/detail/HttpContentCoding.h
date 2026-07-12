@@ -21,6 +21,117 @@ namespace ruvia::detail {
 [[nodiscard]] HttpContentCoding httpContentCodingFromFieldValue(
     std::string_view value) noexcept;
 
+enum class HttpContentEncodeError : std::uint8_t {
+    kUnsupportedCoding,
+    kEncodedSizeExceeded,
+    kEncoderFailure
+};
+
+class HttpEncodedContent final {
+public:
+    HttpEncodedContent(const HttpEncodedContent&) = delete;
+    HttpEncodedContent& operator=(const HttpEncodedContent&) = delete;
+    HttpEncodedContent(HttpEncodedContent&&) noexcept = default;
+    HttpEncodedContent& operator=(HttpEncodedContent&&) = delete;
+
+    [[nodiscard]] std::string_view bytes() const & noexcept {
+        return std::string_view(bytes_.data(), bytes_.size());
+    }
+    std::string_view bytes() const && = delete;
+
+    [[nodiscard]] std::pmr::string takeBytes() && noexcept {
+        return std::move(bytes_);
+    }
+
+private:
+    friend class HttpContentEncodeResult;
+
+    explicit HttpEncodedContent(std::pmr::string bytes) noexcept
+        : bytes_(std::move(bytes)) {}
+
+    std::pmr::string bytes_;
+};
+
+class HttpContentEncodeFailure final {
+public:
+    [[nodiscard]] constexpr HttpContentEncodeError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class HttpContentEncodeResult;
+
+    explicit constexpr HttpContentEncodeFailure(
+        HttpContentEncodeError error) noexcept
+        : error_(error) {}
+
+    HttpContentEncodeError error_;
+};
+
+// Encoding is transactional: success exclusively owns the complete encoded
+// representation, while failure owns only its reason. The exact output cap is
+// part of the operation, so no partial bytes escape when a coding cannot finish
+// within it.
+class HttpContentEncodeResult final {
+public:
+    HttpContentEncodeResult(const HttpContentEncodeResult&) = delete;
+    HttpContentEncodeResult& operator=(const HttpContentEncodeResult&) = delete;
+    HttpContentEncodeResult(HttpContentEncodeResult&&) noexcept = default;
+    HttpContentEncodeResult& operator=(HttpContentEncodeResult&&) = delete;
+
+    [[nodiscard]] HttpEncodedContent* encoded() & noexcept {
+        return std::get_if<HttpEncodedContent>(&value_);
+    }
+
+    [[nodiscard]] const HttpEncodedContent* encoded() const & noexcept {
+        return std::get_if<HttpEncodedContent>(&value_);
+    }
+    HttpEncodedContent* encoded() && = delete;
+    const HttpEncodedContent* encoded() const && = delete;
+
+    [[nodiscard]] const HttpContentEncodeFailure* failure() const & noexcept {
+        return std::get_if<HttpContentEncodeFailure>(&value_);
+    }
+    const HttpContentEncodeFailure* failure() const && = delete;
+
+private:
+    friend HttpContentEncodeResult encodeHttpContent(
+        HttpContentCoding,
+        std::string_view,
+        std::size_t,
+        std::pmr::memory_resource*);
+
+    using Value = std::variant<HttpEncodedContent, HttpContentEncodeFailure>;
+
+    [[nodiscard]] static HttpContentEncodeResult makeEncoded(
+        std::pmr::string bytes) noexcept {
+        return HttpContentEncodeResult(HttpEncodedContent(std::move(bytes)));
+    }
+
+    [[nodiscard]] static HttpContentEncodeResult makeFailure(
+        HttpContentEncodeError error) noexcept {
+        return HttpContentEncodeResult(HttpContentEncodeFailure(error));
+    }
+
+    explicit HttpContentEncodeResult(HttpEncodedContent encoded) noexcept
+        : value_(std::move(encoded)) {}
+
+    explicit HttpContentEncodeResult(
+        HttpContentEncodeFailure failure) noexcept
+        : value_(failure) {}
+
+    Value value_;
+};
+
+// Produces one complete content-coded representation within the exact output
+// cap (zero means only a zero-byte encoding could succeed). HTTP zstd output is
+// constrained to RFC 9659's 8 MiB window limit.
+[[nodiscard]] HttpContentEncodeResult encodeHttpContent(
+    HttpContentCoding coding,
+    std::string_view input,
+    std::size_t maxEncodedBytes,
+    std::pmr::memory_resource* resource);
+
 enum class HttpContentDecodeError : std::uint8_t {
     kUnsupportedCoding,
     kInvalidContent,
@@ -134,11 +245,5 @@ private:
     std::string_view input,
     std::size_t maxDecodedBytes,
     std::pmr::memory_resource* resource);
-
-[[nodiscard]] bool encodeHttpContent(
-    HttpContentCoding coding,
-    std::string_view input,
-    std::pmr::string& output,
-    std::size_t maxOutputBytes);
 
 }  // namespace ruvia::detail

@@ -22,7 +22,7 @@ using ruvia::HttpResponse;
 using ruvia::HttpServerOptions;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpContentCoding;
-using ruvia::detail::compressResponseBodyIfAccepted;
+using ruvia::detail::applyResponseCompression;
 using ruvia::detail::responseBody;
 
 using Compression = HttpServerOptions::Compression;
@@ -93,9 +93,11 @@ bool tryCompress(
     Compression options,
     HttpContentCoding coding = HttpContentCoding::kGzip,
     HttpKnownMethod method = HttpKnownMethod::kGet) {
-    std::pmr::string scratch(std::pmr::new_delete_resource());
-    return compressResponseBodyIfAccepted(
-        coding, method, response, options, scratch);
+    const bool alreadyEncoded =
+        !response.header("Content-Encoding").empty();
+    applyResponseCompression(coding, method, response, options);
+    return !alreadyEncoded &&
+        !response.header("Content-Encoding").empty();
 }
 
 }  // namespace
@@ -105,9 +107,8 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
     // stream. Decompress the produced body with the reference library and confirm it
     // equals the original -- catching a corrupt stream (wrong gzip window bits,
     // truncation, bad framing) that a header-only assertion would silently miss.
-    // The compressor writes into `scratch` and points the response body view at it
-    // (zero-copy), so scratch must outlive the body read -- the shared tryCompress
-    // helper's local scratch would dangle, hence the explicit local here.
+    // Compression installs owned response bytes, so the representation remains
+    // valid without an external scratch lifetime protocol.
     const std::string original =
         "Ruvia response compression round-trip payload. "
         "The quick brown fox jumps over the lazy dog. 0123456789. "
@@ -115,39 +116,36 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
 
     {
         auto response = responseWithBody(original);
-        std::pmr::string scratch(std::pmr::new_delete_resource());
-        RUVIA_CHECK(compressResponseBodyIfAccepted(
+        applyResponseCompression(
             HttpContentCoding::kGzip,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16},
-            scratch));
+            Compression{true, 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
+        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
         RUVIA_CHECK_EQ(gzipDecompress(responseBody(response).bytes()), original);
     }
     {
         auto response = responseWithBody(original);
-        std::pmr::string scratch(std::pmr::new_delete_resource());
-        RUVIA_CHECK(compressResponseBodyIfAccepted(
+        applyResponseCompression(
             HttpContentCoding::kBrotli,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16},
-            scratch));
+            Compression{true, 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
+        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
     }
     {
         auto response = responseWithBody(original);
-        std::pmr::string scratch(std::pmr::new_delete_resource());
-        RUVIA_CHECK(compressResponseBodyIfAccepted(
+        applyResponseCompression(
             HttpContentCoding::kZstd,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16},
-            scratch));
+            Compression{true, 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
+        RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
     }
 }

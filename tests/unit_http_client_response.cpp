@@ -925,18 +925,24 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
 }
 
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
-    std::pmr::string first(std::pmr::get_default_resource());
-    std::pmr::string second(std::pmr::get_default_resource());
-    RUVIA_CHECK(ruvia::detail::encodeHttpContent(
+    auto firstEncoding = ruvia::detail::encodeHttpContent(
         ruvia::detail::HttpContentCoding::kGzip,
         "first-",
-        first,
-        1024));
-    RUVIA_CHECK(ruvia::detail::encodeHttpContent(
+        1024,
+        std::pmr::get_default_resource());
+    auto secondEncoding = ruvia::detail::encodeHttpContent(
         ruvia::detail::HttpContentCoding::kGzip,
         "second",
-        second,
-        1024));
+        1024,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(firstEncoding.encoded() != nullptr);
+    RUVIA_CHECK(secondEncoding.encoded() != nullptr);
+    if (firstEncoding.encoded() == nullptr ||
+        secondEncoding.encoded() == nullptr) {
+        return;
+    }
+    auto first = std::move(*firstEncoding.encoded()).takeBytes();
+    auto second = std::move(*secondEncoding.encoded()).takeBytes();
 
     auto parsed = parseResponse(
         "GET",
