@@ -98,6 +98,26 @@ concept AcceptsJsonStringScanOutputParameters = requires(
     ruvia::detail::parseJsonString(input, value, escaped);
 };
 
+template <typename Value>
+concept AcceptsJsonValueOutputParameter = requires(
+    std::string_view& input,
+    Value& value,
+    std::pmr::memory_resource* resource) {
+    ruvia::detail::parseJsonValue(input, value, resource, std::size_t{});
+};
+
+template <typename Sequence>
+concept AcceptsJsonSequenceOutputParameter = requires(
+    std::string_view& input,
+    Sequence& value,
+    std::pmr::memory_resource* resource) {
+    ruvia::detail::parseJsonSequenceValue(
+        input,
+        value,
+        resource,
+        std::size_t{});
+};
+
 template <typename Services>
 concept HasSplitContextCapabilityAccessors = requires(
     const Services& services) {
@@ -554,6 +574,13 @@ static_assert(std::same_as<
     decltype(ruvia::detail::parseJsonString(
         std::declval<std::string_view&>())),
     std::optional<ruvia::detail::JsonStringToken>>);
+static_assert(!AcceptsJsonValueOutputParameter<ruvia::Array<ruvia::Int32>>);
+static_assert(!AcceptsJsonSequenceOutputParameter<ruvia::Array<ruvia::Int32>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::parseJsonValue<ruvia::Array<ruvia::Int32>>(
+        std::declval<std::string_view&>(),
+        std::declval<std::pmr::memory_resource*>())),
+    std::optional<ruvia::Array<ruvia::Int32>>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -653,6 +680,23 @@ int main() {
         jsonToken->encoding() != ruvia::detail::JsonStringEncoding::kEscaped ||
         jsonTokenInput != " tail") {
         return 12;
+    }
+    std::string_view jsonArrayInput = "[1,2,3] tail";
+    const auto jsonArray = ruvia::detail::parseJsonValue<
+        ruvia::Array<ruvia::Int32>>(
+        jsonArrayInput,
+        std::pmr::get_default_resource());
+    std::string_view malformedJsonArray = R"([1,"bad"] tail)";
+    const auto originalMalformedJsonArray = malformedJsonArray;
+    const auto rejectedJsonArray = ruvia::detail::parseJsonValue<
+        ruvia::Array<ruvia::Int32>>(
+        malformedJsonArray,
+        std::pmr::get_default_resource());
+    if (!jsonArray.has_value() || jsonArray->size() != 3 ||
+        static_cast<std::int32_t>((*jsonArray)[2]) != 3 ||
+        jsonArrayInput != " tail" || rejectedJsonArray.has_value() ||
+        malformedJsonArray != originalMalformedJsonArray) {
+        return 13;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

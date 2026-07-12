@@ -242,17 +242,63 @@ RUVIA_TEST(json_decode_rejects_bad_escapes) {
     RUVIA_CHECK(!decodeJson("trailing\\").has_value()); // dangling backslash
 }
 
-RUVIA_TEST(json_string_decode_failure_preserves_existing_model_value) {
+RUVIA_TEST(json_string_value_failure_preserves_input_cursor) {
     auto* const resource = std::pmr::get_default_resource();
-    ruvia::String value("original", resource);
 
     std::string_view malformed = R"("prefix\ud83d")";
-    RUVIA_CHECK(!ruvia::detail::parseJsonValue(malformed, value, resource));
-    RUVIA_CHECK_EQ(value.view(), std::string_view("original"));
+    const auto original = malformed;
+    const auto rejected = ruvia::detail::parseJsonValue<ruvia::String>(
+        malformed,
+        resource);
+    RUVIA_CHECK(!rejected.has_value());
+    RUVIA_CHECK_EQ(malformed, original);
 
     std::string_view valid = R"("decoded\u0020value")";
-    RUVIA_CHECK(ruvia::detail::parseJsonValue(valid, value, resource));
-    RUVIA_CHECK_EQ(value.view(), std::string_view("decoded value"));
+    const auto parsed = ruvia::detail::parseJsonValue<ruvia::String>(
+        valid,
+        resource);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK_EQ(parsed->view(), std::string_view("decoded value"));
+}
+
+RUVIA_TEST(json_sequence_failure_preserves_input_cursor) {
+    auto* const resource = std::pmr::get_default_resource();
+    using ArrayT = ruvia::Array<ruvia::Int32>;
+    using ListT = ruvia::List<ruvia::Int32>;
+
+    std::string_view malformedArray = R"([1,2,"bad"] tail)";
+    const auto originalArray = malformedArray;
+    const auto rejectedArray = ruvia::detail::parseJsonValue<ArrayT>(
+        malformedArray,
+        resource);
+    RUVIA_CHECK(!rejectedArray.has_value());
+    RUVIA_CHECK_EQ(malformedArray, originalArray);
+
+    std::string_view validArray = "[1,2,3] tail";
+    const auto parsedArray = ruvia::detail::parseJsonValue<ArrayT>(
+        validArray,
+        resource);
+    RUVIA_CHECK(parsedArray.has_value());
+    RUVIA_CHECK_EQ(parsedArray->size(), std::size_t{3});
+    RUVIA_CHECK_EQ(static_cast<std::int32_t>((*parsedArray)[2]), 3);
+    RUVIA_CHECK_EQ(validArray, std::string_view(" tail"));
+
+    std::string_view malformedList = "[4,false] tail";
+    const auto originalList = malformedList;
+    const auto rejectedList = ruvia::detail::parseJsonValue<ListT>(
+        malformedList,
+        resource);
+    RUVIA_CHECK(!rejectedList.has_value());
+    RUVIA_CHECK_EQ(malformedList, originalList);
+
+    std::string_view validList = "[4,5] tail";
+    const auto parsedList = ruvia::detail::parseJsonValue<ListT>(
+        validList,
+        resource);
+    RUVIA_CHECK(parsedList.has_value());
+    RUVIA_CHECK_EQ(parsedList->size(), std::size_t{2});
+    RUVIA_CHECK_EQ(static_cast<std::int32_t>((*parsedList)[1]), 5);
+    RUVIA_CHECK_EQ(validList, std::string_view(" tail"));
 }
 
 RUVIA_TEST(json_appendUtf8_boundaries) {

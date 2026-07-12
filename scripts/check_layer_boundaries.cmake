@@ -107,6 +107,8 @@ set(RULE_STALE_JSON_STRING_DECODE_CHAIN
     "bool[ \t\r\n]+decodeJsonString|decodeJsonString[ \t\r\n]*[(][^,()]*,[ \t\r\n]*value[.]resetOwned[(][)]|bool[ \t\r\n]+jwtDecodeJsonStringValue[ \t\r\n]*[(][ \t\r\n]*std::pmr::string[ \t]*&")
 set(RULE_STALE_JSON_STRING_SCAN_CHAIN
     "parseJsonStringRaw|parseJsonStringView|skipJsonString")
+set(RULE_STALE_JSON_MODEL_PARSE_OUTPUT
+    "parseJson(Array|List)Value|bool[ \t\r\n]+parseJson(Value|SequenceValue)|SequenceT[ \t]*&[ \t]*value")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -518,6 +520,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("JSON skipping retained a separate string scanner wrapper"
         "${RULE_STALE_JSON_STRING_SCAN_CHAIN}"
         "bool skipJsonString(View& input);")
+    expect_match("JSON model values returned bool plus mutable output"
+        "${RULE_STALE_JSON_MODEL_PARSE_OUTPUT}"
+        "bool parseJsonValue(View& input, T& value, Resource* resource);")
+    expect_match("JSON sequences exposed partially parsed elements"
+        "${RULE_STALE_JSON_MODEL_PARSE_OUTPUT}"
+        "bool parseJsonSequenceValue(View& input, SequenceT& value, Resource* resource);")
+    expect_match("JSON array parsing duplicated the sequence parser"
+        "${RULE_STALE_JSON_MODEL_PARSE_OUTPUT}"
+        "bool parseJsonArrayValue(View& input, VectorT& value);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2361,6 +2372,9 @@ check_files_no_match("JSON string scanning must return one transactional token"
     "${WEB_JSON_MODEL_PARSER}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/json/JsonSkip.h"
     "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
+check_files_no_match("JSON model parsing must return complete transactional values"
+    "${RULE_STALE_JSON_MODEL_PARSE_OUTPUT}"
+    "${WEB_JSON_MODEL_PARSER}")
 if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
    EXISTS "${WEB_JSON_MODEL_PARSER}" AND
    EXISTS "${WEB_JSON_STRING_TEST}" AND
@@ -2385,18 +2399,28 @@ if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
            "input[ \t]*=[ \t]*remaining" OR
        NOT web_json_model_parser MATCHES
            "value[.]assignOwned[(]std::move[(][*]decoded[)][)]" OR
+       NOT web_json_model_parser MATCHES
+           "std::optional<SequenceT>[ \t\r\n]+parseJsonSequenceValue" OR
        NOT web_json_string_test MATCHES
-           "json_string_decode_failure_preserves_existing_model_value" OR
+           "json_string_value_failure_preserves_input_cursor" OR
        NOT web_json_string_test MATCHES
            "json_string_scan_failure_preserves_input_cursor" OR
+       NOT web_json_string_test MATCHES
+           "json_sequence_failure_preserves_input_cursor" OR
        NOT web_json_package_consumer MATCHES
            "AcceptsJsonDecodeOutputParameter" OR
        NOT web_json_package_consumer MATCHES
            "AcceptsJsonStringScanOutputParameters" OR
        NOT web_json_package_consumer MATCHES
+           "AcceptsJsonValueOutputParameter" OR
+       NOT web_json_package_consumer MATCHES
+           "AcceptsJsonSequenceOutputParameter" OR
+       NOT web_json_package_consumer MATCHES
            "std::optional<std::pmr::string>" OR
        NOT web_json_package_consumer MATCHES
-           "std::optional<ruvia::detail::JsonStringToken>")
+           "std::optional<ruvia::detail::JsonStringToken>" OR
+       NOT web_json_package_consumer MATCHES
+           "std::optional<ruvia::Array<ruvia::Int32>>")
         boundary_error("JSON string parsing lost transactional ownership"
             "Web JSON scanning and decoding must return complete typed results and commit callers only after success")
     endif()
