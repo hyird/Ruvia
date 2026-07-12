@@ -183,6 +183,14 @@ concept HasGeneratedModelNonConstNameGetter = requires {
     static_cast<const std::optional<ruvia::String>& (T::*)()>(&T::name);
 };
 
+template <typename T>
+concept HasGeneratedModelPublicJsonWriterHooks = requires(
+    const T& model,
+    std::pmr::string& output) {
+    model.ruviaAppendJson(output);
+    model.ruviaJsonSizeHint();
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -196,6 +204,7 @@ static_assert(!HasGeneratedModelInputAccessor<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>);
+static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>);
 static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
 static_assert(!std::constructible_from<
     ruvia::detail::ModelInput,
@@ -832,6 +841,12 @@ int main() {
         installedModel->name()->resource() != &installedModelResource ||
         !installedModel->count().has_value() ||
         static_cast<std::int32_t>(*installedModel->count()) != 7) {
+        return 18;
+    }
+    const auto installedModelJson = ruvia::toJson(
+        *installedModel,
+        &installedModelResource);
+    if (installedModelJson != R"({"name":"installed model","count":7})") {
         return 18;
     }
     const auto invalidFieldModel = InstalledPackageModel::ruviaParseJsonBody(

@@ -14,6 +14,18 @@
 
 namespace ruvia::detail {
 
+struct ModelJsonAccess final {
+    template <typename ModelT>
+    [[nodiscard]] static std::size_t sizeHint(const ModelT& model) {
+        return model.ruviaJsonSizeHint();
+    }
+
+    template <typename ModelT>
+    static void append(std::pmr::string& output, const ModelT& model) {
+        model.ruviaAppendJson(output);
+    }
+};
+
 template <typename ValueT>
 [[nodiscard]] std::size_t jsonSizeHintValue(const ValueT& value) {
     using T = std::remove_cvref_t<ValueT>;
@@ -27,8 +39,8 @@ template <typename ValueT>
         return 32;
     } else if constexpr (isRuviaString<T>) {
         return jsonStringSizeHint(value.view());
-    } else if constexpr (requires { value.ruviaJsonSizeHint(); }) {
-        return value.ruviaJsonSizeHint();
+    } else if constexpr (JsonBody<T>::value) {
+        return ModelJsonAccess::sizeHint(value);
     } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
         std::size_t size = 2;
         bool first = true;
@@ -86,8 +98,8 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         }
     } else if constexpr (isRuviaString<T>) {
         appendJsonString(output, value.view());
-    } else if constexpr (requires { value.ruviaAppendJson(output); }) {
-        value.ruviaAppendJson(output);
+    } else if constexpr (JsonBody<T>::value) {
+        ModelJsonAccess::append(output, value);
     } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
         appendJsonSequence(output, value);
     } else {
