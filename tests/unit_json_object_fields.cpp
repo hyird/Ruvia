@@ -80,6 +80,9 @@ RUVIA_TEST(json_object_fields_rejects_malformed) {
     RUVIA_CHECK(!collect(R"({"a":1,})", fields)); // trailing comma -> expects another key
     RUVIA_CHECK(!collect(R"({1:2})", fields));    // non-string key (keys must be strings)
     RUVIA_CHECK(!collect(R"({"a":1 "b":2})", fields)); // missing ',' between fields
+    RUVIA_CHECK(!collect("{}junk", fields));       // trailing significant bytes
+    RUVIA_CHECK(!collect(R"({"a":1}junk)", fields));
+    RUVIA_CHECK(collect("{\"a\":1} \r\n\t", fields));  // trailing JSON whitespace is allowed
 }
 
 RUVIA_TEST(json_object_fields_visitor_can_stop_early) {

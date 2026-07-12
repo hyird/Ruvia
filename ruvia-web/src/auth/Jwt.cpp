@@ -5,6 +5,23 @@
 #include <stdexcept>
 
 namespace ruvia {
+namespace {
+
+void validateJwtCustomClaims(std::span<const JwtClaim> claims) {
+    for (std::size_t i = 0; i < claims.size(); ++i) {
+        const auto name = claims[i].name();
+        if (name.empty() || detail::jwtIsReservedClaim(name)) {
+            throw std::invalid_argument("JWT custom claim name is empty or reserved");
+        }
+        for (std::size_t j = 0; j < i; ++j) {
+            if (claims[j].name() == name) {
+                throw std::invalid_argument("JWT custom claim names must be unique");
+            }
+        }
+    }
+}
+
+}  // namespace
 
 JwtPayload::JwtPayload(std::pmr::memory_resource* resource)
     : issuer_(detail::pmrResourceOrDefault(resource)),
@@ -42,6 +59,11 @@ std::optional<std::string_view> JwtPayload::claim(std::string_view name) const n
 }
 
 std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resource* resource) {
+    validateJwtCustomClaims(options.claims);
+    if (options.expiresIn.count() < 0 ||
+        options.notBeforeDelay.count() < 0) {
+        throw std::invalid_argument("JWT signing time offsets must not be negative");
+    }
     auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto now = std::chrono::system_clock::now();
     std::pmr::string header(resolved);
@@ -58,15 +80,14 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
     if (!options.id.empty()) { detail::jwtAppendJsonMember(payload, first, "jti", options.id); }
     detail::jwtAppendJsonMember(payload, first, "iat", detail::jwtEpochSeconds(now));
     if (options.expiresIn.count() > 0) {
-        detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(now + options.expiresIn));
+        detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(
+            detail::jwtTimeWithOffset(now, options.expiresIn)));
     }
     if (options.notBeforeDelay.count() > 0) {
-        detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(now + options.notBeforeDelay));
+        detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(
+            detail::jwtTimeWithOffset(now, options.notBeforeDelay)));
     }
     for (const auto& claim : options.claims) {
-        if (claim.name().empty() || detail::jwtIsReservedClaim(claim.name())) {
-            throw std::invalid_argument("JWT custom claim name is empty or reserved");
-        }
         detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());
     }
     payload.push_back('}');
@@ -84,6 +105,9 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
 }
 
 JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, std::pmr::memory_resource* resource) {
+    if (options.leeway.count() < 0) {
+        throw std::invalid_argument("JWT verification leeway must not be negative");
+    }
     auto* resolved = detail::pmrResourceOrDefault(resource);
     const auto parts = detail::jwtSplitToken(token);
     const auto expected = detail::jwtHmacSign(
@@ -95,7 +119,8 @@ JwtPayload jwtVerify(std::string_view token, const JwtVerifyOptions& options, st
         throw std::runtime_error("JWT signature verification failed");
     }
     const auto header = detail::jwtBase64UrlDecode(parts.header, resolved);
-    if (detail::jwtFindJsonString(header, "alg", resolved) != detail::jwtAlgorithmName(options.algorithm)) {
+    if (detail::jwtParseJoseAlgorithm(header, resolved) !=
+        detail::jwtAlgorithmName(options.algorithm)) {
         throw std::runtime_error("JWT algorithm mismatch");
     }
     const auto payloadJson = detail::jwtBase64UrlDecode(parts.payload, resolved);

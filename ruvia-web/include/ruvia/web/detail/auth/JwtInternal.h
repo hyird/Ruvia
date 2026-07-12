@@ -16,9 +16,8 @@ namespace ruvia::detail {
 void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value);
 void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::string_view value);
 void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view name, std::int64_t value);
-[[nodiscard]] std::string_view jwtFindJsonString(
+[[nodiscard]] std::pmr::string jwtParseJoseAlgorithm(
     std::string_view json,
-    std::string_view key,
     std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::string jwtBase64UrlEncode(
@@ -38,6 +37,9 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
 
 [[nodiscard]] std::int64_t jwtEpochSeconds(std::chrono::system_clock::time_point value);
 [[nodiscard]] std::chrono::system_clock::time_point jwtFromEpochSeconds(std::int64_t value);
+[[nodiscard]] std::chrono::system_clock::time_point jwtTimeWithOffset(
+    std::chrono::system_clock::time_point value,
+    std::chrono::seconds offset) noexcept;
 
 // RFC 7519 §4.1.4: a token is valid only while the current time is *before*
 // "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
@@ -47,7 +49,12 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
     std::chrono::system_clock::time_point now,
     std::chrono::system_clock::time_point expiresAt,
     std::chrono::seconds leeway) noexcept {
-    return now >= expiresAt + leeway;
+    const auto nowSeconds = std::chrono::duration<long double>(
+        now.time_since_epoch()).count();
+    const auto expiresSeconds = std::chrono::duration<long double>(
+        expiresAt.time_since_epoch()).count();
+    return nowSeconds - expiresSeconds >=
+        static_cast<long double>(leeway.count());
 }
 
 // RFC 7519 §4.1.5: a token is valid only when the current time is *after or
@@ -57,7 +64,12 @@ void jwtAppendJsonMember(std::pmr::string& out, bool& first, std::string_view na
     std::chrono::system_clock::time_point now,
     std::chrono::system_clock::time_point notBefore,
     std::chrono::seconds leeway) noexcept {
-    return now + leeway < notBefore;
+    const auto nowSeconds = std::chrono::duration<long double>(
+        now.time_since_epoch()).count();
+    const auto notBeforeSeconds = std::chrono::duration<long double>(
+        notBefore.time_since_epoch()).count();
+    return notBeforeSeconds - nowSeconds >
+        static_cast<long double>(leeway.count());
 }
 
 struct JwtTokenParts final {
