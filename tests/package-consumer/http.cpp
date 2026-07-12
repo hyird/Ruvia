@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <ruvia/http/HttpCache.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
 #include <ruvia/http/Http1ClientRequestWriter.h>
@@ -57,6 +58,11 @@
 template <typename T>
 concept HasHttp2EventError = requires(const T& event) {
     { event.error() } -> std::same_as<ruvia::detail::Http2ErrorCode>;
+};
+
+template <typename T>
+concept HasSharedCacheFreshnessPolicy = requires(const T& directives) {
+    directives.sharedFreshnessLifetime();
 };
 
 template <typename T>
@@ -766,6 +772,10 @@ concept HasStaleHttp2RemoveReset = requires(T& table) {
         [](const ruvia::detail::Http2StreamState&) noexcept {});
 };
 
+static_assert(!HasSharedCacheFreshnessPolicy<ruvia::CacheControl>);
+static_assert(std::same_as<
+    decltype(ruvia::CacheControl::sMaxAge),
+    std::optional<std::uint64_t>>);
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
