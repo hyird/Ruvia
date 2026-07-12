@@ -25,19 +25,13 @@
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
-// The umbrella include order mirrors the production instantiation TU, whose helpers
-// reference free-function helpers (ensureFileChunkBuffer, setRetryAfterSeconds, ...)
-// by non-dependent name — so those must be visible first. Mirror the exact include
-// order of the production instantiation TU (HttpServerAccept.cpp): HttpResponseWriter.h
-// then the HttpServerSessionUtils.h umbrella (which pulls in the session header).
 #include "ruvia/http/detail/HttpResponseFileAccess.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
-#include "ruvia/web/detail/server/HttpServerSessionUtils.h"
+// The production session header owns every declaration needed by its templates;
+// this test intentionally must not rely on a server-wide include-order umbrella.
 #include "ruvia/web/detail/server/Http2SansIoSession.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/core/detail/AsioAwait.h"
-#include "ruvia/web/App.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
