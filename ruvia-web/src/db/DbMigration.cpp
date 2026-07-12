@@ -6,13 +6,12 @@
 
 #include "ruvia/core/detail/AsioAwait.h"
 
-#include <asio/co_spawn.hpp>
-#include <asio/use_future.hpp>
+#include <asio/bind_executor.hpp>
 
 #include <array>
 #include <exception>
-#include <future>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -92,12 +91,11 @@ void appendMigrationId(std::pmr::vector<std::pmr::string>& ids, std::string_view
 
 class detail::DbMigrationRunner final {
 public:
-    [[nodiscard]] static Task<void> run(
+    [[nodiscard]] static Task<DbMigrationReport> run(
         asio::io_context& ioContext,
         DbConfig config,
         std::span<const DbMigration> migrations,
         DbMigrationOptions options,
-        DbMigrationReport& report,
         std::pmr::memory_resource* resource) {
         auto* resolved = detail::pmrResourceOrDefault(resource);
         detail::validateMigrationList(migrations);
@@ -110,6 +108,7 @@ public:
             config.acquireTimeout = config.queryTimeout;
         }
         validateDbConfig(config);
+        DbMigrationReport report(resolved);
 
         auto lockName = buildMigrationLockName(config, resolved);
         const detail::DbDefinition databases[] = {
@@ -174,7 +173,7 @@ public:
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
-        co_return;
+        co_return std::move(report);
     }
 };
 
@@ -195,22 +194,34 @@ DbMigrationReport DbMigrator::migrate(
     std::span<const DbMigration> migrations,
     DbMigrationOptions options,
     std::pmr::memory_resource* resource) {
-    auto* resolved = detail::pmrResourceOrDefault(resource);
-    DbMigrationReport report(resolved);
     asio::io_context ioContext(1);
-    auto future = asio::co_spawn(
-        ioContext,
-        detail::taskAsAwaitable(detail::DbMigrationRunner::run(
+    std::optional<DbMigrationReport> report;
+    std::exception_ptr exception;
+    detail::asyncStartTask(
+        detail::DbMigrationRunner::run(
             ioContext,
             std::move(config),
             migrations,
             std::move(options),
-            report,
-            resource)),
-        asio::use_future);
+            resource),
+        asio::bind_executor(
+            ioContext.get_executor(),
+            [&report, &exception](
+                detail::TaskCompletionResult<DbMigrationReport> completion) {
+                exception = std::move(completion.exception);
+                if (completion.value.has_value()) {
+                    report.emplace(std::move(*completion.value));
+                }
+            }));
     ioContext.run();
-    future.get();
-    return report;
+    if (exception != nullptr) {
+        std::rethrow_exception(exception);
+    }
+    if (!report.has_value()) {
+        throw std::logic_error(
+            "database migration produced no report or exception");
+    }
+    return std::move(*report);
 }
 
 }  // namespace ruvia

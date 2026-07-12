@@ -211,6 +211,8 @@ set(RULE_STALE_H1_BUFFERED_COMPLETION
     "Task<void>[ \t\r\n]+writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(]|writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(][^)]*std::error_code[ \t]*&|response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
 set(RULE_STALE_HTTP_FILE_WRITE_COMPLETION
     "Task<void>[ \t\r\n]+writeFile(ZeroCopy|Fallback|FallbackWithLocalChunk|Chunk)[ \t\r\n]*[(]|writeFile(ZeroCopy|Fallback|FallbackWithLocalChunk|Chunk)[ \t\r\n]*[(][^)]*std::error_code[ \t]*&|operation_not_supported")
+set(RULE_STALE_DB_MIGRATION_REPORT_SIDE_CHANNEL
+    "Task<void>[ \t\r\n]+run[ \t\r\n]*[(][^)]*DbMigrationReport[ \t]*&")
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
@@ -678,6 +680,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HTTP file writer restored void plus error side channel"
         "${RULE_STALE_HTTP_FILE_WRITE_COMPLETION}"
         "Task<void> writeFileZeroCopy(Socket&, File, std::error_code& ec);")
+    expect_match("database migration restored a report output parameter"
+        "${RULE_STALE_DB_MIGRATION_REPORT_SIDE_CHANNEL}"
+        "Task<void> run(Config, DbMigrationReport& report);")
     expect_match("stale HTTP/2 field-block state" "${RULE_STALE_H2_FIELD_BLOCK_STATE}"
         "if (dependency == header.streamId) appendRstStream(streamId, error);")
     expect_match("stale HTTP/2 CONNECT marker state" "${RULE_STALE_H2_CONNECT_STATE}"
@@ -2794,6 +2799,28 @@ check_files_no_match("HTTP file writes must return results instead of error side
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileZeroCopy.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpFileZeroCopy.cpp")
+check_files_no_match("database migration must return its owned report"
+    "${RULE_STALE_DB_MIGRATION_REPORT_SIDE_CHANNEL}"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
+
+set(DB_MIGRATION_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
+set(DB_MIGRATION_TEST
+    "${RUVIA_ROOT}/tests/unit_db_api_surface.cpp")
+if(EXISTS "${DB_MIGRATION_SOURCE}" AND EXISTS "${DB_MIGRATION_TEST}")
+    file(READ "${DB_MIGRATION_SOURCE}" db_migration_source)
+    file(READ "${DB_MIGRATION_TEST}" db_migration_test)
+    if(NOT db_migration_source MATCHES
+           "Task<DbMigrationReport>[ \t]+run" OR
+       NOT db_migration_source MATCHES
+           "TaskCompletionResult<DbMigrationReport>" OR
+       NOT db_migration_source MATCHES "return std::move[(][*]report[)]" OR
+       NOT db_migration_test MATCHES
+           "db_migrator_validates_before_opening_connection")
+        boundary_error("database migration report ownership is incomplete"
+            "the runner must return its report and feature-on tests must cover pre-I/O validation")
+    endif()
+endif()
 
 set(HTTP_BUFFERED_RESPONSE_WRITE_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")

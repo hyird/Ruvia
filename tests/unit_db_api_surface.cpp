@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
+#include <array>
 #include <concepts>
 #include <initializer_list>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 
 #include "ruvia/web/db/Db.h"
@@ -67,4 +69,21 @@ static_assert(!HasDbTransactionInitializerListParams<ruvia::DbTransaction>);
 
 RUVIA_TEST(db_api_surface_uses_span_params_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(db_migrator_validates_before_opening_connection) {
+    const std::array<ruvia::DbMigration, 2> migrations{{
+        ruvia::DbMigration{"duplicate", "SELECT 1"},
+        ruvia::DbMigration{"duplicate", "SELECT 2"},
+    }};
+    bool rejected = false;
+    try {
+        (void)ruvia::DbMigrator::migrate(
+            ruvia::DbConfig{},
+            std::span<const ruvia::DbMigration>(migrations));
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string_view(error.what()) ==
+            "database migration ids must be unique";
+    }
+    RUVIA_CHECK(rejected);
 }
