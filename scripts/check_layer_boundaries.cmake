@@ -129,6 +129,8 @@ set(RULE_STALE_MODEL_NONCONST_FIELD_GETTER
     "field[(][)][ \t\r\n]*[{]")
 set(RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING
     "requires[ \t]*[{][ \t]*value[.]ruvia|value[.]ruvia(JsonSizeHint|AppendJson)")
+set(RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS
+    "RUVIA_MODEL_TYPED_GET_BRANCH|auto[ \t]+get[(][)] const")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -606,6 +608,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("model JSON writer restored public hook duck-typing"
         "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}"
         "requires { value.ruviaJsonSizeHint(); }")
+    expect_match("generated model restored compile-time get alias"
+        "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}"
+        "auto get() const { return field(); }")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2607,6 +2612,10 @@ check_files_no_match("generated model fields must expose one const getter"
 check_files_no_match("model JSON writing must use the typed JsonBody boundary"
     "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}"
     "${WEB_MODEL_JSON_WRITER_CONTRACT}")
+check_files_no_match("generated model fields must use their declared names"
+    "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}"
+    "${WEB_MODEL_MACROS_CONTRACT}"
+    "${WEB_MODEL_FIELD_OPS_CONTRACT}")
 check_files_no_match("generated models must not rescan raw bodies through dynamic get"
     "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
     "${WEB_MODEL_MACROS_CONTRACT}"
@@ -2663,6 +2672,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "${RULE_STALE_MODEL_MUTABLE_FIELDS}" OR
        web_model_field_ops_contract MATCHES
            "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}" OR
+       web_model_macros_contract MATCHES
+           "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}" OR
+       web_model_field_ops_contract MATCHES
+           "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}" OR
        NOT web_model_macros_contract MATCHES
            "pmrResourceOrDefault[(]resource[)]" OR
        NOT web_model_macros_contract MATCHES
@@ -2696,11 +2709,17 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_materialization_test MATCHES
            "model_factory_materializes_before_publication" OR
        NOT web_model_materialization_test MATCHES
+           "JsonBody<AccessorSurfaceModel>::parse" OR
+       NOT web_model_materialization_test MATCHES
            "messageEnsure[(][)][.]resource[(][)][ \t]*==[ \t]*&modelResource" OR
        NOT web_model_api_surface MATCHES
            "!HasModelDynamicGet<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
            "!HasModelTypedDynamicGet<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelCompileTimeGetAlias<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelPublicBodyParseHooks<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
            "!HasModelInputAccessor<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
@@ -2720,6 +2739,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelCompileTimeGetAlias<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicBodyParseHooks<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelInputAccessor<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>" OR
@@ -2731,6 +2754,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
            "ruvia::toJson" OR
+       NOT web_json_package_consumer MATCHES
+           "JsonBody<InstalledPackageModel>::parse" OR
        NOT web_json_package_consumer MATCHES
            "installedModelJson[ \t]*!=[ \t]*R" OR
        NOT web_json_package_consumer MATCHES

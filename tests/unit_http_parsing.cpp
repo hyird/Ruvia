@@ -106,7 +106,7 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
 
 RUVIA_TEST(model_factory_materializes_before_publication) {
     std::pmr::monotonic_buffer_resource modelResource;
-    const auto parsed = AccessorSurfaceModel::ruviaParseJsonBody(
+    const auto parsed = ruvia::JsonBody<AccessorSurfaceModel>::parse(
         R"({"message":"ready"})",
         &modelResource);
     RUVIA_CHECK(parsed.has_value());
@@ -122,7 +122,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             ruvia::detail::ModelFieldState::kParsed);
     }
 
-    const auto invalidField = AccessorSurfaceModel::ruviaParseJsonBody(
+    const auto invalidField = ruvia::JsonBody<AccessorSurfaceModel>::parse(
         R"({"message":42})",
         std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
@@ -133,7 +133,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             ruvia::detail::ModelFieldState::kInvalidType);
     }
 
-    const auto malformed = AccessorSurfaceModel::ruviaParseJsonBody(
+    const auto malformed = ruvia::JsonBody<AccessorSurfaceModel>::parse(
         R"({"message":"incomplete")",
         &modelResource);
     RUVIA_CHECK(!malformed.has_value());

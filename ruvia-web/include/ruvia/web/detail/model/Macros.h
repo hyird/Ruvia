@@ -19,31 +19,7 @@
             }                                                               \
         explicit T(RuviaResourceOwnerT& owner) noexcept                       \
             : T(owner.resource()) {}                                         \
-        static ::std::optional<T> ruviaParseJsonBody(                        \
-            ::std::string_view body,                                        \
-            ::std::pmr::memory_resource* resource) {                        \
-            return ruviaParseJsonBodyDepth(body, resource, 0);               \
-        }                                                                   \
-        static ::std::optional<T> ruviaParseFormBody(                        \
-            ::std::string_view body,                                        \
-            ::std::pmr::memory_resource* resource) {                        \
-            auto form = ::ruvia::FormObject::parse(body, resource);          \
-            if (!form) {                                                    \
-                return ::std::nullopt;                                      \
-            }                                                               \
-            return ruviaMaterializeInput(                                    \
-                ::ruvia::detail::makeFormModelInput(form->view(), resource)); \
-        }                                                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
-        template <::ruvia::FixedString Field>                                \
-        [[nodiscard]] auto get() const {                                    \
-            RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_TYPED_GET_BRANCH, T, __VA_ARGS__)      \
-            {                                                               \
-                static_assert(                                              \
-                    ::ruvia::detail::alwaysFalse<decltype(Field)>,           \
-                    "unknown RUVIA_MODEL JSON field");                      \
-            }                                                               \
-        }                                                                   \
         template <::ruvia::FixedString Field>                                \
         [[nodiscard]] ::ruvia::detail::ModelFieldState ruviaFieldState() const { \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_STATE_BRANCH, T, __VA_ARGS__)    \
@@ -59,6 +35,21 @@
         template <typename, typename>                                        \
         friend struct ::ruvia::FormBody;                                    \
         friend struct ::ruvia::detail::ModelJsonAccess;                     \
+        static ::std::optional<T> ruviaParseJsonBody(                        \
+            ::std::string_view body,                                        \
+            ::std::pmr::memory_resource* resource) {                        \
+            return ruviaParseJsonBodyDepth(body, resource, 0);               \
+        }                                                                   \
+        static ::std::optional<T> ruviaParseFormBody(                        \
+            ::std::string_view body,                                        \
+            ::std::pmr::memory_resource* resource) {                        \
+            auto form = ::ruvia::FormObject::parse(body, resource);          \
+            if (!form) {                                                    \
+                return ::std::nullopt;                                      \
+            }                                                               \
+            return ruviaMaterializeInput(                                    \
+                ::ruvia::detail::makeFormModelInput(form->view(), resource)); \
+        }                                                                   \
         void ruviaAppendJson(::std::pmr::string& output) const {             \
             output.push_back('{');                                          \
             bool first = true;                                              \

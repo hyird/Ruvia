@@ -561,6 +561,23 @@ concept HasModelTypedDynamicGet = requires(const T& model) {
 };
 
 template <typename T>
+concept HasModelCompileTimeGetAlias = requires(const T& model) {
+    model.template get<"message">();
+};
+
+template <typename T>
+concept HasModelPublicBodyParseHooks =
+    requires {
+        T::ruviaParseJsonBody(
+            std::string_view{},
+            static_cast<std::pmr::memory_resource*>(nullptr));
+    } || requires {
+        T::ruviaParseFormBody(
+            std::string_view{},
+            static_cast<std::pmr::memory_resource*>(nullptr));
+    };
+
+template <typename T>
 concept HasModelPublicJsonDepthHook = requires {
     T::ruviaParseJsonBodyDepth(
         std::string_view{},
@@ -581,12 +598,12 @@ concept HasModelNonConstMessageGetter = requires {
 };
 
 template <typename T>
-concept HasModelPublicJsonWriterHooks = requires(
-    const T& model,
-    std::pmr::string& output) {
-    model.ruviaAppendJson(output);
-    model.ruviaJsonSizeHint();
-};
+concept HasModelPublicJsonWriterHooks =
+    requires(const T& model, std::pmr::string& output) {
+        model.ruviaAppendJson(output);
+    } || requires(const T& model) {
+        model.ruviaJsonSizeHint();
+    };
 
 template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
@@ -1962,6 +1979,8 @@ static_assert(!std::is_constructible_v<
 static_assert(!HasModelInputAccessor<ClonePayload>);
 static_assert(!HasModelDynamicGet<ClonePayload>);
 static_assert(!HasModelTypedDynamicGet<ClonePayload>);
+static_assert(!HasModelCompileTimeGetAlias<ClonePayload>);
+static_assert(!HasModelPublicBodyParseHooks<ClonePayload>);
 static_assert(!HasModelPublicJsonDepthHook<ClonePayload>);
 static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);

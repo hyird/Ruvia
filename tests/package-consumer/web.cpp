@@ -159,6 +159,23 @@ concept HasGeneratedModelTypedDynamicGet = requires(const T& model) {
 };
 
 template <typename T>
+concept HasGeneratedModelCompileTimeGetAlias = requires(const T& model) {
+    model.template get<"name">();
+};
+
+template <typename T>
+concept HasGeneratedModelPublicBodyParseHooks =
+    requires {
+        T::ruviaParseJsonBody(
+            std::string_view{},
+            static_cast<std::pmr::memory_resource*>(nullptr));
+    } || requires {
+        T::ruviaParseFormBody(
+            std::string_view{},
+            static_cast<std::pmr::memory_resource*>(nullptr));
+    };
+
+template <typename T>
 concept HasGeneratedModelInputAccessor = requires(const T& model) {
     model.body();
 };
@@ -184,12 +201,12 @@ concept HasGeneratedModelNonConstNameGetter = requires {
 };
 
 template <typename T>
-concept HasGeneratedModelPublicJsonWriterHooks = requires(
-    const T& model,
-    std::pmr::string& output) {
-    model.ruviaAppendJson(output);
-    model.ruviaJsonSizeHint();
-};
+concept HasGeneratedModelPublicJsonWriterHooks =
+    requires(const T& model, std::pmr::string& output) {
+        model.ruviaAppendJson(output);
+    } || requires(const T& model) {
+        model.ruviaJsonSizeHint();
+    };
 
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
@@ -200,6 +217,8 @@ static_assert(!std::copy_constructible<InstalledPackageModel>);
 static_assert(std::movable<InstalledPackageModel>);
 static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
 static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
+static_assert(!HasGeneratedModelCompileTimeGetAlias<InstalledPackageModel>);
+static_assert(!HasGeneratedModelPublicBodyParseHooks<InstalledPackageModel>);
 static_assert(!HasGeneratedModelInputAccessor<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
@@ -832,7 +851,7 @@ int main() {
         return 17;
     }
     std::pmr::monotonic_buffer_resource installedModelResource;
-    const auto installedModel = InstalledPackageModel::ruviaParseJsonBody(
+    const auto installedModel = ruvia::JsonBody<InstalledPackageModel>::parse(
         R"({"name":"installed model","count":7})",
         &installedModelResource);
     if (!installedModel.has_value() ||
@@ -849,7 +868,7 @@ int main() {
     if (installedModelJson != R"({"name":"installed model","count":7})") {
         return 18;
     }
-    const auto invalidFieldModel = InstalledPackageModel::ruviaParseJsonBody(
+    const auto invalidFieldModel = ruvia::JsonBody<InstalledPackageModel>::parse(
         R"({"name":42,"count":7})",
         std::pmr::get_default_resource());
     if (!invalidFieldModel.has_value() ||
@@ -858,7 +877,7 @@ int main() {
             ruvia::detail::ModelFieldState::kInvalidType) {
         return 19;
     }
-    const auto malformedModel = InstalledPackageModel::ruviaParseJsonBody(
+    const auto malformedModel = ruvia::JsonBody<InstalledPackageModel>::parse(
         R"({"name":"incomplete")",
         std::pmr::get_default_resource());
     if (malformedModel.has_value()) {
