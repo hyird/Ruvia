@@ -60,8 +60,9 @@ std::optional<std::string_view> JwtPayload::claim(std::string_view name) const n
 
 std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resource* resource) {
     validateJwtCustomClaims(options.claims);
-    if (options.expiresIn.count() < 0 ||
-        options.notBeforeDelay.count() < 0) {
+    if ((options.expiresIn.has_value() && options.expiresIn->count() < 0) ||
+        (options.notBeforeDelay.has_value() &&
+         options.notBeforeDelay->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
     auto* resolved = detail::pmrResourceOrDefault(resource);
@@ -79,13 +80,13 @@ std::pmr::string jwtSign(const JwtSignOptions& options, std::pmr::memory_resourc
     if (!options.audience.empty()) { detail::jwtAppendJsonMember(payload, first, "aud", options.audience); }
     if (!options.id.empty()) { detail::jwtAppendJsonMember(payload, first, "jti", options.id); }
     detail::jwtAppendJsonMember(payload, first, "iat", detail::jwtEpochSeconds(now));
-    if (options.expiresIn.count() > 0) {
+    if (options.expiresIn.has_value()) {
         detail::jwtAppendJsonMember(payload, first, "exp", detail::jwtEpochSeconds(
-            detail::jwtTimeWithOffset(now, options.expiresIn)));
+            detail::jwtTimeWithOffset(now, *options.expiresIn)));
     }
-    if (options.notBeforeDelay.count() > 0) {
+    if (options.notBeforeDelay.has_value()) {
         detail::jwtAppendJsonMember(payload, first, "nbf", detail::jwtEpochSeconds(
-            detail::jwtTimeWithOffset(now, options.notBeforeDelay)));
+            detail::jwtTimeWithOffset(now, *options.notBeforeDelay)));
     }
     for (const auto& claim : options.claims) {
         detail::jwtAppendJsonMember(payload, first, claim.name(), claim.value());

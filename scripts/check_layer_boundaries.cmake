@@ -8072,6 +8072,9 @@ set(CORE_BASE64URL
 set(WEB_JWT_ENCODING "${RUVIA_ROOT}/ruvia-web/src/auth/JwtEncoding.cpp")
 set(WEB_JWT_JSON "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
 set(WEB_JWT_TEST "${RUVIA_ROOT}/tests/unit_jwt.cpp")
+check_files_no_match("JWT optional timestamps must not recover zero sentinels"
+    "std::chrono::seconds[ \t]+(expiresIn|notBeforeDelay)"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/auth/Jwt.h")
 check_files_no_match("JWT must not recover first-match JSON member lookup"
     "jwtFindJsonString"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/auth/JwtInternal.h"
