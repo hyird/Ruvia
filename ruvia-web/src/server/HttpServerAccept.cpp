@@ -44,7 +44,8 @@ Task<void> HttpServer::acceptLoop() {
             closeSocket(socket);
             co_return;
         }
-        if (options_.maxConnections > 0 && activeConnectionCount_ >= options_.maxConnections) {
+        if (options_.maxConnections.has_value() &&
+            activeConnectionCount_ >= *options_.maxConnections) {
             closeSocket(socket);
             continue;
         }

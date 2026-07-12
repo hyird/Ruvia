@@ -58,6 +58,14 @@ inline void ensurePositiveSize(std::size_t value, const char* message) {
     }
 }
 
+inline void ensurePositiveOptionalSize(
+    const std::optional<std::size_t>& value,
+    const char* message) {
+    if (value.has_value() && *value == 0) {
+        throw std::invalid_argument(message);
+    }
+}
+
 inline void ensureNonZeroPort(std::uint16_t port, const char* message) {
     if (port == 0) {
         throw std::invalid_argument(message);

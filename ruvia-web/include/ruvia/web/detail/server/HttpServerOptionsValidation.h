@@ -18,6 +18,12 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     ensurePositiveDuration(options.scanInterval, "connection scan interval must be greater than 0");
     ensurePositiveSize(options.maxBufferedBodyBytes, "buffered body limit must be greater than 0");
     ensurePositiveSize(options.maxWebSocketMessageBytes, "websocket message limit must be greater than 0");
+    ensurePositiveOptionalSize(
+        options.maxConnections,
+        "configured connection limit must be greater than zero");
+    ensurePositiveOptionalSize(
+        options.keepaliveRequests,
+        "configured keepalive request limit must be greater than zero");
     if (options.tls.enabled &&
         (options.tls.certificateChainFile.empty() || options.tls.privateKeyFile.empty())) {
         throw std::invalid_argument("TLS certificate chain and private key files must not be empty");
