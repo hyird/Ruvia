@@ -921,6 +921,12 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_removed_server_session_umbrella
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerSessionUtils.h")
+    if(EXISTS "${_removed_server_session_umbrella}")
+        message(FATAL_ERROR
+            "removed Web server session aggregation header was installed")
+    endif()
     set(_installed_middleware_public_path
         "${_install_prefix}/include/ruvia/web/Middleware.h")
     set(_installed_middleware_descriptor_path
