@@ -1249,7 +1249,7 @@ concept HasControllerRouteBuilderPublicRegisterRoute = requires(
     const T& builder,
     ruvia::detail::ControllerRouteHandler handler) {
     builder.registerRoute(
-        ruvia::Get,
+        ruvia::HttpKnownMethod::kGet,
         std::string_view{"/"},
         handler,
         ruvia::detail::RequestBodyMode::kBuffered,
@@ -1261,7 +1261,7 @@ concept HasControllerRouteBuilderPublicRegisterResponseStreamRoute = requires(
     const T& builder,
     ruvia::detail::ControllerRouteStreamHandler handler) {
     builder.registerResponseStreamRoute(
-        ruvia::Get,
+        ruvia::HttpKnownMethod::kGet,
         std::string_view{"/"},
         handler,
         std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
@@ -2762,7 +2762,10 @@ public:
     RUVIA_GET("/cookies", cookies);
     RUVIA_GET("/signed-cookies", signedCookies);
     RUVIA_ALL("/any", anyMethod);
-    RUVIA_ON((::ruvia::Put, ::ruvia::Delete), ("/on-item/:id", "/on-legacy/:id"), onItem);
+    RUVIA_ON(
+        (::ruvia::HttpKnownMethod::kPut, ::ruvia::HttpKnownMethod::kDelete),
+        ("/on-item/:id", "/on-legacy/:id"),
+        onItem);
     RUVIA_GET("/manual/copy", manualCopy);
     RUVIA_GET("/manual/view", manualView);
     RUVIA_PUT_STREAM("/upload/:id", streamPut);

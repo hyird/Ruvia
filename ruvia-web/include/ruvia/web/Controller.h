@@ -12,7 +12,12 @@ namespace ruvia::detail {
 
 // Methods covered by RUVIA_ALL; HEAD is served by the implicit GET fallback.
 inline constexpr HttpKnownMethod kRuviaAllRouteMethods[] = {
-    Get, Post, Put, Patch, Delete, Options};
+    HttpKnownMethod::kGet,
+    HttpKnownMethod::kPost,
+    HttpKnownMethod::kPut,
+    HttpKnownMethod::kPatch,
+    HttpKnownMethod::kDelete,
+    HttpKnownMethod::kOptions};
 
 // Startup-only holder for the RUVIA_ON method list; the macro pastes the
 // parenthesized list as a constructor call.
@@ -93,7 +98,7 @@ private: \
 #define RUVIA_GET(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Get, \
+        ::ruvia::HttpKnownMethod::kGet, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -102,7 +107,7 @@ private: \
 #define RUVIA_GET_STREAM(path, handler, ...) \
     RuviaControllerAccess::addResponseStreamRoute( \
         ruviaRouteScope, \
-        ::ruvia::Get, \
+        ::ruvia::HttpKnownMethod::kGet, \
         path, \
         RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
@@ -110,7 +115,7 @@ private: \
 #define RUVIA_GET_SSE(path, handler, ...) \
     RuviaControllerAccess::addSseRoute( \
         ruviaRouteScope, \
-        ::ruvia::Get, \
+        ::ruvia::HttpKnownMethod::kGet, \
         path, \
         RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
@@ -118,7 +123,7 @@ private: \
 #define RUVIA_GET_WS(path, handler, ...) \
     RuviaControllerAccess::addWebSocketRoute( \
         ruviaRouteScope, \
-        ::ruvia::Get, \
+        ::ruvia::HttpKnownMethod::kGet, \
         path, \
         RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
@@ -126,7 +131,7 @@ private: \
 #define RUVIA_GET_WS_OPTIONS(path, handler, options, ...) \
     RuviaControllerAccess::addWebSocketRoute( \
         ruviaRouteScope, \
-        ::ruvia::Get, \
+        ::ruvia::HttpKnownMethod::kGet, \
         path, \
         RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
         RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>(), \
@@ -135,7 +140,7 @@ private: \
 #define RUVIA_POST(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Post, \
+        ::ruvia::HttpKnownMethod::kPost, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -144,7 +149,7 @@ private: \
 #define RUVIA_PUT(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Put, \
+        ::ruvia::HttpKnownMethod::kPut, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -153,7 +158,7 @@ private: \
 #define RUVIA_DELETE(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Delete, \
+        ::ruvia::HttpKnownMethod::kDelete, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -162,7 +167,7 @@ private: \
 #define RUVIA_PATCH(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Patch, \
+        ::ruvia::HttpKnownMethod::kPatch, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -171,7 +176,7 @@ private: \
 #define RUVIA_HEAD(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Head, \
+        ::ruvia::HttpKnownMethod::kHead, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -180,7 +185,7 @@ private: \
 #define RUVIA_OPTIONS(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Options, \
+        ::ruvia::HttpKnownMethod::kOptions, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
@@ -198,7 +203,8 @@ private: \
             RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 // Hono app.on: registers the handler for an explicit method x path list, e.g.
-// RUVIA_ON((ruvia::Put, ruvia::Delete), ("/items/:id", "/legacy/:id"), handler).
+// RUVIA_ON((ruvia::HttpKnownMethod::kPut, ruvia::HttpKnownMethod::kDelete),
+//     ("/items/:id", "/legacy/:id"), handler).
 #define RUVIA_ON(methods, paths, handler, ...) \
     for (const auto ruviaRouteMethod : ::ruvia::detail::RuviaMethodList methods) \
         for (const auto ruviaRoutePath : ::ruvia::detail::RuviaPathList paths) \
@@ -213,7 +219,7 @@ private: \
 #define RUVIA_POST_STREAM(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Post, \
+        ::ruvia::HttpKnownMethod::kPost, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
@@ -222,7 +228,7 @@ private: \
 #define RUVIA_PUT_STREAM(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Put, \
+        ::ruvia::HttpKnownMethod::kPut, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
@@ -231,7 +237,7 @@ private: \
 #define RUVIA_PATCH_STREAM(path, handler, ...) \
     RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
-        ::ruvia::Patch, \
+        ::ruvia::HttpKnownMethod::kPatch, \
         path, \
         RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
