@@ -47,6 +47,7 @@
 #include "ruvia/http/detail/http2/Http2StreamTable.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
+#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpInterimResponse.h"
 #include "ruvia/http/HttpResponse.h"
 
@@ -89,6 +90,88 @@ enum class Http2SubmitStatus : std::uint8_t {
     kInvalidMessage,
     // Extended CONNECT was requested before the peer advertised RFC 8441 support.
     kPeerCapabilityUnavailable
+};
+
+enum class Http2WebSocketHandshakeSubmitError : std::uint8_t {
+    kClosed,
+    kInvalidState,
+};
+
+class Http2WebSocketHandshakeSubmitResult;
+
+class Http2SubmittedWebSocketHandshake final {
+public:
+    [[nodiscard]] const WebSocketServerNegotiation& negotiation() const noexcept {
+        return negotiation_;
+    }
+
+private:
+    friend class Http2WebSocketHandshakeSubmitResult;
+
+    explicit Http2SubmittedWebSocketHandshake(
+        WebSocketServerNegotiation negotiation) noexcept
+        : negotiation_(negotiation) {}
+
+    WebSocketServerNegotiation negotiation_;
+};
+
+class Http2WebSocketHandshakeSubmitFailure final {
+public:
+    [[nodiscard]] constexpr Http2WebSocketHandshakeSubmitError
+    error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class Http2WebSocketHandshakeSubmitResult;
+
+    explicit constexpr Http2WebSocketHandshakeSubmitFailure(
+        Http2WebSocketHandshakeSubmitError error) noexcept
+        : error_(error) {}
+
+    Http2WebSocketHandshakeSubmitError error_;
+};
+
+// Only the submitted alternative owns the exact negotiation encoded in the 200
+// response. The runtime must configure WsConnection from that committed value,
+// never from a separately recomputed compression/subprotocol tuple.
+class Http2WebSocketHandshakeSubmitResult final {
+public:
+    [[nodiscard]] const Http2SubmittedWebSocketHandshake*
+    submitted() const noexcept {
+        return std::get_if<Http2SubmittedWebSocketHandshake>(&value_);
+    }
+
+    [[nodiscard]] const Http2WebSocketHandshakeSubmitFailure*
+    failure() const noexcept {
+        return std::get_if<Http2WebSocketHandshakeSubmitFailure>(&value_);
+    }
+
+private:
+    friend class Http2Connection;
+
+    using Value = std::variant<
+        Http2SubmittedWebSocketHandshake,
+        Http2WebSocketHandshakeSubmitFailure>;
+
+    template <typename Alternative>
+    explicit Http2WebSocketHandshakeSubmitResult(
+        Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
+    makeSubmitted(WebSocketServerNegotiation negotiation) noexcept {
+        return Http2WebSocketHandshakeSubmitResult(
+            Http2SubmittedWebSocketHandshake(negotiation));
+    }
+
+    [[nodiscard]] static Http2WebSocketHandshakeSubmitResult
+    makeFailure(Http2WebSocketHandshakeSubmitError error) noexcept {
+        return Http2WebSocketHandshakeSubmitResult(
+            Http2WebSocketHandshakeSubmitFailure(error));
+    }
+
+    Value value_;
 };
 
 // Opening a client request is one transaction: semantic validation and peer/local
@@ -409,12 +492,13 @@ public:
     // final response. Invalid HTTP/2 fields reject transactionally.
     [[nodiscard]] Http2SubmitStatus submitInterimResponseHead(
         std::uint32_t streamId, const HttpInterimResponseHead& response);
-    // RFC 8441 Extended CONNECT: emit the WebSocket handshake response HEADERS (200 +
-    // optional sec-websocket-protocol, NO END_STREAM) so the stream stays open as the
-    // tunnel; the owner then exchanges WebSocket frames via submitData. Mirrors the
-    // coroutine session's writeHttp2WebSocketHandshake byte-for-byte.
-    [[nodiscard]] Http2SubmitStatus submitWebSocketHandshake(
-        std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions = {});
+    // Queue the RFC 8441 successful response (:status 200, Date and the exact
+    // negotiated fields, without END_STREAM) and open the stream as a tunnel.
+    // Only the submitted alternative exposes the negotiation committed on wire.
+    [[nodiscard]] Http2WebSocketHandshakeSubmitResult
+    submitWebSocketHandshake(
+        std::uint32_t streamId,
+        WebSocketServerNegotiation negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.

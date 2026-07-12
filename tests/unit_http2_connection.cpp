@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
@@ -2938,8 +2939,30 @@ RUVIA_TEST(http2_connection_websocket_tunnel_handshake_and_data) {
 
     // Owner route policy admitted a WebSocket route: answer 200 and open the tunnel.
     conn.consumeOutput(conn.pendingOutput().size());
-    RUVIA_CHECK(conn.submitWebSocketHandshake(1, "chat") ==
-        Http2SubmitStatus::kAccepted);
+    ruvia::detail::Http1ServerRequestParser negotiationParser;
+    const auto negotiationRequest = negotiationParser.parseMessage(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "\r\n");
+    const auto negotiation =
+        ruvia::detail::makeWebSocketServerNegotiation(
+            negotiationRequest.request,
+            "chat");
+    const auto handshakeResult =
+        conn.submitWebSocketHandshake(1, negotiation);
+    RUVIA_CHECK(handshakeResult.submitted() != nullptr);
+    RUVIA_CHECK(handshakeResult.failure() == nullptr);
+    RUVIA_CHECK(
+        handshakeResult.submitted()->negotiation().subprotocol() == "chat");
+
+    const auto duplicateHandshakeResult =
+        conn.submitWebSocketHandshake(1, negotiation);
+    RUVIA_CHECK(duplicateHandshakeResult.submitted() == nullptr);
+    RUVIA_CHECK(duplicateHandshakeResult.failure() != nullptr);
+    RUVIA_CHECK(
+        duplicateHandshakeResult.failure()->error() ==
+        ruvia::detail::Http2WebSocketHandshakeSubmitError::kInvalidState);
 
     const auto out = conn.pendingOutput();
     RUVIA_CHECK(out.size() > 9);

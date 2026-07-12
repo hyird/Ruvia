@@ -1,7 +1,10 @@
 #include <concepts>
 #include <cstddef>
+#include <memory_resource>
 
 #include <ruvia/http/detail/http1/Http1RequestBodyPlan.h>
+#include <ruvia/http/detail/websocket/WebSocketServerNegotiation.h>
+#include <ruvia/http/detail/websocket/WsConnection.h>
 
 template <typename T>
 concept HasPublicHttp1RequestBodyPlanFactories = requires {
@@ -18,5 +21,15 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http1KnownLengthRequestBody>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1ChunkedRequestBody>);
+static_assert(!std::default_initializable<
+    ruvia::detail::WebSocketServerNegotiation>);
+static_assert(!std::constructible_from<
+    ruvia::detail::WebSocketDeflateNegotiation,
+    bool>);
+static_assert(!std::constructible_from<
+    ruvia::detail::WsConnection,
+    std::pmr::string&,
+    std::size_t,
+    bool>);
 
 int main() {}

@@ -43,12 +43,13 @@ public:
         std::size_t maxMessageBytes,
         std::pmr::memory_resource* resource,
         std::string_view initialBytes = {},
-        bool permessageDeflate = false)
+        WebSocketDeflateNegotiation deflate =
+            WebSocketDeflateNegotiation::kDisabled)
         : transport_(std::move(transport)),
           scannerEntry_(scannerEntry),
           lifecycleOptions_(lifecycleOptions),
           buffer_(pmrResourceOrDefault(resource)),
-          protocol_(buffer_, maxMessageBytes, permessageDeflate),
+          protocol_(buffer_, maxMessageBytes, deflate),
           backgroundWriteTimer_(transport_.executor()) {
         backgroundWriteTimer_.expires_at((asio::steady_timer::time_point::max)());
         buffer_.append(initialBytes.data(), initialBytes.size());

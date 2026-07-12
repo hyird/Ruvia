@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <cstdint>
 #include <memory_resource>
 #include <string>
@@ -23,6 +24,7 @@ using ruvia::WebSocketOpcode;
 using ruvia::detail::ConnectionScanner;
 using ruvia::detail::SocketWebSocketConnection;
 using ruvia::detail::WebSocketDeflate;
+using ruvia::detail::WebSocketDeflateNegotiation;
 using ruvia::detail::WebSocketConnection;
 using ruvia::detail::WebSocketSocketTransport;
 using ruvia::detail::WsTransportDisposition;
@@ -62,6 +64,16 @@ private:
     asio::io_context* io_;
     RecordingTransportState* state_;
 };
+
+static_assert(!std::constructible_from<
+    WebSocketConnection<RecordingTransport>,
+    RecordingTransport,
+    ConnectionScanner::Entry&,
+    ruvia::WebSocketLifecycleOptions,
+    std::size_t,
+    std::pmr::memory_resource*,
+    std::string_view,
+    bool>);
 
 std::string maskedFrame(
     std::uint8_t opcode,
@@ -220,7 +232,7 @@ RUVIA_TEST(websocket_socket_bridge_permessage_deflate_round_trip) {
                 1024,
                 memory.resource(),
                 {},
-                true);
+                WebSocketDeflateNegotiation::kAccepted);
             const auto message = co_await ruvia::detail::taskAsAwaitable(connection.read());
             serverDecoded = message.has_value() && message->payload() == original;
             if (message) {

@@ -2348,18 +2348,24 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     return Http2SubmitStatus::kAccepted;
 }
 
-Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
-    std::uint32_t streamId, std::string_view subprotocol, std::string_view extensions) {
+Http2WebSocketHandshakeSubmitResult
+Http2Connection::submitWebSocketHandshake(
+    std::uint32_t streamId,
+    WebSocketServerNegotiation negotiation) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
-        return Http2SubmitStatus::kClosed;
+        return Http2WebSocketHandshakeSubmitResult::makeFailure(
+            Http2WebSocketHandshakeSubmitError::kClosed);
     }
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr ||
         !http2IsPendingWebSocketConnect(*stream)) {
-        return Http2SubmitStatus::kInvalidState;
+        return Http2WebSocketHandshakeSubmitResult::makeFailure(
+            Http2WebSocketHandshakeSubmitError::kInvalidState);
     }
-    http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol, extensions);
+    http2EncodeWebSocketHandshakeHeaders(
+        stream->responseHeaderBlock(),
+        negotiation);
     appendResponseHeaderFrames(
         *stream,
         std::string_view(stream->responseHeaderBlock().data(), stream->responseHeaderBlock().size()),
@@ -2371,7 +2377,7 @@ Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
     if (http2RemotePeerHalfClosed(*stream)) {
         events_.push_back(Http2Event::tunnelEnd(streamId));
     }
-    return Http2SubmitStatus::kAccepted;
+    return Http2WebSocketHandshakeSubmitResult::makeSubmitted(negotiation);
 }
 
 Http2FinishSubmitStatus Http2Connection::finishResponse(

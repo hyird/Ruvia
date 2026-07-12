@@ -553,6 +553,19 @@ path/query 继承、merge 与 dot-segment removal 必须符合
 区别。`HttpClientOriginAuthorityStatus` 的 alternatives 都没有 payload，因此继续使用 enum，不为形式
 统一强行包装 variant。
 
+WebSocket server 握手必须只协商一次。`ruvia-http` 的不可变
+`WebSocketServerNegotiation` 同时拥有选中的 subprotocol 和唯一
+`WebSocketDeflateNegotiation` alternative；deflate 结果只能是 disabled、accepted 或
+accepted-with-`server_max_window_bits=15`，不得恢复 `enabled + echoServerMaxWindowBits` 布尔乘积。
+HTTP/1 的 `HttpWebSocketServerHandshake` 必须从该值序列化 101 fields，RFC 8441 路径必须把同一值提交给
+`Http2Connection::submitWebSocketHandshake()`；只有成功的
+`Http2SubmittedWebSocketHandshake` alternative 可以暴露已经写入 200 response 的协商值。后续
+`WsConnection`/Web runtime 只能从这份已提交值取得 deflate alternative，禁止 H1 writer 用 `bool&`
+回传压缩状态、H2 传递松散 `subprotocol + extensions` 字符串，或任一路径重新扫描 request。该调用链遵守
+[RFC 6455 §4.2.2](https://www.rfc-editor.org/rfc/rfc6455.html#section-4.2.2)、
+[RFC 7692 §7.1](https://www.rfc-editor.org/rfc/rfc7692.html#section-7.1) 与
+[RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5)。
+
 WebSocket close handshake 必须由 `ruvia-http` 的 `WsClosePhase` 与不可变 `WsOutputPlan` 统一拥有：
 输入只走 `poll()`；它必须返回 `std::optional<WsEvent>`，其中 `std::nullopt` 只表示需要更多 transport
 bytes，每个实际事件必须由零分配 `std::variant` 持有且仅持有 `WsMessageEvent`、`WsPingEvent`、

@@ -176,6 +176,7 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
         "Sec-WebSocket-Protocol: chat, superchat\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate; server_max_window_bits=15\r\n"
         "\r\n");
     const auto handshake = ruvia::detail::makeHttpWebSocketServerHandshake(
         request, "chat");
@@ -192,6 +193,16 @@ RUVIA_TEST(ws_server_handshake_response_serialization_is_http_owned) {
             "Connection: Upgrade\r\n"
             "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
             "Sec-WebSocket-Protocol: chat\r\n"
+            "Sec-WebSocket-Extensions: permessage-deflate; "
+            "server_no_context_takeover; client_no_context_takeover; "
+            "server_max_window_bits=15\r\n"
             "\r\n"));
-    RUVIA_CHECK(!handshake.permessageDeflate);
+    RUVIA_CHECK(
+        handshake.negotiation().deflate() ==
+        ruvia::detail::WebSocketDeflateNegotiation::
+            kAcceptedWithServerMaxWindowBits);
+    RUVIA_CHECK_EQ(handshake.negotiation().subprotocol(), "chat");
+    RUVIA_CHECK_EQ(
+        handshake.negotiation().extensions(),
+        ruvia::detail::kWebSocketDeflateResponseExtensionsMaxWindow);
 }

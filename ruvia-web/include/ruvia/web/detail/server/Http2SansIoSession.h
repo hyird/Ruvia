@@ -535,14 +535,17 @@ Task<void> runHttp2SansIoSession(
                 : resolved->route().endpoint().responseStream();
             if (webSocketEndpoint != nullptr) {
                 if (http2IsValidWebSocketRequest(*streamState, request)) {
-                    // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
-                    const auto deflate = webSocketNegotiatePermessageDeflate(request);
-                    const auto handshakeStatus = connection.submitWebSocketHandshake(
+                    // HTTP/1 and RFC 8441 consume the same immutable negotiation;
+                    // the committed result then configures the frame core exactly.
+                    const auto negotiation = makeWebSocketServerNegotiation(
+                        request,
+                        webSocketEndpoint->subprotocols());
+                    const auto handshakeResult = connection.submitWebSocketHandshake(
                         streamId,
-                        http2ChooseWebSocketSubprotocol(
-                            request, webSocketEndpoint->subprotocols()),
-                        webSocketDeflateResponseExtensions(deflate));
-                    if (handshakeStatus != Http2SubmitStatus::kAccepted) {
+                        negotiation);
+                    const auto* submittedHandshake =
+                        handshakeResult.submitted();
+                    if (submittedHandshake == nullptr) {
                         co_return;
                     }
                     wakeWriter();  // flush the 200 before the first tunnel read suspends
@@ -564,7 +567,7 @@ Task<void> runHttp2SansIoSession(
                         options.maxWebSocketMessageBytes,
                         requestMemory.resource(),
                         /*initialBytes=*/{},
-                        deflate.enabled);
+                        submittedHandshake->negotiation().deflate());
                     co_await runWebSocketSession(
                         webSocketConnection,
                         scannerEntry,

@@ -16,9 +16,9 @@ using ruvia::HttpRequest;
 using ruvia::detail::Http2StreamState;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::HpackDecoder;
-using ruvia::detail::http2ChooseWebSocketSubprotocol;
 using ruvia::detail::http2EncodeWebSocketHandshakeHeaders;
 using ruvia::detail::http2IsValidWebSocketRequest;
+using ruvia::detail::makeWebSocketServerNegotiation;
 
 struct Collector final {
     std::vector<std::pair<std::string, std::string>> headers;
@@ -86,15 +86,23 @@ Http2StreamState makeStream() {
 RUVIA_TEST(websocket_subprotocol_negotiation) {
     const auto request = requestWithProtocol();
     // Server preference wins: the first supported token the client also offered.
-    RUVIA_CHECK_EQ(http2ChooseWebSocketSubprotocol(request, "superchat, chat"),
-                   std::string_view("superchat"));
-    RUVIA_CHECK_EQ(http2ChooseWebSocketSubprotocol(request, "chat"), std::string_view("chat"));
+    RUVIA_CHECK_EQ(
+        makeWebSocketServerNegotiation(request, "superchat, chat")
+            .subprotocol(),
+        std::string_view("superchat"));
+    RUVIA_CHECK_EQ(
+        makeWebSocketServerNegotiation(request, "chat").subprotocol(),
+        std::string_view("chat"));
     // No overlap yields no subprotocol.
-    RUVIA_CHECK(http2ChooseWebSocketSubprotocol(request, "binary").empty());
+    RUVIA_CHECK(
+        makeWebSocketServerNegotiation(request, "binary")
+            .subprotocol()
+            .empty());
 
     // A request offering nothing yields no subprotocol.
     const auto none = parseRequest("GET /ws HTTP/1.1\r\nHost: example.test\r\n\r\n");
-    RUVIA_CHECK(http2ChooseWebSocketSubprotocol(none, "chat").empty());
+    RUVIA_CHECK(
+        makeWebSocketServerNegotiation(none, "chat").subprotocol().empty());
 }
 
 RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
@@ -133,9 +141,16 @@ RUVIA_TEST(websocket_request_validity_requires_all_conditions) {
 }
 
 RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
+    const auto request = parseRequest(
+        "GET /ws HTTP/1.1\r\n"
+        "Host: example.test\r\n"
+        "Sec-WebSocket-Protocol: chat\r\n"
+        "Sec-WebSocket-Extensions: permessage-deflate\r\n"
+        "\r\n");
+    const auto negotiation = makeWebSocketServerNegotiation(request, "chat");
     std::pmr::string block(std::pmr::get_default_resource());
     http2EncodeWebSocketHandshakeHeaders(
-        block, "chat", "permessage-deflate");
+        block, negotiation);
 
     Collector fields;
     HpackDecoder decoder(std::pmr::get_default_resource());
@@ -143,7 +158,9 @@ RUVIA_TEST(http2_websocket_handshake_does_not_invent_server_product) {
     RUVIA_CHECK(hasHeader(fields, ":status", "200"));
     RUVIA_CHECK(hasHeader(fields, "sec-websocket-protocol", "chat"));
     RUVIA_CHECK(hasHeader(
-        fields, "sec-websocket-extensions", "permessage-deflate"));
+        fields,
+        "sec-websocket-extensions",
+        ruvia::detail::kWebSocketDeflateResponseExtensions));
     RUVIA_CHECK(hasHeaderName(fields, "date"));
     RUVIA_CHECK(!hasHeaderName(fields, "server"));
 }

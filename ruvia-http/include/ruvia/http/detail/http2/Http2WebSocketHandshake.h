@@ -9,18 +9,10 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
-#include "ruvia/http/detail/HeaderTokenUtils.h"
+#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
-
-[[nodiscard]] inline std::string_view http2ChooseWebSocketSubprotocol(
-    const HttpRequest& request,
-    std::string_view supported) noexcept {
-    return httpFindHeaderToken(supported, [&request](std::string_view protocol) noexcept {
-        return webSocketProtocolOffered(request, protocol);
-    });
-}
 
 [[nodiscard]] inline bool http2IsPendingWebSocketConnect(
     const Http2StreamState& stream) noexcept {
@@ -40,16 +32,21 @@ namespace ruvia::detail {
 
 inline void http2EncodeWebSocketHandshakeHeaders(
     std::pmr::string& headerBlock,
-    std::string_view subprotocol,
-    std::string_view extensions = {}) {
+    const WebSocketServerNegotiation& negotiation) {
     headerBlock.clear();
     HpackEncoder::encodeStatus(headerBlock, 200);
     HpackEncoder::encodeHeaderWithNameIndex(headerBlock, HpackStaticIndex::kDate, cachedDateValue());
-    if (!subprotocol.empty()) {
-        HpackEncoder::encodeHeader(headerBlock, "sec-websocket-protocol", subprotocol);
+    if (!negotiation.subprotocol().empty()) {
+        HpackEncoder::encodeHeader(
+            headerBlock,
+            "sec-websocket-protocol",
+            negotiation.subprotocol());
     }
-    if (!extensions.empty()) {
-        HpackEncoder::encodeHeader(headerBlock, "sec-websocket-extensions", extensions);
+    if (!negotiation.extensions().empty()) {
+        HpackEncoder::encodeHeader(
+            headerBlock,
+            "sec-websocket-extensions",
+            negotiation.extensions());
     }
 }
 
