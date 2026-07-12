@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 #include <array>
 #include <cstdint>

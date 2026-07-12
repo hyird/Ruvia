@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpParseError.h"
 
 namespace {

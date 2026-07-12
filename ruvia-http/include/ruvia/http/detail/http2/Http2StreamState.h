@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string_view>
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2LocalContentState.h"
 #include "ruvia/http/detail/http2/Http2RemoteContentState.h"

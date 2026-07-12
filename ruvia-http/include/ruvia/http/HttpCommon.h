@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
 
@@ -22,18 +23,6 @@ struct RequestValueGroupAccess;
 struct RequestValueGroupListAccess;
 
 }  // namespace detail
-
-enum class HttpKnownMethod {
-    kGet,
-    kPost,
-    kPut,
-    kDelete,
-    kPatch,
-    kHead,
-    kOptions,
-    kConnect,
-    kUnknown
-};
 
 inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 
@@ -403,11 +392,6 @@ struct RequestValueGroupListAccess final {
 
 }  // namespace detail
 
-// HTTP methods are an extensible, case-sensitive token space. HttpKnownMethod is
-// only the framework's fixed semantic classification; it is never the wire value.
-[[nodiscard]] HttpKnownMethod classifyHttpMethod(std::string_view method) noexcept;
-[[nodiscard]] std::string_view knownHttpMethodToken(HttpKnownMethod method) noexcept;
-[[nodiscard]] bool isValidHttpMethodToken(std::string_view method) noexcept;
 [[nodiscard]] bool isValidHttpHeaderName(std::string_view name) noexcept;
 [[nodiscard]] bool isValidHttpHeaderValue(std::string_view value) noexcept;
 [[nodiscard]] bool isValidHttpStatusText(std::string_view value) noexcept;

@@ -5,6 +5,7 @@
 #include <variant>
 
 #include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 namespace ruvia::detail {
 

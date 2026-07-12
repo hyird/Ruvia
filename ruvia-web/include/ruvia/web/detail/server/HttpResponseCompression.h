@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/HttpServerOptions.h"
