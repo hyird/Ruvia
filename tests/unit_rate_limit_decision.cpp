@@ -76,8 +76,7 @@ RUVIA_TEST(rate_limit_allowed_when_no_limiter) {
 
 RUVIA_TEST(rate_limit_allowed_when_limiter_disabled) {
     RateLimitRule rule;    // maxRequests == 0 -> disabled
-    rule.slotCount = 1;    // keep the slot table tiny for the test
-    RateLimiter limiter(rule);
+    RateLimiter limiter(rule, 1);
     RUVIA_CHECK(!limiter.enabled());
     RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "1.2.3.4").allowed);
 }
@@ -90,8 +89,7 @@ RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
     RateLimitRule rule;
     rule.maxRequests = 3;
     rule.window = std::chrono::seconds(60);
-    rule.slotCount = 16;
-    RateLimiter limiter(rule);
+    RateLimiter limiter(rule, 16);
     RUVIA_CHECK(limiter.enabled());
 
     RUVIA_CHECK(rateLimitRequestAllowed(&limiter, "10.0.0.1").allowed);
@@ -107,21 +105,20 @@ RUVIA_TEST(rate_limit_enforces_per_key_request_budget) {
 }
 
 RUVIA_TEST(rate_limit_oversized_key_honors_fail_mode) {
-    // A remote address longer than the fixed 64-byte key buffer cannot be tracked.
+    // A remote address longer than the fixed inline key buffer cannot be tracked.
     // Under failClosed (the default) such a request is DENIED rather than silently
     // admitted, so an attacker cannot bypass the limiter with an overlong key.
     RateLimitRule closed;
     closed.maxRequests = 5;
-    closed.slotCount = 8;
     closed.failClosed = true;
-    RateLimiter closedLimiter(closed);
-    const std::string longKey(65, 'a');  // > kMaxKeyBytes (64)
+    RateLimiter closedLimiter(closed, 8);
+    const std::string longKey(100, 'a');
     RUVIA_CHECK(!rateLimitRequestAllowed(&closedLimiter, longKey).allowed);
 
     // Under failOpen the same request is admitted (availability over strictness).
     RateLimitRule open = closed;
     open.failClosed = false;
-    RateLimiter openLimiter(open);
+    RateLimiter openLimiter(open, 8);
     RUVIA_CHECK(rateLimitRequestAllowed(&openLimiter, longKey).allowed);
 }
 
@@ -132,8 +129,7 @@ RUVIA_TEST(rate_limiter_now_ms_is_positive_and_monotonic) {
     RUVIA_CHECK(second >= first);
 }
 
-RUVIA_TEST(rate_limit_rule_normalization_clamps_unsafe_fields) {
-    using ruvia::detail::kMaxRateLimitRequests;
+RUVIA_TEST(rate_limit_rule_normalization_repairs_invalid_window) {
     using ruvia::detail::normalizeRateLimitRule;
 
     // A zero or negative window would break the fixed-window math -> clamp to 1ms.
@@ -147,28 +143,16 @@ RUVIA_TEST(rate_limit_rule_normalization_clamps_unsafe_fields) {
         rule.window = std::chrono::milliseconds(-5);
         RUVIA_CHECK(normalizeRateLimitRule(rule).window == std::chrono::milliseconds(1));
     }
-    // An empty slot table is unusable -> clamp to at least one slot.
-    {
-        RateLimitRule rule;
-        rule.slotCount = 0;
-        RUVIA_CHECK_EQ(normalizeRateLimitRule(rule).slotCount, std::size_t{1});
-    }
-    // maxRequests must fit the counter width -> clamp to the maximum.
-    {
-        RateLimitRule rule;
-        rule.maxRequests = kMaxRateLimitRequests + 1000;
-        RUVIA_CHECK_EQ(normalizeRateLimitRule(rule).maxRequests, kMaxRateLimitRequests);
-    }
     // A valid rule passes through unchanged.
     {
         RateLimitRule rule;
         rule.maxRequests = 100;
         rule.window = std::chrono::seconds(60);
-        rule.slotCount = 1024;
+        rule.failClosed = false;
         const auto normalized = normalizeRateLimitRule(rule);
         RUVIA_CHECK_EQ(normalized.maxRequests, std::size_t{100});
         RUVIA_CHECK(normalized.window == std::chrono::milliseconds(60000));
-        RUVIA_CHECK_EQ(normalized.slotCount, std::size_t{1024});
+        RUVIA_CHECK(!normalized.failClosed);
     }
 }
 

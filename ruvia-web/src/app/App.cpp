@@ -49,11 +49,9 @@ namespace detail {
 struct AppRuntimeGraph final {
     explicit AppRuntimeGraph(std::pmr::memory_resource* resource)
         : documentRoot(nullptr, PmrObjectDeleter<StaticRoot>{resource}),
-          rateLimiter(nullptr, PmrObjectDeleter<RateLimiter>{resource}),
           workers(resource) {}
 
     std::unique_ptr<StaticRoot, PmrObjectDeleter<StaticRoot>> documentRoot;
-    std::unique_ptr<RateLimiter, PmrObjectDeleter<RateLimiter>> rateLimiter;
     std::pmr::vector<std::unique_ptr<HttpServer, PmrObjectDeleter<HttpServer>>> workers;
 };
 
@@ -143,10 +141,6 @@ void App::run() {
         }
 
         const auto address = asio::ip::make_address(state.listenAddress);
-        runtime->rateLimiter = detail::makePmrObject<detail::RateLimiter>(
-            runtimeResource,
-            state.options.rateLimit,
-            runtimeResource);
         const auto workerCount =
             (state.httpListenPort.has_value() ? state.threadNum : 0) +
             (state.httpsListenPort.has_value() ? state.threadNum : 0);
@@ -178,8 +172,7 @@ void App::run() {
                         state.redis
 #endif
                     },
-                    std::move(workerOptions),
-                    runtime->rateLimiter.get()));
+                    std::move(workerOptions)));
             }
         };
 
