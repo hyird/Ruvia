@@ -92,6 +92,12 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::RedisConfig{}.acquireTimeout),
     std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisConfig{}.maxReplyBytes),
+    std::optional<std::size_t>>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisScanOptions{}.count),
+    std::optional<std::uint64_t>>);
 #endif
 
 template <typename Runtime, typename Executor>

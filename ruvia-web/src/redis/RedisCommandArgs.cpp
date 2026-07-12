@@ -144,14 +144,18 @@ void appendRedisScanOptions(
     std::pmr::vector<std::pmr::string>& args,
     const RedisScanOptions& options,
     std::pmr::memory_resource* resource) {
+    if (options.count.has_value() && *options.count == 0) {
+        throw std::invalid_argument(
+            "configured redis scan count must be greater than zero");
+    }
     if (!options.match.empty()) {
         emplaceRedisString(args, "MATCH");
         emplaceRedisString(args, options.match);
     }
-    if (options.count != 0) {
+    if (options.count.has_value()) {
         emplaceRedisString(args, "COUNT");
         std::pmr::string count(resource);
-        appendRedisNumber(count, options.count);
+        appendRedisNumber(count, *options.count);
         args.emplace_back(std::move(count));
     }
 }

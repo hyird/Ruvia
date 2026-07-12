@@ -21,6 +21,9 @@ inline void validateRedisConfig(const RedisConfig& config) {
         config.commandTimeout,
         config.acquireTimeout);
     ensurePositiveSize(config.maxArrayDepth, "redis max array depth must be greater than zero");
+    ensurePositiveOptionalSize(
+        config.maxReplyBytes,
+        "configured redis reply byte limit must be greater than zero");
 }
 
 }  // namespace ruvia::detail

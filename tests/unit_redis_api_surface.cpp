@@ -3,6 +3,7 @@
 #include <chrono>
 #include <concepts>
 #include <initializer_list>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -85,6 +86,9 @@ static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::RedisSetOptions>().condition),
     ruvia::RedisSetCondition>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisScanOptions{}.count),
+    std::optional<std::uint64_t>>);
 
 }  // namespace
 
