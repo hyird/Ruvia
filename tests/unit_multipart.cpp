@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/HttpCommonInternal.h"
+#include "ruvia/http/detail/MultipartPartAccess.h"
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/MultipartParser.h"
 

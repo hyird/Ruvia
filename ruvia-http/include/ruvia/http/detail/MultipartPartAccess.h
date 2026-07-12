@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ruvia/http/HttpCommon.h"
-
 #include <memory_resource>
 #include <string_view>
+#include <utility>
 
+#include "ruvia/http/MultipartParser.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 
 namespace ruvia::detail {

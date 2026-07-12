@@ -1118,6 +1118,8 @@ file(GLOB_RECURSE CORE_SOURCE LIST_DIRECTORIES FALSE
     "${RUVIA_ROOT}/ruvia-core/*.inl")
 check_files_no_match("ruvia-http must not invent a Ruvia Server product identity"
     "${RULE_HTTP_IMPLICIT_SERVER_PRODUCT}" ${HTTP_SOURCE})
+check_files_no_match("Context request-field models must remain Web-owned"
+    "RequestNameValue(View|List)|RequestValueGroup(List)?" ${HTTP_SOURCE})
 file(GLOB_RECURSE EDGE_REFERENCE_SOURCE LIST_DIRECTORIES FALSE
     "${RUVIA_ROOT}/ruvia-core/*.h" "${RUVIA_ROOT}/ruvia-core/*.cpp" "${RUVIA_ROOT}/ruvia-core/*.inl"
     "${RUVIA_ROOT}/ruvia-core/*.cmake" "${RUVIA_ROOT}/ruvia-core/CMakeLists.txt"
@@ -1225,8 +1227,14 @@ set(HTTP_METHOD_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpKnownMethod.h")
 set(HTTP_HEADER_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpHeader.h")
-set(HTTP_COMMON_HEADER
+set(HTTP_MULTIPART_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/MultipartParser.h")
+set(HTTP_MULTIPART_PART_ACCESS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/MultipartPartAccess.h")
+set(HTTP_LEGACY_COMMON_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpCommon.h")
+set(HTTP_LEGACY_COMMON_INTERNAL
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpCommonInternal.h")
 set(WEB_REQUEST_FIELDS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h")
 set(WEB_REQUEST_FIELDS_ACCESS
@@ -1265,6 +1273,27 @@ else()
        NOT http_header_contract MATCHES "isValidHttpHeaderValue")
         boundary_error("HTTP header contract lost a canonical primitive"
             "HttpHeader.h must own header views, limits and field validation")
+    endif()
+endif()
+if(EXISTS "${HTTP_LEGACY_COMMON_HEADER}" OR EXISTS "${HTTP_LEGACY_COMMON_INTERNAL}")
+    boundary_error("Generic HTTP common headers were restored"
+        "multipart, method, header and Web request-field contracts must retain explicit owners")
+endif()
+if(NOT EXISTS "${HTTP_MULTIPART_CONTRACT}" OR
+   NOT EXISTS "${HTTP_MULTIPART_PART_ACCESS}")
+    boundary_error("HTTP multipart part ownership is incomplete"
+        "MultipartParser.h and detail/MultipartPartAccess.h are required")
+else()
+    file(READ "${HTTP_MULTIPART_CONTRACT}" http_multipart_contract)
+    file(READ "${HTTP_MULTIPART_PART_ACCESS}" http_multipart_part_access)
+    if(NOT http_multipart_contract MATCHES "class[ \t]+MultipartPart[ \t]+final" OR
+       NOT http_multipart_contract MATCHES "class[ \t]+MultipartParser[ \t]+final" OR
+       http_multipart_contract MATCHES
+           "struct[ \t]+MultipartPartAccess[ \t]+final" OR
+       NOT http_multipart_part_access MATCHES
+           "struct[ \t]+MultipartPartAccess[ \t]+final")
+        boundary_error("Buffered multipart parts escaped their protocol owner"
+            "MultipartParser.h owns the read-only model and detail/MultipartPartAccess.h owns mutation")
     endif()
 endif()
 if(NOT EXISTS "${WEB_REQUEST_FIELDS}" OR NOT EXISTS "${WEB_REQUEST_FIELDS_ACCESS}")
@@ -1318,26 +1347,6 @@ if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
        NOT http_request_model MATCHES "HttpKnownMethod knownMethod[(][)] const noexcept")
         boundary_error("HTTP request method lost raw-token/known-class separation"
             "HttpRequest::method must expose the exact token and knownMethod the fixed semantic class")
-    endif()
-endif()
-if(EXISTS "${HTTP_COMMON_HEADER}")
-    file(READ "${HTTP_COMMON_HEADER}" http_common_header)
-    if(http_common_header MATCHES "enum[ \t]+class[ \t]+HttpKnownMethod" OR
-       http_common_header MATCHES
-           "HttpKnownMethod[ \t\r\n]+classifyHttpMethod")
-        boundary_error("HTTP method contract leaked back into HttpCommon.h"
-            "HttpKnownMethod.h must exclusively own method classification declarations")
-    endif()
-    if(http_common_header MATCHES "class[ \t]+HttpHeaderView[ \t]+final" OR
-       http_common_header MATCHES
-           "bool[ \t\r\n]+isValidHttpHeader(Name|Value)")
-        boundary_error("HTTP header contract leaked back into HttpCommon.h"
-            "HttpHeader.h must exclusively own header primitives and validation declarations")
-    endif()
-    if(http_common_header MATCHES
-           "class[ \t]+Request(NameValue(View|List)|ValueGroup(List)?)[ \t]+final")
-        boundary_error("Web request fields leaked back into ruvia-http"
-            "Context request-field views and grouping belong to ruvia-web/RequestFields.h")
     endif()
 endif()
 if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND
