@@ -15,8 +15,8 @@ inline constexpr std::size_t kRateLimitKeyBufferBytes = 19;
 // Rate-limit key derived from a peer address string. A genuine IPv6 address is
 // grouped by its /64 network prefix: a single client typically controls an entire
 // /64 (or larger) allocation, so keying on the full 128-bit address would let it
-// rotate through billions of addresses to bypass the per-IP limit and fill the
-// shared fixed slot table -- turning the fail-closed limiter into an availability
+// rotate through billions of addresses to bypass the per-IP limit and fill a
+// worker's fixed slot table -- turning the fail-closed limiter into an availability
 // DoS. IPv4, and IPv4-mapped IPv6, pass through unchanged since each host is
 // already a distinct key. The /64 prefix is emitted into `buffer` as an
 // allocation-free "v6/<16 hex>" token (distinct from any IPv4 dotted string) and

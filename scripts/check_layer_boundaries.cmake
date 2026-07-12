@@ -1120,6 +1120,50 @@ check_files_no_match("ruvia-http must not invent a Ruvia Server product identity
     "${RULE_HTTP_IMPLICIT_SERVER_PRODUCT}" ${HTTP_SOURCE})
 check_files_no_match("Context request-field models must remain Web-owned"
     "RequestNameValue(View|List)|RequestValueGroup(List)?" ${HTTP_SOURCE})
+
+set(WEB_RATE_LIMIT_RULE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RateLimitRule.h")
+set(WEB_RATE_LIMITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/RateLimiter.h")
+set(WEB_HTTP_SERVER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServer.h")
+set(WEB_APP_RUNTIME
+    "${RUVIA_ROOT}/ruvia-web/src/app/App.cpp")
+foreach(rate_limit_owner IN ITEMS
+        "${WEB_RATE_LIMIT_RULE}"
+        "${WEB_RATE_LIMITER}"
+        "${WEB_HTTP_SERVER}"
+        "${WEB_APP_RUNTIME}")
+    if(NOT EXISTS "${rate_limit_owner}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${rate_limit_owner}")
+        boundary_error("Worker-owned rate-limit chain is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_RATE_LIMIT_RULE}" AND EXISTS "${WEB_RATE_LIMITER}" AND
+   EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_APP_RUNTIME}")
+    file(READ "${WEB_RATE_LIMIT_RULE}" web_rate_limit_rule)
+    file(READ "${WEB_RATE_LIMITER}" web_rate_limiter)
+    file(READ "${WEB_HTTP_SERVER}" web_http_server)
+    file(READ "${WEB_APP_RUNTIME}" web_app_runtime)
+    if(web_rate_limit_rule MATCHES "slotCount|shared[ \t]+atomic" OR
+       NOT web_rate_limit_rule MATCHES "Per-worker")
+        boundary_error("RateLimitRule exposes shared-table implementation policy"
+            "public rules must describe independent per-worker admission semantics")
+    endif()
+    if(web_rate_limiter MATCHES
+           "#[ \t]*include[ \t]*[<\"]atomic|std::atomic|compare_exchange|this_thread|yield[(]" OR
+       NOT web_rate_limiter MATCHES "std::pmr::vector[<]Slot[>]")
+        boundary_error("RateLimiter regained cross-worker synchronization"
+            "the request path must mutate only its worker-owned PMR slot table")
+    endif()
+    if(NOT web_http_server MATCHES "RateLimiter[ \t]+rateLimiter_" OR
+       web_http_server MATCHES "RateLimiter[*][ \t]+rateLimiter_" OR
+       web_app_runtime MATCHES "unique_ptr[<]RateLimiter|runtime->rateLimiter")
+        boundary_error("RateLimiter escaped HttpServer worker ownership"
+            "each HttpServer must own its limiter; AppRuntimeGraph must not share one")
+    endif()
+endif()
 file(GLOB_RECURSE EDGE_REFERENCE_SOURCE LIST_DIRECTORIES FALSE
     "${RUVIA_ROOT}/ruvia-core/*.h" "${RUVIA_ROOT}/ruvia-core/*.cpp" "${RUVIA_ROOT}/ruvia-core/*.inl"
     "${RUVIA_ROOT}/ruvia-core/*.cmake" "${RUVIA_ROOT}/ruvia-core/CMakeLists.txt"

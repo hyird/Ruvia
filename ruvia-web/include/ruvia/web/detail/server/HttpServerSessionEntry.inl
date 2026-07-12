@@ -10,7 +10,7 @@ Task<void> HttpServer::handleSession(TcpSocket socket) {
         const ContextServices baseServices(
             &databases_,
             &redis_,
-            rateLimiter_,
+            &rateLimiter_,
             options_.maxBufferedBodyBytes);
         if (options_.tls.enabled) {
             ConnectionScanner::Entry handshakeEntry;

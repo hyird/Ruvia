@@ -1,11 +1,8 @@
 #include "test_harness.h"
 
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
-#include <thread>
-#include <vector>
 
 #include "ruvia/web/detail/server/RateLimiter.h"
 #include "ruvia/web/RateLimitRule.h"
@@ -18,14 +15,14 @@ using ruvia::detail::RateLimiter;
 
 struct ManualRateLimiterClock final {
     [[nodiscard]] static std::int64_t nowMs() noexcept {
-        return value.load(std::memory_order_relaxed);
+        return value;
     }
 
     static void set(std::int64_t nowMs) noexcept {
-        value.store(nowMs, std::memory_order_relaxed);
+        value = nowMs;
     }
 
-    inline static std::atomic<std::int64_t> value{0};
+    inline static std::int64_t value{0};
 };
 
 using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
@@ -94,7 +91,7 @@ RUVIA_TEST(rate_limiter_route_scope_independent_of_global) {
 
 RUVIA_TEST(rate_limiter_route_enforced_when_app_rule_disabled) {
     // A disabled app rule (maxRequests == 0) does NOT disable route rate limiting:
-    // route rules share the limiter's slot table, so the slots must exist and be
+    // route rules share this worker's limiter table, so the slots must exist and be
     // enforced even though allowGlobal always allows. This is why construction cannot
     // skip slot allocation based on the app rule alone.
     RateLimiter limiter(ruleWith(0));
@@ -133,29 +130,36 @@ RUVIA_TEST(rate_limiter_route_rule_is_normalized) {
     RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
 }
 
-// The core lock-free guarantee: under heavy contention on ONE key within a single
-// window, the limiter admits EXACTLY maxRequests — never over-admits (a lost CAS
-// race would let clients exceed the limit) and never under-admits.
-RUVIA_TEST(rate_limiter_concurrent_admits_exactly_max) {
-    constexpr int kMax = 100;
-    constexpr int kThreads = 8;
-    constexpr int kPerThread = 50;  // 400 attempts >> kMax
-    RateLimiter limiter(ruleWith(kMax));
+RUVIA_TEST(rate_limiter_workers_own_independent_budgets) {
+    RateLimiter firstWorker(ruleWith(1), 8);
+    RateLimiter secondWorker(ruleWith(1), 8);
 
-    std::atomic<int> admitted{0};
-    std::vector<std::thread> pool;
-    pool.reserve(kThreads);
-    for (int t = 0; t < kThreads; ++t) {
-        pool.emplace_back([&limiter, &admitted] {
-            for (int i = 0; i < kPerThread; ++i) {
-                if (limiter.allowGlobal("shared.key").allowed) {
-                    admitted.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-        });
-    }
-    for (auto& thread : pool) {
-        thread.join();
-    }
-    RUVIA_CHECK_EQ(admitted.load(), kMax);
+    RUVIA_CHECK(firstWorker.allowGlobal("shared.key").allowed);
+    RUVIA_CHECK(!firstWorker.allowGlobal("shared.key").allowed);
+    RUVIA_CHECK(secondWorker.allowGlobal("shared.key").allowed);
+    RUVIA_CHECK(!secondWorker.allowGlobal("shared.key").allowed);
+}
+
+RUVIA_TEST(rate_limiter_full_worker_table_honors_fail_policy) {
+    RateLimiter closed(ruleWith(1, /*failClosed=*/true), 1);
+    RUVIA_CHECK(closed.allowGlobal("first").allowed);
+    RUVIA_CHECK(!closed.allowGlobal("second").allowed);
+
+    RateLimiter open(ruleWith(1, /*failClosed=*/false), 1);
+    RUVIA_CHECK(open.allowGlobal("first").allowed);
+    RUVIA_CHECK(open.allowGlobal("second").allowed);
+}
+
+RUVIA_TEST(rate_limiter_reclaims_expired_worker_slot) {
+    RateLimitRule rule;
+    rule.maxRequests = 1;
+    rule.window = std::chrono::milliseconds(10);
+    ManualRateLimiterClock::set(1'000);
+    ManualRateLimiter limiter(rule, 1);
+
+    RUVIA_CHECK(limiter.allowGlobal("first").allowed);
+    RUVIA_CHECK(!limiter.allowGlobal("second").allowed);
+    ManualRateLimiterClock::set(1'010);
+    RUVIA_CHECK(limiter.allowGlobal("second").allowed);
+    RUVIA_CHECK(!limiter.allowGlobal("second").allowed);
 }

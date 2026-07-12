@@ -144,21 +144,18 @@ HttpServer::HttpServer(
     TcpEndpoint endpoint,
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
-    HttpServerOptions options,
-    RateLimiter* rateLimiter)
+    HttpServerOptions options)
     : HttpServer(
           std::move(endpoint), routes, databases,
           std::span<const RedisDefinition>{},
-          std::move(options),
-          rateLimiter) {}
+          std::move(options)) {}
 
 HttpServer::HttpServer(
     TcpEndpoint endpoint,
     const RouteTable& routes,
     std::span<const DbDefinition> databases,
     std::span<const RedisDefinition> redis,
-    HttpServerOptions options,
-    RateLimiter* rateLimiter)
+    HttpServerOptions options)
     // One worker thread runs all I/O on this context; cross-thread access is
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
@@ -172,7 +169,7 @@ HttpServer::HttpServer(
       options_(validatedHttpServerOptions(std::move(options))),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
-      rateLimiter_(rateLimiter),
+      rateLimiter_(options_.rateLimit, memory_.resource()),
       connectionScanner_(ioContext_.get_executor(), makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
     if (databases_.hasAnyTimeout()) {

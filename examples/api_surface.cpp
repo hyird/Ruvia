@@ -1240,6 +1240,11 @@ concept HasAppSetRateLimitAlias = requires(T& app) {
 };
 
 template <typename T>
+concept HasRateLimitSlotCount = requires(T& rule) {
+    rule.slotCount;
+};
+
+template <typename T>
 concept HasAppUseMiddlewareTemplate = requires {
     &T::template use<AppUseProbeMiddleware>;
 };
@@ -2218,6 +2223,7 @@ static_assert(HasRequestValueGroupListCanonicalAccessors<ruvia::RequestValueGrou
 static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
+static_assert(!HasRateLimitSlotCount<ruvia::RateLimitRule>);
 static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
 #ifndef _MSC_VER

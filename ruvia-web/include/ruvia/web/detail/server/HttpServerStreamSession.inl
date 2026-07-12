@@ -135,7 +135,7 @@ Task<void> HttpServer::handleStreamSession(
                     break;
                 }
                 routeResolution = routes.resolve(parsed.request);
-                const auto appRateLimit = rateLimitRequestAllowed(rateLimiter_, remoteAddress);
+                const auto appRateLimit = rateLimitRequestAllowed(&rateLimiter_, remoteAddress);
                 if (!appRateLimit.allowed) {
                     response = co_await routes.handleError(
                         parsed.request,
