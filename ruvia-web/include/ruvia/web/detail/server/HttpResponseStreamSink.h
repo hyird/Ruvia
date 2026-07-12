@@ -11,7 +11,6 @@
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/http/HttpTypes.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/memory/MemoryPool.h"
 

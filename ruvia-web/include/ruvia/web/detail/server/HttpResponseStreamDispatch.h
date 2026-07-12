@@ -13,7 +13,8 @@
 #include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpRequest.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/Streaming.h"
 
 namespace ruvia {

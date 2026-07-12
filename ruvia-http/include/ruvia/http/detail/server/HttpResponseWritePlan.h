@@ -7,7 +7,6 @@
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/http/HttpTypes.h"
 
 namespace ruvia::detail {
 

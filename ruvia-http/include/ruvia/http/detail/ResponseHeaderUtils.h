@@ -7,7 +7,7 @@
 
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 
 namespace ruvia::detail {
 

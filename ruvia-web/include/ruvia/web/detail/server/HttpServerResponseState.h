@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/Http1RequestSequence.h"
 
 #include <charconv>

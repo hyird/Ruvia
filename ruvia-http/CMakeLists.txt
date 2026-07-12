@@ -79,7 +79,6 @@ ruvia_install_public_headers(http
     include/ruvia/http/HttpRequest.h
     include/ruvia/http/HttpResponse.h
     include/ruvia/http/HttpStatus.h
-    include/ruvia/http/HttpTypes.h
     include/ruvia/http/MultipartParser.h
     include/ruvia/http/Sse.h
     include/ruvia/http/UrlEncoding.h

@@ -7,7 +7,6 @@
 
 #include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpTypes.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <algorithm>

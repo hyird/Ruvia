@@ -15,7 +15,7 @@
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/RegistrationResource.h"
-#include "ruvia/http/HttpTypes.h"
+#include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/WebSocket.h"

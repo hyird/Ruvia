@@ -4,7 +4,6 @@
 
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/Cookies.h"
-#include "ruvia/http/HttpTypes.h"
 
 #include <chrono>
 #include <cstddef>

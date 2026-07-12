@@ -1235,6 +1235,8 @@ set(HTTP_LEGACY_COMMON_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpCommon.h")
 set(HTTP_LEGACY_COMMON_INTERNAL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpCommonInternal.h")
+set(HTTP_LEGACY_TYPES_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpTypes.h")
 set(WEB_REQUEST_FIELDS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h")
 set(WEB_REQUEST_FIELDS_ACCESS
@@ -1275,9 +1277,11 @@ else()
             "HttpHeader.h must own header views, limits and field validation")
     endif()
 endif()
-if(EXISTS "${HTTP_LEGACY_COMMON_HEADER}" OR EXISTS "${HTTP_LEGACY_COMMON_INTERNAL}")
-    boundary_error("Generic HTTP common headers were restored"
-        "multipart, method, header and Web request-field contracts must retain explicit owners")
+if(EXISTS "${HTTP_LEGACY_COMMON_HEADER}" OR
+   EXISTS "${HTTP_LEGACY_COMMON_INTERNAL}" OR
+   EXISTS "${HTTP_LEGACY_TYPES_HEADER}")
+    boundary_error("Generic HTTP aggregation headers were restored"
+        "request, response, multipart, method, header and Web field contracts must retain explicit owners")
 endif()
 if(NOT EXISTS "${HTTP_MULTIPART_CONTRACT}" OR
    NOT EXISTS "${HTTP_MULTIPART_PART_ACCESS}")
