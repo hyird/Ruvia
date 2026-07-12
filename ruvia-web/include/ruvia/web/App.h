@@ -61,8 +61,8 @@ public:
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
     App& useTls(TlsConfig config);
     App& addTlsCertificate(std::string_view host, TlsConfig config);
-    App& setCompression(CompressionConfig config);
-    App& setCors(CorsConfig config);
+    App& setCompression(std::optional<CompressionConfig> config);
+    App& setCors(std::optional<CorsConfig> config);
     App& setDocumentRoot(DocumentRootConfig config);
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);

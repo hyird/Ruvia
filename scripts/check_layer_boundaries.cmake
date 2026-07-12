@@ -1371,6 +1371,8 @@ set(WEB_SERVER_CONFIG_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ServerConfig.h")
 set(WEB_SERVER_OPTIONS_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerOptions.h")
+set(WEB_SERVER_CONFIG_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 set(WEB_LEGACY_PUBLIC_SERVER_OPTIONS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/HttpServerOptions.h")
 foreach(method_contract_file IN ITEMS
@@ -1421,10 +1423,13 @@ if(EXISTS "${WEB_LEGACY_PUBLIC_SERVER_OPTIONS}")
 endif()
 if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
    EXISTS "${WEB_SERVER_CONFIG_MODEL}" AND
-   EXISTS "${WEB_SERVER_OPTIONS_MODEL}")
+   EXISTS "${WEB_SERVER_OPTIONS_MODEL}" AND
+   EXISTS "${WEB_SERVER_CONFIG_PACKAGE_CONSUMER}")
     file(READ "${WEB_APP_PUBLIC_MODEL}" web_app_public_model)
     file(READ "${WEB_SERVER_CONFIG_MODEL}" web_server_config_model)
     file(READ "${WEB_SERVER_OPTIONS_MODEL}" web_server_options_model)
+    file(READ "${WEB_SERVER_CONFIG_PACKAGE_CONSUMER}"
+        web_server_config_package_consumer)
     if(web_app_public_model MATCHES
            "struct[ \t]+(CompressionConfig|CorsConfig)[ \t]+final" OR
        NOT web_server_config_model MATCHES
@@ -1435,10 +1440,19 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
        NOT web_server_options_model MATCHES
            "namespace[ \t]+ruvia::detail" OR
        NOT web_server_options_model MATCHES
-           "CompressionConfig[ \t]+compression" OR
-       NOT web_server_options_model MATCHES "CorsConfig[ \t]+cors")
+           "std::optional<CompressionConfig>[ \t]+compression" OR
+       NOT web_server_options_model MATCHES
+           "std::optional<CorsConfig>[ \t]+cors" OR
+       web_server_config_model MATCHES
+           "bool[ \t]+enabled" OR
+       NOT web_server_config_package_consumer MATCHES
+           "HasEmbeddedPolicyEnabledFlag" OR
+       NOT web_server_config_package_consumer MATCHES
+           "AppSetCompressionFunction" OR
+       NOT web_server_config_package_consumer MATCHES
+           "AppSetCorsFunction")
         boundary_error("Web server configuration regained parallel public models"
-            "ServerConfig.h owns public values; detail/server/HttpServerOptions.h owns normalized worker state")
+            "ServerConfig.h owns active policy values; detail/server/HttpServerOptions.h uses optional presence for enablement")
     endif()
 endif()
 if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")

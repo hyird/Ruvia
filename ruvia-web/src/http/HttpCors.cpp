@@ -26,10 +26,6 @@ void setCorsMaxAge(HttpResponse& response, std::chrono::seconds maxAge) {
 }  // namespace
 
 void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsConfig& cors) {
-    if (!cors.enabled) {
-        return;
-    }
-
     const auto origin = requestKnownHeader(request, RequestKnownHeader::kOrigin);
     if (origin.empty()) {
         return;

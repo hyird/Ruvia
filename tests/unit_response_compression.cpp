@@ -11,6 +11,8 @@
 #include <zstd.h>
 
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
+#include "ruvia/web/detail/server/HttpBufferedResponse.h"
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -119,7 +121,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpContentCoding::kGzip,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16});
+            Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
@@ -131,7 +133,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpContentCoding::kBrotli,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16});
+            Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
@@ -142,7 +144,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             HttpContentCoding::kZstd,
             HttpKnownMethod::kGet,
             response,
-            Compression{true, 16});
+            Compression{.minBytes = 16});
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
         RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
         RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
@@ -151,7 +153,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
 
 RUVIA_TEST(compress_happy_path_sets_encoding_and_vary) {
     auto response = responseWithBody(kCompressibleBody);
-    RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+    RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
     // Compressing on Accept-Encoding must advertise the variance.
     RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
@@ -165,7 +167,7 @@ RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
     {
         auto response = responseWithBody(kCompressibleBody);
         response.header("ETag", "\"v1\"");
-        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
         RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"v1\""));
     }
@@ -174,13 +176,13 @@ RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
     {
         auto response = responseWithBody(kCompressibleBody);
         response.header("ETag", "W/\"v1\"");
-        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
         RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("W/\"v1\""));
     }
     // No ETag stays no ETag -- weakening never fabricates a validator.
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}));
         RUVIA_CHECK(response.header("ETag").empty());
     }
     // When nothing is compressed (body below minBytes), the strong ETag is left
@@ -188,7 +190,7 @@ RUVIA_TEST(compress_weakens_strong_etag_but_leaves_weak_and_absent) {
     {
         auto response = responseWithBody("tiny");
         response.header("ETag", "\"v1\"");
-        RUVIA_CHECK(!tryCompress(response, Compression{true, 4096}));
+        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 4096}));
         RUVIA_CHECK_EQ(response.header("ETag"), std::string_view("\"v1\""));
     }
 }
@@ -198,31 +200,47 @@ RUVIA_TEST(compress_brotli_and_zstd_emit_their_content_encoding) {
     // codings and must set their own Content-Encoding token after compressing.
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(tryCompress(response, Compression{true, 16}, HttpContentCoding::kBrotli));
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kBrotli));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
         RUVIA_CHECK(response.header("Vary").find("Accept-Encoding") != std::string_view::npos);
     }
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(tryCompress(response, Compression{true, 16}, HttpContentCoding::kZstd));
+        RUVIA_CHECK(tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kZstd));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
     }
 }
 
-RUVIA_TEST(compress_skips_when_disabled_or_none_but_preserves_head_metadata) {
+RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
+    ruvia::detail::Http1ServerRequestParser parser;
+    const auto parsed = parser.parseMessage(
+        "GET / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Accept-Encoding: gzip\r\n\r\n");
+    auto response = responseWithBody(kCompressibleBody);
+    ruvia::detail::HttpServerOptions options;
+    options.compression.reset();
+    RUVIA_CHECK(!options.cors.has_value());
+
+    (void)ruvia::detail::prepareBufferedHttpResponse(
+        parsed.request,
+        HttpContentCoding::kGzip,
+        response,
+        options);
+    RUVIA_CHECK(response.header("Access-Control-Allow-Origin").empty());
+    RUVIA_CHECK(response.header("Content-Encoding").empty());
+    RUVIA_CHECK(response.header("Vary").empty());
+}
+
+RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(response, Compression{false, 16}));  // disabled
-    }
-    {
-        auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(response, Compression{true, 16}, HttpContentCoding::kNone));
+        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kNone));
     }
     {
         auto response = responseWithBody(kCompressibleBody);
         RUVIA_CHECK(tryCompress(
             response,
-            Compression{true, 16},
+            Compression{.minBytes = 16},
             HttpContentCoding::kGzip,
             HttpKnownMethod::kHead));
         const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
@@ -240,25 +258,25 @@ RUVIA_TEST(compress_skips_non_compressible_status_codes) {
                                        std::uint16_t{205}, std::uint16_t{304}}) {
         auto response = responseWithBody(kCompressibleBody);
         response.status(status);
-        RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
     }
 }
 
 RUVIA_TEST(compress_respects_below_min_bytes) {
     auto response = responseWithBody("too small to bother");
-    RUVIA_CHECK(!tryCompress(response, Compression{true, 1024}));
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 1024}));
 }
 
 RUVIA_TEST(compress_respects_no_transform) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Cache-Control", "no-transform");
-    RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 
 RUVIA_TEST(compress_skips_already_encoded_body) {
     auto response = responseWithBody(kCompressibleBody);
     response.header("Content-Encoding", "gzip");  // already encoded upstream
-    RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
 }
 
 RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
@@ -272,39 +290,34 @@ RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
     // identity body to a client that would get the compressed one (RFC 9110 12.5.5).
     {
         auto r = responseWithBody("small");
-        RUVIA_CHECK(!tryCompress(r, Compression{true, 4096}));  // below minBytes
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 4096}));  // below minBytes
         RUVIA_CHECK(varies(r));
     }
     {
         auto r = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}, HttpContentCoding::kNone));
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}, HttpContentCoding::kNone));
         RUVIA_CHECK(varies(r));
     }
 
     // Responses that never vary by Accept-Encoding must NOT over-declare Vary
     // (RFC 9110 12.5.5 SHOULD NOT): incompressible media type, no-transform,
-    // an already-chosen encoding, and (compression disabled) no negotiation at all.
+    // and an already-chosen encoding.
     {
         auto r = responseWithBody(kCompressibleBody);
         r.header("Content-Type", "image/png");
-        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}));
         RUVIA_CHECK(!varies(r));
     }
     {
         auto r = responseWithBody(kCompressibleBody);
         r.header("Cache-Control", "no-transform");
-        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}));
         RUVIA_CHECK(!varies(r));
     }
     {
         auto r = responseWithBody(kCompressibleBody);
         r.header("Content-Encoding", "gzip");
-        RUVIA_CHECK(!tryCompress(r, Compression{true, 16}));
-        RUVIA_CHECK(!varies(r));
-    }
-    {
-        auto r = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(r, Compression{false, 16}));  // disabled
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}));
         RUVIA_CHECK(!varies(r));
     }
 }
@@ -325,7 +338,7 @@ RUVIA_TEST(compress_skips_when_result_would_not_be_smaller) {
         incompressible.push_back(static_cast<char>(z & 0xFF));
     }
     auto response = responseWithBody(incompressible);
-    RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK(response.header("Content-Encoding").empty());
 }
 
@@ -334,19 +347,19 @@ RUVIA_TEST(compress_skips_content_range_response) {
     // the byte offsets the Content-Range header describes.
     auto response = responseWithBody(kCompressibleBody);
     response.header("Content-Range", "bytes 0-2047/8192");
-    RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
     RUVIA_CHECK(response.header("Content-Encoding").empty());
 }
 
 RUVIA_TEST(compress_skips_incompressible_media_types) {
     auto png = responseWithBody(kCompressibleBody);
     png.header("Content-Type", "image/png");
-    RUVIA_CHECK(!tryCompress(png, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(png, Compression{.minBytes = 16}));
     RUVIA_CHECK(png.header("Content-Encoding").empty());
 
     auto svg = responseWithBody(kCompressibleBody);
     svg.header("Content-Type", "image/svg+xml");
-    RUVIA_CHECK(tryCompress(svg, Compression{true, 16}));
+    RUVIA_CHECK(tryCompress(svg, Compression{.minBytes = 16}));
     RUVIA_CHECK_EQ(svg.header("Content-Encoding"), std::string_view("gzip"));
 }
 
@@ -359,7 +372,7 @@ RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
                              "application/pdf", "application/octet-stream"}) {
         auto response = responseWithBody(kCompressibleBody);
         response.header("Content-Type", type);
-        RUVIA_CHECK(!tryCompress(response, Compression{true, 16}));
+        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}));
         RUVIA_CHECK(response.header("Content-Encoding").empty());
     }
 
@@ -367,6 +380,6 @@ RUVIA_TEST(compress_skips_video_audio_and_container_media_types) {
     // stripped, so it is not compressed either.
     auto png = responseWithBody(kCompressibleBody);
     png.header("Content-Type", "image/png; name=photo");
-    RUVIA_CHECK(!tryCompress(png, Compression{true, 16}));
+    RUVIA_CHECK(!tryCompress(png, Compression{.minBytes = 16}));
     RUVIA_CHECK(png.header("Content-Encoding").empty());
 }

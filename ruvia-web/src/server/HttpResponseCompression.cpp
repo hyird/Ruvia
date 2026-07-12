@@ -88,7 +88,7 @@ void applyResponseCompression(
     const auto bodyPlan = httpResponseBodyPlan(
         requestMethod,
         response.status());
-    if (!bodyPlan.statusAllowsBody() || !options.enabled) {
+    if (!bodyPlan.statusAllowsBody()) {
         return;
     }
 
