@@ -145,6 +145,13 @@ stream-framing, WebSocket, and final-response control consume the same enum. The
 `HttpRequest::httpVersion()` string view and private `HttpResponseProtocolVersion` duplicate are
 removed, so no layer can compare an arbitrary or dangling version spelling.
 
+Access logging consumes that same message value. `AccessLogRecord` borrows the one immutable
+`HttpRequest` for the duration of the callback and derives `method()`, `knownMethod()`, `path()`, and
+`protocolVersion()` from it. `recordHttpAccess()` therefore accepts no transport/version flag: an
+HTTP/1.0 request remains distinguishable from HTTP/1.1, HTTP/2 remains `kHttp2`, and log metadata
+cannot disagree with the request that was actually parsed. The former `http2()` boolean and copied
+request-field tuple are removed without adding allocation or type-erasure.
+
 Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
 `HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,
 `HttpOwnedResponseBytes`, `HttpOwnedResponseFile`, or `HttpBorrowedResponseFile`. Owned byte and

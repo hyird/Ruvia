@@ -71,6 +71,8 @@ set(RULE_STALE_SERVER_EXPECTATION_STATE
     "httpUpdateExpectContinueFlag|kExpectationFailed|http1PlanRequestBody|bool[ \t]+expectContinue|shouldSendContinue[ \t]*\\(|[.]expectsContinue[ \t]*\\(")
 set(RULE_STALE_HTTP_PROTOCOL_VERSION_STATE
     "httpVersion[ \t]*\\(|httpVersion_|setHttpVersion|HttpResponseProtocolVersion|bool[ \t]+isHttp11")
+set(RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT
+    "bool[ \t]+http2|http2_|[.]http2[ \t]*[(]|method_|knownMethod_|path_")
 set(RULE_STALE_RESPONSE_REASON_PHRASE
     "HttpStatusEntry|http(CachedStatusLine|DefaultStatusText|StatusText)|statusText_|[.]statusText[ \t]*[(][ \t]*[)]|status[ \t\r\n]*[(][ \t\r\n]*std::uint16_t[ \t]+statusCode[ \t\r\n]*,[ \t\r\n]*std::string_view")
 set(RULE_STALE_CONTEXT_REASON_PHRASE
@@ -442,6 +444,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("boolean connection transport refinement"
         "${RULE_STALE_CONN_INFO_SCALARS}"
         "services.withTransport(remote, certificate, secure);")
+    expect_match("access log protocol boolean"
+        "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}"
+        "bool http2_; bool http2() const;")
+    expect_match("access log copied request tuple"
+        "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}"
+        "std::string_view method_; HttpKnownMethod knownMethod_; std::string_view path_;")
     expect_match("duplicated HTTP/2 response plan in Web runtime"
         "${RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION}"
         "const auto policy = responseWritePolicy(response.status());")
@@ -1570,6 +1578,112 @@ if(NOT http_protocol_request_tests MATCHES
     boundary_error("typed HTTP protocol-version coverage is incomplete"
         "request defaults, H1 start-lines, H2 connection version, and client responses all require direct tests")
 endif()
+
+set(WEB_ACCESS_LOG_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/HttpServerOptions.h")
+set(WEB_ACCESS_LOG_ACCESS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/app/AppAccess.h")
+set(WEB_ACCESS_LOG_RECORDER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerAccessLog.h")
+set(WEB_ACCESS_LOG_HTTP1
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_ACCESS_LOG_HTTP2
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_ACCESS_LOG_TEST "${RUVIA_ROOT}/tests/unit_access_log.cpp")
+set(WEB_ACCESS_LOG_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+set(WEB_ACCESS_LOG_API_SURFACE "${RUVIA_ROOT}/examples/api_surface.cpp")
+foreach(access_log_contract_file IN ITEMS
+        "${WEB_ACCESS_LOG_MODEL}"
+        "${WEB_ACCESS_LOG_ACCESS}"
+        "${WEB_ACCESS_LOG_RECORDER}"
+        "${WEB_ACCESS_LOG_HTTP1}"
+        "${WEB_ACCESS_LOG_HTTP2}"
+        "${WEB_ACCESS_LOG_TEST}"
+        "${WEB_ACCESS_LOG_PACKAGE_CONSUMER}"
+        "${WEB_ACCESS_LOG_API_SURFACE}")
+    if(NOT EXISTS "${access_log_contract_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${access_log_contract_file}")
+        boundary_error("typed access-log protocol contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_ACCESS_LOG_MODEL}" AND
+   EXISTS "${WEB_ACCESS_LOG_ACCESS}" AND
+   EXISTS "${WEB_ACCESS_LOG_RECORDER}" AND
+   EXISTS "${WEB_ACCESS_LOG_HTTP1}" AND
+   EXISTS "${WEB_ACCESS_LOG_HTTP2}" AND
+   EXISTS "${WEB_ACCESS_LOG_TEST}" AND
+   EXISTS "${WEB_ACCESS_LOG_PACKAGE_CONSUMER}" AND
+   EXISTS "${WEB_ACCESS_LOG_API_SURFACE}")
+    file(READ "${WEB_ACCESS_LOG_MODEL}" web_access_log_model)
+    file(READ "${WEB_ACCESS_LOG_ACCESS}" web_access_log_access)
+    file(READ "${WEB_ACCESS_LOG_RECORDER}" web_access_log_recorder)
+    file(READ "${WEB_ACCESS_LOG_HTTP1}" web_access_log_http1)
+    file(READ "${WEB_ACCESS_LOG_HTTP2}" web_access_log_http2)
+    file(READ "${WEB_ACCESS_LOG_TEST}" web_access_log_test)
+    file(READ "${WEB_ACCESS_LOG_PACKAGE_CONSUMER}"
+        web_access_log_package_consumer)
+    file(READ "${WEB_ACCESS_LOG_API_SURFACE}"
+        web_access_log_api_surface)
+    if(web_access_log_model MATCHES
+           "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}" OR
+       web_access_log_access MATCHES
+           "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}" OR
+       web_access_log_recorder MATCHES
+           "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}" OR
+       NOT web_access_log_model MATCHES
+           "const HttpRequest& request_" OR
+       NOT web_access_log_model MATCHES
+           "HttpProtocolVersion protocolVersion[(][)] const noexcept" OR
+       NOT web_access_log_model MATCHES
+           "return request_[.]protocolVersion[(][)]" OR
+       NOT web_access_log_model MATCHES
+           "return request_[.]method[(][)]" OR
+       NOT web_access_log_model MATCHES
+           "return request_[.]knownMethod[(][)]" OR
+       NOT web_access_log_model MATCHES
+           "return request_[.]path[(][)]" OR
+       NOT web_access_log_access MATCHES
+           "const HttpRequest& request" OR
+       NOT web_access_log_access MATCHES
+           "AccessLogRecord[(][ \t\r\n]*request" OR
+       NOT web_access_log_recorder MATCHES
+           "AccessLogRecordAccess::make[(][ \t\r\n]*request")
+        boundary_error("access log restored copied request facts or a protocol boolean"
+            "AccessLogRecord must borrow one HttpRequest and derive method/path/version from it")
+    endif()
+    if(web_access_log_http1 MATCHES
+           "recordHttpAccess[(][^;]*(true|false)[)]" OR
+       web_access_log_http2 MATCHES
+           "recordHttpAccess[(][^;]*(true|false)[)]" OR
+       web_access_log_recorder MATCHES
+           "HttpProtocolVersion[ \t]+protocolVersion|bool[ \t]+http2")
+        boundary_error("server access-log calls re-derived protocol version"
+            "recordHttpAccess must consume request.protocolVersion through the record without H1/H2 flags")
+    endif()
+    if(NOT web_access_log_test MATCHES
+           "access_log_record_borrows_one_typed_request" OR
+       NOT web_access_log_test MATCHES
+           "access_log_preserves_all_protocol_versions_without_transport_bool" OR
+       NOT web_access_log_test MATCHES "RecordHttpAccessFunction" OR
+       NOT web_access_log_package_consumer MATCHES
+           "HasLegacyAccessLogHttp2Flag" OR
+       NOT web_access_log_package_consumer MATCHES
+           "RecordHttpAccessFunction" OR
+       NOT web_access_log_api_surface MATCHES
+           "HasLegacyAccessLogHttp2Flag")
+        boundary_error("typed access-log protocol contract lacks regression coverage"
+            "unit, installed-package, and public API checks must pin request borrowing, all versions, and removed bool access")
+    endif()
+endif()
+check_files_no_match("AccessLogRecord restored copied request or bool protocol state"
+    "${RULE_STALE_ACCESS_LOG_PROTOCOL_SPLIT}"
+    "${WEB_ACCESS_LOG_MODEL}"
+    "${WEB_ACCESS_LOG_ACCESS}"
+    "${WEB_ACCESS_LOG_RECORDER}")
+
 file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
     http_client_public_model)
 if(NOT http_client_public_model MATCHES "enum class HttpScheme" OR
@@ -5276,6 +5390,16 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("typed connection metadata contract is undocumented"
             "${relative} must document plain/TLS alternatives, single construction/propagation, and removed scalar APIs")
+    endif()
+    if(NOT boundary_doc_content MATCHES "AccessLogRecord" OR
+       NOT boundary_doc_content MATCHES "recordHttpAccess" OR
+       NOT boundary_doc_content MATCHES "HttpRequest" OR
+       NOT boundary_doc_content MATCHES "protocolVersion[(][)]" OR
+       NOT boundary_doc_content MATCHES "http2[(][)]" OR
+       NOT boundary_doc_content MATCHES "type-erasure")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("typed access-log protocol contract is undocumented"
+            "${relative} must document request borrowing, exact protocol versions, removed bool access, and zero-cost propagation")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2SansIoSessionContext" OR
        NOT boundary_doc_content MATCHES "Http2SansIoSessionEnv" OR

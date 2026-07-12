@@ -377,6 +377,12 @@ HTTP protocol version 是每条 message 的 control data，必须统一使用 `r
 view。connection persistence、response-stream framing、WebSocket handshake、client response
 framing 与 final-response control 必须消费同一枚举。
 
+access log 也必须消费同一个 message control value。`AccessLogRecord` 只借用 callback 期间仍有效的
+唯一 `HttpRequest`，`method()`、`knownMethod()`、`path()` 与 `protocolVersion()` 都从该 request 派生；
+remote address 仍由 Web transport 单独提供。`recordHttpAccess()` 禁止接收 `bool http2` 或另一个版本
+参数，HTTP/1 与 HTTP/2 调用点都不得重建版本。禁止恢复 `http2()`、`http2_` 或复制
+`method_ + knownMethod_ + path_` 的平行 tuple；该日志边界不得增加分配、虚调用或 type-erasure。
+
 公开整消息入口只允许 `Http1RequestParser`，其 `Http1RequestParseResult` 必须以
 `Http1RequestNeedMore`、`Http1ParsedRequest`、`Http1RequestParseFailure` 三个互斥 alternative
 表达结果。need-more 只能用可选 `requiredTotalBytes()` 表达 Content-Length 已知的所需总长度；

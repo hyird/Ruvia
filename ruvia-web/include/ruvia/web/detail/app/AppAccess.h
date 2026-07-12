@@ -6,15 +6,15 @@ namespace ruvia::detail {
 
 struct AccessLogRecordAccess final {
     [[nodiscard]] static constexpr AccessLogRecord make(
-        std::string_view method,
-        HttpKnownMethod knownMethod,
-        std::string_view path,
+        const HttpRequest& request,
         std::string_view remoteAddress,
         std::uint16_t status,
-        std::uint64_t durationMicros,
-        bool http2) noexcept {
+        std::uint64_t durationMicros) noexcept {
         return AccessLogRecord(
-            method, knownMethod, path, remoteAddress, status, durationMicros, http2);
+            request,
+            remoteAddress,
+            status,
+            durationMicros);
     }
 };
 

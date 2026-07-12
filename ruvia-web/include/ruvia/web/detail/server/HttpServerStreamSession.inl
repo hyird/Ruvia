@@ -373,7 +373,7 @@ Task<void> HttpServer::handleStreamSession(
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
-                response.status(), requestStart, false);
+                response.status(), requestStart);
             if (ec ||
                 connectionPlan.disposition() == Http1ConnectionDisposition::kClose ||
                 !started_.load(std::memory_order_relaxed)) {
@@ -383,7 +383,7 @@ Task<void> HttpServer::handleStreamSession(
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             recordHttpAccess(
                 options_.accessLog, parsed.request, remoteAddress,
-                response.status(), requestStart, false);
+                response.status(), requestStart);
             if (!started_.load(std::memory_order_relaxed)) {
                 co_return;
             }

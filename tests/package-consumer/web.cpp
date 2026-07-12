@@ -29,6 +29,7 @@
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
+#include <ruvia/web/detail/server/HttpServerAccessLog.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -117,6 +118,18 @@ concept ExposesRvalueTransportPointer = requires {
     std::declval<const Info&&>().tls();
 };
 
+template <typename Record>
+concept HasLegacyAccessLogHttp2Flag = requires(const Record& record) {
+    record.http2();
+};
+
+using RecordHttpAccessFunction = void (*)(
+    const ruvia::HttpServerOptions::AccessLog&,
+    const ruvia::HttpRequest&,
+    std::string_view,
+    std::uint16_t,
+    std::chrono::steady_clock::time_point) noexcept;
+
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -130,6 +143,17 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::AccessLogRecord&>().method()),
     std::string_view>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::AccessLogRecord&>()
+                 .protocolVersion()),
+    ruvia::HttpProtocolVersion>);
+static_assert(!HasLegacyAccessLogHttp2Flag<ruvia::AccessLogRecord>);
+static_assert(std::is_same_v<
+    decltype(&ruvia::detail::recordHttpAccess),
+    RecordHttpAccessFunction>);
+static_assert(std::is_nothrow_copy_constructible_v<
+    ruvia::AccessLogRecord>);
+static_assert(!std::is_copy_assignable_v<ruvia::AccessLogRecord>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),
