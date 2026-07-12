@@ -14,7 +14,7 @@
 namespace ruvia::detail {
 
 // Read exactly four hex digits as a UTF-16 code unit. Single owner of \uXXXX
-// digit decoding for both the validation scan (parseJsonStringRaw) and the
+// digit decoding for both the validation scan (parseJsonString) and the
 // decode pass (decodeJsonString).
 [[nodiscard]] inline bool readJsonHex4(std::string_view input, std::uint32_t& value) noexcept {
     if (input.size() < 4) {
@@ -77,26 +77,53 @@ namespace ruvia::detail {
     return 0;  // 0x80-0xC1 (bare continuation / overlong lead) or 0xF5-0xFF
 }
 
-[[nodiscard]] inline bool parseJsonStringRaw(
-    std::string_view& input,
-    std::string_view& value,
-    bool& escaped) noexcept {
-    skipJsonWhitespace(input);
-    if (input.empty() || input.front() != '"') {
-        return false;
-    }
-    input.remove_prefix(1);
+enum class JsonStringEncoding : std::uint8_t {
+    kLiteral,
+    kEscaped
+};
 
-    escaped = false;
-    const char* const begin = input.data();
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        const char c = input[i];
+class JsonStringToken final {
+public:
+    JsonStringToken(
+        std::string_view raw,
+        JsonStringEncoding encoding) noexcept
+        : raw_(raw), encoding_(encoding) {}
+
+    [[nodiscard]] std::string_view raw() const noexcept {
+        return raw_;
+    }
+
+    [[nodiscard]] JsonStringEncoding encoding() const noexcept {
+        return encoding_;
+    }
+
+private:
+    std::string_view raw_;
+    JsonStringEncoding encoding_;
+};
+
+// Scans one JSON string and commits the input cursor only after the closing
+// quote and all encoded bytes have been validated. The token owns both pieces
+// of scan state, so callers cannot observe a raw view without its encoding.
+[[nodiscard]] inline std::optional<JsonStringToken> parseJsonString(
+    std::string_view& input) noexcept {
+    auto remaining = input;
+    skipJsonWhitespace(remaining);
+    if (remaining.empty() || remaining.front() != '"') {
+        return std::nullopt;
+    }
+    remaining.remove_prefix(1);
+
+    auto encoding = JsonStringEncoding::kLiteral;
+    const char* const begin = remaining.data();
+    for (std::size_t i = 0; i < remaining.size(); ++i) {
+        const char c = remaining[i];
         if (c == '\\') {
-            escaped = true;
-            if (i + 1 >= input.size()) {
-                return false;
+            encoding = JsonStringEncoding::kEscaped;
+            if (i + 1 >= remaining.size()) {
+                return std::nullopt;
             }
-            const char escape = input[i + 1];
+            const char escape = remaining[i + 1];
             if (escape == '"' || escape == '\\' || escape == '/' || escape == 'b' || escape == 'f' ||
                 escape == 'n' || escape == 'r' || escape == 't') {
                 ++i;
@@ -104,41 +131,34 @@ namespace ruvia::detail {
             }
             if (escape == 'u') {
                 std::uint32_t ignored = 0;
-                if (i + 5 >= input.size() || !readJsonHex4(input.substr(i + 2), ignored)) {
-                    return false;
+                if (i + 5 >= remaining.size() || !readJsonHex4(remaining.substr(i + 2), ignored)) {
+                    return std::nullopt;
                 }
                 i += 5;
                 continue;
             }
-            return false;
+            return std::nullopt;
         }
         const auto uc = static_cast<unsigned char>(c);
         if (uc < 0x20) {
-            return false;
+            return std::nullopt;
         }
         if (c == '"') {
-            value = std::string_view(begin, i);
-            input.remove_prefix(i + 1);
-            return true;
+            const JsonStringToken token(std::string_view(begin, i), encoding);
+            remaining.remove_prefix(i + 1);
+            input = remaining;
+            return token;
         }
         if (uc >= 0x80) {
-            const auto length = jsonUtf8SequenceLength(input, i);
+            const auto length = jsonUtf8SequenceLength(remaining, i);
             if (length == 0) {
-                return false;
+                return std::nullopt;
             }
             i += length - 1;  // the loop's ++i steps past the final byte
         }
     }
 
-    return false;
-}
-
-[[nodiscard]] inline bool parseJsonStringView(std::string_view& input, std::string_view& value) noexcept {
-    bool escaped = false;
-    if (!parseJsonStringRaw(input, value, escaped)) {
-        return false;
-    }
-    return !escaped;
+    return std::nullopt;
 }
 
 template <typename OutputT>
@@ -242,12 +262,6 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
         }
     }
     return output;
-}
-
-[[nodiscard]] inline bool skipJsonString(std::string_view& input) noexcept {
-    std::string_view ignored;
-    bool escaped = false;
-    return parseJsonStringRaw(input, ignored, escaped);
 }
 
 }  // namespace ruvia::detail

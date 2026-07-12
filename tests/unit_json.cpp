@@ -112,49 +112,42 @@ RUVIA_TEST(json_number_parse_type_boundaries) {
     }
 }
 
-// --- String view parsing -------------------------------------------------
-RUVIA_TEST(json_string_view_unescaped) {
+// --- String token scanning -----------------------------------------------
+RUVIA_TEST(json_string_token_literal) {
     std::string_view in = "\"hello\" rest";
-    std::string_view value;
-    RUVIA_CHECK(ruvia::detail::parseJsonStringView(in, value));
-    RUVIA_CHECK_EQ(value, std::string_view("hello"));
+    const auto parsed = ruvia::detail::parseJsonString(in);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK_EQ(parsed->raw(), std::string_view("hello"));
+    RUVIA_CHECK(parsed->encoding() == ruvia::detail::JsonStringEncoding::kLiteral);
     RUVIA_CHECK_EQ(in, std::string_view(" rest"));
 }
 
-RUVIA_TEST(json_string_view_escaped_reports_escape) {
-    // parseJsonStringView returns false for a string that needs decoding.
+RUVIA_TEST(json_string_token_carries_escape_encoding) {
     std::string_view in = "\"a\\nb\"";
-    std::string_view value;
-    RUVIA_CHECK(!ruvia::detail::parseJsonStringView(in, value));
+    const auto parsed = ruvia::detail::parseJsonString(in);
+    RUVIA_CHECK(parsed.has_value());
+    RUVIA_CHECK_EQ(parsed->raw(), std::string_view("a\\nb"));
+    RUVIA_CHECK(parsed->encoding() == ruvia::detail::JsonStringEncoding::kEscaped);
 }
 
-RUVIA_TEST(json_string_raw_flags_escape) {
-    std::string_view in = "\"a\\nb\"";
-    std::string_view value;
-    bool escaped = false;
-    RUVIA_CHECK(ruvia::detail::parseJsonStringRaw(in, value, escaped));
-    RUVIA_CHECK(escaped);
-    RUVIA_CHECK_EQ(value, std::string_view("a\\nb"));
-}
-
-RUVIA_TEST(json_string_raw_rejects_control_and_unterminated) {
+RUVIA_TEST(json_string_scan_failure_preserves_input_cursor) {
     {
         std::string_view in = std::string_view("\"a\x01""b\"", 5);  // raw control char
-        std::string_view value;
-        bool escaped = false;
-        RUVIA_CHECK(!ruvia::detail::parseJsonStringRaw(in, value, escaped));
+        const auto original = in;
+        RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
+        RUVIA_CHECK_EQ(in, original);
     }
     {
-        std::string_view in = "\"unterminated";
-        std::string_view value;
-        bool escaped = false;
-        RUVIA_CHECK(!ruvia::detail::parseJsonStringRaw(in, value, escaped));
+        std::string_view in = "  \"unterminated";
+        const auto original = in;
+        RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
+        RUVIA_CHECK_EQ(in, original);
     }
     {
         std::string_view in = "\"bad\\x\"";  // invalid escape
-        std::string_view value;
-        bool escaped = false;
-        RUVIA_CHECK(!ruvia::detail::parseJsonStringRaw(in, value, escaped));
+        const auto original = in;
+        RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
+        RUVIA_CHECK_EQ(in, original);
     }
 }
 
@@ -189,19 +182,18 @@ RUVIA_TEST(json_string_validates_utf8_content) {
         RUVIA_CHECK(!decodeJson(b).has_value());
     }
 
-    // The validation scan (parseJsonStringRaw) applies the same rule.
+    // The validation scan (parseJsonString) applies the same rule.
     {
         std::string_view in = std::string_view("\"\xFF\"", 3);  // invalid lead byte
-        std::string_view value;
-        bool escaped = false;
-        RUVIA_CHECK(!ruvia::detail::parseJsonStringRaw(in, value, escaped));
+        const auto original = in;
+        RUVIA_CHECK(!ruvia::detail::parseJsonString(in).has_value());
+        RUVIA_CHECK_EQ(in, original);
     }
     {
         std::string_view in = std::string_view("\"caf\xC3\xA9\"", 7);  // valid é passes
-        std::string_view value;
-        bool escaped = false;
-        RUVIA_CHECK(ruvia::detail::parseJsonStringRaw(in, value, escaped));
-        RUVIA_CHECK_EQ(std::string(value), std::string("caf\xC3\xA9"));
+        const auto parsed = ruvia::detail::parseJsonString(in);
+        RUVIA_CHECK(parsed.has_value());
+        RUVIA_CHECK_EQ(std::string(parsed->raw()), std::string("caf\xC3\xA9"));
     }
 }
 

@@ -42,9 +42,8 @@ template <typename Visitor>
 
     auto& visitorRef = visitor;
     while (true) {
-        std::string_view key;
-        bool keyEscaped = false;
-        if (!parseJsonStringRaw(input, key, keyEscaped) ||
+        const auto key = parseJsonString(input);
+        if (!key.has_value() ||
             !consumeJsonChar(input, ':')) {
             return false;
         }
@@ -55,15 +54,15 @@ template <typename Visitor>
         }
         const auto consumed = valueStart.size() - input.size();
         const auto value = valueStart.substr(0, consumed);
-        if (keyEscaped) {
-            auto decodedKey = decodeJsonString(key, resource);
+        if (key->encoding() == JsonStringEncoding::kEscaped) {
+            auto decodedKey = decodeJsonString(key->raw(), resource);
             if (!decodedKey.has_value()) {
                 return false;
             }
             if (!dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(*decodedKey), value)) {
                 return true;
             }
-        } else if (!dispatchJsonObjectFieldVisitor(visitorRef, key, value)) {
+        } else if (!dispatchJsonObjectFieldVisitor(visitorRef, key->raw(), value)) {
             return true;
         }
 
