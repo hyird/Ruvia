@@ -125,6 +125,8 @@ set(RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION
     "body_|&ruviaValid|[)][ \t]*&&[ \t]*ruviaValid")
 set(RULE_STALE_MODEL_REQUEST_OBJECT
     "RequestObject")
+set(RULE_STALE_MODEL_NONCONST_FIELD_GETTER
+    "field[(][)][ \t\r\n]*[{]")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -596,6 +598,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("model input escaped into the public RequestObject vocabulary"
         "${RULE_STALE_MODEL_REQUEST_OBJECT}"
         "class RequestObject final {};")
+    expect_match("generated model restored duplicate non-const field getter"
+        "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}"
+        "const std::optional<T>& field() { return value_; }")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2589,6 +2594,9 @@ check_files_no_match("generated model factories must publish only materialized m
 check_files_no_match("generated model fields must remain const-correct"
     "${RULE_STALE_MODEL_MUTABLE_FIELDS}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+check_files_no_match("generated model fields must expose one const getter"
+    "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}"
+    "${WEB_MODEL_FIELD_OPS_CONTRACT}")
 check_files_no_match("generated models must not rescan raw bodies through dynamic get"
     "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
     "${WEB_MODEL_MACROS_CONTRACT}"
@@ -2640,12 +2648,18 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}" OR
        web_model_field_ops_contract MATCHES
            "${RULE_STALE_MODEL_MUTABLE_FIELDS}" OR
+       web_model_field_ops_contract MATCHES
+           "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}" OR
        NOT web_model_macros_contract MATCHES
            "pmrResourceOrDefault[(]resource[)]" OR
        NOT web_model_macros_contract MATCHES
            "memory_resource[*][ \t]+ruviaResource_" OR
        NOT web_model_macros_contract MATCHES
            "ruviaMaterialize[(]const[ \t]+::ruvia::detail::ModelInput&[ \t]+ruviaInput[)]" OR
+       NOT web_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::JsonBody" OR
+       NOT web_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
        NOT web_model_object_contract MATCHES
            "enum[ \t]+class[ \t]+ModelInputKind" OR
        NOT web_model_object_contract MATCHES
@@ -2665,6 +2679,12 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_api_surface MATCHES
            "!HasModelInputAccessor<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
+           "!HasModelPublicJsonDepthHook<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelPublicFormFieldsHook<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelNonConstMessageGetter<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
            "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
            "RUVIA_MODEL[(]InstalledPackageModel" OR
@@ -2674,6 +2694,12 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelInputAccessor<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
            "std::default_initializable<ruvia::detail::ModelInput>" OR
        NOT web_json_package_consumer MATCHES

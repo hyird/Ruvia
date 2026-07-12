@@ -86,9 +86,6 @@
     RUVIA_MODEL_FIELD_ACCESSORS_I(T, RUVIA_MODEL_UNPAREN x)
 #define RUVIA_MODEL_FIELD_ACCESSORS_I(T, ...) RUVIA_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
 #define RUVIA_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
-    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() { \
-        return ruviaField_##field##_; \
-    } \
     [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
         return ruviaField_##field##_; \
     } \

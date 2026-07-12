@@ -1026,6 +1026,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState" OR
        _installed_model_field_ops_contract MATCHES
            "mutable[ \t]+::ruvia::detail::ModelFieldState|mutable[ \t]+::std::optional" OR
+       _installed_model_field_ops_contract MATCHES
+           "field[(][)][ \t\r\n]*[{]" OR
        _installed_model_macros_contract MATCHES
            "body_[.]get<" OR
        _installed_model_object_contract MATCHES
@@ -1038,6 +1040,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "memory_resource[*][ \t]+ruviaResource_" OR
        NOT _installed_model_macros_contract MATCHES
            "ruviaMaterialize[(]const[ \t]+::ruvia::detail::ModelInput&[ \t]+ruviaInput[)]" OR
+       NOT _installed_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::JsonBody" OR
+       NOT _installed_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
        NOT _installed_model_object_contract MATCHES
            "enum[ \t]+class[ \t]+ModelInputKind" OR
        NOT _installed_model_object_contract MATCHES
