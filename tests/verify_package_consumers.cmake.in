@@ -931,10 +931,14 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_json_string_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
+       NOT _installed_json_string_contract MATCHES
+           "class[ \t]+JsonStringToken[ \t]+final" OR
+       NOT _installed_json_string_contract MATCHES
+           "std::optional<JsonStringToken>[ \t\r\n]+parseJsonString" OR
        _installed_json_string_contract MATCHES
-           "bool[ \t\r\n]+decodeJsonString")
+           "bool[ \t\r\n]+decodeJsonString|parseJsonStringRaw|parseJsonStringView|skipJsonString")
         message(FATAL_ERROR
-            "installed JSON string decoder lost its owning transactional contract")
+            "installed JSON string parser lost its typed transactional contract")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")

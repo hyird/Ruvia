@@ -57,7 +57,7 @@ namespace ruvia::detail {
         return true;
     }
 
-    while (skipJsonString(input)) {
+    while (parseJsonString(input).has_value()) {
         if (!consumeJsonChar(input, ':') || !skipJsonValue(input, depth + 1)) {
             return false;
         }
@@ -89,7 +89,7 @@ namespace ruvia::detail {
 
     switch (input.front()) {
         case '"':
-            return skipJsonString(input);
+            return parseJsonString(input).has_value();
         case '{':
             // skipJsonObject/skipJsonArray already add depth+1 for their child values; passing
             // depth+1 here too would double-count and enforce half the documented kMaxJsonDepth.

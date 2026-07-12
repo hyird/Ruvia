@@ -90,6 +90,14 @@ concept AcceptsJsonDecodeOutputParameter = requires(Output& output) {
     ruvia::detail::decodeJsonString(std::string_view{}, output);
 };
 
+template <typename Value>
+concept AcceptsJsonStringScanOutputParameters = requires(
+    std::string_view& input,
+    Value& value,
+    bool& escaped) {
+    ruvia::detail::parseJsonString(input, value, escaped);
+};
+
 template <typename Services>
 concept HasSplitContextCapabilityAccessors = requires(
     const Services& services) {
@@ -540,6 +548,12 @@ static_assert(std::same_as<
         std::string_view{},
         std::declval<std::pmr::memory_resource*>())),
     std::optional<std::pmr::string>>);
+static_assert(!std::default_initializable<ruvia::detail::JsonStringToken>);
+static_assert(!AcceptsJsonStringScanOutputParameters<std::string_view>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::parseJsonString(
+        std::declval<std::string_view&>())),
+    std::optional<ruvia::detail::JsonStringToken>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -631,6 +645,14 @@ int main() {
         std::string_view(*decodedJson) != "installed decoder" ||
         malformedJson.has_value()) {
         return 11;
+    }
+    std::string_view jsonTokenInput = "  \"installed\\u0020token\" tail";
+    const auto jsonToken = ruvia::detail::parseJsonString(jsonTokenInput);
+    if (!jsonToken.has_value() ||
+        jsonToken->raw() != "installed\\u0020token" ||
+        jsonToken->encoding() != ruvia::detail::JsonStringEncoding::kEscaped ||
+        jsonTokenInput != " tail") {
+        return 12;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

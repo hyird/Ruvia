@@ -114,23 +114,28 @@ template <typename T>
         return false;
     }
     if constexpr (isRuviaString<FieldT>) {
-        std::string_view raw;
-        bool escaped = false;
-        if (!parseJsonStringRaw(input, raw, escaped)) {
+        const auto parsed = parseJsonString(input);
+        if (!parsed.has_value()) {
             return false;
         }
-        if (!escaped) {
-            value.assignView(raw);
+        if (parsed->encoding() == JsonStringEncoding::kLiteral) {
+            value.assignView(parsed->raw());
             return true;
         }
-        auto decoded = decodeJsonString(raw, resource);
+        auto decoded = decodeJsonString(parsed->raw(), resource);
         if (!decoded.has_value()) {
             return false;
         }
         value.assignOwned(std::move(*decoded));
         return true;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
-        return parseJsonStringView(input, value);
+        const auto parsed = parseJsonString(input);
+        if (!parsed.has_value() ||
+            parsed->encoding() != JsonStringEncoding::kLiteral) {
+            return false;
+        }
+        value = parsed->raw();
+        return true;
     } else if constexpr (isRuviaArray<FieldT>) {
         return parseJsonArrayValue(input, value, resource, depth);
     } else if constexpr (isRuviaList<FieldT>) {

@@ -29,9 +29,8 @@ namespace detail {
 [[nodiscard]] std::optional<std::pmr::string> jwtDecodeJsonStringValue(
     std::string_view value,
     std::pmr::memory_resource* resource) {
-    std::string_view raw;
-    bool escaped = false;
-    if (!parseJsonStringRaw(value, raw, escaped)) {
+    const auto parsed = parseJsonString(value);
+    if (!parsed.has_value()) {
         return std::nullopt;
     }
     skipJsonWhitespace(value);
@@ -39,23 +38,22 @@ namespace detail {
         return std::nullopt;
     }
 
-    if (!escaped) {
-        return std::pmr::string(raw, resource);
+    if (parsed->encoding() == JsonStringEncoding::kLiteral) {
+        return std::pmr::string(parsed->raw(), resource);
     }
-    return decodeJsonString(raw, resource);
+    return decodeJsonString(parsed->raw(), resource);
 }
 
 [[nodiscard]] std::optional<std::string_view> jwtRawJsonStringValue(std::string_view value) noexcept {
-    std::string_view raw;
-    bool escaped = false;
-    if (!parseJsonStringRaw(value, raw, escaped)) {
+    const auto parsed = parseJsonString(value);
+    if (!parsed.has_value()) {
         return std::nullopt;
     }
     skipJsonWhitespace(value);
     if (!value.empty()) {
         return std::nullopt;
     }
-    return raw;
+    return parsed->raw();
 }
 
 void jwtAppendJsonEscaped(std::pmr::string& out, std::string_view value) {
@@ -153,21 +151,20 @@ void jwtDecodeAudiences(
         return;  // an empty array carries no audience
     }
     for (;;) {
-        std::string_view raw;
-        bool escaped = false;
-        if (!detail::parseJsonStringRaw(value, raw, escaped)) {
+        const auto parsed = detail::parseJsonString(value);
+        if (!parsed.has_value()) {
             out.clear();  // a non-string array element is not a valid audience
             return;
         }
         std::optional<std::pmr::string> decoded;
-        if (escaped) {
-            decoded = detail::decodeJsonString(raw, resource);
+        if (parsed->encoding() == detail::JsonStringEncoding::kEscaped) {
+            decoded = detail::decodeJsonString(parsed->raw(), resource);
             if (!decoded.has_value()) {
                 out.clear();
                 return;
             }
         } else {
-            decoded.emplace(raw, resource);
+            decoded.emplace(parsed->raw(), resource);
         }
         out.push_back(std::move(*decoded));
 

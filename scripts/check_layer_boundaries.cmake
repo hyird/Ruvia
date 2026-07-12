@@ -105,6 +105,8 @@ set(RULE_STALE_URL_DECODE_CHAIN
     "decodeUrlComponentToString|decodeFormComponent|StringT[ \t]*&[ \t]*output")
 set(RULE_STALE_JSON_STRING_DECODE_CHAIN
     "bool[ \t\r\n]+decodeJsonString|decodeJsonString[ \t\r\n]*[(][^,()]*,[ \t\r\n]*value[.]resetOwned[(][)]|bool[ \t\r\n]+jwtDecodeJsonStringValue[ \t\r\n]*[(][ \t\r\n]*std::pmr::string[ \t]*&")
+set(RULE_STALE_JSON_STRING_SCAN_CHAIN
+    "parseJsonStringRaw|parseJsonStringView|skipJsonString")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -507,6 +509,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("JWT JSON decoding retained a bool/output wrapper"
         "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
         "bool jwtDecodeJsonStringValue(std::pmr::string& target, View value);")
+    expect_match("JSON string scanning returned parallel output state"
+        "${RULE_STALE_JSON_STRING_SCAN_CHAIN}"
+        "bool parseJsonStringRaw(View& input, View& raw, bool& escaped);")
+    expect_match("JSON literal-only scanning duplicated the token parser"
+        "${RULE_STALE_JSON_STRING_SCAN_CHAIN}"
+        "bool parseJsonStringView(View& input, View& value);")
+    expect_match("JSON skipping retained a separate string scanner wrapper"
+        "${RULE_STALE_JSON_STRING_SCAN_CHAIN}"
+        "bool skipJsonString(View& input);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2343,6 +2354,13 @@ check_files_no_match("JSON string decoding must return one owning transactional 
     "${WEB_JSON_OBJECT_FIELDS}"
     "${WEB_JSON_MODEL_PARSER}"
     "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
+check_files_no_match("JSON string scanning must return one transactional token"
+    "${RULE_STALE_JSON_STRING_SCAN_CHAIN}"
+    "${WEB_JSON_STRING_CONTRACT}"
+    "${WEB_JSON_OBJECT_FIELDS}"
+    "${WEB_JSON_MODEL_PARSER}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/json/JsonSkip.h"
+    "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
 if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
    EXISTS "${WEB_JSON_MODEL_PARSER}" AND
    EXISTS "${WEB_JSON_STRING_TEST}" AND
@@ -2357,16 +2375,30 @@ if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
         web_json_package_consumer)
     if(NOT web_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
+       NOT web_json_string_contract MATCHES
+           "class[ \t]+JsonStringToken[ \t]+final" OR
+       NOT web_json_string_contract MATCHES
+           "std::optional<JsonStringToken>[ \t\r\n]+parseJsonString" OR
+       NOT web_json_string_contract MATCHES
+           "auto[ \t]+remaining[ \t]*=[ \t]*input" OR
+       NOT web_json_string_contract MATCHES
+           "input[ \t]*=[ \t]*remaining" OR
        NOT web_json_model_parser MATCHES
            "value[.]assignOwned[(]std::move[(][*]decoded[)][)]" OR
        NOT web_json_string_test MATCHES
            "json_string_decode_failure_preserves_existing_model_value" OR
+       NOT web_json_string_test MATCHES
+           "json_string_scan_failure_preserves_input_cursor" OR
        NOT web_json_package_consumer MATCHES
            "AcceptsJsonDecodeOutputParameter" OR
        NOT web_json_package_consumer MATCHES
-           "std::optional<std::pmr::string>")
-        boundary_error("JSON string decoding lost transactional ownership"
-            "Web JSON decoding must own the optional result and model fields must commit only after success")
+           "AcceptsJsonStringScanOutputParameters" OR
+       NOT web_json_package_consumer MATCHES
+           "std::optional<std::pmr::string>" OR
+       NOT web_json_package_consumer MATCHES
+           "std::optional<ruvia::detail::JsonStringToken>")
+        boundary_error("JSON string parsing lost transactional ownership"
+            "Web JSON scanning and decoding must return complete typed results and commit callers only after success")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT
