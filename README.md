@@ -509,8 +509,9 @@ sent as consumed data frees that capacity.
 
 Buffered/streamed request storage is therefore Web runtime state, not HTTP/2 protocol state.
 The connection coroutine also requires a complete `Http2SansIoSessionContext` value. It binds the
-server options, `ConnectionScanner::Entry`, graceful-shutdown atomic, remote endpoint metadata, and
-explicit `ContextServices` integrations before the coroutine starts. The former default-constructed
+server options, `ConnectionScanner::Entry`, graceful-shutdown atomic, and explicit
+`ContextServices` integrations—including the already-typed `ConnInfo`—before the coroutine starts.
+The former default-constructed
 `Http2SansIoSessionEnv` pointer bag is removed: an installed caller cannot silently fall back to
 default options, an unlinked local scanner, or a session that ignores shutdown. Bare defaults used
 by socket tests now live only in a test fixture.
@@ -838,12 +839,29 @@ kept out of the request model and queried with the Hono-like `ruvia::getConnInfo
 ```cpp
 const auto info = ruvia::getConnInfo(c);
 const auto peerAddress = info.remote().address();
-const bool tls = info.secure();
-const auto clientSubject = info.clientCertificateSubject();
+if (const auto* tls = info.tls()) {
+    const auto clientSubject = tls->clientCertificateSubject();
+}
 ```
 
-The certificate value is the verified mutual-TLS peer subject DN, or empty when no
-client certificate was presented.
+`ConnInfo` contains exactly one `PlainConnectionTransport` or
+`TlsConnectionTransport`. Only the TLS alternative exposes the verified mutual-TLS
+peer subject DN, which is empty when TLS was used without a client certificate. The
+former independent `secure()` boolean and top-level `clientCertificateSubject()`
+cannot represent that relationship and are removed together with the internal
+`withTransport(..., bool secure)` refinement.
+
+The server creates this typed connection value once: plain TCP is classified at the
+accepted-socket entry, while TLS is classified only after a successful handshake.
+The same borrowed, allocation-free value then flows through HTTP/1 or HTTP/2
+`ContextServices`, into `Context`, and out through `getConnInfo()`. HTTP/2 no longer
+re-derives security from its stream template for every dispatched request, and a
+plain connection cannot carry client-certificate identity. Because both address and
+certificate are borrowed from connection-owned storage, rvalue owning-string
+transport refinements are deleted rather than creating dangling metadata. The
+pointer-returning alternative accessors are lvalue-only, so callers must retain the
+small `ConnInfo` value exactly as shown above instead of taking a pointer from a
+temporary.
 
 ## Core API Shape
 

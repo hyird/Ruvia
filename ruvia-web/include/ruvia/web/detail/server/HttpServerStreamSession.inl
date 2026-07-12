@@ -1,5 +1,8 @@
 template <typename Stream>
-Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, std::string_view clientCertificate) {
+Task<void> HttpServer::handleStreamSession(
+    Stream& stream,
+    TcpSocket& socket,
+    ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
     // entry, keep-alive counters, the remote address, and the count of buffered
     // bytes. The heavy per-request working set (read buffer, request arena,
@@ -9,21 +12,14 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
     ConnectionScanner::Entry scannerEntry;
     ConnectionScanner::Guard scannerGuard(&connectionScanner_, scannerEntry, socket);
     const auto& routes = routes_;
-    std::pmr::string remoteAddress(memory_.allocator<char>());
-    std::error_code remoteEc;
-    const auto remoteEndpoint = socket.remote_endpoint(remoteEc);
-    if (!remoteEc) {
-        assignRemoteAddress(remoteAddress, remoteEndpoint.address());
-    }
+    const auto remoteAddress =
+        baseRouteServices.connInfo().remote().address();
     std::size_t requestCount = 0;
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
     WorkSetReturn workSetReturn(workSetPool_, workSet);
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
-    const auto baseRouteServices = ContextServices(&databases_, &redis_, rateLimiter_)
-        .withTransport(remoteAddress, clientCertificate, !kPlainTcp);
-
     for (;;) {
         scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
 
@@ -77,12 +73,9 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         socket,
                         memory_,
                         routes_,
-                        databases_,
-                        redis_,
                         options_,
                         scannerEntry,
-                        remoteAddress,
-                        rateLimiter_,
+                        baseRouteServices,
                         readBuffer,
                         usedBytes,
                         started_);

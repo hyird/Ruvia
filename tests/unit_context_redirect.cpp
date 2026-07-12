@@ -53,16 +53,18 @@ RUVIA_TEST(context_connection_info_is_adapter_owned) {
         HttpHeaderView{"Host", "example.test"},
         HttpRequestAccess::knownHeaderSlot(ruvia::detail::RequestKnownHeader::kHost)));
 
-    const auto services = ContextServices{}.withTransport(
+    const auto services = ContextServices{}.withTlsTransport(
         "203.0.113.7",
-        "/CN=client",
-        true);
+        "/CN=client");
     auto context = ContextAccess::make(memory, request, services);
     const auto info = ruvia::getConnInfo(context);
 
     RUVIA_CHECK_EQ(info.remote().address(), std::string_view("203.0.113.7"));
-    RUVIA_CHECK_EQ(info.clientCertificateSubject(), std::string_view("/CN=client"));
-    RUVIA_CHECK(info.secure());
+    RUVIA_CHECK(info.plain() == nullptr);
+    RUVIA_CHECK(info.tls() != nullptr);
+    RUVIA_CHECK_EQ(
+        info.tls()->clientCertificateSubject(),
+        std::string_view("/CN=client"));
     RUVIA_CHECK(context.req().url() == std::string_view("https://example.test/secure"));
 }
 

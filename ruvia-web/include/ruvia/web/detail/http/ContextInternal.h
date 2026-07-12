@@ -28,8 +28,7 @@ inline Context::Context(
     std::size_t routeMiddlewareCount) noexcept
     : memory_(memory),
       request_(request),
-      remoteAddress_(services.remoteAddress()),
-      clientCertificateSubject_(services.clientCertificateSubject()),
+      connInfo_(services.connInfo()),
       routePath_(routePath),
       routeMethod_(routeMethod),
       paramNames_(paramNames),
@@ -44,8 +43,7 @@ inline Context::Context(
       routeRateLimitScope_(routeRateLimitScope),
       requestBodySource_(services.requestBodySource()),
       responseOutput_(services.responseOutput()),
-      responseHeaders_(memory.resource()),
-      secure_(services.secure()) {}
+      responseHeaders_(memory.resource()) {}
 
 }  // namespace ruvia
 

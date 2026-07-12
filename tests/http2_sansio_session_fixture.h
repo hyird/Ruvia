@@ -14,16 +14,12 @@ namespace ruvia::test {
 class Http2SansIoSessionFixture final {
 public:
     [[nodiscard]] detail::Http2SansIoSessionContext context(
-        std::string_view remoteAddress,
-        detail::ContextServices services = {},
-        std::string_view clientCertificate = {}) noexcept {
+        detail::ContextServices services = {}) noexcept {
         return detail::Http2SansIoSessionContext(
             services,
             options,
             scannerEntry,
-            serverStarted,
-            remoteAddress,
-            clientCertificate);
+            serverStarted);
     }
 
     HttpServerOptions options;
@@ -36,14 +32,31 @@ Task<void> runBareHttp2SansIoSession(
     Stream& stream,
     const detail::RouteTable& routes,
     WorkerMemory& worker,
-    std::string_view remoteAddress,
+    detail::ContextServices services,
     std::string_view initialBytes = {}) {
     Http2SansIoSessionFixture fixture;
     co_await detail::runHttp2SansIoSession(
         stream,
         routes,
         worker,
-        fixture.context(remoteAddress),
+        fixture.context(services),
+        initialBytes);
+}
+
+// Convenience for the many cleartext socket tests. TLS tests must call the
+// typed helper above so the stream type cannot silently manufacture identity.
+template <typename Stream>
+Task<void> runBarePlainHttp2SansIoSession(
+    Stream& stream,
+    const detail::RouteTable& routes,
+    WorkerMemory& worker,
+    std::string_view remoteAddress,
+    std::string_view initialBytes = {}) {
+    co_await runBareHttp2SansIoSession(
+        stream,
+        routes,
+        worker,
+        detail::ContextServices{}.withPlainTransport(remoteAddress),
         initialBytes);
 }
 

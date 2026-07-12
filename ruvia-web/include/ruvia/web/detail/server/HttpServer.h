@@ -30,6 +30,7 @@
 
 namespace ruvia::detail {
 
+class ContextServices;
 class RouteTable;
 
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
@@ -72,9 +73,16 @@ private:
     Task<void> acceptLoop();
     Task<void> handleSession(asio::ip::tcp::socket socket);
     template <typename Stream>
-    Task<void> handleStreamSession(Stream& stream, asio::ip::tcp::socket& socket, std::string_view clientCertificate = {});
+    Task<void> handleStreamSession(
+        Stream& stream,
+        asio::ip::tcp::socket& socket,
+        ContextServices services);
     template <typename Stream>
-    Task<void> handleHttp2Session(Stream& stream, asio::ip::tcp::socket& socket, std::string_view initialBytes = {}, std::string_view clientCertificate = {});
+    Task<void> handleHttp2Session(
+        Stream& stream,
+        asio::ip::tcp::socket& socket,
+        ContextServices services,
+        std::string_view initialBytes = {});
     [[nodiscard]] std::optional<HttpResponse> tryDocumentRootResponse(
         const HttpRequest& request,
         RequestMemory& memory) const;

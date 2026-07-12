@@ -1,8 +1,10 @@
 #pragma once
 
+#include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/detail/http/ContextCapabilities.h"
 
+#include <string>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -13,7 +15,8 @@ class RateLimiter;
 
 class ContextServices final {
 public:
-    constexpr ContextServices() noexcept = default;
+    constexpr ContextServices() noexcept
+        : connInfo_(ConnInfo::plain({})) {}
 
     constexpr ContextServices(
         DbRegistry* db,
@@ -21,7 +24,8 @@ public:
         RateLimiter* rateLimiter = nullptr) noexcept
         : db_(db),
           redis_(redis),
-          rateLimiter_(rateLimiter) {}
+          rateLimiter_(rateLimiter),
+          connInfo_(ConnInfo::plain({})) {}
 
     [[nodiscard]] DbRegistry* db() const noexcept {
         return db_;
@@ -53,16 +57,8 @@ public:
         return responseOutput_;
     }
 
-    [[nodiscard]] std::string_view remoteAddress() const noexcept {
-        return remoteAddress_;
-    }
-
-    [[nodiscard]] std::string_view clientCertificateSubject() const noexcept {
-        return clientCertificateSubject_;
-    }
-
-    [[nodiscard]] bool secure() const noexcept {
-        return secure_;
+    [[nodiscard]] constexpr const ConnInfo& connInfo() const noexcept {
+        return connInfo_;
     }
 
     [[nodiscard]] ContextServices withStreamingRequestBody(
@@ -105,16 +101,36 @@ public:
 
     // Views borrow connection-owned storage and remain valid for every Context
     // created while that connection is dispatched.
-    [[nodiscard]] ContextServices withTransport(
-        std::string_view remoteAddress,
-        std::string_view clientCertificateSubject,
-        bool secure) const noexcept {
+    [[nodiscard]] ContextServices withPlainTransport(
+        std::string_view remoteAddress) const noexcept {
         auto services = *this;
-        services.remoteAddress_ = remoteAddress;
-        services.clientCertificateSubject_ = clientCertificateSubject;
-        services.secure_ = secure;
+        services.connInfo_ = ConnInfo::plain(remoteAddress);
         return services;
     }
+
+    template <typename Traits, typename Allocator>
+    ContextServices withPlainTransport(
+        std::basic_string<char, Traits, Allocator>&&) const = delete;
+
+    [[nodiscard]] ContextServices withTlsTransport(
+        std::string_view remoteAddress,
+        std::string_view clientCertificateSubject = {}) const noexcept {
+        auto services = *this;
+        services.connInfo_ = ConnInfo::tls(
+            remoteAddress,
+            clientCertificateSubject);
+        return services;
+    }
+
+    template <typename Traits, typename Allocator>
+    ContextServices withTlsTransport(
+        std::basic_string<char, Traits, Allocator>&&,
+        std::string_view = {}) const = delete;
+
+    template <typename Traits, typename Allocator>
+    ContextServices withTlsTransport(
+        std::string_view,
+        std::basic_string<char, Traits, Allocator>&&) const = delete;
 
 private:
     DbRegistry* db_{nullptr};
@@ -125,9 +141,7 @@ private:
 
     ContextRequestBodySource requestBodySource_;
     ContextResponseOutput responseOutput_;
-    std::string_view remoteAddress_;
-    std::string_view clientCertificateSubject_;
-    bool secure_{false};
+    ConnInfo connInfo_;
 };
 
 }  // namespace ruvia::detail

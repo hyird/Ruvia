@@ -1759,8 +1759,7 @@ private:
 
     RequestMemory& memory_;
     const HttpRequest& request_;
-    std::string_view remoteAddress_;
-    std::string_view clientCertificateSubject_;
+    ConnInfo connInfo_;
     std::string_view routePath_;
     HttpKnownMethod routeMethod_{HttpKnownMethod::kUnknown};
     const std::string_view* paramNames_{nullptr};
@@ -1796,7 +1795,6 @@ private:
     detail::ContextValueStore* values_{nullptr};
     HttpResponse* response_{nullptr};
     std::exception_ptr error_;
-    bool secure_ : 1 {false};
     mutable bool bodyDecoded_ : 1 {false};
     bool sessionDirty_ : 1 {false};
     bool sessionRegenerate_ : 1 {false};
@@ -1832,7 +1830,7 @@ inline std::pmr::string ContextRequest::url() const {
         return result;
     }
 
-    result.append(context_->secure_ ? "https://" : "http://");
+    result.append(context_->connInfo_.tls() != nullptr ? "https://" : "http://");
     result.append(host->data(), host->size());
     result.append(requestTarget.data(), requestTarget.size());
     return result;

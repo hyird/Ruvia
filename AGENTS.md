@@ -679,8 +679,9 @@ route selection 必须只走 `Http2SansIoStreamRuntime::selectRoute()`，一次�
 `RouteResolution` 与 optional `RequestBodyMode`；`Http2RequestBodyRuntime` 不得公开独立 mode selector，
 不得恢复默认 buffered mode + `modeSelected` 布尔组合。
 `runHttp2SansIoSession()` 必须按值接收不可默认构造的 `Http2SansIoSessionContext`，在 coroutine 启动前
-一次性绑定 `ContextServices`、`HttpServerOptions`、`ConnectionScanner::Entry`、graceful-shutdown atomic、
-remote address 与 client certificate。禁止恢复全空 `Http2SansIoSessionEnv` 指针包、静态默认 options、
+一次性绑定 `ContextServices`（其中已携带 typed `ConnInfo`）、`HttpServerOptions`、
+`ConnectionScanner::Entry` 与 graceful-shutdown atomic。禁止恢复独立的 remote address、client
+certificate、`secure` 参数，全空 `Http2SansIoSessionEnv` 指针包、静态默认 options、
 未链接的 local scanner 或 nullable shutdown 状态；裸 session 默认值只能存在于 `tests/` fixture，不能让
 测试便利反向弱化安装后的生产调用契约。
 同一个 `Http2SansIoStreamRuntime` 还必须拥有 optional `Http2SansIoStreamSignal` 作为 dispatch lease；
@@ -858,6 +859,16 @@ HEADERS/END_STREAM 状态转换。
 - 读取请求统一走 `c.req()`。
 - socket/TLS 连接元数据统一通过 `getConnInfo(c)` 读取；`HttpRequest`、`ContextRequest` 和
   `RawRequestClone` 不得保存或暴露 remote address、TLS 状态、客户端证书身份。
+- `ConnInfo` 必须只包含 `PlainConnectionTransport` 或 `TlsConnectionTransport` 一个 active
+  alternative；只有 TLS alternative 暴露 `clientCertificateSubject()`，TLS 无客户端证书时该值为空。
+  禁止恢复 top-level `secure()`、top-level `clientCertificateSubject()`、`withTransport(..., bool secure)`，
+  或在 `ContextServices`/`Context` 中并行保存 remote address、certificate 与安全布尔值。server adapter
+  必须在 accepted plain socket 或成功 TLS handshake 处构造一次 typed connection value，HTTP/1、
+  cleartext HTTP/2、ALPN HTTP/2、`ContextServices` 与 `Context` 只能传递该值，不得按 stream/request
+  重新推导安全状态；address/certificate view 必须借用覆盖整个连接的 storage，所有 owning string
+  rvalue refinement 入口必须 deleted；该调用链不得增加分配、虚调用或 type-erasure。
+  `plain()`/`tls()` 返回 active alternative 指针，只允许在 `ConnInfo` lvalue 上调用；rvalue accessor
+  必须 deleted，禁止从临时 `getConnInfo(c)` 保存悬垂 alternative 指针。
 - 设置响应 metadata 走 `c.status(...)`、`c.header(...)`、`c.setCookie(...)` 等。
 - 构造响应走 `c.body(...)`、`c.text(...)`、`c.html(...)`、`c.json(...)`、`c.file(...)`、`c.staticFile(...)`、`c.redirect(...)`、`c.error(...)`。
 - 公开 API 一个操作只保留一个名字，不新增别名。

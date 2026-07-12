@@ -25,10 +25,7 @@
 namespace ruvia {
 
 ConnInfo getConnInfo(const Context& context) noexcept {
-    return ConnInfo(
-        context.remoteAddress_,
-        context.clientCertificateSubject_,
-        context.secure_);
+    return context.connInfo_;
 }
 
 namespace detail {
