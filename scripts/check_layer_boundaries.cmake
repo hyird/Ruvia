@@ -131,6 +131,8 @@ set(RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING
     "requires[ \t]*[{][ \t]*value[.]ruvia|value[.]ruvia(JsonSizeHint|AppendJson)")
 set(RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS
     "RUVIA_MODEL_TYPED_GET_BRANCH|auto[ \t]+get[(][)] const")
+set(RULE_STALE_MODEL_VALIDATION_DIRECT_STATE
+    "body[.]template[ \t]+ruviaFieldState")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -611,6 +613,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("generated model restored compile-time get alias"
         "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}"
         "auto get() const { return field(); }")
+    expect_match("validation restored direct access to model parse state"
+        "${RULE_STALE_MODEL_VALIDATION_DIRECT_STATE}"
+        "body.template ruviaFieldState<\"name\">()")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2594,6 +2599,10 @@ set(WEB_MODEL_INPUT_VISITORS_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/ModelInputVisitors.h")
 set(WEB_MODEL_JSON_WRITER_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/JsonWriter.h")
+set(WEB_MODEL_RULES_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/Rules.h")
+set(WEB_VALIDATION_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Validation.h")
 set(WEB_STALE_REQUEST_OBJECT_VISITORS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestObjectVisitors.h")
 if(EXISTS "${WEB_STALE_REQUEST_OBJECT_VISITORS}")
@@ -2616,6 +2625,9 @@ check_files_no_match("generated model fields must use their declared names"
     "${RULE_STALE_MODEL_COMPILE_TIME_GET_ALIAS}"
     "${WEB_MODEL_MACROS_CONTRACT}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+check_files_no_match("model validation must use its detail state accessor"
+    "${RULE_STALE_MODEL_VALIDATION_DIRECT_STATE}"
+    "${WEB_VALIDATION_CONTRACT}")
 check_files_no_match("generated models must not rescan raw bodies through dynamic get"
     "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
     "${WEB_MODEL_MACROS_CONTRACT}"
@@ -2643,6 +2655,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
    EXISTS "${WEB_MODEL_INPUT_VISITORS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_JSON_WRITER_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_RULES_CONTRACT}" AND
+   EXISTS "${WEB_VALIDATION_CONTRACT}" AND
    EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
     file(READ "${WEB_MODEL_MACROS_CONTRACT}"
         web_model_macros_contract)
@@ -2658,6 +2672,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
         web_model_input_visitors_contract)
     file(READ "${WEB_MODEL_JSON_WRITER_CONTRACT}"
         web_model_json_writer_contract)
+    file(READ "${WEB_MODEL_RULES_CONTRACT}"
+        web_model_rules_contract)
+    file(READ "${WEB_VALIDATION_CONTRACT}"
+        web_validation_contract)
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT web_model_macros_contract MATCHES
@@ -2688,6 +2706,16 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
        NOT web_model_macros_contract MATCHES
            "friend[ \t]+struct[ \t]+::ruvia::detail::ModelJsonAccess" OR
+       NOT web_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::detail::ModelValidationAccess" OR
+       NOT web_model_rules_contract MATCHES
+           "struct[ \t]+ModelValidationAccess[ \t]+final" OR
+       NOT web_model_rules_contract MATCHES
+           "model[.]template[ \t]+ruviaFieldState<Field>[(][)]" OR
+       NOT web_validation_contract MATCHES
+           "ModelValidationAccess::fieldState<#field>[(]body[)]" OR
+       web_validation_contract MATCHES
+           "${RULE_STALE_MODEL_VALIDATION_DIRECT_STATE}" OR
        NOT web_model_json_writer_contract MATCHES
            "struct[ \t]+ModelJsonAccess[ \t]+final" OR
        NOT web_model_json_writer_contract MATCHES
@@ -2711,6 +2739,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_materialization_test MATCHES
            "JsonBody<AccessorSurfaceModel>::parse" OR
        NOT web_model_materialization_test MATCHES
+           "ModelValidationAccess::fieldState<\"message\">" OR
+       NOT web_model_materialization_test MATCHES
            "messageEnsure[(][)][.]resource[(][)][ \t]*==[ \t]*&modelResource" OR
        NOT web_model_api_surface MATCHES
            "!HasModelDynamicGet<ClonePayload>" OR
@@ -2730,6 +2760,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "!HasModelNonConstMessageGetter<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
            "!HasModelPublicJsonWriterHooks<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelPublicFieldStateHook<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
            "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
@@ -2753,6 +2785,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "ModelValidationAccess::fieldState<\"name\">" OR
+       NOT web_json_package_consumer MATCHES
            "ruvia::toJson" OR
        NOT web_json_package_consumer MATCHES
            "JsonBody<InstalledPackageModel>::parse" OR
@@ -2763,7 +2799,7 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
         boundary_error("generated model schema boundary regressed"
-            "detail::ModelInput must remain transient and ModelJsonAccess must serialize only typed JsonBody models")
+            "detail accessors must exclusively mediate model input, JSON writing, and validation state")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

@@ -118,7 +118,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             RUVIA_CHECK(model.message()->resource() == &modelResource);
         }
         RUVIA_CHECK(
-            model.ruviaFieldState<"message">() ==
+            ruvia::detail::ModelValidationAccess::fieldState<"message">(model) ==
             ruvia::detail::ModelFieldState::kParsed);
     }
 
@@ -129,7 +129,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
     if (invalidField.has_value()) {
         RUVIA_CHECK(!invalidField->message().has_value());
         RUVIA_CHECK(
-            invalidField->ruviaFieldState<"message">() ==
+            ruvia::detail::ModelValidationAccess::fieldState<"message">(*invalidField) ==
             ruvia::detail::ModelFieldState::kInvalidType);
     }
 

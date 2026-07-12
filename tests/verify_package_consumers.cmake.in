@@ -939,6 +939,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/model/ModelInputVisitors.h")
     set(_installed_model_json_writer_path
         "${_install_prefix}/include/ruvia/web/detail/model/JsonWriter.h")
+    set(_installed_model_rules_path
+        "${_install_prefix}/include/ruvia/web/detail/model/Rules.h")
+    set(_installed_validation_path
+        "${_install_prefix}/include/ruvia/web/Validation.h")
     set(_installed_stale_request_object_visitors_path
         "${_install_prefix}/include/ruvia/web/detail/model/RequestObjectVisitors.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
@@ -950,6 +954,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT EXISTS "${_installed_model_object_path}" OR
        NOT EXISTS "${_installed_model_input_visitors_path}" OR
        NOT EXISTS "${_installed_model_json_writer_path}" OR
+       NOT EXISTS "${_installed_model_rules_path}" OR
+       NOT EXISTS "${_installed_validation_path}" OR
        EXISTS "${_installed_stale_request_object_visitors_path}")
         message(FATAL_ERROR
             "installed Web model parsing headers are incomplete or stale")
@@ -972,6 +978,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_model_input_visitors_contract)
     file(READ "${_installed_model_json_writer_path}"
         _installed_model_json_writer_contract)
+    file(READ "${_installed_model_rules_path}"
+        _installed_model_rules_contract)
+    file(READ "${_installed_validation_path}"
+        _installed_validation_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -1055,6 +1065,14 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "friend[ \t]+struct[ \t]+::ruvia::FormBody" OR
        NOT _installed_model_macros_contract MATCHES
            "friend[ \t]+struct[ \t]+::ruvia::detail::ModelJsonAccess" OR
+       NOT _installed_model_macros_contract MATCHES
+           "friend[ \t]+struct[ \t]+::ruvia::detail::ModelValidationAccess" OR
+       NOT _installed_model_rules_contract MATCHES
+           "struct[ \t]+ModelValidationAccess[ \t]+final" OR
+       NOT _installed_validation_contract MATCHES
+           "ModelValidationAccess::fieldState<#field>[(]body[)]" OR
+       _installed_validation_contract MATCHES
+           "body[.]template[ \t]+ruviaFieldState" OR
        NOT _installed_model_json_writer_contract MATCHES
            "struct[ \t]+ModelJsonAccess[ \t]+final" OR
        NOT _installed_model_json_writer_contract MATCHES

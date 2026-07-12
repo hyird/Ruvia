@@ -7,6 +7,17 @@
 
 #include "ruvia/web/detail/model/RuleValidation.h"
 
+namespace ruvia::detail {
+
+struct ModelValidationAccess final {
+    template <FixedString Field, typename ModelT>
+    [[nodiscard]] static ModelFieldState fieldState(const ModelT& model) {
+        return model.template ruviaFieldState<Field>();
+    }
+};
+
+}  // namespace ruvia::detail
+
 namespace ruvia::detail::model {
 
 template <typename... RuleTs>

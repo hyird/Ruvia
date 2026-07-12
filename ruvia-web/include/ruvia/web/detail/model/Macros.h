@@ -20,6 +20,13 @@
         explicit T(RuviaResourceOwnerT& owner) noexcept                       \
             : T(owner.resource()) {}                                         \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
+    private:                                                                \
+        template <typename, typename>                                        \
+        friend struct ::ruvia::JsonBody;                                    \
+        template <typename, typename>                                        \
+        friend struct ::ruvia::FormBody;                                    \
+        friend struct ::ruvia::detail::ModelJsonAccess;                     \
+        friend struct ::ruvia::detail::ModelValidationAccess;               \
         template <::ruvia::FixedString Field>                                \
         [[nodiscard]] ::ruvia::detail::ModelFieldState ruviaFieldState() const { \
             RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_STATE_BRANCH, T, __VA_ARGS__)    \
@@ -29,12 +36,6 @@
                     "unknown RUVIA_MODEL field");                           \
             }                                                               \
         }                                                                   \
-    private:                                                                \
-        template <typename, typename>                                        \
-        friend struct ::ruvia::JsonBody;                                    \
-        template <typename, typename>                                        \
-        friend struct ::ruvia::FormBody;                                    \
-        friend struct ::ruvia::detail::ModelJsonAccess;                     \
         static ::std::optional<T> ruviaParseJsonBody(                        \
             ::std::string_view body,                                        \
             ::std::pmr::memory_resource* resource) {                        \
