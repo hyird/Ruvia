@@ -20,6 +20,7 @@
 #include <ruvia/http/HttpProtocolVersion.h>
 #include <ruvia/http/HttpResponse.h>
 #include <ruvia/http/MultipartParser.h>
+#include <ruvia/http/UrlEncoding.h>
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
@@ -86,6 +87,14 @@ concept ExposesRvalueEncodedContent = requires(T&& result) {
 template <typename T>
 concept ExposesRvalueEncodeFailure = requires(const T&& result) {
     std::move(result).failure();
+};
+
+template <typename Output>
+concept AcceptsUrlDecodeOutputParameter = requires(Output& output) {
+    ruvia::detail::decodeUrlComponent(
+        std::string_view{},
+        output,
+        ruvia::detail::UrlDecodeMode::kPercent);
 };
 
 template <typename T>
@@ -1809,8 +1818,28 @@ static_assert(std::same_as<
         std::size_t{},
         std::declval<std::pmr::memory_resource*>())),
     ruvia::detail::HttpContentEncodeResult>);
+static_assert(!AcceptsUrlDecodeOutputParameter<std::pmr::string>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeUrlComponent(
+        std::string_view{},
+        ruvia::detail::UrlDecodeMode::kPercent,
+        std::declval<std::pmr::memory_resource*>())),
+    std::optional<std::pmr::string>>);
 
 int main() {
+    const auto decodedUrl = ruvia::detail::decodeUrlComponent(
+        "installed%20decoder",
+        ruvia::detail::UrlDecodeMode::kPercent,
+        std::pmr::get_default_resource());
+    const auto malformedUrl = ruvia::detail::decodeUrlComponent(
+        "prefix%2",
+        ruvia::detail::UrlDecodeMode::kPercent,
+        std::pmr::get_default_resource());
+    if (!decodedUrl.has_value() ||
+        std::string_view(*decodedUrl) != "installed decoder" ||
+        malformedUrl.has_value()) {
+        return 51;
+    }
     auto encodedContent = ruvia::detail::encodeHttpContent(
         ruvia::detail::HttpContentCoding::kGzip,
         "installed content encoder",

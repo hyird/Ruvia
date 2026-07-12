@@ -58,9 +58,14 @@ enum class UrlDecodeMode : std::uint8_t {
     return true;
 }
 
-template <typename StringT>
-[[nodiscard]] bool decodeUrlComponent(std::string_view input, StringT& output, UrlDecodeMode mode) {
-    output.clear();
+// Returns the complete decoded component or no value for malformed percent
+// encoding. The caller never supplies mutable storage, so a failure cannot
+// expose the prefix decoded before the bad escape.
+[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponent(
+    std::string_view input,
+    UrlDecodeMode mode,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(httpPmrResourceOrDefault(resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
         const char c = input[i];
@@ -71,14 +76,14 @@ template <typename StringT>
         if (c == '%') {
             const int byte = decodePercentByte(input, i);
             if (byte < 0) {
-                return false;
+                return std::nullopt;
             }
             output.push_back(static_cast<char>(byte));
             continue;
         }
         output.push_back(c);
     }
-    return true;
+    return output;
 }
 
 [[nodiscard]] inline bool urlComponentEquals(
@@ -160,17 +165,6 @@ template <typename Visitor>
         return true;
     });
     return result;
-}
-
-[[nodiscard]] inline std::optional<std::pmr::string> decodeUrlComponentToString(
-    std::string_view input,
-    std::pmr::memory_resource* resource,
-    UrlDecodeMode mode) {
-    std::pmr::string output(httpPmrResourceOrDefault(resource));
-    if (!decodeUrlComponent(input, output, mode)) {
-        return std::nullopt;
-    }
-    return output;
 }
 
 }  // namespace ruvia::detail

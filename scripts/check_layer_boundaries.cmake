@@ -101,6 +101,8 @@ set(RULE_STALE_HTTP_CONTENT_ENCODE_CHAIN
     "bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&|compressResponseBodyIfAccepted|bodyBorrowsCompressionScratch|compressionScratch|response[.]setBodyView[ \t]*[(]")
 set(RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT
     "borrowNativePath|selectStaticEncodingVariant|std::string_view[ \t]*&[ \t]*contentEncoding|struct[ \t]+StaticRootEntryView|[.]found[(][)]")
+set(RULE_STALE_URL_DECODE_CHAIN
+    "decodeUrlComponentToString|decodeFormComponent|StringT[ \t]*&[ \t]*output")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -488,6 +490,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("static index encoded absence inside a default view"
         "${RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT}"
         "struct StaticRootEntryView { bool found() const; };")
+    expect_match("URL decoding returned bool plus partial output"
+        "${RULE_STALE_URL_DECODE_CHAIN}"
+        "bool decodeUrlComponent(View input, StringT& output, Mode mode);")
+    expect_match("form decoding duplicated the URL decoder"
+        "${RULE_STALE_URL_DECODE_CHAIN}"
+        "bool decodeFormComponent(View input, StringT& output);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2306,6 +2314,49 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "std::optional<ruvia::detail::StaticRootEntryView>")
         boundary_error("static file representation ownership was split"
             "path lifetime, selected entry, and HTTP content coding must remain typed and atomically tested")
+    endif()
+endif()
+set(HTTP_URL_ENCODING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/UrlEncoding.h")
+set(WEB_FORM_DECODING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/FormParser.h")
+set(WEB_FORM_DECODING_VISITOR
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestFieldVisitors.h")
+set(WEB_FORM_DECODING_TEST
+    "${RUVIA_ROOT}/tests/unit_form_parser.cpp")
+set(HTTP_URL_ENCODING_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+check_files_no_match("URL decoding must return one owning transactional result"
+    "${RULE_STALE_URL_DECODE_CHAIN}"
+    "${HTTP_URL_ENCODING_CONTRACT}"
+    "${WEB_FORM_DECODING_CONTRACT}"
+    "${WEB_FORM_DECODING_VISITOR}"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp")
+if(EXISTS "${HTTP_URL_ENCODING_CONTRACT}" AND
+   EXISTS "${WEB_FORM_DECODING_CONTRACT}" AND
+   EXISTS "${WEB_FORM_DECODING_TEST}" AND
+   EXISTS "${HTTP_URL_ENCODING_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_URL_ENCODING_CONTRACT}"
+        http_url_encoding_contract)
+    file(READ "${WEB_FORM_DECODING_CONTRACT}"
+        web_form_decoding_contract)
+    file(READ "${WEB_FORM_DECODING_TEST}"
+        web_form_decoding_test)
+    file(READ "${HTTP_URL_ENCODING_PACKAGE_CONSUMER}"
+        http_url_encoding_package_consumer)
+    if(NOT http_url_encoding_contract MATCHES
+           "std::optional<std::pmr::string>[ \t\r\n]+decodeUrlComponent" OR
+       NOT web_form_decoding_contract MATCHES
+           "value[.]assignOwned[(]std::move[(][*]decoded[)][)]" OR
+       NOT web_form_decoding_test MATCHES
+           "form_string_decode_failure_preserves_existing_value" OR
+       NOT http_url_encoding_package_consumer MATCHES
+           "AcceptsUrlDecodeOutputParameter" OR
+       NOT http_url_encoding_package_consumer MATCHES
+           "std::optional<std::pmr::string>")
+        boundary_error("URL decoding lost transactional ownership"
+            "HTTP must own the decoded optional and Web model fields must commit only after success")
     endif()
 endif()
 check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"

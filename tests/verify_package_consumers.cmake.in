@@ -161,6 +161,21 @@ if(NOT _installed_http_content_coding_contract MATCHES
     message(FATAL_ERROR
         "installed HTTP content coding lost its owning discriminated contract")
 endif()
+set(_installed_url_encoding
+    "${_install_prefix}/include/ruvia/http/UrlEncoding.h")
+if(NOT EXISTS "${_installed_url_encoding}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing URL decoding")
+endif()
+file(READ "${_installed_url_encoding}"
+    _installed_url_encoding_contract)
+if(NOT _installed_url_encoding_contract MATCHES
+       "std::optional<std::pmr::string>[ \t\r\n]+decodeUrlComponent" OR
+   _installed_url_encoding_contract MATCHES
+       "decodeUrlComponentToString|decodeFormComponent|StringT[ \t]*&[ \t]*output")
+    message(FATAL_ERROR
+        "installed URL decoder lost its owning transactional contract")
+endif()
 set(_removed_loose_http_parser_header
     "${_install_prefix}/include/ruvia/http/HttpParser.h")
 if(EXISTS "${_removed_loose_http_parser_header}")

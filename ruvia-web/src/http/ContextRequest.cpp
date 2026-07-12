@@ -105,7 +105,12 @@ void assignUrlDecodedOrCopy(
     std::string_view input,
     detail::UrlDecodeMode mode) {
     if (detail::hasUrlEncoding(input, mode)) {
-        if (detail::decodeUrlComponent(input, output, mode)) {
+        auto decoded = detail::decodeUrlComponent(
+            input,
+            mode,
+            output.get_allocator().resource());
+        if (decoded.has_value()) {
+            output = std::move(*decoded);
             return;
         }
     }
@@ -265,8 +270,14 @@ void compactParsedBodyFields(
     const bool ok = detail::visitUrlEncodedPairs(
         requestBody,
         [resource, &fields, &valid, options](std::string_view key, std::string_view value) {
-            auto decodedName = detail::decodeUrlComponentToString(key, resource, detail::UrlDecodeMode::kForm);
-            auto decodedValue = detail::decodeUrlComponentToString(value, resource, detail::UrlDecodeMode::kForm);
+            auto decodedName = detail::decodeUrlComponent(
+                key,
+                detail::UrlDecodeMode::kForm,
+                resource);
+            auto decodedValue = detail::decodeUrlComponent(
+                value,
+                detail::UrlDecodeMode::kForm,
+                resource);
             if (!decodedName || !decodedValue) {
                 valid = false;
                 return false;
