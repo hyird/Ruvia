@@ -41,8 +41,10 @@
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
 #include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
 #include <ruvia/web/detail/server/HttpResponseStreamState.h>
+#include <ruvia/web/detail/server/HttpResponseCompression.h>
 #include <ruvia/web/detail/server/HttpServerResponseStreamRoute.h>
 #include <ruvia/web/detail/server/HttpServerWebSocketRoute.h>
+#include <ruvia/http/detail/HttpResponseBodyAccess.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -578,6 +580,18 @@ int main() {
         tlsServices.connInfo().remote().address() != "198.51.100.9" ||
         tls->clientCertificateSubject() != "CN=package-client") {
         return 9;
+    }
+    ruvia::HttpResponse compressed;
+    compressed.setBodyCopy(std::string(2048, 'a'));
+    ruvia::detail::applyResponseCompression(
+        ruvia::detail::HttpContentCoding::kGzip,
+        ruvia::HttpKnownMethod::kGet,
+        compressed,
+        ruvia::HttpServerOptions::Compression{true, 16});
+    if (compressed.header("Content-Encoding") != "gzip" ||
+        ruvia::detail::responseBody(compressed).ownedBytes() == nullptr ||
+        ruvia::detail::responseBody(compressed).bytes().empty()) {
+        return 10;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

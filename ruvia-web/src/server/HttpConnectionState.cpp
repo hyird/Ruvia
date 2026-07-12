@@ -6,7 +6,6 @@
 #include <memory>
 
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
-#include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/memory/PmrObject.h"
@@ -32,8 +31,7 @@ constexpr std::size_t kMaxPooledWorkSets = 64;
 ConnectionWorkSet::ConnectionWorkSet(WorkerMemory& memory)
     : readBuffer(memory.allocator<char>()),
       responseHead(memory.allocator<char>()),
-      fileChunk(memory.allocator<char>()),
-      compressionScratch(memory.allocator<char>()) {
+      fileChunk(memory.allocator<char>()) {
     resizePmrStringForOverwrite(readBuffer, kInitialReadBufferBytes);
 }
 
@@ -43,7 +41,6 @@ void ConnectionWorkSet::resetForReuse() {
     // still guards against it.
     trimReadBufferStorage(readBuffer, 0);
     responseHead.reset();
-    clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
     // parsed is fully overwritten by the next parseHead(); fileChunk/parser
     // carry no cross-request state worth clearing.
 }

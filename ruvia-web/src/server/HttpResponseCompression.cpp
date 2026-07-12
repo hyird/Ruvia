@@ -5,12 +5,11 @@
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/ResponseHeaderUtils.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/PmrString.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <string_view>
+#include <utility>
 
 namespace ruvia::detail {
 namespace {
@@ -81,22 +80,21 @@ void weakenStrongResponseEtag(HttpResponse& response) {
 
 }  // namespace
 
-bool compressResponseBodyIfAccepted(
+void applyResponseCompression(
     HttpContentCoding coding,
     HttpKnownMethod requestMethod,
     HttpResponse& response,
-    const HttpServerOptions::Compression& options,
-    std::pmr::string& compressionScratch) {
+    const HttpServerOptions::Compression& options) {
     const auto bodyPlan = httpResponseBodyPlan(
         requestMethod,
         response.status());
     if (!bodyPlan.statusAllowsBody() || !options.enabled) {
-        return false;
+        return;
     }
 
     const auto statusCode = response.status();
     if (statusCode == 206 || statusCode == 205) {
-        return false;
+        return;
     }
 
     const auto& responseContent = responseBody(response);
@@ -111,7 +109,7 @@ bool compressResponseBodyIfAccepted(
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
         httpHasToken(responseKnownHeader(response, kResponseHeaderCacheControl), "no-transform")) {
-        return false;
+        return;
     }
 
     // A compressible representation IS selected by Accept-Encoding, so it varies by
@@ -124,22 +122,24 @@ bool compressResponseBodyIfAccepted(
 
     if (coding == HttpContentCoding::kNone ||
         responseContent.size() < options.minBytes) {
-        return false;
+        return;
     }
     const auto body = responseContent.bytes();
-    compressionScratch.clear();
-    compressionScratch.reserve(body.size());
-    if (!encodeHttpContent(coding, body, compressionScratch, body.size()) ||
-        compressionScratch.size() >= body.size()) {
-        clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
-        return false;
+    const auto maxEncodedBytes = body.empty() ? 0 : body.size() - 1;
+    auto encoding = encodeHttpContent(
+        coding,
+        body,
+        maxEncodedBytes,
+        responseResource(response));
+    auto* encoded = encoding.encoded();
+    if (encoded == nullptr) {
+        return;
     }
 
     setResponseHeaderStableView(response, "Content-Encoding", httpContentCodingToken(coding));
     weakenStrongResponseEtag(response);
-    setCompressedContentLength(response, compressionScratch.size());
-    response.setBodyView(compressionScratch);
-    return true;
+    setCompressedContentLength(response, encoded->bytes().size());
+    setResponseBodyOwned(response, std::move(*encoded).takeBytes());
 }
 
 }  // namespace ruvia::detail

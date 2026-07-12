@@ -1,8 +1,5 @@
 #pragma once
 
-#include <memory_resource>
-#include <string_view>
-
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
@@ -22,26 +19,18 @@ public:
         return writePlan_;
     }
 
-    [[nodiscard]] bool bodyBorrowsCompressionScratch() const noexcept {
-        return bodyBorrowsCompressionScratch_;
-    }
-
 private:
     friend HttpBufferedResponsePreparation prepareBufferedHttpResponse(
         const HttpRequest&,
         HttpContentCoding,
         HttpResponse&,
-        const HttpServerOptions&,
-        std::pmr::string&);
+        const HttpServerOptions&);
 
-    HttpBufferedResponsePreparation(
-        HttpBufferedResponseWritePlan writePlan,
-        bool bodyBorrowsCompressionScratch) noexcept
-        : writePlan_(writePlan),
-          bodyBorrowsCompressionScratch_(bodyBorrowsCompressionScratch) {}
+    explicit HttpBufferedResponsePreparation(
+        HttpBufferedResponseWritePlan writePlan) noexcept
+        : writePlan_(writePlan) {}
 
     HttpBufferedResponseWritePlan writePlan_;
-    bool bodyBorrowsCompressionScratch_{false};
 };
 
 [[nodiscard]] inline HttpContentCoding httpResponseCodingFor(const HttpRequest& request) noexcept {
@@ -52,32 +41,27 @@ private:
     const HttpRequest& request,
     HttpContentCoding coding,
     HttpResponse& response,
-    const HttpServerOptions& options,
-    std::pmr::string& compressionScratch) {
+    const HttpServerOptions& options) {
     materializeResponseBody(response);
     applyCorsHeaders(request, response, options.cors);
-    const bool bodyBorrowsCompressionScratch = compressResponseBodyIfAccepted(
+    applyResponseCompression(
         coding,
         request.knownMethod(),
         response,
-        options.compression,
-        compressionScratch);
+        options.compression);
     return HttpBufferedResponsePreparation(
-        httpBufferedResponseWritePlan(request.knownMethod(), response),
-        bodyBorrowsCompressionScratch);
+        httpBufferedResponseWritePlan(request.knownMethod(), response));
 }
 
 [[nodiscard]] inline HttpBufferedResponsePreparation prepareBufferedHttpResponse(
     const HttpRequest& request,
     HttpResponse& response,
-    const HttpServerOptions& options,
-    std::pmr::string& compressionScratch) {
+    const HttpServerOptions& options) {
     return prepareBufferedHttpResponse(
         request,
         httpResponseCodingFor(request),
         response,
-        options,
-        compressionScratch);
+        options);
 }
 
 }  // namespace ruvia::detail

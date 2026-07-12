@@ -50,7 +50,6 @@ Task<void> HttpServer::handleStreamSession(
         auto& parsed = workSet->parsed;
         auto& responseHead = workSet->responseHead;
         auto& fileChunk = workSet->fileChunk;
-        auto& compressionScratch = workSet->compressionScratch;
         auto& routeResolution = workSet->routeResolution;
 
         std::optional<RequestMemory> requestMemoryStorage;
@@ -367,8 +366,7 @@ Task<void> HttpServer::handleStreamSession(
                 parsed.request,
                 parsed.responseCoding,
                 response,
-                options_,
-                compressionScratch);
+                options_);
             const auto responsePlan = http1BufferedResponsePlan(
                 responsePreparation.writePlan(),
                 connectionPlan);
@@ -379,9 +377,6 @@ Task<void> HttpServer::handleStreamSession(
                 &fileChunk,
                 response,
                 responsePlan);
-            if (responsePreparation.bodyBorrowsCompressionScratch()) {
-                clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
-            }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
             if (const auto* completed = writeResult.completed()) {
                 recordHttpAccess(
