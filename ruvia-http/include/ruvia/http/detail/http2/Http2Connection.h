@@ -214,21 +214,9 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
     // The stream is not in an open response body/trailers phase, or a
     // trailers-only response has no submitted terminal section.
     kInvalidState,
+    // The complete trailer section is rejected before HPACK/output/state mutation.
+    kInvalidTrailerSection,
     // The response remains body-open so the caller can submit the missing bytes.
-    kContentLengthIncomplete
-};
-
-// One trailer section is submitted atomically after the final response head.
-// Unlike the former per-field void API, every refusal is observable and invalid
-// input cannot leave a partially encoded field block attached to the stream.
-enum class Http2ResponseTrailerSubmitStatus : std::uint8_t {
-    kAccepted,
-    kClosed,
-    kInvalidState,
-    kEmpty,
-    kInvalidField,
-    // No trailer bytes are retained; the owner may submit the missing DATA and
-    // retry the same section.
     kContentLengthIncomplete
 };
 
@@ -336,10 +324,9 @@ struct Http2PendingSend final {
     std::pmr::string bytes;
     std::size_t offset{0};
     Http2EndStream endStream{Http2EndStream::kKeepOpen};
-    // A trailer HEADERS block queued behind flow-control-deferred DATA: it must go out AFTER
-    // the deferred DATA drains (RFC 9113 §8.1), carrying END_STREAM in place of it. Set
-    // by finishResponse while a remainder is queued; emitted by markSendWindowOpened
-    // once the body fully drains.
+    // A terminal trailer HEADERS block queued atomically by finishResponse behind
+    // flow-control-deferred DATA. It goes out AFTER that DATA drains (RFC 9113
+    // §8.1), carrying END_STREAM in place of the body.
     std::pmr::string trailerBlock;
 };
 
@@ -407,7 +394,7 @@ public:
     // chunks unless the method/status suppresses a body. A declared trailer section
     // keeps an HTTP/2 content-forbidden response open in a trailers-only phase; without
     // one, END_STREAM is carried by the initial HEADERS. The owner then streams DATA
-    // (when allowed) and terminates through finishResponse().
+    // (when allowed) and terminates through finishResponse(streamId, trailers).
     [[nodiscard]] Http2StreamingResponseHeadSubmitResult submitStreamingResponseHead(
         std::uint32_t streamId,
         HttpResponse head,
@@ -433,17 +420,15 @@ public:
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
     [[nodiscard]] Http2SubmitStatus submitConnectResponseHead(
         std::uint32_t streamId, const HttpResponse& response);
-    // Submit the complete terminal response trailer section. The final response head
-    // must already be open, the span must be non-empty, and no prior trailer section
-    // may exist. The core validates every field before HPACK encoding any of them.
-    [[nodiscard]] Http2ResponseTrailerSubmitStatus submitResponseTrailerSection(
+    // Finish a response exactly once with its complete terminal trailer section
+    // (possibly empty). Validation, HPACK encoding, DATA/trailer ordering, and
+    // END_STREAM are one transaction: no independently staged trailer state exists.
+    // An incomplete declared Content-Length or invalid trailer section is rejected
+    // without changing the body-open phase. A flow-control-blocked body keeps the
+    // terminal marker queued behind it once the full length is core-owned.
+    [[nodiscard]] Http2FinishSubmitStatus finishResponse(
         std::uint32_t streamId,
         std::span<const HttpHeaderView> trailers);
-    // Finish a response exactly once. An incomplete declared Content-Length is rejected
-    // without changing the body-open phase. Queued trailers become terminal HEADERS;
-    // otherwise an empty DATA(END_STREAM) is emitted. A flow-control-blocked body keeps
-    // this terminal marker queued behind it once the full length is core-owned.
-    [[nodiscard]] Http2FinishSubmitStatus finishResponse(std::uint32_t streamId);
     [[nodiscard]] Http2SubmitStatus submitReset(
         std::uint32_t streamId, Http2ErrorCode error);
 

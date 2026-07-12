@@ -181,6 +181,10 @@ set(RULE_STALE_H2_SEND_API
     "Http2SubmitResult|kBlocked|hasBlockedSend|takeUnblockedStreams|submitResponseTrailers|pumpWritable")
 set(RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL
     "[.]addTrailer[ 	]*\\(|addResponseTrailer[ 	]*\\(|ensureTrailerOpen")
+set(RULE_STALE_H2_RESPONSE_TRAILER_STAGING
+    "submitResponseTrailerSection|Http2ResponseTrailerSubmitStatus|responseTrailerBlock|responseTrailers[ 	]*[(]")
+set(RULE_IMPLICIT_H2_RESPONSE_FINISH
+    "finishResponse[ 	\r\n]*[(][ 	\r\n]*[A-Za-z0-9_]+[ 	\r\n]*[)]")
 set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
     "markCommitted[ 	]*\\([ 	]*(true|false)|bodySuppressed_")
 set(RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT
@@ -599,6 +603,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
+    expect_match("staged HTTP/2 response trailer section"
+        "${RULE_STALE_H2_RESPONSE_TRAILER_STAGING}"
+        "connection.submitResponseTrailerSection(streamId, trailers);")
+    expect_match("implicit HTTP/2 response finish without terminal section"
+        "${RULE_IMPLICIT_H2_RESPONSE_FINISH}"
+        "connection.finishResponse(streamId);")
     expect_match("stale response-stream commit boolean"
         "${RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL}"
         "state.markCommitted(true);")
@@ -2416,6 +2426,20 @@ check_files_no_match("response trailers must remain one terminal section"
     "${RUVIA_ROOT}/tests/unit_streaming.cpp"
     "${RUVIA_ROOT}/tests/unit_http2_connection.cpp"
     "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
+check_files_no_match("HTTP/2 response trailers must not have staged per-stream ownership"
+    "${RULE_STALE_H2_RESPONSE_TRAILER_STAGING}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+check_files_no_match("HTTP/2 response finish must receive the complete terminal section explicitly"
+    "${RULE_IMPLICIT_H2_RESPONSE_FINISH}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 check_files_no_match("response-stream runtime must consume the typed commit plan"
     "${RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h"
@@ -5868,17 +5892,80 @@ endif()
 
 set(RESPONSE_TRAILER_H2_TEST "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
 set(RESPONSE_TRAILER_H1_TEST "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp")
-if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND EXISTS "${RESPONSE_TRAILER_H1_TEST}")
+set(RESPONSE_TRAILER_H2_CONNECTION
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(RESPONSE_TRAILER_H2_CONNECTION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(RESPONSE_TRAILER_H2_STREAM_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(RESPONSE_TRAILER_H2_HEADER_BLOCKS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
+set(RESPONSE_TRAILER_H2_SINK
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+set(RESPONSE_TRAILER_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+set(RESPONSE_TRAILER_PACKAGE_VERIFY
+    "${RUVIA_ROOT}/tests/verify_package_consumers.cmake.in")
+if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
+   EXISTS "${RESPONSE_TRAILER_H1_TEST}" AND
+   EXISTS "${RESPONSE_TRAILER_H2_CONNECTION}" AND
+   EXISTS "${RESPONSE_TRAILER_H2_CONNECTION_SOURCE}" AND
+   EXISTS "${RESPONSE_TRAILER_H2_STREAM_STATE}" AND
+   EXISTS "${RESPONSE_TRAILER_H2_HEADER_BLOCKS}" AND
+   EXISTS "${RESPONSE_TRAILER_H2_SINK}" AND
+   EXISTS "${RESPONSE_TRAILER_PACKAGE_CONSUMER}" AND
+   EXISTS "${RESPONSE_TRAILER_PACKAGE_VERIFY}")
     file(READ "${RESPONSE_TRAILER_H2_TEST}" response_trailer_h2_test)
     file(READ "${RESPONSE_TRAILER_H1_TEST}" response_trailer_h1_test)
+    file(READ "${RESPONSE_TRAILER_H2_CONNECTION}"
+        response_trailer_h2_connection)
+    file(READ "${RESPONSE_TRAILER_H2_CONNECTION_SOURCE}"
+        response_trailer_h2_connection_source)
+    file(READ "${RESPONSE_TRAILER_H2_STREAM_STATE}"
+        response_trailer_h2_stream_state)
+    file(READ "${RESPONSE_TRAILER_H2_HEADER_BLOCKS}"
+        response_trailer_h2_header_blocks)
+    file(READ "${RESPONSE_TRAILER_H2_SINK}"
+        response_trailer_h2_sink)
+    file(READ "${RESPONSE_TRAILER_PACKAGE_CONSUMER}"
+        response_trailer_package_consumer)
+    file(READ "${RESPONSE_TRAILER_PACKAGE_VERIFY}"
+        response_trailer_package_verify)
+    if(NOT response_trailer_h2_connection MATCHES
+           "kInvalidTrailerSection" OR
+       NOT response_trailer_h2_connection MATCHES
+           "std::span<const HttpHeaderView> trailers" OR
+       NOT response_trailer_h2_connection_source MATCHES
+           "std::pmr::string trailerBlock[(]resource_[)]" OR
+       NOT response_trailer_h2_connection_source MATCHES
+           "pending[.]trailerBlock[.]swap[(]trailerBlock[)]" OR
+       response_trailer_h2_stream_state MATCHES "responseTrailerBlock" OR
+       response_trailer_h2_header_blocks MATCHES "responseTrailers" OR
+       NOT response_trailer_h2_sink MATCHES
+           "finishResponse[(]streamId_, trailers[)]" OR
+       NOT response_trailer_h2_sink MATCHES
+           "responseTrailerSectionValid[(]trailers[)]" OR
+       NOT response_trailer_package_consumer MATCHES
+           "AcceptsStagedResponseTrailerSection" OR
+       NOT response_trailer_package_consumer MATCHES
+           "HasStagedResponseTrailerBlock" OR
+       NOT response_trailer_package_verify MATCHES
+           "installed HTTP/2 response finish restored staged trailer ownership" OR
+       NOT response_trailer_package_verify MATCHES
+           "installed Web HTTP/2 sink restored staged trailer submission")
+        boundary_error("HTTP/2 response finish lost atomic trailer ownership"
+            "the HTTP preflight must preserve pre-commit failure, then finishResponse must receive the whole section, encode detached, queue behind DATA, and expose no per-stream staging API")
+    endif()
     if(NOT response_trailer_h2_test MATCHES
            "http2_connection_head_response_can_end_with_trailers_only" OR
        NOT response_trailer_h2_test MATCHES
-           "http2_response_trailer_section_is_phase_typed_and_atomic" OR
+           "http2_response_finish_owns_trailer_section_atomically" OR
+       NOT response_trailer_h2_test MATCHES
+           "http2_connection_trailers_wait_for_blocked_body" OR
        NOT response_trailer_h1_test MATCHES
            "http1_stream_commit_plan_exposes_exact_trailer_capability")
         boundary_error("response trailer terminal contract is under-tested"
-            "tests must pin H1 framing capability, H2 trailers-only, phase refusal, and atomic validation")
+            "tests must pin H1 framing capability plus H2 trailers-only, phase refusal, atomic validation, and DATA-before-trailers ordering")
     endif()
 endif()
 
@@ -6127,8 +6214,10 @@ foreach(boundary_doc IN ITEMS
     endif()
     if(NOT boundary_doc_content MATCHES "ResponseStreamCommitPlan" OR
        NOT boundary_doc_content MATCHES "ResponseStreamWriter::end" OR
-       NOT boundary_doc_content MATCHES "submitResponseTrailerSection" OR
-       NOT boundary_doc_content MATCHES "Http2ResponseTrailerSubmitStatus" OR
+       NOT boundary_doc_content MATCHES "finishResponse" OR
+       NOT boundary_doc_content MATCHES "kInvalidTrailerSection" OR
+       NOT boundary_doc_content MATCHES "atomic" OR
+       NOT boundary_doc_content MATCHES "per-stream" OR
        NOT boundary_doc_content MATCHES "status" OR
        NOT boundary_doc_content MATCHES "framing" OR
        NOT boundary_doc_content MATCHES "peer[^\r\n]*before[^\r\n]*commit" OR
@@ -6137,7 +6226,7 @@ foreach(boundary_doc IN ITEMS
        NOT boundary_doc_content MATCHES "200")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("response trailer terminal contract is undocumented"
-            "${relative} must document commit status/framing ownership, exclusive runtime outcomes, terminal API, exact access-log propagation, and typed H2 ownership")
+            "${relative} must document commit status/framing ownership, exclusive runtime outcomes, atomic H2 terminal API without per-stream staging, exact access-log propagation, and typed ownership")
     endif()
     if(NOT boundary_doc_content MATCHES "205 Reset Content" OR
        NOT boundary_doc_content MATCHES "Content-Length: 0")

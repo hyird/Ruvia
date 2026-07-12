@@ -92,10 +92,18 @@ so HTTP/1.0 close-delimited responses and HEAD/1xx/204/304 reject it instead of 
 HTTP/2 can keep a content-forbidden response open in the explicit
 `Http2LocalResponseTrailersOnly` alternative of `Http2LocalSendState` and terminate it with
 trailing HEADERS; it never
-becomes DATA-open or falls back to empty DATA. `Http2Connection::submitResponseTrailerSection()` accepts fields only
-after the final response head, validates the whole section before HPACK mutation, and returns a
-typed `Http2ResponseTrailerSubmitStatus` for closed/wrong-phase/empty/invalid/incomplete-length
-outcomes; `finishResponse()` remains the sole owner of the terminal `END_STREAM` ordering.
+becomes DATA-open or falls back to empty DATA.
+`Http2Connection::finishResponse(streamId, trailers)` explicitly receives the complete terminal
+section (possibly empty; trailers-only requires one) and performs validation, detached HPACK
+encoding, ordering behind blocked DATA, and `END_STREAM` as one atomic transaction. Its typed
+`Http2FinishSubmitStatus` distinguishes closed/wrong-phase, `kInvalidTrailerSection`, and
+incomplete-length outcomes without mutating output or stream state. The former
+`submitResponseTrailerSection()`/`Http2ResponseTrailerSubmitStatus` staging API and the per-stream
+trailer block are gone; a blocked terminal section moves directly into core-owned pending DATA.
+Before an initial head is committed, the Web sink uses HTTP's shared
+`responseTrailerSectionValid()` preflight so invalid application metadata remains a pre-commit
+failure; the core repeats the defensive check at its final mutation boundary without Web
+reimplementing any field rule.
 Router and runtime completion are discriminated too: handled routes own no dummy `HttpResponse`,
 buffered fallbacks own the response, committed/failed streams own the status from the commit plan,
 and a peer abort before commit owns no fictitious status. Consequently HTTP/1 close-delimited
@@ -516,7 +524,7 @@ explicit length in its failure alternative; a valid explicit value is parsed onc
 on the wire, and reused to initialize `Http2LocalContentKnownLength`. The HPACK encoder accepts only
 that plan—the former `autoContentLength + emitAutoContentLength` scalar entry does not exist.
 Overrun and premature END_STREAM are rejected before output/window mutation,
-`finishResponse()` refuses an incomplete exact body, and invalid preserved lengths reject the head
+`finishResponse(streamId, trailers)` refuses an incomplete exact body, and invalid preserved lengths reject the head
 before HPACK output. This follows HTTP/2's HEADERS-then-DATA message order and terminal END_STREAM in
 [RFC 9113 Section 8.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1), plus its exact
 Content-Length/DATA requirement in

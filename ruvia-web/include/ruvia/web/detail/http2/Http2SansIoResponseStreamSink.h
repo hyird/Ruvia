@@ -135,10 +135,12 @@ public:
         const auto trailerIntent = trailers.empty()
             ? ResponseTrailerIntent::kNone
             : ResponseTrailerIntent::kPresent;
+        // Preflight through the HTTP-owned rule before committing the initial
+        // response head, so invalid application metadata remains a pre-commit
+        // failure. The core validates again at its final mutation boundary.
         if (!trailers.empty() && !responseTrailerSectionValid(trailers)) {
             throw std::invalid_argument("invalid response trailer section");
         }
-
         co_await commit(trailerIntent);
         if (state_.ended()) {
             co_return;
@@ -146,34 +148,17 @@ public:
         if (!trailers.empty()) {
             state_.ensureTrailersAllowed(
                 ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
-            const auto trailerResult =
-                connection_.submitResponseTrailerSection(streamId_, trailers);
-            wakeWriter();
-            switch (trailerResult) {
-                case Http2ResponseTrailerSubmitStatus::kAccepted:
-                    break;
-                case Http2ResponseTrailerSubmitStatus::kClosed:
-                    throw std::system_error(
-                        std::make_error_code(std::errc::connection_reset));
-                case Http2ResponseTrailerSubmitStatus::kInvalidState:
-                case Http2ResponseTrailerSubmitStatus::kEmpty:
-                    throw std::logic_error(
-                        "invalid HTTP/2 response trailer state");
-                case Http2ResponseTrailerSubmitStatus::kInvalidField:
-                    throw std::invalid_argument(
-                        "invalid response trailer section");
-                case Http2ResponseTrailerSubmitStatus::kContentLengthIncomplete:
-                    throw std::length_error(
-                        "HTTP/2 response ended before Content-Length");
-            }
         }
-        const auto result = connection_.finishResponse(streamId_);
+        const auto result = connection_.finishResponse(streamId_, trailers);
         wakeWriter();
         if (result == Http2FinishSubmitStatus::kClosed) {
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
         }
         if (result == Http2FinishSubmitStatus::kInvalidState) {
             throw std::logic_error("invalid HTTP/2 response stream finish state");
+        }
+        if (result == Http2FinishSubmitStatus::kInvalidTrailerSection) {
+            throw std::invalid_argument("invalid response trailer section");
         }
         if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
             throw std::length_error("HTTP/2 response ended before Content-Length");

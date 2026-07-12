@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -37,6 +38,8 @@
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
 #include <ruvia/http/detail/http2/Http2RemoteReceiveState.h>
 #include <ruvia/http/detail/http2/Http2ResponseHeadPlan.h>
+#include <ruvia/http/detail/http2/Http2StreamHeaderBlocks.h>
+#include <ruvia/http/detail/http2/Http2StreamState.h>
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
@@ -108,6 +111,28 @@ concept AcceptsUnpreparedBufferedResponseHead = requires(
     Connection& connection,
     const ruvia::HttpResponse& response) {
     connection.submitResponseHead(std::uint32_t{}, response);
+};
+
+template <typename Connection>
+concept AcceptsStagedResponseTrailerSection = requires(
+    Connection& connection,
+    std::span<const ruvia::HttpHeaderView> trailers) {
+    connection.submitResponseTrailerSection(std::uint32_t{}, trailers);
+};
+
+template <typename Connection>
+concept AcceptsImplicitResponseFinish = requires(Connection& connection) {
+    connection.finishResponse(std::uint32_t{});
+};
+
+template <typename Stream>
+concept HasStagedResponseTrailerBlock = requires(Stream& stream) {
+    stream.responseTrailerBlock();
+};
+
+template <typename HeaderBlocks>
+concept HasStagedResponseTrailers = requires(HeaderBlocks& blocks) {
+    blocks.responseTrailers();
 };
 
 template <typename BodyPlan>
@@ -1297,6 +1322,20 @@ static_assert(std::same_as<
     ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
 static_assert(!AcceptsUnpreparedBufferedResponseHead<
     ruvia::detail::Http2Connection>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http2Connection&>()
+        .finishResponse(
+            std::uint32_t{},
+            std::declval<std::span<const ruvia::HttpHeaderView>>())),
+    ruvia::detail::Http2FinishSubmitStatus>);
+static_assert(!AcceptsStagedResponseTrailerSection<
+    ruvia::detail::Http2Connection>);
+static_assert(!AcceptsImplicitResponseFinish<
+    ruvia::detail::Http2Connection>);
+static_assert(!HasStagedResponseTrailerBlock<
+    ruvia::detail::Http2StreamState>);
+static_assert(!HasStagedResponseTrailers<
+    ruvia::detail::Http2StreamHeaderBlocks>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2Connection&>()
         .submitStreamingResponseHead(

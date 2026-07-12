@@ -260,8 +260,4 @@ inline void appendHttp2ResponseTrailer(
         value);
 }
 
-inline void http2ReleaseResponseTrailerBlock(Http2StreamState& stream) {
-    clearPmrStringRetainingSmall(stream.responseTrailerBlock());
-}
-
 }  // namespace ruvia::detail

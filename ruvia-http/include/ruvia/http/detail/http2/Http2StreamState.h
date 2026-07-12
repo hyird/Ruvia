@@ -93,14 +93,6 @@ public:
         return headerBlocks_.response();
     }
 
-    [[nodiscard]] std::pmr::string& responseTrailerBlock() noexcept {
-        return headerBlocks_.responseTrailers();
-    }
-
-    [[nodiscard]] const std::pmr::string& responseTrailerBlock() const noexcept {
-        return headerBlocks_.responseTrailers();
-    }
-
     [[nodiscard]] bool declareRemoteContentLength(
         std::size_t value) noexcept {
         return remoteContent_.declareKnownLength(value);
