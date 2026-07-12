@@ -103,6 +103,8 @@ set(RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT
     "borrowNativePath|selectStaticEncodingVariant|std::string_view[ \t]*&[ \t]*contentEncoding|struct[ \t]+StaticRootEntryView|[.]found[(][)]")
 set(RULE_STALE_URL_DECODE_CHAIN
     "decodeUrlComponentToString|decodeFormComponent|StringT[ \t]*&[ \t]*output")
+set(RULE_STALE_JSON_STRING_DECODE_CHAIN
+    "bool[ \t\r\n]+decodeJsonString|decodeJsonString[ \t\r\n]*[(][^,()]*,[ \t\r\n]*value[.]resetOwned[(][)]|bool[ \t\r\n]+jwtDecodeJsonStringValue[ \t\r\n]*[(][ \t\r\n]*std::pmr::string[ \t]*&")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -496,6 +498,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("form decoding duplicated the URL decoder"
         "${RULE_STALE_URL_DECODE_CHAIN}"
         "bool decodeFormComponent(View input, StringT& output);")
+    expect_match("JSON string decoding returned bool plus partial output"
+        "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
+        "bool decodeJsonString(View input, OutputT& output);")
+    expect_match("JSON model decoding exposed its field before success"
+        "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
+        "decodeJsonString(raw, value.resetOwned())")
+    expect_match("JWT JSON decoding retained a bool/output wrapper"
+        "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
+        "bool jwtDecodeJsonStringValue(std::pmr::string& target, View value);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2314,6 +2325,48 @@ if(EXISTS "${WEB_STATIC_FILE_RESPONSE_SOURCE}" AND
            "std::optional<ruvia::detail::StaticRootEntryView>")
         boundary_error("static file representation ownership was split"
             "path lifetime, selected entry, and HTTP content coding must remain typed and atomically tested")
+    endif()
+endif()
+set(WEB_JSON_STRING_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/json/JsonString.h")
+set(WEB_JSON_OBJECT_FIELDS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/json/JsonObjectFields.h")
+set(WEB_JSON_MODEL_PARSER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/JsonParser.h")
+set(WEB_JSON_STRING_TEST
+    "${RUVIA_ROOT}/tests/unit_json.cpp")
+set(WEB_JSON_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+check_files_no_match("JSON string decoding must return one owning transactional result"
+    "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
+    "${WEB_JSON_STRING_CONTRACT}"
+    "${WEB_JSON_OBJECT_FIELDS}"
+    "${WEB_JSON_MODEL_PARSER}"
+    "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
+if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
+   EXISTS "${WEB_JSON_MODEL_PARSER}" AND
+   EXISTS "${WEB_JSON_STRING_TEST}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_JSON_STRING_CONTRACT}"
+        web_json_string_contract)
+    file(READ "${WEB_JSON_MODEL_PARSER}"
+        web_json_model_parser)
+    file(READ "${WEB_JSON_STRING_TEST}"
+        web_json_string_test)
+    file(READ "${WEB_JSON_PACKAGE_CONSUMER}"
+        web_json_package_consumer)
+    if(NOT web_json_string_contract MATCHES
+           "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
+       NOT web_json_model_parser MATCHES
+           "value[.]assignOwned[(]std::move[(][*]decoded[)][)]" OR
+       NOT web_json_string_test MATCHES
+           "json_string_decode_failure_preserves_existing_model_value" OR
+       NOT web_json_package_consumer MATCHES
+           "AcceptsJsonDecodeOutputParameter" OR
+       NOT web_json_package_consumer MATCHES
+           "std::optional<std::pmr::string>")
+        boundary_error("JSON string decoding lost transactional ownership"
+            "Web JSON decoding must own the optional result and model fields must commit only after success")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

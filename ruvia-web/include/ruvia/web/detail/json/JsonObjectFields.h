@@ -56,11 +56,11 @@ template <typename Visitor>
         const auto consumed = valueStart.size() - input.size();
         const auto value = valueStart.substr(0, consumed);
         if (keyEscaped) {
-            std::pmr::string decodedKey(resource);
-            if (!decodeJsonString(key, decodedKey)) {
+            auto decodedKey = decodeJsonString(key, resource);
+            if (!decodedKey.has_value()) {
                 return false;
             }
-            if (!dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(decodedKey), value)) {
+            if (!dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(*decodedKey), value)) {
                 return true;
             }
         } else if (!dispatchJsonObjectFieldVisitor(visitorRef, key, value)) {
