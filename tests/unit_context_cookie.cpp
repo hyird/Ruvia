@@ -513,9 +513,9 @@ RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
     host.secure = true;
     host.path = "/";
     host.httpOnly = true;
-    host.sameSite = "Strict";
-    host.maxAge = 3600;
-    host.priority = "High";
+    host.sameSite = ruvia::CookieSameSite::kStrict;
+    host.maxAge = std::chrono::seconds(3600);
+    host.priority = ruvia::CookiePriority::kHigh;
     host.partitioned = true;
     const auto hostCookie = context.generateCookie("id", "abc", host);
     RUVIA_CHECK_EQ(
@@ -532,7 +532,7 @@ RUVIA_TEST(context_generate_cookie_serializes_all_attributes) {
     secure.secure = true;
     secure.path = "/app";
     secure.domain = "example.com";
-    secure.sameSite = "None";
+    secure.sameSite = ruvia::CookieSameSite::kNone;
     secure.expires = std::chrono::system_clock::time_point(std::chrono::seconds(1234567890));
     const auto secureCookie = context.generateCookie("sess", "xyz", secure);
     RUVIA_CHECK_EQ(

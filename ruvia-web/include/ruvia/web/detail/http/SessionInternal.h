@@ -2,7 +2,9 @@
 
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
+#include "ruvia/http/detail/SetCookiePlan.h"
 
+#include <cstddef>
 #include <memory_resource>
 #include <string_view>
 
@@ -66,13 +68,16 @@ inline void appendSessionCookieHeader(
     std::pmr::memory_resource* resource,
     std::string_view id,
     bool secure) {
+    CookieOptions options;
+    options.httpOnly = true;
+    options.secure = secure;
+    options.sameSite = CookieSameSite::kLax;
+    const SetCookiePlan plan("sid", id, options);
     std::pmr::string setCookie(resource);
-    setCookie.append("sid=");
-    setCookie.append(id.data(), id.size());
-    setCookie.append("; Path=/; HttpOnly; SameSite=Lax");
-    if (secure) {
-        setCookie.append("; Secure");
-    }
+    setCookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
+        plan.write(out);
+        return size;
+    });
     response.header("Set-Cookie", setCookie, {.append = true});
 }
 

@@ -56,7 +56,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         const auto token = detail::generateCsrfToken(buffer);
         CookieOptions options;
         options.path = "/";
-        options.sameSite = "Lax";
+        options.sameSite = CookieSameSite::kLax;
         const auto connection = getConnInfo(c);
         options.secure = connection.tls() != nullptr;
         c.setCookie("XSRF-TOKEN", token, options);

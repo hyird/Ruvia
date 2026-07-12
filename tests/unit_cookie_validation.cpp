@@ -1,5 +1,8 @@
 #include "test_harness.h"
 
+#include <chrono>
+#include <concepts>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -20,55 +23,51 @@ bool rejects(const ruvia::CookieOptions& options) {
 
 }  // namespace
 
-RUVIA_TEST(cookie_samesite_accepts_canonical) {
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.sameSite),
+    ruvia::CookieSameSite>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.priority),
+    ruvia::CookiePriority>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.maxAge),
+    std::optional<std::chrono::seconds>>);
+
+RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
     ruvia::CookieOptions strict;
-    strict.sameSite = "Strict";
+    strict.sameSite = ruvia::CookieSameSite::kStrict;
     RUVIA_CHECK(!rejects(strict));
 
     ruvia::CookieOptions lax;
-    lax.sameSite = "Lax";
+    lax.sameSite = ruvia::CookieSameSite::kLax;
     RUVIA_CHECK(!rejects(lax));
 
     ruvia::CookieOptions none;
-    none.sameSite = "None";
+    none.sameSite = ruvia::CookieSameSite::kNone;
     none.secure = true;
     RUVIA_CHECK(!rejects(none));
-}
 
-RUVIA_TEST(cookie_samesite_empty_is_allowed) {
-    ruvia::CookieOptions options;  // no SameSite attribute at all
-    RUVIA_CHECK(!rejects(options));
-}
-
-RUVIA_TEST(cookie_samesite_is_case_insensitive) {
-    ruvia::CookieOptions lower;
-    lower.sameSite = "lax";
-    RUVIA_CHECK(!rejects(lower));
-    // The serialized form is canonicalized regardless of input case.
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken("lax"), std::string_view("Lax"));
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken("STRICT"), std::string_view("Strict"));
-    RUVIA_CHECK_EQ(ruvia::detail::cookieSameSiteToken("nOnE"), std::string_view("None"));
-    RUVIA_CHECK(ruvia::detail::cookieSameSiteToken("laxx").empty());
-}
-
-RUVIA_TEST(cookie_samesite_rejects_typos) {
-    ruvia::CookieOptions typo;
-    typo.sameSite = "Laxx";
-    RUVIA_CHECK(rejects(typo));
-
-    ruvia::CookieOptions bogus;
-    bogus.sameSite = "bogus";
-    RUVIA_CHECK(rejects(bogus));
+    RUVIA_CHECK(ruvia::detail::cookieSameSiteToken(
+        ruvia::CookieSameSite::kUnspecified).empty());
+    RUVIA_CHECK_EQ(
+        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict),
+        std::string_view("Strict"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kLax),
+        std::string_view("Lax"));
+    RUVIA_CHECK_EQ(
+        ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kNone),
+        std::string_view("None"));
 }
 
 RUVIA_TEST(cookie_samesite_none_requires_secure) {
     ruvia::CookieOptions insecureNone;
-    insecureNone.sameSite = "None";
+    insecureNone.sameSite = ruvia::CookieSameSite::kNone;
     insecureNone.secure = false;
     RUVIA_CHECK(rejects(insecureNone));  // RFC 6265bis §5.5
 
     ruvia::CookieOptions secureNone;
-    secureNone.sameSite = "None";
+    secureNone.sameSite = ruvia::CookieSameSite::kNone;
     secureNone.secure = true;
     RUVIA_CHECK(!rejects(secureNone));
 }
@@ -109,13 +108,18 @@ RUVIA_TEST(cookie_attribute_char_validation) {
     RUVIA_CHECK(isValidCookieAttribute("caf\xc3\xa9.com"));  // UTF-8 obs-text
 }
 
-RUVIA_TEST(cookie_priority_token_canonicalizes) {
+RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
     using ruvia::detail::cookiePriorityToken;
-    RUVIA_CHECK_EQ(cookiePriorityToken("Low"), std::string_view("Low"));
-    RUVIA_CHECK_EQ(cookiePriorityToken("medium"), std::string_view("Medium"));  // case-insensitive
-    RUVIA_CHECK_EQ(cookiePriorityToken("HIGH"), std::string_view("High"));
-    RUVIA_CHECK(cookiePriorityToken("").empty());
-    RUVIA_CHECK(cookiePriorityToken("Urgent").empty());  // not a valid priority
+    RUVIA_CHECK(cookiePriorityToken(ruvia::CookiePriority::kUnspecified).empty());
+    RUVIA_CHECK_EQ(
+        cookiePriorityToken(ruvia::CookiePriority::kLow),
+        std::string_view("Low"));
+    RUVIA_CHECK_EQ(
+        cookiePriorityToken(ruvia::CookiePriority::kMedium),
+        std::string_view("Medium"));
+    RUVIA_CHECK_EQ(
+        cookiePriorityToken(ruvia::CookiePriority::kHigh),
+        std::string_view("High"));
 }
 
 RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
@@ -136,8 +140,14 @@ RUVIA_TEST(cookie_validation_rejects_injection_and_bad_options) {
     badPath.path = "a;b";
     RUVIA_CHECK(rejectsCookie("sid", "value", badPath));     // ';' in path attribute
     ruvia::CookieOptions badPriority;
-    badPriority.priority = "Urgent";
+    badPriority.priority = static_cast<ruvia::CookiePriority>(255);
     RUVIA_CHECK(rejectsCookie("sid", "value", badPriority));
+    ruvia::CookieOptions badSameSite;
+    badSameSite.sameSite = static_cast<ruvia::CookieSameSite>(255);
+    RUVIA_CHECK(rejectsCookie("sid", "value", badSameSite));
+    ruvia::CookieOptions badPrefix;
+    badPrefix.prefix = static_cast<ruvia::CookiePrefix>(255);
+    RUVIA_CHECK(rejectsCookie("sid", "value", badPrefix));
     ruvia::CookieOptions partitioned;
     partitioned.partitioned = true;  // partitioned requires Secure
     RUVIA_CHECK(rejectsCookie("sid", "value", partitioned));
@@ -215,10 +225,18 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
 
 RUVIA_TEST(cookie_max_age_capped_at_400_days) {
     ruvia::CookieOptions atCap;
-    atCap.maxAge = 34560000;  // exactly 400 days is allowed
+    atCap.maxAge = std::chrono::seconds(34560000);  // exactly 400 days is allowed
     RUVIA_CHECK(!rejects(atCap));
 
     ruvia::CookieOptions overCap;
-    overCap.maxAge = 34560001;
+    overCap.maxAge = std::chrono::seconds(34560001);
     RUVIA_CHECK(rejects(overCap));
+
+    ruvia::CookieOptions deletion;
+    deletion.maxAge = std::chrono::seconds(0);
+    RUVIA_CHECK(!rejects(deletion));
+
+    ruvia::CookieOptions negative;
+    negative.maxAge = std::chrono::seconds(-1);
+    RUVIA_CHECK(rejects(negative));
 }

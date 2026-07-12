@@ -45,7 +45,7 @@ RUVIA_TEST(session_cookie_secure_flag_appended_for_secure_requests) {
     RUVIA_CHECK_EQ(headers.size(), std::size_t{1});
     const auto it = headers.begin();
     RUVIA_CHECK_EQ(it->name(), std::string_view("Set-Cookie"));
-    RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; SameSite=Lax; Secure"));
+    RUVIA_CHECK_EQ(it->value(), std::string_view("sid=abcdef; Path=/; HttpOnly; Secure; SameSite=Lax"));
 }
 
 RUVIA_TEST(session_mint_decision_defends_fixation) {

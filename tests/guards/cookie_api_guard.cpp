@@ -50,18 +50,18 @@ void checkThrowsInvalidArgument(Callable&& callable) {
 }
 
 // Full option serialization is deterministic: the fixed Expires renders a
-// fixed IMF-fixdate and Priority is canonicalized from any input case.
+// fixed IMF-fixdate and typed attributes have one canonical wire spelling.
 void exerciseGenerateCookieSerialization(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     ruvia::CookieOptions options;
     options.secure = true;
     options.httpOnly = true;
-    options.sameSite = "None";
-    options.priority = "high";
+    options.sameSite = ruvia::CookieSameSite::kNone;
+    options.priority = ruvia::CookiePriority::kHigh;
     options.partitioned = true;
     options.prefix = ruvia::CookiePrefix::kHost;
     options.expires = std::chrono::system_clock::from_time_t(259200);
-    options.maxAge = 3600;
+    options.maxAge = std::chrono::seconds(3600);
     const auto cookie = context.generateCookie("chip", "value", options);
     check(std::string_view(cookie) ==
         "__Host-chip=value; Path=/; Max-Age=3600; Expires=Sun, 04 Jan 1970 00:00:00 GMT; "
@@ -72,7 +72,7 @@ void exerciseSetCookieMatchesGenerate(ruvia::RequestMemory& memory, const ruvia:
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     ruvia::CookieOptions options;
     options.httpOnly = true;
-    options.sameSite = "Lax";
+    options.sameSite = ruvia::CookieSameSite::kLax;
     context.setCookie("session", "id", options);
     auto response = context.text("hi");
     check(response.header("Set-Cookie") == std::string_view(context.generateCookie("session", "id", options)));
@@ -101,13 +101,13 @@ void exerciseCookieValidationThrows(ruvia::RequestMemory& memory, const ruvia::H
     partitionedWithoutSecure.partitioned = true;
     checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", partitionedWithoutSecure); });
 
-    ruvia::CookieOptions badPriority;
-    badPriority.priority = "urgent";
-    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", badPriority); });
-
     ruvia::CookieOptions maxAgeTooLong;
-    maxAgeTooLong.maxAge = 34560001;
+    maxAgeTooLong.maxAge = std::chrono::seconds(34560001);
     checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", maxAgeTooLong); });
+
+    ruvia::CookieOptions negativeMaxAge;
+    negativeMaxAge.maxAge = std::chrono::seconds(-1);
+    checkThrowsInvalidArgument([&] { (void)context.generateCookie("n", "v", negativeMaxAge); });
 
     ruvia::CookieOptions expiresTooFar;
     expiresTooFar.expires = std::chrono::system_clock::now() + std::chrono::hours(24 * 401);
