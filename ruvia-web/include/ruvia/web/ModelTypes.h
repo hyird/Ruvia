@@ -260,8 +260,28 @@ public:
     List(const List&) = delete;
     List& operator=(const List&) = delete;
 
-    List(List&&) noexcept = default;
-    List& operator=(List&&) noexcept = default;
+    List(List&& other) noexcept
+        : resource_(other.resource_),
+          items_(std::move(other.items_)) {}
+
+    List& operator=(List&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+
+        clear();
+        // polymorphic_allocator does not propagate on move assignment. Rebuild
+        // the pointer table so its allocator follows the resource that owns the
+        // transferred elements.
+        std::destroy_at(&items_);
+        resource_ = other.resource_;
+        std::construct_at(&items_, std::move(other.items_));
+        return *this;
+    }
+
+    ~List() {
+        clear();
+    }
 
     [[nodiscard]] bool empty() const noexcept {
         return items_.empty();
@@ -288,6 +308,12 @@ public:
     }
 
     void clear() noexcept {
+        for (auto* value : items_) {
+            detail::destroyPmrObject(
+                detail::ResolvedPmrResourceTag{},
+                value,
+                resource_);
+        }
         items_.clear();
     }
 

@@ -581,6 +581,10 @@ static_assert(std::same_as<
         std::declval<std::string_view&>(),
         std::declval<std::pmr::memory_resource*>())),
     std::optional<ruvia::Array<ruvia::Int32>>>);
+static_assert(!std::copy_constructible<ruvia::List<ruvia::Int32>>);
+static_assert(!std::is_copy_assignable_v<ruvia::List<ruvia::Int32>>);
+static_assert(std::is_nothrow_move_constructible_v<ruvia::List<ruvia::Int32>>);
+static_assert(std::is_nothrow_move_assignable_v<ruvia::List<ruvia::Int32>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -697,6 +701,20 @@ int main() {
         jsonArrayInput != " tail" || rejectedJsonArray.has_value() ||
         malformedJsonArray != originalMalformedJsonArray) {
         return 13;
+    }
+    ruvia::List<ruvia::Int32> installedList;
+    installedList.emplace(7);
+    ruvia::List<ruvia::Int32> movedList;
+    movedList.emplace(8);
+    movedList = std::move(installedList);
+    if (movedList.size() != 1 ||
+        static_cast<std::int32_t>(movedList.front()) != 7 ||
+        !installedList.empty()) {
+        return 14;
+    }
+    movedList.clear();
+    if (!movedList.empty()) {
+        return 15;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

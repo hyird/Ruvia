@@ -109,6 +109,8 @@ set(RULE_STALE_JSON_STRING_SCAN_CHAIN
     "parseJsonStringRaw|parseJsonStringView|skipJsonString")
 set(RULE_STALE_JSON_MODEL_PARSE_OUTPUT
     "parseJson(Array|List)Value|bool[ \t\r\n]+parseJson(Value|SequenceValue)|SequenceT[ \t]*&[ \t]*value")
+set(RULE_STALE_MODEL_LIST_OWNERSHIP
+    "List[(]List&&[^;]*=[ \t]*default|operator=[(]List&&[^;]*=[ \t]*default|void[ \t]+clear[(][)] noexcept[ \t\r\n]*[{][ \t\r\n]*items_[.]clear")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -529,6 +531,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("JSON array parsing duplicated the sequence parser"
         "${RULE_STALE_JSON_MODEL_PARSE_OUTPUT}"
         "bool parseJsonArrayValue(View& input, VectorT& value);")
+    expect_match("model List defaulted resource-sensitive move construction"
+        "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
+        "List(List&&) noexcept = default;")
+    expect_match("model List defaulted resource-sensitive move assignment"
+        "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
+        "List& operator=(List&&) noexcept = default;")
+    expect_match("model List clear leaked individually allocated elements"
+        "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
+        "void clear() noexcept { items_.clear(); }")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2423,6 +2434,40 @@ if(EXISTS "${WEB_JSON_STRING_CONTRACT}" AND
            "std::optional<ruvia::Array<ruvia::Int32>>")
         boundary_error("JSON string parsing lost transactional ownership"
             "Web JSON scanning and decoding must return complete typed results and commit callers only after success")
+    endif()
+endif()
+set(WEB_MODEL_TYPES_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelTypes.h")
+set(WEB_MODEL_LIST_TEST
+    "${RUVIA_ROOT}/tests/unit_model_list.cpp")
+check_files_no_match("model List must own and release its PMR elements"
+    "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
+    "${WEB_MODEL_TYPES_CONTRACT}")
+if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_LIST_TEST}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_MODEL_TYPES_CONTRACT}"
+        web_model_types_contract)
+    file(READ "${WEB_MODEL_LIST_TEST}"
+        web_model_list_test)
+    if(NOT web_model_types_contract MATCHES
+           "~List[(][)]" OR
+       NOT web_model_types_contract MATCHES
+           "for[ \t]*[(]auto[*][ \t]+value[ \t]*:[ \t]*items_[)]" OR
+       NOT web_model_types_contract MATCHES
+           "destroyPmrObject" OR
+       NOT web_model_types_contract MATCHES
+           "std::destroy_at[(]&items_[)]" OR
+       NOT web_model_types_contract MATCHES
+           "std::construct_at[(]&items_[ \t]*,[ \t]*std::move[(]other[.]items_[)]" OR
+       NOT web_model_list_test MATCHES
+           "model_list_clear_and_destructor_release_owned_elements" OR
+       NOT web_model_list_test MATCHES
+           "model_list_move_assignment_transfers_element_resource" OR
+       NOT web_json_package_consumer MATCHES
+           "is_nothrow_move_assignable_v<ruvia::List<ruvia::Int32>>")
+        boundary_error("model List lost PMR element ownership"
+            "List must destroy every allocated element and move its pointer-table allocator with the owning resource")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

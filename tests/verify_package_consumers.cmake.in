@@ -925,8 +925,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/json/JsonString.h")
     set(_installed_json_model_parser_path
         "${_install_prefix}/include/ruvia/web/detail/model/JsonParser.h")
+    set(_installed_model_types_path
+        "${_install_prefix}/include/ruvia/web/ModelTypes.h")
     if(NOT EXISTS "${_installed_json_string_path}" OR
-       NOT EXISTS "${_installed_json_model_parser_path}")
+       NOT EXISTS "${_installed_json_model_parser_path}" OR
+       NOT EXISTS "${_installed_model_types_path}")
         message(FATAL_ERROR
             "installed Web package is missing transactional JSON parsing")
     endif()
@@ -934,6 +937,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_json_string_contract)
     file(READ "${_installed_json_model_parser_path}"
         _installed_json_model_parser_contract)
+    file(READ "${_installed_model_types_path}"
+        _installed_model_types_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -951,6 +956,19 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "parseJson(Array|List)Value|bool[ \t\r\n]+parseJson(Value|SequenceValue)|SequenceT[ \t]*&[ \t]*value")
         message(FATAL_ERROR
             "installed JSON model parser restored mutable partial outputs")
+    endif()
+    if(NOT _installed_model_types_contract MATCHES
+           "~List[(][)]" OR
+       NOT _installed_model_types_contract MATCHES
+           "destroyPmrObject" OR
+       NOT _installed_model_types_contract MATCHES
+           "std::destroy_at[(]&items_[)]" OR
+       NOT _installed_model_types_contract MATCHES
+           "std::construct_at[(]&items_[ \t]*,[ \t]*std::move[(]other[.]items_[)]" OR
+       _installed_model_types_contract MATCHES
+           "List[(]List&&[^;]*=[ \t]*default|operator=[(]List&&[^;]*=[ \t]*default|void[ \t]+clear[(][)] noexcept[ \t\r\n]*[{][ \t\r\n]*items_[.]clear")
+        message(FATAL_ERROR
+            "installed model List lost PMR element ownership")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")
