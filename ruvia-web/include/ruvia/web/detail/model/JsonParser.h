@@ -45,134 +45,45 @@ struct JsonSequenceValueTraits<List<ValueT>> {
 };
 
 template <typename SequenceT>
-[[nodiscard]] bool parseJsonSequenceValue(
+[[nodiscard]] std::optional<SequenceT> parseJsonSequenceValue(
     std::string_view& input,
-    SequenceT& value,
     std::pmr::memory_resource* resource,
     std::size_t depth) {
     using Traits = JsonSequenceValueTraits<std::remove_cvref_t<SequenceT>>;
     using ElementT = typename Traits::value_type;
 
     if (depth > kMaxJsonDepth) {
-        return false;
+        return std::nullopt;
     }
-    if (!consumeJsonChar(input, '[')) {
-        return false;
+    auto remaining = input;
+    if (!consumeJsonChar(remaining, '[')) {
+        return std::nullopt;
     }
 
-    value.clear();
-    skipJsonWhitespace(input);
-    if (!input.empty() && input.front() == ']') {
-        input.remove_prefix(1);
-        return true;
+    SequenceT value = makeRequestValue<SequenceT>(resource);
+    skipJsonWhitespace(remaining);
+    if (!remaining.empty() && remaining.front() == ']') {
+        remaining.remove_prefix(1);
+        input = remaining;
+        return value;
     }
 
     for (;;) {
-        auto element = parseJsonValue<ElementT>(input, resource, depth + 1);
-        if (!element) {
-            return false;
+        auto element = parseJsonValue<ElementT>(remaining, resource, depth + 1);
+        if (!element.has_value()) {
+            return std::nullopt;
         }
         Traits::emplace(value, std::move(*element));
 
-        skipJsonWhitespace(input);
-        if (!input.empty() && input.front() == ']') {
-            input.remove_prefix(1);
-            return true;
+        skipJsonWhitespace(remaining);
+        if (!remaining.empty() && remaining.front() == ']') {
+            remaining.remove_prefix(1);
+            input = remaining;
+            return value;
         }
-        if (!consumeJsonChar(input, ',')) {
-            return false;
+        if (!consumeJsonChar(remaining, ',')) {
+            return std::nullopt;
         }
-    }
-}
-
-template <typename VectorT>
-[[nodiscard]] bool parseJsonArrayValue(
-    std::string_view& input,
-    VectorT& value,
-    std::pmr::memory_resource* resource,
-    std::size_t depth) {
-    return parseJsonSequenceValue(input, value, resource, depth);
-}
-
-template <typename ListT>
-[[nodiscard]] bool parseJsonListValue(
-    std::string_view& input,
-    ListT& value,
-    std::pmr::memory_resource* resource,
-    std::size_t depth) {
-    return parseJsonSequenceValue(input, value, resource, depth);
-}
-
-template <typename T>
-[[nodiscard]] bool parseJsonValue(
-    std::string_view& input,
-    T& value,
-    std::pmr::memory_resource* resource,
-    std::size_t depth = 0) {
-    using FieldT = std::remove_cvref_t<T>;
-    if (depth > kMaxJsonDepth) {
-        return false;
-    }
-    if constexpr (isRuviaString<FieldT>) {
-        const auto parsed = parseJsonString(input);
-        if (!parsed.has_value()) {
-            return false;
-        }
-        if (parsed->encoding() == JsonStringEncoding::kLiteral) {
-            value.assignView(parsed->raw());
-            return true;
-        }
-        auto decoded = decodeJsonString(parsed->raw(), resource);
-        if (!decoded.has_value()) {
-            return false;
-        }
-        value.assignOwned(std::move(*decoded));
-        return true;
-    } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
-        const auto parsed = parseJsonString(input);
-        if (!parsed.has_value() ||
-            parsed->encoding() != JsonStringEncoding::kLiteral) {
-            return false;
-        }
-        value = parsed->raw();
-        return true;
-    } else if constexpr (isRuviaArray<FieldT>) {
-        return parseJsonArrayValue(input, value, resource, depth);
-    } else if constexpr (isRuviaList<FieldT>) {
-        return parseJsonListValue(input, value, resource, depth);
-    } else if constexpr (isRuviaScalar<FieldT>) {
-        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
-        ScalarT parsed{};
-        if constexpr (std::is_same_v<ScalarT, bool>) {
-            if (consumeJsonLiteral(input, "true")) {
-                value.value = true;
-                return true;
-            }
-            if (consumeJsonLiteral(input, "false")) {
-                value.value = false;
-                return true;
-            }
-            return false;
-        } else {
-            if (!parseJsonNumberValue(input, parsed)) {
-                return false;
-            }
-            value.value = parsed;
-            return true;
-        }
-    } else if constexpr (JsonBody<FieldT>::value) {
-        std::string_view object = input;
-        if (!skipJsonObject(input, depth + 1)) {
-            return false;
-        }
-        object = object.substr(0, object.size() - input.size());
-        if (auto nested = JsonBody<FieldT>::parseDepth(object, resource, depth + 1); nested) {
-            value = std::move(*nested);
-            return true;
-        }
-        return false;
-    } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL JSON getter type is not supported");
     }
 }
 
@@ -185,19 +96,76 @@ template <typename T>
     if (depth > kMaxJsonDepth) {
         return std::nullopt;
     }
-    if constexpr (JsonBody<FieldT>::value) {
-        std::string_view object = input;
-        if (!skipJsonObject(input, depth + 1)) {
+    auto remaining = input;
+    if constexpr (isRuviaString<FieldT>) {
+        const auto parsed = parseJsonString(remaining);
+        if (!parsed.has_value()) {
             return std::nullopt;
         }
-        object = object.substr(0, object.size() - input.size());
-        return JsonBody<FieldT>::parseDepth(object, resource, depth + 1);
-    } else {
         FieldT value = makeRequestValue<FieldT>(resource);
-        if (!parseJsonValue(input, value, resource, depth)) {
+        if (parsed->encoding() == JsonStringEncoding::kLiteral) {
+            value.assignView(parsed->raw());
+        } else {
+            auto decoded = decodeJsonString(parsed->raw(), resource);
+            if (!decoded.has_value()) {
+                return std::nullopt;
+            }
+            value.assignOwned(std::move(*decoded));
+        }
+        input = remaining;
+        return value;
+    } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
+        const auto parsed = parseJsonString(remaining);
+        if (!parsed.has_value() ||
+            parsed->encoding() != JsonStringEncoding::kLiteral) {
             return std::nullopt;
         }
-        return value;
+        input = remaining;
+        return parsed->raw();
+    } else if constexpr (isRuviaArray<FieldT> || isRuviaList<FieldT>) {
+        auto parsed = parseJsonSequenceValue<FieldT>(remaining, resource, depth);
+        if (!parsed.has_value()) {
+            return std::nullopt;
+        }
+        input = remaining;
+        return parsed;
+    } else if constexpr (isRuviaScalar<FieldT>) {
+        using ScalarT = typename RuviaScalarTraits<FieldT>::value_type;
+        ScalarT parsed{};
+        if constexpr (std::is_same_v<ScalarT, bool>) {
+            if (consumeJsonLiteral(remaining, "true")) {
+                parsed = true;
+            } else if (consumeJsonLiteral(remaining, "false")) {
+                parsed = false;
+            } else {
+                return std::nullopt;
+            }
+        } else {
+            if (!parseJsonNumberValue(remaining, parsed)) {
+                return std::nullopt;
+            }
+        }
+        input = remaining;
+        return FieldT(parsed);
+    } else if constexpr (JsonBody<FieldT>::value) {
+        const auto objectStart = remaining;
+        if (!skipJsonObject(remaining, depth + 1)) {
+            return std::nullopt;
+        }
+        const auto object = objectStart.substr(
+            0,
+            objectStart.size() - remaining.size());
+        auto nested = JsonBody<FieldT>::parseDepth(
+            object,
+            resource,
+            depth + 1);
+        if (!nested.has_value()) {
+            return std::nullopt;
+        }
+        input = remaining;
+        return nested;
+    } else {
+        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL JSON getter type is not supported");
     }
 }
 

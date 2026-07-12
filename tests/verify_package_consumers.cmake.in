@@ -923,12 +923,17 @@ set(_installed_http2_web_runtime_path
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
     set(_installed_json_string_path
         "${_install_prefix}/include/ruvia/web/detail/json/JsonString.h")
-    if(NOT EXISTS "${_installed_json_string_path}")
+    set(_installed_json_model_parser_path
+        "${_install_prefix}/include/ruvia/web/detail/model/JsonParser.h")
+    if(NOT EXISTS "${_installed_json_string_path}" OR
+       NOT EXISTS "${_installed_json_model_parser_path}")
         message(FATAL_ERROR
-            "installed Web package is missing JSON string decoding")
+            "installed Web package is missing transactional JSON parsing")
     endif()
     file(READ "${_installed_json_string_path}"
         _installed_json_string_contract)
+    file(READ "${_installed_json_model_parser_path}"
+        _installed_json_model_parser_contract)
     if(NOT _installed_json_string_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeJsonString" OR
        NOT _installed_json_string_contract MATCHES
@@ -939,6 +944,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "bool[ \t\r\n]+decodeJsonString|parseJsonStringRaw|parseJsonStringView|skipJsonString")
         message(FATAL_ERROR
             "installed JSON string parser lost its typed transactional contract")
+    endif()
+    if(NOT _installed_json_model_parser_contract MATCHES
+           "std::optional<SequenceT>[ \t\r\n]+parseJsonSequenceValue" OR
+       _installed_json_model_parser_contract MATCHES
+           "parseJson(Array|List)Value|bool[ \t\r\n]+parseJson(Value|SequenceValue)|SequenceT[ \t]*&[ \t]*value")
+        message(FATAL_ERROR
+            "installed JSON model parser restored mutable partial outputs")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")
