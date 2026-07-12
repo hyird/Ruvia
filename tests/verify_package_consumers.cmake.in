@@ -1013,7 +1013,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_model_macros_contract MATCHES
            "ruviaMaterializeRequest" OR
        NOT _installed_model_macros_contract MATCHES
-           "if[ \t]*[(]!request[.]ruviaMaterialize[(][)][)]" OR
+           "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaBody[)][)]" OR
        _installed_model_macros_contract MATCHES
            "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState" OR
        _installed_model_field_ops_contract MATCHES
@@ -1021,9 +1021,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_model_macros_contract MATCHES
            "body_[.]get<" OR
        _installed_model_object_contract MATCHES
-           "body_,[ \t]*resource[)][.]get<T>")
+           "body_,[ \t]*resource[)][.]get<T>" OR
+       _installed_model_macros_contract MATCHES
+           "body_|&ruviaValid|[)][ \t]*&&[ \t]*ruviaValid" OR
+       NOT _installed_model_macros_contract MATCHES
+           "pmrResourceOrDefault[(]resource[)]" OR
+       NOT _installed_model_macros_contract MATCHES
+           "memory_resource[*][ \t]+ruviaResource_" OR
+       NOT _installed_model_macros_contract MATCHES
+           "ruviaMaterialize[(]const[ \t]+::ruvia::RequestObject&[ \t]+ruviaBody[)]")
         message(FATAL_ERROR
-            "installed generated models restored lazy or dynamic raw-body parsing")
+            "installed generated models restored retained, lazy, or dynamic raw-body parsing")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")

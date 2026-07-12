@@ -158,6 +158,11 @@ concept HasGeneratedModelTypedDynamicGet = requires(const T& model) {
     model.template get<ruvia::String>(std::string_view{});
 };
 
+template <typename T>
+concept HasGeneratedModelRequestSource = requires(const T& model) {
+    model.body();
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -167,6 +172,7 @@ static_assert(!std::copy_constructible<InstalledPackageModel>);
 static_assert(std::movable<InstalledPackageModel>);
 static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
 static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
+static_assert(!HasGeneratedModelRequestSource<InstalledPackageModel>);
 
 template <typename Info>
 concept HasLegacyConnInfoScalarAccessors = requires(const Info& info) {
@@ -787,12 +793,14 @@ int main() {
         modelString.resource() != std::pmr::get_default_resource()) {
         return 17;
     }
+    std::pmr::monotonic_buffer_resource installedModelResource;
     const auto installedModel = InstalledPackageModel::ruviaParseJsonBody(
         R"({"name":"installed model","count":7})",
-        std::pmr::get_default_resource());
+        &installedModelResource);
     if (!installedModel.has_value() ||
         !installedModel->name().has_value() ||
         installedModel->name()->view() != "installed model" ||
+        installedModel->name()->resource() != &installedModelResource ||
         !installedModel->count().has_value() ||
         static_cast<std::int32_t>(*installedModel->count()) != 7) {
         return 18;

@@ -64,7 +64,7 @@
                 ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kDuplicate; \
                 return; \
             } \
-            const auto ruviaEncoding = body_.kind() == ::ruvia::RequestObjectKind::kFormFields \
+            const auto ruviaEncoding = ruviaBody.kind() == ::ruvia::RequestObjectKind::kFormFields \
                 ? ::ruvia::detail::FormValueEncoding::kDecoded \
                 : ::ruvia::detail::FormValueEncoding::kUrlEncoded; \
             auto ruviaValue = ::ruvia::detail::parseFormValue<RUVIA_MODEL_UNPAREN type>( \
@@ -93,7 +93,7 @@
         return ruviaField_##field##_; \
     } \
     [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
-        auto* const ruviaResource = body_.resource(); \
+        auto* const ruviaResource = ruviaResource_; \
         if (!ruviaField_##field##_) { \
             ruviaField_##field##_.emplace(::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
                 ::ruvia::detail::ResolvedPmrResourceTag{}, \
@@ -113,7 +113,7 @@
                   (!::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
                       ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
     model_type& field(RuviaFieldValueT&& value) { \
-        auto* const ruviaResource = body_.resource(); \
+        auto* const ruviaResource = ruviaResource_; \
         ::ruvia::detail::model::assignFieldValue( \
             ruviaField_##field##_, \
             ::std::forward<RuviaFieldValueT>(value), \

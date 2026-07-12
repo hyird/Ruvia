@@ -121,6 +121,8 @@ set(RULE_STALE_MODEL_MUTABLE_FIELDS
     "mutable[ \t]+::ruvia::detail::ModelFieldState|mutable[ \t]+::std::optional")
 set(RULE_STALE_GENERATED_MODEL_DYNAMIC_GET
     "body_[.]get<|body_,[ \t]*resource[)][.]get<T>")
+set(RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION
+    "body_|&ruviaValid|[)][ \t]*&&[ \t]*ruviaValid")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -583,6 +585,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("RequestObject restored repeated dynamic parsing"
         "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
         "return JsonObject({}, body_, resource).get<T>(field);")
+    expect_match("generated model retained its transient request source"
+        "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}"
+        "::ruvia::RequestObject body_;")
+    expect_match("generated model visitor restored ineffective outer validity capture"
+        "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}"
+        "[this, &ruviaValid](auto key, auto value) {}")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2570,6 +2578,10 @@ check_files_no_match("generated models must not rescan raw bodies through dynami
     "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
     "${WEB_MODEL_MACROS_CONTRACT}"
     "${WEB_MODEL_OBJECT_CONTRACT}")
+check_files_no_match("generated models must not retain transient request sources"
+    "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}"
+    "${WEB_MODEL_MACROS_CONTRACT}"
+    "${WEB_MODEL_FIELD_OPS_CONTRACT}")
 if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_FIELD_OPS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_MATERIALIZATION_TEST}" AND
@@ -2587,15 +2599,25 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeRequest" OR
        NOT web_model_macros_contract MATCHES
-           "T[ \t]+request[{]::std::move[(]body[)][}]" OR
+           "T[ \t]+request[{]ruviaBody[.]resource[(][)][}]" OR
        NOT web_model_macros_contract MATCHES
-           "if[ \t]*[(]!request[.]ruviaMaterialize[(][)][)]" OR
+           "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaBody[)][)]" OR
        web_model_macros_contract MATCHES
            "${RULE_STALE_MODEL_LAZY_PARSE_STATE}" OR
+       web_model_macros_contract MATCHES
+           "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}" OR
        web_model_field_ops_contract MATCHES
            "${RULE_STALE_MODEL_MUTABLE_FIELDS}" OR
+       NOT web_model_macros_contract MATCHES
+           "pmrResourceOrDefault[(]resource[)]" OR
+       NOT web_model_macros_contract MATCHES
+           "memory_resource[*][ \t]+ruviaResource_" OR
+       NOT web_model_macros_contract MATCHES
+           "ruviaMaterialize[(]const[ \t]+::ruvia::RequestObject&[ \t]+ruviaBody[)]" OR
        NOT web_model_materialization_test MATCHES
            "model_factory_materializes_before_publication" OR
+       NOT web_model_materialization_test MATCHES
+           "messageEnsure[(][)][.]resource[(][)][ \t]*==[ \t]*&modelResource" OR
        NOT web_model_api_surface MATCHES
            "!HasModelDynamicGet<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
@@ -2605,9 +2627,13 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelDynamicGet<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>")
+           "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelRequestSource<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
         boundary_error("generated model schema boundary regressed"
-            "request factories must materialize once, const access must not mutate, and schema models must not dynamically rescan raw bodies")
+            "request factories must materialize once, retain only their PMR resource, and never dynamically rescan raw bodies")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT
