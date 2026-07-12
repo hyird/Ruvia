@@ -115,6 +115,10 @@ set(RULE_STALE_MODEL_LIST_OWNERSHIP
     "List[(]List&&[^;]*=[ \t]*default|operator=[(]List&&[^;]*=[ \t]*default|void[ \t]+clear[(][)] noexcept[ \t\r\n]*[{][ \t\r\n]*items_[.]clear")
 set(RULE_STALE_MODEL_STRING_STORAGE
     "ownedActive_|std::string_view[ \t]+view_|std::pmr::string[ \t]+owned_|assignView|resetOwned")
+set(RULE_STALE_MODEL_LAZY_PARSE_STATE
+    "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState")
+set(RULE_STALE_MODEL_MUTABLE_FIELDS
+    "mutable[ \t]+::ruvia::detail::ModelFieldState|mutable[ \t]+::std::optional")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -565,6 +569,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("model String exposed mutable owned storage before commit"
         "${RULE_STALE_MODEL_STRING_STORAGE}"
         "std::pmr::string& resetOwned();")
+    expect_match("generated model retained lazy parse state"
+        "${RULE_STALE_MODEL_LAZY_PARSE_STATE}"
+        "mutable bool ruviaParsed_; mutable bool ruviaInvalid_;")
+    expect_match("generated model retained mutable fields behind const access"
+        "${RULE_STALE_MODEL_MUTABLE_FIELDS}"
+        "mutable ::std::optional<ruvia::String> ruviaField_name_;")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2530,6 +2540,46 @@ if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
            "!std::copy_constructible<ruvia::String>")
         boundary_error("model String lost exclusive move-only ownership"
             "public values must own inputs while parser-only construction may borrow one typed storage alternative")
+    endif()
+endif()
+set(WEB_MODEL_MACROS_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/Macros.h")
+set(WEB_MODEL_FIELD_OPS_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/MacroFieldOps.h")
+set(WEB_MODEL_MATERIALIZATION_TEST
+    "${RUVIA_ROOT}/tests/unit_http_parsing.cpp")
+check_files_no_match("generated model factories must publish only materialized models"
+    "${RULE_STALE_MODEL_LAZY_PARSE_STATE}"
+    "${WEB_MODEL_MACROS_CONTRACT}")
+check_files_no_match("generated model fields must remain const-correct"
+    "${RULE_STALE_MODEL_MUTABLE_FIELDS}"
+    "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_FIELD_OPS_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_MATERIALIZATION_TEST}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_MODEL_MACROS_CONTRACT}"
+        web_model_macros_contract)
+    file(READ "${WEB_MODEL_FIELD_OPS_CONTRACT}"
+        web_model_field_ops_contract)
+    file(READ "${WEB_MODEL_MATERIALIZATION_TEST}"
+        web_model_materialization_test)
+    if(NOT web_model_macros_contract MATCHES
+           "ruviaMaterializeRequest" OR
+       NOT web_model_macros_contract MATCHES
+           "T[ \t]+request[{]::std::move[(]body[)][}]" OR
+       NOT web_model_macros_contract MATCHES
+           "if[ \t]*[(]!request[.]ruviaMaterialize[(][)][)]" OR
+       web_model_macros_contract MATCHES
+           "${RULE_STALE_MODEL_LAZY_PARSE_STATE}" OR
+       web_model_field_ops_contract MATCHES
+           "${RULE_STALE_MODEL_MUTABLE_FIELDS}" OR
+       NOT web_model_materialization_test MATCHES
+           "model_factory_materializes_before_publication" OR
+       NOT web_json_package_consumer MATCHES
+           "RUVIA_MODEL[(]InstalledPackageModel")
+        boundary_error("generated model parsing restored lazy mutable state"
+            "request factories must materialize once before publication and const access must not mutate fields")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

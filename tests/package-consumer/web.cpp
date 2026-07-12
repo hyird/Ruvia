@@ -148,6 +148,14 @@ concept HasLegacyContextBodyRefinement = requires(
     services.withBodyLoader(loader);
 };
 
+RUVIA_MODEL(InstalledPackageModel,
+    RUVIA_FIELD(name, ruvia::String),
+    RUVIA_FIELD(count, ruvia::Int32)
+);
+
+static_assert(!std::copy_constructible<InstalledPackageModel>);
+static_assert(std::movable<InstalledPackageModel>);
+
 template <typename Info>
 concept HasLegacyConnInfoScalarAccessors = requires(const Info& info) {
     info.secure();
@@ -766,6 +774,31 @@ int main() {
     if (modelString.view() != expectedModelString ||
         modelString.resource() != std::pmr::get_default_resource()) {
         return 17;
+    }
+    const auto installedModel = InstalledPackageModel::ruviaParseJsonBody(
+        R"({"name":"installed model","count":7})",
+        std::pmr::get_default_resource());
+    if (!installedModel.has_value() ||
+        !installedModel->name().has_value() ||
+        installedModel->name()->view() != "installed model" ||
+        !installedModel->count().has_value() ||
+        static_cast<std::int32_t>(*installedModel->count()) != 7) {
+        return 18;
+    }
+    const auto invalidFieldModel = InstalledPackageModel::ruviaParseJsonBody(
+        R"({"name":42,"count":7})",
+        std::pmr::get_default_resource());
+    if (!invalidFieldModel.has_value() ||
+        invalidFieldModel->name().has_value() ||
+        invalidFieldModel->ruviaFieldState<"name">() !=
+            ruvia::detail::ModelFieldState::kInvalidType) {
+        return 19;
+    }
+    const auto malformedModel = InstalledPackageModel::ruviaParseJsonBody(
+        R"({"name":"incomplete")",
+        std::pmr::get_default_resource());
+    if (malformedModel.has_value()) {
+        return 20;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

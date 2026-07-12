@@ -27,15 +27,8 @@
 #define RUVIA_MODEL_FIELD_STORAGE_IMPL(type, field, wire, rules) \
     static_assert(::ruvia::detail::isModelField<RUVIA_MODEL_UNPAREN type>, \
         "RUVIA_MODEL field type must be a Ruvia model type such as ruvia::String, ruvia::List<T>, ruvia::Bool, ruvia::Int32, or nested RUVIA_MODEL"); \
-    mutable ::ruvia::detail::ModelFieldState ruviaState_##field##_ {::ruvia::detail::ModelFieldState::kMissing}; \
-    mutable ::std::optional<RUVIA_MODEL_UNPAREN type> ruviaField_##field##_ {};
-
-#define RUVIA_MODEL_RESET_FIELD(T, x) \
-    RUVIA_MODEL_RESET_FIELD_I(RUVIA_MODEL_UNPAREN x)
-#define RUVIA_MODEL_RESET_FIELD_I(...) RUVIA_MODEL_RESET_FIELD_IMPL(__VA_ARGS__)
-#define RUVIA_MODEL_RESET_FIELD_IMPL(type, field, wire, rules) \
-    ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kMissing; \
-    ruviaField_##field##_.reset();
+    ::ruvia::detail::ModelFieldState ruviaState_##field##_ {::ruvia::detail::ModelFieldState::kMissing}; \
+    ::std::optional<RUVIA_MODEL_UNPAREN type> ruviaField_##field##_ {};
 
 #define RUVIA_MODEL_PARSE_JSON_FIELD(T, x) \
     RUVIA_MODEL_PARSE_JSON_FIELD_I(RUVIA_MODEL_UNPAREN x)
@@ -94,15 +87,12 @@
 #define RUVIA_MODEL_FIELD_ACCESSORS_I(T, ...) RUVIA_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
 #define RUVIA_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
     [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() { \
-        ruviaEnsureParsed(); \
         return ruviaField_##field##_; \
     } \
     [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
-        ruviaEnsureParsed(); \
         return ruviaField_##field##_; \
     } \
     [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
-        ruviaEnsureParsed(); \
         auto* const ruviaResource = body_.resource(); \
         if (!ruviaField_##field##_) { \
             ruviaField_##field##_.emplace(::ruvia::detail::makeRequestValue<RUVIA_MODEL_UNPAREN type>( \
@@ -123,13 +113,12 @@
                   (!::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
                       ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
     model_type& field(RuviaFieldValueT&& value) { \
-        ruviaEnsureParsed(); \
         auto* const ruviaResource = body_.resource(); \
-        ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         ::ruvia::detail::model::assignFieldValue( \
             ruviaField_##field##_, \
             ::std::forward<RuviaFieldValueT>(value), \
             ruviaResource); \
+        ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         return *this; \
     }
 
