@@ -741,6 +741,13 @@ static_assert(std::is_nothrow_copy_constructible_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_copy_assignable_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::ConnInfo>);
+static_assert(!std::default_initializable<ruvia::WebSocketHeartbeatPolicy>);
+static_assert(std::same_as<
+    decltype(ruvia::WebSocketLifecycleOptions{}.heartbeat),
+    std::optional<ruvia::WebSocketHeartbeatPolicy>>);
+static_assert(std::same_as<
+    decltype(ruvia::WebSocketLifecycleOptions{}.closeHandshakeTimeout),
+    std::optional<std::chrono::milliseconds>>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);
@@ -802,7 +809,8 @@ int main() {
         return 2;
     }
     const ruvia::WebSocketRouteOptions webSocketOptions;
-    if (webSocketOptions.lifecycle.closeHandshakeTimeout != std::chrono::seconds(5)) {
+    if (webSocketOptions.lifecycle.closeHandshakeTimeout !=
+        std::optional<std::chrono::milliseconds>(std::chrono::seconds(5))) {
         return 3;
     }
     ruvia::detail::Http2SansIoStreamRuntime standaloneRuntime(

@@ -82,7 +82,8 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
         "chat, superchat", std::pmr::get_default_resource());
     ruvia::WebSocketRouteOptions options;
     options.subprotocols = sourceProtocols;
-    options.lifecycle.pingInterval = std::chrono::milliseconds(25);
+    options.lifecycle.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(
+        std::chrono::milliseconds(25));
     const auto webSocket = RouteEndpoint::webSocket(
         std::pmr::get_default_resource(),
         RouteStreamHandler(nullptr, &streamRouteHandler),
@@ -93,7 +94,7 @@ RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
     RUVIA_CHECK(webSocket.webSocket() != nullptr);
     RUVIA_CHECK(webSocket.webSocket()->subprotocols() == "chat, superchat");
     RUVIA_CHECK_EQ(
-        webSocket.webSocket()->lifecycle().pingInterval.count(),
+        webSocket.webSocket()->lifecycle().heartbeat->pingInterval().count(),
         std::int64_t{25});
 }
 

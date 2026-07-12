@@ -85,7 +85,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     ruvia::Router invalidRouter;
     auto& invalid = ruvia::detail::RouterImpl::from(invalidRouter);
     ruvia::WebSocketRouteOptions invalidOptions;
-    invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(-1);
+    invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(0);
     bool rejected = false;
     try {
         invalid.registerWebSocketRoute(
@@ -119,7 +119,7 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     const auto* endpoint = resolved->route().endpoint().webSocket();
     RUVIA_CHECK(endpoint != nullptr);
     RUVIA_CHECK_EQ(
-        endpoint->lifecycle().closeHandshakeTimeout.count(),
+        endpoint->lifecycle().closeHandshakeTimeout->count(),
         std::int64_t{1234});
 }
 

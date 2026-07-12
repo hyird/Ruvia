@@ -7833,8 +7833,17 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
         boundary_error("RFC 8441 transport mapping lost stream-local lifecycle"
             "typed end must map to END_STREAM and liveness abort to RST_STREAM(CANCEL)")
     endif()
-    if(NOT ws_public_config MATCHES "struct WebSocketLifecycleOptions" OR
+    if(NOT ws_public_config MATCHES "class WebSocketHeartbeatPolicy final" OR
+       NOT ws_public_config MATCHES
+           "static WebSocketHeartbeatPolicy periodic" OR
+       NOT ws_public_config MATCHES
+           "std::optional<WebSocketHeartbeatPolicy> heartbeat" OR
+       NOT ws_public_config MATCHES
+           "std::optional<std::chrono::milliseconds> closeHandshakeTimeout" OR
+       ws_public_config MATCHES "milliseconds pingInterval[{]" OR
+       ws_public_config MATCHES "milliseconds pongTimeout[{]" OR
        NOT ws_public_config MATCHES "closeHandshakeTimeout" OR
+       NOT ws_liveness MATCHES "options[.]heartbeat[.]has_value" OR
        NOT ws_liveness MATCHES "WsClosePhase closePhase" OR
        NOT ws_runtime MATCHES "WebSocketLifecycleOptions lifecycleOptions_")
         boundary_error("WebSocket liveness policy is not Web-owned"
