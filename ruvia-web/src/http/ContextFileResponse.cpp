@@ -441,13 +441,9 @@ class StaticFileRepresentation final {
 public:
     StaticFileRepresentation(
         detail::StaticRootEntryView entry,
-        detail::HttpContentCoding contentCoding)
+        detail::HttpContentCoding contentCoding) noexcept
         : entry_(entry),
-          contentCoding_(contentCoding) {
-        if (!entry_.found()) {
-            throw std::logic_error("static file representation has no entry");
-        }
-    }
+          contentCoding_(contentCoding) {}
 
     [[nodiscard]] const detail::StaticRootEntryView& entry() const noexcept {
         return entry_;
@@ -509,10 +505,10 @@ private:
         variantPath.append(candidate.suffix.data(), candidate.suffix.size());
         if (const auto entry =
                 detail::StaticRootAccess::find(root, variantPath);
-            entry.found()) {
+            entry.has_value()) {
             best = candidate.score;
             selected = StaticFileRepresentation(
-                entry,
+                *entry,
                 candidate.contentCoding);
         }
     }
@@ -547,7 +543,8 @@ HttpResponse Context::staticFile(
     }
 
     auto entry = detail::StaticRootAccess::find(root, relative);
-    if (!entry.found() && detail::StaticRootAccess::isIndexedDirectory(root, relative)) {
+    if (!entry.has_value() &&
+        detail::StaticRootAccess::isIndexedDirectory(root, relative)) {
         if (!relative.empty() && relative.back() != '/') {
             relative.push_back('/');
         }
@@ -555,9 +552,10 @@ HttpResponse Context::staticFile(
         relative.append(indexFile.data(), indexFile.size());
         entry = detail::StaticRootAccess::find(root, relative);
     }
-    if (!entry.found()) {
+    if (!entry.has_value()) {
         throw HttpError(404, "not_found", "file not found");
     }
+    const auto& baseEntry = *entry;
 
     // Serve a precompressed sidecar when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
@@ -566,7 +564,7 @@ HttpResponse Context::staticFile(
         relative,
         request_,
         resource(),
-        entry);
+        baseEntry);
     const auto& servedEntry = served.entry();
 
     const auto applyState = [this](HttpResponse& response, std::uint16_t statusCode) {
@@ -574,15 +572,15 @@ HttpResponse Context::staticFile(
     };
     return makeFileResponse(
         *this,
-        FileResponsePath::borrowing(servedEntry.filePath),
-        servedEntry.size,
-        servedEntry.modified,
-        contentType.empty() ? entry.contentType : contentType,
-        entry.cacheControl,
-        entry.enableRanges,
-        entry.enableValidators,
-        servedEntry.etag,
-        servedEntry.lastModified,
+        FileResponsePath::borrowing(servedEntry.filePath()),
+        servedEntry.size(),
+        servedEntry.modified(),
+        contentType.empty() ? baseEntry.contentType() : contentType,
+        baseEntry.cacheControl(),
+        baseEntry.rangesEnabled(),
+        baseEntry.validatorsEnabled(),
+        servedEntry.etag(),
+        servedEntry.lastModified(),
         served.contentCoding(),
         true,  // staticFile negotiates the representation by Accept-Encoding
         applyState);
