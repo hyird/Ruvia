@@ -671,9 +671,9 @@ Task<std::string_view> Context::requestBody() const {
     }
 
     std::string_view raw;
-    if (bodyLoader_ != nullptr) {
-        raw = co_await bodyLoader_->readAll();
-    } else if (bodyReader_ != nullptr) {
+    if (const auto* lazy = requestBodySource_.lazy()) {
+        raw = co_await lazy->loader().readAll();
+    } else if (requestBodySource_.streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
         raw = detail::requestBodyBytes(request_);
@@ -759,20 +759,21 @@ Task<ContextRequest::RequestFormData> Context::parseRequestBody(
 }
 
 Task<void> Context::requestDiscardBody() const {
-    if (bodyLoader_ != nullptr) {
-        co_await bodyLoader_->discard();
+    if (const auto* lazy = requestBodySource_.lazy()) {
+        co_await lazy->loader().discard();
         co_return;
     }
-    if (bodyReader_ != nullptr) {
-        while (co_await bodyReader_->read()) {}
+    if (const auto* streaming = requestBodySource_.streaming()) {
+        while (co_await streaming->reader().read()) {}
     }
 }
 
 BodyReader& Context::requestBodyReader() const {
-    if (bodyReader_ == nullptr) {
+    const auto* streaming = requestBodySource_.streaming();
+    if (streaming == nullptr) {
         throw std::logic_error("request body is not streamable");
     }
-    return *bodyReader_;
+    return streaming->reader();
 }
 
 MultipartReader Context::requestMultipartReader() const {
@@ -780,17 +781,19 @@ MultipartReader Context::requestMultipartReader() const {
 }
 
 WebSocket& Context::webSocket() const {
-    if (webSocket_ == nullptr) {
+    const auto* output = responseOutput_.webSocket();
+    if (output == nullptr) {
         throw std::logic_error("websocket is not available");
     }
-    return *webSocket_;
+    return output->webSocket();
 }
 
 ResponseStreamWriter& Context::stream() const {
-    if (responseStream_ == nullptr) {
+    const auto* output = responseOutput_.responseStream();
+    if (output == nullptr) {
         throw std::logic_error("response body is not streamable");
     }
-    return *responseStream_;
+    return output->writer();
 }
 
 ResponseStreamWriter& Context::streamText() {

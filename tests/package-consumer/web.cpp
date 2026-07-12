@@ -22,6 +22,8 @@
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>
 #include <ruvia/web/detail/ValidatedValues.h>
+#include <ruvia/web/detail/http/ContextCapabilities.h>
+#include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
@@ -58,6 +60,24 @@ concept HasLooseRouteResolutionAccessors = requires(
     resolution.allowedMethods();
 };
 
+template <typename Services>
+concept HasSplitContextCapabilityAccessors = requires(
+    const Services& services) {
+    services.bodyReader();
+    services.bodyLoader();
+    services.webSocket();
+    services.responseStream();
+};
+
+template <typename Services>
+concept HasLegacyContextBodyRefinement = requires(
+    const Services& services,
+    ruvia::BodyReader& reader,
+    ruvia::detail::RequestBodyLoader& loader) {
+    services.withBodyReader(reader);
+    services.withBodyLoader(loader);
+};
+
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -84,6 +104,26 @@ static_assert(!HasDirectHttp2BodyModeSelection<
     ruvia::detail::Http2RequestBodyRuntime>);
 static_assert(!HasLooseRouteResolutionAccessors<
     ruvia::detail::RouteResolution>);
+static_assert(!HasSplitContextCapabilityAccessors<
+    ruvia::detail::ContextServices>);
+static_assert(!HasLegacyContextBodyRefinement<
+    ruvia::detail::ContextServices>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::detail::ContextServices&>()
+                 .requestBodySource()),
+    const ruvia::detail::ContextRequestBodySource&>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::detail::ContextServices&>()
+                 .responseOutput()),
+    const ruvia::detail::ContextResponseOutput&>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::ContextLazyRequestBodySource>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::ContextStreamingRequestBodySource>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::ContextResponseStreamOutput>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::ContextWebSocketOutput>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::RouteEndpoint>);
 static_assert(!std::is_polymorphic_v<ruvia::detail::RouteTable>);
@@ -147,6 +187,15 @@ int main() {
     if (!signal->ended() || !runtimes.remove(1) ||
         runtimes.dispatchedCount() != 0) {
         return 7;
+    }
+    const ruvia::detail::ContextServices contextServices;
+    if (contextServices.requestBodySource().buffered() == nullptr ||
+        contextServices.requestBodySource().lazy() != nullptr ||
+        contextServices.requestBodySource().streaming() != nullptr ||
+        contextServices.responseOutput().buffered() == nullptr ||
+        contextServices.responseOutput().responseStream() != nullptr ||
+        contextServices.responseOutput().webSocket() != nullptr) {
+        return 8;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

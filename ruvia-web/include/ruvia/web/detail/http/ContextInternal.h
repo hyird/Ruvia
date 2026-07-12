@@ -42,10 +42,8 @@ inline Context::Context(
       errorHandler_(services.errorHandler()),
       notFoundHandler_(services.notFoundHandler()),
       routeRateLimitScope_(routeRateLimitScope),
-      bodyReader_(services.bodyReader()),
-      bodyLoader_(services.bodyLoader()),
-      webSocket_(services.webSocket()),
-      responseStream_(services.responseStream()),
+      requestBodySource_(services.requestBodySource()),
+      responseOutput_(services.responseOutput()),
       responseHeaders_(memory.resource()),
       secure_(services.secure()) {}
 

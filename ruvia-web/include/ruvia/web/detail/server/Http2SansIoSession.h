@@ -482,7 +482,7 @@ Task<void> runHttp2SansIoSession(
         }
         auto dispatchServices = baseServices;
         if (bodyReaderStorage) {
-            dispatchServices = dispatchServices.withBodyReader(*bodyReaderStorage);
+            dispatchServices = dispatchServices.withStreamingRequestBody(*bodyReaderStorage);
         }
 
         HttpResponse response(requestMemory.resource());

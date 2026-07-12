@@ -806,6 +806,14 @@ HEADERS/END_STREAM 状态转换。
 - 文件响应不全量读入内存；plain TCP 优先使用平台零拷贝路径。
 - response streaming 和 WebSocket 必须通过显式 route macro 注册。
 - 普通路由返回的 `HttpResponse` 只允许空、borrowed/owned bytes 或 file body；响应流必须走显式 streaming route 和 `ResponseStreamWriter`，不得增加动态或类型擦除的响应体旁路。
+- 每个 `Context` 的请求体来源必须由 `ContextRequestBodySource` 唯一表达，只能是
+  `ContextBufferedRequestBodySource`、`ContextLazyRequestBodySource` 或
+  `ContextStreamingRequestBodySource`；响应输出必须由 `ContextResponseOutput` 唯一表达，只能是
+  `ContextBufferedResponseOutput`、`ContextResponseStreamOutput` 或 `ContextWebSocketOutput`。
+  非 buffered alternative 必须持有不可为空的 runtime facade，`ContextServices` 按值把两个判别联合
+  传给 `Context`。禁止恢复 `bodyReader + bodyLoader`、`responseStream + webSocket` 四个 nullable
+  pointer slot、`withBodyReader()`/`withBodyLoader()` 手工清空对端，或为这两个状态轴引入分配、虚调用、
+  type-erasure 和请求期同步。
 
 ## 路由和中间件
 

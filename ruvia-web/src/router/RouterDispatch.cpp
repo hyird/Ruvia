@@ -188,9 +188,10 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         request,
         resolved,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
-    auto* responseStream = services.responseStream();
-    if (responseStream != nullptr) {
-        detail::StreamingAccess::bindContext(*responseStream, context, &streamingHeadThunk);
+    const auto* responseStreamOutput = services.responseOutput().responseStream();
+    if (responseStreamOutput != nullptr) {
+        detail::StreamingAccess::bindContext(
+            responseStreamOutput->writer(), context, &streamingHeadThunk);
     }
 
     std::exception_ptr exception;
@@ -224,8 +225,9 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     }
 
     if (exception != nullptr) {
-        if (services.webSocket() != nullptr ||
-            (responseStream != nullptr && detail::StreamingAccess::committed(*responseStream))) {
+        if (services.responseOutput().webSocket() != nullptr ||
+            (responseStreamOutput != nullptr &&
+             detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
             std::rethrow_exception(exception);
         }
         auto response = co_await handleException(context, exception);
@@ -242,8 +244,9 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     // the stream with a clean terminator would frame a truncated body as complete.
     // Rethrow so the driver aborts (connection close / RST_STREAM), exactly as the
     // no-middleware path does through the committed check above.
-    if (services.webSocket() != nullptr ||
-        (responseStream != nullptr && detail::StreamingAccess::committed(*responseStream))) {
+    if (services.responseOutput().webSocket() != nullptr ||
+        (responseStreamOutput != nullptr &&
+         detail::StreamingAccess::committed(responseStreamOutput->writer()))) {
         if (auto contextException = context.error()) {
             std::rethrow_exception(contextException);
         }

@@ -859,6 +859,16 @@ through `found()`/top-level accessors. Those transports now call the one concret
 `RouteTable` directly. The former `RequestDispatcher` virtual interface is removed: it had only one
 implementation but imposed request-time virtual lookup and dispatch on every HTTP/2 stream.
 
+Per-dispatch `Context` capabilities follow the same exclusive-state rule. `ContextRequestBodySource`
+contains exactly one `ContextBufferedRequestBodySource`, `ContextLazyRequestBodySource`, or
+`ContextStreamingRequestBodySource`; `ContextResponseOutput` contains exactly one
+`ContextBufferedResponseOutput`, `ContextResponseStreamOutput`, or `ContextWebSocketOutput`. The
+non-buffered alternatives borrow a non-null runtime facade, and `ContextServices` copies the two
+small discriminated values into `Context`. The former four nullable `bodyReader`/`bodyLoader`/
+`responseStream`/`webSocket` slots and the `withBodyReader`/`withBodyLoader` refinements are removed,
+so an output cannot be both a response stream and a WebSocket and a body cannot be both lazy and
+streaming. This adds no allocation, lock, virtual dispatch, or request-time type erasure.
+
 ## Runtime Model
 
 - Per-worker standalone Asio `io_context`.
