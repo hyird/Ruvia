@@ -8070,6 +8070,12 @@ endif()
 set(CORE_BASE64URL
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/Base64Url.h")
 set(WEB_JWT_ENCODING "${RUVIA_ROOT}/ruvia-web/src/auth/JwtEncoding.cpp")
+set(WEB_JWT_JSON "${RUVIA_ROOT}/ruvia-web/src/auth/JwtJson.cpp")
+set(WEB_JWT_TEST "${RUVIA_ROOT}/tests/unit_jwt.cpp")
+check_files_no_match("JWT must not recover first-match JSON member lookup"
+    "jwtFindJsonString"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/auth/JwtInternal.h"
+    "${WEB_JWT_JSON}")
 if(NOT EXISTS "${CORE_BASE64URL}")
     boundary_error("core base64url primitive is missing"
         "ruvia-core/include/ruvia/core/detail/Base64Url.h")
@@ -8079,6 +8085,19 @@ elseif(EXISTS "${WEB_JWT_ENCODING}")
        NOT web_jwt_encoding MATCHES "decodeBase64UrlChar")
         boundary_error("JWT stopped reusing the core base64url primitive"
             "ruvia-web must not recreate or recover the removed HTTP-owned helper")
+    endif()
+endif()
+if(EXISTS "${WEB_JWT_JSON}" AND EXISTS "${WEB_JWT_TEST}")
+    file(READ "${WEB_JWT_JSON}" web_jwt_json)
+    file(READ "${WEB_JWT_TEST}" web_jwt_test)
+    if(NOT web_jwt_json MATCHES "visitUniqueJwtJsonObjectFields" OR
+       NOT web_jwt_json MATCHES "jwtParseJoseAlgorithm" OR
+       NOT web_jwt_test MATCHES
+           "jwt_verify_requires_unique_complete_json_objects" OR
+       NOT web_jwt_test MATCHES
+           "jwt_sign_rejects_duplicate_custom_claim_names")
+        boundary_error("JWT JSON objects lost their unique complete-member contract"
+            "JOSE headers and claims must reject duplicate names and trailing significant bytes")
     endif()
 endif()
 

@@ -37,7 +37,9 @@ template <typename Visitor>
     }
     skipJsonWhitespace(input);
     if (!input.empty() && input.front() == '}') {
-        return true;
+        input.remove_prefix(1);
+        skipJsonWhitespace(input);
+        return input.empty();
     }
 
     auto& visitorRef = visitor;
@@ -68,7 +70,9 @@ template <typename Visitor>
 
         skipJsonWhitespace(input);
         if (!input.empty() && input.front() == '}') {
-            return true;
+            input.remove_prefix(1);
+            skipJsonWhitespace(input);
+            return input.empty();
         }
         if (!consumeJsonChar(input, ',')) {
             return false;
