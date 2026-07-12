@@ -52,7 +52,7 @@ int main() {
         .setListenAddress("0.0.0.0")
         .setHttpListenPort(8083)
         .setThreadNum(2)
-        .setCompression(ruvia::CompressionConfig{.enabled = true, .minBytes = 128})
+        .setCompression(ruvia::CompressionConfig{.minBytes = 128})
         .setDocumentRoot(std::move(documentRoot))
         .run();
 }

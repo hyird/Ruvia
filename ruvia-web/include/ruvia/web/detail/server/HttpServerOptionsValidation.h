@@ -25,7 +25,9 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     if (options.autoHttps.enabled) {
         ensureNonZeroPort(options.autoHttps.httpsPort, "auto HTTPS requires a fixed HTTPS listen port");
     }
-    validateCorsConfig(options.cors);
+    if (options.cors.has_value()) {
+        validateCorsConfig(*options.cors);
+    }
 }
 
 [[nodiscard]] inline HttpServerOptions validatedHttpServerOptions(HttpServerOptions options) {

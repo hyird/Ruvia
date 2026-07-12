@@ -28,12 +28,10 @@ struct TlsConfig final {
 // Canonical startup values shared by App setters and every worker's server
 // options. They stay top-level so configuration is not copied between models.
 struct CompressionConfig final {
-    bool enabled{true};
     std::size_t minBytes{1024};
 };
 
 struct CorsConfig final {
-    bool enabled{false};
     std::pmr::string allowOrigin{"*"};
     std::pmr::string allowHeaders;
     std::pmr::string exposeHeaders;

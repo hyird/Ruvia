@@ -413,6 +413,11 @@ concept HasLegacyStreamHandledPredicate = requires(const Result& result) {
     result.streamHandled();
 };
 
+template <typename Policy>
+concept HasEmbeddedPolicyEnabledFlag = requires(Policy& policy) {
+    policy.enabled;
+};
+
 using RecordHttpAccessFunction = void (*)(
     const ruvia::detail::AccessLogSink&,
     const ruvia::HttpRequest&,
@@ -422,16 +427,28 @@ using RecordHttpAccessFunction = void (*)(
 using AppOnAccessFunction = ruvia::App& (ruvia::App::*)(
     ruvia::AccessLogCallback,
     void*);
+using AppSetCompressionFunction = ruvia::App& (ruvia::App::*)(
+    std::optional<ruvia::CompressionConfig>);
+using AppSetCorsFunction = ruvia::App& (ruvia::App::*)(
+    std::optional<ruvia::CorsConfig>);
 
 static_assert(std::same_as<
     decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
     AppOnAccessFunction>);
 static_assert(std::same_as<
+    decltype(static_cast<AppSetCompressionFunction>(&ruvia::App::setCompression)),
+    AppSetCompressionFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetCorsFunction>(&ruvia::App::setCors)),
+    AppSetCorsFunction>);
+static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
+static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
+static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::HttpServerOptions>().compression),
-    ruvia::CompressionConfig>);
+    std::optional<ruvia::CompressionConfig>>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::HttpServerOptions>().cors),
-    ruvia::CorsConfig>);
+    std::optional<ruvia::CorsConfig>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -903,7 +920,7 @@ int main() {
         ruvia::detail::HttpContentCoding::kGzip,
         ruvia::HttpKnownMethod::kGet,
         compressed,
-        ruvia::CompressionConfig{true, 16});
+        ruvia::CompressionConfig{.minBytes = 16});
     if (compressed.header("Content-Encoding") != "gzip" ||
         ruvia::detail::responseBody(compressed).ownedBytes() == nullptr ||
         ruvia::detail::responseBody(compressed).bytes().empty()) {

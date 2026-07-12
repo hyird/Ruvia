@@ -52,6 +52,17 @@ int main() {
     memory.requestInitialBufferBytes = 4096;
     const auto httpPort = app.env().get<std::uint16_t>("RUVIA_HTTP_PORT")
         .value_or(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8087));
+    std::optional<ruvia::CompressionConfig> compression;
+    if (app.env().get<bool>("RUVIA_GZIP").value_or(true)) {
+        compression.emplace();
+    }
+    std::optional<ruvia::CorsConfig> cors;
+    if (app.env().get<bool>("RUVIA_CORS").value_or(false)) {
+        auto& config = cors.emplace();
+        config.allowOrigin = "*";
+        config.allowHeaders = "content-type, authorization";
+        config.maxAge = std::chrono::seconds(600);
+    }
 
     app
         .setListenAddress("0.0.0.0")
@@ -68,16 +79,8 @@ int main() {
         .setMaxStreamBodyBytes(0)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .setMemoryPoolConfig(memory)
-        .setCompression(ruvia::CompressionConfig{
-            .enabled = app.env().get<bool>("RUVIA_GZIP").value_or(true),
-            .minBytes = 1024,
-        })
-        .setCors(ruvia::CorsConfig{
-            .enabled = app.env().get<bool>("RUVIA_CORS").value_or(false),
-            .allowOrigin = "*",
-            .allowHeaders = "content-type, authorization",
-            .maxAge = std::chrono::seconds(600),
-        });
+        .setCompression(std::move(compression))
+        .setCors(std::move(cors));
 
     const auto cert = pathOrEmpty(app.env().get("RUVIA_TLS_CERT"));
     const auto key = pathOrEmpty(app.env().get("RUVIA_TLS_KEY"));

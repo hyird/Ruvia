@@ -68,8 +68,10 @@ struct HttpServerOptions final {
     // WebSocket messages are assembled before delivery; this must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     Tls tls;
-    CompressionConfig compression;
-    CorsConfig cors;
+    // Presence enables the policy; absence bypasses it without retaining an
+    // inactive configuration state.
+    std::optional<CompressionConfig> compression{std::in_place};
+    std::optional<CorsConfig> cors;
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLogSink accessLog;

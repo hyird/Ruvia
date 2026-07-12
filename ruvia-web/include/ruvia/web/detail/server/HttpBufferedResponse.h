@@ -45,12 +45,16 @@ private:
     HttpResponse& response,
     const HttpServerOptions& options) {
     materializeResponseBody(response);
-    applyCorsHeaders(request, response, options.cors);
-    applyResponseCompression(
-        coding,
-        request.knownMethod(),
-        response,
-        options.compression);
+    if (options.cors.has_value()) {
+        applyCorsHeaders(request, response, *options.cors);
+    }
+    if (options.compression.has_value()) {
+        applyResponseCompression(
+            coding,
+            request.knownMethod(),
+            response,
+            *options.compression);
+    }
     return HttpBufferedResponsePreparation(
         httpBufferedResponseWritePlan(request.knownMethod(), response));
 }

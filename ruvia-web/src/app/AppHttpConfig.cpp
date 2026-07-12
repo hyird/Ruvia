@@ -71,23 +71,25 @@ App& App::addTlsCertificate(std::string_view host, TlsConfig config) {
         });
 }
 
-App& App::setCompression(CompressionConfig config) {
+App& App::setCompression(std::optional<CompressionConfig> config) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change compression config while app is running",
-        [config](detail::AppState& state) {
-            state.options.compression = config;
+        [&config](detail::AppState& state) {
+            state.options.compression = std::move(config);
         });
 }
 
-App& App::setCors(CorsConfig config) {
+App& App::setCors(std::optional<CorsConfig> config) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change CORS config while app is running",
         [&config](detail::AppState& state) {
-            detail::validateCorsConfig(config);
+            if (config.has_value()) {
+                detail::validateCorsConfig(*config);
+            }
             state.options.cors = std::move(config);
         });
 }
