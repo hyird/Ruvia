@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ruvia/web/Context.h"
+// Model-backed inline definitions for the public Context API.
+
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/ModelObject.h"
 #include "ruvia/web/ModelTypes.h"

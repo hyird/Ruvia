@@ -4324,13 +4324,33 @@ set(HTTP1_INTERIM_RESPONSE_WRITER
 set(WEB_CONTEXT_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
 set(WEB_CONTEXT_INLINE
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.inl")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/Context.inl")
 set(WEB_CONTEXT_MODEL
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextModel.h")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextModel.inl")
 set(WEB_CONTEXT_RESPONSE_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
 set(WEB_ERROR_NORMALIZE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/HttpErrorNormalize.h")
+
+foreach(stale_context_inline IN ITEMS
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.inl"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextModel.h")
+    if(EXISTS "${stale_context_inline}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${stale_context_inline}")
+        boundary_error("Context implementation escaped detail/http ownership"
+            "${relative} must not restore the removed public-root path")
+    endif()
+endforeach()
+if(EXISTS "${WEB_CONTEXT_HEADER}")
+    file(READ "${WEB_CONTEXT_HEADER}" web_context_public_header)
+    if(NOT web_context_public_header MATCHES
+           "ruvia/web/detail/http/Context[.]inl" OR
+       NOT web_context_public_header MATCHES
+           "ruvia/web/detail/http/ContextModel[.]inl")
+        boundary_error("Context public templates depend on caller include order"
+            "Context.h must include both detail/http inline implementation headers")
+    endif()
+endif()
 
 foreach(response_status_contract_file IN ITEMS
         "${HTTP_STATUS_HEADER}"

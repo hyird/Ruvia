@@ -2,7 +2,6 @@
 
 #include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/ContextModel.h"
 #include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/web/Model.h"
 #include "ruvia/http/UrlEncoding.h"
