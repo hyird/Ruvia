@@ -75,6 +75,6 @@ Task<void> HttpServer::handleHttp2Session(
         options_,
         scannerEntry,
         services,
-        started_,
+        workerRunning_,
         initialBytes);
 }

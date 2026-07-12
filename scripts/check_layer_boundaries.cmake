@@ -174,7 +174,7 @@ set(RULE_STALE_CONN_INFO_SCALARS
 set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
     "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
 set(RULE_STALE_HTTP2_SESSION_ENV
-    "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](databases|redis|rateLimiter|options|scannerEntry|clientCertificate|serverStarted)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]|const[ \t]+std::atomic_bool[*][ \t]+serverStarted[ \t]*=[ \t]*nullptr")
+    "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](databases|redis|rateLimiter|options|scannerEntry|clientCertificate|serverStarted|workerRunning)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]|const[ \t]+(std::atomic_bool|bool)[*][ \t]+(serverStarted|workerRunning)[ \t]*=[ \t]*nullptr")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -1162,6 +1162,48 @@ if(EXISTS "${WEB_RATE_LIMIT_RULE}" AND EXISTS "${WEB_RATE_LIMITER}" AND
        web_app_runtime MATCHES "unique_ptr[<]RateLimiter|runtime->rateLimiter")
         boundary_error("RateLimiter escaped HttpServer worker ownership"
             "each HttpServer must own its limiter; AppRuntimeGraph must not share one")
+    endif()
+endif()
+
+set(WEB_HTTP_SERVER_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerLifecycle.cpp")
+set(WEB_HTTP_SERVER_ACCEPT
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerAccept.cpp")
+set(WEB_HTTP1_STREAM_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+set(WEB_HTTP2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_CLEARTEXT_HTTP2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
+foreach(worker_lifecycle_file IN ITEMS
+        "${WEB_HTTP_SERVER_LIFECYCLE}"
+        "${WEB_HTTP_SERVER_ACCEPT}"
+        "${WEB_HTTP1_STREAM_SESSION}"
+        "${WEB_HTTP2_SESSION}"
+        "${WEB_CLEARTEXT_HTTP2_SESSION}")
+    if(NOT EXISTS "${worker_lifecycle_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${worker_lifecycle_file}")
+        boundary_error("Worker-local shutdown chain is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+check_files_no_match("request sessions must not poll cross-thread lifecycle atomics"
+    "atomic_bool|started_[.]load|lifecycleState_"
+    "${WEB_HTTP_SERVER_ACCEPT}"
+    "${WEB_HTTP1_STREAM_SESSION}"
+    "${WEB_HTTP2_SESSION}"
+    "${WEB_CLEARTEXT_HTTP2_SESSION}")
+if(EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_HTTP_SERVER_LIFECYCLE}")
+    file(READ "${WEB_HTTP_SERVER}" web_http_server_lifecycle_model)
+    file(READ "${WEB_HTTP_SERVER_LIFECYCLE}" web_http_server_lifecycle)
+    if(NOT web_http_server_lifecycle_model MATCHES "enum class LifecycleState" OR
+       NOT web_http_server_lifecycle_model MATCHES
+           "std::atomic[<]LifecycleState[>][ \t]+lifecycleState_" OR
+       NOT web_http_server_lifecycle_model MATCHES "bool[ \t]+workerRunning_" OR
+       NOT web_http_server_lifecycle MATCHES "asio::post[(]ioContext_" OR
+       NOT web_http_server_lifecycle MATCHES "workerRunning_[ \t]*=[ \t]*false")
+        boundary_error("HttpServer shutdown bypasses its worker mailbox"
+            "external lifecycle state must post shutdown; request sessions use workerRunning_ only")
     endif()
 endif()
 file(GLOB_RECURSE EDGE_REFERENCE_SOURCE LIST_DIRECTORIES FALSE
@@ -6321,7 +6363,7 @@ else()
        NOT web_http2_session MATCHES
            "ConnectionScanner::Entry& scannerEntry" OR
        NOT web_http2_session MATCHES
-           "const std::atomic_bool& serverStarted" OR
+           "const bool& workerRunning" OR
        NOT web_http2_session MATCHES
            "const ContextServices& services[(][)]" OR
        NOT web_http2_session MATCHES

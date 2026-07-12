@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <string_view>
 
 #include "ruvia/web/detail/http/ContextServices.h"
@@ -19,12 +18,12 @@ public:
             services,
             options,
             scannerEntry,
-            serverStarted);
+            workerRunning);
     }
 
     HttpServerOptions options;
     detail::ConnectionScanner::Entry scannerEntry;
-    std::atomic_bool serverStarted{true};
+    bool workerRunning{true};
 };
 
 template <typename Stream>

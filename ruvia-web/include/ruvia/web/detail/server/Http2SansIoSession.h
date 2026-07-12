@@ -24,7 +24,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -86,11 +85,11 @@ public:
         ContextServices services,
         const HttpServerOptions& options,
         ConnectionScanner::Entry& scannerEntry,
-        const std::atomic_bool& serverStarted) noexcept
+        const bool& workerRunning) noexcept
         : services_(services),
           options_(&options),
           scannerEntry_(&scannerEntry),
-          serverStarted_(&serverStarted) {}
+          workerRunning_(&workerRunning) {}
 
     [[nodiscard]] const HttpServerOptions& options() const noexcept {
         return *options_;
@@ -100,8 +99,8 @@ public:
         return *scannerEntry_;
     }
 
-    [[nodiscard]] const std::atomic_bool& serverStarted() const noexcept {
-        return *serverStarted_;
+    [[nodiscard]] bool workerRunning() const noexcept {
+        return *workerRunning_;
     }
 
     [[nodiscard]] const ContextServices& services() const noexcept {
@@ -112,7 +111,7 @@ private:
     ContextServices services_;
     const HttpServerOptions* options_;
     ConnectionScanner::Entry* scannerEntry_;
-    const std::atomic_bool* serverStarted_;
+    const bool* workerRunning_;
 };
 
 [[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
@@ -1045,7 +1044,7 @@ Task<void> runHttp2SansIoSession(
             // The server has begun draining: tell the peer to stop opening streams
             // (RFC 9113 §6.8); streams already started keep running.
             if (!connection.draining() &&
-                !session.serverStarted().load(std::memory_order_relaxed)) {
+                !session.workerRunning()) {
                 connection.beginDrain();
             }
             const auto result = feedAndDrain(

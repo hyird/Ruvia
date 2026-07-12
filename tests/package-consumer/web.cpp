@@ -1,4 +1,3 @@
-#include <atomic>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -674,7 +673,7 @@ static_assert(std::is_nothrow_constructible_v<
     ruvia::detail::ContextServices,
     const ruvia::HttpServerOptions&,
     ruvia::detail::ConnectionScanner::Entry&,
-    const std::atomic_bool&>);
+    const bool&>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ConnInfo&>().plain()),
     const ruvia::PlainConnectionTransport*>);

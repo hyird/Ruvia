@@ -189,10 +189,13 @@ HttpServer::~HttpServer() {
 }
 
 void HttpServer::start() {
-    bool expected = false;
-    if (!started_.compare_exchange_strong(expected, true)) {
-        throw std::logic_error("http server worker is already started");
+    auto expected = LifecycleState::kFresh;
+    if (!lifecycleState_.compare_exchange_strong(
+            expected,
+            LifecycleState::kRunning)) {
+        throw std::logic_error("http server worker cannot be restarted");
     }
+    workerRunning_ = true;
 
     try {
         resetStartupState();
@@ -206,10 +209,11 @@ void HttpServer::start() {
         workerThread_ = std::jthread([this] { runIoContext(); });
         waitForStartupReady();
     } catch (...) {
-        started_ = false;
+        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
         if (workerThread_.joinable()) {
             workerThread_.join();
         } else {
+            workerRunning_ = false;
             stopOnContext(/*honorGracePeriod=*/false);
         }
         throw;
@@ -217,7 +221,10 @@ void HttpServer::start() {
 }
 
 void HttpServer::stop() {
-    if (!started_.exchange(false)) {
+    auto expected = LifecycleState::kRunning;
+    if (!lifecycleState_.compare_exchange_strong(
+            expected,
+            LifecycleState::kStopping)) {
         return;
     }
 
@@ -330,12 +337,13 @@ void HttpServer::configureTlsContext() {
 }
 
 void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
+    workerRunning_ = false;
     std::error_code ignored;
     acceptor_.cancel(ignored);
     acceptor_.close(ignored);
     connectionScanner_.stop();
 
-    // started_ is already false, so sessions self-close after their current
+    // workerRunning_ is now false, so sessions close after their current
     // request. With a grace period, hold the force-close for that long so
     // in-flight requests can finish; otherwise close immediately. A teardown
     // triggered by a startup failure or a worker crash (honorGracePeriod=false)
@@ -390,12 +398,14 @@ void HttpServer::runIoContext() noexcept {
     try {
         ioContext_.run();
     } catch (...) {
-        started_.store(false, std::memory_order_relaxed);
+        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
         stopOnContext(/*honorGracePeriod=*/false);
         completeStartup(std::current_exception());
         return;
     }
 
+    lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
+    workerRunning_ = false;
     completeStartup(std::make_exception_ptr(
         std::runtime_error("http server worker stopped before startup completed")));
 }
@@ -411,7 +421,7 @@ Task<void> HttpServer::runWorker() {
         completeStartup();
         co_await acceptLoop();
     } catch (...) {
-        started_.store(false, std::memory_order_relaxed);
+        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
         stopOnContext(/*honorGracePeriod=*/false);
         completeStartup(std::current_exception());
     }
