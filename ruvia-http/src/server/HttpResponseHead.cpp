@@ -110,6 +110,13 @@ void appendResponseHead(
         throw std::invalid_argument(
             "HTTP/1 response plan status does not match response");
     }
+    const auto* buffered = plan.buffered();
+    if (buffered != nullptr &&
+        buffered->contentLength() !=
+            bodyPlan.bufferedRepresentationLength(response)) {
+        throw std::invalid_argument(
+            "HTTP/1 response plan representation does not match response");
+    }
     const auto responseStatus = bodyPlan.responseStatus();
     const auto& policy = bodyPlan.policy();
     const bool emitChunkedTransferEncoding =
@@ -123,7 +130,6 @@ void appendResponseHead(
         !emitChunkedTransferEncoding &&
         !autoContentLengthOwnedByWriter &&
         (plan.closeDelimitedStream() == nullptr || bodyPlan.bodySuppressed());
-    const auto* buffered = plan.buffered();
     const ResponseHeadFlags flags{
         .protocolVersion = plan.protocolVersion(),
         .emitChunkedTransferEncoding = emitChunkedTransferEncoding,

@@ -434,7 +434,13 @@ if(NOT _installed_http2_connection MATCHES
    NOT _installed_http2_connection MATCHES
        "Http2BufferedResponseHeadSubmitResult" OR
    NOT _installed_http2_connection MATCHES
-       "Http2StreamingResponseHeadSubmitResult")
+       "Http2StreamingResponseHeadSubmitResult" OR
+   NOT _installed_http2_connection MATCHES
+       "kResponsePlanMismatch" OR
+   NOT _installed_http2_connection MATCHES
+       "HttpBufferedResponseWritePlan writePlan" OR
+   _installed_http2_connection MATCHES
+       "submitResponseHead[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*const HttpResponse&[ \t]+response[ \t\r\n]*[)]")
     message(FATAL_ERROR "installed HTTP/2 core lost its discriminated response-head submission result")
 endif()
 set(_installed_http2_event_path
@@ -864,11 +870,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_stream_session MATCHES
            "All valid buffered branches converge here" OR
        NOT _installed_http2_stream_session MATCHES
+           "const auto responsePreparation = prepareBufferedHttpResponse" OR
+       NOT _installed_http2_stream_session MATCHES
+           "responsePreparation[.]writePlan[(][)]" OR
+       _installed_http2_stream_session MATCHES
+           "[(]void[)][ \t]*prepareBufferedHttpResponse" OR
+       NOT _installed_http2_stream_session MATCHES
            "result[.]peerAbortedBeforeCommit[(][)]" OR
        _installed_http2_stream_session MATCHES
            "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
         message(FATAL_ERROR
-            "installed buffered response status ownership was split or reconstructed")
+            "installed HTTP/2 prepared buffered response plan ownership was split or reconstructed")
     endif()
 
     set(_installed_http1_buffered_response_result_path
@@ -1435,6 +1447,12 @@ if(NOT _installed_response_content_semantics MATCHES
        "HttpResponseContentSemantics semantics_" OR
    NOT _installed_response_write_plan MATCHES
        "std::uint16_t responseStatus[(][)] const noexcept" OR
+   NOT _installed_response_write_plan MATCHES
+       "HttpKnownMethod requestMethod[(][)] const noexcept" OR
+   NOT _installed_response_write_plan MATCHES
+       "matchesResponse" OR
+   NOT _installed_response_write_plan MATCHES
+       "bufferedRepresentationLength" OR
    NOT _installed_response_write_plan MATCHES
        "return bodyPlan_[.]responseStatus[(][)]" OR
    _installed_response_write_plan MATCHES

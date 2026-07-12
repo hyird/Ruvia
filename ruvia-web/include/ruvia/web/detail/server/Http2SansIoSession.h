@@ -285,14 +285,19 @@ Task<void> runHttp2SansIoSession(
 
     // Submit a complete buffered/file response through the core. Explicit response
     // streaming has its own route dispatch and ResponseStreamSink call chain.
-    auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response)
+    auto submitResponse = [&](std::uint32_t streamId,
+                              const HttpResponse& response,
+                              HttpBufferedResponseWritePlan preparedWritePlan)
         -> Task<Http2BufferedResponseDispatchResult> {
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr || streamState->isAborted()) {
             co_return Http2BufferedResponseDispatchResult::
                 makePeerAbortedBeforeCommit();
         }
-        const auto headResult = connection.submitResponseHead(streamId, response);
+        const auto headResult = connection.submitResponseHead(
+            streamId,
+            response,
+            std::move(preparedWritePlan));
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
             const auto error = headResult.failure()->error();
@@ -458,7 +463,12 @@ Task<void> runHttp2SansIoSession(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
                 baseServices);
-            (void)co_await submitResponse(streamId, response);
+            (void)co_await submitResponse(
+                streamId,
+                response,
+                httpBufferedResponseWritePlan(
+                    streamState->requestKnownMethod(),
+                    response));
             co_return;
         }
         HttpResponse response(requestMemory.resource());
@@ -639,15 +649,19 @@ Task<void> runHttp2SansIoSession(
         } while (false);
 
         // One request-local scratch owns a compressed body until the protocol core
-        // has accepted every DATA byte. All valid buffered branches converge here.
+        // has accepted every DATA byte. All valid buffered branches converge here,
+        // and the exact post-transformation plan is submitted without re-planning.
         std::pmr::string responseCompressionScratch(
             requestMemory.resource());
-        (void)prepareBufferedHttpResponse(
+        const auto responsePreparation = prepareBufferedHttpResponse(
             request,
             response,
             options,
             responseCompressionScratch);
-        const auto result = co_await submitResponse(streamId, response);
+        const auto result = co_await submitResponse(
+            streamId,
+            response,
+            responsePreparation.writePlan());
         if (const auto* completed = result.completed()) {
             recordHttpAccess(
                 options.accessLog,

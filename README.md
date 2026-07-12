@@ -60,10 +60,16 @@ plan; `Http1BufferedResponseHead` owns the same canonical representation length 
 I/O. `HttpResponseBodyPlan` also owns the exact numeric response status from which its write policy
 and content semantics were derived, and `HttpBufferedResponseWritePlan` exposes that same status.
 The only buffered-plan factory accepts the request method plus the response; the former loose
-`bodyPlan + response` overload is gone. HTTP/1 rejects a response whose mutable status no longer
-matches the prepared plan, while the HTTP/2 head planner reports
-`kResponseStatusMismatch` before HPACK or stream mutation. Web therefore cannot reconstruct status,
-version, or length from loose inputs; the former standalone
+`bodyPlan + response` overload is gone. The body plan also retains the exact `HttpKnownMethod`
+provenance used to derive its semantics. HTTP/1 rejects a response whose mutable status or
+representation length no longer matches the prepared plan, while the HTTP/2 head planner reports
+typed status/representation mismatches before HPACK or stream mutation. Web's
+`prepareBufferedHttpResponse()` creates one plan only after materialization, compression, and CORS;
+HTTP/1 and HTTP/2 consume that same snapshot.
+`Http2Connection::submitResponseHead()` therefore requires the prepared plan and returns
+`kResponsePlanMismatch` if its method, status, or representation length disagrees with the live
+stream/response—the former two-argument entry and hidden core re-planning are gone. Web therefore
+cannot reconstruct status, version, or length from loose inputs; the former standalone
 `http1BufferedResponseHeadPlan()` factory does not exist. The writer is the sole owner
 of canonical `Transfer-Encoding: chunked`, replacing any application framing declaration. A
 body-open close-delimited response filters both application `Transfer-Encoding` and
@@ -633,7 +639,10 @@ terminal marker is tracked separately from a serialized
 woken. This keeps head ordering, retry ownership, and stream termination inside the sans-I/O
 protocol state machine instead of relying on each runtime driver to reproduce them.
 
-Final response submission is discriminated in the same direction. `submitResponseHead()` returns
+Final response submission is discriminated in the same direction. The buffered
+`submitResponseHead(streamId, response, writePlan)` consumes the caller's final prepared
+representation snapshot and rejects a stale plan separately from a malformed response.
+`submitResponseHead()` returns
 `Http2BufferedResponseHeadSubmitResult`, and `submitStreamingResponseHead()` returns
 `Http2StreamingResponseHeadSubmitResult`. Only the `Http2SubmittedResponseHead<Plan>` alternative
 exposes its immutable buffered write plan or streaming commit plan; only

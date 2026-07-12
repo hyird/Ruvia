@@ -2026,17 +2026,28 @@ void Http2Connection::appendResponseHeaderFrames(
 }
 
 Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
-    std::uint32_t streamId, const HttpResponse& response) {
+    std::uint32_t streamId,
+    const HttpResponse& response,
+    HttpBufferedResponseWritePlan writePlan) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kClosed);
     }
+    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
+        stream->localSend().headPending() == nullptr) {
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kInvalidState);
+    }
+    if (writePlan.requestMethod() != stream->requestKnownMethod() ||
+        !writePlan.matchesResponse(response)) {
+        return Http2BufferedResponseHeadSubmitResult::makeFailure(
+            Http2ResponseHeadSubmitError::kResponsePlanMismatch);
+    }
     const bool successfulConnect =
         response.status() >= 200 && response.status() < 300 &&
         stream->tunnel().pending() != nullptr;
-    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
-        stream->localSend().headPending() == nullptr || successfulConnect) {
+    if (successfulConnect) {
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
             Http2ResponseHeadSubmitError::kInvalidState);
     }
@@ -2051,17 +2062,20 @@ Http2BufferedResponseHeadSubmitResult Http2Connection::submitResponseHead(
             Http2ResponseHeadSubmitError::kInvalidMessage);
     }
 
-    // A complete HttpResponse is buffered or file-backed, so its size is known.
-    // Explicit response streaming uses submitStreamingResponseHead() instead.
-    auto writePlan = httpBufferedResponseWritePlan(
-        stream->requestKnownMethod(), response);
     const auto headPlanResult = http2BufferedResponseHeadPlan(
         writePlan,
         response);
     const auto* headPlan = headPlanResult.plan();
     if (headPlan == nullptr) {
+        const auto error = headPlanResult.failure()->error();
+        const bool responsePlanMismatch =
+            error == Http2ResponseHeadPlanError::kResponseStatusMismatch ||
+            error == Http2ResponseHeadPlanError::
+                kResponseRepresentationMismatch;
         return Http2BufferedResponseHeadSubmitResult::makeFailure(
-            Http2ResponseHeadSubmitError::kInvalidMessage);
+            responsePlanMismatch
+                ? Http2ResponseHeadSubmitError::kResponsePlanMismatch
+                : Http2ResponseHeadSubmitError::kInvalidMessage);
     }
     appendHttp2ResponseHeaders(
         *stream,

@@ -103,6 +103,13 @@ concept HasResponseHeadErrorAccessor = requires(const T& result) {
         std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
+template <typename Connection>
+concept AcceptsUnpreparedBufferedResponseHead = requires(
+    Connection& connection,
+    const ruvia::HttpResponse& response) {
+    connection.submitResponseHead(std::uint32_t{}, response);
+};
+
 template <typename BodyPlan>
 concept AcceptsLooseResponseStreamBodyPlan = requires(BodyPlan bodyPlan) {
     ruvia::detail::httpResponseStreamCommitPlan(
@@ -1285,8 +1292,11 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2Connection&>()
         .submitResponseHead(
             std::uint32_t{},
-            std::declval<const ruvia::HttpResponse&>())),
+            std::declval<const ruvia::HttpResponse&>(),
+            std::declval<ruvia::detail::HttpBufferedResponseWritePlan>())),
     ruvia::detail::Http2BufferedResponseHeadSubmitResult>);
+static_assert(!AcceptsUnpreparedBufferedResponseHead<
+    ruvia::detail::Http2Connection>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2Connection&>()
         .submitStreamingResponseHead(
@@ -1984,7 +1994,11 @@ int main() {
     response.setBodyCopy("body");
     const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kHead, response);
-    if (!writePlan.bodySuppressed() || writePlan.sendBody() ||
+    if (writePlan.requestMethod() != ruvia::HttpKnownMethod::kHead ||
+        writePlan.bodyPlan().requestMethod() !=
+            ruvia::HttpKnownMethod::kHead ||
+        !writePlan.matchesResponse(response) ||
+        !writePlan.bodySuppressed() || writePlan.sendBody() ||
         writePlan.contentLength() != 4) {
         return 6;
     }
