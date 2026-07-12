@@ -114,8 +114,13 @@ concept HasResponseHeadersAlias = requires(T& response) {
 };
 
 template <typename T>
-concept HasRequestBytesAlias = requires(const T& request) {
-    request.bytes();
+concept HasContextRequestBytes = requires(const T& request) {
+    { request.bytes() } -> std::same_as<ruvia::Task<std::span<const std::byte>>>;
+};
+
+template <typename T>
+concept HasRequestArrayBufferAlias = requires(const T& request) {
+    request.arrayBuffer();
 };
 
 template <typename T>
@@ -1849,7 +1854,8 @@ static_assert(!HasUnaryContextCookie<ruvia::Context>);
 static_assert(!HasUnaryContextParam<ruvia::Context>);
 static_assert(!HasContextStatusTextSetter<ruvia::Context>);
 static_assert(!HasResponseHeadersAlias<ruvia::HttpResponse>);
-static_assert(HasRequestBytesAlias<ruvia::ContextRequest>);
+static_assert(HasContextRequestBytes<ruvia::ContextRequest>);
+static_assert(!HasRequestArrayBufferAlias<ruvia::ContextRequest>);
 static_assert(HasContextRequestCanonicalMethodAccessors<ruvia::ContextRequest>);
 static_assert(!HasRequestBlobArrayBufferAlias<ruvia::ContextRequest::RequestBlob>);
 static_assert(HasRequestJsonValueAlias<ruvia::ContextRequest>);
@@ -2740,7 +2746,6 @@ public:
     RUVIA_POST("/multipart", bufferedMultipart);
     RUVIA_POST("/parse-body", parsedBody);
     RUVIA_POST("/form-data", formDataBody);
-    RUVIA_POST("/array-buffer", arrayBufferBody);
     RUVIA_POST("/bytes", bytesBody);
     RUVIA_POST("/blob", blobBody);
     RUVIA_POST("/json-object", jsonValueBody);
@@ -3140,15 +3145,6 @@ private:
             body.append("\nliteral-obj-key1=");
             body.append(*literalDot);
         }
-        body.push_back('\n');
-        co_return c.text(body);
-    }
-
-    ruvia::Task<ruvia::HttpResponse> arrayBufferBody(ruvia::Context& c) {
-        const auto bytes = co_await c.req().arrayBuffer();
-        std::pmr::string body(c.allocator<char>());
-        body.append("array-buffer bytes=");
-        appendUnsigned(body, bytes.size());
         body.push_back('\n');
         co_return c.text(body);
     }

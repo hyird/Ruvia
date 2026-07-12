@@ -165,6 +165,11 @@ concept HasTypedValidationTarget = requires(const Request& request) {
     request.addValidatedData(ruvia::ValidationTarget::kQuery, int{});
 };
 
+template <typename Request>
+concept HasRequestArrayBufferAlias = requires(const Request& request) {
+    request.arrayBuffer();
+};
+
 template <typename T>
 concept HasGeneratedModelDynamicGet = requires(const T& model) {
     model.get(std::string_view{});
@@ -366,6 +371,10 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().knownMethod()),
     ruvia::HttpKnownMethod>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::ContextRequest&>().bytes()),
+    ruvia::Task<std::span<const std::byte>>>);
+static_assert(!HasRequestArrayBufferAlias<ruvia::ContextRequest>);
 static_assert(HasTypedValidationTarget<ruvia::ContextRequest>);
 static_assert(!HasStringValidationTarget<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
