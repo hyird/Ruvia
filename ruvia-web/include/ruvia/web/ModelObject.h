@@ -161,7 +161,6 @@ public:
 
 private:
     friend class JsonValue;
-    friend class RequestObject;
 
     JsonObject() noexcept = default;
 
@@ -230,8 +229,6 @@ public:
     }
 
 private:
-    friend class RequestObject;
-
     FormObject() noexcept = default;
 
     FormObject(
@@ -246,73 +243,20 @@ private:
 
 namespace detail {
 
-struct RequestObjectAccess;
-[[nodiscard]] RequestObject makeJsonRequestObject(
-    std::string_view body,
-    std::pmr::memory_resource* resource) noexcept;
-[[nodiscard]] RequestObject makeFormRequestObject(
-    std::string_view body,
-    std::pmr::memory_resource* resource) noexcept;
-[[nodiscard]] RequestObject makeFormFieldsRequestObject(
-    const RequestNameValueList& fields,
-    std::pmr::memory_resource* resource) noexcept;
-
-template <typename T>
-[[nodiscard]] std::optional<T> getDecodedFormField(
-    const RequestNameValueList& fields,
-    std::string_view field,
-    std::pmr::memory_resource* resource) {
-    for (std::size_t index = fields.size(); index > 0; --index) {
-        const auto& item = fields[index - 1];
-        if (item.name() != field) {
-            continue;
-        }
-
-        auto value = parseFormValue<T>(
-            ResolvedPmrResourceTag{},
-            item.value(),
-            FormValueEncoding::kDecoded,
-            resource);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        return value;
-    }
-
-    return std::nullopt;
-}
-
-}  // namespace detail
-
-enum class RequestObjectKind {
+enum class ModelInputKind {
     kJson,
     kForm,
     kFormFields
 };
 
-class RequestObject final {
+class ModelInput final {
 public:
-    RequestObject(const RequestObject& other)
-        : kind_(other.kind_),
-          body_(other.body_),
-          fields_(other.fields_),
-          resource_(other.resource_) {}
+    ModelInput(const ModelInput&) noexcept = default;
+    ModelInput& operator=(const ModelInput&) noexcept = default;
+    ModelInput(ModelInput&&) noexcept = default;
+    ModelInput& operator=(ModelInput&&) noexcept = default;
 
-    RequestObject& operator=(const RequestObject& other) {
-        if (this == &other) {
-            return *this;
-        }
-        kind_ = other.kind_;
-        body_ = other.body_;
-        fields_ = other.fields_;
-        resource_ = other.resource_;
-        return *this;
-    }
-
-    RequestObject(RequestObject&&) noexcept = default;
-    RequestObject& operator=(RequestObject&&) noexcept = default;
-
-    [[nodiscard]] RequestObjectKind kind() const noexcept {
+    [[nodiscard]] ModelInputKind kind() const noexcept {
         return kind_;
     }
 
@@ -325,72 +269,68 @@ public:
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return detail::pmrResourceOrDefault(resource_);
+        return resource_;
     }
 
 private:
-    friend RequestObject detail::makeJsonRequestObject(
+    friend ModelInput makeJsonModelInput(
         std::string_view body,
         std::pmr::memory_resource* resource) noexcept;
-    friend RequestObject detail::makeFormRequestObject(
+    friend ModelInput makeFormModelInput(
         std::string_view body,
         std::pmr::memory_resource* resource) noexcept;
-    friend RequestObject detail::makeFormFieldsRequestObject(
+    friend ModelInput makeFormFieldsModelInput(
         const RequestNameValueList& fields,
         std::pmr::memory_resource* resource) noexcept;
 
-    RequestObject() noexcept = default;
-
-    RequestObject(
-        RequestObjectKind kind,
+    ModelInput(
+        ModelInputKind kind,
         std::string_view body,
         std::pmr::memory_resource* resource = nullptr) noexcept
-        : RequestObject(
-              detail::ResolvedPmrResourceTag{},
+        : ModelInput(
+              ResolvedPmrResourceTag{},
               kind,
               body,
-              detail::pmrResourceOrDefault(resource)) {}
+              pmrResourceOrDefault(resource)) {}
 
-    RequestObject(
+    ModelInput(
         const RequestNameValueList& fields,
         std::pmr::memory_resource* resource = nullptr) noexcept
-        : kind_(RequestObjectKind::kFormFields),
+        : kind_(ModelInputKind::kFormFields),
           fields_(&fields),
-          resource_(detail::pmrResourceOrDefault(resource)) {}
+          resource_(pmrResourceOrDefault(resource)) {}
 
-    RequestObject(
-        detail::ResolvedPmrResourceTag,
-        RequestObjectKind kind,
+    ModelInput(
+        ResolvedPmrResourceTag,
+        ModelInputKind kind,
         std::string_view body,
         std::pmr::memory_resource* resource) noexcept
         : kind_(kind),
           body_(body),
           resource_(resource) {}
 
-    RequestObjectKind kind_{RequestObjectKind::kJson};
+    ModelInputKind kind_;
     std::string_view body_;
     const RequestNameValueList* fields_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
+    std::pmr::memory_resource* resource_;
 };
 
-namespace detail {
-
-[[nodiscard]] inline RequestObject makeJsonRequestObject(
+[[nodiscard]] inline ModelInput makeJsonModelInput(
     std::string_view body,
     std::pmr::memory_resource* resource) noexcept {
-    return RequestObject(RequestObjectKind::kJson, body, resource);
+    return ModelInput(ModelInputKind::kJson, body, resource);
 }
 
-[[nodiscard]] inline RequestObject makeFormRequestObject(
+[[nodiscard]] inline ModelInput makeFormModelInput(
     std::string_view body,
     std::pmr::memory_resource* resource) noexcept {
-    return RequestObject(RequestObjectKind::kForm, body, resource);
+    return ModelInput(ModelInputKind::kForm, body, resource);
 }
 
-[[nodiscard]] inline RequestObject makeFormFieldsRequestObject(
+[[nodiscard]] inline ModelInput makeFormFieldsModelInput(
     const RequestNameValueList& fields,
     std::pmr::memory_resource* resource) noexcept {
-    return RequestObject(fields, resource);
+    return ModelInput(fields, resource);
 }
 
 }  // namespace detail

@@ -64,7 +64,7 @@
                 ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kDuplicate; \
                 return; \
             } \
-            const auto ruviaEncoding = ruviaBody.kind() == ::ruvia::RequestObjectKind::kFormFields \
+            const auto ruviaEncoding = ruviaInput.kind() == ::ruvia::detail::ModelInputKind::kFormFields \
                 ? ::ruvia::detail::FormValueEncoding::kDecoded \
                 : ::ruvia::detail::FormValueEncoding::kUrlEncoded; \
             auto ruviaValue = ::ruvia::detail::parseFormValue<RUVIA_MODEL_UNPAREN type>( \

@@ -159,7 +159,7 @@ concept HasGeneratedModelTypedDynamicGet = requires(const T& model) {
 };
 
 template <typename T>
-concept HasGeneratedModelRequestSource = requires(const T& model) {
+concept HasGeneratedModelInputAccessor = requires(const T& model) {
     model.body();
 };
 
@@ -172,7 +172,13 @@ static_assert(!std::copy_constructible<InstalledPackageModel>);
 static_assert(std::movable<InstalledPackageModel>);
 static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
 static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
-static_assert(!HasGeneratedModelRequestSource<InstalledPackageModel>);
+static_assert(!HasGeneratedModelInputAccessor<InstalledPackageModel>);
+static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
+static_assert(!std::constructible_from<
+    ruvia::detail::ModelInput,
+    ruvia::detail::ModelInputKind,
+    std::string_view,
+    std::pmr::memory_resource*>);
 
 template <typename Info>
 concept HasLegacyConnInfoScalarAccessors = requires(const Info& info) {

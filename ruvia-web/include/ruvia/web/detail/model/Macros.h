@@ -35,8 +35,8 @@
             if (!json) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            return ruviaMaterializeRequest(                                  \
-                ::ruvia::detail::makeJsonRequestObject(json->view(), resource)); \
+            return ruviaMaterializeInput(                                    \
+                ::ruvia::detail::makeJsonModelInput(json->view(), resource)); \
         }                                                                   \
         static ::std::optional<T> ruviaParseFormBody(                        \
             ::std::string_view body,                                        \
@@ -45,14 +45,14 @@
             if (!form) {                                                    \
                 return ::std::nullopt;                                      \
             }                                                               \
-            return ruviaMaterializeRequest(                                  \
-                ::ruvia::detail::makeFormRequestObject(form->view(), resource)); \
+            return ruviaMaterializeInput(                                    \
+                ::ruvia::detail::makeFormModelInput(form->view(), resource)); \
         }                                                                   \
         static ::std::optional<T> ruviaParseFormFields(                      \
             const ::ruvia::RequestNameValueList& fields,                    \
             ::std::pmr::memory_resource* resource) {                        \
-            return ruviaMaterializeRequest(                                  \
-                ::ruvia::detail::makeFormFieldsRequestObject(fields, resource)); \
+            return ruviaMaterializeInput(                                    \
+                ::ruvia::detail::makeFormFieldsModelInput(fields, resource)); \
         }                                                                   \
         RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_FIELD_ACCESSORS, T, __VA_ARGS__)           \
         template <::ruvia::FixedString Field>                                \
@@ -86,25 +86,25 @@
             return size;                                                    \
         }                                                                   \
     private:                                                                \
-        static ::std::optional<T> ruviaMaterializeRequest(                  \
-            const ::ruvia::RequestObject& ruviaBody) {                      \
-            T request{ruviaBody.resource()};                                \
-            if (!request.ruviaMaterialize(ruviaBody)) {                     \
+        static ::std::optional<T> ruviaMaterializeInput(                    \
+            const ::ruvia::detail::ModelInput& ruviaInput) {                \
+            T request{ruviaInput.resource()};                               \
+            if (!request.ruviaMaterialize(ruviaInput)) {                    \
                 return ::std::nullopt;                                      \
             }                                                               \
             return ::std::move(request);                                     \
         }                                                                   \
-        bool ruviaMaterialize(const ::ruvia::RequestObject& ruviaBody) {     \
+        bool ruviaMaterialize(const ::ruvia::detail::ModelInput& ruviaInput) { \
             auto* const ruviaResource = ruviaResource_;                     \
             bool ruviaValid = false;                                         \
-            if (ruviaBody.kind() == ::ruvia::RequestObjectKind::kJson) {     \
-                ruviaValid = ::ruvia::detail::visitRequestJsonFields(ruviaBody, [this, ruviaResource]( \
+            if (ruviaInput.kind() == ::ruvia::detail::ModelInputKind::kJson) { \
+                ruviaValid = ::ruvia::detail::visitModelInputJsonFields(ruviaInput, [this, ruviaResource]( \
                     ::std::string_view key,                                 \
                     ::std::string_view value) {                             \
                     RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_PARSE_JSON_FIELD, T, __VA_ARGS__) \
                 });                                                         \
             } else {                                                        \
-                ruviaValid = ::ruvia::detail::visitRequestFormFields(ruviaBody, [this, &ruviaBody, ruviaResource]( \
+                ruviaValid = ::ruvia::detail::visitModelInputFormFields(ruviaInput, [this, &ruviaInput, ruviaResource]( \
                     ::std::string_view key,                                 \
                     ::std::string_view value) {                             \
                     RUVIA_MODEL_FOR_EACH(RUVIA_MODEL_PARSE_FORM_FIELD, T, __VA_ARGS__) \
