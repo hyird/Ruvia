@@ -66,7 +66,7 @@
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
-#include "ruvia/web/detail/router/RequestDispatcher.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
@@ -409,7 +409,15 @@ Task<void> runHttp2SansIoSession(
             co_await submitResponse(streamId, response);
             co_return;
         }
-        const RouteResolution resolution = streamRuntime->routeResolution();
+        const auto* routeResolution = streamRuntime->routeResolution();
+        if (routeResolution == nullptr) {
+            (void)connection.submitReset(
+                streamId, Http2ErrorCode::kInternalError);
+            wakeWriter();
+            co_return;
+        }
+        const auto& resolution = *routeResolution;
+        const auto* resolved = resolution.resolved();
 
         const auto appRateLimit = rateLimitRequestAllowed(env.rateLimiter, remoteAddress);
         if (!appRateLimit.allowed) {
@@ -441,13 +449,20 @@ Task<void> runHttp2SansIoSession(
         }
 
         HttpResponse response(requestMemory.resource());
-        if (resolution.found() && resolution.isWebSocketResponse()) {
+        const auto* webSocketEndpoint = resolved == nullptr
+            ? nullptr
+            : resolved->route().endpoint().webSocket();
+        const auto* responseStreamEndpoint = resolved == nullptr
+            ? nullptr
+            : resolved->route().endpoint().responseStream();
+        if (webSocketEndpoint != nullptr) {
             if (http2IsValidWebSocketRequest(*streamState, request)) {
                 // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
                 const auto deflate = webSocketNegotiatePermessageDeflate(request);
                 const auto handshakeStatus = connection.submitWebSocketHandshake(
                     streamId,
-                    http2ChooseWebSocketSubprotocol(request, resolution.webSocketSubprotocols()),
+                    http2ChooseWebSocketSubprotocol(
+                        request, webSocketEndpoint->subprotocols()),
                     webSocketDeflateResponseExtensions(deflate));
                 if (handshakeStatus != Http2SubmitStatus::kAccepted) {
                     co_return;
@@ -467,13 +482,17 @@ Task<void> runHttp2SansIoSession(
                         writeSignal,
                         executor),
                     scannerEntry,
-                    resolution.webSocketLifecycle(),
+                    webSocketEndpoint->lifecycle(),
                     options.maxWebSocketMessageBytes,
                     requestMemory.resource(),
                     /*initialBytes=*/{},
                     deflate.enabled);
                 co_await runWebSocketSession(
-                    webSocketConnection, scannerEntry, routes, request, resolution,
+                    webSocketConnection,
+                    scannerEntry,
+                    routes,
+                    request,
+                    *resolved,
                     requestMemory, baseServices);
                 co_return;  // tunnel handled on the wire; no buffered tail (parity)
             }
@@ -481,14 +500,22 @@ Task<void> runHttp2SansIoSession(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 websocket request"),
                 baseServices);
-        } else if (resolution.found() && resolution.usesResponseStream()) {
+        } else if (responseStreamEndpoint != nullptr) {
             // Streaming route (for example SSE): drive the shared streaming
             // dispatch through a sans-I/O sink that submits chunks via the core.
             Http2SansIoResponseStreamSink<decltype(executor)> sink(
-                connection, streamId, resolution.responseMode(), requestMemory.resource(),
+                connection,
+                streamId,
+                responseStreamEndpoint->kind(),
+                requestMemory.resource(),
                 executor, writeSignal, *streamSignal);
             auto result = co_await dispatchResponseStreamWith(
-                sink, routes, request, resolution, requestMemory, dispatchServices,
+                sink,
+                routes,
+                request,
+                *resolved,
+                requestMemory,
+                dispatchServices,
                 [&connection, streamId]() noexcept {
                     auto* s = connection.stream(streamId);
                     return s == nullptr || s->isAborted();
@@ -559,27 +586,21 @@ Task<void> runHttp2SansIoSession(
         if (runtime == nullptr) {
             return nullptr;
         }
-        runtime->routeScratch().clear();
-        runtime->routeResolution() = {};
+        RouteResolution resolution;
         auto bodyMode = RequestBodyMode::kBuffered;
-        if (method == HttpKnownMethod::kUnknown || path.empty()) {
-            return runtime->body().selectMode(bodyMode)
-                ? runtime
-                : nullptr;
+        if (method != HttpKnownMethod::kUnknown && !path.empty()) {
+            resolution = routes.resolve(method, path);
         }
-        runtime->routeResolution() = routes.resolve(
-            method,
-            path,
-            runtime->routeScratch());
-        const auto& resolution = runtime->routeResolution();
-        if (resolution.found()) {
-            bodyMode = resolution.bodyMode();
+        const auto* resolved = resolution.resolved();
+        if (resolved != nullptr) {
+            bodyMode = resolved->route().endpoint().requestBodyMode();
         }
         if (http2IsPendingWebSocketConnect(streamState) &&
-            resolution.isWebSocketResponse()) {
+            resolved != nullptr &&
+            resolved->route().endpoint().webSocket() != nullptr) {
             bodyMode = RequestBodyMode::kStream;
         }
-        return runtime->body().selectMode(bodyMode)
+        return runtime->selectRoute(std::move(resolution), bodyMode)
             ? runtime
             : nullptr;
     };
@@ -708,8 +729,15 @@ Task<void> runHttp2SansIoSession(
                     }
                     continue;
                 }
+                const auto* bodyMode =
+                    streamRuntime->body().selectedMode();
+                if (bodyMode == nullptr) {
+                    resetEventStream(
+                        streamId, Http2ErrorCode::kInternalError);
+                    continue;
+                }
                 const auto totalLimit = requestBodyByteLimit(
-                    streamRuntime->body().mode(),
+                    *bodyMode,
                     options.maxStreamBodyBytes,
                     options.maxBufferedBodyBytes);
                 const auto stored = streamRuntime->body().store(

@@ -36,7 +36,6 @@ struct ConnectionWorkSet final {
     std::pmr::string compressionScratch;
     Http1ServerRequestParser parser;
     Http1ServerRequestParseState parsed;
-    RouteMatch routeMatch;
     RouteResolution routeResolution;
     alignas(std::max_align_t) std::byte arenaBlock[kWorkSetArenaBytes];
     ConnectionWorkSet* poolNext{nullptr};

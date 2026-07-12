@@ -500,8 +500,10 @@ Buffered/streamed request storage is therefore Web runtime state, not HTTP/2 pro
 `Http2SansIoStreamSignal` that is also the stream's dispatch lease. The table increments
 `dispatchedCount()` synchronously before `co_spawn`; runtime-level admission is table-only, so no
 caller can create a signal while bypassing the aggregate lease, and admission is rejected until
-the request body mode is selected. Writer exit consumes that dispatch count; idle classification
-consumes the same table's `size()`, so a buffered body that has not reached
+`Http2SansIoStreamRuntime::selectRoute()` has stored the stream's `RouteResolution` and selected its
+optional `RequestBodyMode` in one operation. `Http2RequestBodyRuntime` has no independently callable
+mode selector and no fake buffered default plus selection flag. Writer exit consumes that dispatch
+count; idle classification consumes the same table's `size()`, so a buffered body that has not reached
 dispatch is still treated as active payload work. Teardown wakeup and removal traverse that one
 runtime lifetime. There is no parallel
 default-heap `streamSignals` vector or per-signal `unique_ptr` allocation. Body readers,
@@ -837,6 +839,17 @@ Ruvia's public web API is macro-based and startup-built:
 - `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE`
 
 The request hot path uses prebuilt route tables and middleware chains. Public APIs expose Ruvia types, not Web runtime objects.
+
+The internal registration-to-dispatch chain is also discriminated. A move-only `RouteEndpoint`
+contains exactly one `BufferedRouteEndpoint`, `ResponseStreamRouteEndpoint`, or
+`WebSocketRouteEndpoint`, binding the legal handler shape to only its relevant request-body,
+stream-kind, or WebSocket metadata. The former `ResponseBodyMode` plus simultaneous buffered and
+stream handler fields are removed. Lookup returns a self-contained `RouteResolution` containing
+exactly one `ResolvedRoute`, `RouteMethodNotAllowed`, or `RouteNotFound`; only `ResolvedRoute` owns
+the route reference and its copied `RouteMatch`, and only `RouteMethodNotAllowed` exposes the Allow
+mask. `resolve()` no longer accepts caller-owned match scratch, so HTTP/1 and HTTP/2 transport
+drivers consume the same result rather than maintaining a parallel match buffer or reading payload
+through `found()`/top-level accessors.
 
 ## Runtime Model
 

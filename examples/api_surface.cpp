@@ -66,9 +66,7 @@ RUVIA_MODEL(SurfaceJsonResponse,
 inline constexpr ruvia::ContextKey<CurrentUser> kCurrentUser("currentUser");
 
 using DetailRequestBodyMode = ruvia::detail::RequestBodyMode;
-using DetailResponseBodyMode = ruvia::detail::ResponseBodyMode;
 static_assert(std::is_enum_v<DetailRequestBodyMode>);
-static_assert(std::is_enum_v<DetailResponseBodyMode>);
 
 template <typename T>
 concept HasPlainAddressOf = requires(T& value) {
@@ -1173,14 +1171,13 @@ concept HasControllerRouteBuilderPublicRegisterRoute = requires(
 };
 
 template <typename T>
-concept HasControllerRouteBuilderPublicRegisterStreamRoute = requires(
+concept HasControllerRouteBuilderPublicRegisterResponseStreamRoute = requires(
     const T& builder,
     ruvia::detail::ControllerRouteStreamHandler handler) {
-    builder.registerStreamRoute(
+    builder.registerResponseStreamRoute(
         ruvia::Get,
         std::string_view{"/"},
         handler,
-        ruvia::detail::ResponseBodyMode::kStream,
         std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
 };
 
@@ -2088,7 +2085,8 @@ static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
 #ifndef _MSC_VER
 static_assert(!HasControllerRouteBuilderPublicRegisterRoute<ruvia::detail::ControllerRouteBuilder>);
-static_assert(!HasControllerRouteBuilderPublicRegisterStreamRoute<ruvia::detail::ControllerRouteBuilder>);
+static_assert(!HasControllerRouteBuilderPublicRegisterResponseStreamRoute<
+    ruvia::detail::ControllerRouteBuilder>);
 static_assert(!HasControllerRouteBuilderPublicCreateScope<ruvia::detail::ControllerRouteBuilder>);
 #endif
 static_assert(!HasControllerMiddlewareDescriptorPublicCallbackConstructor<ruvia::detail::ControllerMiddlewareDescriptor>);

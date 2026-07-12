@@ -6,7 +6,6 @@
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
@@ -37,14 +36,14 @@ public:
         WorkerMemory& memory,
         ResponseHeadBuffer& head,
         ScannerEntry& scannerEntry,
-        ResponseBodyMode mode,
+        ResponseStreamKind kind,
         Http1ResponseStreamPlan plan) noexcept
         : stream_(stream),
           head_(head),
           scratch_(memory.resource()),
           trailers_(memory.resource()),
           scannerEntry_(scannerEntry),
-          mode_(mode),
+          kind_(kind),
           plan_(plan),
           connectionPlan_(plan.requestConnectionPlan().requireClose()) {}
 
@@ -88,7 +87,7 @@ private:
 
         auto streamHead = prepareHttp1ResponseStreamHead(
             state_.streamingHead(),
-            responseStreamKindForRouteMode(mode_),
+            kind_,
             plan_,
             trailerIntent);
         if (trailerIntent == ResponseTrailerIntent::kPresent &&
@@ -219,7 +218,7 @@ private:
     std::pmr::string scratch_;
     std::pmr::string trailers_;
     ScannerEntry& scannerEntry_;
-    ResponseBodyMode mode_;
+    ResponseStreamKind kind_;
     Http1ResponseStreamPlan plan_;
     Http1ServerConnectionPlan connectionPlan_;
     ResponseStreamState state_;

@@ -1,24 +1,129 @@
 #include "test_harness.h"
 
+#include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <type_traits>
 
-#include "ruvia/web/detail/router/RouteResolution.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/http/HttpCommon.h"
 
 namespace {
 
 using ruvia::kMaxRouteParams;
 using ruvia::detail::RouteEntry;
+using ruvia::detail::RouteEndpoint;
+using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
+using ruvia::detail::RouteStreamHandler;
 
-// A non-null, never-dereferenced RouteEntry pointer: found() only compares it
-// against nullptr, and RouteEntry is incomplete here.
-const RouteEntry* fakeRoute() noexcept {
-    alignas(std::max_align_t) static unsigned char storage[8];
-    return reinterpret_cast<const RouteEntry*>(&storage);
+template <typename T>
+concept HasLooseRouteResolutionAccessors = requires(const T& value) {
+    value.found();
+    value.route();
+    value.match();
+    value.allowedMethods();
+};
+
+static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
+static_assert(!std::default_initializable<RouteEndpoint>);
+static_assert(!std::copy_constructible<RouteEndpoint>);
+
+ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
+    co_return ruvia::HttpResponse(context.resource());
+}
+
+ruvia::Task<void> streamRouteHandler(void*, ruvia::Context&) {
+    co_return;
+}
+
+const RouteEntry& fakeRoute() {
+    static RouteEntry route(
+        std::pmr::get_default_resource(),
+        RouteEntry::Init{
+            .method = ruvia::HttpKnownMethod::kGet,
+            .path = "/route",
+            .endpoint = ruvia::detail::RouteEndpoint::buffered(
+                ruvia::detail::RouteHandler(nullptr, &routeHandler),
+                ruvia::detail::RequestBodyMode::kBuffered)});
+    return route;
+}
+
+RUVIA_TEST(route_endpoint_binds_handler_shape_and_only_relevant_metadata) {
+    const auto buffered = RouteEndpoint::buffered(
+        RouteHandler(nullptr, &routeHandler),
+        ruvia::detail::RequestBodyMode::kStream);
+    RUVIA_CHECK(buffered.buffered() != nullptr);
+    RUVIA_CHECK(buffered.responseStream() == nullptr);
+    RUVIA_CHECK(buffered.webSocket() == nullptr);
+    RUVIA_CHECK(buffered.requestBodyMode() ==
+        ruvia::detail::RequestBodyMode::kStream);
+
+    const auto stream = RouteEndpoint::responseStream(
+        RouteStreamHandler(nullptr, &streamRouteHandler),
+        ruvia::detail::ResponseStreamKind::kSse);
+    RUVIA_CHECK(stream.buffered() == nullptr);
+    RUVIA_CHECK(stream.responseStream() != nullptr);
+    RUVIA_CHECK(stream.webSocket() == nullptr);
+    RUVIA_CHECK(stream.responseStream()->kind() ==
+        ruvia::detail::ResponseStreamKind::kSse);
+    RUVIA_CHECK(stream.requestBodyMode() ==
+        ruvia::detail::RequestBodyMode::kBuffered);
+
+    std::pmr::string sourceProtocols(
+        "chat, superchat", std::pmr::get_default_resource());
+    ruvia::WebSocketRouteOptions options;
+    options.subprotocols = sourceProtocols;
+    options.lifecycle.pingInterval = std::chrono::milliseconds(25);
+    const auto webSocket = RouteEndpoint::webSocket(
+        std::pmr::get_default_resource(),
+        RouteStreamHandler(nullptr, &streamRouteHandler),
+        options);
+    sourceProtocols.assign("mutated");
+    RUVIA_CHECK(webSocket.buffered() == nullptr);
+    RUVIA_CHECK(webSocket.responseStream() == nullptr);
+    RUVIA_CHECK(webSocket.webSocket() != nullptr);
+    RUVIA_CHECK(webSocket.webSocket()->subprotocols() == "chat, superchat");
+    RUVIA_CHECK_EQ(
+        webSocket.webSocket()->lifecycle().pingInterval.count(),
+        std::int64_t{25});
+}
+
+RUVIA_TEST(route_endpoint_rejects_empty_handlers_and_invalid_discriminants) {
+    bool rejected = false;
+    try {
+        (void)RouteEndpoint::buffered(
+            RouteHandler{}, ruvia::detail::RequestBodyMode::kBuffered);
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    rejected = false;
+    try {
+        (void)RouteEndpoint::buffered(
+            RouteHandler(nullptr, &routeHandler),
+            static_cast<ruvia::detail::RequestBodyMode>(99));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+
+    rejected = false;
+    try {
+        (void)RouteEndpoint::responseStream(
+            RouteStreamHandler(nullptr, &streamRouteHandler),
+            static_cast<ruvia::detail::ResponseStreamKind>(99));
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 }  // namespace
@@ -59,34 +164,43 @@ RUVIA_TEST(route_match_add_rejects_when_full) {
 }
 
 RUVIA_TEST(route_resolution_found_static) {
-    const auto resolution = RouteResolution::foundStatic(fakeRoute());
-    RUVIA_CHECK(resolution.found());
-    RUVIA_CHECK(!resolution.methodNotAllowed());
-    RUVIA_CHECK(resolution.match() == nullptr);  // a static match carries no params
+    const auto resolution = RouteResolution::resolved(fakeRoute());
+    const auto* resolved = resolution.resolved();
+    RUVIA_CHECK(resolved != nullptr);
+    RUVIA_CHECK(resolution.methodNotAllowed() == nullptr);
+    RUVIA_CHECK(resolution.notFound() == nullptr);
+    RUVIA_CHECK(resolved->match().values().empty());
 }
 
 RUVIA_TEST(route_resolution_found_dynamic) {
     RouteMatch match;
     RUVIA_CHECK(match.add("id"));
-    const auto resolution = RouteResolution::foundDynamic(fakeRoute(), match);
-    RUVIA_CHECK(resolution.found());
-    RUVIA_CHECK(!resolution.methodNotAllowed());
-    RUVIA_CHECK(resolution.match() != nullptr);
-    RUVIA_CHECK(resolution.match() != &match);
-    RUVIA_CHECK_EQ(resolution.match()->size(), std::size_t{1});
-    RUVIA_CHECK_EQ(resolution.match()->values()[0], std::string_view("id"));
+    const auto resolution = RouteResolution::resolved(fakeRoute(), match);
+    const auto* resolved = resolution.resolved();
+    RUVIA_CHECK(resolved != nullptr);
+    RUVIA_CHECK(&resolved->match() != &match);
+    RUVIA_CHECK_EQ(resolved->match().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(
+        resolved->match().values()[0], std::string_view("id"));
 }
 
 RUVIA_TEST(route_resolution_method_not_allowed_vs_not_found) {
     // 405: no route, but a non-zero allowed-methods mask drives the Allow header.
     const auto notAllowed = RouteResolution::methodNotAllowed(0x5);
-    RUVIA_CHECK(!notAllowed.found());
-    RUVIA_CHECK(notAllowed.methodNotAllowed());
-    RUVIA_CHECK_EQ(notAllowed.allowedMethods(), std::uint32_t{0x5});
+    RUVIA_CHECK(notAllowed.resolved() == nullptr);
+    RUVIA_CHECK(notAllowed.notFound() == nullptr);
+    RUVIA_CHECK(notAllowed.methodNotAllowed() != nullptr);
+    RUVIA_CHECK_EQ(
+        notAllowed.methodNotAllowed()->allowedMethods(),
+        std::uint32_t{0x5});
 
-    // 404: a default resolution is neither found nor method-not-allowed.
+    // 404 is its own payload-free alternative.
     const RouteResolution notFound;
-    RUVIA_CHECK(!notFound.found());
-    RUVIA_CHECK(!notFound.methodNotAllowed());
-    RUVIA_CHECK_EQ(notFound.allowedMethods(), std::uint32_t{0});
+    RUVIA_CHECK(notFound.resolved() == nullptr);
+    RUVIA_CHECK(notFound.methodNotAllowed() == nullptr);
+    RUVIA_CHECK(notFound.notFound() != nullptr);
+
+    // A zero Allow mask cannot materialize a fake 405 state.
+    const auto zeroMask = RouteResolution::methodNotAllowed(0);
+    RUVIA_CHECK(zeroMask.notFound() != nullptr);
 }

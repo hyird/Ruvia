@@ -23,6 +23,7 @@
 #include <ruvia/web/detail/ValidatedValues.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/model/Parser.h>
+#include <ruvia/web/detail/router/RouteTable.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -39,6 +40,20 @@ concept HasDirectHttp2BeginDispatch = requires(
     Runtime& runtime,
     Executor executor) {
     runtime.beginDispatch(executor);
+};
+
+template <typename Body>
+concept HasDirectHttp2BodyModeSelection = requires(Body& body) {
+    body.selectMode(ruvia::detail::RequestBodyMode::kBuffered);
+};
+
+template <typename Resolution>
+concept HasLooseRouteResolutionAccessors = requires(
+    const Resolution& resolution) {
+    resolution.found();
+    resolution.route();
+    resolution.match();
+    resolution.allowedMethods();
 };
 
 static_assert(std::is_same_v<
@@ -63,6 +78,15 @@ static_assert(std::is_same_v<
 static_assert(!HasDirectHttp2BeginDispatch<
     ruvia::detail::Http2SansIoStreamRuntime,
     asio::io_context::executor_type>);
+static_assert(!HasDirectHttp2BodyModeSelection<
+    ruvia::detail::Http2RequestBodyRuntime>);
+static_assert(!HasLooseRouteResolutionAccessors<
+    ruvia::detail::RouteResolution>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::RouteEndpoint>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
+    const ruvia::detail::ResolvedRoute*>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -77,8 +101,16 @@ int main() {
     if (webSocketOptions.lifecycle.closeHandshakeTimeout != std::chrono::seconds(5)) {
         return 3;
     }
-    ruvia::detail::Http2RequestBodyRuntime body;
-    if (!body.selectMode(ruvia::detail::RequestBodyMode::kStream) ||
+    ruvia::detail::Http2SansIoStreamRuntime standaloneRuntime(
+        3, std::pmr::get_default_resource());
+    if (!standaloneRuntime.selectRoute(
+            ruvia::detail::RouteResolution{},
+            ruvia::detail::RequestBodyMode::kStream)) {
+        return 4;
+    }
+    auto& body = standaloneRuntime.body();
+    if (body.selectedMode() == nullptr ||
+        *body.selectedMode() != ruvia::detail::RequestBodyMode::kStream ||
         body.store("web-owned", 0, 1024) !=
             ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
         body.queue().pop() != "web-owned") {
@@ -89,7 +121,8 @@ int main() {
         std::pmr::get_default_resource());
     auto* runtime = runtimes.ensure(1);
     if (runtime == nullptr ||
-        !runtime->body().selectMode(
+        !runtime->selectRoute(
+            ruvia::detail::RouteResolution{},
             ruvia::detail::RequestBodyMode::kBuffered)) {
         return 5;
     }

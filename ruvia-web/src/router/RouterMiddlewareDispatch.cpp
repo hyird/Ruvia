@@ -54,11 +54,15 @@ NextControlScope makeNextControlScope(Next::State::Control& control) noexcept {
 }  // namespace
 
 Task<HttpResponse> detail::RouteTable::invokeRoute(const RouteEntry& route, Context& context) const {
+    const auto* endpoint = route.endpoint().buffered();
+    if (endpoint == nullptr) {
+        throw std::logic_error("route is not a buffered-response route");
+    }
     // Hot path: a route with no middleware goes straight to the handler. The
     // Context response slot is only needed when middleware can observe or mutate
     // the downstream response through c.res().
     if (!route.hasMiddleware()) {
-        return route.handler()(context);
+        return endpoint->handler()(context);
     }
     return invokeRouteWithMiddleware(route, context);
 }
@@ -81,7 +85,11 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     std::size_t index,
     Context& context) const {
     if (index >= route.middlewareCount()) {
-        auto response = co_await route.handler()(context);
+        const auto* endpoint = route.endpoint().buffered();
+        if (endpoint == nullptr) {
+            throw std::logic_error("route is not a buffered-response route");
+        }
+        auto response = co_await endpoint->handler()(context);
         detail::ContextAccess::setResponse(context, std::move(response));
         co_return;
     }
@@ -131,7 +139,16 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     Context& context,
     RouteStreamDispatchOutcome& outcome) const {
     if (index >= route.middlewareCount()) {
-        co_await route.streamHandler()(context);
+        const auto& endpoint = route.endpoint();
+        const auto* responseStream = endpoint.responseStream();
+        const auto* webSocket = endpoint.webSocket();
+        if (responseStream == nullptr && webSocket == nullptr) {
+            throw std::logic_error("route is not a stream-handler route");
+        }
+        const auto& handler = responseStream != nullptr
+            ? responseStream->handler()
+            : webSocket->handler();
+        co_await handler(context);
         outcome = RouteStreamDispatchOutcome::kStreamHandled;
         co_return;
     }

@@ -28,7 +28,6 @@
 #include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/web/detail/http2/Http2SansIoStreamRuntime.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
-#include "ruvia/web/detail/server/HttpResponseStreamKindAdapter.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
@@ -47,14 +46,14 @@ public:
     Http2SansIoResponseStreamSink(
         Http2Connection& connection,
         std::uint32_t streamId,
-        ResponseBodyMode mode,
+        ResponseStreamKind kind,
         std::pmr::memory_resource* resource,
         Executor executor,
         asio::steady_timer& writeSignal,
         Http2SansIoStreamSignal& streamSignal) noexcept
         : connection_(connection),
           streamId_(streamId),
-          mode_(mode),
+          kind_(kind),
           scratch_(resource),
           executor_(executor),
           writeSignal_(writeSignal),
@@ -194,7 +193,7 @@ private:
         const auto headResult = connection_.submitStreamingResponseHead(
             streamId_,
             state_.streamingHead(),
-            responseStreamKindForRouteMode(mode_),
+            kind_,
             trailerIntent);
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
@@ -237,7 +236,7 @@ private:
 
     Http2Connection& connection_;
     std::uint32_t streamId_;
-    ResponseBodyMode mode_;
+    ResponseStreamKind kind_;
     ResponseStreamState state_;
     std::pmr::string scratch_;
     Executor executor_;

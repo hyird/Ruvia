@@ -29,7 +29,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
     const Http1ServerRequestParseState& parsed,
-    const RouteResolution& routeResolution,
+    const ResolvedRoute& resolved,
     const RouteTable& routes,
     RequestMemory& requestMemory,
     ContextServices baseRouteServices,
@@ -49,11 +49,12 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
     bool permessageDeflate = false;
-    const auto& route = routeResolution.route();
+    const auto& webSocketEndpoint =
+        *resolved.route().endpoint().webSocket();
     if (!(co_await writeWebSocketHandshake(
             stream,
             parsed.request,
-            route.webSocketSubprotocols(),
+            webSocketEndpoint.subprotocols(),
             permessageDeflate))) {
         co_return HttpWebSocketRouteResult::kSessionFinished;
     }
@@ -61,7 +62,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     SocketWebSocketConnection<Stream> webSocketConnection(
         WebSocketSocketTransport<Stream>{stream},
         scannerEntry,
-        route.webSocketLifecycle(),
+        webSocketEndpoint.lifecycle(),
         options.maxWebSocketMessageBytes,
         memory.resource(),
         pendingFrames,
@@ -71,7 +72,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         scannerEntry,
         routes,
         parsed.request,
-        routeResolution,
+        resolved,
         requestMemory,
         baseRouteServices);
     co_return HttpWebSocketRouteResult::kSessionFinished;

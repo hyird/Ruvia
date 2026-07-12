@@ -570,11 +570,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerWebSocketRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ws", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
-                ruvia::detail::ResponseBodyMode::kWebSocket,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -716,11 +715,10 @@ RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerWebSocketRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/server-close", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &wsServerCloseHandler),
-                ruvia::detail::ResponseBodyMode::kWebSocket,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -849,11 +847,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerWebSocketRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ws", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
-                ruvia::detail::ResponseBodyMode::kWebSocket,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -1132,11 +1129,10 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerResponseStreamRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/trail", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &streamTrailerHandler),
-                ruvia::detail::ResponseBodyMode::kStream,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -1230,11 +1226,10 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerWebSocketRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ws", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
-                ruvia::detail::ResponseBodyMode::kWebSocket,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -1357,11 +1352,10 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerResponseStreamRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/big", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &streamBigChunkHandler),
-                ruvia::detail::ResponseBodyMode::kStream,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
@@ -1867,11 +1861,10 @@ RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
             ruvia::WorkerMemory worker;
             ruvia::Router router;
             auto& impl = ruvia::detail::RouterImpl::from(router);
-            impl.registerStreamRoute(
+            impl.registerWebSocketRoute(
                 ruvia::HttpKnownMethod::kGet,
                 std::pmr::string("/ws", std::pmr::get_default_resource()),
                 ruvia::detail::RouteStreamHandler(nullptr, &wsEchoHandler),
-                ruvia::detail::ResponseBodyMode::kWebSocket,
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();

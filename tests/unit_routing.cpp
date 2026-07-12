@@ -88,11 +88,10 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     invalidOptions.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(-1);
     bool rejected = false;
     try {
-        invalid.registerStreamRoute(
+        invalid.registerWebSocketRoute(
             HttpKnownMethod::kGet,
             path("/invalid-ws"),
             ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
-            ruvia::detail::ResponseBodyMode::kWebSocket,
             std::span<const ControllerMiddlewareDescriptor>{},
             std::span<const ControllerMiddlewareDescriptor>{},
             invalidOptions);
@@ -105,20 +104,22 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     auto& impl = ruvia::detail::RouterImpl::from(router);
     ruvia::WebSocketRouteOptions options;
     options.lifecycle.closeHandshakeTimeout = std::chrono::milliseconds(1234);
-    impl.registerStreamRoute(
+    impl.registerWebSocketRoute(
         HttpKnownMethod::kGet,
         path("/ws"),
         ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
-        ruvia::detail::ResponseBodyMode::kWebSocket,
         std::span<const ControllerMiddlewareDescriptor>{},
         std::span<const ControllerMiddlewareDescriptor>{},
         options);
     impl.finalize();
-    RouteMatch match;
-    const auto resolution = impl.routeTable().resolve(HttpKnownMethod::kGet, "/ws", match);
-    RUVIA_CHECK(resolution.found());
+    const auto resolution =
+        impl.routeTable().resolve(HttpKnownMethod::kGet, "/ws");
+    const auto* resolved = resolution.resolved();
+    RUVIA_CHECK(resolved != nullptr);
+    const auto* endpoint = resolved->route().endpoint().webSocket();
+    RUVIA_CHECK(endpoint != nullptr);
     RUVIA_CHECK_EQ(
-        resolution.webSocketLifecycle().closeHandshakeTimeout.count(),
+        endpoint->lifecycle().closeHandshakeTimeout.count(),
         std::int64_t{1234});
 }
 
@@ -129,8 +130,8 @@ struct Router final {
     void finalize() { impl.finalize(); }
 
     bool matches(std::string_view p) {
-        RouteMatch match;
-        return impl.routeTable().resolve(HttpKnownMethod::kGet, p, match).found();
+        return impl.routeTable().resolve(
+            HttpKnownMethod::kGet, p).resolved() != nullptr;
     }
 
     std::string_view routePathOf(std::string_view p) {
@@ -138,19 +139,19 @@ struct Router final {
     }
 
     std::string_view routePathOf(HttpKnownMethod method, std::string_view p) {
-        RouteMatch match;
-        const auto res = impl.routeTable().resolve(method, p, match);
-        return res.found() ? res.route().path() : "<none>";
+        const auto res = impl.routeTable().resolve(method, p);
+        const auto* resolved = res.resolved();
+        return resolved != nullptr ? resolved->route().path() : "<none>";
     }
 
     // Returns the single captured param value, or "<none>" if unmatched / no param.
     std::string_view paramOf(std::string_view p) {
-        RouteMatch match;
-        const auto res = impl.routeTable().resolve(HttpKnownMethod::kGet, p, match);
-        if (!res.found() || match.size() != 1) {
+        const auto res = impl.routeTable().resolve(HttpKnownMethod::kGet, p);
+        const auto* resolved = res.resolved();
+        if (resolved == nullptr || resolved->match().size() != 1) {
             return "<none>";
         }
-        return match.values()[0];
+        return resolved->match().values()[0];
     }
 };
 
@@ -302,11 +303,12 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
 
     const auto bit = [](HttpKnownMethod m) { return 1U << static_cast<unsigned>(m); };
 
-    RouteMatch match;
-    const auto res = r.impl.routeTable().resolve(HttpKnownMethod::kDelete, "/a", match);
-    RUVIA_CHECK(!res.found());
-    RUVIA_CHECK(res.methodNotAllowed());                 // /a exists for other methods -> 405, not 404
-    const auto mask = res.allowedMethods();
+    const auto res =
+        r.impl.routeTable().resolve(HttpKnownMethod::kDelete, "/a");
+    RUVIA_CHECK(res.resolved() == nullptr);
+    const auto* methodNotAllowed = res.methodNotAllowed();
+    RUVIA_CHECK(methodNotAllowed != nullptr);  // /a exists for other methods -> 405
+    const auto mask = methodNotAllowed->allowedMethods();
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kGet)) != 0);
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kPost)) != 0);
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kHead)) != 0);    // auto-registered alongside the GET route
@@ -314,10 +316,11 @@ RUVIA_TEST(routing_405_allow_set_lists_the_other_registered_methods) {
     RUVIA_CHECK((mask & bit(HttpKnownMethod::kDelete)) == 0);  // the requested method is not echoed back
 
     // A path with no route at all is a 404 (not found), never a 405.
-    RouteMatch missMatch;
-    const auto missing = r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/nope", missMatch);
-    RUVIA_CHECK(!missing.found());
-    RUVIA_CHECK(!missing.methodNotAllowed());
+    const auto missing =
+        r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/nope");
+    RUVIA_CHECK(missing.resolved() == nullptr);
+    RUVIA_CHECK(missing.methodNotAllowed() == nullptr);
+    RUVIA_CHECK(missing.notFound() != nullptr);
 }
 
 RUVIA_TEST(routing_options_only_resource_is_405_not_404) {
@@ -330,15 +333,17 @@ RUVIA_TEST(routing_options_only_resource_is_405_not_404) {
     r.finalize();
     const auto bit = [](HttpKnownMethod m) { return 1U << static_cast<unsigned>(m); };
 
-    RouteMatch match;
-    const auto res = r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/preflight", match);
-    RUVIA_CHECK(!res.found());
-    RUVIA_CHECK(res.methodNotAllowed());  // 405, not 404
-    RUVIA_CHECK((res.allowedMethods() & bit(HttpKnownMethod::kOptions)) != 0);
+    const auto res =
+        r.impl.routeTable().resolve(HttpKnownMethod::kGet, "/preflight");
+    RUVIA_CHECK(res.resolved() == nullptr);
+    RUVIA_CHECK(res.methodNotAllowed() != nullptr);  // 405, not 404
+    RUVIA_CHECK((res.methodNotAllowed()->allowedMethods() &
+                 bit(HttpKnownMethod::kOptions)) != 0);
 
     // The explicit OPTIONS route still handles an OPTIONS request to that path.
-    RouteMatch optMatch;
-    RUVIA_CHECK(r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "/preflight", optMatch).found());
+    RUVIA_CHECK(r.impl.routeTable()
+        .resolve(HttpKnownMethod::kOptions, "/preflight")
+        .resolved() != nullptr);
 }
 
 RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
@@ -350,12 +355,14 @@ RUVIA_TEST(routing_options_asterisk_not_captured_by_wildcard_route) {
     addRoute(r.impl, HttpKnownMethod::kGet, "/*");
     r.finalize();
 
-    RouteMatch match;
-    RUVIA_CHECK(!r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "*", match).found());
+    RUVIA_CHECK(r.impl.routeTable()
+        .resolve(HttpKnownMethod::kOptions, "*")
+        .notFound() != nullptr);
 
     // A normal path still matches the catch-all: the short-circuit is only for "*".
-    RouteMatch pathMatch;
-    RUVIA_CHECK(r.impl.routeTable().resolve(HttpKnownMethod::kOptions, "/anything", pathMatch).found());
+    RUVIA_CHECK(r.impl.routeTable()
+        .resolve(HttpKnownMethod::kOptions, "/anything")
+        .resolved() != nullptr);
 }
 
 RUVIA_TEST(routing_rejects_duplicate_route_registration) {
@@ -579,10 +586,9 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     const ControllerMiddlewareDescriptor mws[] = {
         ruvia::detail::makeMiddlewareDescriptor<ChainMwA>(),
     };
-    impl.registerStreamRoute(
+    impl.registerResponseStreamRoute(
         HttpKnownMethod::kGet, path("/s"),
         ruvia::detail::RouteStreamHandler(nullptr, &streamCommitThenThrow),
-        ruvia::detail::ResponseBodyMode::kStream,
         std::span<const ControllerMiddlewareDescriptor>{},
         std::span<const ControllerMiddlewareDescriptor>(mws, 1));
     impl.finalize();
@@ -596,9 +602,9 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     ruvia::detail::HttpRequestAccess::setPath(request, "/s");
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
 
-    RouteMatch match;
-    const auto resolution = table.resolve(HttpKnownMethod::kGet, "/s", match);
-    RUVIA_CHECK(resolution.found());
+    const auto resolution = table.resolve(HttpKnownMethod::kGet, "/s");
+    const auto* resolved = resolution.resolved();
+    RUVIA_CHECK(resolved != nullptr);
 
     StreamCaptureSink sink;
     auto writer = scMakeWriter(sink);
@@ -612,7 +618,8 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
         [&]() -> asio::awaitable<void> {
             try {
                 (void)co_await ruvia::detail::taskAsAwaitable(
-                    table.dispatchResponseStream(request, resolution, memory, writer, {}));
+                    table.dispatchResponseStream(
+                        request, *resolved, memory, writer, {}));
             } catch (const std::exception&) {
                 threw = true;
             }

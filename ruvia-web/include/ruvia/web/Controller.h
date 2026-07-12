@@ -94,39 +94,35 @@ private:
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_STREAM(path, handler, ...) \
-    RuviaControllerType::ruviaAddStreamRoute( \
+    RuviaControllerType::ruviaAddResponseStreamRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::detail::ResponseBodyMode::kStream, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_SSE(path, handler, ...) \
-    RuviaControllerType::ruviaAddStreamRoute( \
+    RuviaControllerType::ruviaAddSseRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::detail::ResponseBodyMode::kSse, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS(path, handler, ...) \
-    RuviaControllerType::ruviaAddStreamRoute( \
+    RuviaControllerType::ruviaAddWebSocketRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::detail::ResponseBodyMode::kWebSocket, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS_OPTIONS(path, handler, options, ...) \
-    RuviaControllerType::ruviaAddStreamRoute( \
+    RuviaControllerType::ruviaAddWebSocketRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
         bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        ::ruvia::detail::ResponseBodyMode::kWebSocket, \
         RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>(), \
         options)
 

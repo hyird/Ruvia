@@ -55,7 +55,6 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
         auto& responseHead = workSet->responseHead;
         auto& fileChunk = workSet->fileChunk;
         auto& compressionScratch = workSet->compressionScratch;
-        auto& routeMatch = workSet->routeMatch;
         auto& routeResolution = workSet->routeResolution;
 
         std::optional<RequestMemory> requestMemoryStorage;
@@ -142,7 +141,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     scannerEntry.touch();
                     break;
                 }
-                routeResolution = routes.resolve(parsed.request, routeMatch);
+                routeResolution = routes.resolve(parsed.request);
                 const auto appRateLimit = rateLimitRequestAllowed(rateLimiter_, remoteAddress);
                 if (!appRateLimit.allowed) {
                     consumedBytes = parsed.headerBytes;
@@ -156,7 +155,8 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         response, parsed.connectionPlan.requireClose());
                     break;
                 }
-                if (!routeResolution.found()) {
+                const auto* resolved = routeResolution.resolved();
+                if (resolved == nullptr) {
                     consumedBytes = parsed.headerBytes;
                     if (contentLengthExceedsLimit(
                             parsed.bodyPlan,
@@ -195,9 +195,12 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     break;
                 }
 
-                const auto& route = routeResolution.route();
+                const auto& route = resolved->route();
+                const auto& endpoint = route.endpoint();
                 const auto maxRequestBodyBytes = requestBodyByteLimit(
-                    route.bodyMode(), options_.maxStreamBodyBytes, options_.maxBufferedBodyBytes);
+                    endpoint.requestBodyMode(),
+                    options_.maxStreamBodyBytes,
+                    options_.maxBufferedBodyBytes);
                 if (contentLengthExceedsLimit(parsed.bodyPlan, maxRequestBodyBytes)) {
                     consumedBytes = parsed.headerBytes;
                     response = co_await routes.handleError(
@@ -210,7 +213,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     break;
                 }
 
-                if (route.isWebSocketResponse()) {
+                if (endpoint.webSocket() != nullptr) {
                     consumedBytes = parsed.headerBytes;
                     const auto pendingFrames = std::string_view(
                         readBuffer.data() + parsed.headerBytes,
@@ -220,7 +223,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         memory_,
                         scannerEntry,
                         parsed,
-                        routeResolution,
+                        *resolved,
                         routes,
                         requestMemory,
                         baseRouteServices,
@@ -234,7 +237,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     co_return;
                 }
 
-                if (route.usesResponseStream()) {
+                if (endpoint.responseStream() != nullptr) {
                     consumedBytes = parsed.headerBytes;
                     const auto streamResult = co_await dispatchHttpResponseStreamRoute(
                         stream,
@@ -242,7 +245,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         responseHead,
                         scannerEntry,
                         parsed,
-                        routeResolution,
+                        *resolved,
                         routes,
                         requestMemory,
                         baseRouteServices,
@@ -259,7 +262,10 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                     }
                     break;
                 }
-                if (route.usesStreamRequestBody()) {
+                const auto* bufferedEndpoint = endpoint.buffered();
+                if (bufferedEndpoint != nullptr &&
+                    bufferedEndpoint->requestBodyMode() ==
+                        RequestBodyMode::kStream) {
                     co_await dispatchHttpStreamBodyRoute(
                         stream,
                         memory_,

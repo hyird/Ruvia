@@ -26,9 +26,9 @@ public:
     virtual ~RequestDispatcher() = default;
 
     [[nodiscard]] virtual RouteResolution resolve(
-        const HttpRequest& request, RouteMatch& match) const noexcept = 0;
+        const HttpRequest& request) const noexcept = 0;
     [[nodiscard]] virtual RouteResolution resolve(
-        HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept = 0;
+        HttpKnownMethod method, std::string_view path) const noexcept = 0;
 
     virtual Task<HttpResponse> dispatch(
         const HttpRequest& request,
@@ -52,13 +52,13 @@ public:
         ContextServices services) const = 0;
     virtual Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,
-        const RouteResolution& resolution,
+        const ResolvedRoute& route,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services) const = 0;
     virtual Task<StreamDispatchResult> dispatchWebSocket(
         const HttpRequest& request,
-        const RouteResolution& resolution,
+        const ResolvedRoute& route,
         RequestMemory& memory,
         WebSocket& webSocket,
         ContextServices services) const = 0;

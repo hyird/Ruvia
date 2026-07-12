@@ -115,6 +115,12 @@ set(RULE_HTTP2_WEB_RUNTIME_IN_CORE
     "#[ 	]*include[ 	]*[<\"]coroutine|std::coroutine_handle|HttpRequestBodyMode|Http2StreamBody(Policy|Queue)|Http2ConnectionLimits|deferStreamWindowRelease|releaseStreamWindow|responseCompressionScratch|requestBody(View|Size|Empty)|enqueueBufferedRequestBodyChunk|queuedBodyBytes")
 set(RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE
     "streamSignals|make_unique<Http2SansIoStreamSignal>|std::vector[<]std::pair[<]std::uint32_t|inFlight")
+set(RULE_STALE_ROUTE_MODE_SPLIT
+    "ResponseBodyMode|RouteDisposition|registerStreamRoute|responseStreamKindForRouteMode|HttpResponseStreamKindAdapter|routeScratch")
+set(RULE_STALE_ROUTE_RESOLUTION_TUPLE
+    "RouteResolution::found(Static|Dynamic)|resolution[.](found|route|match|allowedMethods)[ \t]*[(]|resolve[ \t\r\n]*[(][^)]*RouteMatch[ \t]*&")
+set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
+    "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -438,6 +444,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("parallel HTTP/2 Web dispatch ownership"
         "${RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE}"
         "std::vector streamSignals; int inFlight;")
+    expect_match("split route handler/mode contract"
+        "${RULE_STALE_ROUTE_MODE_SPLIT}"
+        "registerStreamRoute(handler, ResponseBodyMode::kWebSocket);")
+    expect_match("route-resolution status/payload side channel"
+        "${RULE_STALE_ROUTE_RESOLUTION_TUPLE}"
+        "if (resolution.found()) use(resolution.route());")
+    expect_match("HTTP/2 default body mode plus selection flag"
+        "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}"
+        "RequestBodyMode mode_{RequestBodyMode::kBuffered}; bool modeSelected_; ")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -956,6 +971,113 @@ if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND
             "H1/H2 must preserve valid tokens, WS CONNECT may map only route lookup, and Web must render 501")
     endif()
 endif()
+
+set(WEB_ROUTE_MODES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RouteModes.h")
+set(WEB_ROUTE_RESOLUTION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteResolution.h")
+set(WEB_ROUTE_TABLE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h")
+set(WEB_REQUEST_DISPATCHER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RequestDispatcher.h")
+set(WEB_CONTROLLER_MACROS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Controller.h")
+set(WEB_STALE_STREAM_KIND_ADAPTER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
+set(WEB_ROUTE_RESOLUTION_TEST
+    "${RUVIA_ROOT}/tests/unit_route_resolution.cpp")
+foreach(route_contract_file IN ITEMS
+        "${WEB_ROUTE_MODES}"
+        "${WEB_ROUTE_RESOLUTION}"
+        "${WEB_ROUTE_TABLE}"
+        "${WEB_REQUEST_DISPATCHER}"
+        "${WEB_CONTROLLER_MACROS}"
+        "${WEB_ROUTE_RESOLUTION_TEST}")
+    if(NOT EXISTS "${route_contract_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${route_contract_file}")
+        boundary_error("typed Web route contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_STALE_STREAM_KIND_ADAPTER}")
+    boundary_error("split response route-mode adapter was restored"
+        "stream sinks must consume the ResponseStreamKind owned by the typed endpoint")
+endif()
+if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
+   EXISTS "${WEB_ROUTE_TABLE}" AND EXISTS "${WEB_REQUEST_DISPATCHER}" AND
+   EXISTS "${WEB_CONTROLLER_MACROS}" AND EXISTS "${WEB_ROUTE_RESOLUTION_TEST}")
+    file(READ "${WEB_ROUTE_MODES}" web_route_modes)
+    file(READ "${WEB_ROUTE_RESOLUTION}" web_route_resolution)
+    file(READ "${WEB_ROUTE_TABLE}" web_route_table)
+    file(READ "${WEB_REQUEST_DISPATCHER}" web_request_dispatcher)
+    file(READ "${WEB_CONTROLLER_MACROS}" web_controller_macros)
+    file(READ "${WEB_ROUTE_RESOLUTION_TEST}" web_route_resolution_test)
+    if(web_route_modes MATCHES "ResponseBodyMode" OR
+       web_route_resolution MATCHES "RouteDisposition" OR
+       web_route_table MATCHES "ResponseBodyMode" OR
+       web_request_dispatcher MATCHES
+           "resolve[ \t\r\n]*[(][^)]*RouteMatch[ \t]*&")
+        boundary_error("Web routing restored handler/mode or caller-scratch split state"
+            "endpoint kind, handler shape, route match, and resolution outcome must each have one owner")
+    endif()
+    if(NOT web_route_resolution MATCHES "class RouteNotFound final" OR
+       NOT web_route_resolution MATCHES
+           "class RouteMethodNotAllowed final" OR
+       NOT web_route_resolution MATCHES "class ResolvedRoute final" OR
+       NOT web_route_resolution MATCHES "using Value = std::variant" OR
+       NOT web_route_resolution MATCHES "std::get_if<ResolvedRoute>" OR
+       NOT web_route_resolution MATCHES
+           "std::get_if<RouteMethodNotAllowed>" OR
+       NOT web_route_resolution MATCHES "std::get_if<RouteNotFound>")
+        boundary_error("RouteResolution lost its exclusive result alternatives"
+            "resolved, 405, and 404 payloads must not be readable through a shared tuple")
+    endif()
+    if(NOT web_route_table MATCHES
+           "class BufferedRouteEndpoint final" OR
+       NOT web_route_table MATCHES
+           "class ResponseStreamRouteEndpoint final" OR
+       NOT web_route_table MATCHES
+           "class WebSocketRouteEndpoint final" OR
+       NOT web_route_table MATCHES "class RouteEndpoint final" OR
+       NOT web_route_table MATCHES
+           "std::get_if<BufferedRouteEndpoint>" OR
+       NOT web_route_table MATCHES
+           "std::get_if<ResponseStreamRouteEndpoint>" OR
+       NOT web_route_table MATCHES
+           "std::get_if<WebSocketRouteEndpoint>" OR
+       NOT web_route_table MATCHES "RouteEndpoint endpoint_" OR
+       NOT web_request_dispatcher MATCHES "const ResolvedRoute& route")
+        boundary_error("route endpoint lost its discriminated handler contract"
+            "buffered, response-stream, and WebSocket routes must bind handler and metadata in one alternative")
+    endif()
+    if(NOT web_controller_macros MATCHES
+           "ruviaAddResponseStreamRoute" OR
+       NOT web_controller_macros MATCHES "ruviaAddSseRoute" OR
+       NOT web_controller_macros MATCHES "ruviaAddWebSocketRoute" OR
+       NOT web_route_resolution_test MATCHES
+           "route_endpoint_binds_handler_shape_and_only_relevant_metadata" OR
+       NOT web_route_resolution_test MATCHES
+           "route_endpoint_rejects_empty_handlers_and_invalid_discriminants" OR
+       NOT web_route_resolution_test MATCHES
+           "route_resolution_method_not_allowed_vs_not_found")
+        boundary_error("typed route contract lacks registration or regression coverage"
+            "distinct macro paths and value-level endpoint/resolution tests must remain")
+    endif()
+endif()
+check_files_no_match("Web routing restored split endpoint or resolution APIs"
+    "${RULE_STALE_ROUTE_MODE_SPLIT}|${RULE_STALE_ROUTE_RESOLUTION_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Controller.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerDescriptors.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerRuntime.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RequestDispatcher.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouterInternal.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterBuild.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterIndex.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterRegistration.cpp")
+
 set(HTTP_PROTOCOL_VERSION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpProtocolVersion.h")
 set(HTTP_REQUEST_ACCESS
@@ -3607,6 +3729,12 @@ else()
        NOT web_http2_stream_runtime MATCHES "RequestBodyMode" OR
        NOT web_http2_stream_runtime MATCHES "kModeNotSelected" OR
        NOT web_http2_stream_runtime MATCHES "modeSelected" OR
+       NOT web_http2_stream_runtime MATCHES "selectedMode" OR
+       NOT web_http2_stream_runtime MATCHES
+           "std::optional<RequestBodyMode>" OR
+       NOT web_http2_stream_runtime MATCHES
+           "std::optional<RouteResolution>" OR
+       NOT web_http2_stream_runtime MATCHES "selectRoute" OR
        NOT web_http2_stream_runtime MATCHES "streamingBacklogLimit" OR
        NOT web_http2_stream_runtime MATCHES
            "std::optional<Http2SansIoStreamSignal>" OR
@@ -3623,6 +3751,8 @@ else()
        web_http2_ws_transport MATCHES "Http2SansIoStreamSignal[*]" OR
        web_http2_response_stream_sink MATCHES
            "Http2SansIoStreamSignal[*]" OR
+       web_http2_stream_runtime MATCHES
+           "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
        web_http2_ws_transport MATCHES
            "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final")
         boundary_error("HTTP/2 Web stream runtime lost its ownership boundary"
@@ -3671,6 +3801,8 @@ if(EXISTS "${WEB_HTTP2_SESSION}")
        NOT web_http2_session MATCHES "Owner-side reset" OR
        NOT web_http2_session MATCHES
            "streamRuntimes[.]beginDispatch" OR
+       NOT web_http2_session MATCHES "runtime->selectRoute" OR
+       NOT web_http2_session MATCHES "routes[.]resolve[(]method, path[)]" OR
        NOT web_http2_session MATCHES
            "streamRuntimes[.]dispatchedCount" OR
        NOT web_http2_session MATCHES "streamRuntimes[.]size" OR
@@ -3680,6 +3812,8 @@ if(EXISTS "${WEB_HTTP2_SESSION}")
            "sansio_driver_h2_inactivity_phase_counts_predispatch_runtime" OR
        web_http2_session MATCHES
            "${RULE_HTTP2_PARALLEL_WEB_DISPATCH_STATE}" OR
+       web_http2_session MATCHES "${RULE_STALE_ROUTE_MODE_SPLIT}" OR
+       web_http2_session MATCHES "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
        web_http2_session MATCHES
            "Http2ConnectionLimits|HttpRequestBodyMode|setBodyMode|usesStreamRequestBody")
         boundary_error("ruvia-web HTTP/2 session bypasses Web-owned body storage"
@@ -4467,6 +4601,22 @@ foreach(boundary_doc IN ITEMS
     "${RUVIA_ROOT}/README.md"
     "${RUVIA_ROOT}/AGENTS.md")
     file(READ "${boundary_doc}" boundary_doc_content)
+    if(NOT boundary_doc_content MATCHES "RouteEndpoint" OR
+       NOT boundary_doc_content MATCHES "BufferedRouteEndpoint" OR
+       NOT boundary_doc_content MATCHES
+           "ResponseStreamRouteEndpoint" OR
+       NOT boundary_doc_content MATCHES "WebSocketRouteEndpoint" OR
+       NOT boundary_doc_content MATCHES "RouteResolution" OR
+       NOT boundary_doc_content MATCHES "ResolvedRoute" OR
+       NOT boundary_doc_content MATCHES "RouteMethodNotAllowed" OR
+       NOT boundary_doc_content MATCHES "RouteNotFound" OR
+       NOT boundary_doc_content MATCHES "ResponseBodyMode" OR
+       NOT boundary_doc_content MATCHES "RouteMatch" OR
+       NOT boundary_doc_content MATCHES "resolve")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("typed Web route contract is undocumented"
+            "${relative} must document endpoint alternatives, resolved/405/404 alternatives, and removal of response-mode and caller-owned match side channels")
+    endif()
     if(NOT boundary_doc_content MATCHES "Http1ResponseStreamPlan")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("HTTP/1 stream-plan boundary is undocumented"

@@ -7,9 +7,11 @@
 #include <memory_resource>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/web/detail/http/ContextServices.h"
@@ -22,6 +24,7 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
 #include "ruvia/web/WebSocket.h"
+#include "ruvia/http/detail/server/HttpResponseStreamHead.h"
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/web/Router.h"
 
@@ -52,23 +55,195 @@ using RouteHandler = CallableRef<HttpResponse, Context&>;
 using RouteStreamHandler = CallableRef<void, Context&>;
 using RouteMiddleware = CallableRef<void, Context&, Next&>;
 
-// Streaming dispatch result types are web-level because they describe the route
-// handler contract, not the HTTP wire protocol.
+class RouteEndpoint;
+
+class BufferedRouteEndpoint final {
+public:
+    [[nodiscard]] const RouteHandler& handler() const noexcept {
+        return handler_;
+    }
+
+    [[nodiscard]] RequestBodyMode requestBodyMode() const noexcept {
+        return requestBodyMode_;
+    }
+
+private:
+    friend class RouteEndpoint;
+
+    BufferedRouteEndpoint(
+        RouteHandler handler,
+        RequestBodyMode requestBodyMode) noexcept
+        : handler_(handler), requestBodyMode_(requestBodyMode) {}
+
+    RouteHandler handler_;
+    RequestBodyMode requestBodyMode_;
+};
+
+class ResponseStreamRouteEndpoint final {
+public:
+    [[nodiscard]] const RouteStreamHandler& handler() const noexcept {
+        return handler_;
+    }
+
+    [[nodiscard]] ResponseStreamKind kind() const noexcept {
+        return kind_;
+    }
+
+private:
+    friend class RouteEndpoint;
+
+    ResponseStreamRouteEndpoint(
+        RouteStreamHandler handler,
+        ResponseStreamKind kind) noexcept
+        : handler_(handler), kind_(kind) {}
+
+    RouteStreamHandler handler_;
+    ResponseStreamKind kind_;
+};
+
+class WebSocketRouteEndpoint final {
+public:
+    [[nodiscard]] const RouteStreamHandler& handler() const noexcept {
+        return handler_;
+    }
+
+    [[nodiscard]] std::string_view subprotocols() const noexcept {
+        return subprotocols_;
+    }
+
+    [[nodiscard]] const WebSocketLifecycleOptions& lifecycle() const noexcept {
+        return lifecycle_;
+    }
+
+private:
+    friend class RouteEndpoint;
+
+    WebSocketRouteEndpoint(
+        std::pmr::memory_resource* resource,
+        RouteStreamHandler handler,
+        WebSocketRouteOptions options)
+        : handler_(handler),
+          subprotocols_(options.subprotocols, resource),
+          lifecycle_(options.lifecycle) {}
+
+    RouteStreamHandler handler_;
+    std::pmr::string subprotocols_;
+    WebSocketLifecycleOptions lifecycle_;
+};
+
+// Startup-built endpoint contract. The handler shape and its only legal route
+// metadata live in the same alternative, so a route cannot claim a streaming or
+// WebSocket mode while carrying only a buffered handler (or vice versa).
+class RouteEndpoint final {
+public:
+    RouteEndpoint(const RouteEndpoint&) = delete;
+    RouteEndpoint& operator=(const RouteEndpoint&) = delete;
+    RouteEndpoint(RouteEndpoint&&) noexcept = default;
+    RouteEndpoint& operator=(RouteEndpoint&&) noexcept = default;
+
+    [[nodiscard]] static RouteEndpoint buffered(
+        RouteHandler handler,
+        RequestBodyMode requestBodyMode) {
+        if (!handler.valid()) {
+            throw std::invalid_argument("route handler must not be empty");
+        }
+        if (requestBodyMode != RequestBodyMode::kBuffered &&
+            requestBodyMode != RequestBodyMode::kStream) {
+            throw std::invalid_argument("invalid route request-body mode");
+        }
+        return RouteEndpoint(BufferedRouteEndpoint(handler, requestBodyMode));
+    }
+
+    [[nodiscard]] static RouteEndpoint responseStream(
+        RouteStreamHandler handler,
+        ResponseStreamKind kind) {
+        if (!handler.valid()) {
+            throw std::invalid_argument("route stream handler must not be empty");
+        }
+        if (kind != ResponseStreamKind::kGeneric &&
+            kind != ResponseStreamKind::kSse) {
+            throw std::invalid_argument("invalid response-stream kind");
+        }
+        return RouteEndpoint(ResponseStreamRouteEndpoint(handler, kind));
+    }
+
+    [[nodiscard]] static RouteEndpoint webSocket(
+        std::pmr::memory_resource* resource,
+        RouteStreamHandler handler,
+        WebSocketRouteOptions options = {}) {
+        if (!handler.valid()) {
+            throw std::invalid_argument("websocket route handler must not be empty");
+        }
+        if (options.lifecycle.pingInterval.count() < 0 ||
+            options.lifecycle.pongTimeout.count() < 0 ||
+            options.lifecycle.closeHandshakeTimeout.count() < 0) {
+            throw std::invalid_argument(
+                "websocket lifecycle timeouts must not be negative");
+        }
+        return RouteEndpoint(WebSocketRouteEndpoint(
+            pmrResourceOrDefault(resource), handler, options));
+    }
+
+    [[nodiscard]] RouteEndpoint clone(
+        std::pmr::memory_resource* resource) const {
+        if (const auto* endpoint = buffered()) {
+            return RouteEndpoint::buffered(
+                endpoint->handler(), endpoint->requestBodyMode());
+        }
+        if (const auto* endpoint = responseStream()) {
+            return RouteEndpoint::responseStream(
+                endpoint->handler(), endpoint->kind());
+        }
+        const auto& endpoint = *webSocket();
+        return RouteEndpoint::webSocket(
+            resource,
+            endpoint.handler(),
+            WebSocketRouteOptions{endpoint.subprotocols(), endpoint.lifecycle()});
+    }
+
+    [[nodiscard]] const BufferedRouteEndpoint* buffered() const noexcept {
+        return std::get_if<BufferedRouteEndpoint>(&value_);
+    }
+
+    [[nodiscard]] const ResponseStreamRouteEndpoint* responseStream() const noexcept {
+        return std::get_if<ResponseStreamRouteEndpoint>(&value_);
+    }
+
+    [[nodiscard]] const WebSocketRouteEndpoint* webSocket() const noexcept {
+        return std::get_if<WebSocketRouteEndpoint>(&value_);
+    }
+
+    // Every non-buffered endpoint has a buffered request body contract. Only a
+    // buffered-response endpoint may opt into the explicit stream-body route.
+    [[nodiscard]] RequestBodyMode requestBodyMode() const noexcept {
+        const auto* endpoint = buffered();
+        return endpoint == nullptr
+            ? RequestBodyMode::kBuffered
+            : endpoint->requestBodyMode();
+    }
+
+private:
+    using Value = std::variant<
+        BufferedRouteEndpoint,
+        ResponseStreamRouteEndpoint,
+        WebSocketRouteEndpoint>;
+
+    template <typename Endpoint>
+    explicit RouteEndpoint(Endpoint endpoint) noexcept
+        : value_(std::move(endpoint)) {}
+
+    Value value_;
+};
 
 class RouteEntry final {
 public:
     struct Init final {
         HttpKnownMethod method;
         std::string_view path;
-        RouteHandler handler;
-        RouteStreamHandler streamHandler;
-        RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-        ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
+        RouteEndpoint endpoint;
         bool dynamic{false};
         std::size_t middlewareOffset{0};
         std::size_t middlewareCount{0};
-        std::string_view webSocketSubprotocols{};
-        WebSocketLifecycleOptions webSocketLifecycle{};
     };
 
     RouteEntry(std::pmr::memory_resource* resource, Init init);
@@ -86,37 +261,8 @@ public:
         return path_;
     }
 
-    [[nodiscard]] const RouteHandler& handler() const noexcept {
-        return handler_;
-    }
-
-    [[nodiscard]] const RouteStreamHandler& streamHandler() const noexcept {
-        return streamHandler_;
-    }
-
-    [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
-        return bodyMode_;
-    }
-
-    [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
-        return responseMode_;
-    }
-
-    [[nodiscard]] bool usesStreamRequestBody() const noexcept {
-        return bodyMode_ == RequestBodyMode::kStream;
-    }
-
-    [[nodiscard]] bool isBufferedResponse() const noexcept {
-        return responseMode_ == ResponseBodyMode::kBuffered;
-    }
-
-    [[nodiscard]] bool isWebSocketResponse() const noexcept {
-        return responseMode_ == ResponseBodyMode::kWebSocket;
-    }
-
-    [[nodiscard]] bool usesResponseStream() const noexcept {
-        return responseMode_ == ResponseBodyMode::kStream ||
-            responseMode_ == ResponseBodyMode::kSse;
+    [[nodiscard]] const RouteEndpoint& endpoint() const noexcept {
+        return endpoint_;
     }
 
     [[nodiscard]] bool dynamic() const noexcept {
@@ -139,14 +285,6 @@ public:
         return middlewareCount_ != 0;
     }
 
-    [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
-        return webSocketSubprotocols_;
-    }
-
-    [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
-        return webSocketLifecycle_;
-    }
-
     void setMiddlewareRange(std::size_t offset, std::size_t count) noexcept {
         middlewareOffset_ = offset;
         middlewareCount_ = count;
@@ -159,16 +297,11 @@ public:
 private:
     HttpKnownMethod method_;
     std::pmr::string path_;
-    RouteHandler handler_;
-    RouteStreamHandler streamHandler_;
-    RequestBodyMode bodyMode_{RequestBodyMode::kBuffered};
-    ResponseBodyMode responseMode_{ResponseBodyMode::kBuffered};
+    RouteEndpoint endpoint_;
     bool dynamic_{false};
     std::span<const std::string_view> paramNames_{};
     std::size_t middlewareOffset_{0};
     std::size_t middlewareCount_{0};
-    std::pmr::string webSocketSubprotocols_;
-    WebSocketLifecycleOptions webSocketLifecycle_{};
 };
 
 class RouteTable final : public RequestDispatcher {
@@ -181,8 +314,10 @@ public:
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;
-    [[nodiscard]] RouteResolution resolve(const HttpRequest& request, RouteMatch& match) const noexcept;
-    [[nodiscard]] RouteResolution resolve(HttpKnownMethod method, std::string_view path, RouteMatch& match) const noexcept;
+    [[nodiscard]] RouteResolution resolve(const HttpRequest& request) const noexcept;
+    [[nodiscard]] RouteResolution resolve(
+        HttpKnownMethod method,
+        std::string_view path) const noexcept;
     Task<HttpResponse> dispatch(
         const HttpRequest& request,
         RequestMemory& memory,
@@ -214,13 +349,13 @@ public:
         ContextServices services = {}) const;
     Task<StreamDispatchResult> dispatchResponseStream(
         const HttpRequest& request,
-        const RouteResolution& resolution,
+        const ResolvedRoute& route,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services = {}) const;
     Task<StreamDispatchResult> dispatchWebSocket(
         const HttpRequest& request,
-        const RouteResolution& resolution,
+        const ResolvedRoute& route,
         RequestMemory& memory,
         WebSocket& webSocket,
         ContextServices services = {}) const;
@@ -348,7 +483,7 @@ private:
     [[nodiscard]] static Task<void> invokeMiddlewareContinuation(Next::State state);
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
-        const RouteResolution& resolution,
+        const ResolvedRoute& route,
         RequestMemory& memory,
         ContextServices services) const;
     [[nodiscard]] Task<void> invokeStreamMiddlewareAt(

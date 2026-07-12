@@ -13,13 +13,6 @@ enum class RequestBodyMode {
     kStream
 };
 
-enum class ResponseBodyMode {
-    kBuffered,
-    kStream,
-    kSse,
-    kWebSocket
-};
-
 }  // namespace detail
 
 }  // namespace ruvia
