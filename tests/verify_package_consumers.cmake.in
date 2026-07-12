@@ -1626,6 +1626,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Context request API restored the arrayBuffer alias")
     endif()
+    if(_installed_context_header MATCHES "formData[(]" OR
+       _installed_context_header MATCHES "SingleValueSelection")
+        message(FATAL_ERROR
+            "installed Context request API restored split form-body selection semantics")
+    endif()
     if(NOT _installed_context_capabilities MATCHES
            "class ContextBufferedRequestBodySource final" OR
        NOT _installed_context_capabilities MATCHES
