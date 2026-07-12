@@ -48,7 +48,8 @@ class Http2ForbiddenResponseContentLength final {};
 
 enum class Http2ResponseHeadPlanError : std::uint8_t {
     kInvalidContentLength,
-    kConnectTunnelRequired
+    kConnectTunnelRequired,
+    kResponseStatusMismatch
 };
 
 class Http2ResponseHeadPlanFailure final {
@@ -208,6 +209,10 @@ http2BufferedResponseHeadPlan(
     const HttpBufferedResponseWritePlan& writePlan,
     const HttpResponse& response) noexcept {
     const auto& bodyPlan = writePlan.bodyPlan();
+    if (writePlan.responseStatus() != response.status()) {
+        return Http2ResponseHeadPlanResult::failure(
+            Http2ResponseHeadPlanError::kResponseStatusMismatch);
+    }
     const auto& policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed()) {
         return Http2ResponseHeadPlanResult::canonical(
@@ -223,6 +228,10 @@ http2BufferedResponseHeadPlan(
 http2StreamingResponseHeadPlan(
     const HttpResponseBodyPlan& bodyPlan,
     const HttpResponse& response) noexcept {
+    if (bodyPlan.responseStatus() != response.status()) {
+        return Http2ResponseHeadPlanResult::failure(
+            Http2ResponseHeadPlanError::kResponseStatusMismatch);
+    }
     const auto& policy = bodyPlan.policy();
     if (policy.autoContentLengthAllowed() && !policy.bodyAllowed()) {
         return Http2ResponseHeadPlanResult::canonical(bodyPlan, 0);

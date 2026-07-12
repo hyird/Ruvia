@@ -195,7 +195,9 @@ inline void appendHttp2ResponseHeaders(
 
     auto& headerBlock = stream.responseHeaderBlock();
     headerBlock.clear();
-    HpackEncoder::encodeStatus(headerBlock, response.status());
+    HpackEncoder::encodeStatus(
+        headerBlock,
+        plan.bodyPlan().responseStatus());
     std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
     std::pmr::string lowerNameScratch(headerBlock.get_allocator());
     for (const auto& header : response.headers()) {

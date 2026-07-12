@@ -837,6 +837,40 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package restored reconstructed response-stream status")
     endif()
 
+    set(_installed_http2_buffered_response_result_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2BufferedResponseDispatch.h")
+    if(NOT EXISTS "${_installed_http2_buffered_response_result_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing installed buffered response status ownership")
+    endif()
+    file(READ "${_installed_http2_buffered_response_result_path}"
+        _installed_http2_buffered_response_result)
+    if(NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseCompleted" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponsePeerAbortedBeforeCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponsePeerAbortedAfterCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseFailedBeforeCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Http2BufferedResponseFailedAfterCommit" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "using Value = std::variant" OR
+       NOT _installed_http2_stream_session MATCHES
+           "Task<Http2BufferedResponseDispatchResult>" OR
+       NOT _installed_http2_stream_session MATCHES
+           "const auto committedStatus = writePlan[.]responseStatus[(][)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "All valid buffered branches converge here" OR
+       NOT _installed_http2_stream_session MATCHES
+           "result[.]peerAbortedBeforeCommit[(][)]" OR
+       _installed_http2_stream_session MATCHES
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
+        message(FATAL_ERROR
+            "installed buffered response status ownership was split or reconstructed")
+    endif()
+
     set(_installed_access_log_model_path
         "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
     set(_installed_access_log_access_path
@@ -1353,6 +1387,12 @@ if(NOT _installed_response_content_semantics MATCHES
    NOT _installed_response_write_plan MATCHES
        "HttpResponseContentSemantics semantics_" OR
    NOT _installed_response_write_plan MATCHES
+       "std::uint16_t responseStatus[(][)] const noexcept" OR
+   NOT _installed_response_write_plan MATCHES
+       "return bodyPlan_[.]responseStatus[(][)]" OR
+   _installed_response_write_plan MATCHES
+       "httpBufferedResponseWritePlan[ \t\r\n]*[(][ \t\r\n]*const[ \t]+HttpResponseBodyPlan[&]" OR
+   NOT _installed_response_write_plan MATCHES
        "semantics_[.]withContent[(][)] == nullptr" OR
    _installed_response_write_plan MATCHES "bodySuppressed_")
     message(FATAL_ERROR "installed response writers and parsers lost their shared content semantics")
@@ -1494,8 +1534,14 @@ if(NOT _installed_http2_response_head_plan MATCHES
        "http2StreamingResponseHeadPlan" OR
    NOT _installed_http2_response_head_plan MATCHES
        "http2ConnectResponseHeadPlan" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "kResponseStatusMismatch" OR
+   NOT _installed_http2_response_head_plan MATCHES
+       "writePlan[.]responseStatus[(][)] != response[.]status[(][)]" OR
    NOT _installed_http2_response_headers MATCHES
        "const Http2ResponseHeadPlan& plan" OR
+   NOT _installed_http2_response_headers MATCHES
+       "plan[.]bodyPlan[(][)][.]responseStatus[(][)]" OR
    NOT _installed_http2_response_headers MATCHES
        "const Http2FinalResponseControl& control" OR
    _installed_http2_response_headers MATCHES

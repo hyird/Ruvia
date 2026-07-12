@@ -58,7 +58,7 @@ enum class ResponseStreamHeadDisposition : std::uint8_t {
 class ResponseStreamCommitPlan final {
 public:
     [[nodiscard]] std::uint16_t responseStatus() const noexcept {
-        return responseStatus_;
+        return bodyPlan_.responseStatus();
     }
 
     [[nodiscard]] ResponseStreamFraming framing() const noexcept {
@@ -85,18 +85,15 @@ private:
         ResponseTrailerIntent) noexcept;
 
     ResponseStreamCommitPlan(
-        std::uint16_t responseStatus,
         ResponseStreamFraming framing,
         HttpResponseBodyPlan bodyPlan,
         ResponseStreamTrailerFraming trailerFraming,
         ResponseStreamHeadDisposition headDisposition) noexcept
-        : responseStatus_(responseStatus),
-          framing_(framing),
+        : framing_(framing),
           bodyPlan_(bodyPlan),
           trailerFraming_(trailerFraming),
           headDisposition_(headDisposition) {}
 
-    std::uint16_t responseStatus_{0};
     ResponseStreamFraming framing_{ResponseStreamFraming::kHttp2Frames};
     HttpResponseBodyPlan bodyPlan_;
     ResponseStreamTrailerFraming trailerFraming_{ResponseStreamTrailerFraming::kUnavailable};
@@ -111,7 +108,6 @@ private:
     const auto bodyPlan = httpResponseBodyPlan(requestMethod, responseStatus);
     if (framing == ResponseStreamFraming::kHttp2Frames) {
         return ResponseStreamCommitPlan(
-            responseStatus,
             framing,
             bodyPlan,
             ResponseStreamTrailerFraming::kHttp2TrailingHeaders,
@@ -123,7 +119,6 @@ private:
     }
 
     return ResponseStreamCommitPlan(
-        responseStatus,
         framing,
         bodyPlan,
         framing == ResponseStreamFraming::kHttp1Chunked && !bodyPlan.bodySuppressed()

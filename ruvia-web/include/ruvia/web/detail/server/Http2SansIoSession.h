@@ -54,6 +54,7 @@
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
+#include "ruvia/web/detail/server/Http2BufferedResponseDispatch.h"
 #include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
@@ -124,6 +125,12 @@ private:
         ? ConnectionScanner::Phase::kIdle
         : ConnectionScanner::Phase::kReadingPayload;
 }
+
+enum class Http2BufferedDataSubmitResult : std::uint8_t {
+    kCompleted,
+    kPeerAborted,
+    kFailed
+};
 
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
@@ -250,24 +257,27 @@ Task<void> runHttp2SansIoSession(
     // input drains, retry this exact view before its owner advances or refills it.
     auto submitData = [&](std::uint32_t streamId,
                           std::string_view chunk,
-                          Http2EndStream endStream) -> Task<bool> {
+                          Http2EndStream endStream)
+        -> Task<Http2BufferedDataSubmitResult> {
         for (;;) {
             const auto result = connection.submitData(streamId, chunk, endStream);
             wakeWriter();
             if (result == Http2DataSubmitStatus::kAccepted) {
-                co_return true;
+                co_return Http2BufferedDataSubmitResult::kCompleted;
             }
-            if (result == Http2DataSubmitStatus::kClosed ||
-                result == Http2DataSubmitStatus::kInvalidState ||
+            if (result == Http2DataSubmitStatus::kClosed) {
+                co_return Http2BufferedDataSubmitResult::kPeerAborted;
+            }
+            if (result == Http2DataSubmitStatus::kInvalidState ||
                 result == Http2DataSubmitStatus::kContentLengthExceeded ||
                 result == Http2DataSubmitStatus::kContentLengthIncomplete) {
-                co_return false;
+                co_return Http2BufferedDataSubmitResult::kFailed;
             }
             if (!(co_await awaitSendWindow(streamId))) {
-                co_return false;
+                co_return Http2BufferedDataSubmitResult::kPeerAborted;
             }
             if (result == Http2DataSubmitStatus::kQueued) {
-                co_return true;
+                co_return Http2BufferedDataSubmitResult::kCompleted;
             }
             // kBackpressured: the input is still caller-owned; retry unchanged.
         }
@@ -275,31 +285,38 @@ Task<void> runHttp2SansIoSession(
 
     // Submit a complete buffered/file response through the core. Explicit response
     // streaming has its own route dispatch and ResponseStreamSink call chain.
-    auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response) -> Task<void> {
+    auto submitResponse = [&](std::uint32_t streamId, const HttpResponse& response)
+        -> Task<Http2BufferedResponseDispatchResult> {
         auto* streamState = connection.stream(streamId);
         if (streamState == nullptr || streamState->isAborted()) {
-            co_return;
+            co_return Http2BufferedResponseDispatchResult::
+                makePeerAbortedBeforeCommit();
         }
         const auto headResult = connection.submitResponseHead(streamId, response);
         const auto* submittedHead = headResult.submitted();
         if (submittedHead == nullptr) {
-            if (headResult.failure()->error() !=
-                Http2ResponseHeadSubmitError::kClosed) {
-                // A handler supplied metadata that cannot form a conformant final
-                // HTTP/2 response (for example 426, which would require forbidden
-                // Upgrade metadata). Do not strand the peer waiting forever on an
-                // open stream after the transactional head rejection.
-                (void)connection.submitReset(
-                    streamId,
-                    Http2ErrorCode::kInternalError);
-                wakeWriter();
+            const auto error = headResult.failure()->error();
+            if (error == Http2ResponseHeadSubmitError::kClosed) {
+                co_return Http2BufferedResponseDispatchResult::
+                    makePeerAbortedBeforeCommit();
             }
-            co_return;
+            // A handler supplied metadata that cannot form a conformant final
+            // HTTP/2 response (for example 426, which would require forbidden
+            // Upgrade metadata). Do not strand the peer waiting forever on an
+            // open stream after the transactional head rejection.
+            (void)connection.submitReset(
+                streamId,
+                Http2ErrorCode::kInternalError);
+            wakeWriter();
+            co_return Http2BufferedResponseDispatchResult::
+                makeFailedBeforeCommit(error);
         }
         wakeWriter();
         const auto& writePlan = submittedHead->plan();
+        const auto committedStatus = writePlan.responseStatus();
         if (!writePlan.sendBody()) {
-            co_return;
+            co_return Http2BufferedResponseDispatchResult::makeCompleted(
+                committedStatus);
         }
         const auto& responseContent = responseBody(response);
         if (const auto fileBody = responseContent.file()) {
@@ -316,7 +333,8 @@ Task<void> runHttp2SansIoSession(
                 // or shrank): abort the stream rather than under-send (RFC 9113 §8.1.1).
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
-                co_return;
+                co_return Http2BufferedResponseDispatchResult::
+                    makeFailedAfterCommit(committedStatus);
             }
             std::pmr::string fileChunk(worker.allocator<char>());
             ensureFileChunkBuffer(fileChunk);
@@ -324,7 +342,8 @@ Task<void> runHttp2SansIoSession(
             while (remaining > 0) {
                 auto* live = connection.stream(streamId);
                 if (live == nullptr || live->isAborted()) {
-                    co_return;
+                    co_return Http2BufferedResponseDispatchResult::
+                        makePeerAbortedAfterCommit(committedStatus);
                 }
                 const auto next = static_cast<std::size_t>(
                     std::min<std::uint64_t>(fileChunk.size(), remaining));
@@ -333,19 +352,31 @@ Task<void> runHttp2SansIoSession(
                 if (readBytes <= 0) {
                     (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                     wakeWriter();
-                    co_return;
+                    co_return Http2BufferedResponseDispatchResult::
+                        makeFailedAfterCommit(committedStatus);
                 }
                 remaining -= static_cast<std::uint64_t>(readBytes);
-                if (!(co_await submitData(
+                const auto submitResult = co_await submitData(
                     streamId,
                     std::string_view(fileChunk.data(), static_cast<std::size_t>(readBytes)),
                     remaining == 0
                         ? Http2EndStream::kEndStream
-                        : Http2EndStream::kKeepOpen))) {
-                    co_return;
+                        : Http2EndStream::kKeepOpen);
+                if (submitResult == Http2BufferedDataSubmitResult::kPeerAborted) {
+                    co_return Http2BufferedResponseDispatchResult::
+                        makePeerAbortedAfterCommit(committedStatus);
+                }
+                if (submitResult == Http2BufferedDataSubmitResult::kFailed) {
+                    (void)connection.submitReset(
+                        streamId,
+                        Http2ErrorCode::kInternalError);
+                    wakeWriter();
+                    co_return Http2BufferedResponseDispatchResult::
+                        makeFailedAfterCommit(committedStatus);
                 }
             }
-            co_return;
+            co_return Http2BufferedResponseDispatchResult::makeCompleted(
+                committedStatus);
         }
         // Buffered bytes: pace in frame-sized slices instead of one whole submit. The
         // body view is stable (owned by `response` on this handler frame), so a slow
@@ -359,13 +390,27 @@ Task<void> runHttp2SansIoSession(
             const auto endStream = offset + n == body.size()
                 ? Http2EndStream::kEndStream
                 : Http2EndStream::kKeepOpen;
-            if (!(co_await submitData(streamId, body.substr(offset, n), endStream))) {
-                co_return;
+            const auto submitResult = co_await submitData(
+                streamId,
+                body.substr(offset, n),
+                endStream);
+            if (submitResult == Http2BufferedDataSubmitResult::kPeerAborted) {
+                co_return Http2BufferedResponseDispatchResult::
+                    makePeerAbortedAfterCommit(committedStatus);
+            }
+            if (submitResult == Http2BufferedDataSubmitResult::kFailed) {
+                (void)connection.submitReset(
+                    streamId,
+                    Http2ErrorCode::kInternalError);
+                wakeWriter();
+                co_return Http2BufferedResponseDispatchResult::
+                    makeFailedAfterCommit(committedStatus);
             }
             offset += n;
         }
         // An empty write plan returned earlier; submitResponseHead END_STREAM'd it.
-        co_return;
+        co_return Http2BufferedResponseDispatchResult::makeCompleted(
+            committedStatus);
     };
 
     // Handler body for one admitted stream; a 1:1 port of the coroutine
@@ -413,188 +458,188 @@ Task<void> runHttp2SansIoSession(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
                 baseServices);
-            co_await submitResponse(streamId, response);
+            (void)co_await submitResponse(streamId, response);
             co_return;
         }
-        if (streamState->expectationAction() ==
-            HttpServerExpectationAction::kUnsupported) {
-            // Expect is extensible, so the HTTP/2 decoder accepted and preserved
-            // the field. This Web product supports only 100-continue and applies
-            // its 417 policy through the normal application error handler.
-            auto response = co_await routes.handleError(
-                request, requestMemory,
-                HttpErrorInfo(417, {}, "unsupported Expect header"),
-                baseServices);
-            co_await submitResponse(streamId, response);
-            co_return;
-        }
-        const auto* routeResolution = streamRuntime->routeResolution();
-        if (routeResolution == nullptr) {
-            (void)connection.submitReset(
-                streamId, Http2ErrorCode::kInternalError);
-            wakeWriter();
-            co_return;
-        }
-        const auto& resolution = *routeResolution;
-        const auto* resolved = resolution.resolved();
-
-        const auto appRateLimit = rateLimitRequestAllowed(
-            baseServices.rateLimiter(), remoteAddress);
-        if (!appRateLimit.allowed) {
-            auto response = co_await routes.handleError(
-                request, requestMemory,
-                HttpErrorInfo(429, {}, "rate limit exceeded"),
-                baseServices);
-            setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
-            co_await submitResponse(streamId, response);
-            recordHttpAccess(
-                options.accessLog,
-                request,
-                remoteAddress,
-                response.status(),
-                requestStart);
-            co_return;
-        }
-        std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
-        std::optional<BodyReader> bodyReaderStorage;
-        if (streamRuntime->body().streaming() &&
-            streamState->tunnel().pending() == nullptr) {
-            streamReaderStorage.emplace(
-                connection,
-                streamId,
-                streamRuntime->body().queue(),
-                *streamSignal,
-                writeSignal);
-            emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
-        }
-        auto dispatchServices = baseServices;
-        if (bodyReaderStorage) {
-            dispatchServices = dispatchServices.withStreamingRequestBody(*bodyReaderStorage);
-        }
-
         HttpResponse response(requestMemory.resource());
-        const auto* webSocketEndpoint = resolved == nullptr
-            ? nullptr
-            : resolved->route().endpoint().webSocket();
-        const auto* responseStreamEndpoint = resolved == nullptr
-            ? nullptr
-            : resolved->route().endpoint().responseStream();
-        if (webSocketEndpoint != nullptr) {
-            if (http2IsValidWebSocketRequest(*streamState, request)) {
-                // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
-                const auto deflate = webSocketNegotiatePermessageDeflate(request);
-                const auto handshakeStatus = connection.submitWebSocketHandshake(
+        // Select an early policy response or dispatch the route in this coroutine,
+        // then converge on one buffered preparation/send tail. The single-pass block
+        // avoids another request-path coroutine frame solely for common completion.
+        do {
+            if (streamState->expectationAction() ==
+                HttpServerExpectationAction::kUnsupported) {
+                // Expect is extensible, so the HTTP/2 decoder accepted and preserved
+                // the field. This Web product supports only 100-continue and applies
+                // its 417 policy through the normal application error handler.
+                response = co_await routes.handleError(
+                    request, requestMemory,
+                    HttpErrorInfo(417, {}, "unsupported Expect header"),
+                    baseServices);
+                break;
+            }
+            const auto* routeResolution = streamRuntime->routeResolution();
+            if (routeResolution == nullptr) {
+                (void)connection.submitReset(
+                    streamId, Http2ErrorCode::kInternalError);
+                wakeWriter();
+                co_return;
+            }
+            const auto& resolution = *routeResolution;
+            const auto* resolved = resolution.resolved();
+
+            const auto appRateLimit = rateLimitRequestAllowed(
+                baseServices.rateLimiter(), remoteAddress);
+            if (!appRateLimit.allowed) {
+                response = co_await routes.handleError(
+                    request, requestMemory,
+                    HttpErrorInfo(429, {}, "rate limit exceeded"),
+                    baseServices);
+                setRetryAfterSeconds(
+                    response,
+                    std::chrono::milliseconds(appRateLimit.resetAfterMs));
+                break;
+            }
+            std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
+            std::optional<BodyReader> bodyReaderStorage;
+            if (streamRuntime->body().streaming() &&
+                streamState->tunnel().pending() == nullptr) {
+                streamReaderStorage.emplace(
+                    connection,
                     streamId,
-                    http2ChooseWebSocketSubprotocol(
-                        request, webSocketEndpoint->subprotocols()),
-                    webSocketDeflateResponseExtensions(deflate));
-                if (handshakeStatus != Http2SubmitStatus::kAccepted) {
-                    co_return;
-                }
-                wakeWriter();  // flush the 200 before the first tunnel read suspends
-                // Each Extended-CONNECT tunnel registers its OWN heartbeat on the
-                // connection's scanner entry (Entry holds a small set of heartbeat
-                // slots, not one), so concurrent tunnels on this h2 connection do not
-                // clobber each other's server-initiated pings.
-                using WsTransport = Http2SansIoWsTransport<decltype(executor)>;
-                WebSocketConnection<WsTransport> webSocketConnection(
-                    WsTransport(
-                        connection,
+                    streamRuntime->body().queue(),
+                    *streamSignal,
+                    writeSignal);
+                emplaceBodyReaderFacade(bodyReaderStorage, *streamReaderStorage);
+            }
+            auto dispatchServices = baseServices;
+            if (bodyReaderStorage) {
+                dispatchServices = dispatchServices.withStreamingRequestBody(
+                    *bodyReaderStorage);
+            }
+
+            const auto* webSocketEndpoint = resolved == nullptr
+                ? nullptr
+                : resolved->route().endpoint().webSocket();
+            const auto* responseStreamEndpoint = resolved == nullptr
+                ? nullptr
+                : resolved->route().endpoint().responseStream();
+            if (webSocketEndpoint != nullptr) {
+                if (http2IsValidWebSocketRequest(*streamState, request)) {
+                    // RFC 7692 permessage-deflate over h2 (parity with the h1 handshake).
+                    const auto deflate = webSocketNegotiatePermessageDeflate(request);
+                    const auto handshakeStatus = connection.submitWebSocketHandshake(
                         streamId,
-                        streamRuntime->body().queue(),
-                        *streamSignal,
-                        writeSignal,
-                        executor),
-                    scannerEntry,
-                    webSocketEndpoint->lifecycle(),
-                    options.maxWebSocketMessageBytes,
+                        http2ChooseWebSocketSubprotocol(
+                            request, webSocketEndpoint->subprotocols()),
+                        webSocketDeflateResponseExtensions(deflate));
+                    if (handshakeStatus != Http2SubmitStatus::kAccepted) {
+                        co_return;
+                    }
+                    wakeWriter();  // flush the 200 before the first tunnel read suspends
+                    // Each Extended-CONNECT tunnel registers its OWN heartbeat on the
+                    // connection's scanner entry (Entry holds a small set of heartbeat
+                    // slots, not one), so concurrent tunnels on this h2 connection do not
+                    // clobber each other's server-initiated pings.
+                    using WsTransport = Http2SansIoWsTransport<decltype(executor)>;
+                    WebSocketConnection<WsTransport> webSocketConnection(
+                        WsTransport(
+                            connection,
+                            streamId,
+                            streamRuntime->body().queue(),
+                            *streamSignal,
+                            writeSignal,
+                            executor),
+                        scannerEntry,
+                        webSocketEndpoint->lifecycle(),
+                        options.maxWebSocketMessageBytes,
+                        requestMemory.resource(),
+                        /*initialBytes=*/{},
+                        deflate.enabled);
+                    co_await runWebSocketSession(
+                        webSocketConnection,
+                        scannerEntry,
+                        routes,
+                        request,
+                        *resolved,
+                        requestMemory, baseServices);
+                    co_return;  // tunnel handled on the wire; no buffered tail (parity)
+                }
+                response = co_await routes.handleError(
+                    request, requestMemory,
+                    HttpErrorInfo(400, {}, "invalid http2 websocket request"),
+                    baseServices);
+            } else if (responseStreamEndpoint != nullptr) {
+                // Streaming route (for example SSE): drive the shared streaming
+                // dispatch through a sans-I/O sink that submits chunks via the core.
+                Http2SansIoResponseStreamSink<decltype(executor)> sink(
+                    connection,
+                    streamId,
+                    responseStreamEndpoint->kind(),
                     requestMemory.resource(),
-                    /*initialBytes=*/{},
-                    deflate.enabled);
-                co_await runWebSocketSession(
-                    webSocketConnection,
-                    scannerEntry,
+                    executor, writeSignal, *streamSignal);
+                auto result = co_await dispatchResponseStreamWith(
+                    sink,
                     routes,
                     request,
                     *resolved,
-                    requestMemory, baseServices);
-                co_return;  // tunnel handled on the wire; no buffered tail (parity)
-            }
-            response = co_await routes.handleError(
-                request, requestMemory,
-                HttpErrorInfo(400, {}, "invalid http2 websocket request"),
-                baseServices);
-        } else if (responseStreamEndpoint != nullptr) {
-            // Streaming route (for example SSE): drive the shared streaming
-            // dispatch through a sans-I/O sink that submits chunks via the core.
-            Http2SansIoResponseStreamSink<decltype(executor)> sink(
-                connection,
-                streamId,
-                responseStreamEndpoint->kind(),
-                requestMemory.resource(),
-                executor, writeSignal, *streamSignal);
-            auto result = co_await dispatchResponseStreamWith(
-                sink,
-                routes,
-                request,
-                *resolved,
-                requestMemory,
-                dispatchServices,
-                [&connection, streamId]() noexcept {
-                    auto* s = connection.stream(streamId);
-                    return s == nullptr || s->isAborted();
-                });
-            if (const auto* failed = result.failedAfterCommit()) {
-                (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
-                wakeWriter();
-                recordHttpAccess(
-                    options.accessLog,
-                    request,
-                    remoteAddress,
-                    failed->status(),
-                    requestStart);
-                co_return;
-            }
-            if (result.peerAbortedBeforeCommit() != nullptr) {
-                // No final response head existed, so there is no HTTP status to
-                // report through the response-completion access-log callback.
-                co_return;
-            }
-            if (const auto* peer = result.peerAbortedAfterCommit()) {
-                recordHttpAccess(
-                    options.accessLog,
-                    request,
-                    remoteAddress,
-                    peer->status(),
-                    requestStart);
-                co_return;
-            }
-            if (const auto* completed = result.completed()) {
-                recordHttpAccess(
-                    options.accessLog,
-                    request,
-                    remoteAddress,
-                    completed->status(),
-                    requestStart);
-                co_return;
-            }
-            if (auto* failed = result.failedBeforeCommit()) {
-                response = std::move(*failed).takeResponse();
-            } else if (auto* buffered = result.buffered()) {
-                response = std::move(*buffered).takeResponse();
+                    requestMemory,
+                    dispatchServices,
+                    [&connection, streamId]() noexcept {
+                        auto* s = connection.stream(streamId);
+                        return s == nullptr || s->isAborted();
+                    });
+                if (const auto* failed = result.failedAfterCommit()) {
+                    (void)connection.submitReset(
+                        streamId,
+                        Http2ErrorCode::kInternalError);
+                    wakeWriter();
+                    recordHttpAccess(
+                        options.accessLog,
+                        request,
+                        remoteAddress,
+                        failed->status(),
+                        requestStart);
+                    co_return;
+                }
+                if (result.peerAbortedBeforeCommit() != nullptr) {
+                    // No final response head existed, so there is no HTTP status to
+                    // report through the response-completion access-log callback.
+                    co_return;
+                }
+                if (const auto* peer = result.peerAbortedAfterCommit()) {
+                    recordHttpAccess(
+                        options.accessLog,
+                        request,
+                        remoteAddress,
+                        peer->status(),
+                        requestStart);
+                    co_return;
+                }
+                if (const auto* completed = result.completed()) {
+                    recordHttpAccess(
+                        options.accessLog,
+                        request,
+                        remoteAddress,
+                        completed->status(),
+                        requestStart);
+                    co_return;
+                }
+                if (auto* failed = result.failedBeforeCommit()) {
+                    response = std::move(*failed).takeResponse();
+                } else if (auto* buffered = result.buffered()) {
+                    response = std::move(*buffered).takeResponse();
+                } else {
+                    throw std::logic_error(
+                        "response stream dispatch returned no HTTP/2 terminal alternative");
+                }
             } else {
-                throw std::logic_error(
-                    "response stream dispatch returned no HTTP/2 terminal alternative");
+                response = co_await routes.dispatchBuffered(
+                    request, resolution, requestMemory, dispatchServices);
             }
-        } else {
-            response = co_await routes.dispatchBuffered(
-                request, resolution, requestMemory, dispatchServices);
-        }
+        } while (false);
 
-        auto* live = connection.stream(streamId);
-        if (live == nullptr || live->isAborted()) {
-            co_return;
-        }
+        // One request-local scratch owns a compressed body until the protocol core
+        // has accepted every DATA byte. All valid buffered branches converge here.
         std::pmr::string responseCompressionScratch(
             requestMemory.resource());
         (void)prepareBufferedHttpResponse(
@@ -602,13 +647,40 @@ Task<void> runHttp2SansIoSession(
             response,
             options,
             responseCompressionScratch);
-        co_await submitResponse(streamId, response);
-        recordHttpAccess(
-            options.accessLog,
-            request,
-            remoteAddress,
-            response.status(),
-            requestStart);
+        const auto result = co_await submitResponse(streamId, response);
+        if (const auto* completed = result.completed()) {
+            recordHttpAccess(
+                options.accessLog,
+                request,
+                remoteAddress,
+                completed->status(),
+                requestStart);
+            co_return;
+        }
+        if (const auto* peer = result.peerAbortedAfterCommit()) {
+            recordHttpAccess(
+                options.accessLog,
+                request,
+                remoteAddress,
+                peer->status(),
+                requestStart);
+            co_return;
+        }
+        if (const auto* failed = result.failedAfterCommit()) {
+            recordHttpAccess(
+                options.accessLog,
+                request,
+                remoteAddress,
+                failed->status(),
+                requestStart);
+            co_return;
+        }
+        if (result.peerAbortedBeforeCommit() != nullptr ||
+            result.failedBeforeCommit() != nullptr) {
+            co_return;
+        }
+        throw std::logic_error(
+            "buffered HTTP/2 dispatch returned no terminal alternative");
     };
 
     // One concurrent handler: admission already owns the table's dispatch lease.

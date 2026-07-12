@@ -27,12 +27,6 @@ using ruvia::detail::responseBody;
 
 using Compression = HttpServerOptions::Compression;
 
-ruvia::detail::HttpResponseBodyPlan bodyPlanFor(
-    const HttpResponse& response,
-    HttpKnownMethod method = HttpKnownMethod::kGet) {
-    return ruvia::detail::httpResponseBodyPlan(method, response.status());
-}
-
 // Reference decompressors. Each returns "\x01decompress-failed" on error, a
 // sentinel no real body equals, so a failure is a visible mismatch not a match.
 const std::string kDecompressFailed = "\x01" "decompress-failed";
@@ -101,7 +95,7 @@ bool tryCompress(
     HttpKnownMethod method = HttpKnownMethod::kGet) {
     std::pmr::string scratch(std::pmr::new_delete_resource());
     return compressResponseBodyIfAccepted(
-        coding, response, options, scratch, bodyPlanFor(response, method));
+        coding, method, response, options, scratch);
 }
 
 }  // namespace
@@ -124,10 +118,10 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
         std::pmr::string scratch(std::pmr::new_delete_resource());
         RUVIA_CHECK(compressResponseBodyIfAccepted(
             HttpContentCoding::kGzip,
+            HttpKnownMethod::kGet,
             response,
             Compression{true, 16},
-            scratch,
-            bodyPlanFor(response)));
+            scratch));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
         RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
         RUVIA_CHECK_EQ(gzipDecompress(responseBody(response).bytes()), original);
@@ -137,10 +131,10 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
         std::pmr::string scratch(std::pmr::new_delete_resource());
         RUVIA_CHECK(compressResponseBodyIfAccepted(
             HttpContentCoding::kBrotli,
+            HttpKnownMethod::kGet,
             response,
             Compression{true, 16},
-            scratch,
-            bodyPlanFor(response)));
+            scratch));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
         RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
     }
@@ -149,10 +143,10 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
         std::pmr::string scratch(std::pmr::new_delete_resource());
         RUVIA_CHECK(compressResponseBodyIfAccepted(
             HttpContentCoding::kZstd,
+            HttpKnownMethod::kGet,
             response,
             Compression{true, 16},
-            scratch,
-            bodyPlanFor(response)));
+            scratch));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
         RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
     }

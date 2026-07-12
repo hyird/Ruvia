@@ -25,6 +25,16 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::Http1CloseDelimitedResponseStreamHead>);
 
+template <typename BodyPlan>
+concept AcceptsLooseBufferedResponseBodyPlan = requires(
+    BodyPlan bodyPlan,
+    const ruvia::HttpResponse& response) {
+    ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response);
+};
+
+static_assert(!AcceptsLooseBufferedResponseBodyPlan<
+    ruvia::detail::HttpResponseBodyPlan>);
+
 }  // namespace
 
 RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
@@ -35,6 +45,10 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     const auto getPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
+    RUVIA_CHECK_EQ(getPlan.responseStatus(), std::uint16_t{200});
+    RUVIA_CHECK_EQ(
+        getPlan.bodyPlan().responseStatus(),
+        std::uint16_t{200});
     RUVIA_CHECK(getPlan.statusAllowsBody());
     RUVIA_CHECK(
         getPlan.bodyPlan().contentSemantics().withContent() != nullptr);
@@ -44,6 +58,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     const auto headPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kHead, response);
+    RUVIA_CHECK_EQ(headPlan.responseStatus(), std::uint16_t{200});
     RUVIA_CHECK(headPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(
         headPlan.bodyPlan().contentSemantics().withoutContent() != nullptr);
@@ -54,6 +69,7 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     response.status(204);
     const auto noContentPlan = ruvia::detail::httpBufferedResponseWritePlan(
         ruvia::HttpKnownMethod::kGet, response);
+    RUVIA_CHECK_EQ(noContentPlan.responseStatus(), std::uint16_t{204});
     RUVIA_CHECK(!noContentPlan.bodyPlan().statusAllowsBody());
     RUVIA_CHECK(noContentPlan.bodyPlan()
         .contentSemantics().withoutContent() != nullptr);
@@ -136,7 +152,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
         ruvia::detail::http1PlanHttp11RequestConnection(
             ruvia::detail::HttpConnectionOptions{});
     const auto writePlan = ruvia::detail::httpBufferedResponseWritePlan(
-        bodyPlan,
+        ruvia::HttpKnownMethod::kGet,
         response);
     const auto combined = ruvia::detail::http1BufferedResponsePlan(
         writePlan,

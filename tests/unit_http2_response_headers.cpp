@@ -48,11 +48,8 @@ bool appendBufferedResponseHeaders(
     Http2StreamState& stream,
     const HttpResponse& response,
     ruvia::HttpKnownMethod method = ruvia::HttpKnownMethod::kGet) {
-    const auto bodyPlan = ruvia::detail::httpResponseBodyPlan(
-        method,
-        response.status());
     const auto planResult = ruvia::detail::http2BufferedResponseHeadPlan(
-        ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response),
+        ruvia::detail::httpBufferedResponseWritePlan(method, response),
         response);
     const auto* plan = planResult.plan();
     const auto controlResult = ruvia::detail::httpFinalResponseControlPlan(
@@ -147,13 +144,10 @@ bool hasHeaderName(const Collector& headers, std::string_view name) {
 RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     HttpResponse buffered(std::pmr::get_default_resource());
     buffered.setBodyCopy("hello");
-    const auto bufferedBodyPlan = ruvia::detail::httpResponseBodyPlan(
-        ruvia::HttpKnownMethod::kGet,
-        buffered.status());
     const auto bufferedPlanResult =
         ruvia::detail::http2BufferedResponseHeadPlan(
             ruvia::detail::httpBufferedResponseWritePlan(
-                bufferedBodyPlan,
+                ruvia::HttpKnownMethod::kGet,
                 buffered),
             buffered);
     const auto* bufferedPlan = bufferedPlanResult.plan();
@@ -253,6 +247,38 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     RUVIA_CHECK(
         invalidConnectPlan.failure()->error() ==
         ruvia::detail::Http2ResponseHeadPlanError::kConnectTunnelRequired);
+}
+
+RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
+    HttpResponse response(std::pmr::get_default_resource());
+    response.status(207);
+    response.setBodyCopy("planned");
+    const auto bufferedWritePlan =
+        ruvia::detail::httpBufferedResponseWritePlan(
+            ruvia::HttpKnownMethod::kGet,
+            response);
+    const auto streamingBodyPlan = ruvia::detail::httpResponseBodyPlan(
+        ruvia::HttpKnownMethod::kGet,
+        response.status());
+
+    response.status(208);
+    const auto buffered = ruvia::detail::http2BufferedResponseHeadPlan(
+        bufferedWritePlan,
+        response);
+    RUVIA_CHECK(buffered.plan() == nullptr);
+    RUVIA_CHECK(buffered.failure() != nullptr);
+    RUVIA_CHECK(
+        buffered.failure()->error() ==
+        ruvia::detail::Http2ResponseHeadPlanError::kResponseStatusMismatch);
+
+    const auto streaming = ruvia::detail::http2StreamingResponseHeadPlan(
+        streamingBodyPlan,
+        response);
+    RUVIA_CHECK(streaming.plan() == nullptr);
+    RUVIA_CHECK(streaming.failure() != nullptr);
+    RUVIA_CHECK(
+        streaming.failure()->error() ==
+        ruvia::detail::Http2ResponseHeadPlanError::kResponseStatusMismatch);
 }
 
 RUVIA_TEST(http2_interim_response_headers_are_bodyless_exact_and_normalized) {
@@ -431,12 +457,9 @@ RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) 
     HttpResponse notModified(std::pmr::get_default_resource());
     notModified.status(304);
     notModified.header("Content-Length", "5, 5");
-    const auto notModifiedBodyPlan = ruvia::detail::httpResponseBodyPlan(
-        ruvia::HttpKnownMethod::kGet,
-        notModified.status());
     const auto notModifiedPlan = ruvia::detail::http2BufferedResponseHeadPlan(
         ruvia::detail::httpBufferedResponseWritePlan(
-            notModifiedBodyPlan,
+            ruvia::HttpKnownMethod::kGet,
             notModified),
         notModified);
     RUVIA_CHECK(notModifiedPlan.plan() == nullptr);

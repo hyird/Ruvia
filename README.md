@@ -57,7 +57,13 @@ the authoritative connection disposition. It also carries one exclusive `Http1Re
 policy plus `suppressAutoContentLength` boolean entry no longer exists. Buffered output is passed as
 one `Http1BufferedResponsePlan`, inseparably pairing `HttpBufferedResponseWritePlan` with the head
 plan; `Http1BufferedResponseHead` owns the same canonical representation length used to decide body
-I/O, so Web cannot reconstruct version or length from loose inputs; the former standalone
+I/O. `HttpResponseBodyPlan` also owns the exact numeric response status from which its write policy
+and content semantics were derived, and `HttpBufferedResponseWritePlan` exposes that same status.
+The only buffered-plan factory accepts the request method plus the response; the former loose
+`bodyPlan + response` overload is gone. HTTP/1 rejects a response whose mutable status no longer
+matches the prepared plan, while the HTTP/2 head planner reports
+`kResponseStatusMismatch` before HPACK or stream mutation. Web therefore cannot reconstruct status,
+version, or length from loose inputs; the former standalone
 `http1BufferedResponseHeadPlan()` factory does not exist. The writer is the sole owner
 of canonical `Transfer-Encoding: chunked`, replacing any application framing declaration. A
 body-open close-delimited response filters both application `Transfer-Encoding` and
@@ -91,6 +97,13 @@ streams are logged before the socket closes, and HTTP/1 or HTTP/2 custom streami
 be reconstructed as the former default 200. Automatic stream termination runs inside the route
 coroutine while its bound `Context` is still alive; the outer transport driver only consumes the
 committed plan and never dereferences a retained Context pointer after route completion.
+Buffered HTTP/2 completion follows the same rule. Every valid buffered branch—including early
+417/429 application responses—uses one preparation/submission/logging path. Its
+`Http2BufferedResponseDispatchResult` distinguishes completed, peer-aborted-before-commit,
+peer-aborted-after-commit, failed-before-commit, and failed-after-commit alternatives. Only
+post-commit alternatives carry the status from the submitted `HttpBufferedResponseWritePlan`;
+an invalid final head or peer reset before HEADERS commit has no HTTP status and cannot trigger a
+response-completion access-log record.
 Request methods have two deliberately separate representations. RFC 9110 defines the wire method
 as an extensible, case-sensitive token, so `HttpRequest::method()`, `ContextRequest::method()`,
 `RawRequestClone::method()`, and `AccessLogRecord::method()` preserve that exact token for both
