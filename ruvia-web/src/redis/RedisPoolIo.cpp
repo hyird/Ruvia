@@ -49,14 +49,17 @@ void RedisPool::ensureReader(Connection& connection) {
     connection.replyBytes = 0;
 }
 
-void RedisPool::setDeadline(Connection& connection, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept {
+void RedisPool::setDeadline(
+    Connection& connection,
+    std::optional<std::chrono::milliseconds> timeout,
+    Connection::DeadlineKind kind) noexcept {
     connection.deadlineKind = kind;
     connection.timedOut = false;
-    if (timeout.count() <= 0) {
+    if (!timeout.has_value()) {
         connection.deadlineActive = false;
         return;
     }
-    connection.deadline = std::chrono::steady_clock::now() + timeout;
+    connection.deadline = std::chrono::steady_clock::now() + *timeout;
     connection.deadlineActive = true;
 }
 
@@ -65,7 +68,9 @@ void RedisPool::clearDeadline(Connection& connection) noexcept {
     connection.deadlineKind = Connection::DeadlineKind::kNone;
 }
 
-Task<std::error_code> RedisPool::asyncSocketWrite(Connection& connection, std::chrono::milliseconds timeout) {
+Task<std::error_code> RedisPool::asyncSocketWrite(
+    Connection& connection,
+    std::optional<std::chrono::milliseconds> timeout) {
     setDeadline(connection, timeout, Connection::DeadlineKind::kSocket);
     auto ec = co_await asyncError([&connection](auto handler) mutable {
         asio::async_write(connection.socket, asio::buffer(connection.writeBuffer), std::move(handler));
@@ -81,7 +86,7 @@ Task<std::error_code> RedisPool::asyncSocketWrite(Connection& connection, std::c
 Task<std::pair<std::error_code, std::size_t>> RedisPool::asyncSocketReadSome(
     Connection& connection,
     std::span<char> buffer,
-    std::chrono::milliseconds timeout) {
+    std::optional<std::chrono::milliseconds> timeout) {
     setDeadline(connection, timeout, Connection::DeadlineKind::kSocket);
     auto result = co_await asyncResult<std::size_t>(
         [&connection, buffer](auto handler) mutable {
@@ -97,7 +102,7 @@ Task<std::pair<std::error_code, std::size_t>> RedisPool::asyncSocketReadSome(
 
 Task<RedisValue> RedisPool::readReply(
     Connection& connection,
-    std::chrono::milliseconds timeout,
+    std::optional<std::chrono::milliseconds> timeout,
     std::pmr::memory_resource* resource) {
     ensureReader(connection);
     for (;;) {
@@ -200,7 +205,9 @@ Task<void> RedisPool::authenticate(Connection& connection) {
         connection.writeBuffer.clear();
         connection.writeBuffer.reserve(respCommandSerializedSize(args));
         appendRespCommand(connection.writeBuffer, args);
-        const auto timeout = config_.commandTimeout.count() > 0 ? config_.commandTimeout : config_.connectTimeout;
+        const auto timeout = config_.commandTimeout.has_value()
+            ? config_.commandTimeout
+            : config_.connectTimeout;
         const auto writeEc = co_await asyncSocketWrite(connection, timeout);
         if (writeEc) {
             if (writeEc == asio::error::timed_out) {

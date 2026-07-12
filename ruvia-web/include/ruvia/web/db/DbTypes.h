@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -25,12 +26,12 @@ struct DbConfig {
     std::pmr::string database;
     // Number of connections per worker; must be greater than zero.
     std::size_t poolSize{4};
-    // Set to 0 to disable the corresponding timeout.
-    std::chrono::milliseconds connectTimeout{0};
-    std::chrono::milliseconds readTimeout{0};
-    std::chrono::milliseconds writeTimeout{0};
-    std::chrono::milliseconds queryTimeout{0};
-    std::chrono::milliseconds acquireTimeout{0};
+    // Absence disables the corresponding timeout.
+    std::optional<std::chrono::milliseconds> connectTimeout;
+    std::optional<std::chrono::milliseconds> readTimeout;
+    std::optional<std::chrono::milliseconds> writeTimeout;
+    std::optional<std::chrono::milliseconds> queryTimeout;
+    std::optional<std::chrono::milliseconds> acquireTimeout;
 };
 
 namespace detail {

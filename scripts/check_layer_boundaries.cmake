@@ -7423,6 +7423,65 @@ if(EXISTS "${WEB_REDIS_SET_MODEL}" AND
     endif()
 endif()
 
+set(WEB_DB_TIMEOUT_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h")
+set(WEB_REDIS_TIMEOUT_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
+set(WEB_DB_TIMEOUT_TEST "${RUVIA_ROOT}/tests/unit_db_sql.cpp")
+set(WEB_REDIS_TIMEOUT_TEST "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+set(WEB_TIMEOUT_PACKAGE_TEST
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(timeout_contract IN ITEMS
+        "${WEB_DB_TIMEOUT_MODEL}"
+        "${WEB_REDIS_TIMEOUT_MODEL}"
+        "${WEB_DB_TIMEOUT_TEST}"
+        "${WEB_REDIS_TIMEOUT_TEST}"
+        "${WEB_TIMEOUT_PACKAGE_TEST}")
+    if(NOT EXISTS "${timeout_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${timeout_contract}")
+        boundary_error("integration timeout contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_DB_TIMEOUT_MODEL}" AND
+   EXISTS "${WEB_REDIS_TIMEOUT_MODEL}" AND
+   EXISTS "${WEB_DB_TIMEOUT_TEST}" AND
+   EXISTS "${WEB_REDIS_TIMEOUT_TEST}" AND
+   EXISTS "${WEB_TIMEOUT_PACKAGE_TEST}")
+    file(READ "${WEB_DB_TIMEOUT_MODEL}" web_db_timeout_model)
+    file(READ "${WEB_REDIS_TIMEOUT_MODEL}" web_redis_timeout_model)
+    file(READ "${WEB_DB_TIMEOUT_TEST}" web_db_timeout_test)
+    file(READ "${WEB_REDIS_TIMEOUT_TEST}" web_redis_timeout_test)
+    file(READ "${WEB_TIMEOUT_PACKAGE_TEST}" web_timeout_package_test)
+    foreach(db_timeout IN ITEMS
+            connectTimeout readTimeout writeTimeout queryTimeout acquireTimeout)
+        if(NOT web_db_timeout_model MATCHES
+               "std::optional<std::chrono::milliseconds>[ \t]+${db_timeout}")
+            boundary_error("database timeout regained a duration sentinel"
+                "${db_timeout} must distinguish absence from a configured positive duration")
+        endif()
+    endforeach()
+    foreach(redis_timeout IN ITEMS
+            connectTimeout commandTimeout acquireTimeout)
+        if(NOT web_redis_timeout_model MATCHES
+               "std::optional<std::chrono::milliseconds>[ \t]+${redis_timeout}")
+            boundary_error("Redis timeout regained a duration sentinel"
+                "${redis_timeout} must distinguish absence from a configured positive duration")
+        endif()
+    endforeach()
+    if(NOT web_db_timeout_test MATCHES
+           "connectTimeout = milliseconds[(]0[)]" OR
+       NOT web_redis_timeout_test MATCHES
+           "commandTimeout = milliseconds[(]0[)]" OR
+       NOT web_timeout_package_test MATCHES
+           "decltype[(]ruvia::DbConfig[{][}][.]connectTimeout[)]" OR
+       NOT web_timeout_package_test MATCHES
+           "decltype[(]ruvia::RedisConfig[{][}][.]commandTimeout[)]")
+        boundary_error("integration timeout policy is insufficiently pinned"
+            "unit tests must reject configured zero and installed headers must expose optional durations")
+    endif()
+endif()
+
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
 set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")

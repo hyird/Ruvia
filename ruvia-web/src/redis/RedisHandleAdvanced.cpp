@@ -68,9 +68,10 @@ Task<RedisZScanResult> executeRedisZScan(
     co_return detail::parseRedisZScanResult(value, resource);
 }
 
-[[nodiscard]] std::chrono::milliseconds redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
+[[nodiscard]] std::optional<std::chrono::milliseconds>
+redisBlockingPopClientTimeout(std::chrono::seconds timeout) noexcept {
     if (timeout <= std::chrono::seconds(0)) {
-        return std::chrono::milliseconds(0);
+        return std::nullopt;
     }
     return std::chrono::duration_cast<std::chrono::milliseconds>(timeout) + std::chrono::seconds(1);
 }

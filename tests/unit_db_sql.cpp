@@ -2,9 +2,11 @@
 
 #include <mysql/mysql.h>
 
+#include <concepts>
 #include <exception>
 #include <limits>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -178,7 +180,23 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     using ruvia::detail::validateDbConfig;
     using std::chrono::milliseconds;
 
-    // A default config is valid (localhost, port 3306, pool 4, timeouts 0).
+    static_assert(std::same_as<
+                  decltype(DbConfig{}.connectTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(DbConfig{}.readTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(DbConfig{}.writeTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(DbConfig{}.queryTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(DbConfig{}.acquireTimeout),
+                  std::optional<milliseconds>>);
+
+    // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateDbConfig(DbConfig{}); }));
 
     // Host, port and pool size each have a required-value guard.
@@ -186,8 +204,13 @@ RUVIA_TEST(db_config_validation_checks_every_field) {
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.port = 0; validateDbConfig(c); }));
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.poolSize = 0; validateDbConfig(c); }));
 
-    // Every one of the five timeouts must be non-negative -- a negative value in
-    // any of them is rejected (verifies the whole fold is wired, not just one).
+    // Every configured timeout must be positive. Zero cannot silently recover the
+    // former sentinel convention, and the whole fold must validate every field.
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.connectTimeout = milliseconds(0); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.readTimeout = milliseconds(0); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.writeTimeout = milliseconds(0); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.queryTimeout = milliseconds(0); validateDbConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { DbConfig c; c.acquireTimeout = milliseconds(0); validateDbConfig(c); }));
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.connectTimeout = milliseconds(-1); validateDbConfig(c); }));
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.readTimeout = milliseconds(-1); validateDbConfig(c); }));
     RUVIA_CHECK(throwsOn([] { DbConfig c; c.writeTimeout = milliseconds(-1); validateDbConfig(c); }));

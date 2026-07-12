@@ -104,7 +104,7 @@ public:
         }
 
         config.poolSize = 1;
-        if (config.acquireTimeout.count() == 0) {
+        if (!config.acquireTimeout.has_value()) {
             config.acquireTimeout = config.queryTimeout;
         }
         validateDbConfig(config);

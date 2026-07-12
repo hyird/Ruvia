@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -33,10 +34,10 @@ struct RedisConfig {
     std::uint32_t database{0};
     // Must be greater than zero.
     std::size_t poolSizePerWorker{4};
-    // Set to 0 to disable the corresponding timeout.
-    std::chrono::milliseconds connectTimeout{0};
-    std::chrono::milliseconds commandTimeout{0};
-    std::chrono::milliseconds acquireTimeout{0};
+    // Absence disables the corresponding timeout.
+    std::optional<std::chrono::milliseconds> connectTimeout;
+    std::optional<std::chrono::milliseconds> commandTimeout;
+    std::optional<std::chrono::milliseconds> acquireTimeout;
     // Set to 0 to disable the reply byte limit.
     std::size_t maxReplyBytes{64 * 1024 * 1024};
     // Must be greater than zero.

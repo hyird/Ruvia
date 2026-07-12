@@ -64,7 +64,7 @@ void RedisPool::closeNow() noexcept {
 }
 
 void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    if (config_.acquireTimeout.count() > 0) {
+    if (config_.acquireTimeout.has_value()) {
         waiters_.expireDeadlines(now);
     }
 
@@ -83,9 +83,9 @@ void RedisPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcep
 }
 
 bool RedisPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.count() > 0 ||
-        config_.commandTimeout.count() > 0 ||
-        config_.acquireTimeout.count() > 0;
+    return config_.connectTimeout.has_value() ||
+        config_.commandTimeout.has_value() ||
+        config_.acquireTimeout.has_value();
 }
 
 }  // namespace ruvia::detail

@@ -35,7 +35,7 @@ Task<RedisValue> RedisPool::executeOwned(
 template <typename ArgSource>
 Task<RedisValue> RedisPool::executeWithTimeoutImpl(
     ArgSource args,
-    std::chrono::milliseconds timeout,
+    std::optional<std::chrono::milliseconds> timeout,
     std::pmr::memory_resource* resource) {
     const auto index = co_await acquire();
     ConnectionGuard guard(*this, index);
@@ -66,7 +66,7 @@ Task<RedisValue> RedisPool::executeWithTimeoutImpl(
 
 Task<RedisValue> RedisPool::executeWithTimeout(
     std::span<const std::pmr::string> args,
-    std::chrono::milliseconds timeout,
+    std::optional<std::chrono::milliseconds> timeout,
     std::pmr::memory_resource* resource) {
     return executeWithTimeoutImpl(args, timeout, resource);
 }

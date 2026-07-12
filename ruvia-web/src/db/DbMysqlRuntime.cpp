@@ -60,11 +60,14 @@ void ensureMysqlThreadInitialized() {
     (void)threadEnv;
 }
 
-void setMysqlTimeout(st_mysql& connection, mysql_option option, std::chrono::milliseconds timeout) noexcept {
-    const auto seconds = timeoutSeconds(timeout);
-    if (seconds == 0) {
+void setMysqlTimeout(
+    st_mysql& connection,
+    mysql_option option,
+    std::optional<std::chrono::milliseconds> timeout) noexcept {
+    if (!timeout.has_value()) {
         return;
     }
+    const auto seconds = timeoutSeconds(*timeout);
     (void)mysql_options(&connection, option, &seconds);
 }
 

@@ -15,8 +15,8 @@ inline void validateRedisConfig(const RedisConfig& config) {
         kSeparatedPortHostRules);
     ensureNonZeroPort(config.port, "redis port must not be zero");
     ensurePositiveSize(config.poolSizePerWorker, "redis pool size must be greater than zero");
-    ensureNonNegativeDurations(
-        "redis timeouts must not be negative",
+    ensurePositiveOptionalDurations(
+        "configured redis timeouts must be greater than zero",
         config.connectTimeout,
         config.commandTimeout,
         config.acquireTimeout);

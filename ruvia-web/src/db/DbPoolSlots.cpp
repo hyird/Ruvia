@@ -35,8 +35,10 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
         }
     };
 
-    PoolWaiter waiter(
-        std::chrono::steady_clock::now() + config_.acquireTimeout);
+    const auto deadline = config_.acquireTimeout.has_value()
+        ? std::chrono::steady_clock::now() + *config_.acquireTimeout
+        : std::chrono::steady_clock::time_point::max();
+    PoolWaiter waiter(deadline);
     waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 

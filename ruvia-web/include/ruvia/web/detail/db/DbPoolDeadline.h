@@ -3,28 +3,29 @@
 #include "ruvia/web/detail/db/DbInternal.h"
 
 #include <chrono>
+#include <optional>
 
 namespace ruvia {
 
 struct detail::MariaDbPool::OperationDeadline final {
-    std::chrono::milliseconds fallbackTimeout{0};
-    std::chrono::steady_clock::time_point deadline{};
-    bool hasDeadline{false};
+    std::optional<std::chrono::steady_clock::time_point> deadline;
 
-    explicit OperationDeadline(std::chrono::milliseconds timeout) noexcept
-        : fallbackTimeout(timeout),
-          deadline(std::chrono::steady_clock::now() + timeout),
-          hasDeadline(timeout.count() > 0) {}
+    explicit OperationDeadline(
+        std::optional<std::chrono::milliseconds> timeout) noexcept {
+        if (timeout.has_value()) {
+            deadline = std::chrono::steady_clock::now() + *timeout;
+        }
+    }
 
-    [[nodiscard]] std::chrono::milliseconds remaining() const noexcept {
-        if (!hasDeadline) {
-            return fallbackTimeout;
+    [[nodiscard]] std::optional<std::chrono::milliseconds> remaining() const noexcept {
+        if (!deadline.has_value()) {
+            return std::nullopt;
         }
         const auto now = std::chrono::steady_clock::now();
-        if (now >= deadline) {
+        if (now >= *deadline) {
             return std::chrono::milliseconds(0);
         }
-        return std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now);
     }
 };
 
