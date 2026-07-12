@@ -10,6 +10,7 @@
 
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/StaticFiles.h"
 
@@ -24,19 +25,20 @@ struct AccessLogRecordAccess;
 }  // namespace detail
 
 // One completed request, passed to the access-log callback after the response is
-// written. Views borrow request memory and are valid only for the call.
+// written. The record borrows the immutable request and connection-owned remote
+// address; the record and all returned views are valid only for the callback.
 class AccessLogRecord final {
 public:
-    [[nodiscard]] constexpr std::string_view method() const noexcept {
-        return method_;
+    [[nodiscard]] std::string_view method() const noexcept {
+        return request_.method();
     }
 
-    [[nodiscard]] constexpr HttpKnownMethod knownMethod() const noexcept {
-        return knownMethod_;
+    [[nodiscard]] HttpKnownMethod knownMethod() const noexcept {
+        return request_.knownMethod();
     }
 
-    [[nodiscard]] constexpr std::string_view path() const noexcept {
-        return path_;
+    [[nodiscard]] std::string_view path() const noexcept {
+        return request_.path();
     }
 
     [[nodiscard]] constexpr std::string_view remoteAddress() const noexcept {
@@ -51,36 +53,27 @@ public:
         return durationMicros_;
     }
 
-    [[nodiscard]] constexpr bool http2() const noexcept {
-        return http2_;
+    [[nodiscard]] HttpProtocolVersion protocolVersion() const noexcept {
+        return request_.protocolVersion();
     }
 
 private:
     friend struct detail::AccessLogRecordAccess;
 
     constexpr AccessLogRecord(
-        std::string_view method,
-        HttpKnownMethod knownMethod,
-        std::string_view path,
+        const HttpRequest& request,
         std::string_view remoteAddress,
         std::uint16_t status,
-        std::uint64_t durationMicros,
-        bool http2) noexcept
-        : method_(method),
-          knownMethod_(knownMethod),
-          path_(path),
+        std::uint64_t durationMicros) noexcept
+        : request_(request),
           remoteAddress_(remoteAddress),
           status_(status),
-          durationMicros_(durationMicros),
-          http2_(http2) {}
+          durationMicros_(durationMicros) {}
 
-    std::string_view method_;
-    HttpKnownMethod knownMethod_;
-    std::string_view path_;
+    const HttpRequest& request_;
     std::string_view remoteAddress_;
     std::uint16_t status_;
     std::uint64_t durationMicros_;
-    bool http2_;
 };
 
 struct HttpServerOptions final {

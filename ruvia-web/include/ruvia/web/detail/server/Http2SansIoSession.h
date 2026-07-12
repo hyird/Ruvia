@@ -448,7 +448,11 @@ Task<void> runHttp2SansIoSession(
             setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
             co_await submitResponse(streamId, response);
             recordHttpAccess(
-                options.accessLog, request, remoteAddress, response.status(), requestStart, true);
+                options.accessLog,
+                request,
+                remoteAddress,
+                response.status(),
+                requestStart);
             co_return;
         }
         std::optional<Http2SansIoRequestBodyReader> streamReaderStorage;
@@ -544,13 +548,21 @@ Task<void> runHttp2SansIoSession(
                 (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
                 wakeWriter();
                 recordHttpAccess(
-                    options.accessLog, request, remoteAddress, response.status(), requestStart, true);
+                    options.accessLog,
+                    request,
+                    remoteAddress,
+                    response.status(),
+                    requestStart);
                 co_return;
             }
             if (result.streamed() || result.abortedByPeer()) {
                 // Streamed on the wire; log the completed streamed response (status 200).
                 recordHttpAccess(
-                    options.accessLog, request, remoteAddress, response.status(), requestStart, true);
+                    options.accessLog,
+                    request,
+                    remoteAddress,
+                    response.status(),
+                    requestStart);
                 co_return;
             }
             if (result.hasBufferedResponse()) {
@@ -574,7 +586,11 @@ Task<void> runHttp2SansIoSession(
             responseCompressionScratch);
         co_await submitResponse(streamId, response);
         recordHttpAccess(
-            options.accessLog, request, remoteAddress, response.status(), requestStart, true);
+            options.accessLog,
+            request,
+            remoteAddress,
+            response.status(),
+            requestStart);
     };
 
     // One concurrent handler: admission already owns the table's dispatch lease.

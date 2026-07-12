@@ -737,6 +737,67 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
     endif()
 
+    set(_installed_access_log_model_path
+        "${_install_prefix}/include/ruvia/web/HttpServerOptions.h")
+    set(_installed_access_log_access_path
+        "${_install_prefix}/include/ruvia/web/detail/app/AppAccess.h")
+    set(_installed_access_log_recorder_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerAccessLog.h")
+    set(_installed_access_log_http1_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+    set(_installed_access_log_http2_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    foreach(_access_log_contract IN ITEMS
+            "${_installed_access_log_model_path}"
+            "${_installed_access_log_access_path}"
+            "${_installed_access_log_recorder_path}"
+            "${_installed_access_log_http1_path}"
+            "${_installed_access_log_http2_path}")
+        if(NOT EXISTS "${_access_log_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing typed access-log protocol metadata")
+        endif()
+    endforeach()
+    file(READ "${_installed_access_log_model_path}"
+        _installed_access_log_model)
+    file(READ "${_installed_access_log_access_path}"
+        _installed_access_log_access)
+    file(READ "${_installed_access_log_recorder_path}"
+        _installed_access_log_recorder)
+    file(READ "${_installed_access_log_http1_path}"
+        _installed_access_log_http1)
+    file(READ "${_installed_access_log_http2_path}"
+        _installed_access_log_http2)
+    if(_installed_access_log_model MATCHES
+           "bool[ \t]+http2|http2_|[.]http2[ \t]*[(]|method_|knownMethod_|path_" OR
+       _installed_access_log_access MATCHES
+           "bool[ \t]+http2|http2_|[.]http2[ \t]*[(]|method_|knownMethod_|path_" OR
+       _installed_access_log_recorder MATCHES
+           "bool[ \t]+http2|http2_|[.]http2[ \t]*[(]|method_|knownMethod_|path_" OR
+       NOT _installed_access_log_model MATCHES
+           "const HttpRequest& request_" OR
+       NOT _installed_access_log_model MATCHES
+           "HttpProtocolVersion protocolVersion[(][)] const noexcept" OR
+       NOT _installed_access_log_model MATCHES
+           "return request_[.]protocolVersion[(][)]" OR
+       NOT _installed_access_log_model MATCHES
+           "return request_[.]method[(][)]" OR
+       NOT _installed_access_log_model MATCHES
+           "return request_[.]knownMethod[(][)]" OR
+       NOT _installed_access_log_model MATCHES
+           "return request_[.]path[(][)]" OR
+       NOT _installed_access_log_access MATCHES
+           "const HttpRequest& request" OR
+       NOT _installed_access_log_recorder MATCHES
+           "AccessLogRecordAccess::make[(][ \t\r\n]*request" OR
+       _installed_access_log_http1 MATCHES
+           "recordHttpAccess[(][^;]*(true|false)[)]" OR
+       _installed_access_log_http2 MATCHES
+           "recordHttpAccess[(][^;]*(true|false)[)]")
+        message(FATAL_ERROR
+            "installed access log restored copied request facts or bool protocol state")
+    endif()
+
     set(_installed_context_capabilities_path
         "${_install_prefix}/include/ruvia/web/detail/http/ContextCapabilities.h")
     set(_installed_context_services_path

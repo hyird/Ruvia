@@ -19,8 +19,7 @@ inline void recordHttpAccess(
     const HttpRequest& request,
     std::string_view remoteAddress,
     std::uint16_t status,
-    std::chrono::steady_clock::time_point start,
-    bool http2) noexcept {
+    std::chrono::steady_clock::time_point start) noexcept {
     if (accessLog.callback == nullptr) {
         return;
     }
@@ -28,13 +27,10 @@ inline void recordHttpAccess(
                             std::chrono::steady_clock::now() - start)
                             .count();
     const AccessLogRecord record = AccessLogRecordAccess::make(
-        request.method(),
-        request.knownMethod(),
-        request.path(),
+        request,
         remoteAddress,
         status,
-        micros < 0 ? 0 : static_cast<std::uint64_t>(micros),
-        http2);
+        micros < 0 ? 0 : static_cast<std::uint64_t>(micros));
     accessLog.callback(accessLog.user, record);
 }
 

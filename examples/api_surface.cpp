@@ -1425,6 +1425,11 @@ concept HasAccessLogRecordCanonicalReadAccessors = requires(const T& record) {
     { record.remoteAddress() } -> std::same_as<std::string_view>;
     { record.status() } -> std::same_as<std::uint16_t>;
     { record.durationMicros() } -> std::same_as<std::uint64_t>;
+    { record.protocolVersion() } -> std::same_as<ruvia::HttpProtocolVersion>;
+};
+
+template <typename T>
+concept HasLegacyAccessLogHttp2Flag = requires(const T& record) {
     { record.http2() } -> std::same_as<bool>;
 };
 
@@ -2190,6 +2195,9 @@ static_assert(!std::is_constructible_v<
 static_assert(!HasAccessLogRecordPublicFields<ruvia::AccessLogRecord>);
 #endif
 static_assert(HasAccessLogRecordCanonicalReadAccessors<ruvia::AccessLogRecord>);
+static_assert(!HasLegacyAccessLogHttp2Flag<ruvia::AccessLogRecord>);
+static_assert(std::is_nothrow_copy_constructible_v<ruvia::AccessLogRecord>);
+static_assert(!std::is_copy_assignable_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_default_constructible_v<ruvia::ValidationIssue>);
 static_assert(!std::is_constructible_v<
     ruvia::ValidationIssue,

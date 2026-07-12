@@ -80,6 +80,7 @@ add_executable(ruvia_unit_tests
     unit_request_access.cpp
     unit_context_cookie.cpp
     unit_conn_info.cpp
+    unit_access_log.cpp
     unit_context_redirect.cpp
     unit_context_capabilities.cpp
     unit_http2_frame_codec.cpp
