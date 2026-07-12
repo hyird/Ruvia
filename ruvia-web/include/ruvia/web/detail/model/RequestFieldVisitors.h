@@ -5,7 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/web/RequestFields.h"
 #include "ruvia/web/detail/model/FormParser.h"
 #include "ruvia/web/detail/json/JsonObjectFields.h"
 #include "ruvia/core/memory/PmrResource.h"

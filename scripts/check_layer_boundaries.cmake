@@ -1227,6 +1227,10 @@ set(HTTP_HEADER_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpHeader.h")
 set(HTTP_COMMON_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpCommon.h")
+set(WEB_REQUEST_FIELDS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h")
+set(WEB_REQUEST_FIELDS_ACCESS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestFieldsAccess.h")
 set(HTTP_REQUEST_MODEL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpRequest.h")
 set(HTTP1_REQUEST_PARSER
@@ -1263,6 +1267,42 @@ else()
             "HttpHeader.h must own header views, limits and field validation")
     endif()
 endif()
+if(NOT EXISTS "${WEB_REQUEST_FIELDS}" OR NOT EXISTS "${WEB_REQUEST_FIELDS_ACCESS}")
+    boundary_error("Web request-field ownership is incomplete"
+        "RequestFields.h and detail/http/RequestFieldsAccess.h are required")
+else()
+    file(READ "${WEB_REQUEST_FIELDS}" web_request_fields)
+    file(READ "${WEB_REQUEST_FIELDS_ACCESS}" web_request_fields_access)
+    foreach(request_field_type IN ITEMS
+            RequestNameValueView
+            RequestNameValueList
+            RequestValueGroup
+            RequestValueGroupList)
+        if(NOT web_request_fields MATCHES
+               "class[ \t]+${request_field_type}[ \t]+final")
+            boundary_error("Web request-field model lost a canonical type"
+                "RequestFields.h must own ${request_field_type}")
+        endif()
+    endforeach()
+    if(NOT web_request_fields MATCHES "pmrResourceOrDefault" OR
+       web_request_fields MATCHES "httpPmrResourceOrDefault")
+        boundary_error("Web request fields use the wrong memory-resource boundary"
+            "RequestFields.h must resolve null resources through ruvia-core")
+    endif()
+    if(web_request_fields MATCHES
+           "struct[ \t]+Request(NameValue(View|List)|ValueGroup(List)?)Access[ \t]+final" OR
+       NOT web_request_fields_access MATCHES
+           "struct[ \t]+RequestNameValueViewAccess[ \t]+final" OR
+       NOT web_request_fields_access MATCHES
+           "struct[ \t]+RequestNameValueListAccess[ \t]+final" OR
+       NOT web_request_fields_access MATCHES
+           "struct[ \t]+RequestValueGroupAccess[ \t]+final" OR
+       NOT web_request_fields_access MATCHES
+           "struct[ \t]+RequestValueGroupListAccess[ \t]+final")
+        boundary_error("Web request-field mutation leaked into the public model"
+            "only detail/http/RequestFieldsAccess.h may define construction and mutation access")
+    endif()
+endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
     file(READ "${HTTP_REQUEST_MODEL}" http_request_model)
@@ -1293,6 +1333,11 @@ if(EXISTS "${HTTP_COMMON_HEADER}")
            "bool[ \t\r\n]+isValidHttpHeader(Name|Value)")
         boundary_error("HTTP header contract leaked back into HttpCommon.h"
             "HttpHeader.h must exclusively own header primitives and validation declarations")
+    endif()
+    if(http_common_header MATCHES
+           "class[ \t]+Request(NameValue(View|List)|ValueGroup(List)?)[ \t]+final")
+        boundary_error("Web request fields leaked back into ruvia-http"
+            "Context request-field views and grouping belong to ruvia-web/RequestFields.h")
     endif()
 endif()
 if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND

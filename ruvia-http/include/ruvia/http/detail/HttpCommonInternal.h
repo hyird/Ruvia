@@ -27,12 +27,4 @@ struct MultipartPartAccess final {
     }
 };
 
-struct RequestNameValueViewAccess final {
-    [[nodiscard]] static constexpr RequestNameValueView make(
-        std::string_view name,
-        std::string_view value) noexcept {
-        return RequestNameValueView(name, value);
-    }
-};
-
 }  // namespace ruvia::detail
