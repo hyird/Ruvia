@@ -83,10 +83,13 @@ void weakenStrongResponseEtag(HttpResponse& response) {
 
 bool compressResponseBodyIfAccepted(
     HttpContentCoding coding,
+    HttpKnownMethod requestMethod,
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
-    std::pmr::string& compressionScratch,
-    const HttpResponseBodyPlan& bodyPlan) {
+    std::pmr::string& compressionScratch) {
+    const auto bodyPlan = httpResponseBodyPlan(
+        requestMethod,
+        response.status());
     if (!bodyPlan.statusAllowsBody() || !options.enabled) {
         return false;
     }

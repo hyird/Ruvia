@@ -179,6 +179,13 @@ body、通知 EOF，并在 done 后消费协议语义上忽略的 epilogue，确
 
 边界判断：如果代码决定“字节如何解析/分帧/序列化、连接是否保持、协议升级是否成立、协议失败对应哪个 HTTP status”，应放在 `ruvia-http`；如果代码决定“协议失败如何变成应用 error code/JSON envelope，或某个 Web 产品/路由/中间件/配置要不要设置某些 header 或执行某种策略”，应放在 `ruvia-web`。Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection` 参数；HTTP/1 runtime 必须在知道 request-body/keep-alive 状态后统一最终化连接语义。流式响应在 handler 前由 `ruvia-http` 的 `Http1ResponseStreamPlan` 绑定 request connection plan、body 状态、chunked/close-delimited framing 和类型化的外部强制关闭策略；提交 response head 时必须再由 `PreparedHttp1ResponseStream` 合并 response 的 `Connection` 选项、规范化响应信号并产出最终 `Http1ServerConnectionPlan`。prepared 结果还必须携带唯一 `Http1ResponseHeadPlan`，其 framing 只能是 `Http1BufferedResponseHead`、`Http1ChunkedResponseStreamHead` 或 `Http1CloseDelimitedResponseStreamHead`；`appendResponseHead()` 只能接收该 plan，禁止恢复 `policy + suppressAutoContentLength` 标量入口。chunked alternative 由 writer 唯一生成 canonical `Transfer-Encoding: chunked`，不得保留应用自定义 transfer coding；body-open close-delimited alternative 必须过滤应用 `Transfer-Encoding` 与 `Content-Length`，HEAD/304 等 body-suppressed 响应可以保留 representation length metadata，但对 HTTP/1.0 仍不得发送 Transfer-Encoding。该边界遵守 [RFC 9112 §6.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.1) 与 [§6.3](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3)。`ruvia-web` 只能驱动 prepared plan，不得把 pre-commit plan 的下界当成最终 socket 生命周期结论。method/status 的响应 content 语义必须由无分配 `HttpResponseContentSemantics` 唯一分类为 `HttpInformationalResponseContent`、`HttpProtocolSwitchResponseContent`、`HttpConnectTunnelResponseContent`、`HttpResponseWithoutContent` 或 `HttpResponseWithContent` alternative；HTTP/1 client、HTTP/2 client 和 `HttpResponseBodyPlan` 必须消费同一结果，禁止各自重写 HEAD/1xx/204/304/CONNECT 判断。发送侧再由 `HttpResponseBodyPlan` 绑定 status write policy，buffered 响应由 `HttpBufferedResponseWritePlan` 绑定 representation length 与最终 send-body 结论；HTTP/1、HTTP/2 和 streaming 调用链不得在 `ruvia-web` 通过 `skipBody` 等松散布尔值重复判断。HEAD 保留对应 GET representation 的协商 metadata 和长度，但 HTTP/1 不发送 payload、HTTP/2 不发送 DATA。`Http2Connection` 必须拥有完整的本地发送 phase：interim head 不关闭 initial-head phase，request/final response/WebSocket initial head 只能成功提交一次，DATA 只能在 body-open phase 提交。`submitData()` 的 `kQueued` 表示 core 已复制并接管未发送后缀，调用方不得重试同一输入；`kBackpressured` 表示本次零接管，调用方等待已排队数据 drain 后重试。已接管的终止信号与已经物化到输出缓冲的 `END_STREAM` 必须分别记录；任何本地或对端 reset/reject 都必须统一清理未物化 DATA、trailers 和 drain 通知。所有 inbound HEADERS field block 即使最终因 local reset、drain refusal 或 stream error 被丢弃，也必须连续接收同 stream 的 CONTINUATION，并在 detached scratch 中完整 HPACK 解码后才应用完成动作；owner 在 field block 中途关闭 live stream 时必须转移已累积的压缩字节。local RST 必须是本端在该 stream 的最后一帧，不得在 discarded block 完成后再次发送 RST；无法完成强制解压时必须使用 connection-level `COMPRESSION_ERROR`。RFC 9113 已废弃 priority tree，合法形状的 dependency/weight 只能忽略，不得再触发 stream 状态或 reset。`ruvia-web` 只能驱动这些类型化状态，不得自行复制 HTTP/2 head/data/terminal 判断。`ruvia-web` 只能用 core runtime、asio/TLS/socket/timeouts 驱动 `ruvia-http` 的协议 core，不要重写协议判断；`ruvia-http` 可以提供 header token 解析、value 校验、`Vary` 合并等通用工具，但不得依赖 Context/App/Router。
 
+buffered response 的 `HttpResponseBodyPlan` 必须同时拥有 exact numeric status、status write policy
+与 method/status content semantics；`HttpBufferedResponseWritePlan` 再绑定 representation length 和
+最终 send-body 结论。它只能由 `httpBufferedResponseWritePlan(HttpKnownMethod, const HttpResponse&)`
+构造，禁止恢复接受外部 `HttpResponseBodyPlan + HttpResponse` 的 loose overload。HTTP/1 serializer
+和 HTTP/2 head planner 都必须在 wire/HPACK mutation 前拒绝 response status 与 plan status 不一致，
+H2 使用 `kResponseStatusMismatch`。
+
 HTTP/1 的 final `Http1ResponseHeadPlan` 必须拥有准确的 HTTP/1.0/HTTP/1.1 status-line 版本；
 `appendResponseHead()` 只能从该 plan 序列化版本，HTTP/1.0 request 必须得到 `HTTP/1.0` response line，
 符合 [RFC 9110 §2.5](https://www.rfc-editor.org/rfc/rfc9110.html#section-2.5)。buffered 输出必须组合为
@@ -394,8 +401,14 @@ access log 也必须消费同一个 message control value。`AccessLogRecord` �
 remote address 仍由 Web transport 单独提供。`recordHttpAccess()` 禁止接收 `bool http2` 或另一个版本
 参数，HTTP/1 与 HTTP/2 调用点都不得重建版本。禁止恢复 `http2()`、`http2_` 或复制
 `method_ + knownMethod_ + path_` 的平行 tuple；该日志边界不得增加分配、虚调用或 type-erasure。
-streaming status 必须来自提交 response head 的同一个 `ResponseStreamCommitPlan`；在 final head 前被
-peer abort 的请求没有 HTTP status，不得用默认 200 调用 response-completion access log。
+streaming status 必须来自提交 response head 的同一个 `ResponseStreamCommitPlan`；buffered HTTP/2
+status 必须来自 `Http2SubmittedResponseHead<HttpBufferedResponseWritePlan>` 持有的同一 write plan。
+`ruvia-web` 必须用 `Http2BufferedResponseDispatchResult` 的 completed、peer-aborted-before-commit、
+peer-aborted-after-commit、failed-before-commit、failed-after-commit 互斥 alternatives 表达完成状态，
+只有 post-commit alternatives 可以携带 status。所有有效 buffered 分支（包括提前产生的 417/429）
+必须统一经过 prepare/compress/CORS、submit 和 access-log 调用链；在 final head 前被 peer abort 或
+事务性拒绝的请求没有 HTTP status，不得用 `HttpResponse::status()` 或默认 200 调用 response-completion
+access log。
 
 公开整消息入口只允许 `Http1RequestParser`，其 `Http1RequestParseResult` 必须以
 `Http1RequestNeedMore`、`Http1ParsedRequest`、`Http1RequestParseFailure` 三个互斥 alternative
@@ -784,6 +797,12 @@ commit。该边界遵守 [RFC 9113 §8.1](https://www.rfc-editor.org/rfc/rfc9113
 stream response framing、[§8.1.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-8.1.1) 的
 malformed response 规则，以及 [§6.2](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.2) 的
 HEADERS/END_STREAM 状态转换。
+
+Web runtime 的 buffered send completion 必须继续使用不可默认构造的
+`Http2BufferedResponseDispatchResult`；pre-commit failure 只携带 `Http2ResponseHeadSubmitError`，
+pre-commit peer abort 不携带 payload，completed/peer-aborted-after-commit/failed-after-commit 只携带
+submitted write plan 的 exact status。禁止恢复 `Task<void> submitResponse` 后无条件读取可变
+`response.status()` 的调用链，也禁止让早退 error/rate-limit 分支绕过统一的 buffered preparation。
 
 ## 性能原则
 

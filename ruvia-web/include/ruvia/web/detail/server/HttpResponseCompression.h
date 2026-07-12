@@ -15,9 +15,9 @@ inline constexpr std::size_t kCompressionScratchRetainedBytes = 256 * 1024;
 
 bool compressResponseBodyIfAccepted(
     HttpContentCoding coding,
+    HttpKnownMethod requestMethod,
     HttpResponse& response,
     const HttpServerOptions::Compression& options,
-    std::pmr::string& compressionScratch,
-    const HttpResponseBodyPlan& bodyPlan);
+    std::pmr::string& compressionScratch);
 
 }  // namespace ruvia::detail

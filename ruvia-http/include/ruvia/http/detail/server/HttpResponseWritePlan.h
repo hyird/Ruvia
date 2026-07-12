@@ -12,6 +12,10 @@ namespace ruvia::detail {
 
 class HttpResponseBodyPlan final {
 public:
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return responseStatus_;
+    }
+
     [[nodiscard]] const ResponseWritePolicy& policy() const noexcept {
         return policy_;
     }
@@ -35,10 +39,14 @@ private:
     friend class HttpBufferedResponseWritePlan;
 
     HttpResponseBodyPlan(
+        std::uint16_t responseStatus,
         ResponseWritePolicy policy,
         HttpResponseContentSemantics semantics) noexcept
-        : policy_(policy), semantics_(semantics) {}
+        : responseStatus_(responseStatus),
+          policy_(policy),
+          semantics_(semantics) {}
 
+    std::uint16_t responseStatus_;
     ResponseWritePolicy policy_;
     HttpResponseContentSemantics semantics_;
 };
@@ -48,12 +56,17 @@ private:
     std::uint16_t statusCode) noexcept {
     const auto policy = responseWritePolicy(statusCode);
     return HttpResponseBodyPlan(
+        statusCode,
         policy,
         httpResponseContentSemantics(requestMethod, statusCode));
 }
 
 class HttpBufferedResponseWritePlan final {
 public:
+    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+        return bodyPlan_.responseStatus();
+    }
+
     [[nodiscard]] const HttpResponseBodyPlan& bodyPlan() const noexcept {
         return bodyPlan_;
     }
@@ -80,7 +93,7 @@ public:
 
 private:
     friend HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
-        const HttpResponseBodyPlan&, const HttpResponse&) noexcept;
+        HttpKnownMethod, const HttpResponse&) noexcept;
 
     HttpBufferedResponseWritePlan(
         HttpResponseBodyPlan bodyPlan,
@@ -92,8 +105,11 @@ private:
 };
 
 [[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
-    const HttpResponseBodyPlan& bodyPlan,
+    HttpKnownMethod requestMethod,
     const HttpResponse& response) noexcept {
+    const auto bodyPlan = httpResponseBodyPlan(
+        requestMethod,
+        response.status());
     std::uint64_t contentLength = 0;
     if (bodyPlan.statusAllowsBody() &&
         bodyPlan.contentSemantics().connectTunnel() == nullptr) {
@@ -101,14 +117,6 @@ private:
             responseBody(response).size());
     }
     return HttpBufferedResponseWritePlan(bodyPlan, contentLength);
-}
-
-[[nodiscard]] inline HttpBufferedResponseWritePlan httpBufferedResponseWritePlan(
-    HttpKnownMethod requestMethod,
-    const HttpResponse& response) noexcept {
-    return httpBufferedResponseWritePlan(
-        httpResponseBodyPlan(requestMethod, response.status()),
-        response);
 }
 
 }  // namespace ruvia::detail

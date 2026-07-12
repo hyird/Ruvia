@@ -111,6 +111,13 @@ concept AcceptsLooseResponseStreamBodyPlan = requires(BodyPlan bodyPlan) {
         ruvia::detail::ResponseTrailerIntent::kNone);
 };
 
+template <typename BodyPlan>
+concept AcceptsLooseBufferedResponseBodyPlan = requires(
+    BodyPlan bodyPlan,
+    const ruvia::HttpResponse& response) {
+    ruvia::detail::httpBufferedResponseWritePlan(bodyPlan, response);
+};
+
 template <typename T>
 concept HasPeerSettingStatusField = requires(const T& result) {
     result.status;
@@ -1331,6 +1338,13 @@ using ResponseStreamHeadPreparer =
         ruvia::HttpResponse,
         ruvia::detail::ResponseStreamKind,
         ruvia::detail::ResponseStreamCommitPlan);
+using BufferedResponseWritePlanner =
+    ruvia::detail::HttpBufferedResponseWritePlan (*)(
+        ruvia::HttpKnownMethod,
+        const ruvia::HttpResponse&) noexcept;
+static_assert(std::same_as<
+    decltype(&ruvia::detail::httpBufferedResponseWritePlan),
+    BufferedResponseWritePlanner>);
 static_assert(std::same_as<
     decltype(&ruvia::detail::httpResponseStreamCommitPlan),
     ResponseStreamCommitPlanner>);
@@ -1345,7 +1359,17 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamCommitPlan&>()
                  .framing()),
     ruvia::detail::ResponseStreamFraming>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpResponseBodyPlan&>()
+                 .responseStatus()),
+    std::uint16_t>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpBufferedResponseWritePlan&>()
+                 .responseStatus()),
+    std::uint16_t>);
 static_assert(!AcceptsLooseResponseStreamBodyPlan<
+    ruvia::detail::HttpResponseBodyPlan>);
+static_assert(!AcceptsLooseBufferedResponseBodyPlan<
     ruvia::detail::HttpResponseBodyPlan>);
 static_assert(HasResponseHeadPlanAccessor<
     ruvia::detail::Http2SubmittedBufferedResponseHead>);

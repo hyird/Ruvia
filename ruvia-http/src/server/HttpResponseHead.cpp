@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstring>
+#include <stdexcept>
 
 #include "ruvia/http/detail/server/HttpDateCache.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
@@ -52,6 +53,7 @@ template <typename Sink>
 void emitResponseHead(
     const HttpResponse& response,
     Sink& sink,
+    std::uint16_t responseStatus,
     std::string_view reasonPhrase,
     std::string_view dateHeader,
     ResponseHeadFlags flags) {
@@ -59,7 +61,7 @@ void emitResponseHead(
         flags.protocolVersion == HttpProtocolVersion::kHttp10
             ? std::string_view("HTTP/1.0 ")
             : std::string_view("HTTP/1.1 "));
-    sink.appendUnsigned(response.status());
+    sink.appendUnsigned(responseStatus);
     // RFC 9112 requires this SP even when the optional reason phrase is empty.
     sink.append(' ');
     sink.append(reasonPhrase);
@@ -104,6 +106,11 @@ void appendResponseHead(
     ResponseHeadBuffer& head,
     const Http1ResponseHeadPlan& plan) {
     const auto& bodyPlan = plan.bodyPlan();
+    if (response.status() != bodyPlan.responseStatus()) {
+        throw std::invalid_argument(
+            "HTTP/1 response plan status does not match response");
+    }
+    const auto responseStatus = bodyPlan.responseStatus();
     const auto& policy = bodyPlan.policy();
     const bool emitChunkedTransferEncoding =
         plan.chunkedStream() != nullptr && policy.transferEncodingAllowed();
@@ -132,7 +139,7 @@ void appendResponseHead(
 
     const auto knownBits = responseKnownHeaderBits(response);
 
-    const auto reasonPhrase = httpReasonPhrase(response.status());
+    const auto reasonPhrase = httpReasonPhrase(responseStatus);
     const auto dateHeader = cachedDateHeader();
 
     // Upper bound on emitted bytes (filtered headers are counted anyway; the
@@ -156,12 +163,24 @@ void appendResponseHead(
 
     if (char* cursor = head.stackCursor(bound); cursor != nullptr) {
         RawHeadSink sink{cursor};
-        emitResponseHead(response, sink, reasonPhrase, dateHeader, flags);
+        emitResponseHead(
+            response,
+            sink,
+            responseStatus,
+            reasonPhrase,
+            dateHeader,
+            flags);
         head.commitStack(sink.out);
         return;
     }
     head.reserveAdditional(bound);
-    emitResponseHead(response, head, reasonPhrase, dateHeader, flags);
+    emitResponseHead(
+        response,
+        head,
+        responseStatus,
+        reasonPhrase,
+        dateHeader,
+        flags);
 }
 
 }  // namespace ruvia::detail

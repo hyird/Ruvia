@@ -178,6 +178,26 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     RUVIA_CHECK(http11Head.find("Connection:") == std::string::npos);
 }
 
+RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    response.status(207);
+    response.setBodyCopy("planned");
+    const auto plan = http1BufferedResponsePlan(
+        ruvia::detail::httpBufferedResponseWritePlan(
+            HttpKnownMethod::kGet,
+            response),
+        connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
+
+    response.status(208);
+    RUVIA_CHECK(throwsInvalid([&] {
+        (void)emitHead(response, plan.headPlan());
+    }));
+    RUVIA_CHECK_EQ(plan.writePlan().responseStatus(), std::uint16_t{207});
+    RUVIA_CHECK_EQ(
+        plan.headPlan().bodyPlan().responseStatus(),
+        std::uint16_t{207});
+}
+
 RUVIA_TEST(http1_protocol_finalizer_returns_the_authoritative_reuse_verdict) {
     using ruvia::detail::Http1ConnectionDisposition;
     using ruvia::detail::Http1ServerRequestParser;
