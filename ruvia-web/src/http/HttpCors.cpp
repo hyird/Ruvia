@@ -11,15 +11,17 @@
 namespace ruvia::detail {
 namespace {
 
-void setCorsMaxAge(HttpResponse& response, std::chrono::seconds maxAge) {
-    if (maxAge.count() <= 0 ||
+void setCorsMaxAge(
+    HttpResponse& response,
+    std::optional<std::chrono::seconds> maxAge) {
+    if (!maxAge.has_value() ||
         responseHasKnownHeader(response, kResponseHeaderAccessControlMaxAge)) {
         return;
     }
     setResponseHeaderUnsigned(
         response,
         "Access-Control-Max-Age",
-        static_cast<std::uint64_t>(maxAge.count()),
+        static_cast<std::uint64_t>(maxAge->count()),
         kResponseHeaderAccessControlMaxAge);
 }
 

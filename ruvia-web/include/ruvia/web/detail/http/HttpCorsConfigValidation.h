@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -19,7 +20,7 @@ inline void validateCorsFields(
     std::string_view allowOrigin,
     std::string_view allowHeaders,
     std::string_view exposeHeaders,
-    std::chrono::seconds maxAge,
+    std::optional<std::chrono::seconds> maxAge,
     bool allowCredentials) {
     if (allowOrigin.empty()) {
         throw std::invalid_argument("CORS allowOrigin must not be empty");
@@ -35,7 +36,7 @@ inline void validateCorsFields(
     validateCorsHeaderValue(allowOrigin, "CORS allowOrigin must be a valid header value");
     validateCorsHeaderValue(allowHeaders, "CORS allowHeaders must be a valid header value");
     validateCorsHeaderValue(exposeHeaders, "CORS exposeHeaders must be a valid header value");
-    if (maxAge.count() < 0) {
+    if (maxAge.has_value() && maxAge->count() < 0) {
         throw std::invalid_argument("CORS maxAge must not be negative");
     }
 }

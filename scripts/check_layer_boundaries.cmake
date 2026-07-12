@@ -1438,6 +1438,8 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
            "struct[ \t]+CompressionConfig[ \t]+final" OR
        NOT web_server_config_model MATCHES
            "struct[ \t]+CorsConfig[ \t]+final" OR
+       NOT web_server_config_model MATCHES
+           "std::optional<std::chrono::seconds>[ \\t]+maxAge" OR
        NOT web_server_config_model MATCHES "AccessLogCallback" OR
        NOT web_server_options_model MATCHES
            "namespace[ \t]+ruvia::detail" OR
@@ -1452,7 +1454,9 @@ if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
        NOT web_server_config_package_consumer MATCHES
            "AppSetCompressionFunction" OR
        NOT web_server_config_package_consumer MATCHES
-           "AppSetCorsFunction")
+           "AppSetCorsFunction" OR
+       NOT web_server_config_package_consumer MATCHES
+           "decltype[(]ruvia::CorsConfig[{][}][.]maxAge[)]")
         boundary_error("Web server configuration regained parallel public models"
             "ServerConfig.h owns active policy values; detail/server/HttpServerOptions.h uses optional presence for enablement")
     endif()

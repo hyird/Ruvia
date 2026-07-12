@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory_resource>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -35,7 +36,7 @@ struct CorsConfig final {
     std::pmr::string allowOrigin{"*"};
     std::pmr::string allowHeaders;
     std::pmr::string exposeHeaders;
-    std::chrono::seconds maxAge{std::chrono::seconds(0)};
+    std::optional<std::chrono::seconds> maxAge;
     bool allowCredentials{false};
 };
 
