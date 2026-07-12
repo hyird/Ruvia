@@ -1961,17 +1961,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_route_http2_session MATCHES
            "ConnectionScanner::Entry& scannerEntry" OR
        NOT _installed_route_http2_session MATCHES
-           "const std::atomic_bool& serverStarted" OR
+           "const bool& workerRunning" OR
        NOT _installed_route_http2_session MATCHES
            "Http2SansIoSessionContext session" OR
        NOT _installed_route_http2_session MATCHES
            "const ContextServices& services[(][)]" OR
        _installed_route_http2_session MATCHES
-           "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](options|scannerEntry|serverStarted)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]" OR
+           "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](options|scannerEntry|serverStarted|workerRunning)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]" OR
        NOT _installed_http2_server_entry MATCHES
            "Http2SansIoSessionContext[(]" OR
        _installed_http2_server_entry MATCHES
-           "Http2SansIoSessionEnv|const[ \t]+std::atomic_bool[*][ \t]+serverStarted[ \t]*=[ \t]*nullptr")
+           "Http2SansIoSessionEnv|const[ \t]+(std::atomic_bool|bool)[*][ \t]+(serverStarted|workerRunning)[ \t]*=[ \t]*nullptr")
         message(FATAL_ERROR
             "installed HTTP/2 session restored nullable or default production wiring")
     endif()

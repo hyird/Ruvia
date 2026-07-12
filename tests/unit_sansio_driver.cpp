@@ -13,7 +13,6 @@
 #include <asio/write.hpp>
 
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
@@ -192,18 +191,20 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
 RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
     ruvia::HttpServerOptions options;
     ruvia::detail::ConnectionScanner::Entry scannerEntry;
-    std::atomic_bool serverStarted{true};
+    bool workerRunning = true;
     const ruvia::detail::Http2SansIoSessionContext session(
         ruvia::detail::ContextServices{}.withTlsTransport(
             "192.0.2.1",
             "CN=test-client"),
         options,
         scannerEntry,
-        serverStarted);
+        workerRunning);
 
     RUVIA_CHECK(&session.options() == &options);
     RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
-    RUVIA_CHECK(&session.serverStarted() == &serverStarted);
+    RUVIA_CHECK(session.workerRunning());
+    workerRunning = false;
+    RUVIA_CHECK(!session.workerRunning());
     const auto& services = session.services();
     RUVIA_CHECK(
         services.connInfo().remote().address() == "192.0.2.1");

@@ -43,13 +43,13 @@ Task<void> HttpServer::acceptLoop() {
             const auto waitEc = co_await asyncError([&retryTimer](auto handler) mutable {
                 retryTimer.async_wait(std::move(handler));
             });
-            if (waitEc || !started_.load(std::memory_order_relaxed)) {
+            if (waitEc || !workerRunning_) {
                 co_return;
             }
             continue;
         }
 
-        if (!started_.load(std::memory_order_relaxed)) {
+        if (!workerRunning_) {
             closeSocket(socket);
             co_return;
         }

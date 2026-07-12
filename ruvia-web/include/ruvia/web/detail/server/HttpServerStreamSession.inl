@@ -37,7 +37,7 @@ Task<void> HttpServer::handleStreamSession(
             if (plainTcpShouldWaitForNextRequest(socket, usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
                 const auto waitEc = co_await waitForPlainTcpReadable(socket, scannerEntry);
-                if (waitEc || !started_.load(std::memory_order_relaxed)) {
+                if (waitEc || !workerRunning_) {
                     co_return;
                 }
             }
@@ -74,7 +74,7 @@ Task<void> HttpServer::handleStreamSession(
                         baseRouteServices,
                         readBuffer,
                         usedBytes,
-                        started_);
+                        workerRunning_);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }
@@ -412,7 +412,7 @@ Task<void> HttpServer::handleStreamSession(
 
         if (connectionPlan.disposition() ==
                 Http1ConnectionDisposition::kClose ||
-            !started_.load(std::memory_order_relaxed)) {
+            !workerRunning_) {
             co_return;
         }
         applyReusableHttp1RequestBufferCompletion(

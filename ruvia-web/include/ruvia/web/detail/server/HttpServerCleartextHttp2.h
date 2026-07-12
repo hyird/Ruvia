@@ -10,7 +10,6 @@
 #include <asio/buffer.hpp>
 #include <asio/ip/tcp.hpp>
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -92,7 +91,7 @@ Task<void> runHttp2ServerSession(
     const HttpServerOptions& options,
     ConnectionScanner::Entry& scannerEntry,
     ContextServices services,
-    const std::atomic_bool& serverStarted,
+    const bool& workerRunning,
     std::string_view initialBytes = {}) {
     (void)socket;  // the sans-I/O session needs only the (possibly TLS) stream
     co_await runHttp2SansIoSession(
@@ -103,7 +102,7 @@ Task<void> runHttp2ServerSession(
             services,
             options,
             scannerEntry,
-            serverStarted),
+            workerRunning),
         initialBytes);
 }
 
@@ -118,7 +117,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
     const ContextServices& services,
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
-    const std::atomic_bool& serverStarted) {
+    const bool& workerRunning) {
     const auto current = std::string_view(readBuffer.data(), usedBytes);
     switch (probeCleartextHttp2Preface(current, options.autoHttps.enabled)) {
     case CleartextHttp2Probe::kHttp1:
@@ -132,7 +131,7 @@ Task<CleartextHttp2DispatchResult> dispatchCleartextHttp2Preface(
             options,
             scannerEntry,
             services,
-            serverStarted,
+            workerRunning,
             current);
         co_return CleartextHttp2DispatchResult::kSessionFinished;
     case CleartextHttp2Probe::kNeedMorePreface: {

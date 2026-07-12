@@ -6,6 +6,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/steady_timer.hpp>
 #include <condition_variable>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -59,6 +60,13 @@ public:
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
 private:
+    enum class LifecycleState : std::uint8_t {
+        kFresh,
+        kRunning,
+        kStopping,
+        kStopped,
+    };
+
     void configureAcceptor();
     void configureTlsContext();
     void stopOnContext(bool honorGracePeriod = true) noexcept;
@@ -104,7 +112,10 @@ private:
     ConnectionWorkSetPool workSetPool_;
     std::size_t activeConnectionCount_{0};
 
-    std::atomic_bool started_{false};
+    // lifecycleState_ is touched by external start/stop callers. All request
+    // coroutines use workerRunning_, which is mutated only on this io_context.
+    std::atomic<LifecycleState> lifecycleState_{LifecycleState::kFresh};
+    bool workerRunning_{false};
     std::jthread workerThread_;
 
     std::mutex startupMutex_;
