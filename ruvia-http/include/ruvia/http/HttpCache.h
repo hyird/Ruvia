@@ -9,7 +9,7 @@ namespace ruvia {
 
 // Parsed HTTP Cache-Control directives (RFC 9111 section 5.2). Unknown directives are ignored.
 // Boolean directives are flags; delta-seconds directives are optional (absent = not present).
-// This is a pure helper for building a caching reverse proxy / CDN edge.
+// This type reports wire directives only; cache freshness and reuse policy belong to the caller.
 struct CacheControl {
     bool noStore{false};
     bool noCache{false};            // bare or field-name form -- both require revalidation
@@ -19,18 +19,9 @@ struct CacheControl {
     bool isPublic{false};
     bool immutable{false};
     std::optional<std::uint64_t> maxAge;
-    std::optional<std::uint64_t> sMaxAge;               // shared-cache max age (wins for a proxy)
+    std::optional<std::uint64_t> sMaxAge;
     std::optional<std::uint64_t> staleWhileRevalidate;
     std::optional<std::uint64_t> staleIfError;
-
-    // Freshness lifetime a shared cache should use: s-maxage, else max-age, else none (the caller
-    // falls back to Expires/heuristics). A response with no-store/no-cache is never served fresh.
-    [[nodiscard]] std::optional<std::uint64_t> sharedFreshnessLifetime() const noexcept {
-        if (sMaxAge) {
-            return sMaxAge;
-        }
-        return maxAge;
-    }
 };
 
 // Parse a Cache-Control field value (a single line, or several joined by commas).

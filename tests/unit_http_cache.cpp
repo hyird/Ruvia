@@ -12,8 +12,6 @@ RUVIA_TEST(parse_cache_control_flags_and_ages) {
     RUVIA_CHECK_EQ(*cc.maxAge, std::uint64_t{60});
     RUVIA_CHECK_EQ(*cc.sMaxAge, std::uint64_t{120});
     RUVIA_CHECK_EQ(*cc.staleWhileRevalidate, std::uint64_t{30});
-    // A shared cache prefers s-maxage over max-age.
-    RUVIA_CHECK_EQ(*cc.sharedFreshnessLifetime(), std::uint64_t{120});
 }
 
 RUVIA_TEST(parse_cache_control_no_store_and_private) {
