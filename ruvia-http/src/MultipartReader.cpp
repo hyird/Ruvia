@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/MultipartReaderInternal.h"
 #include "ruvia/http/detail/MultipartParsing.h"
-#include "ruvia/http/detail/HttpCommonInternal.h"
+#include "ruvia/http/detail/MultipartPartAccess.h"
 #include "ruvia/http/detail/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
 
