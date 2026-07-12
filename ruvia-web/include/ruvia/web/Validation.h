@@ -322,7 +322,7 @@ private:
         ::ruvia::detail::model::appendPath(ruviaPath, prefix, ::std::string_view{wire}); \
         const auto& ruviaValue = body.field(); \
         rules.validate( \
-            body.template ruviaFieldState<#field>(), \
+            ::ruvia::detail::ModelValidationAccess::fieldState<#field>(body), \
             ruviaValue, \
             ruviaPath, \
             validator); \

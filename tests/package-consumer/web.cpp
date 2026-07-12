@@ -208,6 +208,11 @@ concept HasGeneratedModelPublicJsonWriterHooks =
         model.ruviaJsonSizeHint();
     };
 
+template <typename T>
+concept HasGeneratedModelPublicFieldStateHook = requires(const T& model) {
+    model.template ruviaFieldState<"name">();
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -224,6 +229,7 @@ static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>);
+static_assert(!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>);
 static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
 static_assert(!std::constructible_from<
     ruvia::detail::ModelInput,
@@ -873,7 +879,8 @@ int main() {
         std::pmr::get_default_resource());
     if (!invalidFieldModel.has_value() ||
         invalidFieldModel->name().has_value() ||
-        invalidFieldModel->ruviaFieldState<"name">() !=
+        ruvia::detail::ModelValidationAccess::fieldState<"name">(
+            *invalidFieldModel) !=
             ruvia::detail::ModelFieldState::kInvalidType) {
         return 19;
     }
