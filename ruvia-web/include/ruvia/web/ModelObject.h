@@ -1,8 +1,8 @@
 #pragma once
 
-#include "ruvia/http/HttpCommon.h"
 #include "ruvia/web/ModelJson.h"
 #include "ruvia/web/ModelTypes.h"
+#include "ruvia/web/RequestFields.h"
 #include "ruvia/web/detail/model/Parser.h"
 #include "ruvia/web/detail/model/RequestFieldVisitors.h"
 #include "ruvia/web/detail/model/Traits.h"

@@ -26,6 +26,7 @@
 #include "ruvia/web/ConnInfo.h"
 #include "ruvia/web/ModelTypes.h"
 #include "ruvia/web/MultipartReader.h"
+#include "ruvia/web/RequestFields.h"
 #include "ruvia/web/Streaming.h"
 #include "ruvia/web/ValidationTypes.h"
 #include "ruvia/web/WebSocket.h"

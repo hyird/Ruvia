@@ -2128,6 +2128,9 @@ static_assert(!HasCompleteType<ruvia::detail::Http1ClientResponseParseResultAcce
 static_assert(!HasCompleteType<ruvia::detail::Http1ClientResponsePlanAccess>);
 static_assert(!HasCompleteType<ruvia::detail::MultipartPartAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestNameValueViewAccess>);
+static_assert(!HasCompleteType<ruvia::detail::RequestNameValueListAccess>);
+static_assert(!HasCompleteType<ruvia::detail::RequestValueGroupAccess>);
+static_assert(!HasCompleteType<ruvia::detail::RequestValueGroupListAccess>);
 static_assert(!HasCompleteType<ruvia::detail::MultipartStreamPartAccess>);
 static_assert(!HasCompleteType<ruvia::detail::WebSocketMessageAccess>);
 static_assert(!HasCompleteType<ruvia::detail::AccessLogRecordAccess>);
