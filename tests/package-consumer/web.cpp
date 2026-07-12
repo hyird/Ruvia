@@ -168,6 +168,11 @@ concept HasLegacySharedStreamResponse = requires(Result& result) {
     result.takeResponse();
 };
 
+template <typename State>
+concept HasUntypedNextOutcome = requires(State& state) {
+    state.outcome;
+};
+
 template <typename Result>
 concept HasLegacyStreamHandledPredicate = requires(const Result& result) {
     result.streamHandled();
@@ -204,6 +209,22 @@ static_assert(std::is_same_v<
 static_assert(std::is_nothrow_copy_constructible_v<
     ruvia::AccessLogRecord>);
 static_assert(!std::is_copy_assignable_v<ruvia::AccessLogRecord>);
+static_assert(!HasUntypedNextOutcome<ruvia::Next::State>);
+static_assert(std::same_as<
+    decltype(ruvia::Next::State{}.table),
+    const ruvia::detail::RouteTable*>);
+static_assert(std::same_as<
+    decltype(ruvia::Next::State{}.route),
+    const ruvia::detail::RouteEntry*>);
+static_assert(std::same_as<
+    decltype(ruvia::Next::State{}.streamChain),
+    ruvia::detail::StreamMiddlewareChainState*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::StreamMiddlewareChainState>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        StreamMiddlewareChainState&>().handlerInvoked()),
+    bool>);
 static_assert(!std::default_initializable<
     ruvia::detail::StreamDispatchResult>);
 static_assert(!HasLegacyStreamHandledPredicate<

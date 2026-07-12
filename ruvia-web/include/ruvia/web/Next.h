@@ -12,6 +12,9 @@ class Context;
 
 namespace detail {
 struct NextAccess;
+class RouteEntry;
+class RouteTable;
+class StreamMiddlewareChainState;
 }  // namespace detail
 
 class Next final {
@@ -22,10 +25,10 @@ public:
             bool active{true};
         };
 
-        const void* table{nullptr};
-        const void* route{nullptr};
+        const detail::RouteTable* table{nullptr};
+        const detail::RouteEntry* route{nullptr};
         Context* context{nullptr};
-        void* outcome{nullptr};
+        detail::StreamMiddlewareChainState* streamChain{nullptr};
         Control* control{nullptr};
         std::size_t index{0};
         bool repeated{false};
