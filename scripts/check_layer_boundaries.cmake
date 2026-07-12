@@ -1246,6 +1246,12 @@ check_files_no_match("ruvia-http must not perform OS file I/O (sans-I/O protocol
     "${RULE_FILE_IO}" ${HTTP_SOURCE})
 check_files_no_match("ruvia-http must not include core/web headers"
     "${RULE_HTTP_FRAMEWORK_INCLUDE}" ${HTTP_SOURCE})
+check_files_no_match("Cookie option tokens must remain typed"
+    "std::string_view[ \t]+(sameSite|priority)|std::int64_t[ \t]+maxAge"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Cookies.h")
+check_files_no_match("Set-Cookie wire serialization belongs to ruvia-http"
+    "\";[ ]+(Path=|Domain=|Max-Age=|Expires=|HttpOnly|Secure|SameSite=|Priority=|Partitioned)"
+    ${WEB_SOURCE})
 check_files_no_match("ruvia-http client models must not contain runtime configuration"
     "${RULE_HTTP_CLIENT_RUNTIME_CONFIG}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h")

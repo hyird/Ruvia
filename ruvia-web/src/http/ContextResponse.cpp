@@ -1,28 +1,21 @@
 #include "ruvia/web/Context.h"
 
 #include "ruvia/web/detail/CookieSignature.h"
-#include "ruvia/http/detail/CookieValidation.h"
-#include "ruvia/http/detail/HttpImfFixdate.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
 #include "ruvia/http/detail/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/HttpNumberFormat.h"
 #include "ruvia/http/detail/ResponseHeaderIndexCache.h"
+#include "ruvia/http/detail/SetCookiePlan.h"
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
-#include <array>
-#include <charconv>
 #include <chrono>
-#include <cstring>
-#include <ctime>
 #include <stdexcept>
 #include <string_view>
-#include <system_error>
 #include <utility>
 
 namespace ruvia {
@@ -319,140 +312,6 @@ void Context::header(std::string_view name, std::nullopt_t) {
 
 namespace {
 
-struct SetCookieSerialization final {
-    std::array<char, 32> expiresBuffer{};
-    std::size_t expiresSize{0};
-    std::string_view prefixText{};
-    std::string_view priorityText{};
-    std::string_view sameSiteText{};
-    std::uint64_t maxAgeValue{0};
-    std::size_t maxAgeSize{0};
-    bool hasMaxAge{false};
-    std::size_t size{0};
-
-    [[nodiscard]] std::string_view expiresText() const noexcept {
-        return std::string_view(expiresBuffer.data(), expiresSize);
-    }
-};
-
-[[nodiscard]] SetCookieSerialization prepareSetCookie(
-    std::string_view name,
-    std::string_view value,
-    const CookieOptions& options) {
-    detail::validateCookie(name, value, options);
-    SetCookieSerialization serialization;
-    serialization.prefixText = detail::cookiePrefixText(options.prefix);
-    serialization.priorityText = detail::cookiePriorityToken(options.priority);
-    serialization.sameSiteText = detail::cookieSameSiteToken(options.sameSite);
-    if (options.expires.has_value()) {
-        const auto expiresTime = std::chrono::system_clock::to_time_t(*options.expires);
-        const auto utc = detail::httpUtcTm(expiresTime);
-        // Locale-independent IMF-fixdate (RFC 7231 7.1.1.1). std::strftime's
-        // %a/%b are locale-dependent and could emit a malformed HTTP date under
-        // a non-C locale; the shared formatter uses fixed English day/month
-        // tables, matching the Date-header and file-response paths.
-        serialization.expiresSize =
-            detail::httpWriteImfFixdate(serialization.expiresBuffer.data(), utc);
-    }
-    serialization.hasMaxAge = options.maxAge >= 0;
-    serialization.maxAgeValue =
-        serialization.hasMaxAge ? static_cast<std::uint64_t>(options.maxAge) : std::uint64_t{0};
-    serialization.maxAgeSize =
-        serialization.hasMaxAge ? detail::httpUnsignedDecimalSize(serialization.maxAgeValue) : std::size_t{0};
-
-    std::size_t cookieSize = serialization.prefixText.size() + name.size() + 1 + value.size();
-    if (!options.path.empty()) {
-        cookieSize += std::string_view("; Path=").size() + options.path.size();
-    }
-    if (!options.domain.empty()) {
-        cookieSize += std::string_view("; Domain=").size() + options.domain.size();
-    }
-    if (serialization.hasMaxAge) {
-        cookieSize += std::string_view("; Max-Age=").size() + serialization.maxAgeSize;
-    }
-    if (serialization.expiresSize != 0) {
-        cookieSize += std::string_view("; Expires=").size() + serialization.expiresSize;
-    }
-    if (options.httpOnly) {
-        cookieSize += std::string_view("; HttpOnly").size();
-    }
-    if (options.secure) {
-        cookieSize += std::string_view("; Secure").size();
-    }
-    if (!serialization.sameSiteText.empty()) {
-        cookieSize += std::string_view("; SameSite=").size() + serialization.sameSiteText.size();
-    }
-    if (!serialization.priorityText.empty()) {
-        cookieSize += std::string_view("; Priority=").size() + serialization.priorityText.size();
-    }
-    if (options.partitioned) {
-        cookieSize += std::string_view("; Partitioned").size();
-    }
-    serialization.size = cookieSize;
-    return serialization;
-}
-
-void writeSetCookie(
-    char* cursor,
-    std::string_view name,
-    std::string_view value,
-    const CookieOptions& options,
-    const SetCookieSerialization& serialization) {
-    const auto append = [&cursor](std::string_view text) noexcept {
-        if (text.empty()) {
-            return;
-        }
-        std::memcpy(cursor, text.data(), text.size());
-        cursor += text.size();
-    };
-    const auto appendUnsigned = [&cursor](std::uint64_t number, std::size_t size) {
-        auto* const end = cursor + size;
-        const auto [ptr, ec] = std::to_chars(cursor, end, number);
-        if (ec != std::errc{} || ptr != end) {
-            throw std::logic_error("failed to format cookie Max-Age");
-        }
-        cursor = ptr;
-    };
-
-    append(serialization.prefixText);
-    append(name);
-    *cursor++ = '=';
-    append(value);
-    if (!options.path.empty()) {
-        append("; Path=");
-        append(options.path);
-    }
-    if (!options.domain.empty()) {
-        append("; Domain=");
-        append(options.domain);
-    }
-    if (serialization.hasMaxAge) {
-        append("; Max-Age=");
-        appendUnsigned(serialization.maxAgeValue, serialization.maxAgeSize);
-    }
-    if (serialization.expiresSize != 0) {
-        append("; Expires=");
-        append(serialization.expiresText());
-    }
-    if (options.httpOnly) {
-        append("; HttpOnly");
-    }
-    if (options.secure) {
-        append("; Secure");
-    }
-    if (!serialization.sameSiteText.empty()) {
-        append("; SameSite=");
-        append(serialization.sameSiteText);
-    }
-    if (!serialization.priorityText.empty()) {
-        append("; Priority=");
-        append(serialization.priorityText);
-    }
-    if (options.partitioned) {
-        append("; Partitioned");
-    }
-}
-
 [[nodiscard]] std::pmr::string composeSignedCookieValue(
     std::pmr::memory_resource* resource,
     std::string_view name,
@@ -473,15 +332,15 @@ void writeSetCookie(
 }  // namespace
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
-    const auto serialization = prepareSetCookie(name, value, options);
+    const detail::SetCookiePlan plan(name, value, options);
     const auto index = responseHeaders_.size();
     auto& header = detail::HttpResponseHeadersAccess::addUninitializedValue(
         responseHeaders_,
         "Set-Cookie",
-        serialization.size,
+        plan.size(),
         detail::kResponseHeaderSetCookie);
     recordResponseKnownHeaderIndex(detail::kResponseHeaderSetCookie, index);
-    writeSetCookie(detail::responseHeaderValueBegin(header), name, value, options, serialization);
+    plan.write(detail::responseHeaderValueBegin(header));
     if (response_ != nullptr) {
         detail::appendResponseHeaderValidated(
             responseStorage(),
@@ -503,10 +362,10 @@ std::pmr::string Context::generateCookie(
     std::string_view name,
     std::string_view value,
     const CookieOptions& options) const {
-    const auto serialization = prepareSetCookie(name, value, options);
+    const detail::SetCookiePlan plan(name, value, options);
     std::pmr::string cookie(resource());
-    cookie.resize_and_overwrite(serialization.size, [&](char* out, std::size_t size) {
-        writeSetCookie(out, name, value, options, serialization);
+    cookie.resize_and_overwrite(plan.size(), [&](char* out, std::size_t size) {
+        plan.write(out);
         return size;
     });
     return cookie;
@@ -522,7 +381,7 @@ std::pmr::string Context::generateSignedCookie(
 
 std::optional<std::string_view> Context::deleteCookie(std::string_view name, CookieOptions options) {
     auto deleted = req().cookie(name);
-    options.maxAge = 0;
+    options.maxAge = std::chrono::seconds(0);
     setCookie(name, "", options);
     return deleted;
 }

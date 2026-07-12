@@ -1,4 +1,5 @@
 #include <array>
+#include <chrono>
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
@@ -10,6 +11,7 @@
 #include <utility>
 
 #include <ruvia/http/HttpCache.h>
+#include <ruvia/http/Cookies.h>
 #include <ruvia/http/HttpHeader.h>
 #include <ruvia/http/HttpClient.h>
 #include <ruvia/http/HttpClientRedirect.h>
@@ -50,6 +52,7 @@
 #include <ruvia/http/detail/http2/Http2StreamTable.h>
 #include <ruvia/http/detail/http2/Http2TunnelState.h>
 #include <ruvia/http/detail/MultipartParsing.h>
+#include <ruvia/http/detail/SetCookiePlan.h>
 #include <ruvia/http/detail/parser/HttpChunkParser.h>
 #include <ruvia/http/detail/server/HttpFinalResponseControlPlan.h>
 #include <ruvia/http/detail/server/HttpResponseWritePlan.h>
@@ -779,6 +782,15 @@ static_assert(!HasSharedCacheFreshnessPolicy<ruvia::CacheControl>);
 static_assert(std::same_as<
     decltype(ruvia::CacheControl::sMaxAge),
     std::optional<std::uint64_t>>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.sameSite),
+    ruvia::CookieSameSite>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.priority),
+    ruvia::CookiePriority>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.maxAge),
+    std::optional<std::chrono::seconds>>);
 static_assert(HasHttpClientRequestContentAlternatives<
     ruvia::HttpClientRequestContent>);
 static_assert(!HasStaleHttpClientContentMode<
@@ -1840,6 +1852,18 @@ static_assert(std::same_as<
     std::optional<std::pmr::string>>);
 
 int main() {
+    ruvia::CookieOptions cookieOptions;
+    cookieOptions.sameSite = ruvia::CookieSameSite::kLax;
+    cookieOptions.maxAge = std::chrono::seconds(60);
+    const ruvia::detail::SetCookiePlan cookiePlan(
+        "sid", "value", cookieOptions);
+    std::array<char, 128> cookieBuffer{};
+    cookiePlan.write(cookieBuffer.data());
+    if (std::string_view(cookieBuffer.data(), cookiePlan.size()) !=
+        "sid=value; Path=/; Max-Age=60; SameSite=Lax") {
+        return 52;
+    }
+
     const auto decodedUrl = ruvia::detail::decodeUrlComponent(
         "installed%20decoder",
         ruvia::detail::UrlDecodeMode::kPercent,

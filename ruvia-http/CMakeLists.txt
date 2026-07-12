@@ -1,4 +1,5 @@
 add_library(ruvia-http
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Cookies.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpBasics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/HttpContentCoding.cpp

@@ -13,13 +13,27 @@ enum class CookiePrefix : std::uint8_t {
     kHost,    // serializes the name as "__Host-<name>"; requires secure, Path=/, no Domain
 };
 
-struct CookieOptions {
+enum class CookieSameSite : std::uint8_t {
+    kUnspecified,
+    kStrict,
+    kLax,
+    kNone,
+};
+
+enum class CookiePriority : std::uint8_t {
+    kUnspecified,
+    kLow,
+    kMedium,
+    kHigh,
+};
+
+struct CookieOptions final {
     std::string_view path{"/"};
     std::string_view domain;
-    std::string_view sameSite;
-    std::string_view priority;  // "Low" | "Medium" | "High"
+    CookieSameSite sameSite{CookieSameSite::kUnspecified};
+    CookiePriority priority{CookiePriority::kUnspecified};
     std::optional<std::chrono::system_clock::time_point> expires;
-    std::int64_t maxAge{-1};
+    std::optional<std::chrono::seconds> maxAge;
     CookiePrefix prefix{CookiePrefix::kNone};
     bool httpOnly{false};
     bool secure{false};

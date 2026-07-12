@@ -3269,15 +3269,15 @@ private:
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
         ruvia::CookieOptions options;
         options.httpOnly = true;
-        options.sameSite = "Lax";
-        options.maxAge = 3600;
+        options.sameSite = ruvia::CookieSameSite::kLax;
+        options.maxAge = std::chrono::seconds(3600);
         c.setCookie("session", "example", options);
         c.setCookie("theme", "light");
         ruvia::CookieOptions hostOptions;
         hostOptions.secure = true;
         hostOptions.httpOnly = true;
-        hostOptions.sameSite = "None";
-        hostOptions.priority = "high";
+        hostOptions.sameSite = ruvia::CookieSameSite::kNone;
+        hostOptions.priority = ruvia::CookiePriority::kHigh;
         hostOptions.partitioned = true;
         hostOptions.prefix = ruvia::CookiePrefix::kHost;
         hostOptions.expires = std::chrono::system_clock::now() + std::chrono::hours(1);
