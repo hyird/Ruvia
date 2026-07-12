@@ -64,19 +64,24 @@ private:
 }  // namespace ruvia::detail
 
 #define RUVIA_CONTROLLER_GROUP(prefix, ...) \
+private: \
     [[nodiscard]] static constexpr ::std::string_view ruviaControllerGroupPrefix() noexcept { \
         return prefix; \
     } \
-    [[nodiscard]] static RuviaMiddlewareList ruviaControllerGroupMiddlewares() { \
-        return RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>(); \
+    [[nodiscard]] static auto ruviaControllerGroupMiddlewares() { \
+        return ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>::template makeMiddlewares<__VA_ARGS__>(); \
     }
 
 #define RUVIA_ROUTES_BEGIN \
+private: \
+    using RuviaControllerAccess = \
+        ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>; \
+    friend class ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>; \
     void registerRoutes(::ruvia::Router& router) { \
-        auto ruviaControllerGroup = RuviaControllerType::ruviaCreateRouteGroup( \
+        auto ruviaControllerGroup = RuviaControllerAccess::createRouteGroup( \
             router, \
-            RuviaControllerType::ruviaControllerGroupPrefix(), \
-            RuviaControllerType::ruviaControllerGroupMiddlewares()); \
+            RuviaControllerAccess::groupPrefix(), \
+            RuviaControllerAccess::groupMiddlewares()); \
         auto& ruviaRouteScope = ruviaControllerGroup;
 
 #define RUVIA_ROUTES_END \
@@ -85,158 +90,158 @@ private:
         ::ruvia::detail::registerController<RuviaControllerType>();
 
 #define RUVIA_GET(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_STREAM(path, handler, ...) \
-    RuviaControllerType::ruviaAddResponseStreamRoute( \
+    RuviaControllerAccess::addResponseStreamRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
-        bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_SSE(path, handler, ...) \
-    RuviaControllerType::ruviaAddSseRoute( \
+    RuviaControllerAccess::addSseRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
-        bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS(path, handler, ...) \
-    RuviaControllerType::ruviaAddWebSocketRoute( \
+    RuviaControllerAccess::addWebSocketRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
-        bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GET_WS_OPTIONS(path, handler, options, ...) \
-    RuviaControllerType::ruviaAddWebSocketRoute( \
+    RuviaControllerAccess::addWebSocketRoute( \
         ruviaRouteScope, \
         ::ruvia::Get, \
         path, \
-        bindStream<RuviaControllerType, &RuviaControllerType::handler>(this), \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>(), \
+        RuviaControllerAccess::template bindStream<&RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>(), \
         options)
 
 #define RUVIA_POST(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Post, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PUT(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Put, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_DELETE(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Delete, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PATCH(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Patch, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_HEAD(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Head, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_OPTIONS(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Options, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kBuffered, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 // Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
 #define RUVIA_ALL(path, handler, ...) \
     for (const auto ruviaRouteMethod : ::ruvia::detail::kRuviaAllRouteMethods) \
-        RuviaControllerType::ruviaAddRoute( \
+        RuviaControllerAccess::addRoute( \
             ruviaRouteScope, \
             ruviaRouteMethod, \
             path, \
-            bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+            RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
             ::ruvia::detail::RequestBodyMode::kBuffered, \
-            RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+            RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 // Hono app.on: registers the handler for an explicit method x path list, e.g.
 // RUVIA_ON((ruvia::Put, ruvia::Delete), ("/items/:id", "/legacy/:id"), handler).
 #define RUVIA_ON(methods, paths, handler, ...) \
     for (const auto ruviaRouteMethod : ::ruvia::detail::RuviaMethodList methods) \
         for (const auto ruviaRoutePath : ::ruvia::detail::RuviaPathList paths) \
-            RuviaControllerType::ruviaAddRoute( \
+            RuviaControllerAccess::addRoute( \
                 ruviaRouteScope, \
                 ruviaRouteMethod, \
                 ruviaRoutePath, \
-                bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+                RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
                 ::ruvia::detail::RequestBodyMode::kBuffered, \
-                RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+                RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_POST_STREAM(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Post, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PUT_STREAM(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Put, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_PATCH_STREAM(path, handler, ...) \
-    RuviaControllerType::ruviaAddRoute( \
+    RuviaControllerAccess::addRoute( \
         ruviaRouteScope, \
         ::ruvia::Patch, \
         path, \
-        bind<RuviaControllerType, &RuviaControllerType::handler>(this), \
+        RuviaControllerAccess::template bind<&RuviaControllerType::handler>(this), \
         ::ruvia::detail::RequestBodyMode::kStream, \
-        RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>())
+        RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>())
 
 #define RUVIA_GROUP_BEGIN(prefix, ...) \
     { \
-        auto ruviaRouteGroup = RuviaControllerType::ruviaCreateRouteGroup( \
+        auto ruviaRouteGroup = RuviaControllerAccess::createRouteGroup( \
             ruviaRouteScope, \
             prefix, \
-            RuviaControllerType::template ruviaMakeMiddlewares<__VA_ARGS__>()); \
+            RuviaControllerAccess::template makeMiddlewares<__VA_ARGS__>()); \
         auto& ruviaRouteScope = ruviaRouteGroup;
 
 #define RUVIA_GROUP_END }

@@ -610,6 +610,11 @@ concept HasModelPublicFieldStateHook = requires(const T& model) {
     model.template ruviaFieldState<"message">();
 };
 
+struct ModelBodyDuckProbe final {
+    static int ruviaParseJsonBody(std::string_view, std::pmr::memory_resource*);
+    static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
+};
+
 template <typename T>
 concept HasByteSpanResponseBody = requires(const T& context, std::span<const std::byte> body) {
     { context.body(body) } -> std::same_as<ruvia::HttpResponse>;
@@ -1275,6 +1280,32 @@ concept HasControllerStorePublicMutators = requires(T& store) {
 template <typename T>
 concept HasControllerStorePublicSize = requires(const T& store) {
     { store.size() } -> std::same_as<std::size_t>;
+};
+
+template <typename T>
+concept HasControllerPublicGroupPrefix = requires {
+    T::ruviaControllerGroupPrefix();
+};
+
+template <typename T>
+concept HasControllerPublicGroupMiddlewares = requires {
+    T::ruviaControllerGroupMiddlewares();
+};
+
+template <typename T>
+concept HasControllerPublicRegisterRoutes = requires(T& controller, ruvia::Router& router) {
+    controller.registerRoutes(router);
+};
+
+template <typename T>
+concept HasControllerPublicRegistrationState = requires {
+    T::ruviaControllerRegistered_;
+};
+
+template <typename T>
+concept HasControllerRegistrationAccessPublicHooks = requires {
+    T::groupPrefix();
+    T::groupMiddlewares();
 };
 
 template <typename T>
@@ -1991,6 +2022,9 @@ static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
 static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
 static_assert(!HasModelPublicFieldStateHook<ClonePayload>);
+static_assert(std::is_base_of_v<ruvia::detail::ModelSchemaTag, ClonePayload>);
+static_assert(!ruvia::JsonBody<ModelBodyDuckProbe>::value);
+static_assert(!ruvia::FormBody<ModelBodyDuckProbe>::value);
 static_assert(!std::is_constructible_v<ClonePayload, ruvia::detail::ModelInput>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
@@ -3391,6 +3425,37 @@ private:
                 .headers = headers});
     }
 };
+
+class UngroupedControllerProbe final : public ruvia::Controller<UngroupedControllerProbe> {
+public:
+    RUVIA_ROUTES_BEGIN
+    RUVIA_ROUTES_END
+};
+
+class ControllerBaseSurfaceProbe final : public ruvia::Controller<ControllerBaseSurfaceProbe> {
+public:
+    template <typename T>
+    inline static constexpr bool hasLegacyMiddlewareFactory = requires {
+        T::template ruviaMakeMiddlewares<>();
+    };
+
+    template <typename T>
+    inline static constexpr bool hasLegacyRouteRegistration = requires {
+        &T::ruviaAddRoute;
+    };
+};
+
+#ifndef _MSC_VER
+static_assert(!HasControllerPublicGroupPrefix<FastSurfaceController>);
+static_assert(!HasControllerPublicGroupMiddlewares<FastSurfaceController>);
+static_assert(!HasControllerPublicRegisterRoutes<FastSurfaceController>);
+static_assert(!HasControllerPublicRegistrationState<FastSurfaceController>);
+static_assert(!HasControllerPublicRegisterRoutes<UngroupedControllerProbe>);
+static_assert(!HasControllerRegistrationAccessPublicHooks<
+    ruvia::detail::ControllerRegistrationAccess<FastSurfaceController>>);
+static_assert(!ControllerBaseSurfaceProbe::hasLegacyMiddlewareFactory<ControllerBaseSurfaceProbe>);
+static_assert(!ControllerBaseSurfaceProbe::hasLegacyRouteRegistration<ControllerBaseSurfaceProbe>);
+#endif
 
 int main() {
     ruvia::app()

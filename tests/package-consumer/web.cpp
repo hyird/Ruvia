@@ -213,6 +213,11 @@ concept HasGeneratedModelPublicFieldStateHook = requires(const T& model) {
     model.template ruviaFieldState<"name">();
 };
 
+struct InstalledModelBodyDuckProbe final {
+    static int ruviaParseJsonBody(std::string_view, std::pmr::memory_resource*);
+    static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -230,6 +235,11 @@ static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
 static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>);
 static_assert(!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>);
+static_assert(std::is_base_of_v<
+    ruvia::detail::ModelSchemaTag,
+    InstalledPackageModel>);
+static_assert(!ruvia::JsonBody<InstalledModelBodyDuckProbe>::value);
+static_assert(!ruvia::FormBody<InstalledModelBodyDuckProbe>::value);
 static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
 static_assert(!std::constructible_from<
     ruvia::detail::ModelInput,

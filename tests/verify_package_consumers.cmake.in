@@ -1036,6 +1036,14 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT _installed_model_macros_contract MATCHES
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ModelSchemaTag" OR
+       NOT _installed_model_types_contract MATCHES
+           "struct[ \t]+ModelSchemaTag[ \t]*[{][}]" OR
+       NOT _installed_model_types_contract MATCHES
+           "is_base_of_v<detail::ModelSchemaTag,[ \t]*T>" OR
+       _installed_model_types_contract MATCHES
+           "void_t<decltype[(]T::ruviaParse(Json|Form)Body" OR
+       NOT _installed_model_macros_contract MATCHES
            "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaInput[)][)]" OR
        _installed_model_macros_contract MATCHES
            "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState" OR

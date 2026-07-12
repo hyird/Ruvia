@@ -8,7 +8,7 @@
 // serialization. Validation schema macros live in Validation.h.
 
 #define RUVIA_MODEL(T, ...)                                                  \
-    class T {                                                               \
+    class T : private ::ruvia::detail::ModelSchemaTag {                    \
     public:                                                                 \
         RUVIA_MODEL_FIELD_COUNT_GUARD(__VA_ARGS__)                           \
         explicit T(::std::pmr::memory_resource* resource = nullptr) noexcept \

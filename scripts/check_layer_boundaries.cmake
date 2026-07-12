@@ -1386,9 +1386,11 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
             "HTTP/2, response streaming, and WebSocket sessions must receive the startup-frozen RouteTable directly")
     endif()
     if(NOT web_controller_macros MATCHES
-           "ruviaAddResponseStreamRoute" OR
-       NOT web_controller_macros MATCHES "ruviaAddSseRoute" OR
-       NOT web_controller_macros MATCHES "ruviaAddWebSocketRoute" OR
+           "RuviaControllerAccess::addResponseStreamRoute" OR
+       NOT web_controller_macros MATCHES
+           "RuviaControllerAccess::addSseRoute" OR
+       NOT web_controller_macros MATCHES
+           "RuviaControllerAccess::addWebSocketRoute" OR
        NOT web_route_resolution_test MATCHES
            "route_endpoint_binds_handler_shape_and_only_relevant_metadata" OR
        NOT web_route_resolution_test MATCHES
@@ -1397,6 +1399,25 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_RESOLUTION}" AND
            "route_resolution_method_not_allowed_vs_not_found")
         boundary_error("typed route contract lacks registration or regression coverage"
             "distinct macro paths and value-level endpoint/resolution tests must remain")
+    endif()
+endif()
+set(WEB_CONTROLLER_RUNTIME
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ControllerRuntime.h")
+if(EXISTS "${WEB_CONTROLLER_MACROS}" AND EXISTS "${WEB_CONTROLLER_RUNTIME}")
+    file(READ "${WEB_CONTROLLER_RUNTIME}" web_controller_runtime)
+    if(NOT web_controller_macros MATCHES
+           "using RuviaControllerAccess" OR
+       NOT web_controller_macros MATCHES
+           "friend class ::ruvia::detail::ControllerRegistrationAccess<RuviaControllerType>" OR
+       NOT web_controller_runtime MATCHES
+           "class ControllerRegistrationAccess final" OR
+       NOT web_controller_runtime MATCHES "friend ControllerT;" OR
+       NOT web_controller_runtime MATCHES
+           "ControllerRegistrationAccess<ControllerT>::registerRoutes" OR
+       web_controller_runtime MATCHES
+           "ruvia(CreateRouteGroup|AddRoute|AddResponseStreamRoute|AddSseRoute|AddWebSocketRoute|MakeMiddleware|MakeMiddlewares)")
+        boundary_error("Controller registration escaped its macro-only access chain"
+            "generated hooks and route-builder operations must remain private behind ControllerRegistrationAccess")
     endif()
 endif()
 check_files_no_match("Web routing restored split endpoint or resolution APIs"
@@ -2679,6 +2700,14 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT web_model_macros_contract MATCHES
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ModelSchemaTag" OR
+       NOT web_model_types_contract MATCHES
+           "struct[ \t]+ModelSchemaTag[ \t]*[{][}]" OR
+       NOT web_model_types_contract MATCHES
+           "is_base_of_v<detail::ModelSchemaTag,[ \t]*T>" OR
+       web_model_types_contract MATCHES
+           "void_t<decltype[(]T::ruviaParse(Json|Form)Body" OR
+       NOT web_model_macros_contract MATCHES
            "T[ \t]+request[{]ruviaInput[.]resource[(][)][}]" OR
        NOT web_model_macros_contract MATCHES
            "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaInput[)][)]" OR
@@ -2763,6 +2792,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_api_surface MATCHES
            "!HasModelPublicFieldStateHook<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
+           "!ruvia::JsonBody<ModelBodyDuckProbe>::value" OR
+       NOT web_model_api_surface MATCHES
+           "!ruvia::FormBody<ModelBodyDuckProbe>::value" OR
+       NOT web_model_api_surface MATCHES
            "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
            "RUVIA_MODEL[(]InstalledPackageModel" OR
@@ -2787,6 +2820,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
+           "!ruvia::JsonBody<InstalledModelBodyDuckProbe>::value" OR
+       NOT web_json_package_consumer MATCHES
+           "!ruvia::FormBody<InstalledModelBodyDuckProbe>::value" OR
+       NOT web_json_package_consumer MATCHES
            "ModelValidationAccess::fieldState<\"name\">" OR
        NOT web_json_package_consumer MATCHES
            "ruvia::toJson" OR
@@ -2799,7 +2836,7 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
         boundary_error("generated model schema boundary regressed"
-            "detail accessors must exclusively mediate model input, JSON writing, and validation state")
+            "a nominal ModelSchemaTag plus detail accessors must exclusively mediate model parsing, JSON writing, and validation state")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

@@ -26,6 +26,7 @@ namespace detail {
 
 class ModelInput;
 struct ModelValueFactory;
+struct ModelSchemaTag {};
 
 }  // namespace detail
 
@@ -35,9 +36,7 @@ struct JsonBody {
 };
 
 template <typename T>
-struct JsonBody<T, std::void_t<decltype(T::ruviaParseJsonBody(
-                       std::declval<std::string_view>(),
-                       std::declval<std::pmr::memory_resource*>()))>> {
+struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::ModelSchemaTag, T>>> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(
@@ -65,9 +64,7 @@ struct FormBody {
 };
 
 template <typename T>
-struct FormBody<T, std::void_t<decltype(T::ruviaParseFormBody(
-                       std::declval<std::string_view>(),
-                       std::declval<std::pmr::memory_resource*>()))>> {
+struct FormBody<T, std::enable_if_t<std::is_base_of_v<detail::ModelSchemaTag, T>>> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(
