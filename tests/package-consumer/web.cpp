@@ -70,6 +70,30 @@ static_assert(std::same_as<
     std::optional<std::chrono::seconds>>);
 #endif
 
+#ifdef RUVIA_ENABLE_MARIADB
+static_assert(std::same_as<
+    decltype(ruvia::DbConfig{}.connectTimeout),
+    std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::DbConfig{}.queryTimeout),
+    std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::DbConfig{}.acquireTimeout),
+    std::optional<std::chrono::milliseconds>>);
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+static_assert(std::same_as<
+    decltype(ruvia::RedisConfig{}.connectTimeout),
+    std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisConfig{}.commandTimeout),
+    std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisConfig{}.acquireTimeout),
+    std::optional<std::chrono::milliseconds>>);
+#endif
+
 template <typename Runtime, typename Executor>
 concept HasDirectHttp2BeginDispatch = requires(
     Runtime& runtime,

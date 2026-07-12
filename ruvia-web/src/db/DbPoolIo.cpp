@@ -106,15 +106,15 @@ Task<int> detail::MariaDbPool::waitForMysql(
     int status,
     const OperationDeadline& deadline) {
     auto& connection = *slot.connection;
-    auto timeout = deadline.remaining();
-    if (deadline.hasDeadline && timeout.count() <= 0) {
+    const auto timeout = deadline.remaining();
+    if (timeout.has_value() && timeout->count() <= 0) {
         co_return MYSQL_WAIT_TIMEOUT;
     }
     const auto wantsRead = (status & MYSQL_WAIT_READ) != 0;
     const auto wantsWrite = (status & MYSQL_WAIT_WRITE) != 0;
     const auto wantsException = (status & MYSQL_WAIT_EXCEPT) != 0;
     if (!wantsRead && !wantsWrite && !wantsException) {
-        auto timeoutMs = timeout;
+        auto timeoutMs = timeout.value_or(std::chrono::milliseconds(0));
         if (timeoutMs.count() <= 0) {
             const auto mysqlTimeout = mysql_get_timeout_value_ms(&connection);
             timeoutMs = std::chrono::milliseconds(mysqlTimeout == 0 ? 1 : mysqlTimeout);
@@ -138,7 +138,7 @@ Task<int> detail::MariaDbPool::waitForMysql(
         co_return MYSQL_WAIT_TIMEOUT;
     }
 
-    auto timeoutMs = timeout;
+    auto timeoutMs = timeout.value_or(std::chrono::milliseconds(0));
     if (timeoutMs.count() <= 0 && (status & MYSQL_WAIT_TIMEOUT) != 0) {
         const auto mysqlTimeout = mysql_get_timeout_value_ms(&connection);
         timeoutMs = std::chrono::milliseconds(mysqlTimeout == 0 ? 1 : mysqlTimeout);

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -85,6 +86,24 @@ void ensurePositiveDuration(std::chrono::duration<Rep, Period> value, const char
     if (value.count() <= 0) {
         throw std::invalid_argument(message);
     }
+}
+
+template <typename Rep, typename Period>
+void ensurePositiveOptionalDuration(
+    const std::optional<std::chrono::duration<Rep, Period>>& value,
+    const char* message) {
+    if (value.has_value() && value->count() <= 0) {
+        throw std::invalid_argument(message);
+    }
+}
+
+template <typename FirstDuration, typename... RestDurations>
+void ensurePositiveOptionalDurations(
+    const char* message,
+    const FirstDuration& first,
+    const RestDurations&... rest) {
+    ensurePositiveOptionalDuration(first, message);
+    (ensurePositiveOptionalDuration(rest, message), ...);
 }
 
 }  // namespace ruvia::detail

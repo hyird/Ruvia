@@ -45,6 +45,7 @@ public:
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -86,7 +87,7 @@ public:
         std::pmr::memory_resource* resource);
     Task<RedisValue> executeWithTimeout(
         std::span<const std::pmr::string> args,
-        std::chrono::milliseconds timeout,
+        std::optional<std::chrono::milliseconds> timeout,
         std::pmr::memory_resource* resource);
     Task<std::pmr::vector<RedisValue>> executePipeline(
         std::span<const RedisPipeline::Command> commands,
@@ -148,25 +149,33 @@ private:
     void close(Connection& connection) noexcept;
     void configureSocket(Connection& connection) noexcept;
     void ensureReader(Connection& connection);
-    void setDeadline(Connection& connection, std::chrono::milliseconds timeout, Connection::DeadlineKind kind) noexcept;
+    void setDeadline(
+        Connection& connection,
+        std::optional<std::chrono::milliseconds> timeout,
+        Connection::DeadlineKind kind) noexcept;
     void clearDeadline(Connection& connection) noexcept;
     Task<void> connect(Connection& connection);
     Task<void> authenticate(Connection& connection);
-    Task<RedisValue> readReply(Connection& connection, std::chrono::milliseconds timeout, std::pmr::memory_resource* resource);
+    Task<RedisValue> readReply(
+        Connection& connection,
+        std::optional<std::chrono::milliseconds> timeout,
+        std::pmr::memory_resource* resource);
     template <typename ArgSource>
     Task<RedisValue> executeWithTimeoutImpl(
         ArgSource args,
-        std::chrono::milliseconds timeout,
+        std::optional<std::chrono::milliseconds> timeout,
         std::pmr::memory_resource* resource);
     template <typename CommandSource>
     Task<std::pmr::vector<RedisValue>> executePipelineImpl(
         CommandSource commands,
         std::pmr::memory_resource* resource);
-    Task<std::error_code> asyncSocketWrite(Connection& connection, std::chrono::milliseconds timeout);
+    Task<std::error_code> asyncSocketWrite(
+        Connection& connection,
+        std::optional<std::chrono::milliseconds> timeout);
     Task<std::pair<std::error_code, std::size_t>> asyncSocketReadSome(
         Connection& connection,
         std::span<char> buffer,
-        std::chrono::milliseconds timeout);
+        std::optional<std::chrono::milliseconds> timeout);
     asio::io_context& ioContext_;
     RedisConfig config_;
     std::pmr::memory_resource* resource_;

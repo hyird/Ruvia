@@ -2,9 +2,11 @@
 
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -320,7 +322,17 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     using ruvia::detail::validateRedisConfig;
     using std::chrono::milliseconds;
 
-    // A default config is valid (localhost:6379, pool 4, timeouts 0, depth 64).
+    static_assert(std::same_as<
+                  decltype(RedisConfig{}.connectTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(RedisConfig{}.commandTimeout),
+                  std::optional<milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(RedisConfig{}.acquireTimeout),
+                  std::optional<milliseconds>>);
+
+    // A default config is valid; absent timeouts are disabled explicitly.
     RUVIA_CHECK(!throwsOn([] { validateRedisConfig(RedisConfig{}); }));
 
     // Host, port, pool size and max array depth each have a required-value guard.
@@ -329,8 +341,11 @@ RUVIA_TEST(redis_config_validation_checks_every_field) {
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.poolSizePerWorker = 0; validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.maxArrayDepth = 0; validateRedisConfig(c); }));
 
-    // Every one of the three timeouts must be non-negative -- a negative value in
-    // any of them is rejected (verifies the whole fold is wired, not just one).
+    // Every configured timeout must be positive. Zero cannot silently recover the
+    // former sentinel convention, and the whole fold must validate every field.
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.connectTimeout = milliseconds(0); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(0); validateRedisConfig(c); }));
+    RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(0); validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.connectTimeout = milliseconds(-1); validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.commandTimeout = milliseconds(-1); validateRedisConfig(c); }));
     RUVIA_CHECK(throwsOn([] { RedisConfig c; c.acquireTimeout = milliseconds(-1); validateRedisConfig(c); }));

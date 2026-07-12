@@ -55,7 +55,7 @@ void detail::MariaDbPool::closeNow() noexcept {
 }
 
 void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point now) noexcept {
-    if (config_.acquireTimeout.count() > 0) {
+    if (config_.acquireTimeout.has_value()) {
         waiters_.expireDeadlines(now);
     }
 
@@ -79,11 +79,11 @@ void detail::MariaDbPool::scanDeadlines(std::chrono::steady_clock::time_point no
 }
 
 bool detail::MariaDbPool::hasAnyTimeout() const noexcept {
-    return config_.connectTimeout.count() > 0 ||
-        config_.queryTimeout.count() > 0 ||
-        config_.readTimeout.count() > 0 ||
-        config_.writeTimeout.count() > 0 ||
-        config_.acquireTimeout.count() > 0;
+    return config_.connectTimeout.has_value() ||
+        config_.queryTimeout.has_value() ||
+        config_.readTimeout.has_value() ||
+        config_.writeTimeout.has_value() ||
+        config_.acquireTimeout.has_value();
 }
 
 void detail::MariaDbPool::closeSlot(ConnectionSlot& slot) noexcept {
