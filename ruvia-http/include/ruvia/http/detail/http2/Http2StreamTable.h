@@ -8,7 +8,6 @@
 #include <optional>
 #include <vector>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/HttpPmrObject.h"

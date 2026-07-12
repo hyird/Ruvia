@@ -6,7 +6,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2Role.h"
 
 namespace ruvia::detail {

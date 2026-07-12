@@ -1333,6 +1333,8 @@ set(HTTP_LEGACY_COMMON_INTERNAL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpCommonInternal.h")
 set(HTTP_LEGACY_TYPES_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpTypes.h")
+set(HTTP_LEGACY_FRAME_UMBRELLA
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Frame.h")
 set(WEB_LEGACY_SERVER_SESSION_UMBRELLA
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerSessionUtils.h")
 set(WEB_REQUEST_FIELDS
@@ -1381,6 +1383,13 @@ if(EXISTS "${HTTP_LEGACY_COMMON_HEADER}" OR
     boundary_error("Generic HTTP aggregation headers were restored"
         "request, response, multipart, method, header and Web field contracts must retain explicit owners")
 endif()
+if(EXISTS "${HTTP_LEGACY_FRAME_UMBRELLA}")
+    boundary_error("Generic HTTP/2 frame aggregation was restored"
+        "frame types, byte codec and payload parsing must retain explicit owners")
+endif()
+check_files_no_match("HTTP/2 code must not depend on a frame aggregation header"
+    "Http2Frame[.]h"
+    ${EDGE_REFERENCE_SOURCE})
 if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")
     boundary_error("Generic Web server session aggregation was restored"
         "runtime translation units and tests must include their actual session contracts")
