@@ -23,49 +23,65 @@ public:
     using RuviaControllerType = ControllerT;
 
 protected:
-    using RuviaMiddlewareList = std::pmr::vector<detail::ControllerMiddlewareDescriptor>;
-
     constexpr Controller() noexcept = default;
     ~Controller() = default;
+};
 
-    [[nodiscard]] static constexpr std::string_view ruviaControllerGroupPrefix() noexcept {
+namespace detail {
+
+template <typename ControllerT>
+class ControllerRegistrationAccess final {
+    friend ControllerT;
+
+    template <typename T>
+    friend void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes);
+
+    using MiddlewareList = std::pmr::vector<ControllerMiddlewareDescriptor>;
+
+    [[nodiscard]] static constexpr std::string_view groupPrefix() noexcept {
+        if constexpr (requires { ControllerT::ruviaControllerGroupPrefix(); }) {
+            return ControllerT::ruviaControllerGroupPrefix();
+        }
         return {};
     }
 
-    [[nodiscard]] static RuviaMiddlewareList ruviaControllerGroupMiddlewares() {
-        return RuviaMiddlewareList(detail::registrationResource());
+    [[nodiscard]] static MiddlewareList groupMiddlewares() {
+        if constexpr (requires { ControllerT::ruviaControllerGroupMiddlewares(); }) {
+            return ControllerT::ruviaControllerGroupMiddlewares();
+        }
+        return makeMiddlewares<>();
     }
 
-    [[nodiscard]] static detail::ControllerRouteBuilder ruviaCreateRouteGroup(
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
         Router& router,
         std::string_view prefix,
-        RuviaMiddlewareList middlewares) {
-        return detail::ControllerRouteBuilder(router, prefix, std::move(middlewares));
+        MiddlewareList middlewares) {
+        return ControllerRouteBuilder(router, prefix, std::move(middlewares));
     }
 
-    [[nodiscard]] static detail::ControllerRouteBuilder ruviaCreateRouteGroup(
-        const detail::ControllerRouteBuilder& scope,
+    [[nodiscard]] static ControllerRouteBuilder createRouteGroup(
+        const ControllerRouteBuilder& scope,
         std::string_view prefix,
-        RuviaMiddlewareList middlewares) {
+        MiddlewareList middlewares) {
         return scope.createScope(prefix, std::move(middlewares));
     }
 
-    static void ruviaAddRoute(
-        const detail::ControllerRouteBuilder& scope,
+    static void addRoute(
+        const ControllerRouteBuilder& scope,
         HttpKnownMethod method,
         std::string_view path,
-        detail::ControllerRouteHandler handler,
-        detail::RequestBodyMode bodyMode,
-        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        ControllerRouteHandler handler,
+        RequestBodyMode bodyMode,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
-    static void ruviaAddResponseStreamRoute(
-        const detail::ControllerRouteBuilder& scope,
+    static void addResponseStreamRoute(
+        const ControllerRouteBuilder& scope,
         HttpKnownMethod method,
         std::string_view path,
-        detail::ControllerRouteStreamHandler handler,
-        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerResponseStreamRoute(
             method,
             path,
@@ -73,12 +89,12 @@ protected:
             middlewares);
     }
 
-    static void ruviaAddSseRoute(
-        const detail::ControllerRouteBuilder& scope,
+    static void addSseRoute(
+        const ControllerRouteBuilder& scope,
         HttpKnownMethod method,
         std::string_view path,
-        detail::ControllerRouteStreamHandler handler,
-        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares) {
         scope.registerSseRoute(
             method,
             path,
@@ -86,12 +102,12 @@ protected:
             middlewares);
     }
 
-    static void ruviaAddWebSocketRoute(
-        const detail::ControllerRouteBuilder& scope,
+    static void addWebSocketRoute(
+        const ControllerRouteBuilder& scope,
         HttpKnownMethod method,
         std::string_view path,
-        detail::ControllerRouteStreamHandler handler,
-        std::span<const detail::ControllerMiddlewareDescriptor> middlewares,
+        ControllerRouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> middlewares,
         WebSocketRouteOptions webSocketOptions = {}) {
         scope.registerWebSocketRoute(
             method,
@@ -101,46 +117,45 @@ protected:
             webSocketOptions);
     }
 
-    template <typename T, Task<HttpResponse> (T::*Handler)(Context&)>
-    [[nodiscard]] static detail::ControllerRouteHandler bind(
-        T* instance) noexcept {
-        return detail::ControllerRouteHandler(instance, &Controller::invoke<T, Handler>);
+    template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
+    [[nodiscard]] static ControllerRouteHandler bind(ControllerT* instance) noexcept {
+        return ControllerRouteHandler(instance, &invoke<Handler>);
     }
 
-    template <typename T, Task<void> (T::*Handler)(Context&)>
-    [[nodiscard]] static detail::ControllerRouteStreamHandler bindStream(
-        T* instance) noexcept {
-        return detail::ControllerRouteStreamHandler(instance, &Controller::invokeStream<T, Handler>);
+    template <Task<void> (ControllerT::*Handler)(Context&)>
+    [[nodiscard]] static ControllerRouteStreamHandler bindStream(ControllerT* instance) noexcept {
+        return ControllerRouteStreamHandler(instance, &invokeStream<Handler>);
     }
 
     template <typename MiddlewareT>
-    [[nodiscard]] static detail::ControllerMiddlewareDescriptor ruviaMakeMiddleware() {
-        return detail::makeMiddlewareDescriptor<MiddlewareT>();
+    [[nodiscard]] static ControllerMiddlewareDescriptor makeMiddleware() {
+        return makeMiddlewareDescriptor<MiddlewareT>();
     }
 
     template <typename... MiddlewareTs>
-    [[nodiscard]] static RuviaMiddlewareList ruviaMakeMiddlewares() {
-        RuviaMiddlewareList middlewares(detail::registrationResource());
+    [[nodiscard]] static MiddlewareList makeMiddlewares() {
+        MiddlewareList middlewares(registrationResource());
         if constexpr (sizeof...(MiddlewareTs) > 0) {
             middlewares.reserve(sizeof...(MiddlewareTs));
-            (middlewares.push_back(ruviaMakeMiddleware<MiddlewareTs>()), ...);
+            (middlewares.push_back(makeMiddleware<MiddlewareTs>()), ...);
         }
         return middlewares;
     }
 
-private:
-    template <typename T, Task<HttpResponse> (T::*Handler)(Context&)>
-    [[nodiscard]] static Task<HttpResponse> invoke(void* target, Context& context) {
-        return (static_cast<T*>(target)->*Handler)(context);
+    static void registerRoutes(ControllerT& controller, Router& router) {
+        controller.registerRoutes(router);
     }
 
-    template <typename T, Task<void> (T::*Handler)(Context&)>
+    template <Task<HttpResponse> (ControllerT::*Handler)(Context&)>
+    [[nodiscard]] static Task<HttpResponse> invoke(void* target, Context& context) {
+        return (static_cast<ControllerT*>(target)->*Handler)(context);
+    }
+
+    template <Task<void> (ControllerT::*Handler)(Context&)>
     [[nodiscard]] static Task<void> invokeStream(void* target, Context& context) {
-        return (static_cast<T*>(target)->*Handler)(context);
+        return (static_cast<ControllerT*>(target)->*Handler)(context);
     }
 };
-
-namespace detail {
 
 template <ValidationTarget Target>
 [[noreturn]] inline void throwInvalidValidationTarget() {
@@ -202,7 +217,7 @@ Task<void> invokeModelValidator(
 template <typename ControllerT>
 void registerControllerInstance(Router& router, ControllerStore& controllerLifetimes) {
     auto& controller = controllerLifetimes.emplace<ControllerT>();
-    controller.registerRoutes(router);
+    ControllerRegistrationAccess<ControllerT>::registerRoutes(controller, router);
 }
 
 template <typename ControllerT>

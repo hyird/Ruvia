@@ -21,12 +21,13 @@
 namespace ruvia {
 
 class Router;
-template <typename ControllerT>
-class Controller;
 
 }  // namespace ruvia
 
 namespace ruvia::detail {
+
+template <typename ControllerT>
+class ControllerRegistrationAccess;
 
 struct ControllerStoreState;
 struct ControllerStoreStateDeleter final {
@@ -90,7 +91,7 @@ public:
 
 private:
     template <typename ControllerT>
-    friend class ::ruvia::Controller;
+    friend class ControllerRegistrationAccess;
 
     ControllerRouteBuilder(
         Router& router,
