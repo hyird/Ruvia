@@ -229,13 +229,13 @@ App& App::onStop(AppHook hook) {
         });
 }
 
-App& App::setGlobalRateLimit(RateLimitRule rule) {
+App& App::setGlobalRateLimit(std::optional<RateLimitRule> rule) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change the global rate limit while app is running",
         [rule](detail::AppState& state) mutable {
-            state.options.rateLimit = detail::normalizeRateLimitRule(rule);
+            state.options.rateLimit = std::move(rule);
         });
 }
 

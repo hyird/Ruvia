@@ -20,16 +20,15 @@ struct RouteRateLimitOptions final {
 
 [[nodiscard]] bool applyRouteRateLimit(
     Context& context,
-    const RouteRateLimitOptions& options,
-    std::size_t maxRequests);
+    const RouteRateLimitOptions& options);
 
 [[nodiscard]] constexpr RouteRateLimitOptions routeRateLimitOptions(
     std::size_t maxRequests,
-    std::int64_t windowMs) noexcept {
-    RateLimitRule rule;
-    rule.maxRequests = maxRequests;
-    rule.window = std::chrono::milliseconds(windowMs);
-    return RouteRateLimitOptions{.rule = normalizeRateLimitRule(rule)};
+    std::int64_t windowMs) {
+    return RouteRateLimitOptions{
+        .rule = RateLimitRule::fixedWindow(
+            maxRequests,
+            std::chrono::milliseconds(windowMs))};
 }
 
 }  // namespace detail
@@ -45,7 +44,7 @@ public:
             Derived::ruviaRateLimitWindowMs > 0,
             "route rate limit window must be greater than 0ms");
 
-        if (!detail::applyRouteRateLimit(context, routeRateLimitOptions(), Derived::ruviaRateLimitMaxRequests)) {
+        if (!detail::applyRouteRateLimit(context, routeRateLimitOptions())) {
             co_return;
         }
 

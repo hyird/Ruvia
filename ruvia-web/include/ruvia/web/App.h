@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/web/AppHook.h"
@@ -66,7 +67,7 @@ public:
     App& setMemoryPoolConfig(MemoryPoolConfig config);
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
-    App& setGlobalRateLimit(RateLimitRule rule);
+    App& setGlobalRateLimit(std::optional<RateLimitRule> rule);
     App& onAccess(AccessLogCallback callback, void* user = nullptr);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);

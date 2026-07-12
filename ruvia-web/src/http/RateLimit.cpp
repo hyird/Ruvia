@@ -39,7 +39,7 @@ private:
     Context& context,
     const RouteRateLimitOptions& options) noexcept {
     auto* limiter = ContextAccess::rateLimiter(context);
-    if (limiter == nullptr || options.rule.maxRequests == 0) {
+    if (limiter == nullptr) {
         return RouteRateLimitCheck{};
     }
 
@@ -67,8 +67,7 @@ void setUnsignedHeader(HttpResponse& response, std::string_view name, std::uint6
 
 bool applyRouteRateLimit(
     Context& context,
-    const RouteRateLimitOptions& options,
-    std::size_t maxRequests) {
+    const RouteRateLimitOptions& options) {
     const auto check = checkRouteRateLimit(context, options);
     if (check.allowed()) {
         return true;
@@ -77,7 +76,10 @@ bool applyRouteRateLimit(
     auto response = context.error(429, "too_many_requests", "rate limit exceeded");
     const auto retryAfter = retryAfterSeconds(check.resetAfterMs());
     setUnsignedHeader(response, "Retry-After", retryAfter);
-    setUnsignedHeader(response, "X-RateLimit-Limit", maxRequests);
+    setUnsignedHeader(
+        response,
+        "X-RateLimit-Limit",
+        options.rule.maxRequests());
     setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
     setUnsignedHeader(response, "X-RateLimit-Reset", retryAfter);
     context.res(std::move(response));

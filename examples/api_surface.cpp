@@ -1479,12 +1479,18 @@ concept HasRedisZScanResultCanonicalReadAccessors = requires(const T& result) {
 
 template <typename T>
 concept HasAppGlobalRateLimitRuleSetter = requires(T& app) {
-    { app.setGlobalRateLimit(ruvia::RateLimitRule{}) } -> std::same_as<ruvia::App&>;
+    { app.setGlobalRateLimit(ruvia::RateLimitRule::fixedWindow(
+        std::size_t{1}, std::chrono::seconds(1))) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
 concept HasAppGlobalRateLimitTupleSetter = requires(T& app) {
     { app.setGlobalRateLimit(std::size_t{1}, std::chrono::milliseconds{1000}) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
+concept HasAppGlobalRateLimitDisable = requires(T& app) {
+    { app.setGlobalRateLimit(std::nullopt) } -> std::same_as<ruvia::App&>;
 };
 
 template <typename T>
@@ -2232,6 +2238,11 @@ static_assert(!HasAppErrorHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppNotFoundHandlerSetterAlias<ruvia::App>);
 static_assert(!HasAppSetRateLimitAlias<ruvia::App>);
 static_assert(!HasRateLimitSlotCount<ruvia::RateLimitRule>);
+static_assert(!std::default_initializable<ruvia::RateLimitRule>);
+static_assert(std::same_as<
+    decltype(ruvia::RateLimitRule::fixedWindow(
+        std::size_t{1}, std::chrono::seconds(1))),
+    ruvia::RateLimitRule>);
 static_assert(!HasAppUseMiddlewareTemplate<ruvia::App>);
 static_assert(!std::is_constructible_v<ruvia::detail::ControllerRouteBuilder, ruvia::Router&, std::string_view>);
 #ifndef _MSC_VER
@@ -2303,6 +2314,7 @@ static_assert(!HasRedisZScanResultPublicFields<ruvia::RedisZScanResult>);
 #endif
 static_assert(HasRedisZScanResultCanonicalReadAccessors<ruvia::RedisZScanResult>);
 static_assert(HasAppGlobalRateLimitRuleSetter<ruvia::App>);
+static_assert(HasAppGlobalRateLimitDisable<ruvia::App>);
 static_assert(!HasAppGlobalRateLimitTupleSetter<ruvia::App>);
 static_assert(HasAppDocumentRootConfigSetter<ruvia::App>);
 static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
