@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -48,7 +49,7 @@ bool corsFieldsThrow(
     std::string_view allowOrigin,
     std::string_view allowHeaders,
     std::string_view exposeHeaders,
-    std::chrono::seconds maxAge,
+    std::optional<std::chrono::seconds> maxAge,
     bool allowCredentials) {
     try {
         ruvia::detail::validateCorsFields(
@@ -97,6 +98,30 @@ CorsConfig corsOptions(std::string_view allowOrigin, bool credentials) {
 }
 
 }  // namespace
+
+RUVIA_TEST(cors_max_age_distinguishes_absence_from_zero) {
+    static_assert(std::same_as<
+                  decltype(ruvia::CorsConfig{}.maxAge),
+                  std::optional<std::chrono::seconds>>);
+
+    Http1ServerRequestParser parser;
+    const auto result = parser.parseMessage(
+        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
+        "Access-Control-Request-Method: POST\r\n\r\n");
+
+    auto absent = corsOptions("https://app.example", false);
+    HttpResponse absentResponse(std::pmr::new_delete_resource());
+    applyCorsHeaders(result.request, absentResponse, absent);
+    RUVIA_CHECK(absentResponse.header("Access-Control-Max-Age").empty());
+
+    auto zero = corsOptions("https://app.example", false);
+    zero.maxAge = std::chrono::seconds(0);
+    HttpResponse zeroResponse(std::pmr::new_delete_resource());
+    applyCorsHeaders(result.request, zeroResponse, zero);
+    RUVIA_CHECK_EQ(
+        zeroResponse.header("Access-Control-Max-Age"),
+        std::string_view("0"));
+}
 
 RUVIA_TEST(cors_runtime_sets_configured_origin_and_vary) {
     Http1ServerRequestParser parser;

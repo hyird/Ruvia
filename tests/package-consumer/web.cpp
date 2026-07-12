@@ -478,6 +478,9 @@ static_assert(std::same_as<
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<
+    decltype(ruvia::CorsConfig{}.maxAge),
+    std::optional<std::chrono::seconds>>);
+static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::HttpServerOptions>().compression),
     std::optional<ruvia::CompressionConfig>>);
 static_assert(std::same_as<
