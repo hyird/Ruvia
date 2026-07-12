@@ -25,11 +25,6 @@ namespace ruvia::detail {
     return validateUrlEncoding(body);
 }
 
-template <typename StringT>
-[[nodiscard]] bool decodeFormComponent(std::string_view input, StringT& output) {
-    return decodeUrlComponent(input, output, UrlDecodeMode::kForm);
-}
-
 template <typename Visitor>
 [[nodiscard]] bool withDecodedFormView(
     ResolvedPmrResourceTag,
@@ -39,11 +34,14 @@ template <typename Visitor>
     if (!hasFormEncoding(input)) {
         return std::forward<Visitor>(visitor)(input);
     }
-    std::pmr::string scratch(resource);
-    if (!decodeFormComponent(input, scratch)) {
+    auto decoded = decodeUrlComponent(
+        input,
+        UrlDecodeMode::kForm,
+        resource);
+    if (!decoded.has_value()) {
         return false;
     }
-    return std::forward<Visitor>(visitor)(std::string_view(scratch));
+    return std::forward<Visitor>(visitor)(std::string_view(*decoded));
 }
 
 template <typename Visitor>
@@ -96,8 +94,15 @@ template <typename T>
             value.assignView(input);
             return true;
         }
-        (void)resource;
-        return decodeFormComponent(input, value.resetOwned());
+        auto decoded = decodeUrlComponent(
+            input,
+            UrlDecodeMode::kForm,
+            resource);
+        if (!decoded.has_value()) {
+            return false;
+        }
+        value.assignOwned(std::move(*decoded));
+        return true;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         if (hasFormEncoding(input)) {
             return false;

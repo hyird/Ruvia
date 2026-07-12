@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/web/detail/model/FormParser.h"
@@ -8,6 +9,7 @@ namespace {
 
 using ruvia::detail::parseFormBool;
 using ruvia::detail::parseFormNumber;
+using ruvia::detail::parseFormValue;
 
 }  // namespace
 
@@ -49,4 +51,15 @@ RUVIA_TEST(form_number_floating_accepts_fraction_and_exponent) {
     RUVIA_CHECK(parseFormNumber("-2e3", v) && v == -2000.0);
     RUVIA_CHECK(!parseFormNumber("", v));
     RUVIA_CHECK(!parseFormNumber("1.2.3", v));  // trailing junk after a valid prefix
+}
+
+RUVIA_TEST(form_string_decode_failure_preserves_existing_value) {
+    auto* resource = std::pmr::get_default_resource();
+    ruvia::String value("original", resource);
+
+    RUVIA_CHECK(!parseFormValue("decoded%2", value, resource));
+    RUVIA_CHECK_EQ(value.view(), std::string_view("original"));
+
+    RUVIA_CHECK(parseFormValue("decoded%20value", value, resource));
+    RUVIA_CHECK_EQ(value.view(), std::string_view("decoded value"));
 }

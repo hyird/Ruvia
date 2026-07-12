@@ -8,7 +8,7 @@
 
 namespace {
 
-using ruvia::detail::decodeUrlComponentToString;
+using ruvia::detail::decodeUrlComponent;
 using ruvia::detail::hasUrlEncoding;
 using Mode = ruvia::detail::UrlDecodeMode;
 
@@ -32,7 +32,10 @@ RUVIA_TEST(no_encoding_means_decode_is_identity) {
     for (const std::string_view value : {std::string_view(""), std::string_view("plain"),
                                          std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
         RUVIA_CHECK(!hasUrlEncoding(value, Mode::kPercent));
-        const auto decoded = decodeUrlComponentToString(value, resource, Mode::kPercent);
+        const auto decoded = decodeUrlComponent(
+            value,
+            Mode::kPercent,
+            resource);
         RUVIA_CHECK(decoded.has_value());
         RUVIA_CHECK_EQ(std::string_view(*decoded), value);
     }

@@ -36,12 +36,18 @@ template <typename Visitor>
             return dispatchJsonObjectFieldVisitor(visitorRef, name, value);
         }
 
-        std::pmr::string decodedName(resource);
-        if (!decodeFormComponent(name, decodedName)) {
+        auto decodedName = decodeUrlComponent(
+            name,
+            UrlDecodeMode::kForm,
+            resource);
+        if (!decodedName.has_value()) {
             valid = false;
             return false;
         }
-        return dispatchJsonObjectFieldVisitor(visitorRef, std::string_view(decodedName), value);
+        return dispatchJsonObjectFieldVisitor(
+            visitorRef,
+            std::string_view(*decodedName),
+            value);
     });
     return completed && valid;
 }

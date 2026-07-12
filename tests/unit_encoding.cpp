@@ -27,11 +27,14 @@ std::string b64(std::string_view in) {
 }
 
 std::optional<std::string> urlDecode(std::string_view in, ruvia::detail::UrlDecodeMode mode) {
-    std::string out;
-    if (!ruvia::detail::decodeUrlComponent(in, out, mode)) {
+    auto decoded = ruvia::detail::decodeUrlComponent(
+        in,
+        mode,
+        std::pmr::get_default_resource());
+    if (!decoded.has_value()) {
         return std::nullopt;
     }
-    return out;
+    return std::string(*decoded);
 }
 
 }  // namespace

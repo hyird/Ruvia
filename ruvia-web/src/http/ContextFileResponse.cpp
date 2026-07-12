@@ -19,6 +19,7 @@
 #include <ctime>
 #include <filesystem>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -528,11 +529,18 @@ HttpResponse Context::staticFile(
     // never joins the client path onto the filesystem, so the worst case is a miss
     // (404). A "%00" would inject a NUL that cannot occur in a filename, so reject
     // it; a malformed escape falls back to the raw bytes (which simply miss).
-    std::pmr::string decodedPath(allocator<char>());
-    const std::string_view lookupPath =
-        detail::decodeUrlComponent(relativePath, decodedPath, detail::UrlDecodeMode::kPercent)
-            ? std::string_view(decodedPath)
-            : relativePath;
+    std::optional<std::pmr::string> decodedPath;
+    if (detail::hasUrlEncoding(
+            relativePath,
+            detail::UrlDecodeMode::kPercent)) {
+        decodedPath = detail::decodeUrlComponent(
+            relativePath,
+            detail::UrlDecodeMode::kPercent,
+            resource());
+    }
+    const std::string_view lookupPath = decodedPath.has_value()
+        ? std::string_view(*decodedPath)
+        : relativePath;
     if (lookupPath.find('\0') != std::string_view::npos) {
         throw HttpError(403, "forbidden", "invalid static file path");
     }
