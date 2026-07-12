@@ -95,6 +95,7 @@ add_executable(ruvia_unit_tests
     unit_error_response.cpp
     unit_validator.cpp
     unit_http_response.cpp
+    unit_http_response_body.cpp
     unit_http1_interim_response.cpp
     unit_parser_validation.cpp
     unit_http2_flow_control.cpp

@@ -7,7 +7,6 @@
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/detail/http2/Http2FramePayload.h"
@@ -135,8 +134,9 @@ constexpr std::uint32_t kHttp2MaxUndrainedPings = 1000;
 
 [[nodiscard]] bool http2IsValidConnectResponseHead(
     const HttpResponse& response) noexcept {
+    const auto& body = responseBody(response);
     if (response.status() < 200 || response.status() >= 300 ||
-        responseBodySize(response) != 0 || responseHasFileBody(response)) {
+        body.size() != 0 || body.file().has_value()) {
         return false;
     }
     for (const auto& header : response.headers()) {

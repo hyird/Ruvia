@@ -43,7 +43,6 @@
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
@@ -318,12 +317,14 @@ Task<void> runHttp2SansIoSession(
         if (!writePlan.sendBody()) {
             co_return;
         }
-        if (responseHasFileBody(response)) {
-            const auto fileBody = responseFileBody(response);
-            auto input = openResponseFileInput(fileBody);
+        const auto& responseContent = responseBody(response);
+        if (const auto fileBody = responseContent.file()) {
+            auto input = openResponseFileInput(*fileBody);
             bool ready = static_cast<bool>(input);
             if (ready) {
-                input.seekg(static_cast<std::streamoff>(fileBody.offset), std::ios::beg);
+                input.seekg(
+                    static_cast<std::streamoff>(fileBody->offset()),
+                    std::ios::beg);
                 ready = static_cast<bool>(input);
             }
             if (!ready) {
@@ -335,7 +336,7 @@ Task<void> runHttp2SansIoSession(
             }
             std::pmr::string fileChunk(worker.allocator<char>());
             ensureFileChunkBuffer(fileChunk);
-            std::uint64_t remaining = fileBody.length;
+            std::uint64_t remaining = fileBody->length();
             while (remaining > 0) {
                 auto* live = connection.stream(streamId);
                 if (live == nullptr || live->isAborted()) {
@@ -366,7 +367,7 @@ Task<void> runHttp2SansIoSession(
         // body view is stable (owned by `response` on this handler frame), so a slow
         // client only ever makes the core buffer at most ONE slice as a window-blocked
         // remainder (vs. a copy of the entire windowed-out tail for a large response).
-        const auto body = responseBodyBytes(response);
+        const auto body = responseContent.bytes();
         constexpr std::size_t kSlice = 16 * 1024;
         std::size_t offset = 0;
         while (offset < body.size()) {

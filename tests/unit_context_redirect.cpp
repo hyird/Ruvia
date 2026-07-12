@@ -26,7 +26,7 @@ using ruvia::WorkerMemory;
 using ruvia::detail::ContextAccess;
 using ruvia::detail::ContextServices;
 using ruvia::detail::HttpRequestAccess;
-using ruvia::detail::responseBodyBytes;
+using ruvia::detail::responseBody;
 
 // The Context holds the request by reference, so keep it in the test's scope
 // (this macro-free setup avoids a returning helper that would dangle).
@@ -121,7 +121,7 @@ RUVIA_TEST(context_body_sets_body_and_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     const auto response = context.body("hello world", Context::ResponseInit{.status = 201});
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{201});
-    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello world"));
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("hello world"));
 }
 
 RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
@@ -162,7 +162,7 @@ RUVIA_TEST(context_body_applies_init_headers) {
     const HttpHeaderView headers[] = {{"Content-Type", "text/plain"}, {"X-Custom", "v"}};
     const auto response = context.body("data", Context::ResponseInit{.status = 200, .headers = headers});
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
-    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("data"));
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("data"));
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
     RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
 }
@@ -185,7 +185,7 @@ RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     const auto response = context.body(nullptr, std::uint16_t{204});
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{204});
-    RUVIA_CHECK(responseBodyBytes(response).empty());
+    RUVIA_CHECK(responseBody(response).bytes().empty());
 }
 
 RUVIA_TEST(context_body_byte_span_copies_into_response_storage) {
@@ -196,7 +196,7 @@ RUVIA_TEST(context_body_byte_span_copies_into_response_storage) {
         std::byte{0xff},
     };
     const auto response = context.body(std::span<const std::byte>(bytes));
-    const auto body = responseBodyBytes(response);
+    const auto body = responseBody(response).bytes();
 
     RUVIA_CHECK_EQ(body.size(), std::size(bytes));
     RUVIA_CHECK_EQ(body[0], '\0');
@@ -210,7 +210,7 @@ RUVIA_TEST(context_text_sets_plain_content_type) {
     const auto response = context.text("hello", 200);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
-    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("hello"));
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("hello"));
 }
 
 RUVIA_TEST(context_html_sets_html_content_type) {
@@ -218,7 +218,7 @@ RUVIA_TEST(context_html_sets_html_content_type) {
     const auto response = context.html("<h1>hi</h1>", 200);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/html; charset=UTF-8"));
-    RUVIA_CHECK_EQ(responseBodyBytes(response), std::string_view("<h1>hi</h1>"));
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("<h1>hi</h1>"));
 }
 
 RUVIA_TEST(context_param_lookup_handles_unencoded_and_missing) {
@@ -255,11 +255,11 @@ RUVIA_TEST(context_json_serializes_scalars_with_json_content_type) {
     const auto number = context.json(42, std::uint16_t{200});
     RUVIA_CHECK_EQ(number.status(), std::uint16_t{200});
     RUVIA_CHECK_EQ(number.header("Content-Type"), std::string_view("application/json"));
-    RUVIA_CHECK_EQ(responseBodyBytes(number), std::string_view("42"));
+    RUVIA_CHECK_EQ(responseBody(number).bytes(), std::string_view("42"));
 
     const auto boolean = context.json(true, std::uint16_t{200});
-    RUVIA_CHECK_EQ(responseBodyBytes(boolean), std::string_view("true"));
+    RUVIA_CHECK_EQ(responseBody(boolean).bytes(), std::string_view("true"));
 
     const auto real = context.json(3.5, std::uint16_t{200});
-    RUVIA_CHECK_EQ(responseBodyBytes(real), std::string_view("3.5"));
+    RUVIA_CHECK_EQ(responseBody(real).bytes(), std::string_view("3.5"));
 }

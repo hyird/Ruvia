@@ -22,8 +22,8 @@ namespace ruvia::detail {
 Task<void> writeFileZeroCopy(asio::ip::tcp::socket& socket, ResponseFileBody file, std::error_code& ec) {
     auto input = openNativeFileForRead(file, ec);
     if (ec) { co_return; }
-    auto offset = static_cast<off_t>(file.offset);
-    std::uint64_t remaining = file.length;
+    auto offset = static_cast<off_t>(file.offset());
+    std::uint64_t remaining = file.length();
     while (remaining > 0) {
         const auto nextSend = static_cast<std::size_t>(std::min<std::uint64_t>(remaining, 0x7ffff000ULL));
         const auto sent = ::sendfile(socket.native_handle(), input.get(), &offset, nextSend);
@@ -44,9 +44,10 @@ Task<void> writeFileZeroCopy(asio::ip::tcp::socket& socket, ResponseFileBody fil
 Task<void> writeFileZeroCopy(asio::ip::tcp::socket& socket, ResponseFileBody file, std::error_code& ec) {
     auto input = openNativeFileForRead(file, ec);
     if (ec) { co_return; }
-    LARGE_INTEGER position; position.QuadPart = static_cast<LONGLONG>(file.offset);
+    LARGE_INTEGER position;
+    position.QuadPart = static_cast<LONGLONG>(file.offset());
     if (::SetFilePointerEx(input.get(), position, nullptr, FILE_BEGIN) == 0) { ec = std::error_code(static_cast<int>(::GetLastError()), std::system_category()); co_return; }
-    std::uint64_t remaining = file.length;
+    std::uint64_t remaining = file.length();
     while (remaining > 0) {
         const auto nextSend = static_cast<DWORD>(std::min<std::uint64_t>(remaining, static_cast<std::uint64_t>((std::numeric_limits<DWORD>::max)())));
         if (::TransmitFile(socket.native_handle(), input.get(), nextSend, 0, nullptr, nullptr, 0) != FALSE) { remaining -= nextSend; continue; }

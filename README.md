@@ -144,6 +144,19 @@ from the connection protocol instead of inventing a borrowed `"HTTP/2"` wire val
 stream-framing, WebSocket, and final-response control consume the same enum. The former
 `HttpRequest::httpVersion()` string view and private `HttpResponseProtocolVersion` duplicate are
 removed, so no layer can compare an arbitrary or dangling version spelling.
+
+Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
+`HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,
+`HttpOwnedResponseBytes`, `HttpOwnedResponseFile`, or `HttpBorrowedResponseFile`. Owned byte and
+path alternatives use the response's PMR resource; borrowed alternatives retain only their view.
+The sole read boundary is `responseBody(response)`: its `bytes()`, `file()`, and `size()` are derived
+from the active alternative, and the non-default `ResponseFileBody` view can only be produced by a
+file alternative. A zero-length file therefore remains distinct from an empty body. The former
+`BodyKind` plus simultaneous string/view/optional-file storage and the
+`responseHasFileBody()` + `responseFileBody()` and `responseBodyBytes()`/`responseBodySize()` side
+channels are removed. This reduces resident response state without adding allocation, virtual
+dispatch, or request-time type erasure.
+
 Outbound HTTP/1 request emission is now the matching public sans-I/O boundary.
 `HttpClientRequestContent::none()` is distinct from `bytes("")`: only the latter represents an
 explicit empty content message and causes `Content-Length: 0`. The value is a discriminated union of

@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/http/detail/HttpResponseFileBody.h"
 #include "ruvia/http/HttpResponse.h"
 
 #include <cstdint>
@@ -51,19 +50,6 @@ struct HttpResponseFileAccess final {
         std::uint64_t length) {
         response.setBorrowedNativeFileBody(file, size, offset, length);
     }
-
-    [[nodiscard]] static bool hasFile(const HttpResponse& response) noexcept {
-        return response.hasFileBody();
-    }
-
-    [[nodiscard]] static ResponseFileBody file(const HttpResponse& response) {
-        const auto& body = response.fileBody();
-        return ResponseFileBody{
-            .nativePath = body.nativePathCStr(),
-            .size = body.size_,
-            .offset = body.offset_,
-            .length = body.length_};
-    }
 };
 
 inline void setResponseFileBody(HttpResponse& response, std::filesystem::path file, std::uint64_t size) {
@@ -109,14 +95,6 @@ inline void setResponseBorrowedNativeFileBody(
     std::uint64_t offset,
     std::uint64_t length) {
     HttpResponseFileAccess::setBorrowedNativeFile(response, file, size, offset, length);
-}
-
-[[nodiscard]] inline bool responseHasFileBody(const HttpResponse& response) noexcept {
-    return HttpResponseFileAccess::hasFile(response);
-}
-
-[[nodiscard]] inline ResponseFileBody responseFileBody(const HttpResponse& response) {
-    return HttpResponseFileAccess::file(response);
 }
 
 }  // namespace ruvia::detail

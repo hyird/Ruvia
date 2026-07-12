@@ -1,7 +1,6 @@
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/detail/ResponseHeaderUtils.h"
@@ -97,12 +96,14 @@ bool compressResponseBodyIfAccepted(
         return false;
     }
 
+    const auto& responseContent = responseBody(response);
+
     // These responses never vary by Accept-Encoding, so they are served identity
     // with no Vary (RFC 9110 12.5.5 SHOULD NOT list a field that does not affect
     // the representation): a file body (framed and Vary'd by the static-file path),
     // an already-chosen Content-Encoding, a Content-Range, an incompressible media
     // type, or an explicit no-transform.
-    if (responseHasFileBody(response) ||
+    if (responseContent.file().has_value() ||
         responseHasKnownHeader(response, kResponseHeaderContentEncoding) ||
         responseHasKnownHeader(response, kResponseHeaderContentRange) ||
         responseContentTypeSkipsCompression(responseKnownHeader(response, kResponseHeaderContentType)) ||
@@ -119,10 +120,10 @@ bool compressResponseBodyIfAccepted(
     addVaryToken(response, "Accept-Encoding");
 
     if (coding == HttpContentCoding::kNone ||
-        responseBodySize(response) < options.minBytes) {
+        responseContent.size() < options.minBytes) {
         return false;
     }
-    const auto body = responseBodyBytes(response);
+    const auto body = responseContent.bytes();
     compressionScratch.clear();
     compressionScratch.reserve(body.size());
     if (!encodeHttpContent(coding, body, compressionScratch, body.size()) ||

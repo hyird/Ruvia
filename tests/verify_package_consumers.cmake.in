@@ -989,6 +989,86 @@ if(_installed_http2_remote_content MATCHES
        "(hasContentLength|contentLength|receivedBodyBytes|receivedBodyExceedsContentLength|bodyLengthComplete)[(]")
     message(FATAL_ERROR "installed HTTP/2 remote content accounting lost allowance/length alternatives or atomic DATA ownership")
 endif()
+set(_installed_response_body_storage_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseBody.h")
+set(_installed_response_file_body_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseFileBody.h")
+set(_installed_response_model_path
+    "${_install_prefix}/include/ruvia/http/HttpResponse.h")
+set(_installed_response_body_access_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseBodyAccess.h")
+set(_installed_response_file_access_path
+    "${_install_prefix}/include/ruvia/http/detail/HttpResponseFileAccess.h")
+foreach(_response_body_contract IN ITEMS
+        "${_installed_response_body_storage_path}"
+        "${_installed_response_file_body_path}"
+        "${_installed_response_model_path}"
+        "${_installed_response_body_access_path}"
+        "${_installed_response_file_access_path}")
+    if(NOT EXISTS "${_response_body_contract}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing the typed response-body contract")
+    endif()
+endforeach()
+file(READ "${_installed_response_body_storage_path}"
+    _installed_response_body_storage)
+file(READ "${_installed_response_file_body_path}"
+    _installed_response_file_body)
+file(READ "${_installed_response_model_path}"
+    _installed_response_model)
+file(READ "${_installed_response_body_access_path}"
+    _installed_response_body_access)
+file(READ "${_installed_response_file_access_path}"
+    _installed_response_file_access)
+if(NOT _installed_response_body_storage MATCHES
+       "class HttpEmptyResponseBody final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpBorrowedResponseBytes final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpStaticResponseBytes final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpOwnedResponseBytes final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpOwnedResponseFile final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpBorrowedResponseFile final" OR
+   NOT _installed_response_body_storage MATCHES
+       "class HttpResponseBody final" OR
+   NOT _installed_response_body_storage MATCHES "using Value = std::variant" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpEmptyResponseBody>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpBorrowedResponseBytes>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpStaticResponseBytes>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpOwnedResponseBytes>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpOwnedResponseFile>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::get_if<HttpBorrowedResponseFile>" OR
+   NOT _installed_response_body_storage MATCHES
+       "std::optional<ResponseFileBody> file[(][)] const noexcept")
+    message(FATAL_ERROR
+        "installed HttpResponse body lost its exclusive storage alternatives")
+endif()
+if(_installed_response_model MATCHES
+       "BodyKind|bodyKind_|fileBody_" OR
+   NOT _installed_response_model MATCHES
+       "detail::HttpResponseBody body_" OR
+   NOT _installed_response_file_body MATCHES
+       "class ResponseFileBody final" OR
+   NOT _installed_response_file_body MATCHES
+       "friend class HttpResponseBody" OR
+   _installed_response_body_access MATCHES
+       "responseBodyBytes|responseBodySize" OR
+   _installed_response_file_access MATCHES
+       "responseHasFileBody|responseFileBody" OR
+   NOT _installed_response_body_access MATCHES
+       "const HttpResponseBody& responseBody")
+    message(FATAL_ERROR
+        "installed HttpResponse restored split storage or body read side channels")
+endif()
 set(_installed_response_content_semantics_path
     "${_install_prefix}/include/ruvia/http/detail/HttpResponseContentSemantics.h")
 set(_installed_response_write_plan_path
