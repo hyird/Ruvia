@@ -118,6 +118,18 @@ concept AcceptsJsonSequenceOutputParameter = requires(
         std::size_t{});
 };
 
+template <typename Value>
+concept AcceptsFormValueOutputParameter = requires(
+    Value& value,
+    std::pmr::memory_resource* resource) {
+    ruvia::detail::parseFormValue(std::string_view{}, value, resource);
+};
+
+template <typename Value>
+concept AcceptsFormScalarOutputParameter = requires(Value& value) {
+    ruvia::detail::parseFormBool(std::string_view{}, value);
+};
+
 template <typename Services>
 concept HasSplitContextCapabilityAccessors = requires(
     const Services& services) {
@@ -585,6 +597,17 @@ static_assert(!std::copy_constructible<ruvia::List<ruvia::Int32>>);
 static_assert(!std::is_copy_assignable_v<ruvia::List<ruvia::Int32>>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::List<ruvia::Int32>>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::List<ruvia::Int32>>);
+static_assert(!AcceptsFormValueOutputParameter<ruvia::String>);
+static_assert(!AcceptsFormScalarOutputParameter<bool>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::parseFormBool(std::string_view{})),
+    std::optional<bool>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::parseFormValue<ruvia::String>(
+        std::string_view{},
+        ruvia::detail::FormValueEncoding::kUrlEncoded,
+        std::declval<std::pmr::memory_resource*>())),
+    std::optional<ruvia::String>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -715,6 +738,22 @@ int main() {
     movedList.clear();
     if (!movedList.empty()) {
         return 15;
+    }
+    const auto installedFormValue = ruvia::detail::parseFormValue<
+        ruvia::String>(
+        "installed%20form",
+        ruvia::detail::FormValueEncoding::kUrlEncoded,
+        std::pmr::get_default_resource());
+    const auto installedDecodedValue = ruvia::detail::parseFormValue<
+        ruvia::String>(
+        "literal%20form",
+        ruvia::detail::FormValueEncoding::kDecoded,
+        std::pmr::get_default_resource());
+    if (!installedFormValue.has_value() ||
+        installedFormValue->view() != "installed form" ||
+        !installedDecodedValue.has_value() ||
+        installedDecodedValue->view() != "literal%20form") {
+        return 16;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

@@ -208,17 +208,17 @@ public:
                 return true;
             }
 
-            T value = detail::makeRequestValue<T>(detail::ResolvedPmrResourceTag{}, resource);
-            if (!detail::parseFormValue(
-                    detail::ResolvedPmrResourceTag{},
-                    valueView,
-                    value,
-                    resource)) {
+            auto value = detail::parseFormValue<T>(
+                detail::ResolvedPmrResourceTag{},
+                valueView,
+                detail::FormValueEncoding::kUrlEncoded,
+                resource);
+            if (!value.has_value()) {
                 result.reset();
                 lastMatchFailed = true;
                 return true;
             }
-            result.emplace(std::move(value));
+            result.emplace(std::move(*value));
             lastMatchFailed = false;
             return true;
         });
@@ -268,12 +268,12 @@ template <typename T>
             continue;
         }
 
-        T value = makeRequestValue<T>(ResolvedPmrResourceTag{}, resource);
-        if (!parseDecodedFormValue(
-                ResolvedPmrResourceTag{},
-                item.value(),
-                value,
-                resource)) {
+        auto value = parseFormValue<T>(
+            ResolvedPmrResourceTag{},
+            item.value(),
+            FormValueEncoding::kDecoded,
+            resource);
+        if (!value.has_value()) {
             return std::nullopt;
         }
         return value;

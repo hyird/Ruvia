@@ -103,6 +103,8 @@ set(RULE_STALE_STATIC_FILE_REPRESENTATION_SPLIT
     "borrowNativePath|selectStaticEncodingVariant|std::string_view[ \t]*&[ \t]*contentEncoding|struct[ \t]+StaticRootEntryView|[.]found[(][)]")
 set(RULE_STALE_URL_DECODE_CHAIN
     "decodeUrlComponentToString|decodeFormComponent|StringT[ \t]*&[ \t]*output")
+set(RULE_STALE_FORM_VALUE_PARSE_CHAIN
+    "parseDecodedFormValue|withDecodedFormView|bool[ \t\r\n]+parseForm(Bool|Number|Value)|parseFormValue[ \t\r\n]*[(][^)]*T[ \t]*&[ \t]*value")
 set(RULE_STALE_JSON_STRING_DECODE_CHAIN
     "bool[ \t\r\n]+decodeJsonString|decodeJsonString[ \t\r\n]*[(][^,()]*,[ \t\r\n]*value[.]resetOwned[(][)]|bool[ \t\r\n]+jwtDecodeJsonStringValue[ \t\r\n]*[(][ \t\r\n]*std::pmr::string[ \t]*&")
 set(RULE_STALE_JSON_STRING_SCAN_CHAIN
@@ -504,6 +506,18 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("form decoding duplicated the URL decoder"
         "${RULE_STALE_URL_DECODE_CHAIN}"
         "bool decodeFormComponent(View input, StringT& output);")
+    expect_match("form values returned bool plus mutable output"
+        "${RULE_STALE_FORM_VALUE_PARSE_CHAIN}"
+        "bool parseFormValue(View input, T& value, Resource* resource);")
+    expect_match("decoded form fields used a parallel parser"
+        "${RULE_STALE_FORM_VALUE_PARSE_CHAIN}"
+        "bool parseDecodedFormValue(View input, T& value);")
+    expect_match("form scalar parsing returned bool plus output"
+        "${RULE_STALE_FORM_VALUE_PARSE_CHAIN}"
+        "bool parseFormNumber(View input, NumberT& value);")
+    expect_match("form decoding exposed temporary views through callbacks"
+        "${RULE_STALE_FORM_VALUE_PARSE_CHAIN}"
+        "bool withDecodedFormView(View input, Visitor&& visitor);")
     expect_match("JSON string decoding returned bool plus partial output"
         "${RULE_STALE_JSON_STRING_DECODE_CHAIN}"
         "bool decodeJsonString(View input, OutputT& output);")
@@ -2478,6 +2492,10 @@ set(WEB_FORM_DECODING_VISITOR
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestFieldVisitors.h")
 set(WEB_FORM_DECODING_TEST
     "${RUVIA_ROOT}/tests/unit_form_parser.cpp")
+set(WEB_FORM_MODEL_OBJECT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelObject.h")
+set(WEB_FORM_MODEL_MACROS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/MacroFieldOps.h")
 set(HTTP_URL_ENCODING_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 check_files_no_match("URL decoding must return one owning transactional result"
@@ -2487,6 +2505,11 @@ check_files_no_match("URL decoding must return one owning transactional result"
     "${WEB_FORM_DECODING_VISITOR}"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextFileResponse.cpp")
+check_files_no_match("form values must return one complete typed result"
+    "${RULE_STALE_FORM_VALUE_PARSE_CHAIN}"
+    "${WEB_FORM_DECODING_CONTRACT}"
+    "${WEB_FORM_MODEL_OBJECT}"
+    "${WEB_FORM_MODEL_MACROS}")
 if(EXISTS "${HTTP_URL_ENCODING_CONTRACT}" AND
    EXISTS "${WEB_FORM_DECODING_CONTRACT}" AND
    EXISTS "${WEB_FORM_DECODING_TEST}" AND
@@ -2502,15 +2525,46 @@ if(EXISTS "${HTTP_URL_ENCODING_CONTRACT}" AND
     if(NOT http_url_encoding_contract MATCHES
            "std::optional<std::pmr::string>[ \t\r\n]+decodeUrlComponent" OR
        NOT web_form_decoding_contract MATCHES
-           "value[.]assignOwned[(]std::move[(][*]decoded[)][)]" OR
+           "value[.]assignOwned[(]std::move[(][*]decoded(Storage)?[)][)]" OR
        NOT web_form_decoding_test MATCHES
-           "form_string_decode_failure_preserves_existing_value" OR
+           "form_value_decode_failure_returns_no_partial_value" OR
        NOT http_url_encoding_package_consumer MATCHES
            "AcceptsUrlDecodeOutputParameter" OR
        NOT http_url_encoding_package_consumer MATCHES
            "std::optional<std::pmr::string>")
         boundary_error("URL decoding lost transactional ownership"
             "HTTP must own the decoded optional and Web model fields must commit only after success")
+    endif()
+endif()
+if(EXISTS "${WEB_FORM_DECODING_CONTRACT}" AND
+   EXISTS "${WEB_FORM_DECODING_TEST}" AND
+   EXISTS "${WEB_FORM_MODEL_OBJECT}" AND
+   EXISTS "${WEB_FORM_MODEL_MACROS}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_FORM_MODEL_OBJECT}"
+        web_form_model_object)
+    file(READ "${WEB_FORM_MODEL_MACROS}"
+        web_form_model_macros)
+    file(READ "${WEB_JSON_PACKAGE_CONSUMER}"
+        web_form_package_consumer)
+    if(NOT web_form_decoding_contract MATCHES
+           "enum[ \t]+class[ \t]+FormValueEncoding" OR
+       NOT web_form_decoding_contract MATCHES
+           "std::optional<T>[ \t\r\n]+parseFormValue" OR
+       NOT web_form_model_object MATCHES
+           "FormValueEncoding::kUrlEncoded" OR
+       NOT web_form_model_object MATCHES
+           "FormValueEncoding::kDecoded" OR
+       NOT web_form_model_macros MATCHES
+           "ruviaValue[.]has_value[(][)]" OR
+       NOT web_form_decoding_test MATCHES
+           "form_value_encoding_is_explicit" OR
+       NOT web_form_package_consumer MATCHES
+           "AcceptsFormValueOutputParameter" OR
+       NOT web_form_package_consumer MATCHES
+           "std::optional<ruvia::String>")
+        boundary_error("form model parsing lost its typed value path"
+            "URL-encoded and decoded form fields must share one explicit optional-value parser")
     endif()
 endif()
 check_files_no_match("HTTP/1 request-body plans must use exclusive alternatives"
