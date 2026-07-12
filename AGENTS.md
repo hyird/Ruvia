@@ -854,6 +854,14 @@ submitted write plan 的 exact status。禁止恢复 `Task<void> submitResponse`
 - 非 Windows 平台要求 `SO_REUSEPORT`；Windows 使用 `SO_REUSEADDR`。
 - graceful shutdown 只能在各 worker 自己的 `io_context` 上关闭该 worker 的 acceptor 和活跃 socket。
 - idle/header/body/write timeout、连接数限制和请求数限制保持 per-worker 所有权。
+- per-worker 连接池等待必须复用 `ruvia-core` 的零分配 intrusive `PoolWaiterQueue`。`PoolWaiter` 自身是
+  awaiter，恢复前必须原子提交不可默认构造的 `PoolWaiterResult`；result 只能持有
+  `PoolWaiterAcquired`、`PoolWaiterTimedOut` 或 `PoolWaiterClosed` alternative，且只有 acquired 可以
+  暴露 slot `index()`；调用方只能通过 `co_await`/`await_resume()` 观察完成结果，不得新增并行
+  `result()` accessor。禁止恢复外部 `ready + timedOut + index` 标量、局部 `WaiterAwaiter`、容量值作为
+  close sentinel，或要求 DB/Redis 在恢复后结合 pool size/`closing_` 猜测完成原因；`closeAll()` 只能
+  产生 closed alternative，不接收 sentinel 参数，并且必须先为当前整队提交 closed，再恢复任何协程，
+  防止恢复期间重入把后续 closing waiter 变成 acquired。
 
 ## 内存规则
 

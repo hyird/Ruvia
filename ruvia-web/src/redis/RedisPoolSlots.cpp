@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/redis/RedisInternal.h"
 
-#include <coroutine>
+#include <exception>
 
 namespace ruvia::detail {
 
@@ -46,43 +46,24 @@ Task<std::size_t> RedisPool::acquire() {
         }
     };
 
-    bool ready = false;
-    bool timedOut = false;
-    std::size_t waitedIndex = 0;
     PoolWaiter waiter(
-        ready,
-        timedOut,
-        waitedIndex,
         std::chrono::steady_clock::now() + config_.acquireTimeout);
     waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
-    struct WaiterAwaiter final {
-        PoolWaiter& waiter;
-        bool& ready;
-
-        [[nodiscard]] bool await_ready() const noexcept {
-            return ready;
-        }
-
-        void await_suspend(std::coroutine_handle<> handle) noexcept {
-            waiter.setHandle(handle);
-        }
-
-        void await_resume() const noexcept {}
-    };
-
-    co_await WaiterAwaiter{waiter, ready};
-
-    if (timedOut) {
+    const auto& result = co_await waiter;
+    if (result.timedOut() != nullptr) {
         throw RedisError(RedisError::Code::kTimeout, "redis connection pool acquire timed out");
     }
-
-    if (closing_ || waitedIndex >= connections_.size()) {
+    if (result.closed() != nullptr) {
         throw RedisError(RedisError::Code::kIoError, "redis pool is closing");
     }
 
-    co_return waitedIndex;
+    const auto* acquired = result.acquired();
+    if (acquired == nullptr) {
+        std::terminate();
+    }
+    co_return acquired->index();
 }
 
 void RedisPool::release(std::size_t index) noexcept {

@@ -34,6 +34,55 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)" AND
     message(FATAL_ERROR "core base64url helper was not installed")
 endif()
 
+if(_built_components_csv MATCHES "(^|,)core(,|$)")
+    set(_installed_pool_waiter_path
+        "${_install_prefix}/include/ruvia/core/detail/PoolWaiterQueue.h")
+    if(NOT EXISTS "${_installed_pool_waiter_path}")
+        message(FATAL_ERROR
+            "installed core package is missing its typed pool waiter contract")
+    endif()
+    file(READ "${_installed_pool_waiter_path}" _installed_pool_waiter)
+    if(NOT _installed_pool_waiter MATCHES
+           "class PoolWaiterAcquired final" OR
+       NOT _installed_pool_waiter MATCHES
+           "class PoolWaiterTimedOut final" OR
+       NOT _installed_pool_waiter MATCHES
+           "class PoolWaiterClosed final" OR
+       NOT _installed_pool_waiter MATCHES
+           "class PoolWaiterResult final" OR
+       NOT _installed_pool_waiter MATCHES "using Value = std::variant" OR
+       NOT _installed_pool_waiter MATCHES
+           "std::get_if<PoolWaiterAcquired>" OR
+       NOT _installed_pool_waiter MATCHES
+           "std::get_if<PoolWaiterTimedOut>" OR
+       NOT _installed_pool_waiter MATCHES
+           "std::get_if<PoolWaiterClosed>" OR
+       NOT _installed_pool_waiter MATCHES
+           "std::optional<PoolWaiterResult> result_" OR
+       NOT _installed_pool_waiter MATCHES
+           "bool await_ready[(][)] const noexcept" OR
+       NOT _installed_pool_waiter MATCHES
+           "const PoolWaiterResult& await_resume[(][)] const noexcept" OR
+       NOT _installed_pool_waiter MATCHES "void closeAll[(][)] noexcept")
+        message(FATAL_ERROR
+            "installed pool waiter lost its discriminated await completion")
+    endif()
+    if(_installed_pool_waiter MATCHES
+           "bool[ \t]*&[ \t]*(ready|timedOut)" OR
+       _installed_pool_waiter MATCHES
+           "bool[*][ \t]*(ready_|timedOut_)" OR
+       _installed_pool_waiter MATCHES "sentinelIndex" OR
+       _installed_pool_waiter MATCHES "WaiterAwaiter" OR
+       _installed_pool_waiter MATCHES "setHandle[ \t]*[(]" OR
+       _installed_pool_waiter MATCHES
+           "PoolWaiterResult[*][ \t]+result[ \t]*[(]" OR
+       _installed_pool_waiter MATCHES
+           "closeAll[ \t\r\n]*[(][^)]*std::size_t")
+        message(FATAL_ERROR
+            "installed pool waiter restored parallel completion state or a close sentinel")
+    endif()
+endif()
+
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
 set(_installed_response_stream_commit_path
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
