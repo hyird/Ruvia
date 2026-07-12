@@ -117,8 +117,8 @@ Task<void> detail::RouteTable::invokeMiddlewareContinuation(Next::State state) {
         storeRepeatedNextError(*context);
         co_return;
     }
-    auto* table = static_cast<const RouteTable*>(state.table);
-    auto* route = static_cast<const RouteEntry*>(state.route);
+    const auto* table = state.table;
+    const auto* route = state.route;
     std::exception_ptr exception;
     try {
         co_await table->invokeMiddlewareAt(
@@ -137,7 +137,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     const RouteEntry& route,
     std::size_t index,
     Context& context,
-    StreamMiddlewareDisposition& disposition) const {
+    StreamMiddlewareChainState& chain) const {
     if (index >= route.middlewareCount()) {
         const auto& endpoint = route.endpoint();
         const auto* responseStream = endpoint.responseStream();
@@ -149,7 +149,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             ? responseStream->handler()
             : webSocket->handler();
         co_await handler(context);
-        disposition = StreamMiddlewareDisposition::kStreamHandled;
+        chain.markHandlerInvoked();
         co_return;
     }
 
@@ -162,7 +162,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
             .table = this,
             .route = &route,
             .context = &context,
-            .outcome = &disposition,
+            .streamChain = &chain,
             .control = &control,
             .index = index + 1},
         &RouteTable::invokeStreamMiddlewareContinuation);
@@ -177,16 +177,16 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State st
         storeRepeatedNextError(*context);
         co_return;
     }
-    auto* table = static_cast<const RouteTable*>(state.table);
-    auto* route = static_cast<const RouteEntry*>(state.route);
-    auto* disposition = static_cast<StreamMiddlewareDisposition*>(state.outcome);
+    const auto* table = state.table;
+    const auto* route = state.route;
+    auto* chain = state.streamChain;
     std::exception_ptr exception;
     try {
         co_await table->invokeStreamMiddlewareAt(
             *route,
             state.index,
             *context,
-            *disposition);
+            *chain);
     } catch (...) {
         exception = std::current_exception();
     }

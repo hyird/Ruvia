@@ -195,6 +195,8 @@ set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
     "markCommitted[ 	]*\\([ 	]*(true|false)|bodySuppressed_")
 set(RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT
     "RouteStreamDispatchOutcome|responseStreamDispatched|trailerFraming_|ResponseStreamDispatchResult::(streamed|abortedByPeer|abortedAfterCommit)[ 	]*\\([ 	]*HttpResponse|result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ 	]*\\(")
+set(RULE_STALE_NEXT_CONTINUATION_TYPE_ERASURE
+    "const void[ 	]*[*][ 	]+(table|route)|void[ 	]*[*][ 	]+outcome|[.]outcome[ 	]*=|state[.]outcome|StreamMiddlewareDisposition")
 set(RULE_STALE_HTTP1_SESSION_COMPLETION
     "HttpResponseStream(RouteResult|BufferedRoute|CommittedRoute)|enum class[ 	]+HttpWebSocketRouteResult|HttpWebSocketRouteResult::k(WriteBufferedResponse|SessionFinished)|committedStreamStatus|bufferAlreadyCompacted|Task<void>[ 	\r\n]+dispatchHttp(Buffered|Stream)BodyRoute|std::size_t&[ 	]+consumedBytes|Http1ServerConnectionPlan&[ 	]+connectionPlan")
 set(RULE_STALE_HTTP1_REQUEST_SEQUENCE_SCALARS
@@ -644,6 +646,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("response stream route outcome/payload tuple"
         "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
         "RouteStreamDispatchOutcome outcome;")
+    expect_match("Next restored an untyped stream outcome pointer"
+        "${RULE_STALE_NEXT_CONTINUATION_TYPE_ERASURE}"
+        "void* outcome;")
+    expect_match("Next restored an untyped route-owner pointer"
+        "${RULE_STALE_NEXT_CONTINUATION_TYPE_ERASURE}"
+        "const void* table;")
     expect_match("HTTP/1 session parallel completion tuple"
         "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
         "std::optional<std::uint16_t> committedStreamStatus;")
@@ -2514,6 +2522,13 @@ check_files_no_match("response-stream status must follow exclusive commit result
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+check_files_no_match("Next continuation state must remain fully typed"
+    "${RULE_STALE_NEXT_CONTINUATION_TYPE_ERASURE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Next.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp")
 check_files_no_match("HTTP/1 session completion must not split wire, connection, and buffer state"
     "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h"

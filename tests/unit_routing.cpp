@@ -422,6 +422,15 @@ public:
     }
 };
 
+class ChainMwOverrideAfterNext final
+    : public ruvia::Middleware<ChainMwOverrideAfterNext> {
+public:
+    ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
+        co_await next();
+        context.res(context.body("override"));
+    }
+};
+
 // Short-circuits: sets a response and does NOT call next().
 class ChainMwStop final : public ruvia::Middleware<ChainMwStop> {
 public:
@@ -492,6 +501,7 @@ std::string dispatchChain(
 struct StreamCaptureSink final {
     std::pmr::string scratch{std::pmr::get_default_resource()};
     bool committedFlag = false;
+    bool endedFlag = false;
     std::vector<std::string> writes;
 };
 
@@ -501,7 +511,14 @@ ruvia::Task<void> scWrite(void* target, std::string_view chunk) {
     sink->writes.emplace_back(chunk);
     co_return;
 }
-ruvia::Task<void> scEnd(void*, std::span<const ruvia::HttpHeaderView>) { co_return; }
+ruvia::Task<void> scEnd(
+    void* target,
+    std::span<const ruvia::HttpHeaderView>) {
+    auto* sink = static_cast<StreamCaptureSink*>(target);
+    sink->committedFlag = true;
+    sink->endedFlag = true;
+    co_return;
+}
 ruvia::Task<void> scSleep(void*, std::chrono::milliseconds) { co_return; }
 void scBind(void*, ruvia::Context*, ruvia::HttpResponse (*)(ruvia::Context&)) noexcept {}
 std::pmr::string& scScratch(void* target) noexcept {
@@ -516,6 +533,82 @@ ruvia::ResponseStreamWriter scMakeWriter(StreamCaptureSink& sink) noexcept {
     return ruvia::detail::StreamingAccess::makeResponseStreamWriter(
         &sink, &scWrite, &scEnd, &scSleep, &scBind, &scScratch,
         &scCommitted, &scAborted);
+}
+
+struct EmptyStreamDispatchObservation final {
+    bool handled{false};
+    bool buffered{false};
+    bool threw{false};
+    bool ended{false};
+    bool committed{false};
+    std::string bufferedBody;
+};
+
+EmptyStreamDispatchObservation dispatchEmptyStreamWith(
+    const ControllerMiddlewareDescriptor& middleware) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    impl.registerResponseStreamRoute(
+        HttpKnownMethod::kGet,
+        path("/empty-stream"),
+        ruvia::detail::RouteStreamHandler(nullptr, &dummyStreamHandler),
+        std::span<const ControllerMiddlewareDescriptor>{},
+        std::span<const ControllerMiddlewareDescriptor>(&middleware, 1));
+    impl.finalize();
+    const auto& table = impl.routeTable();
+
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    ruvia::HttpRequest request = ruvia::detail::HttpRequestAccess::make();
+    ruvia::detail::HttpRequestAccess::reset(request);
+    ruvia::detail::HttpRequestAccess::setMethod(request, "GET");
+    ruvia::detail::HttpRequestAccess::setPath(request, "/empty-stream");
+    ruvia::detail::HttpRequestAccess::setResource(
+        request,
+        memory.resource());
+
+    const auto resolution = table.resolve(
+        HttpKnownMethod::kGet,
+        "/empty-stream");
+    const auto* resolved = resolution.resolved();
+    if (resolved == nullptr) {
+        throw std::logic_error("empty stream test route did not resolve");
+    }
+
+    StreamCaptureSink sink;
+    auto writer = scMakeWriter(sink);
+    EmptyStreamDispatchObservation observation;
+    asio::io_context context(1);
+    asio::co_spawn(
+        context,
+        [&]() -> asio::awaitable<void> {
+            try {
+                auto result = co_await ruvia::detail::taskAsAwaitable(
+                    table.dispatchResponseStream(
+                        request,
+                        *resolved,
+                        memory,
+                        writer,
+                        {}));
+                observation.handled = result.handled() != nullptr;
+                if (auto* buffered = result.buffered()) {
+                    observation.buffered = true;
+                    auto response = std::move(*buffered).takeResponse();
+                    const auto body =
+                        ruvia::detail::responseBody(response).bytes();
+                    observation.bufferedBody.assign(
+                        body.data(),
+                        body.size());
+                }
+            } catch (...) {
+                observation.threw = true;
+            }
+        },
+        asio::detached);
+    context.run();
+    observation.ended = sink.endedFlag;
+    observation.committed = sink.committedFlag;
+    return observation;
 }
 
 // Writes a chunk (committing the stream) then throws mid-body.
@@ -629,7 +722,35 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     // The handler committed (wrote a chunk) before failing, and the failure was
     // surfaced (not masked as a clean complete stream).
     RUVIA_CHECK(sink.committedFlag);
+    RUVIA_CHECK(!sink.endedFlag);
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(stream_route_middleware_propagates_empty_handler_completion) {
+    g_chainOrder.clear();
+    const auto middleware =
+        ruvia::detail::makeMiddlewareDescriptor<ChainMwA>();
+    const auto observation = dispatchEmptyStreamWith(middleware);
+    RUVIA_CHECK(!observation.threw);
+    RUVIA_CHECK(observation.handled);
+    RUVIA_CHECK(!observation.buffered);
+    RUVIA_CHECK(observation.ended);
+    RUVIA_CHECK(observation.committed);
+    const std::vector<int> expected{1, -1};
+    RUVIA_CHECK(g_chainOrder == expected);
+}
+
+RUVIA_TEST(stream_route_uncommitted_handler_allows_middleware_override) {
+    const auto middleware =
+        ruvia::detail::makeMiddlewareDescriptor<
+            ChainMwOverrideAfterNext>();
+    const auto observation = dispatchEmptyStreamWith(middleware);
+    RUVIA_CHECK(!observation.threw);
+    RUVIA_CHECK(!observation.handled);
+    RUVIA_CHECK(observation.buffered);
+    RUVIA_CHECK(!observation.ended);
+    RUVIA_CHECK(!observation.committed);
+    RUVIA_CHECK_EQ(observation.bufferedBody, std::string("override"));
 }
 
 RUVIA_TEST(middleware_chain_maps_middleware_exception_to_error_response) {

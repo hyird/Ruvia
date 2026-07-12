@@ -7,13 +7,29 @@
 
 namespace ruvia::detail {
 
-// Transient continuation state for the middleware chain. The final dispatch
-// result below is discriminated independently and never stores this enum beside
-// a response payload.
-enum class StreamMiddlewareDisposition {
-    kBufferedResponse,
-    kStreamHandled
+// One chain-owned bit records that `next()` reached the stream/WebSocket
+// handler even when it emitted no bytes. RouteTable is the sole mutator; Next
+// carries only a typed pointer to this state, so continuation dispatch has no
+// erased outcome channel or extra request-time storage.
+class StreamMiddlewareChainState final {
+public:
+    [[nodiscard]] constexpr bool handlerInvoked() const noexcept {
+        return handlerInvoked_;
+    }
+
+private:
+    friend class RouteTable;
+
+    constexpr StreamMiddlewareChainState() noexcept = default;
+
+    constexpr void markHandlerInvoked() noexcept {
+        handlerInvoked_ = true;
+    }
+
+    bool handlerInvoked_{false};
 };
+
+static_assert(sizeof(StreamMiddlewareChainState) == sizeof(bool));
 
 class StreamRouteHandled final {
 private:
