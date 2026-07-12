@@ -1,19 +1,22 @@
 #include "test_harness.h"
 
 #include <cstdint>
+#include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 
 #include "ruvia/web/detail/json/JsonNumber.h"
 #include "ruvia/web/detail/json/JsonSkip.h"
 #include "ruvia/web/detail/json/JsonString.h"
+#include "ruvia/web/detail/model/JsonParser.h"
 
 namespace {
 
-std::string decodeJson(std::string_view raw, bool& ok) {
-    std::string out;
-    ok = ruvia::detail::decodeJsonString(raw, out);
-    return out;
+std::optional<std::pmr::string> decodeJson(std::string_view raw) {
+    return ruvia::detail::decodeJsonString(
+        raw,
+        std::pmr::get_default_resource());
 }
 
 }  // namespace
@@ -156,16 +159,19 @@ RUVIA_TEST(json_string_raw_rejects_control_and_unterminated) {
 }
 
 RUVIA_TEST(json_string_validates_utf8_content) {
-    bool ok = false;
     // Valid raw UTF-8 in string content passes through unchanged (2/3/4-byte).
-    RUVIA_CHECK_EQ(decodeJson(std::string_view("caf\xC3\xA9", 5), ok), std::string("caf\xC3\xA9"));  // é
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xE2\x82\xAC", 3), ok), std::string("\xE2\x82\xAC"));  // €
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xF0\x9F\x98\x80", 4), ok), std::string("\xF0\x9F\x98\x80"));  // U+1F600
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(decodeJson(std::string_view("\xF4\x8F\xBF\xBF", 4), ok), std::string("\xF4\x8F\xBF\xBF"));  // U+10FFFF
-    RUVIA_CHECK(ok);
+    const auto eAcute = decodeJson(std::string_view("caf\xC3\xA9", 5));
+    RUVIA_CHECK(eAcute.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*eAcute), std::string_view("caf\xC3\xA9", 5));  // é
+    const auto euro = decodeJson(std::string_view("\xE2\x82\xAC", 3));
+    RUVIA_CHECK(euro.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*euro), std::string_view("\xE2\x82\xAC", 3));  // €
+    const auto smile = decodeJson(std::string_view("\xF0\x9F\x98\x80", 4));
+    RUVIA_CHECK(smile.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*smile), std::string_view("\xF0\x9F\x98\x80", 4));  // U+1F600
+    const auto unicodeMax = decodeJson(std::string_view("\xF4\x8F\xBF\xBF", 4));
+    RUVIA_CHECK(unicodeMax.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*unicodeMax), std::string_view("\xF4\x8F\xBF\xBF", 4));  // U+10FFFF
 
     // Ill-formed UTF-8 is rejected (RFC 8259 §8.1 / Unicode Table 3-7).
     const std::string_view bad[] = {
@@ -180,8 +186,7 @@ RUVIA_TEST(json_string_validates_utf8_content) {
         std::string_view("\xC3", 1),              // truncated 2-byte
     };
     for (const auto b : bad) {
-        (void)decodeJson(b, ok);
-        RUVIA_CHECK(!ok);
+        RUVIA_CHECK(!decodeJson(b).has_value());
     }
 
     // The validation scan (parseJsonStringRaw) applies the same rule.
@@ -202,63 +207,60 @@ RUVIA_TEST(json_string_validates_utf8_content) {
 
 // --- String decoding (escape expansion) ----------------------------------
 RUVIA_TEST(json_decode_simple_escapes) {
-    bool ok = false;
-    RUVIA_CHECK_EQ(decodeJson("a\\nb\\tc", ok), std::string("a\nb\tc"));
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(decodeJson("quote\\\"slash\\\\fwd\\/", ok), std::string("quote\"slash\\fwd/"));
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(decodeJson("\\b\\f\\r", ok), std::string("\b\f\r"));
-    RUVIA_CHECK(ok);
+    const auto whitespace = decodeJson("a\\nb\\tc");
+    RUVIA_CHECK(whitespace.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*whitespace), std::string_view("a\nb\tc"));
+    const auto punctuation = decodeJson("quote\\\"slash\\\\fwd\\/");
+    RUVIA_CHECK(punctuation.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*punctuation), std::string_view("quote\"slash\\fwd/"));
+    const auto controls = decodeJson("\\b\\f\\r");
+    RUVIA_CHECK(controls.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*controls), std::string_view("\b\f\r", 3));
 }
 
 RUVIA_TEST(json_decode_bmp_escape) {
-    bool ok = false;
     // U+00E9 (é) -> C3 A9
-    const std::string r = decodeJson("caf\\u00e9", ok);
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(r, std::string("caf\xC3\xA9"));
+    const auto r = decodeJson("caf\\u00e9");
+    RUVIA_CHECK(r.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*r), std::string_view("caf\xC3\xA9", 5));
     // U+20AC (€) -> E2 82 AC
-    const std::string e = decodeJson("\\u20ac", ok);
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(e, std::string("\xE2\x82\xAC"));
+    const auto e = decodeJson("\\u20ac");
+    RUVIA_CHECK(e.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*e), std::string_view("\xE2\x82\xAC", 3));
 }
 
 RUVIA_TEST(json_decode_surrogate_pair) {
-    bool ok = false;
     // U+1F600 😀 -> F0 9F 98 80
-    const std::string r = decodeJson("\\ud83d\\ude00", ok);
-    RUVIA_CHECK(ok);
-    RUVIA_CHECK_EQ(r, std::string("\xF0\x9F\x98\x80"));
+    const auto r = decodeJson("\\ud83d\\ude00");
+    RUVIA_CHECK(r.has_value());
+    RUVIA_CHECK_EQ(std::string_view(*r), std::string_view("\xF0\x9F\x98\x80", 4));
 }
 
 RUVIA_TEST(json_decode_invalid_surrogates) {
-    bool ok = true;
-    (void)decodeJson("\\ud83d", ok);          // lone high surrogate
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("\\ude00", ok);          // lone low surrogate
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("\\ud83dx", ok);         // high not followed by \u
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("\\ud83d\\ud83d", ok);   // high followed by high
-    RUVIA_CHECK(!ok);
+    RUVIA_CHECK(!decodeJson("\\ud83d").has_value());          // lone high surrogate
+    RUVIA_CHECK(!decodeJson("\\ude00").has_value());          // lone low surrogate
+    RUVIA_CHECK(!decodeJson("\\ud83dx").has_value());         // high not followed by \u
+    RUVIA_CHECK(!decodeJson("\\ud83d\\ud83d").has_value()); // high followed by high
 }
 
 RUVIA_TEST(json_decode_rejects_bad_escapes) {
-    bool ok = true;
-    (void)decodeJson("\\x", ok);        // unknown escape
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("\\u12", ok);      // truncated \u
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("\\u12zz", ok);    // non-hex in \u
-    RUVIA_CHECK(!ok);
-    ok = true;
-    (void)decodeJson("trailing\\", ok); // dangling backslash
-    RUVIA_CHECK(!ok);
+    RUVIA_CHECK(!decodeJson("\\x").has_value());        // unknown escape
+    RUVIA_CHECK(!decodeJson("\\u12").has_value());      // truncated \u
+    RUVIA_CHECK(!decodeJson("\\u12zz").has_value());    // non-hex in \u
+    RUVIA_CHECK(!decodeJson("trailing\\").has_value()); // dangling backslash
+}
+
+RUVIA_TEST(json_string_decode_failure_preserves_existing_model_value) {
+    auto* const resource = std::pmr::get_default_resource();
+    ruvia::String value("original", resource);
+
+    std::string_view malformed = R"("prefix\ud83d")";
+    RUVIA_CHECK(!ruvia::detail::parseJsonValue(malformed, value, resource));
+    RUVIA_CHECK_EQ(value.view(), std::string_view("original"));
+
+    std::string_view valid = R"("decoded\u0020value")";
+    RUVIA_CHECK(ruvia::detail::parseJsonValue(valid, value, resource));
+    RUVIA_CHECK_EQ(value.view(), std::string_view("decoded value"));
 }
 
 RUVIA_TEST(json_appendUtf8_boundaries) {

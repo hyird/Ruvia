@@ -2,8 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <optional>
+#include <string>
 #include <string_view>
 
+#include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/Hex.h"
 #include "ruvia/web/detail/json/JsonLex.h"
 
@@ -156,21 +160,25 @@ void appendUtf8(OutputT& output, std::uint32_t codePoint) {
     }
 }
 
-template <typename OutputT>
-[[nodiscard]] bool decodeJsonString(std::string_view input, OutputT& output) {
-    output.clear();
+// Returns the complete decoded string or no value for malformed escape/UTF-8
+// input. Mutable caller storage is intentionally not accepted: a failure must
+// never expose the prefix produced before the malformed byte sequence.
+[[nodiscard]] inline std::optional<std::pmr::string> decodeJsonString(
+    std::string_view input,
+    std::pmr::memory_resource* resource) {
+    std::pmr::string output(pmrResourceOrDefault(resource));
     output.reserve(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
         const char c = input[i];
         if (c != '\\') {
             const auto uc = static_cast<unsigned char>(c);
             if (uc < 0x20) {
-                return false;
+                return std::nullopt;
             }
             if (uc >= 0x80) {
                 const auto length = jsonUtf8SequenceLength(input, i);
                 if (length == 0) {
-                    return false;
+                    return std::nullopt;
                 }
                 for (std::size_t k = 0; k < length; ++k) {
                     output.push_back(input[i + k]);
@@ -183,7 +191,7 @@ template <typename OutputT>
         }
 
         if (i + 1 >= input.size()) {
-            return false;
+            return std::nullopt;
         }
         const char escape = input[++i];
         switch (escape) {
@@ -210,30 +218,30 @@ template <typename OutputT>
             case 'u': {
                 std::uint32_t codePoint = 0;
                 if (!readJsonHex4(input.substr(i + 1), codePoint)) {
-                    return false;
+                    return std::nullopt;
                 }
                 i += 4;
                 if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
                     if (i + 6 >= input.size() || input[i + 1] != '\\' || input[i + 2] != 'u') {
-                        return false;
+                        return std::nullopt;
                     }
                     std::uint32_t low = 0;
                     if (!readJsonHex4(input.substr(i + 3), low) || low < 0xDC00 || low > 0xDFFF) {
-                        return false;
+                        return std::nullopt;
                     }
                     i += 6;
                     codePoint = 0x10000 + (((codePoint - 0xD800) << 10) | (low - 0xDC00));
                 } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
-                    return false;
+                    return std::nullopt;
                 }
                 appendUtf8(output, codePoint);
                 break;
             }
             default:
-                return false;
+                return std::nullopt;
         }
     }
-    return true;
+    return output;
 }
 
 [[nodiscard]] inline bool skipJsonString(std::string_view& input) noexcept {

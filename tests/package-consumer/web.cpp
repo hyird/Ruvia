@@ -30,6 +30,7 @@
 #include <ruvia/web/detail/http/ContextCapabilities.h>
 #include <ruvia/web/detail/http/ContextServices.h>
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
+#include <ruvia/web/detail/json/JsonString.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
 #include <ruvia/web/detail/router/RouteStreamResult.h>
@@ -82,6 +83,11 @@ concept HasLooseRouteResolutionAccessors = requires(
 template <typename Entry>
 concept HasStaticRootEntryFoundFlag = requires(const Entry& entry) {
     entry.found();
+};
+
+template <typename Output>
+concept AcceptsJsonDecodeOutputParameter = requires(Output& output) {
+    ruvia::detail::decodeJsonString(std::string_view{}, output);
 };
 
 template <typename Services>
@@ -528,6 +534,12 @@ static_assert(std::same_as<
         std::declval<const ruvia::StaticRoot&>(),
         std::string_view{})),
     std::optional<ruvia::detail::StaticRootEntryView>>);
+static_assert(!AcceptsJsonDecodeOutputParameter<std::pmr::string>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeJsonString(
+        std::string_view{},
+        std::declval<std::pmr::memory_resource*>())),
+    std::optional<std::pmr::string>>);
 
 std::string_view peerAddress(const ruvia::Context& context) {
     return ruvia::getConnInfo(context).remote().address();
@@ -608,6 +620,17 @@ int main() {
         ruvia::detail::responseBody(compressed).ownedBytes() == nullptr ||
         ruvia::detail::responseBody(compressed).bytes().empty()) {
         return 10;
+    }
+    const auto decodedJson = ruvia::detail::decodeJsonString(
+        "installed\\u0020decoder",
+        std::pmr::get_default_resource());
+    const auto malformedJson = ruvia::detail::decodeJsonString(
+        "prefix\\ud83d",
+        std::pmr::get_default_resource());
+    if (!decodedJson.has_value() ||
+        std::string_view(*decodedJson) != "installed decoder" ||
+        malformedJson.has_value()) {
+        return 11;
     }
     ruvia::app().setHttpListenPort(8080);
     return 0;

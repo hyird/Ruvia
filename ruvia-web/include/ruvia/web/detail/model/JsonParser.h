@@ -123,7 +123,12 @@ template <typename T>
             value.assignView(raw);
             return true;
         }
-        return decodeJsonString(raw, value.resetOwned());
+        auto decoded = decodeJsonString(raw, resource);
+        if (!decoded.has_value()) {
+            return false;
+        }
+        value.assignOwned(std::move(*decoded));
+        return true;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {
         return parseJsonStringView(input, value);
     } else if constexpr (isRuviaArray<FieldT>) {

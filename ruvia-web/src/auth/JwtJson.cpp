@@ -26,23 +26,23 @@ namespace detail {
     return parsed;
 }
 
-[[nodiscard]] bool jwtDecodeJsonStringValue(std::pmr::string& target, std::string_view value) {
+[[nodiscard]] std::optional<std::pmr::string> jwtDecodeJsonStringValue(
+    std::string_view value,
+    std::pmr::memory_resource* resource) {
     std::string_view raw;
     bool escaped = false;
     if (!parseJsonStringRaw(value, raw, escaped)) {
-        return false;
+        return std::nullopt;
     }
     skipJsonWhitespace(value);
     if (!value.empty()) {
-        return false;
+        return std::nullopt;
     }
 
-    target.clear();
     if (!escaped) {
-        target.assign(raw.data(), raw.size());
-        return true;
+        return std::pmr::string(raw, resource);
     }
-    return decodeJsonString(raw, target);
+    return decodeJsonString(raw, resource);
 }
 
 [[nodiscard]] std::optional<std::string_view> jwtRawJsonStringValue(std::string_view value) noexcept {
@@ -141,9 +141,8 @@ void jwtDecodeAudiences(
         return;
     }
     if (value.front() != '[') {
-        std::pmr::string single(resource);
-        if (detail::jwtDecodeJsonStringValue(single, value)) {
-            out.push_back(std::move(single));
+        if (auto single = detail::jwtDecodeJsonStringValue(value, resource)) {
+            out.push_back(std::move(*single));
         }
         return;
     }
@@ -160,16 +159,17 @@ void jwtDecodeAudiences(
             out.clear();  // a non-string array element is not a valid audience
             return;
         }
-        std::pmr::string decoded(resource);
+        std::optional<std::pmr::string> decoded;
         if (escaped) {
-            if (!detail::decodeJsonString(raw, decoded)) {
+            decoded = detail::decodeJsonString(raw, resource);
+            if (!decoded.has_value()) {
                 out.clear();
                 return;
             }
         } else {
-            decoded.assign(raw.data(), raw.size());
+            decoded.emplace(raw, resource);
         }
-        out.push_back(std::move(decoded));
+        out.push_back(std::move(*decoded));
 
         detail::skipJsonWhitespace(value);
         if (value.empty()) {
@@ -215,14 +215,18 @@ JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, st
             if (key == "iss") {
                 if (!issuerSeen) {
                     issuerSeen = true;
-                    (void)detail::jwtDecodeJsonStringValue(payload.issuer_, value);
+                    if (auto issuer = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                        payload.issuer_ = std::move(*issuer);
+                    }
                 }
                 return true;
             }
             if (key == "sub") {
                 if (!subjectSeen) {
                     subjectSeen = true;
-                    (void)detail::jwtDecodeJsonStringValue(payload.subject_, value);
+                    if (auto subject = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                        payload.subject_ = std::move(*subject);
+                    }
                 }
                 return true;
             }
@@ -236,7 +240,9 @@ JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, st
             if (key == "jti") {
                 if (!idSeen) {
                     idSeen = true;
-                    (void)detail::jwtDecodeJsonStringValue(payload.id_, value);
+                    if (auto id = detail::jwtDecodeJsonStringValue(value, resolved)) {
+                        payload.id_ = std::move(*id);
+                    }
                 }
                 return true;
             }
@@ -268,11 +274,12 @@ JwtPayload detail::JwtPayloadAccess::decodePayloadJson(std::string_view json, st
                 return true;
             }
             if (!detail::jwtIsReservedClaim(key)) {
-                std::pmr::string claimValue(resolved);
-                if (detail::jwtDecodeJsonStringValue(claimValue, value)) {
+                if (auto claimValue = detail::jwtDecodeJsonStringValue(value, resolved)) {
                     std::pmr::string claimName(resolved);
                     claimName.assign(key.data(), key.size());
-                    payload.claims_.push_back(detail::JwtPayloadAccess::claim(std::move(claimName), std::move(claimValue)));
+                    payload.claims_.push_back(detail::JwtPayloadAccess::claim(
+                        std::move(claimName),
+                        std::move(*claimValue)));
                 }
             }
             return true;
