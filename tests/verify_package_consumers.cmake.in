@@ -920,6 +920,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamState.h")
     set(_installed_http1_stream_route_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
+    set(_installed_http1_request_completion_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h")
+    set(_installed_http1_body_completion_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h")
+    set(_installed_http1_buffered_body_route_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerBufferedRoute.h")
+    set(_installed_http1_stream_body_route_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h")
+    set(_installed_http1_websocket_route_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
     set(_installed_http1_stream_session_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
     set(_installed_http2_stream_session_path
@@ -931,6 +941,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_response_stream_dispatch_path}"
             "${_installed_response_stream_state_path}"
             "${_installed_http1_stream_route_path}"
+            "${_installed_http1_request_completion_path}"
+            "${_installed_http1_body_completion_path}"
+            "${_installed_http1_buffered_body_route_path}"
+            "${_installed_http1_stream_body_route_path}"
+            "${_installed_http1_websocket_route_path}"
             "${_installed_http1_stream_session_path}"
             "${_installed_http2_stream_session_path}"
             "${_installed_http2_response_stream_sink_path}")
@@ -947,6 +962,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_response_stream_state)
     file(READ "${_installed_http1_stream_route_path}"
         _installed_http1_stream_route)
+    file(READ "${_installed_http1_request_completion_path}"
+        _installed_http1_request_completion)
+    file(READ "${_installed_http1_body_completion_path}"
+        _installed_http1_body_completion)
+    file(READ "${_installed_http1_buffered_body_route_path}"
+        _installed_http1_buffered_body_route)
+    file(READ "${_installed_http1_stream_body_route_path}"
+        _installed_http1_stream_body_route)
+    file(READ "${_installed_http1_websocket_route_path}"
+        _installed_http1_websocket_route)
     file(READ "${_installed_http1_stream_session_path}"
         _installed_http1_stream_session)
     file(READ "${_installed_http2_stream_session_path}"
@@ -972,11 +997,55 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_response_stream_state MATCHES
            "std::optional<CommittedState> committed_" OR
        NOT _installed_http1_stream_route MATCHES
-           "HttpResponseStreamCommittedRoute" OR
+           "Task<Http1SessionRequestCompletion>" OR
+       NOT _installed_http1_stream_route MATCHES
+           "makeCommittedStream" OR
+       NOT _installed_http1_request_completion MATCHES
+           "class Http1SessionRequestCompletion final" OR
+       NOT _installed_http1_request_completion MATCHES
+           "class Http1CommittedStreamResponse final" OR
+       NOT _installed_http1_request_completion MATCHES
+           "class Http1RequestBufferCompletion final" OR
+       NOT _installed_http1_request_completion MATCHES
+           "Http1RequestBufferDiscarded" OR
+       NOT _installed_http1_request_completion MATCHES
+           "Http1RequestBufferCompaction" OR
+       NOT _installed_http1_request_completion MATCHES
+           "Http1RequestBufferRestored" OR
+       NOT _installed_http1_request_completion MATCHES
+           "makeBufferedClosing" OR
+       NOT _installed_http1_request_completion MATCHES
+           "makeBufferedUnrestored" OR
+       NOT _installed_http1_request_completion MATCHES
+           "makeBufferedRestored" OR
+       NOT _installed_http1_request_completion MATCHES
+           "makeCommittedStream" OR
+       NOT _installed_http1_request_completion MATCHES
+           "connectionPlan[(][)] const noexcept" OR
+       NOT _installed_http1_request_completion MATCHES
+           "bufferCompletion[(][)] const noexcept" OR
+       NOT _installed_http1_body_completion MATCHES
+           "Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute" OR
+       NOT _installed_http1_buffered_body_route MATCHES
+           "Task<Http1SessionRequestCompletion> dispatchHttpBufferedBodyRoute" OR
+       NOT _installed_http1_stream_body_route MATCHES
+           "Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "class HttpWebSocketBufferedResponse final" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "class HttpWebSocketSessionFinished final" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "class HttpWebSocketRouteResult final" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "bufferedResponse[(][)] const noexcept" OR
+       NOT _installed_http1_websocket_route MATCHES
+           "sessionFinished[(][)] const noexcept" OR
        NOT _installed_http1_stream_session MATCHES
-           "std::optional<std::uint16_t> committedStreamStatus" OR
+           "std::optional<Http1SessionRequestCompletion> requestCompletion" OR
        NOT _installed_http1_stream_session MATCHES
-           "[*]committedStreamStatus, requestStart" OR
+           "committed->status[(][)]" OR
+       NOT _installed_http1_stream_session MATCHES
+           "applyReusableHttp1RequestBufferCompletion" OR
        NOT _installed_http2_stream_session MATCHES
            "completed->status[(][)]" OR
        NOT _installed_http2_stream_session MATCHES
@@ -985,6 +1054,21 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "failed->status[(][)]")
         message(FATAL_ERROR
             "installed Web package restored reconstructed response-stream status")
+    endif()
+    if(_installed_http1_stream_route MATCHES
+           "HttpResponseStream(RouteResult|BufferedRoute|CommittedRoute)" OR
+       _installed_http1_stream_session MATCHES
+           "committedStreamStatus|bufferAlreadyCompacted" OR
+       _installed_http1_body_completion MATCHES
+           "std::size_t&[ 	]+consumedBytes|bool&[ 	]+bufferAlreadyCompacted" OR
+       _installed_http1_buffered_body_route MATCHES
+           "Task<void>[ 	]+dispatchHttpBufferedBodyRoute" OR
+       _installed_http1_stream_body_route MATCHES
+           "Task<void>[ 	]+dispatchHttpStreamBodyRoute" OR
+       _installed_http1_websocket_route MATCHES
+           "enum class[ 	]+HttpWebSocketRouteResult|HttpWebSocketRouteResult::k")
+        message(FATAL_ERROR
+            "installed Web package restored split HTTP/1 request completion state")
     endif()
     if(NOT _installed_http2_response_stream_sink MATCHES
            "finishResponse[(]streamId_, trailers[)]" OR

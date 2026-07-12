@@ -17,7 +17,7 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> dispatchHttpBufferedBodyRoute(
+Task<Http1SessionRequestCompletion> dispatchHttpBufferedBodyRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
@@ -30,16 +30,11 @@ Task<void> dispatchHttpBufferedBodyRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     HttpResponse& response,
-    Http1ServerConnectionPlan& connectionPlan,
-    std::size_t& requestCount,
-    std::size_t& consumedBytes,
-    bool& bufferAlreadyCompacted) {
-    const auto bodyAndPipeline = beginHttpBodyRoute(
+    std::size_t& requestCount) {
+    const auto bodyAndPipeline = httpBodyAndPipeline(
         parsed,
         readBuffer,
-        usedBytes,
-        connectionPlan,
-        consumedBytes);
+        usedBytes);
 
     // The body reader/loader are this transport's own state, and their setup can
     // throw (e.g. constructing a transfer-coding decoder for a bad
@@ -63,7 +58,7 @@ Task<void> dispatchHttpBufferedBodyRoute(
     }
 
     if (setupException != nullptr) {
-        connectionPlan = co_await completeFailedHttpBodyRoute(
+        co_return co_await completeFailedHttpBodyRoute(
             scannerEntry,
             setupException,
             parsed,
@@ -71,7 +66,6 @@ Task<void> dispatchHttpBufferedBodyRoute(
             requestMemory,
             baseRouteServices,
             response);
-        co_return;
     }
 
     response = co_await routes.dispatchBuffered(
@@ -80,17 +74,15 @@ Task<void> dispatchHttpBufferedBodyRoute(
         requestMemory,
         bodyState.withLoader(baseRouteServices));
 
-    connectionPlan = completeSuccessfulHttpBodyRoute(
+    co_return completeSuccessfulHttpBodyRoute(
         scannerEntry,
         response,
-        connectionPlan,
+        parsed.connectionPlan,
         requestCount,
         options.keepaliveRequests,
         bodyState.consumption(),
         readBuffer,
         usedBytes,
-        consumedBytes,
-        bufferAlreadyCompacted,
         [&bodyState](std::pmr::string& buffer, std::size_t& size) {
             bodyState.restorePipeline(buffer, size);
         });

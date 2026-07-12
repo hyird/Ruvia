@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <memory>
 
+#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpResponseCompression.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -102,6 +104,28 @@ void compactConnectionReadBuffer(
         std::memmove(readBuffer.data(), readBuffer.data() + consumedBytes, remainingBytes);
     }
     usedBytes = remainingBytes;
+}
+
+void applyReusableHttp1RequestBufferCompletion(
+    const Http1RequestBufferCompletion& completion,
+    std::pmr::string& readBuffer,
+    std::size_t& usedBytes) noexcept {
+    if (const auto* compaction = completion.compaction()) {
+        if (compaction->consumedBytes() > usedBytes) {
+            std::terminate();
+        }
+        compactConnectionReadBuffer(
+            readBuffer,
+            usedBytes,
+            compaction->consumedBytes());
+        return;
+    }
+    if (completion.restored() != nullptr) {
+        return;
+    }
+    // A discarded buffer is valid only when the connection plan closes. The
+    // session must never reach reusable cleanup with that alternative.
+    std::terminate();
 }
 
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) {

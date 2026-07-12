@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpResponseStreamSink.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
@@ -13,78 +14,13 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <cstddef>
-#include <cstdint>
 #include <stdexcept>
 #include <utility>
-#include <variant>
 
 namespace ruvia::detail {
 
-class HttpResponseStreamBufferedRoute final {
-private:
-    friend class HttpResponseStreamRouteResult;
-
-    constexpr HttpResponseStreamBufferedRoute() noexcept = default;
-};
-
-class HttpResponseStreamCommittedRoute final {
-public:
-    [[nodiscard]] constexpr std::uint16_t status() const noexcept {
-        return status_;
-    }
-
-private:
-    friend class HttpResponseStreamRouteResult;
-
-    explicit constexpr HttpResponseStreamCommittedRoute(
-        std::uint16_t status) noexcept
-        : status_(status) {}
-
-    std::uint16_t status_;
-};
-
-// The H1 route either leaves one buffered response for the session writer or has
-// already committed a stream head with the exact wire status. Connection reuse is
-// carried separately by the HTTP-owned connection plan output.
-class HttpResponseStreamRouteResult final {
-public:
-    [[nodiscard]] static constexpr HttpResponseStreamRouteResult
-    makeBuffered() noexcept {
-        return HttpResponseStreamRouteResult(
-            HttpResponseStreamBufferedRoute{});
-    }
-
-    [[nodiscard]] static constexpr HttpResponseStreamRouteResult
-    makeCommitted(std::uint16_t status) noexcept {
-        return HttpResponseStreamRouteResult(
-            HttpResponseStreamCommittedRoute(status));
-    }
-
-    [[nodiscard]] constexpr const HttpResponseStreamBufferedRoute*
-    buffered() const noexcept {
-        return std::get_if<HttpResponseStreamBufferedRoute>(&value_);
-    }
-
-    [[nodiscard]] constexpr const HttpResponseStreamCommittedRoute*
-    committed() const noexcept {
-        return std::get_if<HttpResponseStreamCommittedRoute>(&value_);
-    }
-
-private:
-    using Value = std::variant<
-        HttpResponseStreamBufferedRoute,
-        HttpResponseStreamCommittedRoute>;
-
-    template <typename Alternative>
-    explicit constexpr HttpResponseStreamRouteResult(
-        Alternative alternative) noexcept
-        : value_(std::move(alternative)) {}
-
-    Value value_;
-};
-
 template <typename Stream>
-Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
+Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     Stream& stream,
     WorkerMemory& memory,
     ResponseHeadBuffer& responseHead,
@@ -96,12 +32,11 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     ContextServices baseRouteServices,
     const HttpServerOptions& options,
     HttpResponse& response,
-    Http1ServerConnectionPlan& connectionPlan,
     std::size_t& requestCount) {
     const auto streamPlan = http1PlanResponseStream(
         parsed,
         nextHttp1ResponseClosePolicy(requestCount, options.keepaliveRequests));
-    connectionPlan = streamPlan.requestConnectionPlan();
+    auto connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().responseStream();
@@ -125,13 +60,17 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
 
     if (const auto* failed = result.failedAfterCommit()) {
         connectionPlan = responseSink.connectionPlan().requireClose();
-        co_return HttpResponseStreamRouteResult::makeCommitted(
-            failed->status());
+        co_return Http1SessionRequestCompletion::makeCommittedStream(
+            connectionPlan,
+            failed->status(),
+            parsed.headerBytes);
     }
     if (const auto* peer = result.peerAbortedAfterCommit()) {
         connectionPlan = responseSink.connectionPlan().requireClose();
-        co_return HttpResponseStreamRouteResult::makeCommitted(
-            peer->status());
+        co_return Http1SessionRequestCompletion::makeCommittedStream(
+            connectionPlan,
+            peer->status(),
+            parsed.headerBytes);
     }
     if (result.peerAbortedBeforeCommit() != nullptr) {
         throw std::logic_error(
@@ -143,7 +82,8 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             response,
             streamPlan.requestConnectionPlan().requireClose());
         scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::makeBuffered();
+        co_return Http1SessionRequestCompletion::makeBufferedClosing(
+            connectionPlan);
     }
     if (auto* buffered = result.buffered()) {
         response = std::move(*buffered).takeResponse();
@@ -153,7 +93,9 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
             requestCount,
             options.keepaliveRequests);
         scannerEntry.touch();
-        co_return HttpResponseStreamRouteResult::makeBuffered();
+        co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
+            connectionPlan,
+            parsed.headerBytes);
     }
 
     const auto* completed = result.completed();
@@ -168,8 +110,10 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     // the matching Connection signal.
     ++requestCount;
     connectionPlan = responseSink.connectionPlan();
-    co_return HttpResponseStreamRouteResult::makeCommitted(
-        completed->status());
+    co_return Http1SessionRequestCompletion::makeCommittedStream(
+        connectionPlan,
+        completed->status(),
+        parsed.headerBytes);
 }
 
 }  // namespace ruvia::detail

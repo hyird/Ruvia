@@ -202,6 +202,18 @@ Buffered HTTP/1 records likewise consume `Http1BufferedResponseWriteResult`: a c
 later body failure has the plan's committed status, while a transport failure during a partial head
 has none.
 
+The HTTP/1 session now receives one `Http1SessionRequestCompletion` from body, response-stream, and
+WebSocket dispatch. Its wire alternative is exactly `Http1BufferedResponseReady` or
+`Http1CommittedStreamResponse`; only the committed-stream alternative exposes the status already
+written on the wire. The same completion owns the final `Http1ServerConnectionPlan` and exactly one
+read-buffer outcome: `Http1RequestBufferDiscarded` for a closing connection,
+`Http1RequestBufferCompaction` with the sole consumed-byte count, or
+`Http1RequestBufferRestored` when a body runtime has already moved the pipelined suffix. The session
+therefore cannot combine an optional committed status with a stale `consumedBytes` and
+`bufferAlreadyCompacted` flag, and route helpers no longer return one outcome while mutating a
+separate connection-plan out-parameter. This remains a fixed-size, allocation-free Web runtime
+contract; HTTP framing and persistence decisions still come only from `ruvia-http` plans.
+
 Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
 `HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,
 `HttpOwnedResponseBytes`, `HttpOwnedResponseFile`, or `HttpBorrowedResponseFile`. Owned byte and

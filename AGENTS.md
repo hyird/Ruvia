@@ -836,6 +836,17 @@ pre-commit peer abort 不携带 payload，completed/peer-aborted-after-commit/fa
 submitted write plan 的 exact status。禁止恢复 `Task<void> submitResponse` 后无条件读取可变
 `response.status()` 的调用链，也禁止让早退 error/rate-limit 分支绕过统一的 buffered preparation。
 
+HTTP/1 session 每次 route dispatch 的终态必须由不可默认构造的
+`Http1SessionRequestCompletion` 一次性提交。wire alternative 只能是
+`Http1BufferedResponseReady` 或 `Http1CommittedStreamResponse`，且只有 committed stream 可以暴露
+exact status；同一完成对象必须携带最终 `Http1ServerConnectionPlan`，并将读缓冲终态判别为
+`Http1RequestBufferDiscarded`、`Http1RequestBufferCompaction` 或 `Http1RequestBufferRestored`，只有
+compaction 可以暴露 `consumedBytes()`。closing connection 必须 discard，未移动的 reusable pipeline
+必须 compact，body runtime 已恢复的 reusable pipeline 不得二次 compact。禁止恢复 session 局部
+`optional committedStreamStatus + consumedBytes + bufferAlreadyCompacted` tuple，禁止 body/stream/
+WebSocket route 用返回值之外的 `connectionPlan`、`consumedBytes` 或 compact flag out-parameter 回填
+另一份完成状态；这些 Web runtime alternative 不得下沉到 `ruvia-http`。
+
 ## 性能原则
 
 - 请求热路径目标是 0 抽象成本。
