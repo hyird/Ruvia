@@ -88,12 +88,12 @@ RUVIA_TEST(cors_negative_max_age_rejected) {
 namespace {
 
 using ruvia::HttpResponse;
-using ruvia::HttpServerOptions;
+using ruvia::CorsConfig;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::applyCorsHeaders;
 
-HttpServerOptions::Cors corsOptions(bool enabled, std::string_view allowOrigin, bool credentials) {
-    HttpServerOptions::Cors cors;
+CorsConfig corsOptions(bool enabled, std::string_view allowOrigin, bool credentials) {
+    CorsConfig cors;
     cors.enabled = enabled;
     cors.allowOrigin.assign(allowOrigin.data(), allowOrigin.size());
     cors.allowCredentials = credentials;

@@ -25,7 +25,7 @@ void setCorsMaxAge(HttpResponse& response, std::chrono::seconds maxAge) {
 
 }  // namespace
 
-void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const HttpServerOptions::Cors& cors) {
+void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsConfig& cors) {
     if (!cors.enabled) {
         return;
     }

@@ -37,20 +37,6 @@ struct TlsConfig final {
     std::filesystem::path verifyFile;
 };
 
-struct CompressionConfig final {
-    bool enabled{true};
-    std::size_t minBytes{1024};
-};
-
-struct CorsConfig final {
-    bool enabled{false};
-    std::pmr::string allowOrigin{"*"};
-    std::pmr::string allowHeaders;
-    std::pmr::string exposeHeaders;
-    std::chrono::seconds maxAge{std::chrono::seconds(0)};
-    bool allowCredentials{false};
-};
-
 struct DocumentRootConfig final {
     std::filesystem::path root;
     StaticRootOptions staticOptions;

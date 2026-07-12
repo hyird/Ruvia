@@ -77,8 +77,7 @@ App& App::setCompression(CompressionConfig config) {
         *state_,
         "cannot change compression config while app is running",
         [config](detail::AppState& state) {
-            state.options.compression.enabled = config.enabled;
-            state.options.compression.minBytes = config.minBytes;
+            state.options.compression = config;
         });
 }
 
@@ -89,13 +88,7 @@ App& App::setCors(CorsConfig config) {
         "cannot change CORS config while app is running",
         [&config](detail::AppState& state) {
             detail::validateCorsConfig(config);
-
-            state.options.cors.enabled = config.enabled;
-            state.options.cors.allowOrigin = std::move(config.allowOrigin);
-            state.options.cors.allowHeaders = std::move(config.allowHeaders);
-            state.options.cors.exposeHeaders = std::move(config.exposeHeaders);
-            state.options.cors.maxAge = config.maxAge;
-            state.options.cors.allowCredentials = config.allowCredentials;
+            state.options.cors = std::move(config);
         });
 }
 

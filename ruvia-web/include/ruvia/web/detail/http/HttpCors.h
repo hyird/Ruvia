@@ -6,6 +6,6 @@
 
 namespace ruvia::detail {
 
-void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const HttpServerOptions::Cors& cors);
+void applyCorsHeaders(const HttpRequest& request, HttpResponse& response, const CorsConfig& cors);
 
 }  // namespace ruvia::detail

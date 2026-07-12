@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/web/App.h"
+#include "ruvia/web/HttpServerOptions.h"
 #include "ruvia/http/HttpHeader.h"
 
 namespace ruvia::detail {
@@ -49,16 +49,6 @@ inline void validateCorsConfig(const CorsConfig& config) {
         config.exposeHeaders,
         config.maxAge,
         config.allowCredentials);
-}
-
-inline void validateCorsOptions(const HttpServerOptions::Cors& options) {
-    validateCorsFields(
-        options.enabled,
-        options.allowOrigin,
-        options.allowHeaders,
-        options.exposeHeaders,
-        options.maxAge,
-        options.allowCredentials);
 }
 
 }  // namespace ruvia::detail

@@ -25,6 +25,22 @@ namespace detail {
 struct AccessLogRecordAccess;
 }  // namespace detail
 
+// Canonical startup values shared by App setters and every worker's server
+// options. They stay top-level so configuration is not copied between models.
+struct CompressionConfig final {
+    bool enabled{true};
+    std::size_t minBytes{1024};
+};
+
+struct CorsConfig final {
+    bool enabled{false};
+    std::pmr::string allowOrigin{"*"};
+    std::pmr::string allowHeaders;
+    std::pmr::string exposeHeaders;
+    std::chrono::seconds maxAge{std::chrono::seconds(0)};
+    bool allowCredentials{false};
+};
+
 // One terminal response outcome with a committed final status, passed to the
 // access-log callback after a complete buffered response head has reached the
 // transport or a stream head is committed. The record borrows the immutable
@@ -97,20 +113,6 @@ struct HttpServerOptions final {
         std::pmr::vector<SniCertificate> sniCertificates;
     };
 
-    struct Compression final {
-        bool enabled{true};
-        std::size_t minBytes{1024};
-    };
-
-    struct Cors final {
-        bool enabled{false};
-        std::pmr::string allowOrigin{"*"};
-        std::pmr::string allowHeaders;
-        std::pmr::string exposeHeaders;
-        std::chrono::seconds maxAge{std::chrono::seconds(0)};
-        bool allowCredentials{false};
-    };
-
     struct DocumentRoot final {
         const StaticRoot* root{nullptr};
     };
@@ -161,8 +163,8 @@ struct HttpServerOptions final {
     // WebSocket messages are assembled before delivery; this limit must be greater than 0.
     std::size_t maxWebSocketMessageBytes{kDefaultMaxWebSocketMessageBytes};
     Tls tls;
-    Compression compression;
-    Cors cors;
+    CompressionConfig compression;
+    CorsConfig cors;
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLog accessLog;
