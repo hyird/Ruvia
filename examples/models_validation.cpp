@@ -160,7 +160,9 @@ public:
         if (auto page = parseUInt32(c.req().query("page"))) {
             query.page(ruvia::UInt32{*page});
         }
-        c.req().addValidatedData("query", std::move(query));
+        c.req().addValidatedData(
+            ruvia::ValidationTarget::kQuery,
+            std::move(query));
         co_await next();
     }
 };
@@ -206,7 +208,8 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> registerUser(ruvia::Context& c) {
-        const auto& request = c.req().valid<RegisterRequest>("json");
+        const auto& request = c.req().valid<RegisterRequest>(
+            ruvia::ValidationTarget::kJson);
 
         RegisterResponse response(c);
         const auto& username = request.username();
@@ -221,7 +224,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> contact(ruvia::Context& c) {
-        const auto& form = c.req().valid<ContactForm>("form");
+        const auto& form = c.req().valid<ContactForm>(
+            ruvia::ValidationTarget::kForm);
         std::pmr::string body(c.allocator<char>());
         body.append("message from ");
         const auto& name = form.name();
@@ -231,7 +235,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> search(ruvia::Context& c) {
-        const auto& query = c.req().valid<SearchQuery>("query");
+        const auto& query = c.req().valid<SearchQuery>(
+            ruvia::ValidationTarget::kQuery);
         const auto requestQuery = c.req().query("q");
         std::pmr::string body(c.allocator<char>());
         body.append("search=");
@@ -264,7 +269,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> categoryById(ruvia::Context& c) {
-        const auto& params = c.req().valid<CategoryParams>("param");
+        const auto& params = c.req().valid<CategoryParams>(
+            ruvia::ValidationTarget::kParam);
         std::pmr::string body(c.allocator<char>());
         body.append("category=");
         const auto& id = params.id();
@@ -274,7 +280,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> headers(ruvia::Context& c) {
-        const auto& headers = c.req().valid<RequestHeaders>("header");
+        const auto& headers = c.req().valid<RequestHeaders>(
+            ruvia::ValidationTarget::kHeader);
         std::pmr::string body(c.allocator<char>());
         body.append("request-id=");
         const auto& requestId = headers.requestId();
@@ -284,7 +291,8 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> cookies(ruvia::Context& c) {
-        const auto& cookies = c.req().valid<PreferencesCookie>("cookie");
+        const auto& cookies = c.req().valid<PreferencesCookie>(
+            ruvia::ValidationTarget::kCookie);
         std::pmr::string body(c.allocator<char>());
         body.append("theme=");
         const auto& theme = cookies.theme();

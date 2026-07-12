@@ -23,6 +23,7 @@
 #include <ruvia/web/Model.h>
 #include <ruvia/web/detail/router/RouteModes.h>
 #include <ruvia/web/Streaming.h>
+#include <ruvia/web/ValidationTypes.h>
 #include <ruvia/web/WebSocket.h>
 #include <ruvia/web/detail/ContextValues.h>
 #include <ruvia/web/detail/StaticFilesInternal.h>
@@ -146,6 +147,22 @@ concept HasLegacyContextBodyRefinement = requires(
     ruvia::detail::RequestBodyLoader& loader) {
     services.withBodyReader(reader);
     services.withBodyLoader(loader);
+};
+
+template <typename Request>
+concept HasStringValidationTarget = requires(
+    const Request& request,
+    std::string_view target) {
+    request.template valid<int>(target);
+    request.addValidatedData(target, int{});
+};
+
+template <typename Request>
+concept HasTypedValidationTarget = requires(const Request& request) {
+    {
+        request.template valid<int>(ruvia::ValidationTarget::kJson)
+    } -> std::same_as<const int&>;
+    request.addValidatedData(ruvia::ValidationTarget::kQuery, int{});
 };
 
 template <typename T>
@@ -349,6 +366,8 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().knownMethod()),
     ruvia::HttpKnownMethod>);
+static_assert(HasTypedValidationTarget<ruvia::ContextRequest>);
+static_assert(!HasStringValidationTarget<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::AccessLogRecord&>().method()),
     std::string_view>);

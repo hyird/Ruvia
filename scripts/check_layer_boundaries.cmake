@@ -4323,6 +4323,8 @@ set(HTTP1_INTERIM_RESPONSE_WRITER
     "${RUVIA_ROOT}/ruvia-http/src/server/Http1InterimResponseWriter.cpp")
 set(WEB_CONTEXT_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+set(WEB_VALIDATION_TARGET_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ValidationTypes.h")
 set(WEB_CONTEXT_INLINE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/Context.inl")
 set(WEB_CONTEXT_MODEL
@@ -4349,6 +4351,27 @@ if(EXISTS "${WEB_CONTEXT_HEADER}")
            "ruvia/web/detail/http/ContextModel[.]inl")
         boundary_error("Context public templates depend on caller include order"
             "Context.h must include both detail/http inline implementation headers")
+    endif()
+endif()
+if(EXISTS "${WEB_CONTEXT_HEADER}" AND
+   EXISTS "${WEB_VALIDATION_TARGET_HEADER}")
+    file(READ "${WEB_VALIDATION_TARGET_HEADER}"
+        web_validation_target_header)
+    if(web_context_public_header MATCHES
+           "valid[(]std::string_view[ 	]+target[)]" OR
+       web_context_public_header MATCHES
+           "addValidatedData[(]std::string_view[ 	]+target" OR
+       web_validation_target_header MATCHES
+           "validationTargetFromName" OR
+       web_validation_target_header MATCHES
+           "inline[ 	]+constexpr[ 	]+ValidationTarget[ 	]+(Json|Form|Query|Param|Header|Cookie)")
+        boundary_error("validation targets regained parallel string APIs"
+            "Context validation must use only the scoped ValidationTarget vocabulary")
+    endif()
+    if(NOT web_validation_target_header MATCHES
+           "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
+        boundary_error("validation targets lost their typed contract"
+            "Context and controller validation must share ValidationTarget")
     endif()
 endif()
 
