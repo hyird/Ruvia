@@ -19,7 +19,7 @@ Task<void> executeRedisPing(
 Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(
     RedisPool& pool,
     std::pmr::vector<std::pmr::string> args,
-    bool get,
+    bool returnPrevious,
     std::pmr::memory_resource* resource);
 
 Task<bool> executeRedisSetNx(

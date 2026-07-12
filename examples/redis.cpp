@@ -139,7 +139,7 @@ public:
 
         co_await c.redis().set(key, value);
         ruvia::RedisSetOptions setOptions;
-        setOptions.get = true;
+        setOptions.returnPrevious = true;
         auto previous = co_await c.redis().set(key, "fresh", setOptions);
         co_await c.redis().setEx("ruvia:example:ttl", std::chrono::seconds(60), "ttl");
         const auto inserted = co_await c.redis().setNx("ruvia:example:nx", "first");

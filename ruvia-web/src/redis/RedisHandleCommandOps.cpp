@@ -18,7 +18,7 @@ Task<void> executeRedisPing(
 Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(
     RedisPool& pool,
     std::pmr::vector<std::pmr::string> args,
-    bool get,
+    bool returnPrevious,
     std::pmr::memory_resource* resource) {
     auto reply = co_await executeOwnedRedisCommand(pool, std::move(args), resource);
     throwIfRedisError(reply);
@@ -26,7 +26,7 @@ Task<std::optional<std::pmr::string>> executeRedisSetWithOptions(
         co_return std::nullopt;
     }
     const auto text = redisValueString(reply);
-    if (!get) {
+    if (!returnPrevious) {
         if (!httpAsciiEqualsIgnoreCase(text, "OK")) {
             throw RedisError(RedisError::Code::kCommandError, "unexpected redis set reply");
         }

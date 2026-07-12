@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
+#include <chrono>
 #include <concepts>
 #include <initializer_list>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -64,15 +66,51 @@ concept HasRedisTransactionInitializerListCommand =
         transaction.command(args);
     };
 
+template <typename T>
+concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
+    options.ttl;
+    options.nx;
+    options.xx;
+    options.get;
+    options.keepTtl;
+};
+
 static_assert(HasRedisHandleSpanArgs<ruvia::RedisHandle>);
 static_assert(!HasRedisHandleInitializerListArgs<ruvia::RedisHandle>);
 static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
 static_assert(!HasRedisPipelineInitializerListCommand<ruvia::RedisPipeline>);
 static_assert(HasRedisTransactionSpanCommand<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction>);
+static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::RedisSetOptions>().condition),
+    ruvia::RedisSetCondition>);
 
 }  // namespace
 
 RUVIA_TEST(redis_api_surface_uses_span_args_without_initializer_list_overloads) {
     RUVIA_CHECK(true);
+}
+
+RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
+    const auto expiring = ruvia::RedisSetExpiration::expiresAfter(
+        std::chrono::milliseconds(1500));
+    RUVIA_CHECK(expiring.duration() != nullptr);
+    RUVIA_CHECK_EQ(
+        expiring.duration()->count(),
+        std::chrono::milliseconds::rep{1500});
+    RUVIA_CHECK(!expiring.keepsExisting());
+
+    const auto keep = ruvia::RedisSetExpiration::keepExisting();
+    RUVIA_CHECK(keep.duration() == nullptr);
+    RUVIA_CHECK(keep.keepsExisting());
+
+    bool zeroRejected = false;
+    try {
+        (void)ruvia::RedisSetExpiration::expiresAfter(
+            std::chrono::milliseconds(0));
+    } catch (const std::invalid_argument&) {
+        zeroRejected = true;
+    }
+    RUVIA_CHECK(zeroRejected);
 }

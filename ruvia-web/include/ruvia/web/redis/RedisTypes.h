@@ -6,8 +6,10 @@
 #include <exception>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -43,12 +45,57 @@ struct RedisConfig {
     bool keepAlive{false};
 };
 
-struct RedisSetOptions {
-    std::chrono::milliseconds ttl{0};
-    bool nx{false};
-    bool xx{false};
-    bool get{false};
-    bool keepTtl{false};
+enum class RedisSetCondition : std::uint8_t {
+    kNone,
+    kIfAbsent,
+    kIfPresent,
+};
+
+class RedisSetExpiration final {
+public:
+    RedisSetExpiration() noexcept = default;
+
+    [[nodiscard]] static RedisSetExpiration expiresAfter(
+        std::chrono::milliseconds duration) {
+        if (duration.count() <= 0) {
+            throw std::invalid_argument(
+                "redis set expiration must be greater than zero");
+        }
+        return RedisSetExpiration(duration);
+    }
+
+    [[nodiscard]] static RedisSetExpiration keepExisting() noexcept {
+        return RedisSetExpiration(KeepExisting{});
+    }
+
+    [[nodiscard]] const std::chrono::milliseconds* duration() const noexcept {
+        return std::get_if<std::chrono::milliseconds>(&value_);
+    }
+
+    [[nodiscard]] bool keepsExisting() const noexcept {
+        return std::get_if<KeepExisting>(&value_) != nullptr;
+    }
+
+private:
+    struct KeepExisting final {};
+    using Value = std::variant<
+        std::monostate,
+        std::chrono::milliseconds,
+        KeepExisting>;
+
+    explicit RedisSetExpiration(std::chrono::milliseconds duration) noexcept
+        : value_(duration) {}
+
+    explicit RedisSetExpiration(KeepExisting keep) noexcept
+        : value_(keep) {}
+
+    Value value_;
+};
+
+struct RedisSetOptions final {
+    RedisSetCondition condition{RedisSetCondition::kNone};
+    RedisSetExpiration expiration;
+    bool returnPrevious{false};
 };
 
 struct RedisScanOptions {

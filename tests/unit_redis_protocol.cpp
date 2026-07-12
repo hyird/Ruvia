@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <exception>
@@ -112,6 +113,47 @@ RUVIA_TEST(resp_command_encodes_multibulk_form) {
     // A single-argument command and a zero-length argument.
     RUVIA_CHECK_EQ(encode({"PING"}), std::string("*1\r\n$4\r\nPING\r\n"));
     RUVIA_CHECK_EQ(encode({"GET", ""}), std::string("*2\r\n$3\r\nGET\r\n$0\r\n\r\n"));
+}
+
+RUVIA_TEST(redis_set_options_build_one_valid_command_shape) {
+    auto* resource = std::pmr::get_default_resource();
+
+    const auto plain = ruvia::detail::redisSetArgs(
+        "key", "value", ruvia::RedisSetOptions{}, resource);
+    RUVIA_CHECK_EQ(plain.size(), std::size_t{3});
+    RUVIA_CHECK_EQ(std::string_view(plain[0]), std::string_view("SET"));
+    RUVIA_CHECK_EQ(std::string_view(plain[1]), std::string_view("key"));
+    RUVIA_CHECK_EQ(std::string_view(plain[2]), std::string_view("value"));
+
+    ruvia::RedisSetOptions expiring;
+    expiring.condition = ruvia::RedisSetCondition::kIfAbsent;
+    expiring.expiration = ruvia::RedisSetExpiration::expiresAfter(
+        std::chrono::milliseconds(1500));
+    expiring.returnPrevious = true;
+    const auto expiringArgs = ruvia::detail::redisSetArgs(
+        "key", "value", expiring, resource);
+    constexpr std::array<std::string_view, 7> expectedExpiring{
+        "SET", "key", "value", "PX", "1500", "NX", "GET"};
+    RUVIA_CHECK_EQ(expiringArgs.size(), std::size_t{7});
+    for (std::size_t i = 0; i < expiringArgs.size(); ++i) {
+        RUVIA_CHECK_EQ(
+            std::string_view(expiringArgs[i]),
+            expectedExpiring[i]);
+    }
+
+    ruvia::RedisSetOptions preserving;
+    preserving.condition = ruvia::RedisSetCondition::kIfPresent;
+    preserving.expiration = ruvia::RedisSetExpiration::keepExisting();
+    const auto preservingArgs = ruvia::detail::redisSetArgs(
+        "key", "value", preserving, resource);
+    constexpr std::array<std::string_view, 5> expectedPreserving{
+        "SET", "key", "value", "XX", "KEEPTTL"};
+    RUVIA_CHECK_EQ(preservingArgs.size(), expectedPreserving.size());
+    for (std::size_t i = 0; i < preservingArgs.size(); ++i) {
+        RUVIA_CHECK_EQ(
+            std::string_view(preservingArgs[i]),
+            expectedPreserving[i]);
+    }
 }
 
 RUVIA_TEST(resp_serialized_size_matches_written_output) {
