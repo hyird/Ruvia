@@ -678,6 +678,11 @@ scratch 或 `Http2ConnectionLimits`；`Http2BodyState.h`、`Http2BodyQueue.h`、
 route selection 必须只走 `Http2SansIoStreamRuntime::selectRoute()`，一次性绑定
 `RouteResolution` 与 optional `RequestBodyMode`；`Http2RequestBodyRuntime` 不得公开独立 mode selector，
 不得恢复默认 buffered mode + `modeSelected` 布尔组合。
+`runHttp2SansIoSession()` 必须按值接收不可默认构造的 `Http2SansIoSessionContext`，在 coroutine 启动前
+一次性绑定 `ContextServices`、`HttpServerOptions`、`ConnectionScanner::Entry`、graceful-shutdown atomic、
+remote address 与 client certificate。禁止恢复全空 `Http2SansIoSessionEnv` 指针包、静态默认 options、
+未链接的 local scanner 或 nullable shutdown 状态；裸 session 默认值只能存在于 `tests/` fixture，不能让
+测试便利反向弱化安装后的生产调用契约。
 同一个 `Http2SansIoStreamRuntime` 还必须拥有 optional `Http2SansIoStreamSignal` 作为 dispatch lease；
 runtime-level `beginDispatch()` 必须是 table-only friend 操作，table 必须在 `co_spawn` 前同步增加
 `dispatchedCount()`，禁止绕过 aggregate lease；body mode 尚未 selected 时必须拒绝 admission。

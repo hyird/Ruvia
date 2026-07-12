@@ -78,16 +78,57 @@
 
 namespace ruvia::detail {
 
-// Framework wiring for the sans-I/O h2 session. Every field defaults to "absent" so
-// tests can drive the session bare; the accept loop passes the full server context.
-struct Http2SansIoSessionEnv final {
-    DbRegistry* databases{nullptr};
-    RedisRegistry* redis{nullptr};
-    RateLimiter* rateLimiter{nullptr};
-    const HttpServerOptions* options{nullptr};        // null -> default options
-    ConnectionScanner::Entry* scannerEntry{nullptr};  // null -> unlinked local entry
-    std::string_view clientCertificate{};
-    const std::atomic_bool* serverStarted{nullptr};   // false -> graceful GOAWAY drain
+// Complete, non-null connection wiring captured by value in the session coroutine.
+// Optional product integrations remain explicit inside ContextServices, while
+// options, scanner ownership, and graceful-shutdown state are mandatory references.
+class Http2SansIoSessionContext final {
+public:
+    Http2SansIoSessionContext(
+        ContextServices services,
+        const HttpServerOptions& options,
+        ConnectionScanner::Entry& scannerEntry,
+        const std::atomic_bool& serverStarted,
+        std::string_view remoteAddress,
+        std::string_view clientCertificate = {}) noexcept
+        : services_(services),
+          options_(&options),
+          scannerEntry_(&scannerEntry),
+          serverStarted_(&serverStarted),
+          remoteAddress_(remoteAddress),
+          clientCertificate_(clientCertificate) {}
+
+    [[nodiscard]] const HttpServerOptions& options() const noexcept {
+        return *options_;
+    }
+
+    [[nodiscard]] ConnectionScanner::Entry& scannerEntry() const noexcept {
+        return *scannerEntry_;
+    }
+
+    [[nodiscard]] const std::atomic_bool& serverStarted() const noexcept {
+        return *serverStarted_;
+    }
+
+    [[nodiscard]] std::string_view remoteAddress() const noexcept {
+        return remoteAddress_;
+    }
+
+    [[nodiscard]] RateLimiter* rateLimiter() const noexcept {
+        return services_.rateLimiter();
+    }
+
+    [[nodiscard]] ContextServices routeServices(bool secure) const noexcept {
+        return services_.withTransport(
+            remoteAddress_, clientCertificate_, secure);
+    }
+
+private:
+    ContextServices services_;
+    const HttpServerOptions* options_;
+    ConnectionScanner::Entry* scannerEntry_;
+    const std::atomic_bool* serverStarted_;
+    std::string_view remoteAddress_;
+    std::string_view clientCertificate_;
 };
 
 [[nodiscard]] inline ConnectionScanner::Phase http2SansIoInactivityPhase(
@@ -106,15 +147,12 @@ Task<void> runHttp2SansIoSession(
     Stream& stream,
     const RouteTable& routes,
     WorkerMemory& worker,
-    std::string_view remoteAddress,
-    Http2SansIoSessionEnv env = {},
+    Http2SansIoSessionContext session,
     std::string_view initialBytes = {}) {
     auto executor = stream.get_executor();
-    static const HttpServerOptions kDefaultOptions{};
-    const HttpServerOptions& options = env.options != nullptr ? *env.options : kDefaultOptions;
-    ConnectionScanner::Entry localScannerEntry;
-    ConnectionScanner::Entry& scannerEntry =
-        env.scannerEntry != nullptr ? *env.scannerEntry : localScannerEntry;
+    const auto& options = session.options();
+    auto& scannerEntry = session.scannerEntry();
+    const auto remoteAddress = session.remoteAddress();
     constexpr bool kTlsStream = !std::is_same_v<Stream, asio::ip::tcp::socket>;
 
     Http2Connection connection(worker.resource(), Http2Role::kServer);
@@ -378,9 +416,7 @@ Task<void> runHttp2SansIoSession(
             wakeWriter();
             co_return;
         }
-        const auto baseServices = ContextServices(
-            env.databases, env.redis, env.rateLimiter)
-            .withTransport(remoteAddress, env.clientCertificate, kTlsStream);
+        const auto baseServices = session.routeServices(kTlsStream);
 
         HttpRequest request = HttpRequestAccess::make();
         if (!Http2RequestBuilder::build(
@@ -419,7 +455,8 @@ Task<void> runHttp2SansIoSession(
         const auto& resolution = *routeResolution;
         const auto* resolved = resolution.resolved();
 
-        const auto appRateLimit = rateLimitRequestAllowed(env.rateLimiter, remoteAddress);
+        const auto appRateLimit = rateLimitRequestAllowed(
+            session.rateLimiter(), remoteAddress);
         if (!appRateLimit.allowed) {
             auto response = co_await routes.handleError(
                 request, requestMemory,
@@ -904,8 +941,8 @@ Task<void> runHttp2SansIoSession(
             scannerEntry.touch();
             // The server has begun draining: tell the peer to stop opening streams
             // (RFC 9113 §6.8); streams already started keep running.
-            if (!connection.draining() && env.serverStarted != nullptr &&
-                !env.serverStarted->load(std::memory_order_relaxed)) {
+            if (!connection.draining() &&
+                !session.serverStarted().load(std::memory_order_relaxed)) {
                 connection.beginDrain();
             }
             const auto result = feedAndDrain(

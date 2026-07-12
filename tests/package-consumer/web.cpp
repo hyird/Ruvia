@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <memory_resource>
@@ -24,6 +25,7 @@
 #include <ruvia/web/detail/http2/Http2SansIoStreamRuntime.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
+#include <ruvia/web/detail/server/Http2SansIoSession.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -85,6 +87,16 @@ static_assert(!HasLooseRouteResolutionAccessors<
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::RouteEndpoint>);
 static_assert(!std::is_polymorphic_v<ruvia::detail::RouteTable>);
+static_assert(!std::is_default_constructible_v<
+    ruvia::detail::Http2SansIoSessionContext>);
+static_assert(std::is_nothrow_constructible_v<
+    ruvia::detail::Http2SansIoSessionContext,
+    ruvia::detail::ContextServices,
+    const ruvia::HttpServerOptions&,
+    ruvia::detail::ConnectionScanner::Entry&,
+    const std::atomic_bool&,
+    std::string_view,
+    std::string_view>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::RouteResolution&>().resolved()),
     const ruvia::detail::ResolvedRoute*>);

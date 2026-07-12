@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "http2_sansio_session_fixture.h"
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -12,6 +13,7 @@
 #include <asio/write.hpp>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory_resource>
@@ -173,6 +175,28 @@ RUVIA_TEST(sansio_driver_h2_inactivity_phase_counts_predispatch_runtime) {
         Phase::kReadingPayload);
 }
 
+RUVIA_TEST(sansio_driver_h2_session_context_owns_complete_wiring) {
+    ruvia::HttpServerOptions options;
+    ruvia::detail::ConnectionScanner::Entry scannerEntry;
+    std::atomic_bool serverStarted{true};
+    const ruvia::detail::Http2SansIoSessionContext session(
+        ruvia::detail::ContextServices{},
+        options,
+        scannerEntry,
+        serverStarted,
+        "192.0.2.1",
+        "CN=test-client");
+
+    RUVIA_CHECK(&session.options() == &options);
+    RUVIA_CHECK(&session.scannerEntry() == &scannerEntry);
+    RUVIA_CHECK(&session.serverStarted() == &serverStarted);
+    RUVIA_CHECK(session.remoteAddress() == "192.0.2.1");
+    const auto services = session.routeServices(true);
+    RUVIA_CHECK(services.remoteAddress() == "192.0.2.1");
+    RUVIA_CHECK(services.clientCertificateSubject() == "CN=test-client");
+    RUVIA_CHECK(services.secure());
+}
+
 // End-to-end proof that the generic sans-I/O driver (ruvia-core) can back a real
 // HTTP/2 server over a real socket using ONLY the Http2Connection core: a synthetic
 // client sends a GET; the pump feeds the core, the onReadable callback dispatches a
@@ -302,9 +326,9 @@ RUVIA_TEST(sansio_driver_h2_real_dispatch_round_trip) {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());  // empty -> 404
-            // Drive the packaged, reusable buffered session helper.
+            // Test-owned defaults drive the production session's required wiring.
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
+                ruvia::test::runBareHttp2SansIoSession(sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -388,7 +412,7 @@ RUVIA_TEST(sansio_driver_h2_post_echo_real_handler) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -485,7 +509,7 @@ RUVIA_TEST(sansio_driver_h2_concurrent_streams_multiplex) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -577,7 +601,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_echo) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -722,7 +746,7 @@ RUVIA_TEST(sansio_driver_h2_server_close_waits_for_peer_close) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -854,7 +878,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_invalid_version_rejected) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -981,7 +1005,7 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(
+                ruvia::test::runBareHttp2SansIoSession(
                     sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1136,7 +1160,7 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1233,7 +1257,7 @@ RUVIA_TEST(sansio_driver_h2_websocket_permessage_deflate) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1359,7 +1383,7 @@ RUVIA_TEST(sansio_driver_h2_stream_send_window_pacing) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1480,7 +1504,7 @@ RUVIA_TEST(sansio_driver_h2_large_file_body_paces_and_completes) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1583,7 +1607,7 @@ RUVIA_TEST(sansio_driver_h2_streaming_request_body) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1677,7 +1701,7 @@ RUVIA_TEST(sansio_driver_h2_server_request_trailers_dispatch) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1768,7 +1792,7 @@ RUVIA_TEST(sansio_driver_h2_large_buffered_body_paces_and_completes) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);
@@ -1868,7 +1892,7 @@ RUVIA_TEST(sansio_driver_h2_two_concurrent_ws_tunnels) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{},
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
-            co_await ruvia::detail::taskAsAwaitable(ruvia::detail::runHttp2SansIoSession(
+            co_await ruvia::detail::taskAsAwaitable(ruvia::test::runBareHttp2SansIoSession(
                 sock, impl.routeTable(), worker, "127.0.0.1"));
         },
         asio::detached);

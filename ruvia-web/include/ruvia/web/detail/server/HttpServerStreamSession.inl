@@ -85,7 +85,7 @@ Task<void> HttpServer::handleStreamSession(Stream& stream, TcpSocket& socket, st
                         rateLimiter_,
                         readBuffer,
                         usedBytes,
-                        &started_);
+                        started_);
                     if (h2Result == CleartextHttp2DispatchResult::kSessionFinished) {
                         co_return;
                     }

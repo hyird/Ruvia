@@ -1,4 +1,5 @@
 #include "test_harness.h"
+#include "http2_sansio_session_fixture.h"
 
 #include <asio/as_tuple.hpp>
 #include <asio/awaitable.hpp>
@@ -80,13 +81,9 @@ std::vector<std::uint32_t> collectConnectionWindowUpdatesForDroppedData(std::uin
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            ruvia::HttpServerOptions options;
-            ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2SansIoSessionEnv env;
-            env.options = &options;
-            env.scannerEntry = &scannerEntry;
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
+                ruvia::test::runBareHttp2SansIoSession(
+                    sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -174,13 +171,9 @@ std::optional<std::uint32_t> rstErrorForBodylessContentLengthRequest() {
             auto sock = co_await acceptor.async_accept(asio::use_awaitable);
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
-            ruvia::HttpServerOptions options;
-            ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2SansIoSessionEnv env;
-            env.options = &options;
-            env.scannerEntry = &scannerEntry;
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
+                ruvia::test::runBareHttp2SansIoSession(
+                    sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -284,13 +277,9 @@ std::vector<EmittedFrame> framesForConcurrentLargeHeaderResponses() {
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             routes.setNotFoundHandler(&largeHeaderNotFoundHandler);
-            ruvia::HttpServerOptions options;
-            ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2SansIoSessionEnv env;
-            env.options = &options;
-            env.scannerEntry = &scannerEntry;
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
+                ruvia::test::runBareHttp2SansIoSession(
+                    sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 
@@ -412,13 +401,9 @@ std::optional<std::uint32_t> rstErrorForFileBodyHandler(
             ruvia::WorkerMemory worker;
             ruvia::detail::RouteTable routes(worker.resource());
             routes.setNotFoundHandler(handler);
-            ruvia::HttpServerOptions options;
-            ruvia::detail::ConnectionScanner::Entry scannerEntry;
-            ruvia::detail::Http2SansIoSessionEnv env;
-            env.options = &options;
-            env.scannerEntry = &scannerEntry;
             co_await ruvia::detail::taskAsAwaitable(
-                ruvia::detail::runHttp2SansIoSession(sock, routes, worker, "127.0.0.1", env));
+                ruvia::test::runBareHttp2SansIoSession(
+                    sock, routes, worker, "127.0.0.1"));
         },
         asio::detached);
 

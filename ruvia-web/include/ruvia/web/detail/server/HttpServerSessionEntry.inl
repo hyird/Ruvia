@@ -58,7 +58,7 @@ Task<void> HttpServer::handleHttp2Session(Stream& stream, TcpSocket& socket, std
         scannerEntry,
         remoteAddress,
         rateLimiter_,
+        started_,
         clientCertificate,
-        initialBytes,
-        &started_);
+        initialBytes);
 }

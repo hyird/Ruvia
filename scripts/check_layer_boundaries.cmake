@@ -123,6 +123,8 @@ set(RULE_STALE_REQUEST_DISPATCHER
     "RequestDispatcher|virtual[ \t\r\n]+(RouteResolution|Task[ \t]*[<])|virtual[ \t\r\n]+~")
 set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
     "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
+set(RULE_STALE_HTTP2_SESSION_ENV
+    "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](databases|redis|rateLimiter|options|scannerEntry|clientCertificate|serverStarted)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]|const[ \t]+std::atomic_bool[*][ \t]+serverStarted[ \t]*=[ \t]*nullptr")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -458,6 +460,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HTTP/2 default body mode plus selection flag"
         "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}"
         "RequestBodyMode mode_{RequestBodyMode::kBuffered}; bool modeSelected_; ")
+    expect_match("nullable/default HTTP/2 session environment"
+        "${RULE_STALE_HTTP2_SESSION_ENV}"
+        "Http2SansIoSessionEnv env = {}; static HttpServerOptions kDefaultOptions;")
     expect_match("connection policy in Router" "${RULE_ROUTER_CONNECTION_POLICY}"
         "bool closeConnectionOnError")
     expect_match("removed mixed-layer error API" "${RULE_STALE_ERROR_API}"
@@ -3815,10 +3820,52 @@ endif()
 
 set(WEB_HTTP2_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
-if(EXISTS "${WEB_HTTP2_SESSION}")
+set(WEB_HTTP2_SERVER_ENTRY
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerCleartextHttp2.h")
+set(WEB_HTTP2_SESSION_FIXTURE
+    "${RUVIA_ROOT}/tests/http2_sansio_session_fixture.h")
+set(WEB_HTTP2_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+if(NOT EXISTS "${WEB_HTTP2_SESSION}" OR
+   NOT EXISTS "${WEB_HTTP2_SERVER_ENTRY}" OR
+   NOT EXISTS "${WEB_HTTP2_SESSION_FIXTURE}" OR
+   NOT EXISTS "${WEB_HTTP2_PACKAGE_CONSUMER}")
+    boundary_error("HTTP/2 session wiring contract is incomplete"
+        "production context, server entry, test fixture, and installed-package assertion are all required")
+else()
     file(READ "${WEB_HTTP2_SESSION}" web_http2_session)
+    file(READ "${WEB_HTTP2_SERVER_ENTRY}" web_http2_server_entry)
+    file(READ "${WEB_HTTP2_SESSION_FIXTURE}" web_http2_session_fixture)
+    file(READ "${WEB_HTTP2_PACKAGE_CONSUMER}" web_http2_package_consumer)
     file(READ "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp"
         web_http2_session_test)
+    if(NOT web_http2_session MATCHES
+           "class Http2SansIoSessionContext final" OR
+       NOT web_http2_session MATCHES "ContextServices services" OR
+       NOT web_http2_session MATCHES "const HttpServerOptions& options" OR
+       NOT web_http2_session MATCHES
+           "ConnectionScanner::Entry& scannerEntry" OR
+       NOT web_http2_session MATCHES
+           "const std::atomic_bool& serverStarted" OR
+       NOT web_http2_session MATCHES "routeServices[(]bool secure[)]" OR
+       NOT web_http2_session MATCHES
+           "Http2SansIoSessionContext session" OR
+       web_http2_session MATCHES "${RULE_STALE_HTTP2_SESSION_ENV}" OR
+       NOT web_http2_server_entry MATCHES
+           "Http2SansIoSessionContext[(]" OR
+       NOT web_http2_server_entry MATCHES
+           "ContextServices[(]&databases, &redis, rateLimiter[)]" OR
+       web_http2_server_entry MATCHES
+           "${RULE_STALE_HTTP2_SESSION_ENV}" OR
+       NOT web_http2_session_fixture MATCHES
+           "class Http2SansIoSessionFixture final" OR
+       NOT web_http2_session_fixture MATCHES
+           "runBareHttp2SansIoSession" OR
+       NOT web_http2_package_consumer MATCHES
+           "!std::is_default_constructible_v<[ \t\r\n]*ruvia::detail::Http2SansIoSessionContext")
+        boundary_error("HTTP/2 session restored nullable or test-shaped wiring"
+            "the coroutine must receive one non-default context with mandatory options/scanner/shutdown references; bare defaults belong only to tests")
+    endif()
     if(NOT web_http2_session MATCHES "event->tunnelData[(][)]" OR
        NOT web_http2_session MATCHES "event->tunnelEnd[(][)]")
         boundary_error("ruvia-web collapses tunnel bytes back into HTTP message content"
@@ -4659,6 +4706,14 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("typed Web route contract is undocumented"
             "${relative} must document endpoint/result alternatives and the removal of response-mode, caller-owned match, and virtual-dispatch side channels")
+    endif()
+    if(NOT boundary_doc_content MATCHES "Http2SansIoSessionContext" OR
+       NOT boundary_doc_content MATCHES "Http2SansIoSessionEnv" OR
+       NOT boundary_doc_content MATCHES "ContextServices" OR
+       NOT boundary_doc_content MATCHES "ConnectionScanner::Entry")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("required HTTP/2 session wiring is undocumented"
+            "${relative} must document the complete session context and removal of nullable/default production wiring")
     endif()
     if(NOT boundary_doc_content MATCHES "Http1ResponseStreamPlan")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
