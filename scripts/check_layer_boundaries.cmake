@@ -142,6 +142,8 @@ set(RULE_ROUTER_CONNECTION_POLICY
 set(RULE_STALE_ERROR_API
     "ruvia/http/Error\.h|defaultStatusText|makeErrorResponse")
 set(RULE_CORE_PROTOCOL "ruvia/http/|Http[A-Z]|WebSocket|websocket")
+set(RULE_STALE_POOL_WAITER_TUPLE
+    "bool[ \t]*&[ \t]*(ready|timedOut)|bool[*][ \t]*(ready_|timedOut_)|std::size_t[*][ \t]+index_|sentinelIndex|PoolWaiter[ \t\r\n]*[(][^)]*ready|WaiterAwaiter|setHandle[ \t]*[(]|[.]bind[ \t]*[(]|PoolWaiterResult[*][ \t]+result[ \t]*[(]|closeAll[ \t\r\n]*[(][^)]*(slots_|connections_|sentinel|std::size_t)")
 set(RULE_PUBLIC_SRC_INCLUDE "BUILD_INTERFACE:[^>\r\n]*[/\\\\]src")
 set(RULE_CROSS_TARGET_SRC "ruvia-(core|http|web)[/\\\\]src")
 set(RULE_CROSS_TARGET_PHYSICAL_INCLUDE
@@ -527,6 +529,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         "#include \"ruvia/http/Error.h\"")
     expect_match("protocol semantics in core" "${RULE_CORE_PROTOCOL}"
         "#include \"ruvia/http/HttpParser.h\"")
+    expect_match("split pool waiter completion tuple"
+        "${RULE_STALE_POOL_WAITER_TUPLE}"
+        "PoolWaiter(bool& ready, bool& timedOut, std::size_t& index);")
+    expect_match("parallel pool waiter result accessor"
+        "${RULE_STALE_POOL_WAITER_TUPLE}"
+        "const PoolWaiterResult* result() const noexcept;")
     expect_match("public src include" "${RULE_PUBLIC_SRC_INCLUDE}"
         "$<BUILD_INTERFACE:C:/repo/ruvia-http/src>")
     expect_match("cross-target private source include" "${RULE_CROSS_TARGET_SRC}"
@@ -6472,6 +6480,111 @@ foreach(boundary_doc IN ITEMS
             "${relative} must pin optional draining, discriminated payloads, exact RST errors, and connection-level GOAWAY metadata")
     endif()
 endforeach()
+
+set(POOL_WAITER_HEADER
+    "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
+set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")
+set(POOL_WAITER_DB_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolLifecycle.cpp")
+set(POOL_WAITER_REDIS_SLOTS
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp")
+set(POOL_WAITER_REDIS_LIFECYCLE
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolLifecycle.cpp")
+set(POOL_WAITER_TEST "${RUVIA_ROOT}/tests/unit_pool_waiter_queue.cpp")
+set(POOL_WAITER_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
+foreach(required IN ITEMS
+    "${POOL_WAITER_HEADER}"
+    "${POOL_WAITER_DB_SLOTS}"
+    "${POOL_WAITER_DB_LIFECYCLE}"
+    "${POOL_WAITER_REDIS_SLOTS}"
+    "${POOL_WAITER_REDIS_LIFECYCLE}"
+    "${POOL_WAITER_TEST}"
+    "${POOL_WAITER_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${required}")
+        boundary_error("typed pool waiter completion is missing" "${required}")
+    endif()
+endforeach()
+if(EXISTS "${POOL_WAITER_HEADER}" AND
+   EXISTS "${POOL_WAITER_DB_SLOTS}" AND
+   EXISTS "${POOL_WAITER_DB_LIFECYCLE}" AND
+   EXISTS "${POOL_WAITER_REDIS_SLOTS}" AND
+   EXISTS "${POOL_WAITER_REDIS_LIFECYCLE}" AND
+   EXISTS "${POOL_WAITER_TEST}" AND
+   EXISTS "${POOL_WAITER_PACKAGE_CONSUMER}")
+    file(READ "${POOL_WAITER_HEADER}" pool_waiter_header)
+    file(READ "${POOL_WAITER_DB_SLOTS}" pool_waiter_db_slots)
+    file(READ "${POOL_WAITER_DB_LIFECYCLE}" pool_waiter_db_lifecycle)
+    file(READ "${POOL_WAITER_REDIS_SLOTS}" pool_waiter_redis_slots)
+    file(READ "${POOL_WAITER_REDIS_LIFECYCLE}"
+        pool_waiter_redis_lifecycle)
+    file(READ "${POOL_WAITER_TEST}" pool_waiter_test)
+    file(READ "${POOL_WAITER_PACKAGE_CONSUMER}"
+        pool_waiter_package_consumer)
+    file(READ "${RUVIA_ROOT}/README.md" pool_waiter_readme)
+    file(READ "${RUVIA_ROOT}/AGENTS.md" pool_waiter_agents)
+    if(NOT pool_waiter_header MATCHES "class PoolWaiterAcquired final" OR
+       NOT pool_waiter_header MATCHES "class PoolWaiterTimedOut final" OR
+       NOT pool_waiter_header MATCHES "class PoolWaiterClosed final" OR
+       NOT pool_waiter_header MATCHES "class PoolWaiterResult final" OR
+       NOT pool_waiter_header MATCHES "using Value = std::variant" OR
+       NOT pool_waiter_header MATCHES "std::get_if<PoolWaiterAcquired>" OR
+       NOT pool_waiter_header MATCHES "std::get_if<PoolWaiterTimedOut>" OR
+       NOT pool_waiter_header MATCHES "std::get_if<PoolWaiterClosed>" OR
+       NOT pool_waiter_header MATCHES
+           "std::optional<PoolWaiterResult> result_" OR
+       NOT pool_waiter_header MATCHES "bool await_ready[(][)] const noexcept" OR
+       NOT pool_waiter_header MATCHES
+           "void await_suspend[(]std::coroutine_handle<> handle[)] noexcept" OR
+       NOT pool_waiter_header MATCHES
+           "const PoolWaiterResult& await_resume[(][)] const noexcept" OR
+       NOT pool_waiter_header MATCHES "void completeAcquired" OR
+       NOT pool_waiter_header MATCHES "void completeTimedOut" OR
+       NOT pool_waiter_header MATCHES "void completeClosed" OR
+       NOT pool_waiter_header MATCHES "PoolWaiter[*] closedHead" OR
+       NOT pool_waiter_header MATCHES "void closeAll[(][)] noexcept")
+        boundary_error("pool waiter lost its discriminated await result"
+            "pending must remain optional; acquired, timeout, and closure must be exclusive completion alternatives, and closeAll must commit its entire queue before resuming")
+    endif()
+    if(NOT pool_waiter_db_slots MATCHES
+           "const auto& result = co_await waiter" OR
+       NOT pool_waiter_db_slots MATCHES "result[.]timedOut[(][)]" OR
+       NOT pool_waiter_db_slots MATCHES "result[.]closed[(][)]" OR
+       NOT pool_waiter_db_slots MATCHES "result[.]acquired[(][)]" OR
+       NOT pool_waiter_redis_slots MATCHES
+           "const auto& result = co_await waiter" OR
+       NOT pool_waiter_redis_slots MATCHES "result[.]timedOut[(][)]" OR
+       NOT pool_waiter_redis_slots MATCHES "result[.]closed[(][)]" OR
+       NOT pool_waiter_redis_slots MATCHES "result[.]acquired[(][)]" OR
+       NOT pool_waiter_db_lifecycle MATCHES "waiters_[.]closeAll[(][)]" OR
+       NOT pool_waiter_redis_lifecycle MATCHES "waiters_[.]closeAll[(][)]")
+        boundary_error("DB/Redis pool waits stopped consuming one core completion"
+            "both integrations must co_await PoolWaiter and map only its typed timeout, closed, or acquired outcome")
+    endif()
+    if(NOT pool_waiter_test MATCHES
+           "pool_waiter_is_its_own_typed_awaiter" OR
+       NOT pool_waiter_test MATCHES
+           "pool_waiter_queue_close_all_wakes_with_closed_result" OR
+       NOT pool_waiter_test MATCHES
+           "observeWaiterThenTryResumeNext" OR
+       NOT pool_waiter_test MATCHES "PoolWaiterTimedOut" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "AcceptsLoosePoolWaiterTuple" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "AcceptsPoolCloseSentinel" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "HasParallelPoolWaiterResultAccessor" OR
+       NOT pool_waiter_package_consumer MATCHES
+           "PoolWaiterResult" OR
+       NOT pool_waiter_readme MATCHES "PoolWaiterAcquired" OR
+       NOT pool_waiter_readme MATCHES "PoolWaiterClosed" OR
+       NOT pool_waiter_agents MATCHES "PoolWaiterTimedOut" OR
+       NOT pool_waiter_agents MATCHES "closeAll[(][)]")
+        boundary_error("typed pool waiter completion is insufficiently pinned"
+            "runtime tests, installed-core compile contracts, and architecture docs must reject the former flags/sentinel tuple")
+    endif()
+endif()
+
 check_files_no_match("normal responses must not reintroduce a dynamic streaming-body bypass"
     "${RULE_DYNAMIC_RESPONSE_BODY_STREAM}" ${EDGE_REFERENCE_SOURCE})
 check_files_no_match("ruvia-http CMake contains stale mixed-responsibility names"
@@ -6486,6 +6599,13 @@ check_files_no_match("Router/error mapping must not decide HTTP/1 connection per
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextErrorResponse.cpp")
 check_files_no_match("ruvia-core must not contain HTTP/WebSocket semantics"
     "${RULE_CORE_PROTOCOL}" ${CORE_SOURCE})
+check_files_no_match("pool wait completion must not restore readiness flags or a close sentinel"
+    "${RULE_STALE_POOL_WAITER_TUPLE}"
+    "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolLifecycle.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolSlots.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPoolLifecycle.cpp")
 check_files_no_match("target src directories must not be PUBLIC/INTERFACE includes"
     "${RULE_PUBLIC_SRC_INCLUDE}"
     "${RUVIA_ROOT}/ruvia-core/CMakeLists.txt"

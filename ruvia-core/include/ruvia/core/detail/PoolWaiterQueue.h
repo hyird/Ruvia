@@ -3,52 +3,149 @@
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
+#include <exception>
+#include <optional>
+#include <utility>
+#include <variant>
 
 namespace ruvia::detail {
+
+class PoolWaiterResult;
+
+class PoolWaiterAcquired final {
+public:
+    [[nodiscard]] constexpr std::size_t index() const noexcept {
+        return index_;
+    }
+
+private:
+    friend class PoolWaiterResult;
+
+    explicit constexpr PoolWaiterAcquired(std::size_t index) noexcept
+        : index_(index) {}
+
+    std::size_t index_;
+};
+
+class PoolWaiterTimedOut final {
+private:
+    friend class PoolWaiterResult;
+
+    constexpr PoolWaiterTimedOut() noexcept = default;
+};
+
+class PoolWaiterClosed final {
+private:
+    friend class PoolWaiterResult;
+
+    constexpr PoolWaiterClosed() noexcept = default;
+};
+
+// A completed pool wait owns exactly one outcome. Only acquisition carries a
+// slot index; timeout and pool closure can never expose a plausible sentinel.
+class PoolWaiterResult final {
+public:
+    [[nodiscard]] constexpr const PoolWaiterAcquired* acquired() const noexcept {
+        return std::get_if<PoolWaiterAcquired>(&value_);
+    }
+
+    [[nodiscard]] constexpr const PoolWaiterTimedOut* timedOut() const noexcept {
+        return std::get_if<PoolWaiterTimedOut>(&value_);
+    }
+
+    [[nodiscard]] constexpr const PoolWaiterClosed* closed() const noexcept {
+        return std::get_if<PoolWaiterClosed>(&value_);
+    }
+
+private:
+    friend class PoolWaiter;
+
+    using Value = std::variant<
+        PoolWaiterAcquired,
+        PoolWaiterTimedOut,
+        PoolWaiterClosed>;
+
+    template <typename Alternative>
+    explicit constexpr PoolWaiterResult(Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    [[nodiscard]] static constexpr PoolWaiterResult
+    makeAcquired(std::size_t index) noexcept {
+        return PoolWaiterResult(PoolWaiterAcquired(index));
+    }
+
+    [[nodiscard]] static constexpr PoolWaiterResult makeTimedOut() noexcept {
+        return PoolWaiterResult(PoolWaiterTimedOut());
+    }
+
+    [[nodiscard]] static constexpr PoolWaiterResult makeClosed() noexcept {
+        return PoolWaiterResult(PoolWaiterClosed());
+    }
+
+    Value value_;
+};
 
 // One coroutine waiting for a free connection slot in a per-worker connection
 // pool. The node lives on the waiting coroutine's frame; the queue owns only
 // the intrusive links, so enqueuing costs no allocation.
-//
-// `index` receives the slot handed to the waiter, `ready`/`timedOut` are the
-// awaiter's resume flags, all owned by the suspended coroutine.
+// PoolWaiter is its own awaiter: the queue commits one typed result before it
+// resumes the coroutine, so callers never coordinate external readiness flags.
 class PoolWaiter final {
 public:
-    PoolWaiter() noexcept = default;
-    PoolWaiter(
-        bool& ready,
-        bool& timedOut,
-        std::size_t& index,
-        std::chrono::steady_clock::time_point deadline) noexcept {
-        bind(ready, timedOut, index, deadline, {});
-    }
+    explicit PoolWaiter(
+        std::chrono::steady_clock::time_point deadline) noexcept
+        : deadline_(deadline) {}
 
     PoolWaiter(const PoolWaiter&) = delete;
     PoolWaiter& operator=(const PoolWaiter&) = delete;
 
-    void bind(
-        bool& ready,
-        bool& timedOut,
-        std::size_t& index,
-        std::chrono::steady_clock::time_point deadline,
-        std::coroutine_handle<> handle) noexcept {
-        ready_ = &ready;
-        timedOut_ = &timedOut;
-        index_ = &index;
-        deadline_ = deadline;
+    [[nodiscard]] bool await_ready() const noexcept {
+        return result_.has_value();
+    }
+
+    void await_suspend(std::coroutine_handle<> handle) noexcept {
         handle_ = handle;
     }
 
-    void setHandle(std::coroutine_handle<> handle) noexcept {
-        handle_ = handle;
+    [[nodiscard]] const PoolWaiterResult& await_resume() const noexcept {
+        if (!result_) {
+            std::terminate();
+        }
+        return *result_;
     }
 
 private:
     friend class PoolWaiterQueue;
 
-    bool* ready_{nullptr};
-    bool* timedOut_{nullptr};
-    std::size_t* index_{nullptr};
+    void completeAcquired(std::size_t index) noexcept {
+        if (result_) {
+            std::terminate();
+        }
+        result_.emplace(PoolWaiterResult::makeAcquired(index));
+    }
+
+    void completeTimedOut() noexcept {
+        if (result_) {
+            std::terminate();
+        }
+        result_.emplace(PoolWaiterResult::makeTimedOut());
+    }
+
+    void completeClosed() noexcept {
+        if (result_) {
+            std::terminate();
+        }
+        result_.emplace(PoolWaiterResult::makeClosed());
+    }
+
+    void resume() noexcept {
+        auto handle = std::exchange(handle_, {});
+        if (handle) {
+            handle.resume();
+        }
+    }
+
+    std::optional<PoolWaiterResult> result_;
     std::chrono::steady_clock::time_point deadline_{};
     std::coroutine_handle<> handle_{};
     PoolWaiter* previous_{nullptr};
@@ -66,7 +163,7 @@ public:
     }
 
     void enqueue(PoolWaiter& waiter) noexcept {
-        if (waiter.queued_) {
+        if (waiter.queued_ || waiter.result_) {
             return;
         }
         waiter.previous_ = tail_;
@@ -102,39 +199,39 @@ public:
     // Hand the freed slot `index` to the next waiter and resume it. Returns true
     // if a waiter took the slot, false if the queue was empty.
     [[nodiscard]] bool resumeNext(std::size_t index) noexcept {
-        while (head_ != nullptr) {
-            auto* waiter = head_;
-            remove(*waiter);
-            if (waiter->ready_ != nullptr && waiter->index_ != nullptr) {
-                *waiter->index_ = index;
-                *waiter->ready_ = true;
-                if (waiter->handle_) {
-                    waiter->handle_.resume();
-                }
-                return true;
-            }
+        if (head_ == nullptr) {
+            return false;
         }
-        return false;
+        auto* waiter = head_;
+        remove(*waiter);
+        waiter->completeAcquired(index);
+        waiter->resume();
+        return true;
     }
 
-    // Wake every waiter on pool shutdown with a sentinel slot so each acquire
-    // observes the closing pool and fails (not as a timeout).
-    void closeAll(std::size_t sentinelIndex) noexcept {
+    // Commit closure for the entire current queue before resuming any waiter.
+    // A resumed coroutine can re-enter the queue, so draining one waiter at a
+    // time would let that continuation acquire a slot on behalf of a waiter
+    // that should already have observed pool closure.
+    void closeAll() noexcept {
+        PoolWaiter* closedHead = nullptr;
+        PoolWaiter* closedTail = nullptr;
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
-            if (waiter->timedOut_ != nullptr) {
-                *waiter->timedOut_ = false;
+            waiter->completeClosed();
+            if (closedTail != nullptr) {
+                closedTail->next_ = waiter;
+            } else {
+                closedHead = waiter;
             }
-            if (waiter->index_ != nullptr) {
-                *waiter->index_ = sentinelIndex;
-            }
-            if (waiter->ready_ != nullptr) {
-                *waiter->ready_ = true;
-            }
-            if (waiter->handle_) {
-                waiter->handle_.resume();
-            }
+            closedTail = waiter;
+        }
+        while (closedHead != nullptr) {
+            auto* resumeWaiter = closedHead;
+            closedHead = closedHead->next_;
+            resumeWaiter->next_ = nullptr;
+            resumeWaiter->resume();
         }
     }
 
@@ -148,8 +245,8 @@ public:
         // queued waiter). So first detach every expired waiter into a private
         // list, then resume them once the traversal is complete — a resumed
         // coroutine can no longer touch a node that is already off the queue, so
-        // no waiter is ever resumed twice. (closeAll() is re-entrancy-safe for
-        // the same reason: it re-reads head_ after every resume.)
+        // no waiter is ever resumed twice. closeAll() applies the same
+        // commit-before-resume rule to the entire queue.
         PoolWaiter* expiredHead = nullptr;
         PoolWaiter* expiredTail = nullptr;
         auto* waiter = head_;
@@ -157,12 +254,7 @@ public:
             auto* next = waiter->next_;
             if (waiter->deadline_ <= now) {
                 remove(*waiter);
-                if (waiter->timedOut_ != nullptr) {
-                    *waiter->timedOut_ = true;
-                }
-                if (waiter->ready_ != nullptr) {
-                    *waiter->ready_ = true;
-                }
+                waiter->completeTimedOut();
                 waiter->next_ = nullptr;
                 if (expiredTail != nullptr) {
                     expiredTail->next_ = waiter;
@@ -176,9 +268,7 @@ public:
         while (expiredHead != nullptr) {
             auto* resumeWaiter = expiredHead;
             expiredHead = expiredHead->next_;
-            if (resumeWaiter->handle_) {
-                resumeWaiter->handle_.resume();
-            }
+            resumeWaiter->resume();
         }
     }
 

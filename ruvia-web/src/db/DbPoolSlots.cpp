@@ -1,6 +1,6 @@
 #include "ruvia/web/detail/db/DbInternal.h"
 
-#include <coroutine>
+#include <exception>
 #include <stdexcept>
 
 namespace ruvia {
@@ -35,43 +35,24 @@ Task<std::size_t> detail::MariaDbPool::acquireSlot() {
         }
     };
 
-    bool ready = false;
-    bool timedOut = false;
-    std::size_t slot = 0;
     PoolWaiter waiter(
-        ready,
-        timedOut,
-        slot,
         std::chrono::steady_clock::now() + config_.acquireTimeout);
     waiters_.enqueue(waiter);
     WaiterGuard guard{*this, waiter};
 
-    struct WaiterAwaiter final {
-        PoolWaiter& waiter;
-        bool& ready;
-
-        [[nodiscard]] bool await_ready() const noexcept {
-            return ready;
-        }
-
-        void await_suspend(std::coroutine_handle<> handle) noexcept {
-            waiter.setHandle(handle);
-        }
-
-        void await_resume() const noexcept {}
-    };
-
-    co_await WaiterAwaiter{waiter, ready};
-
-    if (timedOut) {
+    const auto& result = co_await waiter;
+    if (result.timedOut() != nullptr) {
         throw std::runtime_error("database connection pool acquire timed out");
     }
-
-    if (closing_ || slot >= slots_.size()) {
+    if (result.closed() != nullptr) {
         throw std::runtime_error("database client is closing");
     }
 
-    co_return slot;
+    const auto* acquired = result.acquired();
+    if (acquired == nullptr) {
+        std::terminate();
+    }
+    co_return acquired->index();
 }
 
 void detail::MariaDbPool::releaseSlot(std::size_t slot) noexcept {

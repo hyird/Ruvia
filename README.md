@@ -992,6 +992,17 @@ streaming. This adds no allocation, lock, virtual dispatch, or request-time type
   monotonic arena. Per-worker isolation comes from an object pool plus mimalloc's
   thread-local heaps rather than a distinct PMR tier.
 
+Exhausted per-worker DB and Redis pools share `ruvia-core`'s allocation-free intrusive
+`PoolWaiterQueue`. `PoolWaiter` is itself the coroutine awaiter, and the queue commits one
+non-default-constructible `PoolWaiterResult` before resuming it. The result contains exactly
+`PoolWaiterAcquired`, `PoolWaiterTimedOut`, or `PoolWaiterClosed`; only acquisition exposes a slot
+index. Pool shutdown therefore produces an explicit closed alternative instead of encoding closure
+as `ready + !timedOut + pool-size sentinel`, and the two integrations no longer duplicate a local
+awaiter or reconstruct completion from three parallel scalars. Callers observe completion only
+through the awaiter protocol (`co_await`/`await_resume()`), with no parallel result accessor.
+`closeAll()` commits closure to the entire queued snapshot before resuming any coroutine, so a
+re-entrant continuation cannot turn another closing waiter into a successful acquisition.
+
 ## HTTP Library
 
 `ruvia::http` is intended to be useful without the web framework or the Ruvia runtime foundation, in the nghttp2 class: a pure, core-free, asio-free, sans-I/O protocol library. It owns HTTP wire/message/framing/connection semantics and reusable helpers -- the h1 parser and connection semantics, the HTTP/2 connection state machine (`Http2Connection`, one implementation driven in both server and client role), the WebSocket protocol core (`WebSocketProtocol.h`), HPACK, response-head serialization helpers, cookie/cache/range/conditional request/content negotiation helpers, multipart/form/url encoding (`MultipartParser.h`), SSE formatting (`Sse.h`), content decoding, and opaque protocol body handles. You feed it bytes and drive its events from any runtime.

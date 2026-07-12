@@ -57,7 +57,7 @@ Task<void> RedisPool::connect() {
 
 void RedisPool::closeNow() noexcept {
     closing_ = true;
-    waiters_.closeAll(connections_.size());
+    waiters_.closeAll();
     for (auto& connection : connections_) {
         close(connection);
     }

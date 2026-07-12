@@ -48,7 +48,7 @@ void detail::MariaDbPool::closeNow() noexcept {
         return;
     }
     closing_ = true;
-    waiters_.closeAll(slots_.size());
+    waiters_.closeAll();
     for (auto& slot : slots_) {
         closeSlot(slot);
     }
