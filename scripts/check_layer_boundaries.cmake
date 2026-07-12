@@ -1451,6 +1451,57 @@ elseif(EXISTS "${WEB_CONTROLLER_MACROS}")
             "generated hooks and route-builder operations must remain private behind ControllerRegistrationAccess")
     endif()
 endif()
+set(WEB_MIDDLEWARE_PUBLIC
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Middleware.h")
+set(WEB_MIDDLEWARE_DESCRIPTOR
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/middleware/MiddlewareDescriptor.h")
+set(WEB_MIDDLEWARE_REGISTRATION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/middleware/MiddlewareRegistration.h")
+set(WEB_MIDDLEWARE_GUARD
+    "${RUVIA_ROOT}/tests/guards/middleware_next_guard.cpp")
+set(WEB_MIDDLEWARE_EXAMPLE
+    "${RUVIA_ROOT}/examples/middleware_next.cpp")
+foreach(stale_middleware_header IN ITEMS
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/MiddlewareDescriptor.h"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/MiddlewareRuntime.h")
+    if(EXISTS "${stale_middleware_header}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${stale_middleware_header}")
+        boundary_error("middleware registration internals escaped detail ownership"
+            "${relative} must not restore the removed public-root path")
+    endif()
+endforeach()
+if(NOT EXISTS "${WEB_MIDDLEWARE_PUBLIC}" OR
+   NOT EXISTS "${WEB_MIDDLEWARE_DESCRIPTOR}" OR
+   NOT EXISTS "${WEB_MIDDLEWARE_REGISTRATION}" OR
+   NOT EXISTS "${WEB_MIDDLEWARE_GUARD}" OR
+   NOT EXISTS "${WEB_MIDDLEWARE_EXAMPLE}")
+    boundary_error("middleware API/registration split is incomplete"
+        "Middleware.h, detail/middleware contracts, and the signature guard must remain")
+else()
+    file(READ "${WEB_MIDDLEWARE_PUBLIC}" web_middleware_public)
+    file(READ "${WEB_MIDDLEWARE_DESCRIPTOR}" web_middleware_descriptor)
+    file(READ "${WEB_MIDDLEWARE_REGISTRATION}" web_middleware_registration)
+    file(READ "${WEB_MIDDLEWARE_GUARD}" web_middleware_guard)
+    file(READ "${WEB_MIDDLEWARE_EXAMPLE}" web_middleware_example)
+    if(NOT web_middleware_public MATCHES "class Middleware" OR
+       web_middleware_public MATCHES
+           "namespace detail|ControllerMiddlewareDescriptor|invokeMiddleware|Context[.]h" OR
+       NOT web_middleware_descriptor MATCHES
+           "class ControllerMiddlewareDescriptor final" OR
+       NOT web_middleware_registration MATCHES
+           "concept VoidHandleMiddleware" OR
+       NOT web_middleware_registration MATCHES
+           "concept ResponseHandleMiddleware" OR
+       NOT web_middleware_registration MATCHES
+           "makeMiddlewareDescriptor" OR
+       NOT web_middleware_guard MATCHES
+           "!ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>" OR
+       web_middleware_example MATCHES
+           "ruvia::detail::(VoidHandleMiddleware|ResponseHandleMiddleware)|detail/middleware")
+        boundary_error("middleware public API and registration implementation were mixed"
+            "the public header must contain only the CRTP marker; signature/factory checks belong in detail and guard tests")
+    endif()
+endif()
 check_files_no_match("Web routing restored split endpoint or resolution APIs"
     "${RULE_STALE_ROUTE_MODE_SPLIT}|${RULE_STALE_ROUTE_RESOLUTION_TUPLE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Controller.h"

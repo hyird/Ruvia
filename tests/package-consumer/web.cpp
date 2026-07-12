@@ -19,7 +19,7 @@
 #include <ruvia/web/Controller.h>
 #include <ruvia/web/Error.h>
 #include <ruvia/web/HttpServerOptions.h>
-#include <ruvia/web/MiddlewareRuntime.h>
+#include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
 #include <ruvia/web/RouteModes.h>
 #include <ruvia/web/Streaming.h>
