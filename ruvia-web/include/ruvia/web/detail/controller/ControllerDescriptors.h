@@ -16,7 +16,7 @@
 #include "ruvia/web/detail/RegistrationResource.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
-#include "ruvia/web/RouteModes.h"
+#include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/core/memory/PmrObject.h"
 

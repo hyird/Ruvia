@@ -20,7 +20,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/detail/PmrString.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
-#include "ruvia/web/RouteModes.h"
+#include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 
 namespace ruvia::detail {

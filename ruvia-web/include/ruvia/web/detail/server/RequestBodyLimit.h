@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "ruvia/web/RouteModes.h"
+#include "ruvia/web/detail/router/RouteModes.h"
 
 namespace ruvia::detail {
 

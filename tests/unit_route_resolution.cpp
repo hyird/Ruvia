@@ -15,7 +15,7 @@
 
 namespace {
 
-using ruvia::kMaxRouteParams;
+using ruvia::detail::kMaxRouteParams;
 using ruvia::detail::RouteEntry;
 using ruvia::detail::RouteEndpoint;
 using ruvia::detail::RouteHandler;

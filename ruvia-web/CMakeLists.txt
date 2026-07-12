@@ -156,7 +156,6 @@ ruvia_install_public_headers(web
     include/ruvia/web/MultipartReader.h
     include/ruvia/web/Next.h
     include/ruvia/web/RateLimit.h
-    include/ruvia/web/RouteModes.h
     include/ruvia/web/SecurityHeaders.h
     include/ruvia/web/Session.h
     include/ruvia/web/Streaming.h

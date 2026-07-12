@@ -1634,6 +1634,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endif()
 
     set(_installed_route_modes_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteModes.h")
+    set(_installed_route_limits_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteLimits.h")
+    set(_installed_stale_route_modes_path
         "${_install_prefix}/include/ruvia/web/RouteModes.h")
     set(_installed_route_resolution_path
         "${_install_prefix}/include/ruvia/web/detail/router/RouteResolution.h")
@@ -1659,6 +1663,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
     foreach(_route_contract IN ITEMS
             "${_installed_route_modes_path}"
+            "${_installed_route_limits_path}"
             "${_installed_route_resolution_path}"
             "${_installed_route_table_path}"
             "${_installed_route_http2_session_path}"
@@ -1673,6 +1678,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
                 "installed Web package is missing a typed route contract")
         endif()
     endforeach()
+    if(EXISTS "${_installed_stale_route_modes_path}")
+        message(FATAL_ERROR
+            "installed Web package restored public-root route mode internals")
+    endif()
     if(EXISTS "${_installed_stale_stream_kind_adapter}")
         message(FATAL_ERROR
             "installed Web package retained the removed response-mode adapter")
@@ -1682,6 +1691,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package retained the removed virtual RequestDispatcher")
     endif()
     file(READ "${_installed_route_modes_path}" _installed_route_modes)
+    file(READ "${_installed_route_limits_path}" _installed_route_limits)
     file(READ "${_installed_route_resolution_path}"
         _installed_route_resolution)
     file(READ "${_installed_route_table_path}" _installed_route_table)
@@ -1824,7 +1834,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed server runtimes re-derived connection identity")
     endif()
-    if(_installed_route_modes MATCHES "ResponseBodyMode" OR
+    if(NOT _installed_route_modes MATCHES "enum class RequestBodyMode" OR
+       _installed_route_modes MATCHES "kMaxRouteParams" OR
+       NOT _installed_route_limits MATCHES
+           "inline constexpr std::size_t kMaxRouteParams" OR
+       _installed_route_limits MATCHES "namespace ruvia[ \t\r\n]*[{]" OR
+       _installed_route_modes MATCHES "ResponseBodyMode" OR
        _installed_route_resolution MATCHES "RouteDisposition" OR
        _installed_route_resolution MATCHES
            "bool[ \t]+(found|hasMatch)_" OR
