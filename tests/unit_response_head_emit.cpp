@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -109,7 +110,7 @@ RUVIA_TEST(finalize_buffered_response_preserves_request_version_and_persistence)
         HttpResponse response(std::pmr::new_delete_resource());
         response.status(200);
         ruvia::detail::Http1RequestSequence requestSequence(
-            /*maxRequests=*/0);
+            std::nullopt);
         const auto plan = finalizeBufferedRouteResponse(
             response,
             parser.parseMessage(request).connectionPlan,
@@ -328,7 +329,7 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
     Http1ServerRequestParser parser;
     const auto requestPlan = parser.parseMessage(
         "GET / HTTP/1.1\r\nHost: x\r\n\r\n").connectionPlan;
-    Http1RequestSequence requestSequence(/*maxRequests=*/5);
+    Http1RequestSequence requestSequence(std::optional<std::size_t>{5});
     for (std::size_t completed = 0; completed < 4; ++completed) {
         HttpResponse response(std::pmr::new_delete_resource());
         const auto connectionPlan = finalizeBufferedRouteResponse(
@@ -350,6 +351,13 @@ RUVIA_TEST(http1_buffered_request_limit_closes_the_typed_connection_plan) {
     RUVIA_CHECK_EQ(std::string(response.header("Connection")), std::string("close"));
 }
 
+RUVIA_TEST(http1_request_sequence_rejects_configured_zero_budget) {
+    RUVIA_CHECK(throwsInvalid([] {
+        ruvia::detail::Http1RequestSequence sequence(
+            std::optional<std::size_t>{0});
+    }));
+}
+
 RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
     using ruvia::detail::Http1ConnectionDisposition;
     using ruvia::detail::Http1RequestSequence;
@@ -362,7 +370,7 @@ RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
 
     const auto reusablePlan = connectionPlanFor(
         ruvia::HttpProtocolVersion::kHttp11);
-    Http1RequestSequence requestSequence(/*maxRequests=*/2);
+    Http1RequestSequence requestSequence(std::optional<std::size_t>{2});
     RUVIA_CHECK(
         requestSequence.nextResponseClosePolicy() ==
         Http1ServerClosePolicy::kAllowReuse);
@@ -396,7 +404,7 @@ RUVIA_TEST(http1_request_sequence_unifies_buffered_and_committed_completion) {
     requestSequence.completeCommittedResponse(
         prepared.connectionPlan());
 
-    Http1RequestSequence unlimited(/*maxRequests=*/0);
+    Http1RequestSequence unlimited(std::nullopt);
     unlimited.completeCommittedResponse(reusablePlan);
     RUVIA_CHECK(
         unlimited.nextResponseClosePolicy() ==
@@ -416,7 +424,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     HttpResponse completeResponse(std::pmr::new_delete_resource());
     completeResponse.setBodyCopy("response");
     ruvia::detail::Http1RequestSequence completeRequestSequence(
-        /*maxRequests=*/0);
+        std::nullopt);
     const auto completePlan = finalizeBodyRouteResponse(
         completeResponse,
         parser.parseMessage(request).connectionPlan,
@@ -433,7 +441,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
     HttpResponse incompleteResponse(std::pmr::new_delete_resource());
     incompleteResponse.setBodyCopy("response");
     ruvia::detail::Http1RequestSequence incompleteRequestSequence(
-        /*maxRequests=*/0);
+        std::nullopt);
     const auto incompletePlan = finalizeBodyRouteResponse(
         incompleteResponse,
         parser.parseMessage(request).connectionPlan,

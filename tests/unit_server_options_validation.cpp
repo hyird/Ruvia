@@ -38,6 +38,12 @@ RUVIA_TEST(validate_server_options_accepts_defaults) {
     static_assert(std::same_as<
                   decltype(HttpServerOptions{}.sendTimeout),
                   std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.maxConnections),
+                  std::optional<std::size_t>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.keepaliveRequests),
+                  std::optional<std::size_t>>);
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
 }
 
@@ -90,6 +96,16 @@ RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
 }
 
 RUVIA_TEST(validate_server_options_rejects_nonpositive_limits) {
+    {
+        HttpServerOptions options;
+        options.maxConnections = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.keepaliveRequests = 0;
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
     {
         HttpServerOptions options;
         options.maxBufferedBodyBytes = 0;

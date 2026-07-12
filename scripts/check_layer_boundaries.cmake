@@ -1202,7 +1202,9 @@ check_files_no_match("request sessions must not poll cross-thread lifecycle atom
 if(EXISTS "${WEB_HTTP_SERVER_ACCEPT}")
     file(READ "${WEB_HTTP_SERVER_ACCEPT}" web_http_server_accept)
     if(NOT web_http_server_accept MATCHES
-           "activeConnectionCount_[ 	]*>=[ 	]*options_[.]maxConnections" OR
+           "options_[.]maxConnections[.]has_value[(][)]" OR
+       NOT web_http_server_accept MATCHES
+           "activeConnectionCount_[ 	]*>=[ 	]*[*]options_[.]maxConnections" OR
        web_http_server_accept MATCHES
            "Http(Response|Error)|http1|writeResponse|RequestMemory")
         boundary_error("Connection admission crossed into HTTP response handling"
@@ -3708,6 +3710,42 @@ check_files_no_match("HTTP/1 request limit must use one connection-private seque
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+set(WEB_HTTP1_REQUEST_SEQUENCE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1RequestSequence.h")
+set(WEB_HTTP1_REQUEST_SEQUENCE_TEST
+    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
+if(EXISTS "${WEB_HTTP1_REQUEST_SEQUENCE}" AND
+   EXISTS "${WEB_HTTP1_REQUEST_SEQUENCE_TEST}" AND
+   EXISTS "${WEB_SERVER_OPTIONS_MODEL}" AND
+   EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
+   EXISTS "${WEB_SERVER_CONFIG_PACKAGE_CONSUMER}")
+    file(READ "${WEB_HTTP1_REQUEST_SEQUENCE}" web_http1_request_sequence)
+    file(READ "${WEB_HTTP1_REQUEST_SEQUENCE_TEST}"
+        web_http1_request_sequence_test)
+    file(READ "${WEB_SERVER_OPTIONS_MODEL}" web_limit_server_options)
+    file(READ "${WEB_APP_PUBLIC_MODEL}" web_limit_app_api)
+    file(READ "${WEB_SERVER_CONFIG_PACKAGE_CONSUMER}"
+        web_limit_package_consumer)
+    if(NOT web_http1_request_sequence MATCHES
+           "std::optional<std::size_t>[ 	]+requestsUntilClose_" OR
+       NOT web_http1_request_sequence MATCHES
+           "Http1RequestSequence[(]std::size_t[)][ 	]*=[ 	]*delete" OR
+       NOT web_http1_request_sequence_test MATCHES
+           "http1_request_sequence_rejects_configured_zero_budget" OR
+       NOT web_limit_server_options MATCHES
+           "std::optional<std::size_t>[ 	]+maxConnections" OR
+       NOT web_limit_server_options MATCHES
+           "std::optional<std::size_t>[ 	]+keepaliveRequests" OR
+       NOT web_limit_app_api MATCHES
+           "setMaxConnectionsPerWorker[(]std::optional<std::size_t>" OR
+       NOT web_limit_app_api MATCHES
+           "setKeepaliveRequests[(]std::optional<std::size_t>" OR
+       NOT web_limit_package_consumer MATCHES
+           "AppSetOptionalSizeFunction")
+        boundary_error("Web connection/request limits regained zero sentinels"
+            "absence must mean unlimited from App configuration through admission and the connection-private request sequence")
+    endif()
+endif()
 check_files_no_match("response stream must end in Context scope without dummy payload"
     "${RULE_LATE_RESPONSE_STREAM_END}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")

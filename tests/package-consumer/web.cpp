@@ -433,6 +433,8 @@ using AppSetCorsFunction = ruvia::App& (ruvia::App::*)(
     std::optional<ruvia::CorsConfig>);
 using AppSetConnectionTimeoutFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::chrono::milliseconds>);
+using AppSetOptionalSizeFunction = ruvia::App& (ruvia::App::*)(
+    std::optional<std::size_t>);
 
 static_assert(std::same_as<
     decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
@@ -459,6 +461,14 @@ static_assert(std::same_as<
     decltype(static_cast<AppSetConnectionTimeoutFunction>(
         &ruvia::App::setSendTimeout)),
     AppSetConnectionTimeoutFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetOptionalSizeFunction>(
+        &ruvia::App::setMaxConnectionsPerWorker)),
+    AppSetOptionalSizeFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetOptionalSizeFunction>(
+        &ruvia::App::setKeepaliveRequests)),
+    AppSetOptionalSizeFunction>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<
@@ -470,6 +480,12 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::detail::HttpServerOptions{}.keepaliveTimeout),
     std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpServerOptions{}.maxConnections),
+    std::optional<std::size_t>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpServerOptions{}.keepaliveRequests),
+    std::optional<std::size_t>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -651,15 +667,16 @@ static_assert(!std::default_initializable<
     ruvia::detail::Http1SessionRequestCompletion>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1RequestSequence>);
-static_assert(std::is_nothrow_constructible_v<
+static_assert(std::constructible_from<
+    ruvia::detail::Http1RequestSequence,
+    std::optional<std::size_t>>);
+static_assert(!std::constructible_from<
     ruvia::detail::Http1RequestSequence,
     std::size_t>);
 static_assert(!std::copy_constructible<
     ruvia::detail::Http1RequestSequence>);
 static_assert(!std::move_constructible<
     ruvia::detail::Http1RequestSequence>);
-static_assert(sizeof(ruvia::detail::Http1RequestSequence) ==
-              sizeof(std::size_t));
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http1RequestSequence&>().nextResponseClosePolicy()),

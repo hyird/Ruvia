@@ -4,27 +4,36 @@
 
 #include <cstddef>
 #include <exception>
+#include <optional>
+#include <stdexcept>
 
 namespace ruvia::detail {
 
 // Connection-private ownership of the Web product's request-count policy.
-// HTTP still owns persistence and response framing; this one-word state keeps
-// a saturating remaining-response budget, contributes one typed close policy
+// HTTP still owns persistence and response framing; this connection state keeps
+// an optional saturating remaining-response budget, contributes one typed close policy
 // before a streamed head is committed, and records each completed route once.
 class Http1RequestSequence final {
 public:
-    explicit constexpr Http1RequestSequence(
-        std::size_t maxRequests) noexcept
-        : requestsUntilClose_(maxRequests) {}
+    explicit Http1RequestSequence(
+        std::optional<std::size_t> maxRequests)
+        : requestsUntilClose_(maxRequests) {
+        if (maxRequests.has_value() && *maxRequests == 0) {
+            throw std::invalid_argument(
+                "configured keepalive request limit must be greater than zero");
+        }
+    }
+
+    Http1RequestSequence(std::size_t) = delete;
 
     Http1RequestSequence(const Http1RequestSequence&) = delete;
     Http1RequestSequence& operator=(const Http1RequestSequence&) = delete;
     Http1RequestSequence(Http1RequestSequence&&) = delete;
     Http1RequestSequence& operator=(Http1RequestSequence&&) = delete;
 
-    [[nodiscard]] constexpr Http1ServerClosePolicy
+    [[nodiscard]] Http1ServerClosePolicy
     nextResponseClosePolicy() const noexcept {
-        return requestsUntilClose_ == 1
+        return requestsUntilClose_.has_value() && *requestsUntilClose_ == 1
             ? Http1ServerClosePolicy::kCloseAfterResponse
             : Http1ServerClosePolicy::kAllowReuse;
     }
@@ -32,7 +41,7 @@ public:
     // Buffered response bytes have not been committed yet, so the request
     // budget may still tighten the protocol plan before Connection fields are
     // finalized.
-    [[nodiscard]] constexpr Http1ServerConnectionPlan
+    [[nodiscard]] Http1ServerConnectionPlan
     completeUncommittedResponse(
         Http1ServerConnectionPlan connectionPlan) noexcept {
         const auto closePolicy = nextResponseClosePolicy();
@@ -57,15 +66,15 @@ public:
     }
 
 private:
-    constexpr void recordCompletion() noexcept {
-        // Zero is the configured unlimited state. One is deliberately
-        // saturated so an impossible extra completion cannot reopen reuse.
-        if (requestsUntilClose_ > 1) {
-            --requestsUntilClose_;
+    void recordCompletion() noexcept {
+        // One is deliberately saturated so an impossible extra completion
+        // cannot reopen reuse; absence remains unlimited.
+        if (requestsUntilClose_.has_value() && *requestsUntilClose_ > 1) {
+            --*requestsUntilClose_;
         }
     }
 
-    std::size_t requestsUntilClose_;
+    std::optional<std::size_t> requestsUntilClose_;
 };
 
 }  // namespace ruvia::detail

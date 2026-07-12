@@ -151,22 +151,28 @@ App& App::setSendTimeout(std::optional<std::chrono::milliseconds> timeout) {
         });
 }
 
-App& App::setMaxConnectionsPerWorker(std::size_t maxConnections) {
+App& App::setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change connection limit while app is running",
         [maxConnections](detail::AppState& state) {
+            detail::ensurePositiveOptionalSize(
+                maxConnections,
+                "configured connection limit must be greater than zero");
             state.options.maxConnections = maxConnections;
         });
 }
 
-App& App::setKeepaliveRequests(std::size_t maxRequests) {
+App& App::setKeepaliveRequests(std::optional<std::size_t> maxRequests) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change keepalive request limit while app is running",
         [maxRequests](detail::AppState& state) {
+            detail::ensurePositiveOptionalSize(
+                maxRequests,
+                "configured keepalive request limit must be greater than zero");
             state.options.keepaliveRequests = maxRequests;
         });
 }

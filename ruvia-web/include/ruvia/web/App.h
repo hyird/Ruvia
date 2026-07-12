@@ -54,8 +54,8 @@ public:
     App& setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setSendTimeout(std::optional<std::chrono::milliseconds> timeout);
-    App& setMaxConnectionsPerWorker(std::size_t maxConnections);
-    App& setKeepaliveRequests(std::size_t maxRequests);
+    App& setMaxConnectionsPerWorker(std::optional<std::size_t> maxConnections);
+    App& setKeepaliveRequests(std::optional<std::size_t> maxRequests);
     App& setMaxBufferedBodyBytes(std::size_t bytes);
     App& setMaxStreamBodyBytes(std::size_t bytes);
     App& setMaxWebSocketMessageBytes(std::size_t bytes);
