@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketConnection.h"
 #include "ruvia/web/detail/websocket/HttpWebSocketSession.h"
@@ -15,12 +16,69 @@
 #include "ruvia/core/memory/MemoryPool.h"
 
 #include <string_view>
+#include <utility>
+#include <variant>
 
 namespace ruvia::detail {
 
-enum class HttpWebSocketRouteResult {
-    kWriteBufferedResponse,
-    kSessionFinished
+class HttpWebSocketBufferedResponse final {
+public:
+    [[nodiscard]] const Http1SessionRequestCompletion&
+    completion() const noexcept {
+        return completion_;
+    }
+
+private:
+    friend class HttpWebSocketRouteResult;
+
+    explicit HttpWebSocketBufferedResponse(
+        Http1SessionRequestCompletion completion) noexcept
+        : completion_(std::move(completion)) {}
+
+    Http1SessionRequestCompletion completion_;
+};
+
+class HttpWebSocketSessionFinished final {
+private:
+    friend class HttpWebSocketRouteResult;
+
+    constexpr HttpWebSocketSessionFinished() noexcept = default;
+};
+
+class HttpWebSocketRouteResult final {
+public:
+    [[nodiscard]] static HttpWebSocketRouteResult makeBuffered(
+        Http1SessionRequestCompletion completion) noexcept {
+        return HttpWebSocketRouteResult(
+            HttpWebSocketBufferedResponse(std::move(completion)));
+    }
+
+    [[nodiscard]] static HttpWebSocketRouteResult
+    makeSessionFinished() noexcept {
+        return HttpWebSocketRouteResult(
+            HttpWebSocketSessionFinished{});
+    }
+
+    [[nodiscard]] const HttpWebSocketBufferedResponse*
+    bufferedResponse() const noexcept {
+        return std::get_if<HttpWebSocketBufferedResponse>(&value_);
+    }
+
+    [[nodiscard]] const HttpWebSocketSessionFinished*
+    sessionFinished() const noexcept {
+        return std::get_if<HttpWebSocketSessionFinished>(&value_);
+    }
+
+private:
+    using Value = std::variant<
+        HttpWebSocketBufferedResponse,
+        HttpWebSocketSessionFinished>;
+
+    template <typename Alternative>
+    explicit HttpWebSocketRouteResult(Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    Value value_;
 };
 
 template <typename Stream>
@@ -35,8 +93,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     ContextServices baseRouteServices,
     const HttpServerOptions& options,
     std::string_view pendingFrames,
-    HttpResponse& response,
-    Http1ServerConnectionPlan& connectionPlan) {
+    HttpResponse& response) {
     if (!isValidWebSocketRequest(parsed.request) ||
         parsed.bodyPlan.requiresConsumption()) {
         response = co_await routes.handleError(
@@ -44,9 +101,11 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             requestMemory,
             HttpErrorInfo(400, {}, "invalid websocket upgrade"),
             baseRouteServices);
-        connectionPlan = http1FinalizeResponseConnection(
+        const auto connectionPlan = http1FinalizeResponseConnection(
             response, parsed.connectionPlan.requireClose());
-        co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
+        co_return HttpWebSocketRouteResult::makeBuffered(
+            Http1SessionRequestCompletion::makeBufferedClosing(
+                connectionPlan));
     }
     const auto& webSocketEndpoint =
         *resolved.route().endpoint().webSocket();
@@ -56,7 +115,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
     if (!(co_await writeWebSocketHandshake(
             stream,
             handshake))) {
-        co_return HttpWebSocketRouteResult::kSessionFinished;
+        co_return HttpWebSocketRouteResult::makeSessionFinished();
     }
 
     SocketWebSocketConnection<Stream> webSocketConnection(
@@ -75,7 +134,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         resolved,
         requestMemory,
         baseRouteServices);
-    co_return HttpWebSocketRouteResult::kSessionFinished;
+    co_return HttpWebSocketRouteResult::makeSessionFinished();
 }
 
 }  // namespace ruvia::detail

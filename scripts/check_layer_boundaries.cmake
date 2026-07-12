@@ -195,6 +195,8 @@ set(RULE_STALE_RESPONSE_STREAM_COMMIT_BOOL
     "markCommitted[ 	]*\\([ 	]*(true|false)|bodySuppressed_")
 set(RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT
     "RouteStreamDispatchOutcome|responseStreamDispatched|trailerFraming_|ResponseStreamDispatchResult::(streamed|abortedByPeer|abortedAfterCommit)[ 	]*\\([ 	]*HttpResponse|result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ 	]*\\(")
+set(RULE_STALE_HTTP1_SESSION_COMPLETION
+    "HttpResponseStream(RouteResult|BufferedRoute|CommittedRoute)|enum class[ 	]+HttpWebSocketRouteResult|HttpWebSocketRouteResult::k(WriteBufferedResponse|SessionFinished)|committedStreamStatus|bufferAlreadyCompacted|Task<void>[ 	\r\n]+dispatchHttp(Buffered|Stream)BodyRoute|std::size_t&[ 	]+consumedBytes|Http1ServerConnectionPlan&[ 	]+connectionPlan")
 set(RULE_LATE_RESPONSE_STREAM_END
     "co_await[ 	]+responseStream[.]end|HttpResponse[ 	]+response[ 	]*[(][ 	]*requestMemory[.]resource[(][)]")
 set(RULE_LOOSE_BUFFERED_RESPONSE_PLAN
@@ -636,6 +638,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("response stream route outcome/payload tuple"
         "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
         "RouteStreamDispatchOutcome outcome;")
+    expect_match("HTTP/1 session parallel completion tuple"
+        "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
+        "std::optional<std::uint16_t> committedStreamStatus;")
+    expect_match("HTTP/1 body route completion out-parameters"
+        "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
+        "Task<void> dispatchHttpBufferedBodyRoute(std::size_t& consumedBytes);")
     expect_match("response stream ended after its bound Context lifetime"
         "${RULE_LATE_RESPONSE_STREAM_END}"
         "co_await responseStream.end();")
@@ -2488,6 +2496,17 @@ check_files_no_match("response-stream status must follow exclusive commit result
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+check_files_no_match("HTTP/1 session completion must not split wire, connection, and buffer state"
+    "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBufferedRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpConnectionState.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpConnectionState.cpp")
 check_files_no_match("response stream must end in Context scope without dummy payload"
     "${RULE_LATE_RESPONSE_STREAM_END}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
@@ -2508,12 +2527,16 @@ set(WEB_RESPONSE_STREAM_STATE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h")
 set(WEB_HTTP1_RESPONSE_STREAM_ROUTE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
+set(WEB_HTTP1_SESSION_REQUEST_COMPLETION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h")
 set(WEB_HTTP1_STREAM_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
 set(WEB_HTTP2_STREAM_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(RESPONSE_STREAM_STATUS_TEST
     "${RUVIA_ROOT}/tests/unit_response_stream_dispatch.cpp")
+set(HTTP1_SESSION_COMPLETION_TEST
+    "${RUVIA_ROOT}/tests/unit_connection_read_buffer.cpp")
 set(RESPONSE_STREAM_H2_RUNTIME_TEST
     "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
 set(RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER
@@ -2529,9 +2552,11 @@ foreach(response_stream_status_contract IN ITEMS
         "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}"
         "${WEB_RESPONSE_STREAM_STATE}"
         "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}"
+        "${WEB_HTTP1_SESSION_REQUEST_COMPLETION}"
         "${WEB_HTTP1_STREAM_SESSION}"
         "${WEB_HTTP2_STREAM_SESSION}"
         "${RESPONSE_STREAM_STATUS_TEST}"
+        "${HTTP1_SESSION_COMPLETION_TEST}"
         "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
         "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}"
         "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}")
@@ -2550,9 +2575,11 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
    EXISTS "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}" AND
    EXISTS "${WEB_RESPONSE_STREAM_STATE}" AND
    EXISTS "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}" AND
+   EXISTS "${WEB_HTTP1_SESSION_REQUEST_COMPLETION}" AND
    EXISTS "${WEB_HTTP1_STREAM_SESSION}" AND
    EXISTS "${WEB_HTTP2_STREAM_SESSION}" AND
    EXISTS "${RESPONSE_STREAM_STATUS_TEST}" AND
+   EXISTS "${HTTP1_SESSION_COMPLETION_TEST}" AND
    EXISTS "${RESPONSE_STREAM_H2_RUNTIME_TEST}" AND
    EXISTS "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}" AND
    EXISTS "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}")
@@ -2572,18 +2599,26 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
         web_response_stream_state)
     file(READ "${WEB_HTTP1_RESPONSE_STREAM_ROUTE}"
         web_http1_response_stream_route)
+    file(READ "${WEB_HTTP1_SESSION_REQUEST_COMPLETION}"
+        web_http1_session_request_completion)
     file(READ "${WEB_HTTP1_STREAM_SESSION}"
         web_http1_stream_session)
     file(READ "${WEB_HTTP2_STREAM_SESSION}"
         web_http2_stream_session)
     file(READ "${RESPONSE_STREAM_STATUS_TEST}"
         response_stream_status_test)
+    file(READ "${HTTP1_SESSION_COMPLETION_TEST}"
+        http1_session_completion_test)
     file(READ "${RESPONSE_STREAM_H2_RUNTIME_TEST}"
         response_stream_h2_runtime_test)
     file(READ "${RESPONSE_STREAM_HTTP_PACKAGE_CONSUMER}"
         response_stream_http_package_consumer)
     file(READ "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}"
         response_stream_web_package_consumer)
+    file(READ "${RUVIA_ROOT}/README.md"
+        http1_session_completion_readme)
+    file(READ "${RUVIA_ROOT}/AGENTS.md"
+        http1_session_completion_agents)
 
     if(NOT response_stream_commit_plan MATCHES
            "std::uint16_t responseStatus[(][)] const noexcept" OR
@@ -2630,17 +2665,45 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT web_response_stream_state MATCHES
            "const ResponseStreamCommitPlan[*] commitPlan[(][)] const noexcept" OR
        NOT web_http1_response_stream_route MATCHES
-           "HttpResponseStreamCommittedRoute" OR
+           "Task<Http1SessionRequestCompletion>" OR
+       NOT web_http1_response_stream_route MATCHES
+           "makeCommittedStream" OR
        NOT web_http1_response_stream_route MATCHES
            "completed->status[(][)]")
         boundary_error("Web response-stream outcomes restored a status/payload tuple"
             "handled, buffered, committed, pre-commit abort, and committed failure must remain exclusive alternatives")
     endif()
 
-    if(NOT web_http1_stream_session MATCHES
-           "std::optional<std::uint16_t> committedStreamStatus" OR
+    if(NOT web_http1_session_request_completion MATCHES
+           "class Http1SessionRequestCompletion final" OR
+       NOT web_http1_session_request_completion MATCHES
+           "class Http1CommittedStreamResponse final" OR
+       NOT web_http1_session_request_completion MATCHES
+           "class Http1RequestBufferCompletion final" OR
+       NOT web_http1_session_request_completion MATCHES
+           "Http1RequestBufferDiscarded" OR
+       NOT web_http1_session_request_completion MATCHES
+           "Http1RequestBufferCompaction" OR
+       NOT web_http1_session_request_completion MATCHES
+           "Http1RequestBufferRestored" OR
+       NOT web_http1_session_request_completion MATCHES
+           "makeBufferedClosing" OR
+       NOT web_http1_session_request_completion MATCHES
+           "makeBufferedUnrestored" OR
+       NOT web_http1_session_request_completion MATCHES
+           "makeBufferedRestored" OR
+       NOT web_http1_session_request_completion MATCHES
+           "makeCommittedStream" OR
+       NOT web_http1_session_request_completion MATCHES
+           "connectionPlan[(][)] const noexcept" OR
+       NOT web_http1_session_request_completion MATCHES
+           "bufferCompletion[(][)] const noexcept" OR
        NOT web_http1_stream_session MATCHES
-           "[*]committedStreamStatus, requestStart" OR
+           "std::optional<Http1SessionRequestCompletion> requestCompletion" OR
+       NOT web_http1_stream_session MATCHES
+           "committed->status[(][)]" OR
+       NOT web_http1_stream_session MATCHES
+           "applyReusableHttp1RequestBufferCompletion" OR
        NOT web_http1_stream_session MATCHES
            "Http1ConnectionDisposition::kClose" OR
        NOT web_http2_stream_session MATCHES
@@ -2652,7 +2715,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        web_http2_stream_session MATCHES
            "completed streamed response [(]status 200[)]")
         boundary_error("server runtime re-derived streamed access-log status"
-            "H1/H2 must log the exact committed status before close/reset and never fabricate 200")
+            "H1 must consume one request completion carrying wire status, connection disposition, and buffer cleanup; H2 must log exact committed status before close/reset")
     endif()
 
     if(NOT response_stream_status_test MATCHES
@@ -2665,6 +2728,10 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
            "response_stream_dispatch_end_commits_bodyless_status" OR
        NOT response_stream_status_test MATCHES
            "response_stream_dispatch_preserves_committed_failure_status" OR
+       NOT http1_session_completion_test MATCHES
+           "http1_session_request_completion_owns_wire_and_buffer_outcome" OR
+       NOT http1_session_completion_test MATCHES
+           "http1_request_buffer_completion_applies_exactly_one_cleanup" OR
        NOT response_stream_h2_runtime_test MATCHES
            "sansio_driver_h2_stream_trailers_emitted" OR
        NOT response_stream_h2_runtime_test MATCHES
@@ -2674,7 +2741,21 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT response_stream_http_package_consumer MATCHES
            "ResponseStreamCommitPlanner" OR
        NOT response_stream_web_package_consumer MATCHES
-           "HasLegacyStreamedPredicate")
+           "HasLegacyStreamedPredicate" OR
+       NOT response_stream_web_package_consumer MATCHES
+           "Http1SessionRequestCompletion" OR
+       NOT response_stream_web_package_consumer MATCHES
+           "Http1RequestBufferCompaction" OR
+       NOT response_stream_web_package_consumer MATCHES
+           "HttpWebSocketRouteResult" OR
+       NOT http1_session_completion_readme MATCHES
+           "Http1CommittedStreamResponse" OR
+       NOT http1_session_completion_readme MATCHES
+           "Http1RequestBufferRestored" OR
+       NOT http1_session_completion_agents MATCHES
+           "Http1SessionRequestCompletion" OR
+       NOT http1_session_completion_agents MATCHES
+           "bufferAlreadyCompacted")
         boundary_error("response-stream status propagation lacks regression coverage"
             "unit and installed-package checks must pin exact status and exclusive terminal alternatives")
     endif()

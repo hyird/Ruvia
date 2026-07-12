@@ -12,6 +12,8 @@
 
 namespace ruvia::detail {
 
+class Http1RequestBufferCompletion;
+
 // Initial bump block for the per-request arena, carried inside a work set. The
 // request monotonic_buffer_resource bump-allocates from here before spilling to
 // the worker resource, so a typical small request touches no heap at all. Sized
@@ -70,6 +72,10 @@ void compactConnectionReadBuffer(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     std::size_t consumedBytes) noexcept;
+void applyReusableHttp1RequestBufferCompletion(
+    const Http1RequestBufferCompletion& completion,
+    std::pmr::string& readBuffer,
+    std::size_t& usedBytes) noexcept;
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
 void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const Http1ServerRequestParseState& parsed);
 

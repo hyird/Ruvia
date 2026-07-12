@@ -34,10 +34,12 @@
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/Http2BufferedResponseDispatch.h>
 #include <ruvia/web/detail/server/Http1BufferedResponseWrite.h>
+#include <ruvia/web/detail/server/Http1SessionRequestCompletion.h>
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
 #include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
 #include <ruvia/web/detail/server/HttpResponseStreamState.h>
 #include <ruvia/web/detail/server/HttpServerResponseStreamRoute.h>
+#include <ruvia/web/detail/server/HttpServerWebSocketRoute.h>
 
 #ifdef RUVIA_ENABLE_JWT
 #include <ruvia/web/auth/Jwt.h>
@@ -134,6 +136,11 @@ concept HasLegacyAccessLogHttp2Flag = requires(const Record& record) {
 template <typename Alternative>
 concept HasResponseStatus = requires(const Alternative& value) {
     { value.status() } -> std::same_as<std::uint16_t>;
+};
+
+template <typename Alternative>
+concept HasConsumedBytes = requires(const Alternative& value) {
+    { value.consumedBytes() } -> std::same_as<std::size_t>;
 };
 
 template <typename Alternative>
@@ -289,11 +296,63 @@ static_assert(!HasResponseStatus<
 static_assert(HasResponseSubmitError<
     ruvia::detail::Http2BufferedResponseFailedBeforeCommit>);
 static_assert(!std::default_initializable<
-    ruvia::detail::HttpResponseStreamRouteResult>);
+    ruvia::detail::Http1SessionRequestCompletion>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1RequestBufferCompletion>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        HttpResponseStreamRouteResult&>().committed()),
-    const ruvia::detail::HttpResponseStreamCommittedRoute*>);
+        Http1SessionRequestCompletion&>().bufferedResponse()),
+    const ruvia::detail::Http1BufferedResponseReady*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1SessionRequestCompletion&>().committedStream()),
+    const ruvia::detail::Http1CommittedStreamResponse*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1SessionRequestCompletion&>().bufferCompletion()),
+    const ruvia::detail::Http1RequestBufferCompletion&>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1SessionRequestCompletion&>().connectionPlan()),
+    ruvia::detail::Http1ServerConnectionPlan>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1RequestBufferCompletion&>().discarded()),
+    const ruvia::detail::Http1RequestBufferDiscarded*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1RequestBufferCompletion&>().compaction()),
+    const ruvia::detail::Http1RequestBufferCompaction*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1RequestBufferCompletion&>().restored()),
+    const ruvia::detail::Http1RequestBufferRestored*>);
+static_assert(HasResponseStatus<
+    ruvia::detail::Http1CommittedStreamResponse>);
+static_assert(!HasResponseStatus<
+    ruvia::detail::Http1BufferedResponseReady>);
+static_assert(!HasResponseStatus<
+    ruvia::detail::Http1SessionRequestCompletion>);
+static_assert(HasConsumedBytes<
+    ruvia::detail::Http1RequestBufferCompaction>);
+static_assert(!HasConsumedBytes<
+    ruvia::detail::Http1RequestBufferDiscarded>);
+static_assert(!HasConsumedBytes<
+    ruvia::detail::Http1RequestBufferRestored>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpWebSocketRouteResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketRouteResult&>().bufferedResponse()),
+    const ruvia::detail::HttpWebSocketBufferedResponse*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketRouteResult&>().sessionFinished()),
+    const ruvia::detail::HttpWebSocketSessionFinished*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpWebSocketBufferedResponse&>().completion()),
+    const ruvia::detail::Http1SessionRequestCompletion&>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),

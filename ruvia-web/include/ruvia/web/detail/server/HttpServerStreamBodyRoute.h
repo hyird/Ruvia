@@ -19,7 +19,7 @@
 namespace ruvia::detail {
 
 template <typename Stream>
-Task<void> dispatchHttpStreamBodyRoute(
+Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
     Stream& stream,
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
@@ -32,16 +32,11 @@ Task<void> dispatchHttpStreamBodyRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     HttpResponse& response,
-    Http1ServerConnectionPlan& connectionPlan,
-    std::size_t& requestCount,
-    std::size_t& consumedBytes,
-    bool& bufferAlreadyCompacted) {
-    const auto bodyAndPipeline = beginHttpBodyRoute(
+    std::size_t& requestCount) {
+    const auto bodyAndPipeline = httpBodyAndPipeline(
         parsed,
         readBuffer,
-        usedBytes,
-        connectionPlan,
-        consumedBytes);
+        usedBytes);
 
     std::exception_ptr exception;
     std::optional<StreamBodyReader<Stream>> streamReader;
@@ -69,7 +64,7 @@ Task<void> dispatchHttpStreamBodyRoute(
         if (bodyReader) {
             exceptionServices = exceptionServices.withStreamingRequestBody(*bodyReader);
         }
-        connectionPlan = co_await completeFailedHttpBodyRoute(
+        co_return co_await completeFailedHttpBodyRoute(
             scannerEntry,
             exception,
             parsed,
@@ -77,20 +72,17 @@ Task<void> dispatchHttpStreamBodyRoute(
             requestMemory,
             exceptionServices,
             response);
-        co_return;
     }
 
-    connectionPlan = completeSuccessfulHttpBodyRoute(
+    co_return completeSuccessfulHttpBodyRoute(
         scannerEntry,
         response,
-        connectionPlan,
+        parsed.connectionPlan,
         requestCount,
         options.keepaliveRequests,
         streamReader->consumption(),
         readBuffer,
         usedBytes,
-        consumedBytes,
-        bufferAlreadyCompacted,
         [&streamReader](std::pmr::string& buffer, std::size_t& size) {
             streamReader->restorePipeline(buffer, size);
         });
