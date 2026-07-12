@@ -1034,6 +1034,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_model_field_ops_contract MATCHES
            "field[(][)][ \t\r\n]*[{]" OR
        _installed_model_macros_contract MATCHES
+           "RUVIA_MODEL_TYPED_GET_BRANCH|auto[ \t]+get[(][)] const" OR
+       _installed_model_field_ops_contract MATCHES
+           "RUVIA_MODEL_TYPED_GET_BRANCH|auto[ \t]+get[(][)] const" OR
+       _installed_model_macros_contract MATCHES
            "body_[.]get<" OR
        _installed_model_object_contract MATCHES
            "body_,[ \t]*resource[)][.]get<T>" OR

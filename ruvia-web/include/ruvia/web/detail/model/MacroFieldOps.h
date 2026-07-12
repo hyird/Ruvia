@@ -5,14 +5,6 @@
 
 // Per-field storage, access, defaults, and request parsing fragments.
 
-#define RUVIA_MODEL_TYPED_GET_BRANCH(T, x) \
-    RUVIA_MODEL_TYPED_GET_BRANCH_I(RUVIA_MODEL_UNPAREN x)
-#define RUVIA_MODEL_TYPED_GET_BRANCH_I(...) RUVIA_MODEL_TYPED_GET_BRANCH_IMPL(__VA_ARGS__)
-#define RUVIA_MODEL_TYPED_GET_BRANCH_IMPL(type, field, wire, rules) \
-    if constexpr (Field == ::ruvia::FixedString{#field}) { \
-        return field(); \
-    } else
-
 #define RUVIA_MODEL_FIELD_STATE_BRANCH(T, x) \
     RUVIA_MODEL_FIELD_STATE_BRANCH_I(RUVIA_MODEL_UNPAREN x)
 #define RUVIA_MODEL_FIELD_STATE_BRANCH_I(...) RUVIA_MODEL_FIELD_STATE_BRANCH_IMPL(__VA_ARGS__)
