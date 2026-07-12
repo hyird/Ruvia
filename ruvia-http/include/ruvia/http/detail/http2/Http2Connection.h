@@ -36,7 +36,7 @@
 
 #include "ruvia/http/detail/http2/Http2ClosedStreams.h"
 #include "ruvia/http/detail/http2/Http2Event.h"
-#include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2FrameTypes.h"
 #include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"

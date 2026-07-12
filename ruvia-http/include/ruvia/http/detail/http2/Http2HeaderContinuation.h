@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2FrameTypes.h"
 
 namespace ruvia::detail {
 

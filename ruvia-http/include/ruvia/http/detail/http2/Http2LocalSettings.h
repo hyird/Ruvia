@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
 #include "ruvia/http/HttpLimits.h"
 
 namespace ruvia::detail {

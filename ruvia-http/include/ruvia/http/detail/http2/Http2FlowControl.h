@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/http2/Http2WindowUpdate.h"
 

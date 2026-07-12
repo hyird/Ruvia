@@ -5,7 +5,7 @@
 #include <limits>
 #include <string_view>
 
-#include "ruvia/http/detail/http2/Http2Frame.h"
+#include "ruvia/http/detail/http2/Http2FrameCodec.h"
 
 namespace ruvia::detail {
 

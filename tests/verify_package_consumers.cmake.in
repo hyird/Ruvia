@@ -84,6 +84,11 @@ if(_built_components_csv MATCHES "(^|,)core(,|$)")
 endif()
 
 if(_built_components_csv MATCHES "(^|,)http(,|$)")
+set(_removed_http2_frame_umbrella
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Frame.h")
+if(EXISTS "${_removed_http2_frame_umbrella}")
+    message(FATAL_ERROR "removed HTTP/2 frame aggregation header was installed")
+endif()
 set(_installed_response_stream_commit_path
     "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseStreamHead.h")
 set(_installed_http1_response_stream_path
