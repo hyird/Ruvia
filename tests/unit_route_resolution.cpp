@@ -22,6 +22,7 @@ using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
 using ruvia::detail::RouteResolution;
 using ruvia::detail::RouteStreamHandler;
+using ruvia::detail::RouteTable;
 
 template <typename T>
 concept HasLooseRouteResolutionAccessors = requires(const T& value) {
@@ -34,6 +35,7 @@ concept HasLooseRouteResolutionAccessors = requires(const T& value) {
 static_assert(!HasLooseRouteResolutionAccessors<RouteResolution>);
 static_assert(!std::default_initializable<RouteEndpoint>);
 static_assert(!std::copy_constructible<RouteEndpoint>);
+static_assert(!std::is_polymorphic_v<RouteTable>);
 
 ruvia::Task<ruvia::HttpResponse> routeHandler(void*, ruvia::Context& context) {
     co_return ruvia::HttpResponse(context.resource());

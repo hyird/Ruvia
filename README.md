@@ -849,7 +849,9 @@ exactly one `ResolvedRoute`, `RouteMethodNotAllowed`, or `RouteNotFound`; only `
 the route reference and its copied `RouteMatch`, and only `RouteMethodNotAllowed` exposes the Allow
 mask. `resolve()` no longer accepts caller-owned match scratch, so HTTP/1 and HTTP/2 transport
 drivers consume the same result rather than maintaining a parallel match buffer or reading payload
-through `found()`/top-level accessors.
+through `found()`/top-level accessors. Those transports now call the one concrete, startup-frozen
+`RouteTable` directly. The former `RequestDispatcher` virtual interface is removed: it had only one
+implementation but imposed request-time virtual lookup and dispatch on every HTTP/2 stream.
 
 ## Runtime Model
 
@@ -861,8 +863,9 @@ through `found()`/top-level accessors.
 - Explicit stream routes handle large request bodies.
 - Responses use fixed header buffers and scatter-gather writes.
 - File responses avoid full-file buffering and use zero-copy paths where available.
-- The HTTP/1 request path is allocation- and lock-free; HTTP/2 multiplexing adds one
-  recycled coroutine frame and one virtual dispatch per stream.
+- The HTTP/1 request path is allocation- and lock-free; HTTP/2 multiplexing adds one recycled
+  coroutine frame per concurrently dispatched stream. Route lookup and handler dispatch call the
+  concrete `RouteTable` without a per-request virtual interface.
 - The optional rate limiter is the one shared-atomic structure on the request path; it is
   off by default, so per-request atomic cost is opt-in. Its monotonic clock is selected at
   compile time, which keeps fixed-window boundary tests deterministic without adding an

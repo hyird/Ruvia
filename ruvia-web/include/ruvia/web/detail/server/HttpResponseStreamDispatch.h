@@ -5,7 +5,7 @@
 #include <span>
 #include <utility>
 
-#include "ruvia/web/detail/router/RequestDispatcher.h"
+#include "ruvia/web/detail/router/RouteTable.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -155,7 +155,7 @@ private:
 template <typename Sink, typename PeerAborted>
 Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     Sink& sink,
-    const RequestDispatcher& routes,
+    const RouteTable& routes,
     const HttpRequest& request,
     const ResolvedRoute& route,
     RequestMemory& requestMemory,

@@ -743,7 +743,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/router/RouteResolution.h")
     set(_installed_route_table_path
         "${_install_prefix}/include/ruvia/web/detail/router/RouteTable.h")
-    set(_installed_request_dispatcher_path
+    set(_installed_route_http2_session_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    set(_installed_route_response_stream_dispatch_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
+    set(_installed_route_websocket_session_path
+        "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketSession.h")
+    set(_installed_stale_request_dispatcher_path
         "${_install_prefix}/include/ruvia/web/detail/router/RequestDispatcher.h")
     set(_installed_stale_stream_kind_adapter
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
@@ -751,7 +757,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_route_modes_path}"
             "${_installed_route_resolution_path}"
             "${_installed_route_table_path}"
-            "${_installed_request_dispatcher_path}")
+            "${_installed_route_http2_session_path}"
+            "${_installed_route_response_stream_dispatch_path}"
+            "${_installed_route_websocket_session_path}")
         if(NOT EXISTS "${_route_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed route contract")
@@ -761,12 +769,20 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web package retained the removed response-mode adapter")
     endif()
+    if(EXISTS "${_installed_stale_request_dispatcher_path}")
+        message(FATAL_ERROR
+            "installed Web package retained the removed virtual RequestDispatcher")
+    endif()
     file(READ "${_installed_route_modes_path}" _installed_route_modes)
     file(READ "${_installed_route_resolution_path}"
         _installed_route_resolution)
     file(READ "${_installed_route_table_path}" _installed_route_table)
-    file(READ "${_installed_request_dispatcher_path}"
-        _installed_request_dispatcher)
+    file(READ "${_installed_route_http2_session_path}"
+        _installed_route_http2_session)
+    file(READ "${_installed_route_response_stream_dispatch_path}"
+        _installed_route_response_stream_dispatch)
+    file(READ "${_installed_route_websocket_session_path}"
+        _installed_route_websocket_session)
     if(_installed_route_modes MATCHES "ResponseBodyMode" OR
        _installed_route_resolution MATCHES "RouteDisposition" OR
        _installed_route_resolution MATCHES
@@ -803,16 +819,34 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_route_table MATCHES
            "std::get_if<ResponseStreamRouteEndpoint>" OR
        NOT _installed_route_table MATCHES
-           "std::get_if<WebSocketRouteEndpoint>")
+           "std::get_if<WebSocketRouteEndpoint>" OR
+       NOT _installed_route_table MATCHES
+           "class RouteTable final[ \t\r\n]*[{]" OR
+       _installed_route_table MATCHES "RequestDispatcher" OR
+       _installed_route_table MATCHES
+           "virtual[ \t\r\n]+(RouteResolution|Task[ \t]*[<])")
         message(FATAL_ERROR
-            "installed route table restored split handler/mode endpoint state")
+            "installed route table restored split endpoint state or virtual dispatch")
     endif()
-    if(_installed_request_dispatcher MATCHES
+    if(_installed_route_table MATCHES
            "resolve[ \t\r\n]*[(][^)]*RouteMatch[ \t]*&" OR
-       NOT _installed_request_dispatcher MATCHES
+       NOT _installed_route_table MATCHES
            "const ResolvedRoute& route")
         message(FATAL_ERROR
-            "installed route dispatcher restored caller-owned match scratch or untyped stream dispatch")
+            "installed route table restored caller-owned match scratch or untyped stream dispatch")
+    endif()
+    if(NOT _installed_route_http2_session MATCHES
+           "const RouteTable& routes" OR
+       NOT _installed_route_response_stream_dispatch MATCHES
+           "const RouteTable& routes" OR
+       NOT _installed_route_websocket_session MATCHES
+           "const RouteTable& routes" OR
+       _installed_route_http2_session MATCHES "RequestDispatcher" OR
+       _installed_route_response_stream_dispatch MATCHES
+           "RequestDispatcher" OR
+       _installed_route_websocket_session MATCHES "RequestDispatcher")
+        message(FATAL_ERROR
+            "installed Web runtimes do not dispatch through the concrete RouteTable")
     endif()
 endif()
 if(NOT EXISTS "${_installed_http2_remote_content_path}")
