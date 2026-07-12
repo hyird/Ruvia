@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
+#include <optional>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/PmrResource.h"
@@ -42,7 +44,7 @@ template <typename Clock>
 class BasicRateLimiter {
 public:
     explicit BasicRateLimiter(
-        RateLimitRule appRule,
+        std::optional<RateLimitRule> appRule,
         std::pmr::memory_resource* resource = nullptr)
         : BasicRateLimiter(
               appRule,
@@ -50,10 +52,10 @@ public:
               resource) {}
 
     BasicRateLimiter(
-        RateLimitRule appRule,
+        std::optional<RateLimitRule> appRule,
         std::size_t slotCount,
         std::pmr::memory_resource* resource = nullptr)
-        : appRule_(normalizeRateLimitRule(appRule)),
+        : appRule_(std::move(appRule)),
           slots_(pmrResourceOrDefault(resource)) {
         slots_.resize(nextPowerOfTwo(slotCount));
     }
@@ -62,23 +64,23 @@ public:
     BasicRateLimiter& operator=(const BasicRateLimiter&) = delete;
 
     [[nodiscard]] bool enabled() const noexcept {
-        return appRule_.maxRequests > 0;
+        return appRule_.has_value();
     }
 
     [[nodiscard]] RateLimitCheck allowGlobal(std::string_view remoteAddress) noexcept {
-        return allow(kGlobalScope, remoteAddress, appRule_, appRule_.failClosed);
+        return appRule_.has_value()
+            ? allow(kGlobalScope, remoteAddress, *appRule_)
+            : RateLimitCheck{};
     }
 
     [[nodiscard]] RateLimitCheck allowRoute(
         std::uintptr_t routeScope,
         std::string_view remoteAddress,
         const RateLimitRule& rule) noexcept {
-        const auto normalized = normalizeRateLimitRule(rule);
         return allow(
             routeScope == 0 ? kFallbackRouteScope : routeScope,
             remoteAddress,
-            normalized,
-            normalized.failClosed);
+            rule);
     }
 
 private:
@@ -137,7 +139,7 @@ private:
         std::int64_t nowMs,
         const RateLimitRule& rule) noexcept {
         const auto now = safeNowMs(nowMs);
-        const auto windowMs = static_cast<std::uint64_t>(rule.window.count());
+        const auto windowMs = static_cast<std::uint64_t>(rule.window().count());
         const auto bucket = now / windowMs;
         const auto maxTime = std::numeric_limits<std::uint64_t>::max();
         if (bucket >= maxTime / windowMs) {
@@ -205,7 +207,7 @@ private:
                 .allowed = true,
                 .resetAfterMs = resetAfterMs(nowMs, resetAtMs)};
         }
-        if (slot.count >= rule.maxRequests) {
+        if (slot.count >= rule.maxRequests()) {
             return RateLimitCheck{
                 .allowed = false,
                 .resetAfterMs = resetAfterMs(nowMs, slot.resetAtMs)};
@@ -219,13 +221,11 @@ private:
     [[nodiscard]] RateLimitCheck allow(
         std::uintptr_t scope,
         std::string_view key,
-        const RateLimitRule& rule,
-        bool failClosed) noexcept {
-        if (rule.maxRequests == 0) {
-            return RateLimitCheck{};
-        }
+        const RateLimitRule& rule) noexcept {
+        const bool allowOnOverflow =
+            rule.overflowPolicy() == RateLimitOverflowPolicy::kAllow;
         if (key.size() > kMaxKeyBytes) {
-            return RateLimitCheck{.allowed = !failClosed, .resetAfterMs = 1};
+            return RateLimitCheck{.allowed = allowOnOverflow, .resetAfterMs = 1};
         }
 
         const auto nowMs = Clock::nowMs();
@@ -259,10 +259,10 @@ private:
                 .allowed = true,
                 .resetAfterMs = resetAfterMs(nowMs, resetAtMs)};
         }
-        return RateLimitCheck{.allowed = !failClosed, .resetAfterMs = 1};
+        return RateLimitCheck{.allowed = allowOnOverflow, .resetAfterMs = 1};
     }
 
-    RateLimitRule appRule_;
+    std::optional<RateLimitRule> appRule_;
     std::pmr::vector<Slot> slots_;
 };
 

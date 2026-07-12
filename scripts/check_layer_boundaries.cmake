@@ -1149,12 +1149,16 @@ if(EXISTS "${WEB_RATE_LIMIT_RULE}" AND EXISTS "${WEB_RATE_LIMITER}" AND
     file(READ "${WEB_HTTP_SERVER}" web_http_server)
     file(READ "${WEB_APP_RUNTIME}" web_app_runtime)
     if(web_rate_limit_rule MATCHES "slotCount|shared[ \t]+atomic" OR
+       web_rate_limit_rule MATCHES "struct[ \t]+RateLimitRule" OR
+       NOT web_rate_limit_rule MATCHES "class RateLimitRule final" OR
+       NOT web_rate_limit_rule MATCHES "RateLimitRule fixedWindow" OR
+       NOT web_rate_limit_rule MATCHES "enum class RateLimitOverflowPolicy" OR
        NOT web_rate_limit_rule MATCHES "Per-worker")
         boundary_error("RateLimitRule exposes shared-table implementation policy"
-            "public rules must describe independent per-worker admission semantics")
+            "public rules must be valid fixed windows with independent per-worker admission semantics")
     endif()
     if(web_rate_limiter MATCHES
-           "#[ \t]*include[ \t]*[<\"]atomic|std::atomic|compare_exchange|this_thread|yield[(]" OR
+           "#[ \t]*include[ \t]*[<\"]atomic|std::atomic|compare_exchange|this_thread|yield[(]|normalizeRateLimitRule" OR
        NOT web_rate_limiter MATCHES "std::pmr::vector[<]Slot[>]")
         boundary_error("RateLimiter regained cross-worker synchronization"
             "the request path must mutate only its worker-owned PMR slot table")

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "ruvia/web/detail/server/RateLimiter.h"
@@ -10,6 +11,7 @@
 namespace {
 
 using ruvia::RateLimitRule;
+using ruvia::RateLimitOverflowPolicy;
 using ruvia::detail::BasicRateLimiter;
 using ruvia::detail::RateLimiter;
 
@@ -29,11 +31,12 @@ using ManualRateLimiter = BasicRateLimiter<ManualRateLimiterClock>;
 
 // A window long enough that no reset happens during a test.
 RateLimitRule ruleWith(std::size_t maxRequests, bool failClosed = true) {
-    RateLimitRule rule;
-    rule.maxRequests = maxRequests;
-    rule.window = std::chrono::seconds(60);
-    rule.failClosed = failClosed;
-    return rule;
+    return RateLimitRule::fixedWindow(
+        maxRequests,
+        std::chrono::seconds(60),
+        failClosed
+            ? RateLimitOverflowPolicy::kDeny
+            : RateLimitOverflowPolicy::kAllow);
 }
 
 }  // namespace
@@ -58,7 +61,7 @@ RUVIA_TEST(rate_limiter_keys_are_independent) {
 }
 
 RUVIA_TEST(rate_limiter_disabled_allows_everything) {
-    RateLimiter limiter(ruleWith(0));  // maxRequests == 0 disables
+    RateLimiter limiter(std::nullopt);
     RUVIA_CHECK(!limiter.enabled());
     for (int i = 0; i < 100; ++i) {
         RUVIA_CHECK(limiter.allowGlobal("10.0.0.1").allowed);
@@ -66,9 +69,8 @@ RUVIA_TEST(rate_limiter_disabled_allows_everything) {
 }
 
 RUVIA_TEST(rate_limiter_resets_after_window) {
-    RateLimitRule rule;
-    rule.maxRequests = 1;
-    rule.window = std::chrono::milliseconds(20);
+    const auto rule = RateLimitRule::fixedWindow(
+        1, std::chrono::milliseconds(20));
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule);
     RUVIA_CHECK(limiter.allowGlobal("k").allowed);
@@ -90,11 +92,11 @@ RUVIA_TEST(rate_limiter_route_scope_independent_of_global) {
 }
 
 RUVIA_TEST(rate_limiter_route_enforced_when_app_rule_disabled) {
-    // A disabled app rule (maxRequests == 0) does NOT disable route rate limiting:
+    // An absent app rule does NOT disable route rate limiting:
     // route rules share this worker's limiter table, so the slots must exist and be
     // enforced even though allowGlobal always allows. This is why construction cannot
     // skip slot allocation based on the app rule alone.
-    RateLimiter limiter(ruleWith(0));
+    RateLimiter limiter(std::nullopt);
     RUVIA_CHECK(!limiter.enabled());
     RUVIA_CHECK(limiter.allowGlobal("ip").allowed);   // global off -> always allowed
     RUVIA_CHECK(limiter.allowGlobal("ip").allowed);
@@ -118,18 +120,6 @@ RUVIA_TEST(rate_limiter_route_rule_owns_fail_policy) {
     RUVIA_CHECK(limiter.allowRoute(0xCAFE, oversized, routeOpen).allowed);
 }
 
-RUVIA_TEST(rate_limiter_route_rule_is_normalized) {
-    ManualRateLimiterClock::set(5'000);
-    ManualRateLimiter limiter(ruleWith(10));
-    RateLimitRule routeRule;
-    routeRule.maxRequests = 1;
-    routeRule.window = std::chrono::milliseconds(0);
-    RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
-    RUVIA_CHECK(!limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
-    ManualRateLimiterClock::set(5'001);
-    RUVIA_CHECK(limiter.allowRoute(0xBEEF, "ip", routeRule).allowed);
-}
-
 RUVIA_TEST(rate_limiter_workers_own_independent_budgets) {
     RateLimiter firstWorker(ruleWith(1), 8);
     RateLimiter secondWorker(ruleWith(1), 8);
@@ -151,9 +141,8 @@ RUVIA_TEST(rate_limiter_full_worker_table_honors_fail_policy) {
 }
 
 RUVIA_TEST(rate_limiter_reclaims_expired_worker_slot) {
-    RateLimitRule rule;
-    rule.maxRequests = 1;
-    rule.window = std::chrono::milliseconds(10);
+    const auto rule = RateLimitRule::fixedWindow(
+        1, std::chrono::milliseconds(10));
     ManualRateLimiterClock::set(1'000);
     ManualRateLimiter limiter(rule, 1);
 

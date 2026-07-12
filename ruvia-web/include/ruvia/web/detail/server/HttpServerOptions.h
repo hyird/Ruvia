@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -72,7 +73,7 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLogSink accessLog;
-    RateLimitRule rateLimit;
+    std::optional<RateLimitRule> rateLimit;
 };
 
 }  // namespace ruvia::detail

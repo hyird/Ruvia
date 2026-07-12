@@ -741,6 +741,11 @@ static_assert(std::is_nothrow_copy_constructible_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_move_constructible_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_copy_assignable_v<ruvia::ConnInfo>);
 static_assert(std::is_nothrow_move_assignable_v<ruvia::ConnInfo>);
+static_assert(!std::default_initializable<ruvia::RateLimitRule>);
+static_assert(std::same_as<
+    decltype(ruvia::RateLimitRule::fixedWindow(
+        std::size_t{1}, std::chrono::seconds(1))),
+    ruvia::RateLimitRule>);
 static_assert(!std::default_initializable<ruvia::WebSocketHeartbeatPolicy>);
 static_assert(std::same_as<
     decltype(ruvia::WebSocketLifecycleOptions{}.heartbeat),
