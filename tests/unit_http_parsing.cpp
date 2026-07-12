@@ -16,6 +16,7 @@
 #include "ruvia/http/detail/parser/HttpChunkParser.h"
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
+#include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/web/Model.h"
 
@@ -89,15 +90,16 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
     }
     compressed.resize(written - truncateBy);
 
-    std::pmr::string out(std::pmr::get_default_resource());
-    if (!ruvia::detail::decodeRequestContentEncoding(
-            HttpContentCoding::kZstd,
-            compressed,
-            out,
-            ruvia::detail::kMaxDecodedRequestBodyBytes)) {
+    const auto result = ruvia::detail::decodeHttpContent(
+        HttpContentCoding::kZstd,
+        compressed,
+        ruvia::kDefaultMaxBufferedBodyBytes,
+        std::pmr::get_default_resource());
+    const auto* decoded = result.decoded();
+    if (decoded == nullptr) {
         return std::nullopt;
     }
-    return std::string(out.c_str(), out.size());
+    return std::string(decoded->bytes());
 }
 
 }  // namespace

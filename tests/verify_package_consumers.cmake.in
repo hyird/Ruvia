@@ -124,6 +124,35 @@ set(_removed_client_types_header
 if(EXISTS "${_removed_client_types_header}")
     message(FATAL_ERROR "removed Fetch-shaped client model header was installed")
 endif()
+set(_installed_http_content_coding
+    "${_install_prefix}/include/ruvia/http/detail/HttpContentCoding.h")
+set(_removed_http_streaming_decoder
+    "${_install_prefix}/include/ruvia/http/detail/client/HttpStreamingDecoder.h")
+if(NOT EXISTS "${_installed_http_content_coding}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing its typed content decoder")
+endif()
+if(EXISTS "${_removed_http_streaming_decoder}")
+    message(FATAL_ERROR
+        "removed duplicate streaming content decoder was installed")
+endif()
+file(READ "${_installed_http_content_coding}"
+    _installed_http_content_coding_contract)
+if(NOT _installed_http_content_coding_contract MATCHES
+       "class HttpDecodedContent final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpContentDecodeFailure final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpContentDecodeResult final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "using Value = std::variant" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "decodeHttpContent" OR
+   _installed_http_content_coding_contract MATCHES
+       "decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes")
+    message(FATAL_ERROR
+        "installed HTTP content decoder lost its owning discriminated contract")
+endif()
 set(_removed_loose_http_parser_header
     "${_install_prefix}/include/ruvia/http/HttpParser.h")
 if(EXISTS "${_removed_loose_http_parser_header}")

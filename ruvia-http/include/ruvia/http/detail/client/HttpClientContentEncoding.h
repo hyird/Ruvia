@@ -2,20 +2,15 @@
 
 #include <cstddef>
 #include <memory_resource>
-#include <stdexcept>
 #include <string_view>
-#include <utility>
 
-#include "ruvia/http/detail/RequestBodyDecoding.h"
-#include "ruvia/http/detail/client/HttpClientAccess.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/detail/HttpContentCoding.h"
 #include "ruvia/http/HttpClient.h"
 
 namespace ruvia::detail {
 
-// A single decodable Content-Encoding, or kNone if absent, unknown, identity, or listed more
-// than once (a multi-coding stack is delivered as received). Shared by the buffered decode and
-// the streaming decoder.
+// A single decodable Content-Encoding, or kNone if absent, unknown, identity,
+// or listed more than once (a multi-coding stack is delivered as received).
 template <typename Headers>
 [[nodiscard]] inline HttpContentCoding httpClientContentCodingOf(const Headers& headers) noexcept {
     bool seen = false;
@@ -28,7 +23,7 @@ template <typename Headers>
             return HttpContentCoding::kNone;
         }
         seen = true;
-        coding = requestContentCoding(header.value());
+        coding = httpContentCodingFromFieldValue(header.value());
     }
     return coding;
 }
@@ -38,19 +33,20 @@ template <typename Headers>
     return httpClientContentCodingOf(response.headers());
 }
 
-inline void decodeHttpClientResponseContentEncoding(
-    HttpClientResponse& response,
-    std::size_t maxDecodedBytes) {
+[[nodiscard]] inline HttpContentDecodeResult
+decodeHttpClientResponseContentEncoding(
+    const HttpClientResponse& response,
+    std::size_t maxDecodedBytes,
+    std::pmr::memory_resource* resource) {
+    // The parsed wire response remains untouched. A decoded representation has
+    // different Content-Encoding/Content-Length metadata, so returning owned
+    // bytes avoids constructing an internally contradictory response object.
     const auto coding = httpClientResponseContentCoding(response);
-    if (coding == HttpContentCoding::kNone || response.body().empty()) {
-        return;
-    }
-    auto& body = HttpClientResponseAccess::body(response);
-    std::pmr::string decoded(body.get_allocator().resource());
-    if (!decodeRequestContentEncoding(coding, body, decoded, maxDecodedBytes)) {
-        throw std::runtime_error("http client: failed to decode response Content-Encoding");
-    }
-    body = std::move(decoded);
+    return decodeHttpContent(
+        coding,
+        response.body(),
+        maxDecodedBytes,
+        resource);
 }
 
 }  // namespace ruvia::detail

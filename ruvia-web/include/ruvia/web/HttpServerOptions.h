@@ -150,7 +150,8 @@ struct HttpServerOptions final {
     std::chrono::milliseconds sendTimeout{std::chrono::seconds(60)};
     std::size_t maxConnections{0};
     std::size_t keepaliveRequests{1000};
-    // Buffered routes materialize body data; this limit must be greater than 0.
+    // Buffered routes materialize body data; the same cap applies again after
+    // Content-Encoding is decoded. This limit must be greater than 0.
     std::size_t maxBufferedBodyBytes{kDefaultMaxBufferedBodyBytes};
     // Stream routes are explicit; 0 disables the stream body limit.
     std::size_t maxStreamBodyBytes{kDefaultMaxStreamBodyBytes};

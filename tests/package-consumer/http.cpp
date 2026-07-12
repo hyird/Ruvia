@@ -22,10 +22,12 @@
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/HttpByteRange.h>
+#include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpResponseBody.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
 #include <ruvia/http/detail/HttpResponseContentSemantics.h>
 #include <ruvia/http/detail/HttpResponseFileBody.h>
+#include <ruvia/http/detail/client/HttpClientContentEncoding.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
 #include <ruvia/http/detail/http1/Http1ResponseHeadPlan.h>
@@ -64,6 +66,16 @@ concept HasFeedStatusField = requires(const T& result) {
 template <typename T>
 concept HasFeedConsumedField = requires(const T& result) {
     result.consumed;
+};
+
+template <typename T>
+concept ExposesRvalueDecodedContent = requires(T&& result) {
+    std::move(result).decoded();
+};
+
+template <typename T>
+concept ExposesRvalueDecodeFailure = requires(const T&& result) {
+    std::move(result).failure();
 };
 
 template <typename T>
@@ -1727,8 +1739,52 @@ static_assert(!std::default_initializable<
     ruvia::detail::HttpBorrowedResponseFile>);
 static_assert(!std::default_initializable<
     ruvia::detail::ResponseFileBody>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(std::move_constructible<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(!ExposesRvalueDecodedContent<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(!ExposesRvalueDecodeFailure<
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<
+        ruvia::detail::HttpContentDecodeResult&>().decoded()),
+    ruvia::detail::HttpDecodedContent*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpContentDecodeResult&>().failure()),
+    const ruvia::detail::HttpContentDecodeFailure*>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        std::string_view{},
+        std::size_t{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::detail::HttpContentDecodeResult>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::decodeHttpClientResponseContentEncoding(
+        std::declval<const ruvia::HttpClientResponse&>(),
+        std::size_t{},
+        std::declval<std::pmr::memory_resource*>())),
+    ruvia::detail::HttpContentDecodeResult>);
 
 int main() {
+    const auto unsupportedDecode = ruvia::detail::decodeHttpContent(
+        ruvia::detail::HttpContentCoding::kNone,
+        {},
+        0,
+        std::pmr::get_default_resource());
+    if (unsupportedDecode.decoded() != nullptr ||
+        unsupportedDecode.failure() == nullptr ||
+        unsupportedDecode.failure()->error() !=
+            ruvia::detail::HttpContentDecodeError::kUnsupportedCoding) {
+        return 49;
+    }
     const ruvia::HttpResponse emptyResponse;
     const auto& emptyBody = ruvia::detail::responseBody(emptyResponse);
     if (emptyBody.empty() == nullptr ||

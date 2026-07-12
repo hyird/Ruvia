@@ -1772,6 +1772,7 @@ private:
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
+    std::size_t maxDecodedBodyBytes_{0};
     detail::ContextRequestBodySource requestBodySource_;
     detail::ContextResponseOutput responseOutput_;
     Renderer renderer_{nullptr};

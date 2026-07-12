@@ -459,6 +459,10 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::detail::ContextServices&>()
                  .responseOutput()),
     const ruvia::detail::ContextResponseOutput&>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::ContextServices&>()
+                 .maxDecodedBodyBytes()),
+    std::size_t>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::ContextLazyRequestBodySource>);
 static_assert(!std::is_default_constructible_v<

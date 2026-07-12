@@ -924,6 +924,66 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     }
 }
 
+RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
+    std::pmr::string first(std::pmr::get_default_resource());
+    std::pmr::string second(std::pmr::get_default_resource());
+    RUVIA_CHECK(ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        "first-",
+        first,
+        1024));
+    RUVIA_CHECK(ruvia::detail::encodeHttpContent(
+        ruvia::detail::HttpContentCoding::kGzip,
+        "second",
+        second,
+        1024));
+
+    auto parsed = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
+        "Content-Length: 1");
+    auto& body = ruvia::detail::HttpClientResponseAccess::body(
+        parsed.response);
+    body = std::move(first);
+    body.append(second);
+    const std::string encodedBody(body);
+    auto decoded = ruvia::detail::decodeHttpClientResponseContentEncoding(
+        parsed.response,
+        1024,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(decoded.decoded() != nullptr);
+    if (const auto* content = decoded.decoded()) {
+        RUVIA_CHECK_EQ(content->bytes(), std::string_view("first-second"));
+    }
+    // Decoding is a separate representation. The parsed wire response remains
+    // internally coherent instead of retaining gzip metadata over decoded bytes.
+    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view(encodedBody));
+    RUVIA_CHECK(
+        ruvia::detail::httpClientResponseContentCoding(parsed.response) ==
+        ruvia::detail::HttpContentCoding::kGzip);
+}
+
+RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {
+    auto parsed = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
+        "Content-Length: 1");
+    auto& body = ruvia::detail::HttpClientResponseAccess::body(
+        parsed.response);
+    body = "not-gzip";
+    const auto decoded =
+        ruvia::detail::decodeHttpClientResponseContentEncoding(
+            parsed.response,
+            1024,
+            std::pmr::get_default_resource());
+    RUVIA_CHECK(decoded.decoded() == nullptr);
+    RUVIA_CHECK(decoded.failure() != nullptr);
+    RUVIA_CHECK(
+        decoded.failure()->error() ==
+        ruvia::detail::HttpContentDecodeError::kInvalidContent);
+    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view("not-gzip"));
+}
+
 RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
     RUVIA_CHECK(
         parseFailureError("GET", "HTTP/2 200 OK") ==
