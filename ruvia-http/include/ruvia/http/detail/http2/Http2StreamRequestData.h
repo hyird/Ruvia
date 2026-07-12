@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2HeaderList.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/detail/PmrResource.h"
 

@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/http/ContextServices.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/detail/CallableRef.h"

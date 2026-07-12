@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/RateLimitRule.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpRequest.h"

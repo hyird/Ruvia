@@ -1221,7 +1221,9 @@ check_files_no_match("valid extension methods must not be rejected by semantic c
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestHeaders.h"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 
-set(HTTP_METHOD_COMMON
+set(HTTP_METHOD_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpKnownMethod.h")
+set(HTTP_COMMON_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpCommon.h")
 set(HTTP_REQUEST_MODEL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpRequest.h")
@@ -1234,7 +1236,7 @@ set(HTTP2_REQUEST_BUILDER
 set(WEB_ROUTER_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
 foreach(method_contract_file IN ITEMS
-        "${HTTP_METHOD_COMMON}"
+        "${HTTP_METHOD_CONTRACT}"
         "${HTTP_REQUEST_MODEL}"
         "${HTTP1_REQUEST_PARSER}"
         "${HTTP2_REQUEST_HEADERS}"
@@ -1246,21 +1248,30 @@ foreach(method_contract_file IN ITEMS
             "${relative} is required")
     endif()
 endforeach()
-if(EXISTS "${HTTP_METHOD_COMMON}" AND EXISTS "${HTTP_REQUEST_MODEL}")
-    file(READ "${HTTP_METHOD_COMMON}" http_method_common)
+if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
+    file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
     file(READ "${HTTP_REQUEST_MODEL}" http_request_model)
-    if(http_method_common MATCHES
+    if(http_method_contract MATCHES
            "inline[ \t]+constexpr[ \t]+HttpKnownMethod[ \t]+(Get|Post|Put|Delete|Patch|Head|Options|Connect)")
         boundary_error("HTTP methods regained namespace-level aliases"
             "public method values must use the scoped HttpKnownMethod vocabulary")
     endif()
-    if(NOT http_method_common MATCHES "enum class HttpKnownMethod" OR
-       NOT http_method_common MATCHES "classifyHttpMethod" OR
-       NOT http_method_common MATCHES "isValidHttpMethodToken" OR
+    if(NOT http_method_contract MATCHES "enum class HttpKnownMethod" OR
+       NOT http_method_contract MATCHES "classifyHttpMethod" OR
+       NOT http_method_contract MATCHES "isValidHttpMethodToken" OR
        NOT http_request_model MATCHES "std::string_view method[(][)] const noexcept" OR
        NOT http_request_model MATCHES "HttpKnownMethod knownMethod[(][)] const noexcept")
         boundary_error("HTTP request method lost raw-token/known-class separation"
             "HttpRequest::method must expose the exact token and knownMethod the fixed semantic class")
+    endif()
+endif()
+if(EXISTS "${HTTP_COMMON_HEADER}")
+    file(READ "${HTTP_COMMON_HEADER}" http_common_header)
+    if(http_common_header MATCHES "enum[ \t]+class[ \t]+HttpKnownMethod" OR
+       http_common_header MATCHES
+           "HttpKnownMethod[ \t\r\n]+classifyHttpMethod")
+        boundary_error("HTTP method contract leaked back into HttpCommon.h"
+            "HttpKnownMethod.h must exclusively own method classification declarations")
     endif()
 endif()
 if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND

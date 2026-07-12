@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"

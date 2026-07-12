@@ -17,6 +17,7 @@
 #include <ruvia/http/Http1InterimResponseWriter.h>
 #include <ruvia/http/Http1RequestParser.h>
 #include <ruvia/http/HttpInterimResponse.h>
+#include <ruvia/http/HttpKnownMethod.h>
 #include <ruvia/http/HttpProtocolError.h>
 #include <ruvia/http/HttpProtocolVersion.h>
 #include <ruvia/http/HttpResponse.h>

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/Task.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/RegistrationResource.h"
 #include "ruvia/http/HttpTypes.h"

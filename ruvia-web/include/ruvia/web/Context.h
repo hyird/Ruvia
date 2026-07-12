@@ -18,6 +18,7 @@
 
 #include "ruvia/core/Task.h"
 #include "ruvia/http/Cookies.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/http/HttpTypes.h"
