@@ -62,13 +62,16 @@ Task<void> writeFileFallback(
         ec = asio::error::operation_aborted;
         co_return;
     }
-    input.seek(static_cast<std::int64_t>(fileBody.offset), asio::stream_file::seek_set, ec);
+    input.seek(
+        static_cast<std::int64_t>(fileBody.offset()),
+        asio::stream_file::seek_set,
+        ec);
     if (ec) {
         ec = asio::error::operation_aborted;
         co_return;
     }
 
-    std::uint64_t remaining = fileBody.length;
+    std::uint64_t remaining = fileBody.length();
     while (remaining > 0) {
         const auto nextRead = static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), remaining));
         auto [readEc, read] = co_await asyncResult<std::size_t>([&input, &chunk, nextRead](auto handler) mutable {
@@ -90,13 +93,15 @@ Task<void> writeFileFallback(
         ec = std::make_error_code(std::errc::no_such_file_or_directory);
         co_return;
     }
-    input.seekg(static_cast<std::streamoff>(fileBody.offset), std::ios::beg);
+    input.seekg(
+        static_cast<std::streamoff>(fileBody.offset()),
+        std::ios::beg);
     if (!input) {
         ec = std::make_error_code(std::errc::invalid_seek);
         co_return;
     }
 
-    std::uint64_t remaining = fileBody.length;
+    std::uint64_t remaining = fileBody.length();
     while (remaining > 0) {
         const auto nextRead = static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), remaining));
         input.read(chunk.data(), static_cast<std::streamsize>(nextRead));

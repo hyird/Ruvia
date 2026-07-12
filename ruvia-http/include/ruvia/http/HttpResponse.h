@@ -1,15 +1,14 @@
 #pragma once
 
 #include "ruvia/http/HttpCommon.h"
-#include "ruvia/http/detail/NativePath.h"
 #include "ruvia/http/detail/PmrResource.h"
+#include "ruvia/http/detail/HttpResponseBody.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory_resource>
-#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -173,57 +172,6 @@ private:
     friend struct detail::HttpResponseFileAccess;
     friend struct detail::HttpResponseHeaderStateAccess;
 
-    enum class BodyKind : std::uint8_t {
-        kEmpty,
-        kBorrowed,
-        kStaticBorrowed,
-        kOwned,
-        kFile
-    };
-    class FileBody final {
-    public:
-        using NativePathChar = detail::HttpNativePathChar;
-        using NativePathString = detail::HttpNativePathString;
-
-        FileBody(
-            std::pmr::memory_resource* resource,
-            std::filesystem::path file,
-            std::uint64_t size,
-            std::uint64_t offset,
-            std::uint64_t length)
-            : ownedPath_(resource),
-              size_(size),
-              offset_(offset),
-              length_(length) {
-            detail::assignHttpNativePath(ownedPath_, file);
-        }
-
-        FileBody(
-            std::pmr::memory_resource* resource,
-            const NativePathChar* borrowedNativePath,
-            std::uint64_t size,
-            std::uint64_t offset,
-            std::uint64_t length)
-            : ownedPath_(resource),
-              borrowedNativePath_(borrowedNativePath),
-              size_(size),
-              offset_(offset),
-              length_(length) {}
-
-    private:
-        friend class HttpResponse;
-        friend struct detail::HttpResponseFileAccess;
-
-        [[nodiscard]] const NativePathChar* nativePathCStr() const noexcept {
-            return borrowedNativePath_ == nullptr ? ownedPath_.c_str() : borrowedNativePath_;
-        }
-
-        NativePathString ownedPath_;
-        const NativePathChar* borrowedNativePath_{nullptr};
-        std::uint64_t size_{0};
-        std::uint64_t offset_{0};
-        std::uint64_t length_{0};
-    };
     static constexpr std::size_t kKnownHeaderCount = 22;
 
     void setBodyStaticView(std::string_view value) noexcept;
@@ -244,17 +192,13 @@ private:
     void setFileBody(std::filesystem::path file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size);
     void setBorrowedFileBody(const std::filesystem::path& file, std::uint64_t size, std::uint64_t offset, std::uint64_t length);
-    void setBorrowedNativeFileBody(const FileBody::NativePathChar* file, std::uint64_t size);
+    void setBorrowedNativeFileBody(const detail::HttpNativePathChar* file, std::uint64_t size);
     void setBorrowedNativeFileBody(
-        const FileBody::NativePathChar* file,
+        const detail::HttpNativePathChar* file,
         std::uint64_t size,
         std::uint64_t offset,
         std::uint64_t length);
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
-    [[nodiscard]] std::string_view bodyBytes() const noexcept;
-    [[nodiscard]] std::size_t bodySize() const noexcept;
-    [[nodiscard]] bool hasFileBody() const noexcept;
-    [[nodiscard]] const FileBody& fileBody() const;
     [[nodiscard]] std::string_view knownHeaderValue(std::uint32_t bit) const noexcept;
     [[nodiscard]] HttpResponseHeader* findHeaderForUpdate(std::string_view key, std::uint32_t knownBit) noexcept;
     [[nodiscard]] const HttpResponseHeader* findHeaderForRead(std::string_view key, std::uint32_t knownBit) const noexcept;
@@ -265,10 +209,7 @@ private:
     std::uint32_t knownHeaderBits_{0};
     std::array<std::int16_t, kKnownHeaderCount> knownHeaderIndexes_{};
     HttpResponseHeaders headers_;
-    std::pmr::string body_;
-    std::string_view bodyView_;
-    BodyKind bodyKind_{BodyKind::kEmpty};
-    std::optional<FileBody> fileBody_;
+    detail::HttpResponseBody body_;
 };
 
 inline const HttpResponseHeaders& HttpResponse::headers() noexcept {

@@ -4,7 +4,6 @@
 
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/http/HttpTypes.h"
@@ -98,9 +97,8 @@ private:
     std::uint64_t contentLength = 0;
     if (bodyPlan.statusAllowsBody() &&
         bodyPlan.contentSemantics().connectTunnel() == nullptr) {
-        contentLength = responseHasFileBody(response)
-            ? responseFileBody(response).length
-            : static_cast<std::uint64_t>(responseBodySize(response));
+        contentLength = static_cast<std::uint64_t>(
+            responseBody(response).size());
     }
     return HttpBufferedResponseWritePlan(bodyPlan, contentLength);
 }

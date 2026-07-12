@@ -99,6 +99,8 @@ set(RULE_METHOD_CLASSIFICATION_REJECTION
     "classifyHttpMethod[(][^)]*[)][^\r\n]*(==|!=)[^\r\n]*HttpKnownMethod::kUnknown")
 set(RULE_WEB_RESPONSE_BODY_PROTOCOL_BOOL
     "skipBody|bodyForbidden")
+set(RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT
+    "BodyKind|bodyKind_|fileBody_|responseHasFileBody|responseFileBody|responseBodyBytes|responseBodySize")
 set(RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION
     "responseWritePolicy|responseBodySize\\(response\\)|responseFileBody\\(response\\)\\.length")
 set(RULE_WEB_HEAD_BODY_DECISION
@@ -426,6 +428,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("loose response body protocol bool in Web runtime"
         "${RULE_WEB_RESPONSE_BODY_PROTOCOL_BOOL}"
         "const bool skipBody = request.method() == HttpMethod::kHead;")
+    expect_match("split HttpResponse body storage"
+        "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}"
+        "BodyKind bodyKind_; std::optional<FileBody> fileBody_;")
+    expect_match("two-stage HttpResponse file-body read"
+        "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}"
+        "if (responseHasFileBody(response)) use(responseFileBody(response));")
     expect_match("duplicated HTTP/2 response plan in Web runtime"
         "${RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION}"
         "const auto policy = responseWritePolicy(response.status());")
@@ -1817,6 +1825,177 @@ check_files_no_match("ruvia-web must not pass loose response-body protocol boole
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h")
+
+set(HTTP_RESPONSE_BODY_STORAGE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseBody.h")
+set(HTTP_RESPONSE_FILE_BODY_VIEW
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseFileBody.h")
+set(HTTP_RESPONSE_MODEL
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpResponse.h")
+set(HTTP_RESPONSE_BODY_ACCESS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseBodyAccess.h")
+set(HTTP_RESPONSE_FILE_ACCESS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseFileAccess.h")
+set(HTTP_RESPONSE_STORAGE_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp")
+set(HTTP_RESPONSE_WRITE_PLAN
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
+set(HTTP_RESPONSE_H2_CONNECTION
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(WEB_BUFFERED_RESPONSE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
+set(WEB_RESPONSE_COMPRESSION
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp")
+set(WEB_RESPONSE_H2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(HTTP_RESPONSE_BODY_TEST
+    "${RUVIA_ROOT}/tests/unit_http_response_body.cpp")
+set(HTTP_RESPONSE_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
+foreach(response_body_contract_file IN ITEMS
+        "${HTTP_RESPONSE_BODY_STORAGE}"
+        "${HTTP_RESPONSE_FILE_BODY_VIEW}"
+        "${HTTP_RESPONSE_MODEL}"
+        "${HTTP_RESPONSE_BODY_ACCESS}"
+        "${HTTP_RESPONSE_FILE_ACCESS}"
+        "${HTTP_RESPONSE_STORAGE_SOURCE}"
+        "${HTTP_RESPONSE_WRITE_PLAN}"
+        "${HTTP_RESPONSE_H2_CONNECTION}"
+        "${WEB_BUFFERED_RESPONSE_WRITER}"
+        "${WEB_RESPONSE_COMPRESSION}"
+        "${WEB_RESPONSE_H2_SESSION}"
+        "${HTTP_RESPONSE_BODY_TEST}"
+        "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${response_body_contract_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}"
+            "${response_body_contract_file}")
+        boundary_error("typed HttpResponse body contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
+   EXISTS "${HTTP_RESPONSE_FILE_BODY_VIEW}" AND
+   EXISTS "${HTTP_RESPONSE_MODEL}" AND
+   EXISTS "${HTTP_RESPONSE_BODY_ACCESS}" AND
+   EXISTS "${HTTP_RESPONSE_FILE_ACCESS}" AND
+   EXISTS "${HTTP_RESPONSE_STORAGE_SOURCE}" AND
+   EXISTS "${HTTP_RESPONSE_WRITE_PLAN}" AND
+   EXISTS "${HTTP_RESPONSE_H2_CONNECTION}" AND
+   EXISTS "${WEB_BUFFERED_RESPONSE_WRITER}" AND
+   EXISTS "${WEB_RESPONSE_COMPRESSION}" AND
+   EXISTS "${WEB_RESPONSE_H2_SESSION}" AND
+   EXISTS "${HTTP_RESPONSE_BODY_TEST}" AND
+   EXISTS "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_RESPONSE_BODY_STORAGE}" http_response_body_storage)
+    file(READ "${HTTP_RESPONSE_FILE_BODY_VIEW}" http_response_file_body_view)
+    file(READ "${HTTP_RESPONSE_MODEL}" http_response_storage_model)
+    file(READ "${HTTP_RESPONSE_BODY_ACCESS}" http_response_body_access)
+    file(READ "${HTTP_RESPONSE_FILE_ACCESS}" http_response_file_access)
+    file(READ "${HTTP_RESPONSE_STORAGE_SOURCE}" http_response_storage_source)
+    file(READ "${HTTP_RESPONSE_WRITE_PLAN}" http_response_storage_write_plan)
+    file(READ "${HTTP_RESPONSE_H2_CONNECTION}" http_response_storage_h2)
+    file(READ "${WEB_BUFFERED_RESPONSE_WRITER}" web_buffered_response_writer)
+    file(READ "${WEB_RESPONSE_COMPRESSION}" web_response_compression)
+    file(READ "${WEB_RESPONSE_H2_SESSION}" web_response_h2_session)
+    file(READ "${HTTP_RESPONSE_BODY_TEST}" http_response_body_test)
+    file(READ "${HTTP_RESPONSE_PACKAGE_CONSUMER}"
+        http_response_package_consumer)
+    if(NOT http_response_body_storage MATCHES
+           "class HttpEmptyResponseBody final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpBorrowedResponseBytes final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpStaticResponseBytes final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpOwnedResponseBytes final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpOwnedResponseFile final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpBorrowedResponseFile final" OR
+       NOT http_response_body_storage MATCHES
+           "class HttpResponseBody final" OR
+       NOT http_response_body_storage MATCHES "using Value = std::variant" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpEmptyResponseBody>" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpBorrowedResponseBytes>" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpStaticResponseBytes>" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpOwnedResponseBytes>" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpOwnedResponseFile>" OR
+       NOT http_response_body_storage MATCHES
+           "std::get_if<HttpBorrowedResponseFile>" OR
+       NOT http_response_body_storage MATCHES
+           "std::optional<ResponseFileBody> file[(][)] const noexcept")
+        boundary_error("HttpResponse body lost its exclusive storage alternatives"
+            "empty, borrowed/static/owned bytes, and owned/borrowed files must remain one discriminated value")
+    endif()
+    if(http_response_storage_model MATCHES
+           "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}" OR
+       http_response_storage_source MATCHES
+           "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}" OR
+       NOT http_response_storage_model MATCHES
+           "detail::HttpResponseBody body_" OR
+       NOT http_response_file_body_view MATCHES
+           "class ResponseFileBody final" OR
+       NOT http_response_file_body_view MATCHES
+           "friend class HttpResponseBody" OR
+       NOT http_response_file_body_view MATCHES
+           "std::uint64_t length[(][)] const noexcept")
+        boundary_error("HttpResponse restored enum plus parallel payload storage"
+            "the model must own only HttpResponseBody and file descriptors must come from its active file alternative")
+    endif()
+    if(http_response_body_access MATCHES
+           "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}" OR
+       http_response_file_access MATCHES
+           "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}" OR
+       NOT http_response_body_access MATCHES
+           "const HttpResponseBody& responseBody" OR
+       NOT http_response_storage_write_plan MATCHES
+           "responseBody[(]response[)][.]size[(][)]" OR
+       NOT http_response_storage_h2 MATCHES
+           "const auto& body = responseBody[(]response[)]" OR
+       NOT web_buffered_response_writer MATCHES
+           "const auto& responseContent = responseBody[(]response[)]" OR
+       NOT web_buffered_response_writer MATCHES
+           "responseContent[.]file[(][)]" OR
+       NOT web_response_compression MATCHES
+           "const auto& responseContent = responseBody[(]response[)]" OR
+       NOT web_response_h2_session MATCHES
+           "const auto& responseContent = responseBody[(]response[)]")
+        boundary_error("response writers bypass the unified body read contract"
+            "HTTP planning, H1/H2 drivers, and compression must derive bytes/file/size from responseBody(response)")
+    endif()
+    if(NOT http_response_body_test MATCHES
+           "response_body_has_one_storage_alternative" OR
+       NOT http_response_body_test MATCHES
+           "response_body_materializes_only_ephemeral_borrow" OR
+       NOT http_response_body_test MATCHES
+           "response_body_file_view_is_atomic_and_non_default" OR
+       NOT http_response_body_test MATCHES
+           "response_body_file_transition_validates_before_replacement" OR
+       NOT http_response_package_consumer MATCHES
+           "const ruvia::detail::HttpResponseBody&" OR
+       NOT http_response_package_consumer MATCHES
+           "HttpBorrowedResponseFile" OR
+       NOT http_response_package_consumer MATCHES "ResponseFileBody")
+        boundary_error("typed HttpResponse body lacks regression coverage"
+            "unit and installed-package consumers must pin alternatives, materialization, atomic file views, and removed default states")
+    endif()
+endif()
+check_files_no_match("HttpResponse restored split body storage or read side channels"
+    "${RULE_STALE_RESPONSE_BODY_STORAGE_SPLIT}"
+    "${HTTP_RESPONSE_MODEL}"
+    "${HTTP_RESPONSE_BODY_ACCESS}"
+    "${HTTP_RESPONSE_FILE_ACCESS}"
+    "${HTTP_RESPONSE_STORAGE_SOURCE}"
+    "${HTTP_RESPONSE_WRITE_PLAN}"
+    "${HTTP_RESPONSE_H2_CONNECTION}"
+    "${WEB_BUFFERED_RESPONSE_WRITER}"
+    "${WEB_RESPONSE_COMPRESSION}"
+    "${WEB_RESPONSE_H2_SESSION}")
 check_files_no_match("ruvia-web HTTP/2 runtime must not recompute the response write plan"
     "${RULE_WEB_H2_RESPONSE_PLAN_DUPLICATION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
@@ -5036,6 +5215,23 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("response body-plan boundary is undocumented"
             "${relative} must describe the shared response-content alternatives and HTTP-owned write plans")
+    endif()
+    if(NOT boundary_doc_content MATCHES "HttpResponseBody" OR
+       NOT boundary_doc_content MATCHES "HttpEmptyResponseBody" OR
+       NOT boundary_doc_content MATCHES "HttpBorrowedResponseBytes" OR
+       NOT boundary_doc_content MATCHES "HttpStaticResponseBytes" OR
+       NOT boundary_doc_content MATCHES "HttpOwnedResponseBytes" OR
+       NOT boundary_doc_content MATCHES "HttpOwnedResponseFile" OR
+       NOT boundary_doc_content MATCHES "HttpBorrowedResponseFile" OR
+       NOT boundary_doc_content MATCHES "ResponseFileBody" OR
+       NOT boundary_doc_content MATCHES "responseBody[(]response[)]" OR
+       NOT boundary_doc_content MATCHES "responseHasFileBody" OR
+       NOT boundary_doc_content MATCHES "responseFileBody" OR
+       NOT boundary_doc_content MATCHES "responseBodyBytes" OR
+       NOT boundary_doc_content MATCHES "responseBodySize")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("typed HttpResponse storage contract is undocumented"
+            "${relative} must document all storage alternatives, the sole read boundary, and removed split APIs")
     endif()
     if(NOT boundary_doc_content MATCHES "ResponseStreamCommitPlan" OR
        NOT boundary_doc_content MATCHES "ResponseStreamWriter::end" OR

@@ -21,7 +21,10 @@
 #include <ruvia/http/MultipartParser.h>
 #include <ruvia/http/detail/AsciiCase.h>
 #include <ruvia/http/detail/HttpByteRange.h>
+#include <ruvia/http/detail/HttpResponseBody.h>
+#include <ruvia/http/detail/HttpResponseBodyAccess.h>
 #include <ruvia/http/detail/HttpResponseContentSemantics.h>
+#include <ruvia/http/detail/HttpResponseFileBody.h>
 #include <ruvia/http/detail/client/HttpOrigin.h>
 #include <ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h>
 #include <ruvia/http/detail/http1/Http1ResponseHeadPlan.h>
@@ -1477,8 +1480,42 @@ static_assert(!HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTarget>);
 static_assert(HasHttpClientRedirectError<
     ruvia::HttpClientRedirectTargetFailure>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::responseBody(
+        std::declval<const ruvia::HttpResponse&>())),
+    const ruvia::detail::HttpResponseBody&>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::HttpResponseBody>);
+static_assert(std::is_nothrow_move_constructible_v<
+    ruvia::detail::HttpResponseBody>);
+static_assert(std::is_nothrow_move_constructible_v<
+    ruvia::HttpResponse>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpBorrowedResponseBytes>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpStaticResponseBytes>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpOwnedResponseBytes>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpOwnedResponseFile>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpBorrowedResponseFile>);
+static_assert(!std::default_initializable<
+    ruvia::detail::ResponseFileBody>);
 
 int main() {
+    const ruvia::HttpResponse emptyResponse;
+    const auto& emptyBody = ruvia::detail::responseBody(emptyResponse);
+    if (emptyBody.empty() == nullptr ||
+        emptyBody.borrowedBytes() != nullptr ||
+        emptyBody.staticBytes() != nullptr ||
+        emptyBody.ownedBytes() != nullptr ||
+        emptyBody.ownedFile() != nullptr ||
+        emptyBody.borrowedFile() != nullptr ||
+        emptyBody.file().has_value() ||
+        !emptyBody.bytes().empty()) {
+        return 48;
+    }
     std::pmr::monotonic_buffer_resource remoteReceiveResource;
     ruvia::detail::Http2StreamState remoteReceiveStream(
         3, &remoteReceiveResource);

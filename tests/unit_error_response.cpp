@@ -26,7 +26,7 @@ RUVIA_TEST(default_error_response_escapes_message_in_json_body) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
     RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("application/json"));
 
-    const auto body = ruvia::detail::responseBodyBytes(response);
+    const auto body = ruvia::detail::responseBody(response).bytes();
     RUVIA_CHECK(body.starts_with("{") && body.ends_with("}"));
     RUVIA_CHECK(body.find(R"("code":"bad_request")") != std::string_view::npos);
     RUVIA_CHECK(body.find(R"("message":"invalid \"input\"")") != std::string_view::npos);
@@ -38,7 +38,7 @@ RUVIA_TEST(default_error_response_embeds_details_json) {
                         R"([{"field":"x","code":"required","message":"m"}])");
     const auto response = makeDefaultErrorResponse(resource, error);
 
-    const auto body = ruvia::detail::responseBodyBytes(response);
+    const auto body = ruvia::detail::responseBody(response).bytes();
     // The already-valid details JSON is embedded verbatim under "details".
     RUVIA_CHECK(body.find(R"("details":[{"field":"x","code":"required","message":"m"}])") !=
                 std::string_view::npos);
@@ -78,7 +78,7 @@ RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {
         HttpErrorInfo error(400, "bad", "msg", std::string_view("Bad\r\nRequest", 12));
         const auto response = makeDefaultErrorResponse(resource, error);
         RUVIA_CHECK_EQ(response.status(), std::uint16_t{400});
-        const auto body = ruvia::detail::responseBodyBytes(response);
+        const auto body = ruvia::detail::responseBody(response).bytes();
         RUVIA_CHECK(body.find(R"("error":"Bad Request")") != std::string_view::npos);
         RUVIA_CHECK(body.find('\r') == std::string_view::npos);
         RUVIA_CHECK(body.find('\n') == std::string_view::npos);
@@ -88,7 +88,7 @@ RUVIA_TEST(default_error_response_coerces_invalid_status_and_status_text) {
     {
         const auto response = makeDefaultErrorResponse(resource, HttpErrorInfo(599));
         RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
-        const auto body = ruvia::detail::responseBodyBytes(response);
+        const auto body = ruvia::detail::responseBody(response).bytes();
         RUVIA_CHECK(body.find(R"("error":"HTTP Error")") != std::string_view::npos);
     }
     // A valid in-range status is preserved unchanged.

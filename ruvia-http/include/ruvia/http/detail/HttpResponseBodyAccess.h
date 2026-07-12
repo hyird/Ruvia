@@ -2,7 +2,6 @@
 
 #include "ruvia/http/HttpResponse.h"
 
-#include <cstddef>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
@@ -22,14 +21,10 @@ struct HttpResponseBodyAccess final {
         response.materializeBody();
     }
 
-    [[nodiscard]] static std::string_view bytes(const HttpResponse& response) noexcept {
-        return response.bodyBytes();
+    [[nodiscard]] static const HttpResponseBody& body(
+        const HttpResponse& response) noexcept {
+        return response.body_;
     }
-
-    [[nodiscard]] static std::size_t size(const HttpResponse& response) noexcept {
-        return response.bodySize();
-    }
-
 };
 
 inline void setResponseBodyStaticView(HttpResponse& response, std::string_view value) noexcept {
@@ -44,12 +39,9 @@ inline void materializeResponseBody(HttpResponse& response) {
     HttpResponseBodyAccess::materialize(response);
 }
 
-[[nodiscard]] inline std::string_view responseBodyBytes(const HttpResponse& response) noexcept {
-    return HttpResponseBodyAccess::bytes(response);
-}
-
-[[nodiscard]] inline std::size_t responseBodySize(const HttpResponse& response) noexcept {
-    return HttpResponseBodyAccess::size(response);
+[[nodiscard]] inline const HttpResponseBody& responseBody(
+    const HttpResponse& response) noexcept {
+    return HttpResponseBodyAccess::body(response);
 }
 
 }  // namespace ruvia::detail

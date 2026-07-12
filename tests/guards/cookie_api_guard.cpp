@@ -181,7 +181,7 @@ void exerciseByteSpanBody(ruvia::RequestMemory& memory, const ruvia::HttpRequest
     check(response.status() == 206);
     check(response.header("X-Bin") == "1");
     check(response.header("Content-Type").empty());
-    const auto body = ruvia::detail::responseBodyBytes(response);
+    const auto body = ruvia::detail::responseBody(response).bytes();
     check(body.size() == 3);
     check(body.size() == 3 && body[0] == '\0' && body[1] == 'A' &&
         static_cast<unsigned char>(body[2]) == 0xff);

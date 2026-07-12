@@ -13,7 +13,6 @@
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
-#include "ruvia/http/detail/HttpResponseFileAccess.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/http/HttpTypes.h"
@@ -36,8 +35,8 @@ Task<void> writeResponseWithScratch(
         response,
         head,
         responsePlan.headPlan());
-    if (responseHasFileBody(response)) {
-        const auto fileBody = responseFileBody(response);
+    const auto& responseContent = responseBody(response);
+    if (const auto fileBody = responseContent.file()) {
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {
             asio::async_write(stream, asio::buffer(headView), std::move(handler));
         });
@@ -46,17 +45,19 @@ Task<void> writeResponseWithScratch(
         }
 
         if constexpr (std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>) {
-            co_await writeFileZeroCopy(stream, fileBody, ec);
+            co_await writeFileZeroCopy(stream, *fileBody, ec);
             if (ec != asio::error::operation_not_supported) {
                 co_return;
             }
         }
 
-        co_await writeFileFallback(stream, memory, fileChunkBuffer, fileBody, ec);
+        co_await writeFileFallback(stream, memory, fileChunkBuffer, *fileBody, ec);
         co_return;
     }
 
-    const auto body = writePlan.sendBody() ? responseBodyBytes(response) : std::string_view{};
+    const auto body = writePlan.sendBody()
+        ? responseContent.bytes()
+        : std::string_view{};
     if (body.empty()) {
         ec = co_await asyncError([&stream, headView = head.view()](auto handler) mutable {
             asio::async_write(stream, asio::buffer(headView), std::move(handler));

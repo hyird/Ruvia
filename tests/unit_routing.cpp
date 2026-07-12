@@ -483,7 +483,7 @@ std::string dispatchChain(
         asio::use_future);
     ctx.run();
     auto response = future.get();
-    const auto body = ruvia::detail::responseBodyBytes(response);
+    const auto body = ruvia::detail::responseBody(response).bytes();
     return std::string(body.data(), body.size());
 }
 
@@ -701,7 +701,7 @@ struct DispatchResult final {
 DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     DispatchResult result;
     result.status = response.status();
-    const auto body = ruvia::detail::responseBodyBytes(response);
+    const auto body = ruvia::detail::responseBody(response).bytes();
     result.body.assign(body.data(), body.size());
     const auto allow = response.header("Allow");
     result.allow.assign(allow.data(), allow.size());

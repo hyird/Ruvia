@@ -23,7 +23,7 @@ using ruvia::HttpServerOptions;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::compressResponseBodyIfAccepted;
-using ruvia::detail::responseBodyBytes;
+using ruvia::detail::responseBody;
 
 using Compression = HttpServerOptions::Compression;
 
@@ -129,8 +129,8 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             scratch,
             bodyPlanFor(response)));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("gzip"));
-        RUVIA_CHECK(responseBodyBytes(response).size() < original.size());  // actually shrank
-        RUVIA_CHECK_EQ(gzipDecompress(responseBodyBytes(response)), original);
+        RUVIA_CHECK(responseBody(response).size() < original.size());  // actually shrank
+        RUVIA_CHECK_EQ(gzipDecompress(responseBody(response).bytes()), original);
     }
     {
         auto response = responseWithBody(original);
@@ -142,7 +142,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             scratch,
             bodyPlanFor(response)));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("br"));
-        RUVIA_CHECK_EQ(brotliDecompress(responseBodyBytes(response)), original);
+        RUVIA_CHECK_EQ(brotliDecompress(responseBody(response).bytes()), original);
     }
     {
         auto response = responseWithBody(original);
@@ -154,7 +154,7 @@ RUVIA_TEST(compress_output_round_trips_for_each_coding) {
             scratch,
             bodyPlanFor(response)));
         RUVIA_CHECK_EQ(response.header("Content-Encoding"), std::string_view("zstd"));
-        RUVIA_CHECK_EQ(zstdDecompress(responseBodyBytes(response)), original);
+        RUVIA_CHECK_EQ(zstdDecompress(responseBody(response).bytes()), original);
     }
 }
 
