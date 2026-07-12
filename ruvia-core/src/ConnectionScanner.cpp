@@ -4,6 +4,7 @@
 
 #include <asio/error.hpp>
 #include <chrono>
+#include <stdexcept>
 #include <utility>
 
 namespace ruvia::detail {
@@ -13,6 +14,20 @@ namespace {
 [[nodiscard]] std::int64_t steadyNowMs() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void validateScannerTimeout(
+    const std::optional<std::chrono::milliseconds>& timeout) {
+    if (timeout.has_value() && timeout->count() <= 0) {
+        throw std::invalid_argument(
+            "configured connection scanner timeouts must be greater than zero");
+    }
+}
+
+[[nodiscard]] bool timeoutExpired(
+    const std::optional<std::chrono::milliseconds>& timeout,
+    std::int64_t inactiveMs) noexcept {
+    return timeout.has_value() && inactiveMs >= timeout->count();
 }
 
 }  // namespace
@@ -93,7 +108,15 @@ ConnectionScanner::Guard::~Guard() {
 }
 
 ConnectionScanner::ConnectionScanner(asio::any_io_executor executor, ConnectionScannerOptions options)
-    : timer_(std::move(executor)), options_(options), cachedNowMs_(steadyNowMs()) {
+    : timer_(std::move(executor)), options_(std::move(options)), cachedNowMs_(steadyNowMs()) {
+    if (options_.scanInterval.count() <= 0) {
+        throw std::invalid_argument(
+            "connection scanner interval must be greater than zero");
+    }
+    validateScannerTimeout(options_.idleTimeout);
+    validateScannerTimeout(options_.initialReadTimeout);
+    validateScannerTimeout(options_.payloadReadTimeout);
+    validateScannerTimeout(options_.writeTimeout);
     sentinel_.prev_ = &sentinel_;
     sentinel_.next_ = &sentinel_;
 }
@@ -176,10 +199,10 @@ void ConnectionScanner::closeAll() noexcept {
 }
 
 bool ConnectionScanner::hasAnyTimeout() const noexcept {
-    return options_.idleTimeoutMs > 0 ||
-        options_.initialReadTimeoutMs > 0 ||
-        options_.payloadReadTimeoutMs > 0 ||
-        options_.writeTimeoutMs > 0;
+    return options_.idleTimeout.has_value() ||
+        options_.initialReadTimeout.has_value() ||
+        options_.payloadReadTimeout.has_value() ||
+        options_.writeTimeout.has_value();
 }
 
 void ConnectionScanner::schedule() {
@@ -221,15 +244,15 @@ bool ConnectionScanner::isTimedOut(const Entry& entry, std::int64_t now) const n
     const auto inactiveMs = now - entry.lastActiveMs_;
     switch (entry.phase_) {
         case Phase::kReadingInitial:
-            return options_.initialReadTimeoutMs > 0 && inactiveMs >= options_.initialReadTimeoutMs;
+            return timeoutExpired(options_.initialReadTimeout, inactiveMs);
         case Phase::kReadingPayload:
-            return options_.payloadReadTimeoutMs > 0 && inactiveMs >= options_.payloadReadTimeoutMs;
+            return timeoutExpired(options_.payloadReadTimeout, inactiveMs);
         case Phase::kWriting:
-            return options_.writeTimeoutMs > 0 && inactiveMs >= options_.writeTimeoutMs;
+            return timeoutExpired(options_.writeTimeout, inactiveMs);
         case Phase::kLongLived:
         case Phase::kIdle:
         default:
-            return options_.idleTimeoutMs > 0 && inactiveMs >= options_.idleTimeoutMs;
+            return timeoutExpired(options_.idleTimeout, inactiveMs);
     }
 }
 

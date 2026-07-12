@@ -48,12 +48,12 @@ public:
     App& setHttpsListenPort(std::uint16_t port);
     App& setAutoHttps(bool enabled = true);
     App& setThreadNum(std::size_t threadNum);
-    App& setKeepaliveTimeout(std::chrono::milliseconds timeout);
+    App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
-    App& setClientHeaderTimeout(std::chrono::milliseconds timeout);
-    App& setClientBodyTimeout(std::chrono::milliseconds timeout);
-    App& setSendTimeout(std::chrono::milliseconds timeout);
+    App& setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout);
+    App& setSendTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setMaxConnectionsPerWorker(std::size_t maxConnections);
     App& setKeepaliveRequests(std::size_t maxRequests);
     App& setMaxBufferedBodyBytes(std::size_t bytes);

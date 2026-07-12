@@ -7496,6 +7496,65 @@ if(EXISTS "${WEB_DB_TIMEOUT_MODEL}" AND
     endif()
 endif()
 
+set(CONNECTION_TIMEOUT_CORE_MODEL
+    "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/ConnectionScanner.h")
+set(CONNECTION_TIMEOUT_CORE_RUNTIME
+    "${RUVIA_ROOT}/ruvia-core/src/ConnectionScanner.cpp")
+set(CONNECTION_TIMEOUT_WEB_API
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h")
+set(CONNECTION_TIMEOUT_WEB_OPTIONS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerOptions.h")
+set(CONNECTION_TIMEOUT_WEB_BRIDGE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpServerLifecycle.cpp")
+set(CONNECTION_TIMEOUT_CORE_PACKAGE
+    "${RUVIA_ROOT}/tests/package-consumer/core.cpp")
+set(CONNECTION_TIMEOUT_WEB_PACKAGE
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+if(EXISTS "${CONNECTION_TIMEOUT_CORE_MODEL}" AND
+   EXISTS "${CONNECTION_TIMEOUT_CORE_RUNTIME}" AND
+   EXISTS "${CONNECTION_TIMEOUT_WEB_API}" AND
+   EXISTS "${CONNECTION_TIMEOUT_WEB_OPTIONS}" AND
+   EXISTS "${CONNECTION_TIMEOUT_WEB_BRIDGE}" AND
+   EXISTS "${CONNECTION_TIMEOUT_CORE_PACKAGE}" AND
+   EXISTS "${CONNECTION_TIMEOUT_WEB_PACKAGE}")
+    file(READ "${CONNECTION_TIMEOUT_CORE_MODEL}" connection_timeout_core_model)
+    file(READ "${CONNECTION_TIMEOUT_CORE_RUNTIME}" connection_timeout_core_runtime)
+    file(READ "${CONNECTION_TIMEOUT_WEB_API}" connection_timeout_web_api)
+    file(READ "${CONNECTION_TIMEOUT_WEB_OPTIONS}" connection_timeout_web_options)
+    file(READ "${CONNECTION_TIMEOUT_WEB_BRIDGE}" connection_timeout_web_bridge)
+    file(READ "${CONNECTION_TIMEOUT_CORE_PACKAGE}" connection_timeout_core_package)
+    file(READ "${CONNECTION_TIMEOUT_WEB_PACKAGE}" connection_timeout_web_package)
+    foreach(timeout_name IN ITEMS
+            idleTimeout initialReadTimeout payloadReadTimeout writeTimeout)
+        if(NOT connection_timeout_core_model MATCHES
+               "std::optional<std::chrono::milliseconds>[ \t]+${timeout_name}")
+            boundary_error("core connection timeout regained a numeric sentinel"
+                "${timeout_name} must distinguish absence from a configured duration")
+        endif()
+    endforeach()
+    foreach(timeout_name IN ITEMS
+            keepaliveTimeout clientHeaderTimeout clientBodyTimeout sendTimeout)
+        if(NOT connection_timeout_web_options MATCHES
+               "std::optional<std::chrono::milliseconds>[ \t]+${timeout_name}")
+            boundary_error("Web connection timeout regained a duration sentinel"
+                "${timeout_name} must remain optional through worker normalization")
+        endif()
+    endforeach()
+    if(connection_timeout_core_runtime MATCHES
+           "(idle|initialRead|payloadRead|write)TimeoutMs[ \t]*>[ \t]*0" OR
+       connection_timeout_web_bridge MATCHES
+           "(keepalive|clientHeader|clientBody|send)Timeout[.]count[(][)]" OR
+       NOT connection_timeout_web_api MATCHES
+           "setKeepaliveTimeout[(]std::optional<std::chrono::milliseconds>" OR
+       NOT connection_timeout_core_package MATCHES
+           "HasConnectionTimeoutMillisecondSentinels" OR
+       NOT connection_timeout_web_package MATCHES
+           "AppSetConnectionTimeoutFunction")
+        boundary_error("connection timeout presence was lost across layers"
+            "App, Web worker options and core scanner must carry optional typed durations end to end")
+    endif()
+endif()
+
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
 set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")

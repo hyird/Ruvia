@@ -431,6 +431,8 @@ using AppSetCompressionFunction = ruvia::App& (ruvia::App::*)(
     std::optional<ruvia::CompressionConfig>);
 using AppSetCorsFunction = ruvia::App& (ruvia::App::*)(
     std::optional<ruvia::CorsConfig>);
+using AppSetConnectionTimeoutFunction = ruvia::App& (ruvia::App::*)(
+    std::optional<std::chrono::milliseconds>);
 
 static_assert(std::same_as<
     decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
@@ -441,6 +443,22 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(static_cast<AppSetCorsFunction>(&ruvia::App::setCors)),
     AppSetCorsFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetConnectionTimeoutFunction>(
+        &ruvia::App::setKeepaliveTimeout)),
+    AppSetConnectionTimeoutFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetConnectionTimeoutFunction>(
+        &ruvia::App::setClientHeaderTimeout)),
+    AppSetConnectionTimeoutFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetConnectionTimeoutFunction>(
+        &ruvia::App::setClientBodyTimeout)),
+    AppSetConnectionTimeoutFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<AppSetConnectionTimeoutFunction>(
+        &ruvia::App::setSendTimeout)),
+    AppSetConnectionTimeoutFunction>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<
@@ -449,6 +467,9 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::HttpServerOptions>().cors),
     std::optional<ruvia::CorsConfig>>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::HttpServerOptions{}.keepaliveTimeout),
+    std::optional<std::chrono::milliseconds>>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),

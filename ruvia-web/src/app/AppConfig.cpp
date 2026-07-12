@@ -77,13 +77,15 @@ App& App::setThreadNum(std::size_t threadNum) {
         });
 }
 
-App& App::setKeepaliveTimeout(std::chrono::milliseconds timeout) {
+App& App::setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change keepalive timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "keepalive timeout must not be negative");
+            detail::ensurePositiveOptionalDuration(
+                timeout,
+                "configured keepalive timeout must be greater than zero");
             state.options.keepaliveTimeout = timeout;
         });
 }
@@ -110,35 +112,41 @@ App& App::setConnectionScanInterval(std::chrono::milliseconds interval) {
         });
 }
 
-App& App::setClientHeaderTimeout(std::chrono::milliseconds timeout) {
+App& App::setClientHeaderTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change client header timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "client header timeout must not be negative");
+            detail::ensurePositiveOptionalDuration(
+                timeout,
+                "configured client header timeout must be greater than zero");
             state.options.clientHeaderTimeout = timeout;
         });
 }
 
-App& App::setClientBodyTimeout(std::chrono::milliseconds timeout) {
+App& App::setClientBodyTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change client body timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "client body timeout must not be negative");
+            detail::ensurePositiveOptionalDuration(
+                timeout,
+                "configured client body timeout must be greater than zero");
             state.options.clientBodyTimeout = timeout;
         });
 }
 
-App& App::setSendTimeout(std::chrono::milliseconds timeout) {
+App& App::setSendTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot change send timeout while app is running",
         [timeout](detail::AppState& state) {
-            detail::ensureNonNegativeDuration(timeout, "send timeout must not be negative");
+            detail::ensurePositiveOptionalDuration(
+                timeout,
+                "configured send timeout must be greater than zero");
             state.options.sendTimeout = timeout;
         });
 }
