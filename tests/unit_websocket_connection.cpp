@@ -118,8 +118,8 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     ConnectionScanner::Entry scannerEntry;
     ruvia::WorkerMemory memory;
     ruvia::WebSocketLifecycleOptions lifecycle;
-    lifecycle.pingInterval = std::chrono::milliseconds(1);
-    lifecycle.pongTimeout = std::chrono::milliseconds(1);
+    lifecycle.heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(
+        std::chrono::milliseconds(1));
     WebSocketConnection<RecordingTransport> connection(
         RecordingTransport(io, state),
         scannerEntry,

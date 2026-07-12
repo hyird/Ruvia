@@ -11,8 +11,9 @@ public:
     const auto chatOptions = ruvia::WebSocketRouteOptions{
         .subprotocols = "chat.v1",
         .lifecycle = {
-            .pingInterval = std::chrono::seconds(30),
-            .pongTimeout = std::chrono::seconds(10),
+            .heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(
+                std::chrono::seconds(30),
+                std::chrono::seconds(10)),
             .closeHandshakeTimeout = std::chrono::seconds(5),
         },
     };

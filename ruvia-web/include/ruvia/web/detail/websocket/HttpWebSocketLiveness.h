@@ -23,25 +23,24 @@ enum class WebSocketLivenessDecision : std::uint8_t {
     std::int64_t localCloseStartedMs,
     std::int64_t now) noexcept {
     if (closePhase != WsClosePhase::kOpen) {
-        const auto closeTimeout = options.closeHandshakeTimeout.count();
         const bool awaitingPeerClose =
             closePhase == WsClosePhase::kLocalCloseQueued ||
             closePhase == WsClosePhase::kAwaitingPeerClose;
-        return awaitingPeerClose && closeTimeout > 0 && localCloseStartedMs >= 0 &&
-                now - localCloseStartedMs >= closeTimeout
+        return awaitingPeerClose &&
+                options.closeHandshakeTimeout.has_value() &&
+                localCloseStartedMs >= 0 &&
+                now - localCloseStartedMs >=
+                    options.closeHandshakeTimeout->count()
             ? WebSocketLivenessDecision::kAbortTransport
             : WebSocketLivenessDecision::kIdle;
     }
 
-    const auto pingInterval = options.pingInterval.count();
-    if (pingInterval <= 0) {
+    if (!options.heartbeat.has_value()) {
         return WebSocketLivenessDecision::kIdle;
     }
 
-    auto pongTimeout = options.pongTimeout.count();
-    if (pongTimeout <= 0) {
-        pongTimeout = pingInterval;
-    }
+    const auto pingInterval = options.heartbeat->pingInterval().count();
+    const auto pongTimeout = options.heartbeat->pongTimeout().count();
     if (awaitingPong) {
         return now - heartbeatPingSentMs >= pongTimeout
             ? WebSocketLivenessDecision::kAbortTransport

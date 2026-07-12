@@ -175,11 +175,10 @@ public:
         if (!handler.valid()) {
             throw std::invalid_argument("websocket route handler must not be empty");
         }
-        if (options.lifecycle.pingInterval.count() < 0 ||
-            options.lifecycle.pongTimeout.count() < 0 ||
-            options.lifecycle.closeHandshakeTimeout.count() < 0) {
+        if (options.lifecycle.closeHandshakeTimeout.has_value() &&
+            options.lifecycle.closeHandshakeTimeout->count() <= 0) {
             throw std::invalid_argument(
-                "websocket lifecycle timeouts must not be negative");
+                "websocket close-handshake timeout must be greater than zero");
         }
         return RouteEndpoint(WebSocketRouteEndpoint(
             pmrResourceOrDefault(resource), handler, options));
