@@ -1045,13 +1045,7 @@ public:
     [[nodiscard]] const T& valid(ValidationTarget target) const;
 
     template <typename T>
-    [[nodiscard]] const T& valid(std::string_view target) const;
-
-    template <typename T>
     void addValidatedData(ValidationTarget target, T&& data) const;
-
-    template <typename T>
-    void addValidatedData(std::string_view target, T&& data) const;
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
@@ -1964,11 +1958,6 @@ inline const T& ContextRequest::valid(ValidationTarget target) const {
     return context_->validatedValues_.get<T>(target);
 }
 
-template <typename T>
-inline const T& ContextRequest::valid(std::string_view target) const {
-    return valid<T>(validationTargetFromName(target));
-}
-
 namespace detail {
 
 template <typename T>
@@ -1984,11 +1973,6 @@ inline void ContextRequest::addValidatedData(ValidationTarget target, T&& data) 
         const_cast<Context&>(*context_),
         target,
         std::forward<T>(data));
-}
-
-template <typename T>
-inline void ContextRequest::addValidatedData(std::string_view target, T&& data) const {
-    addValidatedData(validationTargetFromName(target), std::forward<T>(data));
 }
 
 }  // namespace ruvia

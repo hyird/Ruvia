@@ -1568,6 +1568,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/http/ContextServices.h")
     set(_installed_context_header_path
         "${_install_prefix}/include/ruvia/web/Context.h")
+    set(_installed_validation_target_path
+        "${_install_prefix}/include/ruvia/web/ValidationTypes.h")
     set(_installed_context_inline_path
         "${_install_prefix}/include/ruvia/web/detail/http/Context.inl")
     set(_installed_context_model_path
@@ -1576,6 +1578,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
             "${_installed_context_header_path}"
+            "${_installed_validation_target_path}"
             "${_installed_context_inline_path}"
             "${_installed_context_model_path}")
         if(NOT EXISTS "${_context_capability_contract}")
@@ -1597,12 +1600,27 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_services)
     file(READ "${_installed_context_header_path}"
         _installed_context_header)
+    file(READ "${_installed_validation_target_path}"
+        _installed_validation_target)
     if(NOT _installed_context_header MATCHES
            "ruvia/web/detail/http/Context[.]inl" OR
        NOT _installed_context_header MATCHES
            "ruvia/web/detail/http/ContextModel[.]inl")
         message(FATAL_ERROR
             "installed Context.h does not own all public template definitions")
+    endif()
+    if(_installed_context_header MATCHES
+           "valid[(]std::string_view[ 	]+target[)]" OR
+       _installed_context_header MATCHES
+           "addValidatedData[(]std::string_view[ 	]+target" OR
+       _installed_validation_target MATCHES
+           "validationTargetFromName" OR
+       _installed_validation_target MATCHES
+           "inline[ 	]+constexpr[ 	]+ValidationTarget[ 	]+(Json|Form|Query|Param|Header|Cookie)" OR
+       NOT _installed_validation_target MATCHES
+           "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
+        message(FATAL_ERROR
+            "installed Context validation target API is not uniquely typed")
     endif()
     if(NOT _installed_context_capabilities MATCHES
            "class ContextBufferedRequestBodySource final" OR
