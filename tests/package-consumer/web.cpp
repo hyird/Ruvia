@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 
@@ -32,6 +33,7 @@
 #include <ruvia/web/detail/router/RouteStreamResult.h>
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/Http2BufferedResponseDispatch.h>
+#include <ruvia/web/detail/server/Http1BufferedResponseWrite.h>
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
 #include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
 #include <ruvia/web/detail/server/HttpResponseStreamState.h>
@@ -140,6 +142,12 @@ concept HasResponseSubmitError = requires(const Alternative& value) {
         std::same_as<ruvia::detail::Http2ResponseHeadSubmitError>;
 };
 
+template <typename Alternative>
+concept HasResponseWriteError = requires(const Alternative& value) {
+    { value.error() } ->
+        std::same_as<const std::error_code&>;
+};
+
 template <typename Result>
 concept HasLegacyStreamedPredicate = requires(const Result& result) {
     result.streamed();
@@ -218,6 +226,45 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::ResponseStreamState&>()
                  .commitPlan()),
     const ruvia::detail::ResponseStreamCommitPlan*>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1BufferedResponseWriteResult>);
+static_assert(!HasResponseStatus<
+    ruvia::detail::Http1BufferedResponseWriteResult>);
+static_assert(!HasResponseWriteError<
+    ruvia::detail::Http1BufferedResponseWriteResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1BufferedResponseWriteResult&>().completed()),
+    const ruvia::detail::Http1BufferedResponseWriteCompleted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1BufferedResponseWriteResult&>().failedBeforeCommit()),
+    const ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1BufferedResponseWriteResult&>().failedAfterCommit()),
+    const ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit*>);
+static_assert(HasResponseStatus<
+    ruvia::detail::Http1BufferedResponseWriteCompleted>);
+static_assert(!HasResponseStatus<
+    ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit>);
+static_assert(HasResponseStatus<
+    ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit>);
+static_assert(!HasResponseWriteError<
+    ruvia::detail::Http1BufferedResponseWriteCompleted>);
+static_assert(HasResponseWriteError<
+    ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit>);
+static_assert(HasResponseWriteError<
+    ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit>);
+using ClassifyHttp1BufferedResponseWriteFunction =
+    ruvia::detail::Http1BufferedResponseWriteResult (*)(
+        const ruvia::detail::Http1BufferedResponsePlan&,
+        std::size_t,
+        std::error_code,
+        std::size_t) noexcept;
+static_assert(std::same_as<
+    decltype(&ruvia::detail::classifyHttp1BufferedResponseWrite),
+    ClassifyHttp1BufferedResponseWriteFunction>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2BufferedResponseDispatchResult>);
 static_assert(std::same_as<

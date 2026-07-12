@@ -345,7 +345,6 @@ Task<void> HttpServer::handleStreamSession(
         }
 
         if (!committedStreamStatus.has_value()) {
-            std::error_code ec;
             scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
             const auto responsePreparation = prepareBufferedHttpResponse(
                 parsed.request,
@@ -356,22 +355,36 @@ Task<void> HttpServer::handleStreamSession(
             const auto responsePlan = http1BufferedResponsePlan(
                 responsePreparation.writePlan(),
                 connectionPlan);
-            co_await writeResponse(
+            const auto writeResult = co_await writeResponse(
                 stream,
                 memory_,
                 &responseHead,
                 &fileChunk,
                 response,
-                responsePlan,
-                ec);
+                responsePlan);
             if (responsePreparation.bodyBorrowsCompressionScratch()) {
                 clearPmrStringRetainingSmall(compressionScratch, kCompressionScratchRetainedBytes);
             }
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-            recordHttpAccess(
-                options_.accessLog, parsed.request, remoteAddress,
-                response.status(), requestStart);
-            if (ec ||
+            if (const auto* completed = writeResult.completed()) {
+                recordHttpAccess(
+                    options_.accessLog,
+                    parsed.request,
+                    remoteAddress,
+                    completed->status(),
+                    requestStart);
+            } else if (const auto* failed = writeResult.failedAfterCommit()) {
+                recordHttpAccess(
+                    options_.accessLog,
+                    parsed.request,
+                    remoteAddress,
+                    failed->status(),
+                    requestStart);
+            } else if (writeResult.failedBeforeCommit() == nullptr) {
+                throw std::logic_error(
+                    "HTTP/1 buffered write returned no terminal alternative");
+            }
+            if (writeResult.completed() == nullptr ||
                 connectionPlan.disposition() == Http1ConnectionDisposition::kClose ||
                 !started_.load(std::memory_order_relaxed)) {
                 co_return;

@@ -97,6 +97,14 @@ streams are logged before the socket closes, and HTTP/1 or HTTP/2 custom streami
 be reconstructed as the former default 200. Automatic stream termination runs inside the route
 coroutine while its bound `Context` is still alive; the outer transport driver only consumes the
 committed plan and never dereferences a retained Context pointer after route completion.
+Buffered HTTP/1 writes now have the same explicit commit boundary.
+`Http1BufferedResponseWriteResult` is exactly one of completed, failed-before-commit, or
+failed-after-commit. The writer uses the composed operation's cumulative byte count: only a prefix
+that contains the complete serialized response head commits an HTTP status. Completed and
+post-commit failure carry the status from the exact `Http1BufferedResponsePlan`; a partial head
+carries only its transport error and cannot produce a response-completion access-log record. The
+former `Task<void>` plus `std::error_code&` side channel and the later
+`HttpResponse::status()` reconstruction are gone.
 Buffered HTTP/2 completion follows the same rule. Every valid buffered branch—including early
 417/429 application responses—uses one preparation/submission/logging path. Its
 `Http2BufferedResponseDispatchResult` distinguishes completed, peer-aborted-before-commit,
@@ -176,6 +184,9 @@ request-field tuple are removed without adding allocation or type-erasure.
 For streaming responses, its status is taken from the same `ResponseStreamCommitPlan` that emitted
 the final head; a pre-commit peer abort has no final response and therefore does not invoke this
 response-completion hook with an invented status.
+Buffered HTTP/1 records likewise consume `Http1BufferedResponseWriteResult`: a complete head or a
+later body failure has the plan's committed status, while a transport failure during a partial head
+has none.
 
 Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
 `HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,

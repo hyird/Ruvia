@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
 #include <asio/ssl.hpp>
+#include <stdexcept>
 #include <type_traits>
 
 #include "ruvia/core/detail/ConnectionScanner.h"
