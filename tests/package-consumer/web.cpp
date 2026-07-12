@@ -34,6 +34,8 @@
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/Http2BufferedResponseDispatch.h>
 #include <ruvia/web/detail/server/Http1BufferedResponseWrite.h>
+#include <ruvia/web/detail/server/HttpFileFallback.h>
+#include <ruvia/web/detail/server/HttpFileZeroCopy.h>
 #include <ruvia/web/detail/server/Http1RequestSequence.h>
 #include <ruvia/web/detail/server/Http1SessionRequestCompletion.h>
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
@@ -273,6 +275,38 @@ using ClassifyHttp1BufferedResponseWriteFunction =
 static_assert(std::same_as<
     decltype(&ruvia::detail::classifyHttp1BufferedResponseWrite),
     ClassifyHttp1BufferedResponseWriteFunction>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpFileZeroCopyResult>);
+static_assert(!HasResponseWriteError<
+    ruvia::detail::HttpFileZeroCopyResult>);
+static_assert(HasResponseWriteError<
+    ruvia::detail::HttpFileZeroCopyFailed>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpFileZeroCopyResult&>().completed()),
+    const ruvia::detail::HttpFileZeroCopyCompleted*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpFileZeroCopyResult&>().unavailable()),
+    const ruvia::detail::HttpFileZeroCopyUnavailable*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        HttpFileZeroCopyResult&>().failed()),
+    const ruvia::detail::HttpFileZeroCopyFailed*>);
+using WriteFileZeroCopyFunction =
+    ruvia::Task<ruvia::detail::HttpFileZeroCopyResult> (*)(
+        asio::ip::tcp::socket&,
+        ruvia::detail::ResponseFileBody);
+static_assert(std::same_as<
+    decltype(&ruvia::detail::writeFileZeroCopy),
+    WriteFileZeroCopyFunction>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::writeFileFallback(
+        std::declval<asio::ip::tcp::socket&>(),
+        std::declval<ruvia::WorkerMemory&>(),
+        std::declval<std::pmr::string*>(),
+        std::declval<ruvia::detail::ResponseFileBody>())),
+    ruvia::Task<std::error_code>>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http2BufferedResponseDispatchResult>);
 static_assert(std::same_as<

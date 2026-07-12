@@ -61,25 +61,34 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 bytesTransferred);
         }
 
-        if constexpr (std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>) {
-            std::error_code fileError;
-            co_await writeFileZeroCopy(stream, *fileBody, fileError);
-            if (fileError != asio::error::operation_not_supported) {
+        if constexpr (std::is_same_v<
+                          std::remove_cvref_t<Stream>,
+                          asio::ip::tcp::socket>) {
+            const auto zeroCopyResult =
+                co_await writeFileZeroCopy(stream, *fileBody);
+            if (zeroCopyResult.completed() != nullptr) {
                 co_return classifyHttp1BufferedResponseWrite(
                     responsePlan,
                     responseHeadBytes,
-                    fileError,
+                    {},
                     responseHeadBytes);
             }
+            if (const auto* failed = zeroCopyResult.failed()) {
+                co_return classifyHttp1BufferedResponseWrite(
+                    responsePlan,
+                    responseHeadBytes,
+                    failed->error(),
+                    responseHeadBytes);
+            }
+            // The sole remaining alternative is zero-copy unavailable, which
+            // intentionally selects the portable buffered writer below.
         }
 
-        std::error_code fileError;
-        co_await writeFileFallback(
+        const auto fileError = co_await writeFileFallback(
             stream,
             memory,
             fileChunkBuffer,
-            *fileBody,
-            fileError);
+            *fileBody);
         co_return classifyHttp1BufferedResponseWrite(
             responsePlan,
             responseHeadBytes,

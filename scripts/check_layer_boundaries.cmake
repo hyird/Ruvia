@@ -209,6 +209,8 @@ set(RULE_STALE_H2_UNPREPARED_BUFFERED_HEAD
     "[(]void[)][ \t]*prepareBufferedHttpResponse|auto[ \t]+writePlan[ \t]*=[ \t\r\n]*httpBufferedResponseWritePlan|submitResponseHead[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*const HttpResponse&[ \t]+response[ \t\r\n]*[)]")
 set(RULE_STALE_H1_BUFFERED_COMPLETION
     "Task<void>[ \t\r\n]+writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(]|writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(][^)]*std::error_code[ \t]*&|response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
+set(RULE_STALE_HTTP_FILE_WRITE_COMPLETION
+    "Task<void>[ \t\r\n]+writeFile(ZeroCopy|Fallback|FallbackWithLocalChunk|Chunk)[ \t\r\n]*[(]|writeFile(ZeroCopy|Fallback|FallbackWithLocalChunk|Chunk)[ \t\r\n]*[(][^)]*std::error_code[ \t]*&|operation_not_supported")
 set(RULE_STALE_H2_FIELD_BLOCK_STATE
     "refusedHeaderStream_|finishWasTrailers|multi-frame HEADERS on closed stream|dependency[ 	]*==[ 	]*header\.streamId|RFC 9113 §5\.3\.1")
 set(RULE_STALE_H2_CONNECT_STATE
@@ -673,6 +675,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HTTP/1 buffered writer restored void plus error side channel"
         "${RULE_STALE_H1_BUFFERED_COMPLETION}"
         "Task<void> writeResponse(Stream&, std::error_code& ec);")
+    expect_match("HTTP file writer restored void plus error side channel"
+        "${RULE_STALE_HTTP_FILE_WRITE_COMPLETION}"
+        "Task<void> writeFileZeroCopy(Socket&, File, std::error_code& ec);")
     expect_match("stale HTTP/2 field-block state" "${RULE_STALE_H2_FIELD_BLOCK_STATE}"
         "if (dependency == header.streamId) appendRstStream(streamId, error);")
     expect_match("stale HTTP/2 CONNECT marker state" "${RULE_STALE_H2_CONNECT_STATE}"
@@ -2783,6 +2788,12 @@ check_files_no_match("HTTP/1 buffered completion must own its commit boundary an
     "${RULE_STALE_H1_BUFFERED_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+check_files_no_match("HTTP file writes must return results instead of error side channels"
+    "${RULE_STALE_HTTP_FILE_WRITE_COMPLETION}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileFallback.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileZeroCopy.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpFileZeroCopy.cpp")
 
 set(HTTP_BUFFERED_RESPONSE_WRITE_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseWritePlan.h")
@@ -3035,6 +3046,12 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "http1_buffered_scatter_write_keeps_committed_status" OR
        NOT buffered_response_h1_result_test MATCHES
            "http1_buffered_write_cannot_complete_without_a_full_head" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http_file_zero_copy_result_distinguishes_capability" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_file_fallback_completion_owns_status" OR
+       NOT buffered_response_h1_result_test MATCHES
+           "http1_buffered_file_open_failure_preserves_committed_status" OR
        NOT buffered_response_h2_plan_test MATCHES
            "http2_response_head_rejects_status_plan_mismatch" OR
        NOT buffered_response_h2_plan_test MATCHES
@@ -3059,6 +3076,8 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
            "Http2BufferedResponseDispatchResult" OR
        NOT buffered_response_web_package_consumer MATCHES
            "Http1BufferedResponseWriteResult" OR
+       NOT buffered_response_web_package_consumer MATCHES
+           "HttpFileZeroCopyResult" OR
        NOT buffered_response_package_verify MATCHES
            "installed buffered response status ownership" OR
        NOT buffered_response_package_verify MATCHES
