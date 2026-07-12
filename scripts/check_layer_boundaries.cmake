@@ -197,6 +197,8 @@ set(RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT
     "RouteStreamDispatchOutcome|responseStreamDispatched|trailerFraming_|ResponseStreamDispatchResult::(streamed|abortedByPeer|abortedAfterCommit)[ 	]*\\([ 	]*HttpResponse|result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ 	]*\\(")
 set(RULE_STALE_HTTP1_SESSION_COMPLETION
     "HttpResponseStream(RouteResult|BufferedRoute|CommittedRoute)|enum class[ 	]+HttpWebSocketRouteResult|HttpWebSocketRouteResult::k(WriteBufferedResponse|SessionFinished)|committedStreamStatus|bufferAlreadyCompacted|Task<void>[ 	\r\n]+dispatchHttp(Buffered|Stream)BodyRoute|std::size_t&[ 	]+consumedBytes|Http1ServerConnectionPlan&[ 	]+connectionPlan")
+set(RULE_STALE_HTTP1_REQUEST_SEQUENCE_SCALARS
+    "nextHttp1ResponseClosePolicy|applyRequestLimit|requestLimitReached|std::size_t[ 	]*&[ 	]*requestCount|std::size_t[ 	]+requestCount[ 	]*=|[+][+][ 	]*requestCount|std::size_t[ 	]+keepaliveRequests[ 	]*[,)]")
 set(RULE_LATE_RESPONSE_STREAM_END
     "co_await[ 	]+responseStream[.]end|HttpResponse[ 	]+response[ 	]*[(][ 	]*requestMemory[.]resource[(][)]")
 set(RULE_LOOSE_BUFFERED_RESPONSE_PLAN
@@ -644,6 +646,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("HTTP/1 body route completion out-parameters"
         "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
         "Task<void> dispatchHttpBufferedBodyRoute(std::size_t& consumedBytes);")
+    expect_match("HTTP/1 request limit split count and maximum"
+        "${RULE_STALE_HTTP1_REQUEST_SEQUENCE_SCALARS}"
+        "void complete(std::size_t& requestCount, std::size_t keepaliveRequests);")
+    expect_match("HTTP/1 request completion incremented outside its owner"
+        "${RULE_STALE_HTTP1_REQUEST_SEQUENCE_SCALARS}"
+        "++requestCount;")
     expect_match("response stream ended after its bound Context lifetime"
         "${RULE_LATE_RESPONSE_STREAM_END}"
         "co_await responseStream.end();")
@@ -2507,6 +2515,16 @@ check_files_no_match("HTTP/1 session completion must not split wire, connection,
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpConnectionState.h"
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpConnectionState.cpp")
+check_files_no_match("HTTP/1 request limit must use one connection-private sequence"
+    "${RULE_STALE_HTTP1_REQUEST_SEQUENCE_SCALARS}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1RequestSequence.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseState.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBufferedRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl"
+    "${RUVIA_ROOT}/tests/unit_response_head_emit.cpp")
 check_files_no_match("response stream must end in Context scope without dummy payload"
     "${RULE_LATE_RESPONSE_STREAM_END}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
@@ -5988,9 +6006,15 @@ if(EXISTS "${WEB_HTTP1_STREAM_ROUTE}")
         boundary_error("ruvia-web HTTP/1 stream route bypasses the protocol plan"
             "HttpServerResponseStreamRoute.h must call http1PlanResponseStream")
     endif()
-    if(NOT web_http1_stream_route MATCHES "nextHttp1ResponseClosePolicy")
+    if(NOT web_http1_stream_route MATCHES
+       "requestSequence[.]nextResponseClosePolicy[(][)]")
         boundary_error("ruvia-web HTTP/1 stream limit is recomputed after commit"
             "the request limit must enter the pre-commit close policy before response bytes are emitted")
+    endif()
+    if(NOT web_http1_stream_route MATCHES
+       "requestSequence[.]completeCommittedResponse[(]connectionPlan[)]")
+        boundary_error("ruvia-web HTTP/1 stream completion bypasses its request sequence"
+            "the same connection-private owner must record a successfully committed response")
     endif()
     if(web_http1_stream_route MATCHES
        "streamPlan\.(baseDisposition|connectionWillClose)\(\)")

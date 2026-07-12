@@ -30,12 +30,11 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     const RouteTable& routes,
     RequestMemory& requestMemory,
     ContextServices baseRouteServices,
-    const HttpServerOptions& options,
     HttpResponse& response,
-    std::size_t& requestCount) {
+    Http1RequestSequence& requestSequence) {
     const auto streamPlan = http1PlanResponseStream(
         parsed,
-        nextHttp1ResponseClosePolicy(requestCount, options.keepaliveRequests));
+        requestSequence.nextResponseClosePolicy());
     auto connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
     const auto& route = resolved.route();
@@ -90,8 +89,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         connectionPlan = finalizeBufferedRouteResponse(
             response,
             connectionPlan,
-            requestCount,
-            options.keepaliveRequests);
+            requestSequence);
         scannerEntry.touch();
         co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
             connectionPlan,
@@ -104,12 +102,8 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
             "response stream dispatch returned no H1 terminal alternative");
     }
 
-    // The pre-commit close policy already included this completed request in the
-    // plan. After bytes are committed, the prepared sink disposition is the only
-    // lifecycle verdict; recomputing the limit here could close without having sent
-    // the matching Connection signal.
-    ++requestCount;
     connectionPlan = responseSink.connectionPlan();
+    requestSequence.completeCommittedResponse(connectionPlan);
     co_return Http1SessionRequestCompletion::makeCommittedStream(
         connectionPlan,
         completed->status(),

@@ -32,7 +32,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes,
     HttpResponse& response,
-    std::size_t& requestCount) {
+    Http1RequestSequence& requestSequence) {
     const auto bodyAndPipeline = httpBodyAndPipeline(
         parsed,
         readBuffer,
@@ -78,8 +78,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpStreamBodyRoute(
         scannerEntry,
         response,
         parsed.connectionPlan,
-        requestCount,
-        options.keepaliveRequests,
+        requestSequence,
         streamReader->consumption(),
         readBuffer,
         usedBytes,

@@ -4,8 +4,8 @@ Task<void> HttpServer::handleStreamSession(
     TcpSocket& socket,
     ContextServices baseRouteServices) {
     // Resident connection identity (held for the whole connection): the scanner
-    // entry, keep-alive counters, the remote address, and the count of buffered
-    // bytes. The heavy per-request working set (read buffer, request arena,
+    // entry, the keep-alive request sequence, the remote address, and the count
+    // of buffered bytes. The heavy per-request working set (read buffer, request arena,
     // parse result, response head, file chunk) is borrowed from a per-worker
     // pool only while the connection is actively serving and returned the moment
     // it goes idle, so an idle keep-alive connection holds none of it.
@@ -14,7 +14,7 @@ Task<void> HttpServer::handleStreamSession(
     const auto& routes = routes_;
     const auto remoteAddress =
         baseRouteServices.connInfo().remote().address();
-    std::size_t requestCount = 0;
+    Http1RequestSequence requestSequence(options_.keepaliveRequests);
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
     WorkSetReturn workSetReturn(workSetPool_, workSet);
@@ -178,8 +178,7 @@ Task<void> HttpServer::handleStreamSession(
                         connectionPlan = finalizeBufferedRouteResponse(
                             response,
                             connectionPlan,
-                            requestCount,
-                            options_.keepaliveRequests);
+                            requestSequence);
                         requestCompletion.emplace(
                             Http1SessionRequestCompletion::makeBufferedUnrestored(
                                 connectionPlan,
@@ -259,9 +258,8 @@ Task<void> HttpServer::handleStreamSession(
                         routes,
                         requestMemory,
                         baseRouteServices,
-                        options_,
                         response,
-                        requestCount));
+                        requestSequence));
                     break;
                 }
                 const auto* bufferedEndpoint = endpoint.buffered();
@@ -282,7 +280,7 @@ Task<void> HttpServer::handleStreamSession(
                         readBuffer,
                         usedBytes,
                         response,
-                        requestCount));
+                        requestSequence));
                     break;
                 }
 
@@ -300,7 +298,7 @@ Task<void> HttpServer::handleStreamSession(
                         readBuffer,
                         usedBytes,
                         response,
-                        requestCount));
+                        requestSequence));
                 break;
             }
 

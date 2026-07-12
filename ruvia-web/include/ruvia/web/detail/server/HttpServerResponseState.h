@@ -3,6 +3,7 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/web/detail/server/Http1RequestSequence.h"
 
 #include <charconv>
 #include <chrono>
@@ -21,46 +22,23 @@ inline void setRetryAfterSeconds(HttpResponse& response, std::chrono::millisecon
     }
 }
 
-inline bool requestLimitReached(std::size_t requestCount, std::size_t maxRequests) noexcept {
-    return maxRequests != 0 && requestCount >= maxRequests;
-}
-
-[[nodiscard]] inline Http1ServerConnectionPlan applyRequestLimit(
-    Http1ServerConnectionPlan connectionPlan,
-    std::size_t requestCount,
-    std::size_t maxRequests) noexcept {
-    return requestLimitReached(requestCount, maxRequests)
-        ? connectionPlan.requireClose()
-        : connectionPlan;
-}
-
-[[nodiscard]] inline Http1ServerClosePolicy nextHttp1ResponseClosePolicy(
-    std::size_t completedRequests,
-    std::size_t maxRequests) noexcept {
-    return maxRequests != 0 && completedRequests >= maxRequests - 1
-        ? Http1ServerClosePolicy::kCloseAfterResponse
-        : Http1ServerClosePolicy::kAllowReuse;
-}
-
 [[nodiscard]] inline Http1ServerConnectionPlan finalizeBufferedRouteResponse(
     HttpResponse& response,
     Http1ServerConnectionPlan connectionPlan,
-    std::size_t& requestCount,
-    std::size_t maxRequests) {
-    ++requestCount;
-    connectionPlan = applyRequestLimit(connectionPlan, requestCount, maxRequests);
+    Http1RequestSequence& requestSequence) {
+    connectionPlan =
+        requestSequence.completeUncommittedResponse(connectionPlan);
     return http1FinalizeResponseConnection(response, connectionPlan);
 }
 
 [[nodiscard]] inline Http1ServerConnectionPlan finalizeBodyRouteResponse(
     HttpResponse& response,
     Http1ServerConnectionPlan connectionPlan,
-    std::size_t& requestCount,
-    std::size_t maxRequests,
+    Http1RequestSequence& requestSequence,
     Http1RequestBodyConsumption bodyConsumption) {
     connectionPlan = http1ApplyRequestBodyConsumption(connectionPlan, bodyConsumption);
-    ++requestCount;
-    connectionPlan = applyRequestLimit(connectionPlan, requestCount, maxRequests);
+    connectionPlan =
+        requestSequence.completeUncommittedResponse(connectionPlan);
     // Fix borrowed response views before callers restore pipeline bytes.
     materializeResponseBody(response);
     return http1FinalizeResponseConnection(response, connectionPlan);

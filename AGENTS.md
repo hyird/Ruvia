@@ -847,6 +847,15 @@ compaction 可以暴露 `consumedBytes()`。closing connection 必须 discard，
 WebSocket route 用返回值之外的 `connectionPlan`、`consumedBytes` 或 compact flag out-parameter 回填
 另一份完成状态；这些 Web runtime alternative 不得下沉到 `ruvia-http`。
 
+HTTP/1 每连接请求上限及已完成响应数必须由连接私有、不可默认构造的单字
+`Http1RequestSequence` 折叠为饱和的剩余响应预算。buffered/body/response-stream/session 调用链不得重新传递
+`requestCount + keepaliveRequests` 双标量，不得在 sequence 之外裸增 request count，也不得恢复
+`completed >= max` 与 `completed >= max - 1` 两套判断。streaming 必须在 commit head 前通过
+`nextResponseClosePolicy()` 把产品关闭策略交给 `ruvia-http`，成功 commit 后只能用最终
+`Http1ServerConnectionPlan` 完成同一 sequence；buffered response 则必须在 header finalization 前由
+sequence 收紧尚未提交的 connection plan。请求上限是 Web 产品策略，持久连接、framing 与
+`Connection` 字段语义仍只属于 `ruvia-http`。
+
 ## 性能原则
 
 - 请求热路径目标是 0 抽象成本。

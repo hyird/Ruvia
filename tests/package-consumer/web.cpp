@@ -34,6 +34,7 @@
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/Http2BufferedResponseDispatch.h>
 #include <ruvia/web/detail/server/Http1BufferedResponseWrite.h>
+#include <ruvia/web/detail/server/Http1RequestSequence.h>
 #include <ruvia/web/detail/server/Http1SessionRequestCompletion.h>
 #include <ruvia/web/detail/server/HttpServerAccessLog.h>
 #include <ruvia/web/detail/server/HttpResponseStreamDispatch.h>
@@ -297,6 +298,31 @@ static_assert(HasResponseSubmitError<
     ruvia::detail::Http2BufferedResponseFailedBeforeCommit>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1SessionRequestCompletion>);
+static_assert(!std::default_initializable<
+    ruvia::detail::Http1RequestSequence>);
+static_assert(std::is_nothrow_constructible_v<
+    ruvia::detail::Http1RequestSequence,
+    std::size_t>);
+static_assert(!std::copy_constructible<
+    ruvia::detail::Http1RequestSequence>);
+static_assert(!std::move_constructible<
+    ruvia::detail::Http1RequestSequence>);
+static_assert(sizeof(ruvia::detail::Http1RequestSequence) ==
+              sizeof(std::size_t));
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        Http1RequestSequence&>().nextResponseClosePolicy()),
+    ruvia::detail::Http1ServerClosePolicy>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http1RequestSequence&>()
+        .completeUncommittedResponse(
+            std::declval<ruvia::detail::Http1ServerConnectionPlan>())),
+    ruvia::detail::Http1ServerConnectionPlan>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http1RequestSequence&>()
+        .completeCommittedResponse(
+            std::declval<ruvia::detail::Http1ServerConnectionPlan>())),
+    void>);
 static_assert(!std::default_initializable<
     ruvia::detail::Http1RequestBufferCompletion>);
 static_assert(std::same_as<

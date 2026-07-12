@@ -214,6 +214,19 @@ therefore cannot combine an optional committed status with a stale `consumedByte
 separate connection-plan out-parameter. This remains a fixed-size, allocation-free Web runtime
 contract; HTTP framing and persistence decisions still come only from `ruvia-http` plans.
 
+The per-connection HTTP/1 request limit is owned by one allocation-free, one-word
+`Http1RequestSequence`. The configured maximum and completed-response count no longer travel as
+independent scalars through buffered-body, streaming-body, response-stream, and session helpers;
+they collapse into a saturating remaining-response budget, so resident connection state does not
+grow.
+Before a streamed head is committed, the sequence supplies the next response's typed close policy;
+an uncommitted buffered response lets the same owner tighten its connection plan, while a committed
+stream can only record completion after verifying that a limit-ending response already committed a
+closing plan. This removes the former duplicated `completed >= max` / `completed >= max - 1`
+calculations and prevents a post-commit close verdict from disagreeing with bytes already emitted.
+The policy remains Web-owned, while `ruvia-http` remains the sole owner of HTTP persistence and
+framing semantics.
+
 Buffered response storage is exclusive too. `HttpResponseBody` contains exactly one
 `HttpEmptyResponseBody`, `HttpBorrowedResponseBytes`, `HttpStaticResponseBytes`,
 `HttpOwnedResponseBytes`, `HttpOwnedResponseFile`, or `HttpBorrowedResponseFile`. Owned byte and
