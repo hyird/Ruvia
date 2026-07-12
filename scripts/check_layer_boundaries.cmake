@@ -1223,6 +1223,8 @@ check_files_no_match("valid extension methods must not be rejected by semantic c
 
 set(HTTP_METHOD_CONTRACT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpKnownMethod.h")
+set(HTTP_HEADER_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpHeader.h")
 set(HTTP_COMMON_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpCommon.h")
 set(HTTP_REQUEST_MODEL
@@ -1248,6 +1250,19 @@ foreach(method_contract_file IN ITEMS
             "${relative} is required")
     endif()
 endforeach()
+if(NOT EXISTS "${HTTP_HEADER_CONTRACT}")
+    boundary_error("HTTP header contract is incomplete"
+        "ruvia-http/include/ruvia/http/HttpHeader.h is required")
+else()
+    file(READ "${HTTP_HEADER_CONTRACT}" http_header_contract)
+    if(NOT http_header_contract MATCHES "class[ \t]+HttpHeaderView[ \t]+final" OR
+       NOT http_header_contract MATCHES "kMaxHttpHeaderFields" OR
+       NOT http_header_contract MATCHES "isValidHttpHeaderName" OR
+       NOT http_header_contract MATCHES "isValidHttpHeaderValue")
+        boundary_error("HTTP header contract lost a canonical primitive"
+            "HttpHeader.h must own header views, limits and field validation")
+    endif()
+endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_CONTRACT}" http_method_contract)
     file(READ "${HTTP_REQUEST_MODEL}" http_request_model)
@@ -1272,6 +1287,12 @@ if(EXISTS "${HTTP_COMMON_HEADER}")
            "HttpKnownMethod[ \t\r\n]+classifyHttpMethod")
         boundary_error("HTTP method contract leaked back into HttpCommon.h"
             "HttpKnownMethod.h must exclusively own method classification declarations")
+    endif()
+    if(http_common_header MATCHES "class[ \t]+HttpHeaderView[ \t]+final" OR
+       http_common_header MATCHES
+           "bool[ \t\r\n]+isValidHttpHeader(Name|Value)")
+        boundary_error("HTTP header contract leaked back into HttpCommon.h"
+            "HttpHeader.h must exclusively own header primitives and validation declarations")
     endif()
 endif()
 if(EXISTS "${HTTP1_REQUEST_PARSER}" AND EXISTS "${HTTP2_REQUEST_HEADERS}" AND

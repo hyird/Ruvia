@@ -11,7 +11,7 @@
 #include <type_traits>
 
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpKnownMethod.h"
 
 namespace {
 

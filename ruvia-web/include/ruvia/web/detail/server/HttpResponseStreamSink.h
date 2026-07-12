@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include "ruvia/core/detail/AsioAwait.h"
 
 #include "ruvia/http/detail/server/HttpResponseHead.h"

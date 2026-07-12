@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include "ruvia/http/detail/parser/HttpParserSyntax.h"
 #include "ruvia/http/Cookies.h"
 #include "ruvia/http/HttpTypes.h"

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/Error.h"

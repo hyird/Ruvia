@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/web/App.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 
 namespace ruvia::detail {
 

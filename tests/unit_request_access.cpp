@@ -5,7 +5,8 @@
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpRequest.h"
 
 namespace {

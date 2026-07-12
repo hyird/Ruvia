@@ -19,7 +19,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {

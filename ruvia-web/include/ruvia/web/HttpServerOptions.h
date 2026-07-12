@@ -9,10 +9,11 @@
 #include <vector>
 
 #include "ruvia/http/HttpKnownMethod.h"
-#include "ruvia/web/RateLimitRule.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/HttpProtocolVersion.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpTypes.h"
+#include "ruvia/web/RateLimitRule.h"
 #include "ruvia/web/StaticFiles.h"
 
 // Web server runtime configuration and its per-request access-log record. These

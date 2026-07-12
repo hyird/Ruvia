@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 // Streaming response sink for the sans-I/O HTTP/2 session (ruvia-web).
 //
 // Mirrors the coroutine Http2ResponseStreamSink but drives an Http2Connection through

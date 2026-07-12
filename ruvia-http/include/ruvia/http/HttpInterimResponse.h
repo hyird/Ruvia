@@ -7,7 +7,7 @@
 #include <span>
 #include <vector>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 
 namespace ruvia {
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ruvia/http/HttpHeader.h"
+
 // HTTP/2 sans-I/O connection core.
 //
 // A pure protocol state machine: it never touches a socket, a coroutine, a timer,

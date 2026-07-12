@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpLimits.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/AsciiCase.h"

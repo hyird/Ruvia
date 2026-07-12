@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ruvia/core/Task.h"
-#include "ruvia/http/HttpCommon.h"
+#include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/Sse.h"
 #include "ruvia/web/detail/CallableRef.h"
 
