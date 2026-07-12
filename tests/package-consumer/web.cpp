@@ -163,6 +163,26 @@ concept HasGeneratedModelInputAccessor = requires(const T& model) {
     model.body();
 };
 
+template <typename T>
+concept HasGeneratedModelPublicJsonDepthHook = requires {
+    T::ruviaParseJsonBodyDepth(
+        std::string_view{},
+        static_cast<std::pmr::memory_resource*>(nullptr),
+        std::size_t{});
+};
+
+template <typename T>
+concept HasGeneratedModelPublicFormFieldsHook = requires {
+    T::ruviaParseFormFields(
+        std::declval<const ruvia::RequestNameValueList&>(),
+        static_cast<std::pmr::memory_resource*>(nullptr));
+};
+
+template <typename T>
+concept HasGeneratedModelNonConstNameGetter = requires {
+    static_cast<const std::optional<ruvia::String>& (T::*)()>(&T::name);
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -173,6 +193,9 @@ static_assert(std::movable<InstalledPackageModel>);
 static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
 static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
 static_assert(!HasGeneratedModelInputAccessor<InstalledPackageModel>);
+static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>);
+static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
+static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>);
 static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
 static_assert(!std::constructible_from<
     ruvia::detail::ModelInput,
