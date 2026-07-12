@@ -1568,13 +1568,27 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/http/ContextServices.h")
     set(_installed_context_header_path
         "${_install_prefix}/include/ruvia/web/Context.h")
+    set(_installed_context_inline_path
+        "${_install_prefix}/include/ruvia/web/detail/http/Context.inl")
+    set(_installed_context_model_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextModel.inl")
     foreach(_context_capability_contract IN ITEMS
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
-            "${_installed_context_header_path}")
+            "${_installed_context_header_path}"
+            "${_installed_context_inline_path}"
+            "${_installed_context_model_path}")
         if(NOT EXISTS "${_context_capability_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed Context capability contract")
+        endif()
+    endforeach()
+    foreach(_stale_context_inline IN ITEMS
+            "${_install_prefix}/include/ruvia/web/Context.inl"
+            "${_install_prefix}/include/ruvia/web/ContextModel.h")
+        if(EXISTS "${_stale_context_inline}")
+            message(FATAL_ERROR
+                "installed Web package restored a public-root Context implementation header")
         endif()
     endforeach()
     file(READ "${_installed_context_capabilities_path}"
@@ -1583,6 +1597,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_services)
     file(READ "${_installed_context_header_path}"
         _installed_context_header)
+    if(NOT _installed_context_header MATCHES
+           "ruvia/web/detail/http/Context[.]inl" OR
+       NOT _installed_context_header MATCHES
+           "ruvia/web/detail/http/ContextModel[.]inl")
+        message(FATAL_ERROR
+            "installed Context.h does not own all public template definitions")
+    endif()
     if(NOT _installed_context_capabilities MATCHES
            "class ContextBufferedRequestBodySource final" OR
        NOT _installed_context_capabilities MATCHES

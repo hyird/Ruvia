@@ -141,8 +141,6 @@ ruvia_install_public_headers(web
     include/ruvia/web/StaticFiles.h
     include/ruvia/web/ConnInfo.h
     include/ruvia/web/Context.h
-    include/ruvia/web/Context.inl
-    include/ruvia/web/ContextModel.h
     include/ruvia/web/Controller.h
     include/ruvia/web/Csrf.h
     include/ruvia/web/ErrorHandlers.h

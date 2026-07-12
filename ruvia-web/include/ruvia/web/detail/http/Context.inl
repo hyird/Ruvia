@@ -1,5 +1,7 @@
 #pragma once
 
+// Inline definitions for the public Context API.
+
 namespace ruvia {
 
 template <std::size_t N>

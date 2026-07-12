@@ -1993,4 +1993,5 @@ inline void ContextRequest::addValidatedData(std::string_view target, T&& data) 
 
 }  // namespace ruvia
 
-#include "ruvia/web/Context.inl"
+#include "ruvia/web/detail/http/Context.inl"
+#include "ruvia/web/detail/http/ContextModel.inl"
