@@ -1,21 +1,15 @@
 #pragma once
 
 #include "ruvia/web/ErrorHandlers.h"
+#include "ruvia/web/detail/http/ContextCapabilities.h"
 
 #include <string_view>
 
-namespace ruvia {
-
-class BodyReader;
-class ResponseStreamWriter;
-class WebSocket;
-
-namespace detail {
+namespace ruvia::detail {
 
 class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
-class RequestBodyLoader;
 
 class ContextServices final {
 public:
@@ -49,20 +43,14 @@ public:
         return notFoundHandler_;
     }
 
-    [[nodiscard]] BodyReader* bodyReader() const noexcept {
-        return bodyReader_;
+    [[nodiscard]] constexpr const ContextRequestBodySource& requestBodySource()
+        const noexcept {
+        return requestBodySource_;
     }
 
-    [[nodiscard]] RequestBodyLoader* bodyLoader() const noexcept {
-        return bodyLoader_;
-    }
-
-    [[nodiscard]] WebSocket* webSocket() const noexcept {
-        return webSocket_;
-    }
-
-    [[nodiscard]] ResponseStreamWriter* responseStream() const noexcept {
-        return responseStream_;
+    [[nodiscard]] constexpr const ContextResponseOutput& responseOutput()
+        const noexcept {
+        return responseOutput_;
     }
 
     [[nodiscard]] std::string_view remoteAddress() const noexcept {
@@ -77,31 +65,29 @@ public:
         return secure_;
     }
 
-    [[nodiscard]] ContextServices withBodyReader(BodyReader& value) const noexcept {
+    [[nodiscard]] ContextServices withStreamingRequestBody(
+        BodyReader& value) const noexcept {
         auto services = *this;
-        services.bodyReader_ = &value;
-        services.bodyLoader_ = nullptr;
+        services.requestBodySource_ = ContextRequestBodySource::streaming(value);
         return services;
     }
 
-    [[nodiscard]] ContextServices withBodyLoader(RequestBodyLoader& value) const noexcept {
+    [[nodiscard]] ContextServices withLazyRequestBody(
+        RequestBodyLoader& value) const noexcept {
         auto services = *this;
-        services.bodyLoader_ = &value;
-        services.bodyReader_ = nullptr;
+        services.requestBodySource_ = ContextRequestBodySource::lazy(value);
         return services;
     }
 
     [[nodiscard]] ContextServices withResponseStream(ResponseStreamWriter& value) const noexcept {
         auto services = *this;
-        services.responseStream_ = &value;
-        services.webSocket_ = nullptr;
+        services.responseOutput_ = ContextResponseOutput::responseStream(value);
         return services;
     }
 
     [[nodiscard]] ContextServices withWebSocket(WebSocket& value) const noexcept {
         auto services = *this;
-        services.webSocket_ = &value;
-        services.responseStream_ = nullptr;
+        services.responseOutput_ = ContextResponseOutput::webSocket(value);
         return services;
     }
 
@@ -137,14 +123,11 @@ private:
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
 
-    BodyReader* bodyReader_{nullptr};
-    RequestBodyLoader* bodyLoader_{nullptr};
-    WebSocket* webSocket_{nullptr};
-    ResponseStreamWriter* responseStream_{nullptr};
+    ContextRequestBodySource requestBodySource_;
+    ContextResponseOutput responseOutput_;
     std::string_view remoteAddress_;
     std::string_view clientCertificateSubject_;
     bool secure_{false};
 };
 
-}  // namespace detail
-}  // namespace ruvia
+}  // namespace ruvia::detail

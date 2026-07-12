@@ -59,7 +59,7 @@ Task<void> dispatchHttpStreamBodyRoute(
             parsed.request,
             routeResolution,
             requestMemory,
-            baseRouteServices.withBodyReader(*bodyReader));
+            baseRouteServices.withStreamingRequestBody(*bodyReader));
     } catch (...) {
         exception = std::current_exception();
     }
@@ -67,7 +67,7 @@ Task<void> dispatchHttpStreamBodyRoute(
     if (exception != nullptr) {
         auto exceptionServices = baseRouteServices;
         if (bodyReader) {
-            exceptionServices = exceptionServices.withBodyReader(*bodyReader);
+            exceptionServices = exceptionServices.withStreamingRequestBody(*bodyReader);
         }
         connectionPlan = co_await completeFailedHttpBodyRoute(
             scannerEntry,

@@ -737,6 +737,77 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
     endif()
 
+    set(_installed_context_capabilities_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextCapabilities.h")
+    set(_installed_context_services_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextServices.h")
+    set(_installed_context_header_path
+        "${_install_prefix}/include/ruvia/web/Context.h")
+    foreach(_context_capability_contract IN ITEMS
+            "${_installed_context_capabilities_path}"
+            "${_installed_context_services_path}"
+            "${_installed_context_header_path}")
+        if(NOT EXISTS "${_context_capability_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing a typed Context capability contract")
+        endif()
+    endforeach()
+    file(READ "${_installed_context_capabilities_path}"
+        _installed_context_capabilities)
+    file(READ "${_installed_context_services_path}"
+        _installed_context_services)
+    file(READ "${_installed_context_header_path}"
+        _installed_context_header)
+    if(NOT _installed_context_capabilities MATCHES
+           "class ContextBufferedRequestBodySource final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextLazyRequestBodySource final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextStreamingRequestBodySource final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextRequestBodySource final" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextBufferedRequestBodySource>" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextLazyRequestBodySource>" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextStreamingRequestBodySource>" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextBufferedResponseOutput final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextResponseStreamOutput final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextWebSocketOutput final" OR
+       NOT _installed_context_capabilities MATCHES
+           "class ContextResponseOutput final" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextBufferedResponseOutput>" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextResponseStreamOutput>" OR
+       NOT _installed_context_capabilities MATCHES
+           "std::get_if<ContextWebSocketOutput>")
+        message(FATAL_ERROR
+            "installed Context capabilities lost their exclusive alternatives")
+    endif()
+    if(_installed_context_services MATCHES
+           "withBodyReader|withBodyLoader|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
+       _installed_context_header MATCHES
+           "BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_" OR
+       NOT _installed_context_services MATCHES
+           "ContextRequestBodySource requestBodySource_" OR
+       NOT _installed_context_services MATCHES
+           "ContextResponseOutput responseOutput_" OR
+       NOT _installed_context_services MATCHES "withLazyRequestBody" OR
+       NOT _installed_context_services MATCHES
+           "withStreamingRequestBody" OR
+       NOT _installed_context_header MATCHES
+           "ContextRequestBodySource requestBodySource_" OR
+       NOT _installed_context_header MATCHES
+           "ContextResponseOutput responseOutput_")
+        message(FATAL_ERROR
+            "installed Context restored parallel nullable capability slots")
+    endif()
+
     set(_installed_route_modes_path
         "${_install_prefix}/include/ruvia/web/RouteModes.h")
     set(_installed_route_resolution_path

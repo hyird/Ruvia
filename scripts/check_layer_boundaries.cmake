@@ -121,6 +121,8 @@ set(RULE_STALE_ROUTE_RESOLUTION_TUPLE
     "RouteResolution::found(Static|Dynamic)|resolution[.](found|route|match|allowedMethods)[ \t]*[(]|resolve[ \t\r\n]*[(][^)]*RouteMatch[ \t]*&")
 set(RULE_STALE_REQUEST_DISPATCHER
     "RequestDispatcher|virtual[ \t\r\n]+(RouteResolution|Task[ \t]*[<])|virtual[ \t\r\n]+~")
+set(RULE_STALE_CONTEXT_CAPABILITY_SPLIT
+    "withBodyReader|withBodyLoader|BodyReader[ \t]*[*][ \t]*bodyReader_|RequestBodyLoader[ \t]*[*][ \t]*bodyLoader_|WebSocket[ \t]*[*][ \t]*webSocket_|ResponseStreamWriter[ \t]*[*][ \t]*responseStream_")
 set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
     "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
 set(RULE_STALE_HTTP2_SESSION_ENV
@@ -457,6 +459,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("request-time virtual route dispatcher"
         "${RULE_STALE_REQUEST_DISPATCHER}"
         "class RequestDispatcher { virtual RouteResolution resolve() = 0; };")
+    expect_match("manual Context body-capability refinement"
+        "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}"
+        "services.withBodyReader(reader);")
+    expect_match("parallel nullable Context output slots"
+        "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}"
+        "WebSocket* webSocket_; ResponseStreamWriter* responseStream_;")
     expect_match("HTTP/2 default body mode plus selection flag"
         "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}"
         "RequestBodyMode mode_{RequestBodyMode::kBuffered}; bool modeSelected_; ")
@@ -1123,6 +1131,157 @@ check_files_no_match("Web routing restored request-time virtual dispatch"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketSession.h")
+
+set(WEB_CONTEXT_CAPABILITIES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextCapabilities.h")
+set(WEB_CONTEXT_SERVICES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextServices.h")
+set(WEB_CONTEXT_INTERNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextInternal.h")
+set(WEB_CONTEXT_CAPABILITY_CONTEXT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+set(WEB_CONTEXT_REQUEST_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+set(WEB_CONTEXT_ROUTER_DISPATCH
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
+set(WEB_CONTEXT_LAZY_BODY_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h")
+set(WEB_CONTEXT_STREAM_BODY_ROUTE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h")
+set(WEB_CONTEXT_HTTP2_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_CONTEXT_CAPABILITY_TEST
+    "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp")
+set(WEB_CONTEXT_PACKAGE_CONSUMER
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(context_capability_file IN ITEMS
+        "${WEB_CONTEXT_CAPABILITIES}"
+        "${WEB_CONTEXT_SERVICES}"
+        "${WEB_CONTEXT_INTERNAL}"
+        "${WEB_CONTEXT_CAPABILITY_CONTEXT}"
+        "${WEB_CONTEXT_REQUEST_SOURCE}"
+        "${WEB_CONTEXT_ROUTER_DISPATCH}"
+        "${WEB_CONTEXT_LAZY_BODY_ROUTE}"
+        "${WEB_CONTEXT_STREAM_BODY_ROUTE}"
+        "${WEB_CONTEXT_HTTP2_SESSION}"
+        "${WEB_CONTEXT_CAPABILITY_TEST}"
+        "${WEB_CONTEXT_PACKAGE_CONSUMER}")
+    if(NOT EXISTS "${context_capability_file}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${context_capability_file}")
+        boundary_error("typed Context capability contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
+   EXISTS "${WEB_CONTEXT_SERVICES}" AND
+   EXISTS "${WEB_CONTEXT_INTERNAL}" AND
+   EXISTS "${WEB_CONTEXT_CAPABILITY_CONTEXT}" AND
+   EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}" AND
+   EXISTS "${WEB_CONTEXT_ROUTER_DISPATCH}" AND
+   EXISTS "${WEB_CONTEXT_LAZY_BODY_ROUTE}" AND
+   EXISTS "${WEB_CONTEXT_STREAM_BODY_ROUTE}" AND
+   EXISTS "${WEB_CONTEXT_HTTP2_SESSION}" AND
+   EXISTS "${WEB_CONTEXT_CAPABILITY_TEST}" AND
+   EXISTS "${WEB_CONTEXT_PACKAGE_CONSUMER}")
+    file(READ "${WEB_CONTEXT_CAPABILITIES}" web_context_capabilities)
+    file(READ "${WEB_CONTEXT_SERVICES}" web_context_services)
+    file(READ "${WEB_CONTEXT_INTERNAL}" web_context_internal)
+    file(READ "${WEB_CONTEXT_CAPABILITY_CONTEXT}" web_context_header)
+    file(READ "${WEB_CONTEXT_REQUEST_SOURCE}" web_context_request_source)
+    file(READ "${WEB_CONTEXT_ROUTER_DISPATCH}" web_context_router_dispatch)
+    file(READ "${WEB_CONTEXT_LAZY_BODY_ROUTE}" web_context_lazy_body_route)
+    file(READ "${WEB_CONTEXT_STREAM_BODY_ROUTE}" web_context_stream_body_route)
+    file(READ "${WEB_CONTEXT_HTTP2_SESSION}" web_context_http2_session)
+    file(READ "${WEB_CONTEXT_CAPABILITY_TEST}" web_context_capability_test)
+    file(READ "${WEB_CONTEXT_PACKAGE_CONSUMER}" web_context_package_consumer)
+    if(NOT web_context_capabilities MATCHES
+           "class ContextBufferedRequestBodySource final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextLazyRequestBodySource final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextStreamingRequestBodySource final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextRequestBodySource final" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextBufferedRequestBodySource>" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextLazyRequestBodySource>" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextStreamingRequestBodySource>" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextBufferedResponseOutput final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextResponseStreamOutput final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextWebSocketOutput final" OR
+       NOT web_context_capabilities MATCHES
+           "class ContextResponseOutput final" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextBufferedResponseOutput>" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextResponseStreamOutput>" OR
+       NOT web_context_capabilities MATCHES
+           "std::get_if<ContextWebSocketOutput>")
+        boundary_error("Context capabilities lost their exclusive alternatives"
+            "request body and response output must each be one explicit discriminated value")
+    endif()
+    if(web_context_services MATCHES
+           "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
+       web_context_header MATCHES
+           "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
+       web_context_internal MATCHES
+           "${RULE_STALE_CONTEXT_CAPABILITY_SPLIT}" OR
+       NOT web_context_services MATCHES
+           "ContextRequestBodySource requestBodySource_" OR
+       NOT web_context_services MATCHES
+           "ContextResponseOutput responseOutput_" OR
+       NOT web_context_services MATCHES "withLazyRequestBody" OR
+       NOT web_context_services MATCHES "withStreamingRequestBody" OR
+       NOT web_context_header MATCHES
+           "ContextRequestBodySource requestBodySource_" OR
+       NOT web_context_header MATCHES
+           "ContextResponseOutput responseOutput_" OR
+       NOT web_context_internal MATCHES
+           "services[.]requestBodySource[(][)]" OR
+       NOT web_context_internal MATCHES
+           "services[.]responseOutput[(][)]")
+        boundary_error("Context restored parallel nullable capability slots"
+            "ContextServices and Context must carry the two discriminated values without manual pointer clearing")
+    endif()
+    if(NOT web_context_request_source MATCHES
+           "requestBodySource_[.]lazy[(][)]" OR
+       NOT web_context_request_source MATCHES
+           "requestBodySource_[.]streaming[(][)]" OR
+       NOT web_context_request_source MATCHES
+           "responseOutput_[.]responseStream[(][)]" OR
+       NOT web_context_request_source MATCHES
+           "responseOutput_[.]webSocket[(][)]" OR
+       NOT web_context_router_dispatch MATCHES
+           "services[.]responseOutput[(][)][.]responseStream[(][)]" OR
+       NOT web_context_router_dispatch MATCHES
+           "services[.]responseOutput[(][)][.]webSocket[(][)]" OR
+       NOT web_context_lazy_body_route MATCHES "withLazyRequestBody" OR
+       NOT web_context_stream_body_route MATCHES
+           "withStreamingRequestBody" OR
+       NOT web_context_http2_session MATCHES "withStreamingRequestBody")
+        boundary_error("Context runtime bypasses the typed capability chain"
+            "H1, H2, router dispatch, and public Context access must consume the active alternatives")
+    endif()
+    if(NOT web_context_capability_test MATCHES
+           "context_request_body_source_has_one_active_alternative" OR
+       NOT web_context_capability_test MATCHES
+           "context_response_output_has_one_active_alternative" OR
+       NOT web_context_capability_test MATCHES
+           "context_copies_typed_capabilities_into_public_facades" OR
+       NOT web_context_package_consumer MATCHES
+           "HasSplitContextCapabilityAccessors" OR
+       NOT web_context_package_consumer MATCHES
+           "ContextRequestBodySource" OR
+       NOT web_context_package_consumer MATCHES "ContextResponseOutput")
+        boundary_error("typed Context capabilities lack regression coverage"
+            "unit and installed-package tests must pin exclusivity, propagation, and removal of split accessors")
+    endif()
+endif()
 
 set(HTTP_PROTOCOL_VERSION_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpProtocolVersion.h")
@@ -4706,6 +4865,22 @@ foreach(boundary_doc IN ITEMS
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
         boundary_error("typed Web route contract is undocumented"
             "${relative} must document endpoint/result alternatives and the removal of response-mode, caller-owned match, and virtual-dispatch side channels")
+    endif()
+    if(NOT boundary_doc_content MATCHES "ContextRequestBodySource" OR
+       NOT boundary_doc_content MATCHES
+           "ContextBufferedRequestBodySource" OR
+       NOT boundary_doc_content MATCHES "ContextLazyRequestBodySource" OR
+       NOT boundary_doc_content MATCHES
+           "ContextStreamingRequestBodySource" OR
+       NOT boundary_doc_content MATCHES "ContextResponseOutput" OR
+       NOT boundary_doc_content MATCHES "ContextBufferedResponseOutput" OR
+       NOT boundary_doc_content MATCHES "ContextResponseStreamOutput" OR
+       NOT boundary_doc_content MATCHES "ContextWebSocketOutput" OR
+       NOT boundary_doc_content MATCHES "withBodyReader" OR
+       NOT boundary_doc_content MATCHES "withBodyLoader")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
+        boundary_error("typed Context capability contract is undocumented"
+            "${relative} must document both alternative sets and removal of the nullable refinement API")
     endif()
     if(NOT boundary_doc_content MATCHES "Http2SansIoSessionContext" OR
        NOT boundary_doc_content MATCHES "Http2SansIoSessionEnv" OR

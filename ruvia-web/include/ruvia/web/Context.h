@@ -30,6 +30,7 @@
 #include "ruvia/web/WebSocket.h"
 #include "ruvia/web/detail/ContextValues.h"
 #include "ruvia/web/detail/ValidatedValues.h"
+#include "ruvia/web/detail/http/ContextCapabilities.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -53,7 +54,6 @@ namespace detail {
 class DbRegistry;
 class RedisRegistry;
 class RateLimiter;
-class RequestBodyLoader;
 struct ContextAccess;
 class ContextServices;
 struct SessionAccess;
@@ -1773,10 +1773,8 @@ private:
     HttpErrorHandler errorHandler_{nullptr};
     HttpNotFoundHandler notFoundHandler_{nullptr};
     std::uintptr_t routeRateLimitScope_{0};
-    BodyReader* bodyReader_{nullptr};
-    detail::RequestBodyLoader* bodyLoader_{nullptr};
-    WebSocket* webSocket_{nullptr};
-    ResponseStreamWriter* responseStream_{nullptr};
+    detail::ContextRequestBodySource requestBodySource_;
+    detail::ContextResponseOutput responseOutput_;
     Renderer renderer_{nullptr};
     Layout layout_{nullptr};
     std::uint16_t responseStatusCode_{200};
