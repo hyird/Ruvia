@@ -12,6 +12,6 @@ void applyResponseCompression(
     HttpContentCoding coding,
     HttpKnownMethod requestMethod,
     HttpResponse& response,
-    const HttpServerOptions::Compression& options);
+    const CompressionConfig& options);
 
 }  // namespace ruvia::detail

@@ -4,7 +4,7 @@
 
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
-#include "ruvia/web/App.h"
+#include "ruvia/web/HttpServerOptions.h"
 
 namespace ruvia::detail {
 
@@ -25,7 +25,7 @@ inline void validateHttpServerOptions(const HttpServerOptions& options) {
     if (options.autoHttps.enabled) {
         ensureNonZeroPort(options.autoHttps.httpsPort, "auto HTTPS requires a fixed HTTPS listen port");
     }
-    validateCorsOptions(options.cors);
+    validateCorsConfig(options.cors);
 }
 
 [[nodiscard]] inline HttpServerOptions validatedHttpServerOptions(HttpServerOptions options) {

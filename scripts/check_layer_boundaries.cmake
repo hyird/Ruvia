@@ -175,6 +175,8 @@ set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
     "RequestBodyMode[ \t]+mode_[ \t]*[{]|bool[ \t]+modeSelected_|body[(][)][.]selectMode")
 set(RULE_STALE_HTTP2_SESSION_ENV
     "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](databases|redis|rateLimiter|options|scannerEntry|clientCertificate|serverStarted|workerRunning)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]|const[ \t]+(std::atomic_bool|bool)[*][ \t]+(serverStarted|workerRunning)[ \t]*=[ \t]*nullptr")
+set(RULE_STALE_WEB_SERVER_CONFIG_SPLIT
+    "HttpServerOptions::(Compression|Cors)|validateCorsOptions")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -1353,6 +1355,10 @@ set(HTTP2_REQUEST_BUILDER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RequestBuilder.h")
 set(WEB_ROUTER_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
+set(WEB_APP_PUBLIC_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h")
+set(WEB_SERVER_OPTIONS_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/HttpServerOptions.h")
 foreach(method_contract_file IN ITEMS
         "${HTTP_METHOD_CONTRACT}"
         "${HTTP_REQUEST_MODEL}"
@@ -1392,6 +1398,25 @@ endif()
 check_files_no_match("HTTP/2 code must not depend on a frame aggregation header"
     "Http2Frame[.]h"
     ${EDGE_REFERENCE_SOURCE})
+check_files_no_match("App and server runtime must share one compression/CORS model"
+    "${RULE_STALE_WEB_SERVER_CONFIG_SPLIT}"
+    ${EDGE_REFERENCE_SOURCE})
+if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND EXISTS "${WEB_SERVER_OPTIONS_MODEL}")
+    file(READ "${WEB_APP_PUBLIC_MODEL}" web_app_public_model)
+    file(READ "${WEB_SERVER_OPTIONS_MODEL}" web_server_options_model)
+    if(web_app_public_model MATCHES
+           "struct[ \t]+(CompressionConfig|CorsConfig)[ \t]+final" OR
+       NOT web_server_options_model MATCHES
+           "struct[ \t]+CompressionConfig[ \t]+final" OR
+       NOT web_server_options_model MATCHES
+           "struct[ \t]+CorsConfig[ \t]+final" OR
+       NOT web_server_options_model MATCHES
+           "CompressionConfig[ \t]+compression" OR
+       NOT web_server_options_model MATCHES "CorsConfig[ \t]+cors")
+        boundary_error("Web server configuration regained parallel public models"
+            "HttpServerOptions.h must own the one CompressionConfig/CorsConfig used by App and runtime")
+    endif()
+endif()
 if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")
     boundary_error("Generic Web server session aggregation was restored"
         "runtime translation units and tests must include their actual session contracts")

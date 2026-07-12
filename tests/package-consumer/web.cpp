@@ -366,6 +366,12 @@ using RecordHttpAccessFunction = void (*)(
     std::uint16_t,
     std::chrono::steady_clock::time_point) noexcept;
 
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::HttpServerOptions>().compression),
+    ruvia::CompressionConfig>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::HttpServerOptions>().cors),
+    ruvia::CorsConfig>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
         std::declval<std::span<const ruvia::HttpHeaderView>>())),
@@ -824,7 +830,7 @@ int main() {
         ruvia::detail::HttpContentCoding::kGzip,
         ruvia::HttpKnownMethod::kGet,
         compressed,
-        ruvia::HttpServerOptions::Compression{true, 16});
+        ruvia::CompressionConfig{true, 16});
     if (compressed.header("Content-Encoding") != "gzip" ||
         ruvia::detail::responseBody(compressed).ownedBytes() == nullptr ||
         ruvia::detail::responseBody(compressed).bytes().empty()) {

@@ -84,7 +84,7 @@ void applyResponseCompression(
     HttpContentCoding coding,
     HttpKnownMethod requestMethod,
     HttpResponse& response,
-    const HttpServerOptions::Compression& options) {
+    const CompressionConfig& options) {
     const auto bodyPlan = httpResponseBodyPlan(
         requestMethod,
         response.status());

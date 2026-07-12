@@ -19,13 +19,12 @@
 namespace {
 
 using ruvia::HttpResponse;
-using ruvia::HttpServerOptions;
 using ruvia::HttpKnownMethod;
 using ruvia::detail::HttpContentCoding;
 using ruvia::detail::applyResponseCompression;
 using ruvia::detail::responseBody;
 
-using Compression = HttpServerOptions::Compression;
+using Compression = ruvia::CompressionConfig;
 
 // Reference decompressors. Each returns "\x01decompress-failed" on error, a
 // sentinel no real body equals, so a failure is a visible mismatch not a match.
