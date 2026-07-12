@@ -1026,7 +1026,6 @@ public:
         std::string_view secret) const;
     [[nodiscard]] Task<std::string_view> text() const;
     [[nodiscard]] Task<std::span<const std::byte>> bytes() const;
-    [[nodiscard]] Task<std::span<const std::byte>> arrayBuffer() const;
     [[nodiscard]] Task<RequestBlob> blob() const;
     Task<void> discardBody() const;
 
@@ -1908,10 +1907,6 @@ inline Task<std::string_view> ContextRequest::text() const {
 }
 
 inline Task<std::span<const std::byte>> ContextRequest::bytes() const {
-    return arrayBuffer();
-}
-
-inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {
     const auto body = co_await text();
     co_return std::span<const std::byte>(
         reinterpret_cast<const std::byte*>(body.data()),
@@ -1919,7 +1914,7 @@ inline Task<std::span<const std::byte>> ContextRequest::arrayBuffer() const {
 }
 
 inline Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
-    auto bytes = co_await arrayBuffer();
+    auto bytes = co_await this->bytes();
     co_return RequestBlob(bytes, header("Content-Type").value_or(std::string_view{}));
 }
 

@@ -4368,6 +4368,10 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
         boundary_error("validation targets regained parallel string APIs"
             "Context validation must use only the scoped ValidationTarget vocabulary")
     endif()
+    if(web_context_public_header MATCHES "arrayBuffer[(]")
+        boundary_error("binary request bodies regained a parallel name"
+            "ContextRequest, RawRequestClone and RequestBlob must use bytes()")
+    endif()
     if(NOT web_validation_target_header MATCHES
            "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
         boundary_error("validation targets lost their typed contract"
