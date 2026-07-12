@@ -35,15 +35,6 @@ enum class HttpKnownMethod {
     kUnknown
 };
 
-inline constexpr HttpKnownMethod Get = HttpKnownMethod::kGet;
-inline constexpr HttpKnownMethod Post = HttpKnownMethod::kPost;
-inline constexpr HttpKnownMethod Put = HttpKnownMethod::kPut;
-inline constexpr HttpKnownMethod Delete = HttpKnownMethod::kDelete;
-inline constexpr HttpKnownMethod Patch = HttpKnownMethod::kPatch;
-inline constexpr HttpKnownMethod Head = HttpKnownMethod::kHead;
-inline constexpr HttpKnownMethod Options = HttpKnownMethod::kOptions;
-inline constexpr HttpKnownMethod Connect = HttpKnownMethod::kConnect;
-
 inline constexpr std::size_t kMaxHttpHeaderFields = 64;
 
 class HttpHeaderView final {

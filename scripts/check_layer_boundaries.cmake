@@ -1249,6 +1249,11 @@ endforeach()
 if(EXISTS "${HTTP_METHOD_COMMON}" AND EXISTS "${HTTP_REQUEST_MODEL}")
     file(READ "${HTTP_METHOD_COMMON}" http_method_common)
     file(READ "${HTTP_REQUEST_MODEL}" http_request_model)
+    if(http_method_common MATCHES
+           "inline[ \t]+constexpr[ \t]+HttpKnownMethod[ \t]+(Get|Post|Put|Delete|Patch|Head|Options|Connect)")
+        boundary_error("HTTP methods regained namespace-level aliases"
+            "public method values must use the scoped HttpKnownMethod vocabulary")
+    endif()
     if(NOT http_method_common MATCHES "enum class HttpKnownMethod" OR
        NOT http_method_common MATCHES "classifyHttpMethod" OR
        NOT http_method_common MATCHES "isValidHttpMethodToken" OR
