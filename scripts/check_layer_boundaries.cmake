@@ -123,6 +123,8 @@ set(RULE_STALE_GENERATED_MODEL_DYNAMIC_GET
     "body_[.]get<|body_,[ \t]*resource[)][.]get<T>")
 set(RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION
     "body_|&ruviaValid|[)][ \t]*&&[ \t]*ruviaValid")
+set(RULE_STALE_MODEL_REQUEST_OBJECT
+    "RequestObject")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -591,6 +593,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("generated model visitor restored ineffective outer validity capture"
         "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}"
         "[this, &ruviaValid](auto key, auto value) {}")
+    expect_match("model input escaped into the public RequestObject vocabulary"
+        "${RULE_STALE_MODEL_REQUEST_OBJECT}"
+        "class RequestObject final {};")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2568,6 +2573,16 @@ set(WEB_MODEL_OBJECT_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelObject.h")
 set(WEB_MODEL_API_SURFACE
     "${RUVIA_ROOT}/examples/api_surface.cpp")
+set(WEB_MODEL_HEADER_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Model.h")
+set(WEB_MODEL_INPUT_VISITORS_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/ModelInputVisitors.h")
+set(WEB_STALE_REQUEST_OBJECT_VISITORS
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/RequestObjectVisitors.h")
+if(EXISTS "${WEB_STALE_REQUEST_OBJECT_VISITORS}")
+    boundary_error("stale RequestObject visitor header remains"
+        "model parsing input visitors must use the detail::ModelInput vocabulary")
+endif()
 check_files_no_match("generated model factories must publish only materialized models"
     "${RULE_STALE_MODEL_LAZY_PARSE_STATE}"
     "${WEB_MODEL_MACROS_CONTRACT}")
@@ -2582,11 +2597,24 @@ check_files_no_match("generated models must not retain transient request sources
     "${RULE_STALE_GENERATED_MODEL_REQUEST_RETENTION}"
     "${WEB_MODEL_MACROS_CONTRACT}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+check_files_no_match("model parsing input must remain detail-only ModelInput"
+    "${RULE_STALE_MODEL_REQUEST_OBJECT}"
+    "${WEB_MODEL_HEADER_CONTRACT}"
+    "${WEB_MODEL_TYPES_CONTRACT}"
+    "${WEB_MODEL_OBJECT_CONTRACT}"
+    "${WEB_MODEL_MACROS_CONTRACT}"
+    "${WEB_MODEL_FIELD_OPS_CONTRACT}"
+    "${WEB_MODEL_INPUT_VISITORS_CONTRACT}"
+    "${WEB_MODEL_API_SURFACE}"
+    "${WEB_JSON_PACKAGE_CONSUMER}")
 if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_FIELD_OPS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_MATERIALIZATION_TEST}" AND
    EXISTS "${WEB_MODEL_OBJECT_CONTRACT}" AND
    EXISTS "${WEB_MODEL_API_SURFACE}" AND
+   EXISTS "${WEB_MODEL_HEADER_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_INPUT_VISITORS_CONTRACT}" AND
    EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
     file(READ "${WEB_MODEL_MACROS_CONTRACT}"
         web_model_macros_contract)
@@ -2596,12 +2624,16 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
         web_model_materialization_test)
     file(READ "${WEB_MODEL_API_SURFACE}"
         web_model_api_surface)
+    file(READ "${WEB_MODEL_OBJECT_CONTRACT}"
+        web_model_object_contract)
+    file(READ "${WEB_MODEL_INPUT_VISITORS_CONTRACT}"
+        web_model_input_visitors_contract)
     if(NOT web_model_macros_contract MATCHES
-           "ruviaMaterializeRequest" OR
+           "ruviaMaterializeInput" OR
        NOT web_model_macros_contract MATCHES
-           "T[ \t]+request[{]ruviaBody[.]resource[(][)][}]" OR
+           "T[ \t]+request[{]ruviaInput[.]resource[(][)][}]" OR
        NOT web_model_macros_contract MATCHES
-           "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaBody[)][)]" OR
+           "if[ \t]*[(]!request[.]ruviaMaterialize[(]ruviaInput[)][)]" OR
        web_model_macros_contract MATCHES
            "${RULE_STALE_MODEL_LAZY_PARSE_STATE}" OR
        web_model_macros_contract MATCHES
@@ -2613,7 +2645,15 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_macros_contract MATCHES
            "memory_resource[*][ \t]+ruviaResource_" OR
        NOT web_model_macros_contract MATCHES
-           "ruviaMaterialize[(]const[ \t]+::ruvia::RequestObject&[ \t]+ruviaBody[)]" OR
+           "ruviaMaterialize[(]const[ \t]+::ruvia::detail::ModelInput&[ \t]+ruviaInput[)]" OR
+       NOT web_model_object_contract MATCHES
+           "enum[ \t]+class[ \t]+ModelInputKind" OR
+       NOT web_model_object_contract MATCHES
+           "class[ \t]+ModelInput[ \t]+final" OR
+       NOT web_model_input_visitors_contract MATCHES
+           "visitModelInputJsonFields" OR
+       NOT web_model_input_visitors_contract MATCHES
+           "visitModelInputFormFields" OR
        NOT web_model_materialization_test MATCHES
            "model_factory_materializes_before_publication" OR
        NOT web_model_materialization_test MATCHES
@@ -2622,6 +2662,10 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "!HasModelDynamicGet<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
            "!HasModelTypedDynamicGet<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelInputAccessor<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
            "RUVIA_MODEL[(]InstalledPackageModel" OR
        NOT web_json_package_consumer MATCHES
@@ -2629,11 +2673,13 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelRequestSource<InstalledPackageModel>" OR
+           "!HasGeneratedModelInputAccessor<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "std::default_initializable<ruvia::detail::ModelInput>" OR
        NOT web_json_package_consumer MATCHES
            "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
         boundary_error("generated model schema boundary regressed"
-            "request factories must materialize once, retain only their PMR resource, and never dynamically rescan raw bodies")
+            "detail::ModelInput must remain transient while generated models retain only their PMR resource and schema fields")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT
@@ -2690,11 +2736,8 @@ if(EXISTS "${HTTP_URL_ENCODING_CONTRACT}" AND
 endif()
 if(EXISTS "${WEB_FORM_DECODING_CONTRACT}" AND
    EXISTS "${WEB_FORM_DECODING_TEST}" AND
-   EXISTS "${WEB_FORM_MODEL_OBJECT}" AND
    EXISTS "${WEB_FORM_MODEL_MACROS}" AND
    EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
-    file(READ "${WEB_FORM_MODEL_OBJECT}"
-        web_form_model_object)
     file(READ "${WEB_FORM_MODEL_MACROS}"
         web_form_model_macros)
     file(READ "${WEB_JSON_PACKAGE_CONSUMER}"
@@ -2703,9 +2746,9 @@ if(EXISTS "${WEB_FORM_DECODING_CONTRACT}" AND
            "enum[ \t]+class[ \t]+FormValueEncoding" OR
        NOT web_form_decoding_contract MATCHES
            "std::optional<T>[ \t\r\n]+parseFormValue" OR
-       NOT web_form_model_object MATCHES
+       NOT web_form_model_macros MATCHES
            "FormValueEncoding::kUrlEncoded" OR
-       NOT web_form_model_object MATCHES
+       NOT web_form_model_macros MATCHES
            "FormValueEncoding::kDecoded" OR
        NOT web_form_model_macros MATCHES
            "ruviaValue[.]has_value[(][)]" OR

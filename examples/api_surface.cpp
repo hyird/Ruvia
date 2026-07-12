@@ -546,8 +546,8 @@ concept HasFormObjectCanonicalAccessors = requires(const T& object) {
 };
 
 template <typename T>
-concept HasModelBodyAccessor = requires(const T& model) {
-    { model.body() } -> std::same_as<const ruvia::RequestObject&>;
+concept HasModelInputAccessor = requires(const T& model) {
+    model.body();
 };
 
 template <typename T>
@@ -1921,21 +1921,20 @@ static_assert(!std::is_constructible_v<ruvia::JsonObject, std::string_view, std:
 static_assert(!std::is_default_constructible_v<ruvia::FormObject>);
 static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view>);
 static_assert(!std::is_constructible_v<ruvia::FormObject, std::string_view, std::pmr::memory_resource*>);
-static_assert(!std::is_default_constructible_v<ruvia::RequestObject>);
-static_assert(!std::is_constructible_v<ruvia::RequestObject, ruvia::RequestObjectKind, std::string_view>);
+static_assert(!std::is_default_constructible_v<ruvia::detail::ModelInput>);
 static_assert(!std::is_constructible_v<
-    ruvia::RequestObject,
-    ruvia::RequestObjectKind,
+    ruvia::detail::ModelInput,
+    ruvia::detail::ModelInputKind,
     std::string_view,
     std::pmr::memory_resource*>);
 static_assert(!std::is_constructible_v<
-    ruvia::RequestObject,
+    ruvia::detail::ModelInput,
     const ruvia::RequestNameValueList&,
     std::pmr::memory_resource*>);
-static_assert(!HasModelBodyAccessor<ClonePayload>);
+static_assert(!HasModelInputAccessor<ClonePayload>);
 static_assert(!HasModelDynamicGet<ClonePayload>);
 static_assert(!HasModelTypedDynamicGet<ClonePayload>);
-static_assert(!std::is_constructible_v<ClonePayload, ruvia::RequestObject>);
+static_assert(!std::is_constructible_v<ClonePayload, ruvia::detail::ModelInput>);
 static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(!HasContextNewResponseAlias<ruvia::Context>);
@@ -2035,7 +2034,6 @@ static_assert(!HasCompleteType<ruvia::detail::DotenvResultAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RequestFormFieldAccess>);
 static_assert(!HasCompleteType<ruvia::detail::StreamingAccess>);
 static_assert(!HasCompleteType<ruvia::detail::SessionAccess>);
-static_assert(!HasCompleteType<ruvia::detail::RequestObjectAccess>);
 static_assert(!HasCompleteType<ruvia::detail::DbValueAccess>);
 static_assert(!HasCompleteType<ruvia::detail::RedisTypesAccess>);
 #ifndef _MSC_VER

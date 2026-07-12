@@ -24,6 +24,7 @@ class JsonValue;
 
 namespace detail {
 
+class ModelInput;
 struct ModelValueFactory;
 
 }  // namespace detail
@@ -437,6 +438,5 @@ struct ModelValueFactory final {
 
 class JsonObject;
 class FormObject;
-class RequestObject;
 
 }  // namespace ruvia
