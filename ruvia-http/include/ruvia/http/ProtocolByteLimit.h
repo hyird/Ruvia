@@ -7,22 +7,22 @@
 
 namespace ruvia {
 
-// A request-body byte ceiling with no numeric sentinel: the default is
-// unlimited, while a configured limit is always strictly positive.
-class HttpBodyByteLimit final {
+// A protocol byte ceiling with no numeric sentinel: the default is unlimited,
+// while a configured limit is always strictly positive.
+class ProtocolByteLimit final {
 public:
-    HttpBodyByteLimit() noexcept = default;
+    ProtocolByteLimit() noexcept = default;
 
-    [[nodiscard]] static HttpBodyByteLimit unlimited() noexcept {
-        return HttpBodyByteLimit();
+    [[nodiscard]] static ProtocolByteLimit unlimited() noexcept {
+        return ProtocolByteLimit();
     }
 
-    [[nodiscard]] static HttpBodyByteLimit limited(std::size_t bytes) {
+    [[nodiscard]] static ProtocolByteLimit limited(std::size_t bytes) {
         if (bytes == 0) {
             throw std::invalid_argument(
-                "HTTP body byte limit must be greater than zero");
+                "protocol byte limit must be greater than zero");
         }
-        return HttpBodyByteLimit(bytes);
+        return ProtocolByteLimit(bytes);
     }
 
     [[nodiscard]] bool isLimited() const noexcept {
@@ -52,7 +52,7 @@ public:
     }
 
 private:
-    explicit HttpBodyByteLimit(std::size_t bytes) noexcept
+    explicit ProtocolByteLimit(std::size_t bytes) noexcept
         : maximum_(bytes) {}
 
     std::optional<std::size_t> maximum_;

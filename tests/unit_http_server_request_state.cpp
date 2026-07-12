@@ -18,7 +18,7 @@
 
 namespace {
 
-using ruvia::HttpBodyByteLimit;
+using ruvia::ProtocolByteLimit;
 using ruvia::detail::appendHttpsPort;
 using ruvia::detail::appendResponseHead;
 using ruvia::detail::contentLengthExceedsLimit;
@@ -74,13 +74,13 @@ RUVIA_TEST(request_state_content_length_exceeds_limit) {
     const auto chunked = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n").bodyPlan;
     RUVIA_CHECK(contentLengthExceedsLimit(
-        over, HttpBodyByteLimit::limited(100)));
+        over, ProtocolByteLimit::limited(100)));
     RUVIA_CHECK(!contentLengthExceedsLimit(
-        exact, HttpBodyByteLimit::limited(100)));
+        exact, ProtocolByteLimit::limited(100)));
     RUVIA_CHECK(!contentLengthExceedsLimit(
-        unlimited, HttpBodyByteLimit::unlimited()));
+        unlimited, ProtocolByteLimit::unlimited()));
     RUVIA_CHECK(!contentLengthExceedsLimit(
-        chunked, HttpBodyByteLimit::limited(1)));
+        chunked, ProtocolByteLimit::limited(1)));
 }
 
 RUVIA_TEST(request_state_keep_alive_by_connection_header) {

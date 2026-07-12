@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/HttpTransferCoding.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 
 #include <cstddef>
 #include <memory_resource>
@@ -22,7 +22,7 @@ public:
     TransferCodingDecoder(
         HttpTransferCodings codings,
         std::pmr::polymorphic_allocator<char> allocator,
-        HttpBodyByteLimit bodyLimit);
+        ProtocolByteLimit bodyLimit);
     ~TransferCodingDecoder();
 
     TransferCodingDecoder(const TransferCodingDecoder&) = delete;
@@ -64,7 +64,7 @@ private:
     std::string_view pendingInput_;
     std::size_t pendingOffset_{0};
     std::pmr::memory_resource* resource_{nullptr};
-    HttpBodyByteLimit bodyLimit_;
+    ProtocolByteLimit bodyLimit_;
     std::size_t decodedBytes_{0};
 };
 

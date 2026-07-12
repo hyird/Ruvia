@@ -123,7 +123,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         WebSocketSocketTransport<Stream>{stream},
         scannerEntry,
         webSocketEndpoint.lifecycle(),
-        options.maxWebSocketMessageBytes,
+        ProtocolByteLimit::limited(options.maxWebSocketMessageBytes),
         memory.resource(),
         pendingFrames,
         handshake.negotiation().deflate());

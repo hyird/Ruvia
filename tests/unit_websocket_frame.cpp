@@ -11,11 +11,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
 #include "ruvia/http/WebSocketProtocol.h"
 
 namespace {
 
+using ruvia::ProtocolByteLimit;
 using ruvia::WebSocketOpcode;
 using ruvia::detail::decodeMaskedWebSocketPayload;
 using ruvia::detail::decodeWebSocketFrameStart;
@@ -190,11 +192,13 @@ RUVIA_TEST(ws_mask_unmask_round_trip_all_tail_sizes) {
 }
 
 RUVIA_TEST(ws_frame_length_limit) {
-    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(100, 1000));       // within limit
-    RUVIA_CHECK(webSocketFrameLengthExceedsLimit(1001, 1000));       // over limit
-    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(1000000, 0));      // 0 == unlimited
+    const auto limit = ProtocolByteLimit::limited(1000);
+    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(100, limit));
+    RUVIA_CHECK(webSocketFrameLengthExceedsLimit(1001, limit));
+    RUVIA_CHECK(!webSocketFrameLengthExceedsLimit(
+        1000000, ProtocolByteLimit::unlimited()));
     RUVIA_CHECK(webSocketFrameLengthExceedsLimit(
-        std::numeric_limits<std::uint64_t>::max(), 1000));          // enormous payload over limit
+        std::numeric_limits<std::uint64_t>::max(), limit));
 }
 
 RUVIA_TEST(ws_frame_reader_needs_input_without_sentinel_metadata) {
@@ -203,14 +207,16 @@ RUVIA_TEST(ws_frame_reader_needs_input_without_sentinel_metadata) {
     std::size_t pendingCompactUntil = 0;
 
     const auto empty = webSocketTryReadFrame(
-        input, offset, pendingCompactUntil, 1024, false);
+        input, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(empty.needInput() != nullptr);
     RUVIA_CHECK(empty.frame() == nullptr);
     RUVIA_CHECK(empty.failure() == nullptr);
 
     input.push_back(static_cast<char>(0x81));
     const auto partial = webSocketTryReadFrame(
-        input, offset, pendingCompactUntil, 1024, false);
+        input, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(partial.needInput() != nullptr);
     RUVIA_CHECK(partial.frame() == nullptr);
     RUVIA_CHECK(partial.failure() == nullptr);
@@ -224,7 +230,8 @@ RUVIA_TEST(ws_frame_reader_returns_one_unmasked_borrowed_frame) {
     std::size_t pendingCompactUntil = 0;
 
     const auto result = webSocketTryReadFrame(
-        input, offset, pendingCompactUntil, 1024, false);
+        input, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(result.needInput() == nullptr);
     RUVIA_CHECK(result.failure() == nullptr);
     RUVIA_CHECK(result.frame() != nullptr);
@@ -243,7 +250,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
         std::string_view("\x81\x02hi", 4),
         std::pmr::get_default_resource());
     const auto maskFailure = webSocketTryReadFrame(
-        unmasked, offset, pendingCompactUntil, 1024, false);
+        unmasked, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(maskFailure.failure() != nullptr);
     RUVIA_CHECK(
         maskFailure.failure()->error() ==
@@ -254,7 +262,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
     offset = 0;
     pendingCompactUntil = 0;
     const auto sizeFailure = webSocketTryReadFrame(
-        tooLarge, offset, pendingCompactUntil, 5, false);
+        tooLarge, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(5), false);
     RUVIA_CHECK(sizeFailure.failure() != nullptr);
     RUVIA_CHECK(
         sizeFailure.failure()->error() ==
@@ -266,7 +275,8 @@ RUVIA_TEST(ws_frame_reader_reports_typed_wire_failures) {
     offset = 0;
     pendingCompactUntil = 0;
     const auto closeFailure = webSocketTryReadFrame(
-        close, offset, pendingCompactUntil, 1024, false);
+        close, offset, pendingCompactUntil,
+        ProtocolByteLimit::limited(1024), false);
     RUVIA_CHECK(closeFailure.failure() != nullptr);
     RUVIA_CHECK(
         closeFailure.failure()->error() ==

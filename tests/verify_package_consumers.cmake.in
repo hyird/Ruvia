@@ -1793,7 +1793,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_ws_runtime_connection MATCHES
            "WebSocketDeflateNegotiation deflate" OR
        NOT _installed_ws_runtime_connection MATCHES
-           "protocol_[(]buffer_, maxMessageBytes, deflate[)]" OR
+           "protocol_[(]buffer_, messageLimit, deflate[)]" OR
        NOT _installed_ws_h1_route MATCHES
            "makeHttpWebSocketServerHandshake" OR
        NOT _installed_ws_h1_route MATCHES

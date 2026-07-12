@@ -4,11 +4,13 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 
 namespace {
 
+using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::WebSocketDeflate;
 using ruvia::detail::WebSocketInflateResult;
@@ -44,7 +46,9 @@ bool roundTrips(WebSocketDeflate& codec, std::string_view message) {
         return false;
     }
     std::pmr::string restored(std::pmr::get_default_resource());
-    if (codec.decompress(compressed, restored, 0) != WebSocketInflateResult::kOk) {
+    if (codec.decompress(
+            compressed, restored, ProtocolByteLimit::unlimited()) !=
+        WebSocketInflateResult::kOk) {
         return false;
     }
     return std::string_view(restored.data(), restored.size()) == message;
@@ -83,10 +87,14 @@ RUVIA_TEST(websocket_deflate_inflate_respects_max_bytes) {
     RUVIA_CHECK(codec.compress(std::string(10000, 'a'), compressed));  // tiny compressed form
     // Decompressing a bomb under a small cap must be refused, not expanded.
     std::pmr::string restored(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(compressed, restored, 100) == WebSocketInflateResult::kTooLarge);
+    RUVIA_CHECK(codec.decompress(
+        compressed, restored, ProtocolByteLimit::limited(100)) ==
+        WebSocketInflateResult::kTooLarge);
     // With a sufficient cap the same payload inflates fully.
     std::pmr::string ok(std::pmr::get_default_resource());
-    RUVIA_CHECK(codec.decompress(compressed, ok, 10000) == WebSocketInflateResult::kOk);
+    RUVIA_CHECK(codec.decompress(
+        compressed, ok, ProtocolByteLimit::limited(10000)) ==
+        WebSocketInflateResult::kOk);
     RUVIA_CHECK_EQ(ok.size(), std::size_t{10000});
 }
 
@@ -200,6 +208,9 @@ RUVIA_TEST(websocket_deflate_rejects_corrupt_input) {
     WebSocketDeflate codec;
     std::pmr::string restored(std::pmr::get_default_resource());
     // Random bytes are not a valid raw-DEFLATE block; inflate must report an error.
-    const auto result = codec.decompress("\xff\xff\xff\xff\xff\xff", restored, 0);
+    const auto result = codec.decompress(
+        "\xff\xff\xff\xff\xff\xff",
+        restored,
+        ProtocolByteLimit::unlimited());
     RUVIA_CHECK(result == WebSocketInflateResult::kError);
 }

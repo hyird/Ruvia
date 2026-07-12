@@ -34,7 +34,7 @@ struct HttpLazyBufferedBodyRouteState final {
         std::pmr::memory_resource* requestResource,
         std::string_view bodyAndPipeline,
         Http1RequestBodyPlan bodyPlan,
-        HttpBodyByteLimit bodyLimit,
+        ProtocolByteLimit bodyLimit,
         ConnectionScanner::Entry& scannerEntry) {
         body.emplace(
             stream,
@@ -76,7 +76,7 @@ inline void prepareHttpLazyBufferedBodyRoute(
         requestMemory.resource(),
         bodyAndPipeline,
         parsed.bodyPlan,
-        HttpBodyByteLimit::limited(options.maxBufferedBodyBytes),
+        ProtocolByteLimit::limited(options.maxBufferedBodyBytes),
         scannerEntry);
 }
 

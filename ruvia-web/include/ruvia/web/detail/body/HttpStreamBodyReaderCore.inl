@@ -8,7 +8,7 @@ StreamBodyReader<Stream>::StreamBodyReader(
     std::pmr::polymorphic_allocator<char> allocator,
     std::string_view initialBodyAndPipeline,
     Http1RequestBodyPlan bodyPlan,
-    HttpBodyByteLimit bodyLimit,
+    ProtocolByteLimit bodyLimit,
     ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),

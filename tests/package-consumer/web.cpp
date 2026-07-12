@@ -12,7 +12,7 @@
 
 #include <asio/io_context.hpp>
 
-#include <ruvia/http/HttpBodyByteLimit.h>
+#include <ruvia/http/ProtocolByteLimit.h>
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
 #include <ruvia/web/ConnInfo.h>
@@ -767,7 +767,7 @@ static_assert(std::same_as<
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::detail::Http2RequestBodyRuntime&>().store(
         std::declval<std::string_view>(),
-        ruvia::HttpBodyByteLimit::unlimited(),
+        ruvia::ProtocolByteLimit::unlimited(),
         std::size_t{})),
     ruvia::detail::Http2RequestBodyStoreResult>);
 static_assert(!HasDirectHttp2BeginDispatch<
@@ -929,7 +929,7 @@ int main() {
     if (body.selectedMode() == nullptr ||
         *body.selectedMode() != ruvia::detail::RequestBodyMode::kStream ||
         body.store(
-            "web-owned", ruvia::HttpBodyByteLimit::unlimited(), 1024) !=
+            "web-owned", ruvia::ProtocolByteLimit::unlimited(), 1024) !=
             ruvia::detail::Http2RequestBodyStoreResult::kAccepted ||
         body.queue().pop() != "web-owned") {
         return 4;

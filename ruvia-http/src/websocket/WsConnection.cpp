@@ -6,10 +6,10 @@ namespace ruvia::detail {
 
 WsConnection::WsConnection(
     std::pmr::string& input,
-    std::size_t maxMessageBytes,
+    ProtocolByteLimit messageLimit,
     WebSocketDeflateNegotiation deflate)
     : input_(&input),
-      maxMessageBytes_(maxMessageBytes),
+      messageLimit_(messageLimit),
       outBuffer_(input.get_allocator().resource()),
       assembler_(input.get_allocator().resource()),
       inboundInflated_(input.get_allocator().resource()),
@@ -117,7 +117,7 @@ void WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload)
     const bool dataFrame = opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary;
     const bool controlFrame = opcode == WebSocketOpcode::kPing ||
         opcode == WebSocketOpcode::kPong || opcode == WebSocketOpcode::kClose;
-    if (dataFrame && webSocketMessageExceedsLimit(payload.size(), maxMessageBytes_)) {
+    if (dataFrame && webSocketMessageExceedsLimit(payload.size(), messageLimit_)) {
         throw std::invalid_argument("websocket message is too large");
     }
     if (controlFrame && payload.size() > 125) {
@@ -170,7 +170,7 @@ std::optional<WsEvent> WsConnection::poll() {
 
     for (;;) {
         const auto read = webSocketTryReadFrame(
-            *input_, inputOffset_, pendingCompactUntil_, maxMessageBytes_, deflate_.has_value());
+            *input_, inputOffset_, pendingCompactUntil_, messageLimit_, deflate_.has_value());
         if (read.needInput() != nullptr) {
             return std::nullopt;
         }
@@ -179,7 +179,7 @@ std::optional<WsEvent> WsConnection::poll() {
         }
 
         const auto& frame = *read.frame();
-        const auto inbound = assembler_.accept(frame, maxMessageBytes_);
+        const auto inbound = assembler_.accept(frame, messageLimit_);
         if (const auto* failure = inbound.failure()) {
             return protocolFailureEvent(failure->error());
         }
@@ -230,7 +230,7 @@ std::optional<WsEvent> WsConnection::poll() {
 
         const auto inflateResult = deflate_.has_value()
             ? deflate_->decompress(
-                message.payload(), inboundInflated_, maxMessageBytes_)
+                message.payload(), inboundInflated_, messageLimit_)
             : WebSocketInflateResult::kError;
         if (inflateResult == WebSocketInflateResult::kTooLarge) {
             return protocolFailureEvent(

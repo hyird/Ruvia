@@ -8068,7 +8068,7 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
        NOT ws_protocol_source MATCHES
            "webSocketDeflateNegotiated[(]deflate[)]" OR
        NOT ws_runtime MATCHES "WebSocketDeflateNegotiation deflate" OR
-       NOT ws_runtime MATCHES "protocol_[(]buffer_, maxMessageBytes, deflate[)]")
+       NOT ws_runtime MATCHES "protocol_[(]buffer_, messageLimit, deflate[)]")
         boundary_error("WebSocket frame core lost the typed negotiation handoff"
             "the runtime and sans-I/O core must consume the committed deflate alternative, never a boolean")
     endif()
@@ -8345,8 +8345,8 @@ if(EXISTS "${HTTP2_CLEARTEXT_DRIVER}" AND EXISTS "${HTTP2_SANSIO_SESSION}")
     endif()
 endif()
 
-set(HTTP_BODY_BYTE_LIMIT
-    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpBodyByteLimit.h")
+set(PROTOCOL_BYTE_LIMIT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/ProtocolByteLimit.h")
 set(HTTP_TRANSFER_CODING_DECODER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h")
 set(WEB_REQUEST_BODY_LIMIT
@@ -8354,60 +8354,89 @@ set(WEB_REQUEST_BODY_LIMIT
 set(WEB_SERVER_OPTIONS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerOptions.h")
 set(WEB_APP_HEADER "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h")
+set(HTTP_WEBSOCKET_UTILS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h")
+set(HTTP_WEBSOCKET_DEFLATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
+set(HTTP_WEBSOCKET_CONNECTION
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h")
 set(HTTP_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 set(WEB_PACKAGE_CONSUMER "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
-foreach(body_limit_contract IN ITEMS
-        "${HTTP_BODY_BYTE_LIMIT}"
+foreach(protocol_limit_contract IN ITEMS
+        "${PROTOCOL_BYTE_LIMIT}"
         "${HTTP_TRANSFER_CODING_DECODER}"
         "${WEB_REQUEST_BODY_LIMIT}"
         "${WEB_SERVER_OPTIONS}"
         "${WEB_APP_HEADER}"
+        "${HTTP_WEBSOCKET_UTILS}"
+        "${HTTP_WEBSOCKET_DEFLATE}"
+        "${HTTP_WEBSOCKET_CONNECTION}"
         "${HTTP_PACKAGE_CONSUMER}"
         "${WEB_PACKAGE_CONSUMER}")
-    if(NOT EXISTS "${body_limit_contract}")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${body_limit_contract}")
-        boundary_error("explicit HTTP request-body limit contract is incomplete"
+    if(NOT EXISTS "${protocol_limit_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${protocol_limit_contract}")
+        boundary_error("explicit protocol byte-limit contract is incomplete"
             "${relative} is required")
     endif()
 endforeach()
-if(EXISTS "${HTTP_BODY_BYTE_LIMIT}" AND
+if(EXISTS "${PROTOCOL_BYTE_LIMIT}" AND
    EXISTS "${HTTP_TRANSFER_CODING_DECODER}" AND
    EXISTS "${WEB_REQUEST_BODY_LIMIT}" AND
    EXISTS "${WEB_SERVER_OPTIONS}" AND
    EXISTS "${WEB_APP_HEADER}" AND
+   EXISTS "${HTTP_WEBSOCKET_UTILS}" AND
+   EXISTS "${HTTP_WEBSOCKET_DEFLATE}" AND
+   EXISTS "${HTTP_WEBSOCKET_CONNECTION}" AND
    EXISTS "${HTTP_PACKAGE_CONSUMER}" AND
    EXISTS "${WEB_PACKAGE_CONSUMER}")
-    file(READ "${HTTP_BODY_BYTE_LIMIT}" http_body_byte_limit)
+    file(READ "${PROTOCOL_BYTE_LIMIT}" protocol_byte_limit)
     file(READ "${HTTP_TRANSFER_CODING_DECODER}" http_transfer_coding_decoder)
     file(READ "${WEB_REQUEST_BODY_LIMIT}" web_request_body_limit)
     file(READ "${WEB_SERVER_OPTIONS}" web_server_options)
     file(READ "${WEB_APP_HEADER}" web_app_header)
+    file(READ "${HTTP_WEBSOCKET_UTILS}" http_websocket_utils)
+    file(READ "${HTTP_WEBSOCKET_DEFLATE}" http_websocket_deflate)
+    file(READ "${HTTP_WEBSOCKET_CONNECTION}" http_websocket_connection)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http_package_consumer)
     file(READ "${WEB_PACKAGE_CONSUMER}" web_package_consumer)
-    if(NOT http_body_byte_limit MATCHES "class HttpBodyByteLimit final" OR
-       NOT http_body_byte_limit MATCHES "HttpBodyByteLimit limited[(]std::size_t bytes[)]" OR
-       NOT http_body_byte_limit MATCHES "HttpBodyByteLimit unlimited[(][)]" OR
-       NOT http_body_byte_limit MATCHES "bool additionExceeds[(]" OR
-       NOT http_transfer_coding_decoder MATCHES "HttpBodyByteLimit bodyLimit" OR
-       NOT web_request_body_limit MATCHES "HttpBodyByteLimit requestBodyByteLimit" OR
+    if(NOT protocol_byte_limit MATCHES "class ProtocolByteLimit final" OR
+       NOT protocol_byte_limit MATCHES "ProtocolByteLimit limited[(]std::size_t bytes[)]" OR
+       NOT protocol_byte_limit MATCHES "ProtocolByteLimit unlimited[(][)]" OR
+       NOT protocol_byte_limit MATCHES "bool additionExceeds[(]" OR
+       NOT http_transfer_coding_decoder MATCHES "ProtocolByteLimit bodyLimit" OR
+       NOT web_request_body_limit MATCHES "ProtocolByteLimit requestBodyByteLimit" OR
        NOT web_server_options MATCHES
            "std::optional<std::size_t> maxStreamBodyBytes" OR
        NOT web_app_header MATCHES
            "setMaxStreamBodyBytes[(]std::optional<std::size_t> bytes[)]" OR
+       NOT http_websocket_utils MATCHES
+           "ProtocolByteLimit messageLimit" OR
+       NOT http_websocket_deflate MATCHES
+           "ProtocolByteLimit messageLimit" OR
+       NOT http_websocket_connection MATCHES
+           "ProtocolByteLimit messageLimit = ProtocolByteLimit::unlimited" OR
        NOT http_package_consumer MATCHES
-           "!std::constructible_from<ruvia::HttpBodyByteLimit, std::size_t>" OR
+           "!std::constructible_from<ruvia::ProtocolByteLimit, std::size_t>" OR
        NOT web_package_consumer MATCHES
            "defaultOptions[.]maxStreamBodyBytes[.]has_value")
-        boundary_error("HTTP request-body limits recovered a numeric sentinel"
-            "HTTP decoders must consume HttpBodyByteLimit, while Web uses optional configuration and package consumers pin both contracts")
+        boundary_error("protocol byte limits recovered a numeric sentinel"
+            "HTTP body and WebSocket protocol paths must consume ProtocolByteLimit; Web configuration and package consumers pin the boundary contracts")
     endif()
 endif()
-check_files_no_match("HTTP request-body limits recovered a numeric sentinel"
-    "kDefaultMaxStreamBodyBytes|maxBodyBytes_[ 	]*(==|!=)[ 	]*0|totalLimit[ 	]*(==|!=)[ 	]*0"
+if(EXISTS "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpBodyByteLimit.h")
+    boundary_error("body-only byte-limit type was restored"
+        "ProtocolByteLimit must remain shared by HTTP body and WebSocket protocol paths")
+endif()
+check_files_no_match("protocol byte limits recovered a numeric sentinel"
+    "kDefaultMaxStreamBodyBytes|maxBodyBytes_[ 	]*(==|!=)[ 	]*0|totalLimit[ 	]*(==|!=)[ 	]*0|maxMessageBytes[ 	]*(==|!=)[ 	]*0|maxBytes[ 	]*(==|!=)[ 	]*0"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpLimits.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h"
     "${RUVIA_ROOT}/ruvia-http/src/body/HttpTransferCodingDecoder.cpp"
+    "${HTTP_WEBSOCKET_UTILS}"
+    "${HTTP_WEBSOCKET_DEFLATE}"
+    "${HTTP_WEBSOCKET_CONNECTION}"
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 

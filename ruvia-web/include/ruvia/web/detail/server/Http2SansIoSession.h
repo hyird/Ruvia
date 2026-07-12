@@ -563,7 +563,8 @@ Task<void> runHttp2SansIoSession(
                             executor),
                         scannerEntry,
                         webSocketEndpoint->lifecycle(),
-                        options.maxWebSocketMessageBytes,
+                        ProtocolByteLimit::limited(
+                            options.maxWebSocketMessageBytes),
                         requestMemory.resource(),
                         /*initialBytes=*/{},
                         submittedHandshake->negotiation().deflate());

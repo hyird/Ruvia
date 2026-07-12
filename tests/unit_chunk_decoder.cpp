@@ -8,14 +8,14 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/HttpBodyByteLimit.h"
+#include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/HttpProtocolError.h"
 
 namespace {
 
 using ruvia::HttpProtocolError;
-using ruvia::HttpBodyByteLimit;
+using ruvia::ProtocolByteLimit;
 using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
 using ruvia::detail::Http1ChunkDecodeNeedMore;
@@ -65,15 +65,15 @@ bool sizeLineThrows(Http1ChunkDecoder& decoder, std::string_view line) {
 
 }  // namespace
 
-RUVIA_TEST(http_body_byte_limit_has_no_numeric_sentinel) {
-    const auto unlimited = HttpBodyByteLimit::unlimited();
+RUVIA_TEST(protocol_byte_limit_has_no_numeric_sentinel) {
+    const auto unlimited = ProtocolByteLimit::unlimited();
     RUVIA_CHECK(!unlimited.isLimited());
     RUVIA_CHECK(unlimited.maximum() == nullptr);
     RUVIA_CHECK(!unlimited.exceeds((std::numeric_limits<std::size_t>::max)()));
     RUVIA_CHECK(unlimited.additionExceeds(
         (std::numeric_limits<std::size_t>::max)(), 1));
 
-    const auto limited = HttpBodyByteLimit::limited(8);
+    const auto limited = ProtocolByteLimit::limited(8);
     RUVIA_CHECK(limited.isLimited());
     RUVIA_CHECK(limited.maximum() != nullptr);
     RUVIA_CHECK_EQ(*limited.maximum(), std::size_t{8});
@@ -84,7 +84,7 @@ RUVIA_TEST(http_body_byte_limit_has_no_numeric_sentinel) {
 
     bool rejectedZero = false;
     try {
-        (void)HttpBodyByteLimit::limited(0);
+        (void)ProtocolByteLimit::limited(0);
     } catch (const std::invalid_argument&) {
         rejectedZero = true;
     }
@@ -92,7 +92,7 @@ RUVIA_TEST(http_body_byte_limit_has_no_numeric_sentinel) {
 }
 
 RUVIA_TEST(chunk_decoder_basic_two_chunk_flow) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::limited(1000));
+    Http1ChunkDecoder decoder(ProtocolByteLimit::limited(1000));
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("5", size));  // non-final chunk
     RUVIA_CHECK_EQ(size, std::size_t{5});
@@ -107,7 +107,7 @@ RUVIA_TEST(chunk_decoder_basic_two_chunk_flow) {
 }
 
 RUVIA_TEST(chunk_decoder_hex_size_and_partial_consume) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::unlimited());
+    Http1ChunkDecoder decoder(ProtocolByteLimit::unlimited());
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("1a", size));  // 0x1a
     RUVIA_CHECK_EQ(size, std::size_t{26});
@@ -119,7 +119,7 @@ RUVIA_TEST(chunk_decoder_hex_size_and_partial_consume) {
 }
 
 RUVIA_TEST(chunk_decoder_check_delimiter) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::unlimited());
+    Http1ChunkDecoder decoder(ProtocolByteLimit::unlimited());
     RUVIA_CHECK(decoder.checkDelimiter("\r\n") == Http1ChunkDelimiterStatus::kOk);
     RUVIA_CHECK(decoder.checkDelimiter("\r\nmore") == Http1ChunkDelimiterStatus::kOk);
     RUVIA_CHECK(decoder.checkDelimiter("X") == Http1ChunkDelimiterStatus::kNeedMore);   // fewer than 2 bytes
@@ -128,18 +128,18 @@ RUVIA_TEST(chunk_decoder_check_delimiter) {
 }
 
 RUVIA_TEST(chunk_decoder_rejects_invalid_size_line) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::unlimited());
+    Http1ChunkDecoder decoder(ProtocolByteLimit::unlimited());
     RUVIA_CHECK(sizeLineThrows(decoder, "xyz"));
     RUVIA_CHECK(sizeLineThrows(decoder, ""));
 }
 
 RUVIA_TEST(chunk_decoder_single_chunk_over_limit_rejected) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::limited(10));
+    Http1ChunkDecoder decoder(ProtocolByteLimit::limited(10));
     RUVIA_CHECK(sizeLineThrows(decoder, "b"));  // 0xb = 11 > 10 -> 413
 }
 
 RUVIA_TEST(chunk_decoder_accumulated_body_over_limit_rejected) {
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::limited(10));
+    Http1ChunkDecoder decoder(ProtocolByteLimit::limited(10));
     std::size_t size = 0;
     RUVIA_CHECK(decoder.parseSizeLine("8", size));  // 8 <= 10
     decoder.consumeBodyBytes(8);
@@ -157,7 +157,7 @@ RUVIA_TEST(chunk_decoder_rejects_decoded_size_integer_overflow) {
     // a small one must trip 413 rather than wrap. (32-bit size_t cannot express a
     // 64-bit near-max literal, which parseSizeLine rejects earlier, so guard it.)
     if constexpr (sizeof(std::size_t) >= 8) {
-        Http1ChunkDecoder decoder(HttpBodyByteLimit::unlimited());
+        Http1ChunkDecoder decoder(ProtocolByteLimit::unlimited());
         std::size_t size = 0;
         RUVIA_CHECK(decoder.parseSizeLine("fffffffffffffff0", size));  // SIZE_MAX - 15
         RUVIA_CHECK(sizeLineThrows(decoder, "20"));  // +0x20 overflows the total -> 413
@@ -167,7 +167,7 @@ RUVIA_TEST(chunk_decoder_rejects_decoded_size_integer_overflow) {
 RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
     // With a tiny limit, the accumulated size-line + CRLF framing overhead alone
     // must eventually trip the 413 guard even for zero-length chunks.
-    Http1ChunkDecoder decoder(HttpBodyByteLimit::limited(4));
+    Http1ChunkDecoder decoder(ProtocolByteLimit::limited(4));
     std::size_t size = 0;
     bool threw = false;
     try {
@@ -181,7 +181,7 @@ RUVIA_TEST(chunk_decoder_framing_overhead_is_bounded) {
 }
 
 RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
-    Http1ChunkedBodyDecoder decoder(HttpBodyByteLimit::limited(1024));
+    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(1024));
     const std::string_view wire =
         "5\r\nhello\r\n"
         "6;ext=yes\r\n world\r\n"
@@ -208,7 +208,7 @@ RUVIA_TEST(chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) {
 }
 
 RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
-    Http1ChunkedBodyDecoder decoder(HttpBodyByteLimit::limited(1024));
+    Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(1024));
     const std::string wire = "3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
     std::string pending;
     std::string body;
@@ -242,7 +242,7 @@ RUVIA_TEST(chunked_body_decoder_handles_single_byte_input_fragmentation) {
 RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     bool badDelimiter = false;
     try {
-        Http1ChunkedBodyDecoder decoder(HttpBodyByteLimit::limited(1024));
+        Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(1024));
         (void)decoder.decode("1\r\nxXY");
     } catch (const std::invalid_argument&) {
         badDelimiter = true;
@@ -251,7 +251,7 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 
     bool badTrailer = false;
     try {
-        Http1ChunkedBodyDecoder decoder(HttpBodyByteLimit::limited(1024));
+        Http1ChunkedBodyDecoder decoder(ProtocolByteLimit::limited(1024));
         (void)decoder.decode("0\r\nContent-Length: 1\r\n\r\n");
     } catch (const std::invalid_argument&) {
         badTrailer = true;
