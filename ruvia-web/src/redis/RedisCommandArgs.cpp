@@ -70,6 +70,40 @@ std::pmr::vector<std::pmr::string> redisMsetArgs(
     return args;
 }
 
+std::pmr::vector<std::pmr::string> redisSetArgs(
+    std::string_view key,
+    std::string_view value,
+    const RedisSetOptions& options,
+    std::pmr::memory_resource* resource) {
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(8);
+    emplaceRedisString(args, "SET");
+    emplaceRedisString(args, key);
+    emplaceRedisString(args, value);
+    if (const auto* duration = options.expiration.duration();
+        duration != nullptr) {
+        emplaceRedisString(args, "PX");
+        args.emplace_back(redisMillisecondsString(*duration, resource));
+    }
+    switch (options.condition) {
+    case RedisSetCondition::kNone:
+        break;
+    case RedisSetCondition::kIfAbsent:
+        emplaceRedisString(args, "NX");
+        break;
+    case RedisSetCondition::kIfPresent:
+        emplaceRedisString(args, "XX");
+        break;
+    }
+    if (options.returnPrevious) {
+        emplaceRedisString(args, "GET");
+    }
+    if (options.expiration.keepsExisting()) {
+        emplaceRedisString(args, "KEEPTTL");
+    }
+    return args;
+}
+
 std::pmr::vector<std::pmr::string> redisHsetFieldsArgs(
     std::string_view key,
     std::span<const std::pair<std::string_view, std::string_view>> fields,

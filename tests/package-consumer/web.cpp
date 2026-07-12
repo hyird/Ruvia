@@ -68,6 +68,26 @@ concept HasDirectHttp2BeginDispatch = requires(
     runtime.beginDispatch(executor);
 };
 
+#ifdef RUVIA_ENABLE_REDIS
+template <typename T>
+concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
+    options.ttl;
+    options.nx;
+    options.xx;
+    options.get;
+    options.keepTtl;
+};
+
+static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::RedisSetOptions>().condition),
+    ruvia::RedisSetCondition>);
+static_assert(std::same_as<
+    decltype(ruvia::RedisSetExpiration::expiresAfter(
+        std::chrono::milliseconds(1))),
+    ruvia::RedisSetExpiration>);
+#endif
+
 template <typename Body>
 concept HasDirectHttp2BodyModeSelection = requires(Body& body) {
     body.selectMode(ruvia::detail::RequestBodyMode::kBuffered);

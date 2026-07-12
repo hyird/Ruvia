@@ -79,6 +79,11 @@ Task<std::pmr::string> redisStatusCommand(
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisMsetArgs(
     std::span<const std::pair<std::string_view, std::string_view>> items,
     std::pmr::memory_resource* resource);
+[[nodiscard]] std::pmr::vector<std::pmr::string> redisSetArgs(
+    std::string_view key,
+    std::string_view value,
+    const RedisSetOptions& options,
+    std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::vector<std::pmr::string> redisHsetFieldsArgs(
     std::string_view key,
     std::span<const std::pair<std::string_view, std::string_view>> fields,

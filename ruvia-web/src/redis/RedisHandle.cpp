@@ -6,10 +6,8 @@
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <memory_resource>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 namespace ruvia {
 
@@ -46,36 +44,12 @@ Task<void> RedisHandle::set(std::string_view key, std::string_view value) const 
 }
 
 Task<std::optional<std::pmr::string>> RedisHandle::set(std::string_view key, std::string_view value, RedisSetOptions options) const {
-    if (options.nx && options.xx) {
-        throw std::invalid_argument("redis set options cannot combine NX and XX");
-    }
-    if (options.ttl.count() > 0 && options.keepTtl) {
-        throw std::invalid_argument("redis set options cannot combine TTL and KEEPTTL");
-    }
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(8);
-    detail::emplaceRedisString(args, "SET");
-    detail::emplaceRedisString(args, key);
-    detail::emplaceRedisString(args, value);
-    if (options.ttl.count() > 0) {
-        auto ttlValue = detail::redisMillisecondsString(options.ttl, resource_);
-        detail::emplaceRedisString(args, "PX");
-        args.emplace_back(std::move(ttlValue));
-    }
-    if (options.nx) {
-        detail::emplaceRedisString(args, "NX");
-    }
-    if (options.xx) {
-        detail::emplaceRedisString(args, "XX");
-    }
-    if (options.get) {
-        detail::emplaceRedisString(args, "GET");
-    }
-    if (options.keepTtl) {
-        detail::emplaceRedisString(args, "KEEPTTL");
-    }
-
-    return detail::executeRedisSetWithOptions(pool_, std::move(args), options.get, resource_);
+    auto args = detail::redisSetArgs(key, value, options, resource_);
+    return detail::executeRedisSetWithOptions(
+        pool_,
+        std::move(args),
+        options.returnPrevious,
+        resource_);
 }
 
 Task<void> RedisHandle::mset(std::span<const std::pair<std::string_view, std::string_view>> items) const {

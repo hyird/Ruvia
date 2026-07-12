@@ -7354,6 +7354,65 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
 endif()
 
 
+set(WEB_REDIS_SET_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h")
+set(WEB_REDIS_SET_HANDLE
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisHandle.cpp")
+set(WEB_REDIS_SET_ARGS
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisCommandArgs.cpp")
+set(WEB_REDIS_SET_API_TEST
+    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+set(WEB_REDIS_SET_WIRE_TEST
+    "${RUVIA_ROOT}/tests/unit_redis_protocol.cpp")
+set(WEB_REDIS_SET_PACKAGE_TEST
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+foreach(redis_set_contract IN ITEMS
+        "${WEB_REDIS_SET_MODEL}"
+        "${WEB_REDIS_SET_HANDLE}"
+        "${WEB_REDIS_SET_ARGS}"
+        "${WEB_REDIS_SET_API_TEST}"
+        "${WEB_REDIS_SET_WIRE_TEST}"
+        "${WEB_REDIS_SET_PACKAGE_TEST}")
+    if(NOT EXISTS "${redis_set_contract}")
+        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${redis_set_contract}")
+        boundary_error("Redis SET option contract is incomplete"
+            "${relative} is required")
+    endif()
+endforeach()
+if(EXISTS "${WEB_REDIS_SET_MODEL}" AND
+   EXISTS "${WEB_REDIS_SET_HANDLE}" AND
+   EXISTS "${WEB_REDIS_SET_ARGS}" AND
+   EXISTS "${WEB_REDIS_SET_API_TEST}" AND
+   EXISTS "${WEB_REDIS_SET_WIRE_TEST}" AND
+   EXISTS "${WEB_REDIS_SET_PACKAGE_TEST}")
+    file(READ "${WEB_REDIS_SET_MODEL}" web_redis_set_model)
+    file(READ "${WEB_REDIS_SET_HANDLE}" web_redis_set_handle)
+    file(READ "${WEB_REDIS_SET_ARGS}" web_redis_set_args)
+    file(READ "${WEB_REDIS_SET_API_TEST}" web_redis_set_api_test)
+    file(READ "${WEB_REDIS_SET_WIRE_TEST}" web_redis_set_wire_test)
+    file(READ "${WEB_REDIS_SET_PACKAGE_TEST}" web_redis_set_package_test)
+    if(web_redis_set_model MATCHES
+           "milliseconds[ \t]+ttl|bool[ \t]+(nx|xx|get|keepTtl)" OR
+       NOT web_redis_set_model MATCHES "enum class RedisSetCondition" OR
+       NOT web_redis_set_model MATCHES "class RedisSetExpiration final" OR
+       NOT web_redis_set_model MATCHES "using Value = std::variant" OR
+       NOT web_redis_set_model MATCHES "bool[ \t]+returnPrevious" OR
+       web_redis_set_handle MATCHES "options[.](ttl|nx|xx|get|keepTtl)" OR
+       NOT web_redis_set_handle MATCHES "redisSetArgs[(]key, value, options" OR
+       NOT web_redis_set_args MATCHES "switch [(]options[.]condition[)]" OR
+       NOT web_redis_set_args MATCHES "options[.]expiration[.]duration[(][)]" OR
+       NOT web_redis_set_args MATCHES "options[.]expiration[.]keepsExisting[(][)]" OR
+       NOT web_redis_set_api_test MATCHES
+           "redis_set_expiration_cannot_represent_conflicting_modes" OR
+       NOT web_redis_set_wire_test MATCHES
+           "redis_set_options_build_one_valid_command_shape" OR
+       NOT web_redis_set_package_test MATCHES
+           "HasLegacyRedisSetOptionBooleans")
+        boundary_error("Redis SET options regained conflicting boolean state"
+            "condition, expiration and returnPrevious must remain one typed command-building chain")
+    endif()
+endif()
+
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
 set(POOL_WAITER_DB_SLOTS "${RUVIA_ROOT}/ruvia-web/src/db/DbPoolSlots.cpp")
