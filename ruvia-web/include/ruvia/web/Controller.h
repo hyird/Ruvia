@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 #include <concepts>

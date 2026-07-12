@@ -921,6 +921,34 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_middleware_public_path
+        "${_install_prefix}/include/ruvia/web/Middleware.h")
+    set(_installed_middleware_descriptor_path
+        "${_install_prefix}/include/ruvia/web/detail/middleware/MiddlewareDescriptor.h")
+    set(_installed_middleware_registration_path
+        "${_install_prefix}/include/ruvia/web/detail/middleware/MiddlewareRegistration.h")
+    if(NOT EXISTS "${_installed_middleware_public_path}" OR
+       NOT EXISTS "${_installed_middleware_descriptor_path}" OR
+       NOT EXISTS "${_installed_middleware_registration_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing its split middleware contracts")
+    endif()
+    foreach(_stale_middleware_header IN ITEMS
+            "${_install_prefix}/include/ruvia/web/MiddlewareDescriptor.h"
+            "${_install_prefix}/include/ruvia/web/MiddlewareRuntime.h")
+        if(EXISTS "${_stale_middleware_header}")
+            message(FATAL_ERROR
+                "installed Web package restored a public-root middleware implementation header")
+        endif()
+    endforeach()
+    file(READ "${_installed_middleware_public_path}"
+        _installed_middleware_public)
+    if(NOT _installed_middleware_public MATCHES "class Middleware" OR
+       _installed_middleware_public MATCHES
+           "namespace detail|ControllerMiddlewareDescriptor|invokeMiddleware|Context[.]h")
+        message(FATAL_ERROR
+            "installed Middleware.h mixed its public CRTP marker with registration internals")
+    endif()
     set(_installed_controller_descriptors_path
         "${_install_prefix}/include/ruvia/web/detail/controller/ControllerDescriptors.h")
     set(_installed_controller_runtime_path

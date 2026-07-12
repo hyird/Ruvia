@@ -148,8 +148,7 @@ ruvia_install_public_headers(web
     include/ruvia/web/ErrorHandlers.h
     include/ruvia/web/Health.h
     include/ruvia/web/HttpServerOptions.h
-    include/ruvia/web/MiddlewareDescriptor.h
-    include/ruvia/web/MiddlewareRuntime.h
+    include/ruvia/web/Middleware.h
     include/ruvia/web/Model.h
     include/ruvia/web/ModelJson.h
     include/ruvia/web/ModelObject.h

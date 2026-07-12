@@ -6,7 +6,7 @@
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpResponse.h"
-#include "ruvia/web/MiddlewareRuntime.h"
+#include "ruvia/web/Middleware.h"
 #include "ruvia/web/Next.h"
 
 namespace ruvia {

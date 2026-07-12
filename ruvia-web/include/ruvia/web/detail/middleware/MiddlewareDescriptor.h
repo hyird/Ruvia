@@ -1,5 +1,7 @@
 #pragma once
 
+// Internal startup-time middleware descriptor.
+
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Next.h"
 

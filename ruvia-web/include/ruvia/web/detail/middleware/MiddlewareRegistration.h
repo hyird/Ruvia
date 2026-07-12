@@ -1,25 +1,16 @@
 #pragma once
 
-#include <concepts>
-#include <memory>
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/Context.h"
-#include "ruvia/web/detail/RegistrationResource.h"
-#include "ruvia/web/MiddlewareDescriptor.h"
 #include "ruvia/core/memory/PmrObject.h"
+#include "ruvia/web/Context.h"
+#include "ruvia/web/Middleware.h"
+#include "ruvia/web/detail/RegistrationResource.h"
+#include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 
-namespace ruvia {
-
-namespace detail {
-
-template <typename T>
-concept TaskVoid = std::same_as<std::remove_cvref_t<T>, Task<void>>;
-
-template <typename T>
-concept TaskHttpResponse = std::same_as<std::remove_cvref_t<T>, Task<HttpResponse>>;
+namespace ruvia::detail {
 
 template <typename MiddlewareT>
 concept VoidHandleMiddleware = requires {
@@ -69,20 +60,6 @@ void destroyMiddleware(void* target) noexcept {
 }
 
 template <typename MiddlewareT>
-[[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
-
-}  // namespace detail
-
-template <typename MiddlewareT>
-class Middleware {
-protected:
-    constexpr Middleware() noexcept = default;
-    ~Middleware() = default;
-};
-
-namespace detail {
-
-template <typename MiddlewareT>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
     static_assert(
         std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
@@ -96,6 +73,4 @@ template <typename MiddlewareT>
         &destroyMiddleware<MiddlewareT>);
 }
 
-}  // namespace detail
-
-}  // namespace ruvia
+}  // namespace ruvia::detail

@@ -23,7 +23,7 @@
 #include "ruvia/web/Streaming.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/web/Context.h"
-#include "ruvia/web/MiddlewareRuntime.h"
+#include "ruvia/web/detail/middleware/MiddlewareRegistration.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/web/Router.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
