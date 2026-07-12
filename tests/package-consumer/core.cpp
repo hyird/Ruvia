@@ -2,9 +2,11 @@
 #include <concepts>
 #include <coroutine>
 #include <cstddef>
+#include <optional>
 #include <utility>
 
 #include <ruvia/core/Task.h>
+#include <ruvia/core/detail/ConnectionScanner.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
 #include <ruvia/core/memory/MemoryPool.h>
 #include <ruvia/core/memory/PmrObject.h>
@@ -49,6 +51,29 @@ template <typename T>
 concept HasParallelPoolWaiterResultAccessor = requires(const T& waiter) {
     waiter.result();
 };
+
+template <typename Options>
+concept HasConnectionTimeoutMillisecondSentinels = requires(Options& options) {
+    options.idleTimeoutMs;
+    options.initialReadTimeoutMs;
+    options.payloadReadTimeoutMs;
+    options.writeTimeoutMs;
+};
+
+static_assert(!HasConnectionTimeoutMillisecondSentinels<
+              ruvia::detail::ConnectionScannerOptions>);
+static_assert(std::same_as<
+              decltype(ruvia::detail::ConnectionScannerOptions{}.idleTimeout),
+              std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+              decltype(ruvia::detail::ConnectionScannerOptions{}.initialReadTimeout),
+              std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+              decltype(ruvia::detail::ConnectionScannerOptions{}.payloadReadTimeout),
+              std::optional<std::chrono::milliseconds>>);
+static_assert(std::same_as<
+              decltype(ruvia::detail::ConnectionScannerOptions{}.writeTimeout),
+              std::optional<std::chrono::milliseconds>>);
 
 static_assert(!std::default_initializable<ruvia::detail::PoolWaiter>);
 static_assert(std::constructible_from<

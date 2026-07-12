@@ -132,10 +132,10 @@ void loadVerifyFile(asio::ssl::context& context, const std::pmr::string& filenam
 [[nodiscard]] ConnectionScannerOptions makeConnectionScannerOptions(const HttpServerOptions& options) noexcept {
     return ConnectionScannerOptions{
         .scanInterval = options.scanInterval,
-        .idleTimeoutMs = options.keepaliveTimeout.count(),
-        .initialReadTimeoutMs = options.clientHeaderTimeout.count(),
-        .payloadReadTimeoutMs = options.clientBodyTimeout.count(),
-        .writeTimeoutMs = options.sendTimeout.count()};
+        .idleTimeout = options.keepaliveTimeout,
+        .initialReadTimeout = options.clientHeaderTimeout,
+        .payloadReadTimeout = options.clientBodyTimeout,
+        .writeTimeout = options.sendTimeout};
 }
 
 }  // namespace

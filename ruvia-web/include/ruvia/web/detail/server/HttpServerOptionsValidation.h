@@ -9,8 +9,8 @@
 namespace ruvia::detail {
 
 inline void validateHttpServerOptions(const HttpServerOptions& options) {
-    ensureNonNegativeDurations(
-        "server timeouts must not be negative",
+    ensurePositiveOptionalDurations(
+        "configured server timeouts must be greater than zero",
         options.keepaliveTimeout,
         options.clientHeaderTimeout,
         options.clientBodyTimeout,

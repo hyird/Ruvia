@@ -48,14 +48,14 @@ struct HttpServerOptions final {
         std::uint16_t httpsPort{443};
     };
 
-    // nginx-aligned inactivity timeouts. Set any timeout except scanInterval
-    // to 0 to disable it; keepaliveRequests caps requests per reused connection.
-    std::chrono::milliseconds keepaliveTimeout{std::chrono::seconds(75)};
+    // nginx-aligned inactivity timeouts. Absence disables a phase timeout;
+    // keepaliveRequests caps requests per reused connection.
+    std::optional<std::chrono::milliseconds> keepaliveTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds shutdownGracePeriod{0};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
-    std::chrono::milliseconds clientHeaderTimeout{std::chrono::seconds(60)};
-    std::chrono::milliseconds clientBodyTimeout{std::chrono::seconds(60)};
-    std::chrono::milliseconds sendTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> clientHeaderTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> clientBodyTimeout{std::chrono::seconds(60)};
+    std::optional<std::chrono::milliseconds> sendTimeout{std::chrono::seconds(60)};
     // Per worker. 0 is unlimited; excess accepted sockets are closed before
     // TLS or HTTP protocol detection, so admission never fabricates a response.
     std::size_t maxConnections{0};

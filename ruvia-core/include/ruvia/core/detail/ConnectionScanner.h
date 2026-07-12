@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <asio/any_io_executor.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/steady_timer.hpp>
@@ -14,10 +15,11 @@ struct ConnectionScannerOptions final {
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
     // Inactivity timeouts measured from the connection's last successful I/O.
     // Protocol runtimes map their own lifecycle states onto these generic phases.
-    std::int64_t idleTimeoutMs{0};
-    std::int64_t initialReadTimeoutMs{0};
-    std::int64_t payloadReadTimeoutMs{0};
-    std::int64_t writeTimeoutMs{0};
+    // Absence disables the corresponding phase timeout.
+    std::optional<std::chrono::milliseconds> idleTimeout;
+    std::optional<std::chrono::milliseconds> initialReadTimeout;
+    std::optional<std::chrono::milliseconds> payloadReadTimeout;
+    std::optional<std::chrono::milliseconds> writeTimeout;
 };
 
 class ConnectionScanner final {

@@ -1,7 +1,9 @@
 #include "test_harness.h"
 
 #include <chrono>
+#include <concepts>
 #include <exception>
+#include <optional>
 
 #include "ruvia/web/detail/server/HttpServerOptionsValidation.h"
 #include "ruvia/web/App.h"
@@ -24,15 +26,47 @@ bool throwsInvalid(Fn&& fn) {
 }  // namespace
 
 RUVIA_TEST(validate_server_options_accepts_defaults) {
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.keepaliveTimeout),
+                  std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.clientHeaderTimeout),
+                  std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.clientBodyTimeout),
+                  std::optional<std::chrono::milliseconds>>);
+    static_assert(std::same_as<
+                  decltype(HttpServerOptions{}.sendTimeout),
+                  std::optional<std::chrono::milliseconds>>);
     RUVIA_CHECK(!throwsInvalid([] { validateHttpServerOptions(HttpServerOptions{}); }));
 }
 
-RUVIA_TEST(validate_server_options_rejects_negative_timeout) {
-    // Every connection timeout feeds the same non-negative fold. Each one bounds
+RUVIA_TEST(validate_server_options_rejects_configured_nonpositive_timeout) {
+    // Every connection timeout feeds the same positive optional fold. Each one bounds
     // how long a slow client can hold a connection (a slowloris defense), so a
-    // negative value in ANY of them must be rejected -- checking only keepaliveTimeout
+    // nonpositive value in ANY of them must be rejected -- checking only keepaliveTimeout
     // would miss a field dropped from the fold call.
     using std::chrono::milliseconds;
+    {
+        HttpServerOptions options;
+        options.keepaliveTimeout = milliseconds(0);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.clientHeaderTimeout = milliseconds(0);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.clientBodyTimeout = milliseconds(0);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
+    {
+        HttpServerOptions options;
+        options.sendTimeout = milliseconds(0);
+        RUVIA_CHECK(throwsInvalid([&] { validateHttpServerOptions(options); }));
+    }
     {
         HttpServerOptions options;
         options.keepaliveTimeout = milliseconds(-1);
