@@ -149,6 +149,8 @@ struct HttpServerOptions final {
     std::chrono::milliseconds clientHeaderTimeout{std::chrono::seconds(60)};
     std::chrono::milliseconds clientBodyTimeout{std::chrono::seconds(60)};
     std::chrono::milliseconds sendTimeout{std::chrono::seconds(60)};
+    // Per worker. 0 is unlimited; excess accepted sockets are closed before
+    // TLS or HTTP protocol detection, so admission never fabricates a response.
     std::size_t maxConnections{0};
     std::size_t keepaliveRequests{1000};
     // Buffered routes materialize body data; the same cap applies again after
