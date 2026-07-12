@@ -328,26 +328,6 @@ public:
         return detail::pmrResourceOrDefault(resource_);
     }
 
-    template <typename T>
-    [[nodiscard]] std::optional<T> get(std::string_view field) const {
-        auto* const resource = this->resource();
-        if (kind_ == RequestObjectKind::kJson) {
-            return JsonObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
-        }
-        if constexpr (detail::isFormField<T>) {
-            if (kind_ == RequestObjectKind::kFormFields) {
-                if (fields_ == nullptr) {
-                    return std::nullopt;
-                }
-                return detail::getDecodedFormField<T>(*fields_, field, resource);
-            }
-            return FormObject(detail::ResolvedPmrResourceTag{}, body_, resource).get<T>(field);
-        } else {
-            (void)field;
-            return std::nullopt;
-        }
-    }
-
 private:
     friend RequestObject detail::makeJsonRequestObject(
         std::string_view body,

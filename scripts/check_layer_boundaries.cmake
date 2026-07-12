@@ -119,6 +119,8 @@ set(RULE_STALE_MODEL_LAZY_PARSE_STATE
     "ruviaParsed_|ruviaInvalid_|ruviaParseState_|ruviaEnsureParsed|ModelParseState")
 set(RULE_STALE_MODEL_MUTABLE_FIELDS
     "mutable[ \t]+::ruvia::detail::ModelFieldState|mutable[ \t]+::std::optional")
+set(RULE_STALE_GENERATED_MODEL_DYNAMIC_GET
+    "body_[.]get<|body_,[ \t]*resource[)][.]get<T>")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -575,6 +577,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("generated model retained mutable fields behind const access"
         "${RULE_STALE_MODEL_MUTABLE_FIELDS}"
         "mutable ::std::optional<ruvia::String> ruviaField_name_;")
+    expect_match("generated model restored dynamic raw-body lookup"
+        "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
+        "return body_.get<FieldT>(field);")
+    expect_match("RequestObject restored repeated dynamic parsing"
+        "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
+        "return JsonObject({}, body_, resource).get<T>(field);")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2548,15 +2556,25 @@ set(WEB_MODEL_FIELD_OPS_CONTRACT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/model/MacroFieldOps.h")
 set(WEB_MODEL_MATERIALIZATION_TEST
     "${RUVIA_ROOT}/tests/unit_http_parsing.cpp")
+set(WEB_MODEL_OBJECT_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ModelObject.h")
+set(WEB_MODEL_API_SURFACE
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("generated model factories must publish only materialized models"
     "${RULE_STALE_MODEL_LAZY_PARSE_STATE}"
     "${WEB_MODEL_MACROS_CONTRACT}")
 check_files_no_match("generated model fields must remain const-correct"
     "${RULE_STALE_MODEL_MUTABLE_FIELDS}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
+check_files_no_match("generated models must not rescan raw bodies through dynamic get"
+    "${RULE_STALE_GENERATED_MODEL_DYNAMIC_GET}"
+    "${WEB_MODEL_MACROS_CONTRACT}"
+    "${WEB_MODEL_OBJECT_CONTRACT}")
 if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_FIELD_OPS_CONTRACT}" AND
    EXISTS "${WEB_MODEL_MATERIALIZATION_TEST}" AND
+   EXISTS "${WEB_MODEL_OBJECT_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_API_SURFACE}" AND
    EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
     file(READ "${WEB_MODEL_MACROS_CONTRACT}"
         web_model_macros_contract)
@@ -2564,6 +2582,8 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
         web_model_field_ops_contract)
     file(READ "${WEB_MODEL_MATERIALIZATION_TEST}"
         web_model_materialization_test)
+    file(READ "${WEB_MODEL_API_SURFACE}"
+        web_model_api_surface)
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeRequest" OR
        NOT web_model_macros_contract MATCHES
@@ -2576,10 +2596,18 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
            "${RULE_STALE_MODEL_MUTABLE_FIELDS}" OR
        NOT web_model_materialization_test MATCHES
            "model_factory_materializes_before_publication" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelDynamicGet<ClonePayload>" OR
+       NOT web_model_api_surface MATCHES
+           "!HasModelTypedDynamicGet<ClonePayload>" OR
        NOT web_json_package_consumer MATCHES
-           "RUVIA_MODEL[(]InstalledPackageModel")
-        boundary_error("generated model parsing restored lazy mutable state"
-            "request factories must materialize once before publication and const access must not mutate fields")
+           "RUVIA_MODEL[(]InstalledPackageModel" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelDynamicGet<InstalledPackageModel>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>")
+        boundary_error("generated model schema boundary regressed"
+            "request factories must materialize once, const access must not mutate, and schema models must not dynamically rescan raw bodies")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

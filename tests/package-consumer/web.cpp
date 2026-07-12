@@ -148,6 +148,16 @@ concept HasLegacyContextBodyRefinement = requires(
     services.withBodyLoader(loader);
 };
 
+template <typename T>
+concept HasGeneratedModelDynamicGet = requires(const T& model) {
+    model.get(std::string_view{});
+};
+
+template <typename T>
+concept HasGeneratedModelTypedDynamicGet = requires(const T& model) {
+    model.template get<ruvia::String>(std::string_view{});
+};
+
 RUVIA_MODEL(InstalledPackageModel,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
@@ -155,6 +165,8 @@ RUVIA_MODEL(InstalledPackageModel,
 
 static_assert(!std::copy_constructible<InstalledPackageModel>);
 static_assert(std::movable<InstalledPackageModel>);
+static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
+static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
 
 template <typename Info>
 concept HasLegacyConnInfoScalarAccessors = requires(const Info& info) {
