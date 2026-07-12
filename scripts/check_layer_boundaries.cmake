@@ -2633,10 +2633,6 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
         response_stream_http_package_consumer)
     file(READ "${RESPONSE_STREAM_WEB_PACKAGE_CONSUMER}"
         response_stream_web_package_consumer)
-    file(READ "${RUVIA_ROOT}/README.md"
-        http1_session_completion_readme)
-    file(READ "${RUVIA_ROOT}/AGENTS.md"
-        http1_session_completion_agents)
 
     if(NOT response_stream_commit_plan MATCHES
            "std::uint16_t responseStatus[(][)] const noexcept" OR
@@ -2765,15 +2761,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
        NOT response_stream_web_package_consumer MATCHES
            "Http1RequestBufferCompaction" OR
        NOT response_stream_web_package_consumer MATCHES
-           "HttpWebSocketRouteResult" OR
-       NOT http1_session_completion_readme MATCHES
-           "Http1CommittedStreamResponse" OR
-       NOT http1_session_completion_readme MATCHES
-           "Http1RequestBufferRestored" OR
-       NOT http1_session_completion_agents MATCHES
-           "Http1SessionRequestCompletion" OR
-       NOT http1_session_completion_agents MATCHES
-           "bufferAlreadyCompacted")
+           "HttpWebSocketRouteResult")
         boundary_error("response-stream status propagation lacks regression coverage"
             "unit and installed-package checks must pin exact status and exclusive terminal alternatives")
     endif()
@@ -6107,484 +6095,6 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
     endif()
 endif()
 
-foreach(boundary_doc IN ITEMS
-    "${RUVIA_ROOT}/README.md"
-    "${RUVIA_ROOT}/AGENTS.md")
-    file(READ "${boundary_doc}" boundary_doc_content)
-    if(NOT boundary_doc_content MATCHES "RouteEndpoint" OR
-       NOT boundary_doc_content MATCHES "BufferedRouteEndpoint" OR
-       NOT boundary_doc_content MATCHES
-           "ResponseStreamRouteEndpoint" OR
-       NOT boundary_doc_content MATCHES "WebSocketRouteEndpoint" OR
-       NOT boundary_doc_content MATCHES "RouteResolution" OR
-       NOT boundary_doc_content MATCHES "ResolvedRoute" OR
-       NOT boundary_doc_content MATCHES "RouteMethodNotAllowed" OR
-       NOT boundary_doc_content MATCHES "RouteNotFound" OR
-       NOT boundary_doc_content MATCHES "RouteTable" OR
-       NOT boundary_doc_content MATCHES "RequestDispatcher" OR
-       NOT boundary_doc_content MATCHES "ResponseBodyMode" OR
-       NOT boundary_doc_content MATCHES "RouteMatch" OR
-       NOT boundary_doc_content MATCHES "resolve")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("typed Web route contract is undocumented"
-            "${relative} must document endpoint/result alternatives and the removal of response-mode, caller-owned match, and virtual-dispatch side channels")
-    endif()
-    if(NOT boundary_doc_content MATCHES "ContextRequestBodySource" OR
-       NOT boundary_doc_content MATCHES
-           "ContextBufferedRequestBodySource" OR
-       NOT boundary_doc_content MATCHES "ContextLazyRequestBodySource" OR
-       NOT boundary_doc_content MATCHES
-           "ContextStreamingRequestBodySource" OR
-       NOT boundary_doc_content MATCHES "ContextResponseOutput" OR
-       NOT boundary_doc_content MATCHES "ContextBufferedResponseOutput" OR
-       NOT boundary_doc_content MATCHES "ContextResponseStreamOutput" OR
-       NOT boundary_doc_content MATCHES "ContextWebSocketOutput" OR
-       NOT boundary_doc_content MATCHES "withBodyReader" OR
-       NOT boundary_doc_content MATCHES "withBodyLoader")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("typed Context capability contract is undocumented"
-            "${relative} must document both alternative sets and removal of the nullable refinement API")
-    endif()
-    if(NOT boundary_doc_content MATCHES "ConnInfo" OR
-       NOT boundary_doc_content MATCHES "PlainConnectionTransport" OR
-       NOT boundary_doc_content MATCHES "TlsConnectionTransport" OR
-       NOT boundary_doc_content MATCHES "getConnInfo" OR
-       NOT boundary_doc_content MATCHES "clientCertificateSubject" OR
-       NOT boundary_doc_content MATCHES "secure[(][)]" OR
-       NOT boundary_doc_content MATCHES "withTransport" OR
-       NOT boundary_doc_content MATCHES "rvalue" OR
-       NOT boundary_doc_content MATCHES "lvalue" OR
-       NOT boundary_doc_content MATCHES "ContextServices")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("typed connection metadata contract is undocumented"
-            "${relative} must document plain/TLS alternatives, single construction/propagation, and removed scalar APIs")
-    endif()
-    if(NOT boundary_doc_content MATCHES "AccessLogRecord" OR
-       NOT boundary_doc_content MATCHES "recordHttpAccess" OR
-       NOT boundary_doc_content MATCHES "HttpRequest" OR
-       NOT boundary_doc_content MATCHES "protocolVersion[(][)]" OR
-       NOT boundary_doc_content MATCHES "http2[(][)]" OR
-       NOT boundary_doc_content MATCHES "type-erasure")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("typed access-log protocol contract is undocumented"
-            "${relative} must document request borrowing, exact protocol versions, removed bool access, and zero-cost propagation")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2SansIoSessionContext" OR
-       NOT boundary_doc_content MATCHES "Http2SansIoSessionEnv" OR
-       NOT boundary_doc_content MATCHES "ContextServices" OR
-       NOT boundary_doc_content MATCHES "ConnectionScanner::Entry")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("required HTTP/2 session wiring is undocumented"
-            "${relative} must document the complete session context and removal of nullable/default production wiring")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1ResponseStreamPlan")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 stream-plan boundary is undocumented"
-            "${relative} must describe Http1ResponseStreamPlan ownership")
-    endif()
-    if(NOT boundary_doc_content MATCHES "PreparedHttp1ResponseStream")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 commit-time disposition boundary is undocumented"
-            "${relative} must describe PreparedHttp1ResponseStream ownership")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1ResponseHeadPlan" OR
-       NOT boundary_doc_content MATCHES "Http1BufferedResponseHead" OR
-       NOT boundary_doc_content MATCHES
-           "Http1ChunkedResponseStreamHead" OR
-       NOT boundary_doc_content MATCHES
-           "Http1CloseDelimitedResponseStreamHead" OR
-       NOT boundary_doc_content MATCHES "Http1BufferedResponsePlan" OR
-       NOT boundary_doc_content MATCHES "contentLength" OR
-       NOT boundary_doc_content MATCHES "section-2[.]5" OR
-       NOT boundary_doc_content MATCHES "suppressAutoContentLength" OR
-       NOT boundary_doc_content MATCHES "section-6[.]1" OR
-       NOT boundary_doc_content MATCHES "section-6[.]3")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 response-head plan is undocumented"
-            "${relative} must document exact status-line version ownership, buffered write/head composition and canonical length, exclusive framing alternatives, removal of the scalar API, and RFC 9110/9112 behavior")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1ServerConnectionPlan" OR
-       NOT boundary_doc_content MATCHES "HttpProtocolVersion" OR
-       NOT boundary_doc_content MATCHES "http1PlanHttp10RequestConnection" OR
-       NOT boundary_doc_content MATCHES "http1PlanHttp11RequestConnection" OR
-       NOT boundary_doc_content MATCHES "http11Close" OR
-       NOT boundary_doc_content MATCHES "responseSignal")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 connection-plan boundary is undocumented"
-            "${relative} must document exact version/disposition ownership, version-specific factories, the unparsed HTTP/1.1 close fallback, and removal of responseSignal")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1RequestBodyPlan" OR
-       NOT boundary_doc_content MATCHES "Http1RequestWithoutBody" OR
-       NOT boundary_doc_content MATCHES "Http1KnownLengthRequestBody" OR
-       NOT boundary_doc_content MATCHES "Http1ChunkedRequestBody" OR
-       NOT boundary_doc_content MATCHES "Content-Length: 0" OR
-       NOT boundary_doc_content MATCHES "Http1ServerRequestParser" OR
-       NOT boundary_doc_content MATCHES "section-6[.]3" OR
-       NOT boundary_doc_content MATCHES "gzip, chunked")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 request-body plan boundary is undocumented"
-            "${relative} must document parser-only alternatives, payload ownership, explicit zero length, RFC framing, and final-chunked transfer-coding order")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1ChunkedBodyDecoder" OR
-       NOT boundary_doc_content MATCHES "Http1ChunkDecodeNeedMore" OR
-       NOT boundary_doc_content MATCHES "Http1ChunkDecodeBodyChunk" OR
-       NOT boundary_doc_content MATCHES "Http1ChunkDecodeComplete" OR
-       NOT boundary_doc_content MATCHES "HttpChunkScanNeedMore" OR
-       NOT boundary_doc_content MATCHES "HttpChunkScanComplete" OR
-       NOT boundary_doc_content MATCHES "HttpChunkScanFailure" OR
-       NOT boundary_doc_content MATCHES "section-7[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 chunked result ownership is undocumented"
-            "${relative} must pin RFC completion, incremental consumption, and whole-message alternative field ownership")
-    endif()
-    if(NOT boundary_doc_content MATCHES "HttpClientRequestContent" OR
-       NOT boundary_doc_content MATCHES "HttpClientRequestWithoutContent" OR
-       NOT boundary_doc_content MATCHES "HttpClientRequestBytes" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestWriter" OR
-       NOT boundary_doc_content MATCHES "PreparedHttp1ClientRequest" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestWirePolicy" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestContentPlan" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestWithoutContent" OR
-       NOT boundary_doc_content MATCHES
-           "Http1ClientImmediateRequestContent" OR
-       NOT boundary_doc_content MATCHES
-           "Http1ClientContinueGatedRequestContent" OR
-       NOT boundary_doc_content MATCHES "continue-gated" OR
-       NOT boundary_doc_content MATCHES "caller-provided" OR
-       NOT boundary_doc_content MATCHES "prepareConnect" OR
-       NOT boundary_doc_content MATCHES "Content-Length: 0" OR
-       NOT boundary_doc_content MATCHES "section-6[.]3" OR
-       NOT boundary_doc_content MATCHES "Host")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 client request writer boundary is undocumented"
-            "${relative} must document typed content/gating, caller-buffer preparation, managed Host/framing/Expect, dedicated CONNECT, and Prepared-bound parsing")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http1ClientResponseParser" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponseParseResult" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponseNeedMore" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponseParseFailure" OR
-       NOT boundary_doc_content MATCHES "consumedBytes" OR
-       NOT boundary_doc_content MATCHES "101 Switching Protocols" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponsePlan" OR
-       NOT boundary_doc_content MATCHES "Http1ClientInformationalResponse" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponseWithoutContent" OR
-       NOT boundary_doc_content MATCHES "Http1ClientKnownLengthResponse" OR
-       NOT boundary_doc_content MATCHES "Http1ClientChunkedResponse" OR
-       NOT boundary_doc_content MATCHES "Http1ClientCloseDelimitedResponse" OR
-       NOT boundary_doc_content MATCHES "Http1ClientConnectTunnel" OR
-       NOT boundary_doc_content MATCHES "Http1ClientProtocolUpgrade" OR
-       NOT boundary_doc_content MATCHES "Http1ClientResponsePersistence" OR
-       NOT boundary_doc_content MATCHES "section-6[.]3" OR
-       NOT boundary_doc_content MATCHES "section-9[.]3" OR
-       NOT boundary_doc_content MATCHES "close-delimited" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestContentSignal" OR
-       NOT boundary_doc_content MATCHES "Http1ClientRequestContentCompletionStatus" OR
-       NOT boundary_doc_content MATCHES "completeRequestContent" OR
-       NOT boundary_doc_content MATCHES "stateful" OR
-       NOT boundary_doc_content MATCHES "100 Continue" OR
-       NOT boundary_doc_content MATCHES "HttpContentLengthState" OR
-       NOT boundary_doc_content MATCHES "HttpTransferEncodingState")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/1 client response plan boundary is undocumented"
-            "${relative} must document public tri-state head parsing, exact consumption, typed framing/persistence/Upgrade, stateful Expect progress, and shared field parsing")
-    endif()
-    if(NOT boundary_doc_content MATCHES "HttpKnownMethod" OR
-       NOT boundary_doc_content MATCHES "knownMethod[(][)]" OR
-       NOT boundary_doc_content MATCHES "isValidHttpMethodToken" OR
-       NOT boundary_doc_content MATCHES "501" OR
-       NOT boundary_doc_content MATCHES "Http2RequestBuilder::routeMethod")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("extensible HTTP method contract is undocumented"
-            "${relative} must distinguish exact wire tokens, known semantics, Web 501, and WS route-only mapping")
-    endif()
-    if(NOT boundary_doc_content MATCHES "resolveHttpByteRange" OR
-       NOT boundary_doc_content MATCHES "HttpByteRangeResolution" OR
-       NOT boundary_doc_content MATCHES "HttpByteRangeIgnored" OR
-       NOT boundary_doc_content MATCHES "HttpByteRangeUnsatisfiable" OR
-       NOT boundary_doc_content MATCHES "HttpResolvedByteRange" OR
-       NOT boundary_doc_content MATCHES "section-14[.]1" OR
-       NOT boundary_doc_content MATCHES "section-14[.]1[.]2" OR
-       NOT boundary_doc_content MATCHES "section-14[.]2" OR
-       NOT boundary_doc_content MATCHES "416" OR
-       NOT boundary_doc_content MATCHES "206")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP byte-range resolution contract is undocumented"
-            "${relative} must document exclusive outcomes, overflow-safe resolution, and the RFC 200/416/206 mapping")
-    endif()
-    if(NOT boundary_doc_content MATCHES "HttpResponseContentSemantics" OR
-       NOT boundary_doc_content MATCHES "HttpInformationalResponseContent" OR
-       NOT boundary_doc_content MATCHES "HttpProtocolSwitchResponseContent" OR
-       NOT boundary_doc_content MATCHES "HttpConnectTunnelResponseContent" OR
-       NOT boundary_doc_content MATCHES "HttpResponseWithoutContent" OR
-       NOT boundary_doc_content MATCHES "HttpResponseWithContent" OR
-       NOT boundary_doc_content MATCHES "HttpResponseBodyPlan" OR
-       NOT boundary_doc_content MATCHES "HttpBufferedResponseWritePlan" OR
-       NOT boundary_doc_content MATCHES "HttpKnownMethod" OR
-       NOT boundary_doc_content MATCHES "exact numeric" OR
-       NOT boundary_doc_content MATCHES "prepareBufferedHttpResponse" OR
-       NOT boundary_doc_content MATCHES "kResponsePlanMismatch" OR
-       NOT boundary_doc_content MATCHES "representation length" OR
-       NOT boundary_doc_content MATCHES "Http2BufferedResponseDispatchResult" OR
-       NOT boundary_doc_content MATCHES "pre-commit" OR
-       NOT boundary_doc_content MATCHES "post-commit" OR
-       NOT boundary_doc_content MATCHES "417/429")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("response body-plan boundary is undocumented"
-            "${relative} must describe method/status/representation ownership, one prepared H1/H2 plan, exclusive H2 completion, and shared response-content alternatives")
-    endif()
-    if(NOT boundary_doc_content MATCHES "HttpResponseBody" OR
-       NOT boundary_doc_content MATCHES "HttpEmptyResponseBody" OR
-       NOT boundary_doc_content MATCHES "HttpBorrowedResponseBytes" OR
-       NOT boundary_doc_content MATCHES "HttpStaticResponseBytes" OR
-       NOT boundary_doc_content MATCHES "HttpOwnedResponseBytes" OR
-       NOT boundary_doc_content MATCHES "HttpOwnedResponseFile" OR
-       NOT boundary_doc_content MATCHES "HttpBorrowedResponseFile" OR
-       NOT boundary_doc_content MATCHES "ResponseFileBody" OR
-       NOT boundary_doc_content MATCHES "responseBody[(]response[)]" OR
-       NOT boundary_doc_content MATCHES "responseHasFileBody" OR
-       NOT boundary_doc_content MATCHES "responseFileBody" OR
-       NOT boundary_doc_content MATCHES "responseBodyBytes" OR
-       NOT boundary_doc_content MATCHES "responseBodySize")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("typed HttpResponse storage contract is undocumented"
-            "${relative} must document all storage alternatives, the sole read boundary, and removed split APIs")
-    endif()
-    if(NOT boundary_doc_content MATCHES "ResponseStreamCommitPlan" OR
-       NOT boundary_doc_content MATCHES "ResponseStreamWriter::end" OR
-       NOT boundary_doc_content MATCHES "finishResponse" OR
-       NOT boundary_doc_content MATCHES "kInvalidTrailerSection" OR
-       NOT boundary_doc_content MATCHES "atomic" OR
-       NOT boundary_doc_content MATCHES "per-stream" OR
-       NOT boundary_doc_content MATCHES "status" OR
-       NOT boundary_doc_content MATCHES "framing" OR
-       NOT boundary_doc_content MATCHES "peer[^\r\n]*before[^\r\n]*commit" OR
-       NOT boundary_doc_content MATCHES "dummy" OR
-       NOT boundary_doc_content MATCHES "access log" OR
-       NOT boundary_doc_content MATCHES "200")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("response trailer terminal contract is undocumented"
-            "${relative} must document commit status/framing ownership, exclusive runtime outcomes, atomic H2 terminal API without per-stream staging, exact access-log propagation, and typed ownership")
-    endif()
-    if(NOT boundary_doc_content MATCHES "205 Reset Content" OR
-       NOT boundary_doc_content MATCHES "Content-Length: 0")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("205 response-body contract is undocumented"
-            "${relative} must describe HTTP-owned zero-length 205 framing")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2LocalSendState" OR
-       NOT boundary_doc_content MATCHES "Http2LocalHeadPending" OR
-       NOT boundary_doc_content MATCHES "Http2LocalRequestContentOpen" OR
-       NOT boundary_doc_content MATCHES "Http2LocalResponseContentOpen" OR
-       NOT boundary_doc_content MATCHES "Http2LocalResponseTrailersOnly" OR
-       NOT boundary_doc_content MATCHES "Http2LocalConnectPending" OR
-       NOT boundary_doc_content MATCHES "Http2LocalTunnelOpen" OR
-       NOT boundary_doc_content MATCHES "Http2LocalEndStreamQueued" OR
-       NOT boundary_doc_content MATCHES "Http2LocalEndStreamCommitted" OR
-       NOT boundary_doc_content MATCHES "Http2StreamAborted" OR
-       NOT boundary_doc_content MATCHES "localSend[(][)]" OR
-       NOT boundary_doc_content MATCHES "isAborted[(][)]" OR
-       NOT boundary_doc_content MATCHES "abort[(]source[)]" OR
-       NOT boundary_doc_content MATCHES "friend" OR
-       NOT boundary_doc_content MATCHES "Http2StreamState" OR
-       NOT boundary_doc_content MATCHES "kNone" OR
-       NOT boundary_doc_content MATCHES "section-5[.]1" OR
-       NOT boundary_doc_content MATCHES "section-6[.]1" OR
-       NOT boundary_doc_content MATCHES "section-6[.]2" OR
-       NOT boundary_doc_content MATCHES "section-6[.]4" OR
-       NOT boundary_doc_content MATCHES "section-6[.]8")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 local send lifecycle is undocumented"
-            "${relative} must document exclusive head/content/trailer/CONNECT/END_STREAM/abort alternatives, friend-only mutation through Http2StreamState, one const view, atomic abort cleanup, and RFC frame/GOAWAY semantics")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2RemoteReceiveState" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteHeadPending" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteHeadEndStreamPending" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteContentOpen" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteConnectPending" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteConnectPendingEndStream" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteConnectRejectedAwaitingEndStream" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteTunnelOpen" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteEndStream" OR
-       NOT boundary_doc_content MATCHES "Http2RemoteAborted" OR
-       NOT boundary_doc_content MATCHES "remoteReceive[(][)]" OR
-       NOT boundary_doc_content MATCHES "section-5[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]5" OR
-       NOT boundary_doc_content MATCHES "rfc8441[.]html#section-5")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 remote receive lifecycle is undocumented"
-            "${relative} must document exclusive head/content/CONNECT/tunnel/END_STREAM/abort alternatives, one const view, rejected-CONNECT termination, tunnel flow-control ownership, and RFC half-close semantics")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2LocalContentState" OR
-       NOT boundary_doc_content MATCHES "Http2LocalContentUnset" OR
-       NOT boundary_doc_content MATCHES "Http2LocalContentForbidden" OR
-       NOT boundary_doc_content MATCHES "Http2LocalContentUnbounded" OR
-       NOT boundary_doc_content MATCHES "Http2LocalContentKnownLength" OR
-       NOT boundary_doc_content MATCHES "kNotStarted" OR
-       NOT boundary_doc_content MATCHES "localContent[(][)]" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
-       NOT boundary_doc_content MATCHES "accepted" OR
-       NOT boundary_doc_content MATCHES "committed" OR
-       NOT boundary_doc_content MATCHES "Http2ResponseHeadPlan" OR
-       NOT boundary_doc_content MATCHES
-           "Http2CanonicalResponseContentLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2ExplicitResponseContentLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2AbsentResponseContentLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2ForbiddenResponseContentLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2ResponseHeadPlanResult" OR
-       NOT boundary_doc_content MATCHES "http2BufferedResponseHeadPlan" OR
-       NOT boundary_doc_content MATCHES "http2StreamingResponseHeadPlan" OR
-       NOT boundary_doc_content MATCHES "http2ConnectResponseHeadPlan" OR
-       NOT boundary_doc_content MATCHES "emitAutoContentLength")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 outbound Content-Length contract is undocumented"
-            "${relative} must document exclusive head ownership, removal of the scalar API, single explicit-length parsing, local-content states, and accepted versus committed DATA")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2RemoteContentState" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteContentAllowedWithoutLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteContentAllowedKnownLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteContentMetadataOnlyWithoutLength" OR
-       NOT boundary_doc_content MATCHES
-           "Http2RemoteContentMetadataOnlyKnownLength" OR
-       NOT boundary_doc_content MATCHES "remoteContent[(][)]" OR
-       NOT boundary_doc_content MATCHES "kCounterOverflow" OR
-       NOT boundary_doc_content MATCHES "kDeclaredLengthExceeded" OR
-       NOT boundary_doc_content MATCHES "kContentForbidden" OR
-       NOT boundary_doc_content MATCHES "account[(][)]" OR
-       NOT boundary_doc_content MATCHES "terminalLengthValid[(][)]" OR
-       NOT boundary_doc_content MATCHES "section-6[.]4[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1[.]1")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 inbound Content-Length contract is undocumented"
-            "${relative} must document allowance/length alternatives, atomic DATA accounting, and malformed no-content payload rejection")
-    endif()
-    if(NOT boundary_doc_content MATCHES "releaseReceivedData" OR
-       NOT boundary_doc_content MATCHES "Http2SansIoStreamRuntimeTable" OR
-       NOT boundary_doc_content MATCHES "Http2RequestBodyRuntime" OR
-       NOT boundary_doc_content MATCHES "Http2SansIoBodyQueue" OR
-       NOT boundary_doc_content MATCHES "Http2SansIoStreamSignal" OR
-       NOT boundary_doc_content MATCHES "dispatchedCount" OR
-       NOT boundary_doc_content MATCHES "streamSignals" OR
-       NOT boundary_doc_content MATCHES "co_spawn" OR
-       NOT boundary_doc_content MATCHES "table-only" OR
-       NOT boundary_doc_content MATCHES "concurrent waiter" OR
-       NOT boundary_doc_content MATCHES "RequestBodyMode" OR
-       NOT boundary_doc_content MATCHES "kModeNotSelected" OR
-       NOT boundary_doc_content MATCHES "Http2BodyState[.]h" OR
-       NOT boundary_doc_content MATCHES "Http2StreamBodyPolicy[.]h" OR
-       NOT boundary_doc_content MATCHES "owner-side reset" OR
-       NOT boundary_doc_content MATCHES "section-5[.]2" OR
-       NOT boundary_doc_content MATCHES "section-6[.]9[.]1")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 DATA runtime/flow-control boundary is undocumented"
-            "${relative} must pin owner-consumption credit release, unified Web route/body/signal dispatch ownership, same-feed event ordering, and RFC receiver-capacity semantics")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2RequestContent" OR
-       NOT boundary_doc_content MATCHES "Http2RequestWithoutContent" OR
-       NOT boundary_doc_content MATCHES
-           "Http2KnownLengthRequestContent" OR
-       NOT boundary_doc_content MATCHES
-           "Http2StreamingRequestContent" OR
-       NOT boundary_doc_content MATCHES "submitRegularRequestHead" OR
-       NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitResult" OR
-       NOT boundary_doc_content MATCHES "Http2SubmittedRequestHead" OR
-       NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitFailure" OR
-       NOT boundary_doc_content MATCHES "Http2RequestHeadSubmitError" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
-       NOT boundary_doc_content MATCHES "section-5[.]1[.]1" OR
-       NOT boundary_doc_content MATCHES "section-5[.]1[.]2" OR
-       NOT boundary_doc_content MATCHES "section-6[.]5[.]2" OR
-       NOT boundary_doc_content MATCHES "SETTINGS_MAX_CONCURRENT_STREAMS")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 typed request-content contract is undocumented"
-            "${relative} must document request framing, discriminated stream admission, and CONNECT isolation")
-    endif()
-    if(NOT boundary_doc_content MATCHES
-           "Http2BufferedResponseHeadSubmitResult" OR
-       NOT boundary_doc_content MATCHES
-           "Http2StreamingResponseHeadSubmitResult" OR
-       NOT boundary_doc_content MATCHES
-           "Http2SubmittedResponseHead" OR
-       NOT boundary_doc_content MATCHES
-           "Http2ResponseHeadSubmitFailure" OR
-       NOT boundary_doc_content MATCHES
-           "Http2ResponseHeadSubmitError" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1" OR
-       NOT boundary_doc_content MATCHES "section-8[.]1[.]1" OR
-       NOT boundary_doc_content MATCHES "section-6[.]2")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 response-head submit ownership is undocumented"
-            "${relative} must document plan-only success, error-only failure, and RFC response HEADERS framing")
-    endif()
-    if(NOT boundary_doc_content MATCHES "submitConnectRequestHead" OR
-       NOT boundary_doc_content MATCHES "submitExtendedConnectRequestHead" OR
-       NOT boundary_doc_content MATCHES "kTunnelData" OR
-       NOT boundary_doc_content MATCHES "kTunnelEnd" OR
-       NOT boundary_doc_content MATCHES "Http2TunnelState" OR
-       NOT boundary_doc_content MATCHES "Http2NotConnect" OR
-       NOT boundary_doc_content MATCHES "Http2ConnectPending" OR
-       NOT boundary_doc_content MATCHES "Http2TunnelOpen" OR
-       NOT boundary_doc_content MATCHES "Http2ConnectRejected" OR
-       NOT boundary_doc_content MATCHES "Http2ConnectForm" OR
-       NOT boundary_doc_content MATCHES "tunnel[(][)]" OR
-       NOT boundary_doc_content MATCHES "section-8[.]5" OR
-       NOT boundary_doc_content MATCHES "rfc8441[.]html#section-4")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 CONNECT lifecycle is undocumented"
-            "${relative} must document exclusive tunnel states, pending-only form, dedicated heads, events, and half-close ownership")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2LocalSettings" OR
-       NOT boundary_doc_content MATCHES "beginConnection" OR
-       NOT boundary_doc_content MATCHES "Http2PeerSettings" OR
-       NOT boundary_doc_content MATCHES "SETTINGS_ENABLE_PUSH" OR
-       NOT boundary_doc_content MATCHES "Http2PeerSettingApplyResult" OR
-       NOT boundary_doc_content MATCHES "Http2PeerSettingApplied" OR
-       NOT boundary_doc_content MATCHES "Http2PeerInitialWindowChange" OR
-       NOT boundary_doc_content MATCHES "Http2PeerSettingFailure" OR
-       NOT boundary_doc_content MATCHES "section-6[.]9[.]2" OR
-       NOT boundary_doc_content MATCHES "rfc8441[.]html#section-3")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 local SETTINGS and startup contract is undocumented"
-            "${relative} must document the one settings source, role-aware startup, and discriminated peer-setting result")
-    endif()
-    if(NOT boundary_doc_content MATCHES "Http2FeedResult" OR
-       NOT boundary_doc_content MATCHES "kConnectionNotStarted" OR
-       NOT boundary_doc_content MATCHES "kEventsPending" OR
-       NOT boundary_doc_content MATCHES "kAccepted" OR
-       NOT boundary_doc_content MATCHES "kNeedInput" OR
-       NOT boundary_doc_content MATCHES "kProtocolFailure" OR
-       NOT boundary_doc_content MATCHES "section-3[.]4" OR
-       NOT boundary_doc_content MATCHES "section-4[.]1")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 feed ownership contract is undocumented"
-            "${relative} must document every direct enum outcome and its RFC preface/frame boundary")
-    endif()
-    if(NOT boundary_doc_content MATCHES "std::optional<Http2Event>" OR
-       NOT boundary_doc_content MATCHES "std::nullopt" OR
-       NOT boundary_doc_content MATCHES "std::variant" OR
-       NOT boundary_doc_content MATCHES "Http2StreamClosedEvent" OR
-       NOT boundary_doc_content MATCHES "Http2RequestUnprocessedEvent" OR
-       NOT boundary_doc_content MATCHES "Http2GoawayEvent" OR
-       NOT boundary_doc_content MATCHES "section-6[.]4" OR
-       NOT boundary_doc_content MATCHES "section-6[.]8")
-        file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${boundary_doc}")
-        boundary_error("HTTP/2 typed event ownership is undocumented"
-            "${relative} must pin optional draining, discriminated payloads, exact RST errors, and connection-level GOAWAY metadata")
-    endif()
-endforeach()
 
 set(POOL_WAITER_HEADER
     "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/detail/PoolWaiterQueue.h")
@@ -6626,8 +6136,6 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
     file(READ "${POOL_WAITER_TEST}" pool_waiter_test)
     file(READ "${POOL_WAITER_PACKAGE_CONSUMER}"
         pool_waiter_package_consumer)
-    file(READ "${RUVIA_ROOT}/README.md" pool_waiter_readme)
-    file(READ "${RUVIA_ROOT}/AGENTS.md" pool_waiter_agents)
     if(NOT pool_waiter_header MATCHES "class PoolWaiterAcquired final" OR
        NOT pool_waiter_header MATCHES "class PoolWaiterTimedOut final" OR
        NOT pool_waiter_header MATCHES "class PoolWaiterClosed final" OR
@@ -6680,13 +6188,9 @@ if(EXISTS "${POOL_WAITER_HEADER}" AND
        NOT pool_waiter_package_consumer MATCHES
            "HasParallelPoolWaiterResultAccessor" OR
        NOT pool_waiter_package_consumer MATCHES
-           "PoolWaiterResult" OR
-       NOT pool_waiter_readme MATCHES "PoolWaiterAcquired" OR
-       NOT pool_waiter_readme MATCHES "PoolWaiterClosed" OR
-       NOT pool_waiter_agents MATCHES "PoolWaiterTimedOut" OR
-       NOT pool_waiter_agents MATCHES "closeAll[(][)]")
+           "PoolWaiterResult")
         boundary_error("typed pool waiter completion is insufficiently pinned"
-            "runtime tests, installed-core compile contracts, and architecture docs must reject the former flags/sentinel tuple")
+            "runtime tests and installed-core compile contracts must reject the former flags/sentinel tuple")
     endif()
 endif()
 
@@ -7279,241 +6783,59 @@ check_files_no_match("docs contain stale dependency/runtime ownership"
     "${RULE_STALE_DEPENDENCY}" ${BOUNDARY_DOCS})
 check_files_no_match("docs must read the vcpkg toolchain from VCPKG_ROOT"
     "${RULE_HARDCODED_VCPKG_TOOLCHAIN}" ${BOUNDARY_DOCS})
+check_files_no_match("README must describe the current product, not migration history"
+    "former implementation|former API|no longer|was removed|migration history|旧实现|迁移历史"
+    "${RUVIA_ROOT}/README.md")
+
+# Keep the two root documents intentionally small and role-specific. Protocol
+# implementation invariants belong to source, unit tests, package consumers, and
+# the checks above; requiring every internal type name in both documents caused
+# them to become duplicate change logs.
 file(READ "${RUVIA_ROOT}/README.md" readme_content)
 file(READ "${RUVIA_ROOT}/AGENTS.md" agents_content)
-if(NOT readme_content MATCHES "RFC 9113" OR
-   NOT readme_content MATCHES "prior knowledge" OR
-   NOT readme_content MATCHES "HTTP2-Settings" OR
-   NOT agents_content MATCHES "RFC 9113" OR
-   NOT agents_content MATCHES "prior knowledge" OR
-   NOT agents_content MATCHES "HTTP2-Settings")
-    boundary_error("current HTTP/2 startup contract is undocumented"
-        "README and AGENTS must record ALPN/prior-knowledge startup and removal of HTTP/1.1 Upgrade")
+string(REGEX REPLACE "[^\n]" "" readme_newlines "${readme_content}")
+string(REGEX REPLACE "[^\n]" "" agents_newlines "${agents_content}")
+string(LENGTH "${readme_newlines}" readme_line_count)
+string(LENGTH "${agents_newlines}" agents_line_count)
+if(NOT readme_content STREQUAL "" AND NOT readme_content MATCHES "\n$")
+    math(EXPR readme_line_count "${readme_line_count} + 1")
 endif()
-if(NOT readme_content MATCHES "Http1ServerRequestParseState" OR
-   NOT readme_content MATCHES "kRequestHeadReady" OR
-   NOT readme_content MATCHES "kRequestMessageReady" OR
-   NOT agents_content MATCHES "Http1ServerRequestParser" OR
-   NOT agents_content MATCHES "kNeedRequestBody")
-    boundary_error("HTTP/1 head/message parse phases are undocumented"
-        "README and AGENTS must pin the distinct runtime and whole-message readiness contracts")
+if(NOT agents_content STREQUAL "" AND NOT agents_content MATCHES "\n$")
+    math(EXPR agents_line_count "${agents_line_count} + 1")
 endif()
-if(NOT readme_content MATCHES "WsOutputPlan" OR
-   NOT readme_content MATCHES "std::optional<WsEvent>" OR
-   NOT readme_content MATCHES "std::nullopt" OR
-   NOT readme_content MATCHES "std::variant" OR
-   NOT readme_content MATCHES "WsMessageEvent" OR
-   NOT readme_content MATCHES "WsCloseEvent" OR
-   NOT readme_content MATCHES "WsProtocolErrorEvent" OR
-   NOT readme_content MATCHES "WsTransportEndEvent" OR
-   NOT readme_content MATCHES "section-5[.]5[.]1" OR
-   NOT readme_content MATCHES "section-5[.]5[.]2" OR
-   NOT readme_content MATCHES "section-7[.]1[.]5" OR
-   NOT readme_content MATCHES "section-7[.]4[.]1" OR
-   NOT readme_content MATCHES "WebSocketFrameReadResult" OR
-   NOT readme_content MATCHES "WebSocketInboundResult" OR
-   NOT readme_content MATCHES "WebSocketProtocolFailure" OR
-   NOT readme_content MATCHES "section-5[.]2" OR
-   NOT readme_content MATCHES "section-5[.]4" OR
-   NOT readme_content MATCHES "WebSocketLifecycleOptions" OR
-   NOT readme_content MATCHES "RST_STREAM[(]CANCEL[)]" OR
-   NOT agents_content MATCHES "WsClosePhase" OR
-   NOT agents_content MATCHES "std::optional<WsEvent>" OR
-   NOT agents_content MATCHES "std::nullopt" OR
-   NOT agents_content MATCHES "std::variant" OR
-   NOT agents_content MATCHES "WsMessageEvent" OR
-   NOT agents_content MATCHES "WsCloseEvent" OR
-   NOT agents_content MATCHES "WsProtocolErrorEvent" OR
-   NOT agents_content MATCHES "WsTransportEndEvent" OR
-   NOT agents_content MATCHES "section-5[.]5[.]1" OR
-   NOT agents_content MATCHES "section-5[.]5[.]2" OR
-   NOT agents_content MATCHES "section-7[.]1[.]5" OR
-   NOT agents_content MATCHES "section-7[.]4[.]1" OR
-   NOT agents_content MATCHES "WebSocketFrameReadResult" OR
-   NOT agents_content MATCHES "WebSocketInboundResult" OR
-   NOT agents_content MATCHES "WebSocketProtocolFailure" OR
-   NOT agents_content MATCHES "section-5[.]2" OR
-   NOT agents_content MATCHES "section-5[.]4" OR
-   NOT agents_content MATCHES "close-handshake timeout")
-    boundary_error("WebSocket close/liveness boundary is undocumented"
-        "README and AGENTS must pin typed frame/reassembly outcomes, input events, protocol-owned close plans, and Web-owned timeout policy")
+if(readme_line_count GREATER 400)
+    boundary_error("README exceeded its user-document scope"
+        "README.md has ${readme_line_count} lines; keep it under 400 and move executable invariants to tests/guards")
 endif()
-if(NOT readme_content MATCHES "HttpFinalResponseControlPlanResult" OR
-   NOT readme_content MATCHES "HttpFinalResponseControlPlanFailure" OR
-   NOT readme_content MATCHES "HttpFinalResponseControlPlanError" OR
-   NOT readme_content MATCHES "Http1FinalResponseControl" OR
-   NOT readme_content MATCHES "Http2FinalResponseControl" OR
-   NOT readme_content MATCHES "section-8[.]2[.]2" OR
-   NOT readme_content MATCHES "silently dropping" OR
-   NOT readme_content MATCHES "200[.][.]599" OR
-   NOT readme_content MATCHES "HttpInterimResponseHead" OR
-   NOT readme_content MATCHES "Http1InterimResponseWriter" OR
-   NOT readme_content MATCHES "submitInterimResponseHead" OR
-   NOT agents_content MATCHES "HttpFinalResponseControlPlanResult" OR
-   NOT agents_content MATCHES "HttpFinalResponseControlPlanFailure" OR
-   NOT agents_content MATCHES "HttpFinalResponseControlPlanError" OR
-   NOT agents_content MATCHES "Http1FinalResponseControl" OR
-   NOT agents_content MATCHES "Http2FinalResponseControl" OR
-   NOT agents_content MATCHES "section-8[.]2[.]2" OR
-   NOT agents_content MATCHES "静默过滤" OR
-   NOT agents_content MATCHES "`200[.][.]599`" OR
-   NOT agents_content MATCHES "HttpInterimResponseHead" OR
-   NOT agents_content MATCHES "Http1InterimResponseWriter" OR
-   NOT agents_content MATCHES "submitInterimResponseHead" OR
-   NOT agents_content MATCHES "typed invalid message")
-    boundary_error("final response control contract is undocumented"
-        "README and AGENTS must pin the discriminated result/protocol alternatives, H1 parsed fields, pre-HPACK HTTP/2 connection-field rejection, status classes, dedicated 101, and version-specific 426 handling")
-endif()
-if(NOT readme_content MATCHES "Context::ResponseInit" OR
-   NOT readme_content MATCHES "httpReasonPhrase[(][)]" OR
-   NOT readme_content MATCHES "RFC 9112" OR
-   NOT readme_content MATCHES "`:status`" OR
-   NOT readme_content MATCHES "HttpErrorInfo::statusText" OR
-   NOT agents_content MATCHES "Context::ResponseInit" OR
-   NOT agents_content MATCHES "httpReasonPhrase[(][)]" OR
-   NOT agents_content MATCHES "HttpStatusEntry" OR
-   NOT agents_content MATCHES "RFC 9112" OR
-   NOT agents_content MATCHES "`:status`" OR
-   NOT agents_content MATCHES "HttpErrorInfo::statusText")
-    boundary_error("version-neutral response status contract is undocumented"
-        "README and AGENTS must keep reason phrases in HTTP/1 serialization and Web labels out of wire messages")
-endif()
-if(NOT readme_content MATCHES "HttpRequestExpectations" OR
-   NOT readme_content MATCHES "#expectation" OR
-   NOT readme_content MATCHES "HttpServerExpectationAction" OR
-   NOT readme_content MATCHES "kExpectationFailed" OR
-   NOT readme_content MATCHES "submitInterimResponseHead" OR
-   NOT agents_content MATCHES "HttpRequestExpectations" OR
-   NOT agents_content MATCHES "#expectation" OR
-   NOT agents_content MATCHES "HttpServerExpectationAction" OR
-   NOT agents_content MATCHES "kExpectationFailed" OR
-   NOT agents_content MATCHES "submitInterimResponseHead")
-    boundary_error("cross-version server Expect contract is undocumented"
-        "README and AGENTS must pin extensible list parsing, Web-owned 417, and H1/H2 typed 100 emission")
-endif()
-if(NOT readme_content MATCHES "HttpProtocolVersion" OR
-   NOT readme_content MATCHES "protocolVersion[(][)]" OR
-   NOT readme_content MATCHES "HttpRequest::httpVersion[(][)]" OR
-   NOT readme_content MATCHES "HttpResponseProtocolVersion" OR
-   NOT agents_content MATCHES "HttpProtocolVersion" OR
-   NOT agents_content MATCHES "kHttp10" OR
-   NOT agents_content MATCHES "kHttp11" OR
-   NOT agents_content MATCHES "kHttp2" OR
-   NOT agents_content MATCHES "protocolVersion[(][)]" OR
-   NOT agents_content MATCHES "httpVersion[(][)]" OR
-   NOT agents_content MATCHES "httpVersion_" OR
-   NOT agents_content MATCHES "HttpResponseProtocolVersion")
-    boundary_error("typed HTTP protocol-version contract is undocumented"
-        "README and AGENTS must pin the sole enum, H1 conversion, H2 connection source, and removed string/parallel state")
-endif()
-if(NOT readme_content MATCHES "`Server` product identity" OR
-   NOT readme_content MATCHES "section-10[.]2[.]4" OR
-   NOT readme_content MATCHES "section-6[.]6[.]1" OR
-   NOT agents_content MATCHES "`Server` product identity" OR
-   NOT agents_content MATCHES "Server: ruvia" OR
-   NOT agents_content MATCHES "section-10[.]2[.]4" OR
-   NOT agents_content MATCHES "section-6[.]6[.]1")
-    boundary_error("explicit Server product policy is undocumented"
-        "README and AGENTS must keep Server optional/application-owned while retaining required Date generation")
-endif()
-if(NOT readme_content MATCHES "VCPKG_ROOT/scripts/buildsystems/vcpkg[.]cmake" OR
-   NOT agents_content MATCHES "VCPKG_ROOT/scripts/buildsystems/vcpkg[.]cmake")
-    boundary_error("VCPKG_ROOT build guidance is missing"
-        "README and AGENTS must derive CMAKE_TOOLCHAIN_FILE from VCPKG_ROOT")
-endif()
-if(NOT readme_content MATCHES "Each library has its own installed CMake export" OR
-   NOT readme_content MATCHES "ruvia_AVAILABLE_COMPONENTS" OR
-   NOT readme_content MATCHES "OPTIONAL_COMPONENTS" OR
-   NOT agents_content MATCHES "独立安装 export" OR
-   NOT agents_content MATCHES "依赖闭包" OR
-   NOT agents_content MATCHES "ruvia_AVAILABLE_COMPONENTS")
-    boundary_error("component-scoped package loading is undocumented"
-        "README and AGENTS must pin independent exports, actual availability, and optional-component semantics")
-endif()
-if(NOT readme_content MATCHES "MultipartBoundary" OR
-   NOT readme_content MATCHES "MultipartChunkPhase" OR
-   NOT readme_content MATCHES "HttpMultipartBoundaryParseResult" OR
-   NOT readme_content MATCHES "HttpMultipartPartHeaderParseResult" OR
-   NOT readme_content MATCHES "HttpMultipartDelimiterResult" OR
-   NOT readme_content MATCHES "MultipartPollResult" OR
-   NOT readme_content MATCHES "MultipartPollNeedInput" OR
-   NOT readme_content MATCHES "MultipartPollDone" OR
-   NOT readme_content MATCHES "MultipartPollFailure" OR
-   NOT readme_content MATCHES "MultipartParseError" OR
-   NOT readme_content MATCHES "HttpProtocolError" OR
-   NOT readme_content MATCHES "finishInput[(][)]" OR
-   NOT readme_content MATCHES "rfc2046[.]html#section-5[.]1[.]1" OR
-   NOT readme_content MATCHES "rfc7578[.]html#section-4[.]1" OR
-   NOT agents_content MATCHES "MultipartBoundary" OR
-   NOT agents_content MATCHES "MultipartChunkPhase" OR
-   NOT agents_content MATCHES "HttpMultipartBoundaryParseResult" OR
-   NOT agents_content MATCHES "HttpMultipartPartHeaderParseResult" OR
-   NOT agents_content MATCHES "HttpMultipartDelimiterResult" OR
-   NOT agents_content MATCHES "MultipartPollResult" OR
-   NOT agents_content MATCHES "MultipartPollNeedInput" OR
-   NOT agents_content MATCHES "MultipartPollDone" OR
-   NOT agents_content MATCHES "MultipartPollFailure" OR
-   NOT agents_content MATCHES "MultipartParseError" OR
-   NOT agents_content MATCHES "HttpProtocolError" OR
-   NOT agents_content MATCHES "finishInput[(][)]" OR
-   NOT agents_content MATCHES "rfc2046[.]html#section-5[.]1[.]1" OR
-   NOT agents_content MATCHES "rfc7578[.]html#section-4[.]1")
-    boundary_error("multipart boundary/input lifecycle is undocumented"
-        "README and AGENTS must pin discriminated boundary/header/delimiter/poll results, chunk phase, RFC grammar, and explicit EOF")
-endif()
-if(NOT readme_content MATCHES "HttpAuthorityView" OR
-   NOT readme_content MATCHES "IPvFuture" OR
-   NOT readme_content MATCHES "absent/empty" OR
-   NOT readme_content MATCHES "decodes only percent-encoded unreserved" OR
-   NOT readme_content MATCHES "Encoded reserved characters remain distinct" OR
-   NOT readme_content MATCHES "malformed or userinfo-bearing" OR
-   NOT readme_content MATCHES "rvalue string factories are deleted" OR
-   NOT agents_content MATCHES "HttpAuthorityView" OR
-   NOT agents_content MATCHES "IPvFuture" OR
-   NOT agents_content MATCHES "absent/empty/numeric" OR
-   NOT agents_content MATCHES "percent-encoded reserved" OR
-   NOT agents_content MATCHES "malformed/userinfo" OR
-   NOT agents_content MATCHES "rvalue `basic_string`")
-    boundary_error("HTTP authority/origin normalization is undocumented"
-        "README and AGENTS must pin typed port states, IP-literal grammar, and shared comparison")
-endif()
-if(NOT readme_content MATCHES "HttpClientRedirect[.]h" OR
-   NOT readme_content MATCHES "HttpClientResponseHeaderLookupResult" OR
-   NOT readme_content MATCHES "HttpClientResponseHeaderAbsent" OR
-   NOT readme_content MATCHES "HttpClientResponseHeaderFound" OR
-   NOT readme_content MATCHES "HttpClientResponseHeaderRepeated" OR
-   NOT readme_content MATCHES "HttpClientRedirectTargetResult" OR
-   NOT readme_content MATCHES "HttpClientRedirectTargetFailure" OR
-   NOT readme_content MATCHES "HttpClientRedirectTargetError" OR
-   NOT readme_content MATCHES "rfc9110[.]html#section-10[.]2[.]2" OR
-   NOT readme_content MATCHES "rfc3986[.]html#section-5[.]2" OR
-   NOT readme_content MATCHES "rfc3986[.]html#section-5[.]3" OR
-   NOT agents_content MATCHES "HttpClientRedirect[.]h" OR
-   NOT agents_content MATCHES "HttpClientResponseHeaderLookupResult" OR
-   NOT agents_content MATCHES "HttpClientResponseHeaderAbsent" OR
-   NOT agents_content MATCHES "HttpClientResponseHeaderFound" OR
-   NOT agents_content MATCHES "HttpClientResponseHeaderRepeated" OR
-   NOT agents_content MATCHES "HttpClientRedirectTargetResult" OR
-   NOT agents_content MATCHES "HttpClientRedirectTargetFailure" OR
-   NOT agents_content MATCHES "HttpClientRedirectTargetError" OR
-   NOT agents_content MATCHES "rfc9110[.]html#section-10[.]2[.]2" OR
-   NOT agents_content MATCHES "rfc3986[.]html#section-5[.]2" OR
-   NOT agents_content MATCHES "rfc3986[.]html#section-5[.]3")
-    boundary_error("public redirect result ownership is undocumented"
-        "README and AGENTS must pin the public header, discriminated field/target results, PMR ownership, and RFC reference resolution")
-endif()
-if(NOT readme_content MATCHES "Http1RequestParser" OR
-   NOT readme_content MATCHES "Http1RequestNeedMore" OR
-   NOT readme_content MATCHES "Http1ParsedRequest" OR
-   NOT readme_content MATCHES "Http1RequestParseFailure" OR
-   NOT readme_content MATCHES "wireBody" OR
-   NOT agents_content MATCHES "Http1RequestParser" OR
-   NOT agents_content MATCHES "requiredTotalBytes" OR
-   NOT agents_content MATCHES "wireBody")
-    boundary_error("public HTTP/1 discriminated parse contract is undocumented"
-        "README and AGENTS must distinguish input sizing, successful framing bytes, and protocol failure")
+if(agents_line_count GREATER 400)
+    boundary_error("AGENTS exceeded its contributor-guide scope"
+        "AGENTS.md has ${agents_line_count} lines; keep it under 400 and do not append per-refactor type catalogs")
 endif()
 
+if(NOT readme_content MATCHES "## Targets" OR
+   NOT readme_content MATCHES "ruvia::core" OR
+   NOT readme_content MATCHES "ruvia::http" OR
+   NOT readme_content MATCHES "ruvia::web" OR
+   NOT readme_content MATCHES "## Build" OR
+   NOT readme_content MATCHES "## Install and Consume" OR
+   NOT readme_content MATCHES "## Minimal Web App" OR
+   NOT readme_content MATCHES
+       "VCPKG_ROOT/scripts/buildsystems/vcpkg[.]cmake")
+    boundary_error("README lost its user-facing contract"
+        "README must retain targets, build/install guidance, a minimal app, and VCPKG_ROOT-based configuration")
+endif()
+if(NOT agents_content MATCHES "README 面向使用者" OR
+   NOT agents_content MATCHES "AGENTS 面向贡献者" OR
+   NOT agents_content MATCHES "## 目录规则" OR
+   NOT agents_content MATCHES "## Target 边界" OR
+   NOT agents_content MATCHES "ruvia-web  -> ruvia-core [+] ruvia-http" OR
+   NOT agents_content MATCHES "## 性能原则" OR
+   NOT agents_content MATCHES "## 验证要求" OR
+   NOT agents_content MATCHES
+       "VCPKG_ROOT/scripts/buildsystems/vcpkg[.]cmake")
+    boundary_error("AGENTS lost its contributor-guide contract"
+        "AGENTS must retain document roles, directory/target/dependency rules, performance constraints, verification, and VCPKG_ROOT guidance")
+endif()
 get_property(boundary_failed GLOBAL PROPERTY RUVIA_BOUNDARY_FAILED)
 if(boundary_failed)
     message(FATAL_ERROR "Ruvia layer-boundary checks failed")
