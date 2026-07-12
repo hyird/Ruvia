@@ -13,6 +13,7 @@
 namespace {
 
 using ruvia::WebSocketOpcode;
+using ruvia::detail::WebSocketDeflateNegotiation;
 using ruvia::detail::WsConnection;
 using ruvia::detail::WsClosePhase;
 using ruvia::detail::WsCloseEvent;
@@ -57,6 +58,11 @@ static_assert(HasWsPayload<WsMessageEvent>);
 static_assert(!HasWsPayload<WsCloseEvent>);
 static_assert(HasWsReason<WsCloseEvent>);
 static_assert(!HasWsReason<WsProtocolErrorEvent>);
+static_assert(!std::constructible_from<
+    WsConnection,
+    std::pmr::string&,
+    std::size_t,
+    bool>);
 
 // Build a masked client->server frame (RFC 6455 §5.1): FIN/opcode byte, MASK bit + a
 // short length (<=125 for tests), a 4-byte mask, then the masked payload.
@@ -264,7 +270,10 @@ RUVIA_TEST(ws_connection_needs_more_on_partial_frame) {
 RUVIA_TEST(ws_connection_inflates_compressed_message) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, 0, /*permessageDeflate=*/true);
+    WsConnection conn(
+        input,
+        0,
+        WebSocketDeflateNegotiation::kAccepted);
 
     ruvia::detail::WebSocketDeflate encoder;
     RUVIA_CHECK(encoder.ok());
@@ -283,7 +292,10 @@ RUVIA_TEST(ws_connection_inflates_compressed_message) {
 RUVIA_TEST(ws_connection_submit_compresses_when_enabled) {
     std::pmr::monotonic_buffer_resource resource;
     std::pmr::string input(&resource);
-    WsConnection conn(input, 0, /*permessageDeflate=*/true);
+    WsConnection conn(
+        input,
+        0,
+        WebSocketDeflateNegotiation::kAccepted);
 
     const std::pmr::string repetitive(200, 'a', &resource);
     (void)conn.submitMessage(WebSocketOpcode::kText, std::string_view(repetitive.data(), repetitive.size()));

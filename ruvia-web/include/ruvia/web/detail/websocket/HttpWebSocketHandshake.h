@@ -11,19 +11,12 @@
 
 namespace ruvia::detail {
 
-// Writes the 101 handshake. `permessageDeflate` is set to whether the RFC 7692
-// extension was negotiated (offered by the client and acceptable to us); when
-// set, the response advertises it with no-context-takeover in both directions.
+// Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
+// not recomputed and no compression bool is returned through a side channel.
 template <typename Stream>
 Task<bool> writeWebSocketHandshake(
     Stream& stream,
-    const HttpRequest& request,
-    std::string_view supportedSubprotocols,
-    bool& permessageDeflate) {
-    const auto handshake = makeHttpWebSocketServerHandshake(
-        request, supportedSubprotocols);
-    permessageDeflate = handshake.permessageDeflate;
-
+    const HttpWebSocketServerHandshake& handshake) {
     std::array<asio::const_buffer, 10> buffers;
     std::size_t count = 0;
     handshake.forEachResponsePart([&buffers, &count](std::string_view part) {

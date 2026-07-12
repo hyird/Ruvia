@@ -1,8 +1,8 @@
 #pragma once
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h"
 #include "ruvia/http/detail/websocket/HttpWebSocketUtils.h"
+#include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 
 #include <string_view>
 
@@ -19,44 +19,56 @@ inline constexpr std::string_view kHttpWebSocketExtensionsHeaderPrefix =
     "Sec-WebSocket-Extensions: ";
 inline constexpr std::string_view kHttpCrlf = "\r\n";
 
-struct HttpWebSocketServerHandshake final {
-    WebSocketAcceptKey accept{};
-    std::string_view subprotocol;
-    std::string_view extensions;
-    bool permessageDeflate{false};
+class HttpWebSocketServerHandshake final {
+public:
+    [[nodiscard]] const WebSocketServerNegotiation&
+    negotiation() const noexcept {
+        return negotiation_;
+    }
 
     template <typename Visitor>
     void forEachResponsePart(Visitor&& visitor) const {
         visitor(kHttpWebSocketSwitchingProtocolsPrefix);
-        visitor(std::string_view(accept.data(), accept.size()));
+        visitor(std::string_view(accept_.data(), accept_.size()));
         visitor(kHttpCrlf);
-        if (!subprotocol.empty()) {
+        if (!negotiation_.subprotocol().empty()) {
             visitor(kHttpWebSocketSubprotocolHeaderPrefix);
-            visitor(subprotocol);
+            visitor(negotiation_.subprotocol());
             visitor(kHttpCrlf);
         }
-        if (!extensions.empty()) {
+        if (!negotiation_.extensions().empty()) {
             visitor(kHttpWebSocketExtensionsHeaderPrefix);
-            visitor(extensions);
+            visitor(negotiation_.extensions());
             visitor(kHttpCrlf);
         }
         visitor(kHttpCrlf);
     }
+
+private:
+    friend HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(
+        const HttpRequest&,
+        std::string_view) noexcept;
+
+    HttpWebSocketServerHandshake(
+        WebSocketAcceptKey accept,
+        WebSocketServerNegotiation negotiation) noexcept
+        : accept_(accept),
+          negotiation_(negotiation) {}
+
+    WebSocketAcceptKey accept_;
+    WebSocketServerNegotiation negotiation_;
 };
 
 [[nodiscard]] inline HttpWebSocketServerHandshake makeHttpWebSocketServerHandshake(
     const HttpRequest& request,
     std::string_view supportedSubprotocols) noexcept {
-    HttpWebSocketServerHandshake handshake;
+    WebSocketAcceptKey accept;
     encodeWebSocketAccept(
-        handshake.accept,
+        accept,
         requestKnownHeader(request, RequestKnownHeader::kSecWebSocketKey));
-    handshake.subprotocol = chooseWebSocketSubprotocol(
-        request, supportedSubprotocols);
-    const auto deflate = webSocketNegotiatePermessageDeflate(request);
-    handshake.permessageDeflate = deflate.enabled;
-    handshake.extensions = webSocketDeflateResponseExtensions(deflate);
-    return handshake;
+    return HttpWebSocketServerHandshake(
+        accept,
+        makeWebSocketServerNegotiation(request, supportedSubprotocols));
 }
 
 }  // namespace ruvia::detail

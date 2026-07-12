@@ -35,6 +35,10 @@ set(RULE_STALE_MULTIPART_API
     "partBegin[ \\t]*\\(|partEnd[ \\t]*\\(|appendChunk[ \\t]*\\(|enum class[ \\t]+PollStatus|MultipartParser::PollResult|HttpMultipartDelimiter(Status|Match)|HttpMultipartBoundary(Parse)?Status|HttpMultipartPartHeaderStatus|httpParseMultipartPartHeaders[ \\t\\r\\n]*\\([^)]*HttpMultipartPartHeaders[ \\t]*&|MultipartParser[ \\t\\r\\n]*\\([ \\t\\r\\n]*std::string_view")
 set(RULE_WEB_HANDSHAKE_PROTOCOL_BYTES
     "kHttpWebSocket(SwitchingProtocolsPrefix|SubprotocolHeaderPrefix|ExtensionsHeaderPrefix)|kHttpCrlf|cachedDateHeader|asio::buffer\\(\"\\\\r\\\\n")
+set(RULE_STALE_WS_SERVER_NEGOTIATION
+    "bool[ \t]*&[ \t]*permessageDeflate|bool[ \t]+permessageDeflate|[.]permessageDeflate|[.]enabled|echoServerMaxWindowBits|http2ChooseWebSocketSubprotocol|submitWebSocketHandshake[ \t\r\n]*[(][^)]*std::string_view|http2EncodeWebSocketHandshakeHeaders[ \t\r\n]*[(][^)]*std::string_view|webSocketNegotiatePermessageDeflate[ \t]*[(]|chooseWebSocketSubprotocol[ \t]*[(]|webSocketDeflateResponseExtensions[ \t]*[(]")
+set(RULE_STALE_WS_DEFLATE_PRODUCT
+    "bool[ \t]+(enabled|echoServerMaxWindowBits)")
 set(RULE_OBSOLETE_HTTP2_UPGRADE
     "h2c|H2C|HTTP2-Settings|Http2Upgrade|beginUpgraded|seedUpgradedStream|runUpgradedHttp2|Http2SansIoUpgradeSeed|isHttp2UpgradeAttempt|parseHttp2UpgradeRequest")
 set(RULE_HTTP_OWNED_BASE64URL
@@ -316,6 +320,12 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("WebSocket handshake serialization in Web runtime"
         "${RULE_WEB_HANDSHAKE_PROTOCOL_BYTES}"
         "asio::buffer(kHttpWebSocketSwitchingProtocolsPrefix)")
+    expect_match("split WebSocket server negotiation"
+        "${RULE_STALE_WS_SERVER_NEGOTIATION}"
+        "bool& permessageDeflate")
+    expect_match("WebSocket deflate boolean product"
+        "${RULE_STALE_WS_DEFLATE_PRODUCT}"
+        "bool echoServerMaxWindowBits = false;")
     expect_match("obsolete HTTP/2 HTTP/1.1 Upgrade path"
         "${RULE_OBSOLETE_HTTP2_UPGRADE}"
         "connection.beginUpgraded(seed, settingsPayload, body);")
@@ -1987,6 +1997,21 @@ endif()
 check_files_no_match("ruvia-web handshake writers must only submit HTTP-owned parts"
     "${RULE_WEB_HANDSHAKE_PROTOCOL_BYTES}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h")
+check_files_no_match("WebSocket server negotiation must remain one immutable HTTP value"
+    "${RULE_STALE_WS_SERVER_NEGOTIATION}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h"
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+check_files_no_match("WebSocket deflate negotiation must use exclusive alternatives"
+    "${RULE_STALE_WS_DEFLATE_PRODUCT}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
 check_files_no_match("ruvia-web HTTP/2 stream sink must not encode trailer protocol bytes"
     "${RULE_WEB_HTTP2_TRAILER_PROTOCOL}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
@@ -6541,6 +6566,98 @@ if(private_examples)
     boundary_error("examples include target-private headers" "${details}")
 endif()
 
+set(WS_DEFLATE_NEGOTIATION_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
+set(WS_SERVER_NEGOTIATION_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WebSocketServerNegotiation.h")
+set(WS_H1_HANDSHAKE_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
+set(WS_H2_HANDSHAKE_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h")
+set(WS_H2_CONNECTION_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Connection.h")
+set(WS_H1_HANDSHAKE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h")
+set(WS_H1_ROUTE_DRIVER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
+set(WS_H2_ROUTE_DRIVER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+foreach(required IN ITEMS
+    "${WS_DEFLATE_NEGOTIATION_HEADER}"
+    "${WS_SERVER_NEGOTIATION_HEADER}"
+    "${WS_H1_HANDSHAKE_HEADER}"
+    "${WS_H2_HANDSHAKE_HEADER}"
+    "${WS_H2_CONNECTION_HEADER}"
+    "${WS_H1_HANDSHAKE_WRITER}"
+    "${WS_H1_ROUTE_DRIVER}"
+    "${WS_H2_ROUTE_DRIVER}")
+    if(NOT EXISTS "${required}")
+        boundary_error("immutable WebSocket server negotiation is missing"
+            "${required}")
+    endif()
+endforeach()
+if(EXISTS "${WS_DEFLATE_NEGOTIATION_HEADER}" AND
+   EXISTS "${WS_SERVER_NEGOTIATION_HEADER}" AND
+   EXISTS "${WS_H1_HANDSHAKE_HEADER}" AND
+   EXISTS "${WS_H2_HANDSHAKE_HEADER}" AND
+   EXISTS "${WS_H2_CONNECTION_HEADER}" AND
+   EXISTS "${WS_H1_HANDSHAKE_WRITER}" AND
+   EXISTS "${WS_H1_ROUTE_DRIVER}" AND
+   EXISTS "${WS_H2_ROUTE_DRIVER}")
+    file(READ "${WS_DEFLATE_NEGOTIATION_HEADER}" ws_deflate_negotiation)
+    file(READ "${WS_SERVER_NEGOTIATION_HEADER}" ws_server_negotiation)
+    file(READ "${WS_H1_HANDSHAKE_HEADER}" ws_h1_handshake)
+    file(READ "${WS_H2_HANDSHAKE_HEADER}" ws_h2_handshake)
+    file(READ "${WS_H2_CONNECTION_HEADER}" ws_h2_connection)
+    file(READ "${WS_H1_HANDSHAKE_WRITER}" ws_h1_writer)
+    file(READ "${WS_H1_ROUTE_DRIVER}" ws_h1_route)
+    file(READ "${WS_H2_ROUTE_DRIVER}" ws_h2_route)
+    if(NOT ws_deflate_negotiation MATCHES
+           "enum class WebSocketDeflateNegotiation" OR
+       NOT ws_deflate_negotiation MATCHES "kDisabled" OR
+       NOT ws_deflate_negotiation MATCHES "kAccepted" OR
+       NOT ws_deflate_negotiation MATCHES
+           "kAcceptedWithServerMaxWindowBits" OR
+       NOT ws_deflate_negotiation MATCHES "webSocketDeflateNegotiated" OR
+       NOT ws_deflate_negotiation MATCHES
+           "webSocketDeflateResponseExtensions" OR
+       NOT ws_server_negotiation MATCHES
+           "class WebSocketServerNegotiation final" OR
+       NOT ws_server_negotiation MATCHES "std::string_view subprotocol[(][)]" OR
+       NOT ws_server_negotiation MATCHES
+           "WebSocketDeflateNegotiation deflate[(][)]" OR
+       NOT ws_server_negotiation MATCHES "std::string_view extensions[(][)]" OR
+       NOT ws_server_negotiation MATCHES "makeWebSocketServerNegotiation" OR
+       NOT ws_h1_handshake MATCHES
+           "class HttpWebSocketServerHandshake final" OR
+       NOT ws_h1_handshake MATCHES "const WebSocketServerNegotiation&" OR
+       NOT ws_h1_handshake MATCHES "makeHttpWebSocketServerHandshake" OR
+       NOT ws_h2_handshake MATCHES
+           "const WebSocketServerNegotiation& negotiation" OR
+       NOT ws_h2_connection MATCHES
+           "class Http2SubmittedWebSocketHandshake final" OR
+       NOT ws_h2_connection MATCHES
+           "class Http2WebSocketHandshakeSubmitFailure final" OR
+       NOT ws_h2_connection MATCHES
+           "class Http2WebSocketHandshakeSubmitResult final" OR
+       NOT ws_h2_connection MATCHES
+           "std::get_if<Http2SubmittedWebSocketHandshake>" OR
+       NOT ws_h2_connection MATCHES
+           "WebSocketServerNegotiation negotiation" OR
+       NOT ws_h1_writer MATCHES
+           "const HttpWebSocketServerHandshake& handshake" OR
+       NOT ws_h1_route MATCHES "makeHttpWebSocketServerHandshake" OR
+       NOT ws_h1_route MATCHES
+           "handshake[.]negotiation[(][)][.]deflate[(][)]" OR
+       NOT ws_h2_route MATCHES "makeWebSocketServerNegotiation" OR
+       NOT ws_h2_route MATCHES "handshakeResult[.]submitted[(][)]" OR
+       NOT ws_h2_route MATCHES
+           "submittedHandshake->negotiation[(][)][.]deflate[(][)]")
+        boundary_error("WebSocket server negotiation lost its single committed value"
+            "HTTP/1 and RFC 8441 response metadata plus WsConnection compression must consume the same immutable negotiation")
+    endif()
+endif()
+
 set(WS_PROTOCOL_HEADER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h")
 set(WS_EVENT_HEADER
@@ -6671,6 +6788,14 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
         boundary_error("WebSocket liveness policy is not Web-owned"
             "timer configuration and enforcement must remain in ruvia-web")
     endif()
+    if(NOT ws_protocol MATCHES "WebSocketDeflateNegotiation deflate" OR
+       NOT ws_protocol_source MATCHES
+           "webSocketDeflateNegotiated[(]deflate[)]" OR
+       NOT ws_runtime MATCHES "WebSocketDeflateNegotiation deflate" OR
+       NOT ws_runtime MATCHES "protocol_[(]buffer_, maxMessageBytes, deflate[)]")
+        boundary_error("WebSocket frame core lost the typed negotiation handoff"
+            "the runtime and sans-I/O core must consume the committed deflate alternative, never a boolean")
+    endif()
 endif()
 
 set(WS_PROTOCOL_TEST "${RUVIA_ROOT}/tests/unit_ws_connection.cpp")
@@ -6699,6 +6824,45 @@ if(EXISTS "${WS_PROTOCOL_TEST}" AND EXISTS "${WS_RUNTIME_TEST}" AND
        NOT ws_package_consumer MATCHES "WsProtocolErrorEvent")
         boundary_error("typed WebSocket close lifecycle is insufficiently tested"
             "optional typed events, close semantics, EOF, stream-local timeout, and RFC 8441 END_STREAM ordering are required")
+    endif()
+endif()
+
+set(WS_H1_HANDSHAKE_TEST
+    "${RUVIA_ROOT}/tests/unit_websocket_handshake.cpp")
+set(WS_H2_HANDSHAKE_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_websocket_handshake.cpp")
+set(WS_H2_CONNECTION_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_connection.cpp")
+if(EXISTS "${WS_H1_HANDSHAKE_TEST}" AND
+   EXISTS "${WS_H2_HANDSHAKE_TEST}" AND
+   EXISTS "${WS_H2_CONNECTION_TEST}" AND
+   EXISTS "${WS_RUNTIME_TEST}" AND
+   EXISTS "${WS_PACKAGE_CONSUMER}")
+    file(READ "${WS_H1_HANDSHAKE_TEST}" ws_h1_handshake_test)
+    file(READ "${WS_H2_HANDSHAKE_TEST}" ws_h2_handshake_test)
+    file(READ "${WS_H2_CONNECTION_TEST}" ws_h2_connection_test)
+    file(READ "${WS_RUNTIME_TEST}" ws_negotiation_runtime_test)
+    file(READ "${WS_PACKAGE_CONSUMER}" ws_negotiation_package_consumer)
+    if(NOT ws_h1_handshake_test MATCHES
+           "ws_server_handshake_response_serialization_is_http_owned" OR
+       NOT ws_h1_handshake_test MATCHES
+           "kAcceptedWithServerMaxWindowBits" OR
+       NOT ws_h2_handshake_test MATCHES
+           "makeWebSocketServerNegotiation" OR
+       NOT ws_h2_connection_test MATCHES
+           "duplicateHandshakeResult[.]failure[(][)]->error[(][)]" OR
+       NOT ws_negotiation_runtime_test MATCHES
+           "WebSocketDeflateNegotiation::kAccepted" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "HasLooseWebSocketDeflateFields" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "HasLooseWebSocketNegotiationFields" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "AcceptsLooseWebSocketHandshakeSubmit" OR
+       NOT ws_negotiation_package_consumer MATCHES
+           "Http2WebSocketHandshakeSubmitResult")
+        boundary_error("immutable WebSocket server negotiation is insufficiently tested"
+            "H1/H2 serialization, committed submission, typed frame handoff, and installed compile contracts must stay pinned")
     endif()
 endif()
 

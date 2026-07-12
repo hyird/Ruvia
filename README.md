@@ -339,6 +339,17 @@ advertisement never loses its required hop-by-hop marker.
 HTTP/1 WebSocket validation derives Connection, every Upgrade offer, and duplicate handshake
 fields from one parsed `HttpRequest`; it no longer accepts a separate flags object that could
 describe different wire bytes or rely on the single-value known-header cache.
+The server handshake is also negotiated exactly once. The immutable HTTP-owned
+`WebSocketServerNegotiation` binds the selected subprotocol to one exclusive
+`WebSocketDeflateNegotiation` alternative: disabled, accepted, or accepted while echoing
+`server_max_window_bits=15`. HTTP/1 serializes its 101 response from that value. RFC 8441 passes the
+same value into `Http2Connection::submitWebSocketHandshake()`, whose submitted alternative alone
+exposes the negotiation committed to the 200 response; the subsequent `WsConnection` is configured
+from that committed alternative. There is no H1 compression `bool&`, H2 `subprotocol + extensions`
+tuple, or second request scan that can make response metadata disagree with RSV1 handling. This
+follows [RFC 6455 Section 4.2.2](https://www.rfc-editor.org/rfc/rfc6455.html#section-4.2.2),
+[RFC 7692 Section 7.1](https://www.rfc-editor.org/rfc/rfc7692.html#section-7.1), and
+[RFC 8441 Section 5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5).
 WebSocket close handling follows the same single-owner rule. `ruvia-http`'s `WsConnection`
 exposes one `poll()` input driver. It returns `std::optional<WsEvent>`: `std::nullopt` means that a
 complete event is not yet available because the parser needs more transport bytes, while every

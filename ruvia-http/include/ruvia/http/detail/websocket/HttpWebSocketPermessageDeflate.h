@@ -120,13 +120,22 @@ private:
     bool inflateOk_{false};
 };
 
-struct WebSocketDeflateNegotiation final {
-    bool enabled = false;
+// One negotiated permessage-deflate outcome. The former enabled/echo booleans
+// admitted an impossible "disabled but echo server_max_window_bits" product.
+enum class WebSocketDeflateNegotiation : std::uint8_t {
+    kDisabled,
+    kAccepted,
     // The client pinned server_max_window_bits=15, i.e. exactly our fixed window.
-    // RFC 7692 §7.1.2.1 requires a server that accepts an offer carrying this
-    // parameter to echo server_max_window_bits in the response, so record it.
-    bool echoServerMaxWindowBits = false;
+    // RFC 7692 §7.1.2.1 requires the response to echo that parameter.
+    kAcceptedWithServerMaxWindowBits,
 };
+
+[[nodiscard]] constexpr bool webSocketDeflateNegotiated(
+    WebSocketDeflateNegotiation negotiation) noexcept {
+    return negotiation == WebSocketDeflateNegotiation::kAccepted ||
+        negotiation == WebSocketDeflateNegotiation::
+            kAcceptedWithServerMaxWindowBits;
+}
 
 // Decide whether the client offered permessage-deflate in a form we can honor. We
 // run a fixed 32 KiB (15-bit) server window with no context takeover, so a bare
@@ -148,10 +157,11 @@ struct WebSocketDeflateNegotiation final {
             const auto params = semicolon == std::string_view::npos ? std::string_view{} : offer.substr(semicolon + 1);
             const auto serverWindow = httpFindSemicolonParameterQuotedIgnoreCase(params, "server_max_window_bits");
             if (!serverWindow.has_value()) {
-                return {.enabled = true, .echoServerMaxWindowBits = false};
+                return WebSocketDeflateNegotiation::kAccepted;
             }
             if (httpTrimQuotes(*serverWindow) == "15") {
-                return {.enabled = true, .echoServerMaxWindowBits = true};
+                return WebSocketDeflateNegotiation::
+                    kAcceptedWithServerMaxWindowBits;
             }
         }
         if (comma == std::string_view::npos) {
@@ -159,7 +169,7 @@ struct WebSocketDeflateNegotiation final {
         }
         offers.remove_prefix(comma + 1);
     }
-    return {};
+    return WebSocketDeflateNegotiation::kDisabled;
 }
 
 // Response Sec-WebSocket-Extensions VALUES for an accepted permessage-deflate offer
@@ -175,13 +185,16 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
 // The response Sec-WebSocket-Extensions VALUE for a negotiation result (empty when
 // deflate was not accepted). Single-sources the h1 handshake and the h2 tunnel path.
 [[nodiscard]] inline std::string_view webSocketDeflateResponseExtensions(
-    const WebSocketDeflateNegotiation& negotiation) noexcept {
-    if (!negotiation.enabled) {
-        return {};
+    WebSocketDeflateNegotiation negotiation) noexcept {
+    switch (negotiation) {
+        case WebSocketDeflateNegotiation::kDisabled:
+            return {};
+        case WebSocketDeflateNegotiation::kAccepted:
+            return kWebSocketDeflateResponseExtensions;
+        case WebSocketDeflateNegotiation::kAcceptedWithServerMaxWindowBits:
+            return kWebSocketDeflateResponseExtensionsMaxWindow;
     }
-    return negotiation.echoServerMaxWindowBits
-        ? kWebSocketDeflateResponseExtensionsMaxWindow
-        : kWebSocketDeflateResponseExtensions;
+    return {};
 }
 
 [[nodiscard]] inline WebSocketDeflateNegotiation webSocketNegotiatePermessageDeflate(
@@ -197,11 +210,11 @@ inline constexpr std::string_view kWebSocketDeflateResponseExtensionsMaxWindow =
             continue;
         }
         const auto negotiation = webSocketScanDeflateOffers(header.value());
-        if (negotiation.enabled) {
+        if (webSocketDeflateNegotiated(negotiation)) {
             return negotiation;
         }
     }
-    return {};
+    return WebSocketDeflateNegotiation::kDisabled;
 }
 
 }  // namespace ruvia::detail

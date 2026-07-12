@@ -48,14 +48,14 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             response, parsed.connectionPlan.requireClose());
         co_return HttpWebSocketRouteResult::kWriteBufferedResponse;
     }
-    bool permessageDeflate = false;
     const auto& webSocketEndpoint =
         *resolved.route().endpoint().webSocket();
+    const auto handshake = makeHttpWebSocketServerHandshake(
+        parsed.request,
+        webSocketEndpoint.subprotocols());
     if (!(co_await writeWebSocketHandshake(
             stream,
-            parsed.request,
-            webSocketEndpoint.subprotocols(),
-            permessageDeflate))) {
+            handshake))) {
         co_return HttpWebSocketRouteResult::kSessionFinished;
     }
 
@@ -66,7 +66,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
         options.maxWebSocketMessageBytes,
         memory.resource(),
         pendingFrames,
-        permessageDeflate);
+        handshake.negotiation().deflate());
     co_await runWebSocketSession(
         webSocketConnection,
         scannerEntry,

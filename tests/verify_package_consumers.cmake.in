@@ -499,6 +499,80 @@ if(_installed_ws_event MATCHES "struct[ \t]+WsEvent[ \t]+final" OR
    _installed_ws_event MATCHES "Kind::kNone")
     message(FATAL_ERROR "installed WebSocket core restored the loose sentinel event tuple")
 endif()
+set(_installed_ws_deflate_negotiation_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
+set(_installed_ws_server_negotiation_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/WebSocketServerNegotiation.h")
+set(_installed_ws_h1_handshake_path
+    "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketServerHandshake.h")
+set(_installed_ws_h2_handshake_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2WebSocketHandshake.h")
+foreach(_ws_negotiation_contract IN ITEMS
+        "${_installed_ws_deflate_negotiation_path}"
+        "${_installed_ws_server_negotiation_path}"
+        "${_installed_ws_h1_handshake_path}"
+        "${_installed_ws_h2_handshake_path}")
+    if(NOT EXISTS "${_ws_negotiation_contract}")
+        message(FATAL_ERROR
+            "installed HTTP package is missing immutable WebSocket negotiation")
+    endif()
+endforeach()
+file(READ "${_installed_ws_deflate_negotiation_path}"
+    _installed_ws_deflate_negotiation)
+file(READ "${_installed_ws_server_negotiation_path}"
+    _installed_ws_server_negotiation)
+file(READ "${_installed_ws_h1_handshake_path}"
+    _installed_ws_h1_handshake)
+file(READ "${_installed_ws_h2_handshake_path}"
+    _installed_ws_h2_handshake)
+if(NOT _installed_ws_deflate_negotiation MATCHES
+       "enum class WebSocketDeflateNegotiation" OR
+   NOT _installed_ws_deflate_negotiation MATCHES "kDisabled" OR
+   NOT _installed_ws_deflate_negotiation MATCHES "kAccepted" OR
+   NOT _installed_ws_deflate_negotiation MATCHES
+       "kAcceptedWithServerMaxWindowBits" OR
+   NOT _installed_ws_deflate_negotiation MATCHES
+       "webSocketDeflateNegotiated" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "class WebSocketServerNegotiation final" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "makeWebSocketServerNegotiation" OR
+   NOT _installed_ws_server_negotiation MATCHES
+       "WebSocketDeflateNegotiation deflate[(][)]" OR
+   NOT _installed_ws_h1_handshake MATCHES
+       "class HttpWebSocketServerHandshake final" OR
+   NOT _installed_ws_h1_handshake MATCHES
+       "const WebSocketServerNegotiation&" OR
+   NOT _installed_ws_h2_handshake MATCHES
+       "const WebSocketServerNegotiation& negotiation" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2SubmittedWebSocketHandshake final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2WebSocketHandshakeSubmitFailure final" OR
+   NOT _installed_http2_connection MATCHES
+       "class Http2WebSocketHandshakeSubmitResult final" OR
+   NOT _installed_http2_connection MATCHES
+       "std::get_if<Http2SubmittedWebSocketHandshake>" OR
+   NOT _installed_http2_connection MATCHES
+       "WebSocketServerNegotiation negotiation" OR
+   NOT _installed_ws_connection MATCHES
+       "WebSocketDeflateNegotiation deflate")
+    message(FATAL_ERROR
+        "installed WebSocket handshake lost its immutable negotiation contract")
+endif()
+if(_installed_ws_deflate_negotiation MATCHES
+       "bool[ \t]+(enabled|echoServerMaxWindowBits)" OR
+   _installed_ws_h1_handshake MATCHES "permessageDeflate" OR
+   _installed_ws_h2_handshake MATCHES
+       "http2ChooseWebSocketSubprotocol" OR
+   _installed_ws_h2_handshake MATCHES
+       "http2EncodeWebSocketHandshakeHeaders[ \t\r\n]*[(][^)]*std::string_view" OR
+   _installed_http2_connection MATCHES
+       "submitWebSocketHandshake[ \t\r\n]*[(][^)]*std::string_view" OR
+   _installed_ws_connection MATCHES "bool[ \t]+permessageDeflate")
+    message(FATAL_ERROR
+        "installed WebSocket handshake restored split negotiation state")
+endif()
 if(NOT _installed_ws_inbound MATCHES
        "enum class WebSocketProtocolFailure" OR
    NOT _installed_ws_inbound MATCHES
@@ -1106,6 +1180,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
     set(_installed_route_websocket_session_path
         "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketSession.h")
+    set(_installed_ws_handshake_writer_path
+        "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketHandshake.h")
+    set(_installed_ws_runtime_connection_path
+        "${_install_prefix}/include/ruvia/web/detail/websocket/HttpWebSocketConnection.h")
+    set(_installed_ws_h1_route_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpServerWebSocketRoute.h")
     set(_installed_stale_request_dispatcher_path
         "${_install_prefix}/include/ruvia/web/detail/router/RequestDispatcher.h")
     set(_installed_stale_stream_kind_adapter
@@ -1117,7 +1197,10 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "${_installed_route_http2_session_path}"
             "${_installed_http2_server_entry_path}"
             "${_installed_route_response_stream_dispatch_path}"
-            "${_installed_route_websocket_session_path}")
+            "${_installed_route_websocket_session_path}"
+            "${_installed_ws_handshake_writer_path}"
+            "${_installed_ws_runtime_connection_path}"
+            "${_installed_ws_h1_route_path}")
         if(NOT EXISTS "${_route_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed route contract")
@@ -1143,6 +1226,42 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_route_response_stream_dispatch)
     file(READ "${_installed_route_websocket_session_path}"
         _installed_route_websocket_session)
+    file(READ "${_installed_ws_handshake_writer_path}"
+        _installed_ws_handshake_writer)
+    file(READ "${_installed_ws_runtime_connection_path}"
+        _installed_ws_runtime_connection)
+    file(READ "${_installed_ws_h1_route_path}"
+        _installed_ws_h1_route)
+    if(NOT _installed_ws_handshake_writer MATCHES
+           "const HttpWebSocketServerHandshake& handshake" OR
+       NOT _installed_ws_runtime_connection MATCHES
+           "WebSocketDeflateNegotiation deflate" OR
+       NOT _installed_ws_runtime_connection MATCHES
+           "protocol_[(]buffer_, maxMessageBytes, deflate[)]" OR
+       NOT _installed_ws_h1_route MATCHES
+           "makeHttpWebSocketServerHandshake" OR
+       NOT _installed_ws_h1_route MATCHES
+           "handshake[.]negotiation[(][)][.]deflate[(][)]" OR
+       NOT _installed_route_http2_session MATCHES
+           "makeWebSocketServerNegotiation" OR
+       NOT _installed_route_http2_session MATCHES
+           "handshakeResult[.]submitted[(][)]" OR
+       NOT _installed_route_http2_session MATCHES
+           "submittedHandshake->negotiation[(][)][.]deflate[(][)]")
+        message(FATAL_ERROR
+            "installed Web runtime lost the committed WebSocket negotiation handoff")
+    endif()
+    if(_installed_ws_handshake_writer MATCHES
+           "bool[ \t]*&[ \t]*permessageDeflate" OR
+       _installed_ws_h1_route MATCHES
+           "bool[ \t]+permessageDeflate|[.]permessageDeflate|[.]enabled" OR
+       _installed_route_http2_session MATCHES
+           "http2ChooseWebSocketSubprotocol|webSocketNegotiatePermessageDeflate|webSocketDeflateResponseExtensions|[.]enabled" OR
+       _installed_ws_runtime_connection MATCHES
+           "bool[ \t]+permessageDeflate")
+        message(FATAL_ERROR
+            "installed Web runtime restored split WebSocket negotiation state")
+    endif()
     set(_installed_conn_info_path
         "${_install_prefix}/include/ruvia/web/ConnInfo.h")
     set(_installed_context_internal_path

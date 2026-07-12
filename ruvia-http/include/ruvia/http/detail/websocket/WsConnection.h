@@ -77,7 +77,8 @@ public:
     explicit WsConnection(
         std::pmr::string& input,
         std::size_t maxMessageBytes = 0,
-        bool permessageDeflate = false);
+        WebSocketDeflateNegotiation deflate =
+            WebSocketDeflateNegotiation::kDisabled);
 
     // Parse buffered transport bytes until one protocol event is available or
     // more input is required (nullopt). Every materialized event contains one
