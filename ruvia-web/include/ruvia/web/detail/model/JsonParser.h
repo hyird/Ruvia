@@ -102,16 +102,16 @@ template <typename T>
         if (!parsed.has_value()) {
             return std::nullopt;
         }
-        FieldT value = makeRequestValue<FieldT>(resource);
         if (parsed->encoding() == JsonStringEncoding::kLiteral) {
-            value.assignView(parsed->raw());
-        } else {
-            auto decoded = decodeJsonString(parsed->raw(), resource);
-            if (!decoded.has_value()) {
-                return std::nullopt;
-            }
-            value.assignOwned(std::move(*decoded));
+            input = remaining;
+            return ModelValueFactory::makeString(parsed->raw(), resource);
         }
+        auto decoded = decodeJsonString(parsed->raw(), resource);
+        if (!decoded.has_value()) {
+            return std::nullopt;
+        }
+        FieldT value = makeRequestValue<FieldT>(resource);
+        value.assignOwned(std::move(*decoded));
         input = remaining;
         return value;
     } else if constexpr (std::is_same_v<FieldT, std::string_view>) {

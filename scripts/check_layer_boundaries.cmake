@@ -113,6 +113,8 @@ set(RULE_STALE_JSON_MODEL_PARSE_OUTPUT
     "parseJson(Array|List)Value|bool[ \t\r\n]+parseJson(Value|SequenceValue)|SequenceT[ \t]*&[ \t]*value")
 set(RULE_STALE_MODEL_LIST_OWNERSHIP
     "List[(]List&&[^;]*=[ \t]*default|operator=[(]List&&[^;]*=[ \t]*default|void[ \t]+clear[(][)] noexcept[ \t\r\n]*[{][ \t\r\n]*items_[.]clear")
+set(RULE_STALE_MODEL_STRING_STORAGE
+    "ownedActive_|std::string_view[ \t]+view_|std::pmr::string[ \t]+owned_|assignView|resetOwned")
 set(RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT
     "enum class[ \t]+TransferEncodingParse|parseTransferEncoding(Field)?[ \t]*\\(")
 set(RULE_STALE_HTTP_CLIENT_METHOD_CASE_FOLD
@@ -554,6 +556,15 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("model List clear leaked individually allocated elements"
         "${RULE_STALE_MODEL_LIST_OWNERSHIP}"
         "void clear() noexcept { items_.clear(); }")
+    expect_match("model String retained parallel borrowed/owned state"
+        "${RULE_STALE_MODEL_STRING_STORAGE}"
+        "std::string_view view_; std::pmr::string owned_; bool ownedActive_;")
+    expect_match("model String exposed an alias-unsafe borrowed transition"
+        "${RULE_STALE_MODEL_STRING_STORAGE}"
+        "void assignView(std::string_view value);")
+    expect_match("model String exposed mutable owned storage before commit"
+        "${RULE_STALE_MODEL_STRING_STORAGE}"
+        "std::pmr::string& resetOwned();")
     expect_match("split Transfer-Encoding parser state"
         "${RULE_STALE_HTTP_TRANSFER_ENCODING_SPLIT}"
         "auto parseTransferEncodingField(std::string_view value);")
@@ -2482,6 +2493,43 @@ if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
            "is_nothrow_move_assignable_v<ruvia::List<ruvia::Int32>>")
         boundary_error("model List lost PMR element ownership"
             "List must destroy every allocated element and move its pointer-table allocator with the owning resource")
+    endif()
+endif()
+set(WEB_MODEL_STRING_TEST
+    "${RUVIA_ROOT}/tests/unit_model_string.cpp")
+set(WEB_MODEL_VALIDATION_CONTRACT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Validation.h")
+check_files_no_match("model String must use one exclusive storage alternative"
+    "${RULE_STALE_MODEL_STRING_STORAGE}"
+    "${WEB_MODEL_TYPES_CONTRACT}")
+if(EXISTS "${WEB_MODEL_TYPES_CONTRACT}" AND
+   EXISTS "${WEB_MODEL_STRING_TEST}" AND
+   EXISTS "${WEB_MODEL_VALIDATION_CONTRACT}" AND
+   EXISTS "${WEB_JSON_PACKAGE_CONSUMER}")
+    file(READ "${WEB_MODEL_STRING_TEST}"
+        web_model_string_test)
+    file(READ "${WEB_MODEL_VALIDATION_CONTRACT}"
+        web_model_validation_contract)
+    if(NOT web_model_types_contract MATCHES
+           "using[ \t]+Storage[ \t]*=[ \t]*std::variant<std::string_view,[ \t]*std::pmr::string>" OR
+       NOT web_model_types_contract MATCHES
+           "String[(]const String&[)][ \t]*=[ \t]*delete" OR
+       NOT web_model_types_contract MATCHES
+           "std::destroy_at[(]&storage_[)]" OR
+       NOT web_model_types_contract MATCHES
+           "std::construct_at[(]&storage_[ \t]*,[ \t]*std::move[(]other[.]storage_[)]" OR
+       NOT web_model_validation_contract MATCHES
+           "const auto&[ \t]+ruviaValue[ \t]*=[ \t]*body[.]field[(][)]" OR
+       NOT web_model_string_test MATCHES
+           "model_string_public_construction_owns_input" OR
+       NOT web_model_string_test MATCHES
+           "model_string_owned_assignment_is_alias_safe" OR
+       NOT web_model_string_test MATCHES
+           "model_string_move_assignment_transfers_resource" OR
+       NOT web_json_package_consumer MATCHES
+           "!std::copy_constructible<ruvia::String>")
+        boundary_error("model String lost exclusive move-only ownership"
+            "public values must own inputs while parser-only construction may borrow one typed storage alternative")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT

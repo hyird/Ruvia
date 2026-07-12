@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/PmrObject.h"
@@ -129,13 +130,36 @@ public:
     String(
         std::string_view value,
         std::pmr::memory_resource* resource = nullptr)
-        : String(detail::ResolvedPmrResourceTag{}, value, detail::pmrResourceOrDefault(resource)) {}
+        : resource_(detail::pmrResourceOrDefault(resource)),
+          storage_(
+              std::in_place_type<std::pmr::string>,
+              value,
+              resource_) {}
+
+    String(const String&) = delete;
+    String& operator=(const String&) = delete;
+
+    String(String&& other) noexcept
+        : resource_(other.resource_),
+          storage_(std::move(other.storage_)) {}
+
+    String& operator=(String&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+
+        std::destroy_at(&storage_);
+        resource_ = other.resource_;
+        std::construct_at(&storage_, std::move(other.storage_));
+        return *this;
+    }
 
     [[nodiscard]] std::string_view view() const noexcept {
-        if (ownedActive_) {
-            return std::string_view(owned_.data(), owned_.size());
+        if (const auto* borrowed = std::get_if<std::string_view>(&storage_)) {
+            return *borrowed;
         }
-        return view_;
+        const auto& owned = std::get<std::pmr::string>(storage_);
+        return std::string_view(owned.data(), owned.size());
     }
 
     [[nodiscard]] const char* data() const noexcept {
@@ -154,47 +178,40 @@ public:
         return view();
     }
 
-    void assignView(std::string_view value) noexcept {
-        view_ = value;
-        owned_.clear();
-        ownedActive_ = false;
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
     }
 
     void assignOwned(std::string_view value) {
-        auto& owned = resetOwned();
-        owned.assign(value.data(), value.size());
+        std::pmr::string owned(value, resource_);
+        storage_.template emplace<std::pmr::string>(std::move(owned));
     }
 
     void assignOwned(std::pmr::string&& value) {
-        owned_ = std::move(value);
-        ownedActive_ = true;
-        view_ = {};
-    }
-
-    [[nodiscard]] std::pmr::string& resetOwned() {
-        owned_.clear();
-        ownedActive_ = true;
-        view_ = {};
-        return owned_;
+        std::pmr::string owned(std::move(value), resource_);
+        storage_.template emplace<std::pmr::string>(std::move(owned));
     }
 
 private:
     friend struct detail::ModelValueFactory;
 
+    using Storage = std::variant<std::string_view, std::pmr::string>;
+
     String(
         detail::ResolvedPmrResourceTag,
         std::pmr::memory_resource* resource)
-        : owned_(resource) {}
+        : resource_(resource),
+          storage_(std::in_place_type<std::string_view>) {}
 
     String(
         detail::ResolvedPmrResourceTag,
         std::string_view value,
         std::pmr::memory_resource* resource)
-        : view_(value), owned_(resource) {}
+        : resource_(resource),
+          storage_(std::in_place_type<std::string_view>, value) {}
 
-    std::string_view view_;
-    std::pmr::string owned_;
-    bool ownedActive_{false};
+    std::pmr::memory_resource* resource_;
+    Storage storage_;
 };
 
 struct Bool final {
