@@ -1337,6 +1337,8 @@ set(HTTP_LEGACY_FRAME_UMBRELLA
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Frame.h")
 set(WEB_LEGACY_SERVER_SESSION_UMBRELLA
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerSessionUtils.h")
+set(WEB_LEGACY_REQUEST_BODY_UMBRELLA
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpRequestBody.h")
 set(WEB_REQUEST_FIELDS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h")
 set(WEB_REQUEST_FIELDS_ACCESS
@@ -1394,8 +1396,12 @@ if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")
     boundary_error("Generic Web server session aggregation was restored"
         "runtime translation units and tests must include their actual session contracts")
 endif()
-check_files_no_match("Web server code must not depend on a session include-order umbrella"
-    "HttpServerSessionUtils[.]h"
+if(EXISTS "${WEB_LEGACY_REQUEST_BODY_UMBRELLA}")
+    boundary_error("Generic Web request-body aggregation was restored"
+        "streaming and lazy-buffered runtimes must retain explicit owners")
+endif()
+check_files_no_match("Web runtime must not depend on ownerless aggregation headers"
+    "Http(ServerSessionUtils|RequestBody)[.]h"
     ${EDGE_REFERENCE_SOURCE})
 if(NOT EXISTS "${HTTP_MULTIPART_CONTRACT}" OR
    NOT EXISTS "${HTTP_MULTIPART_PART_ACCESS}")
