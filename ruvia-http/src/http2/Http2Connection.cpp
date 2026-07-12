@@ -544,7 +544,6 @@ void Http2Connection::discardDeferredStreamState(std::uint32_t streamId) {
         drainedDataStreams_.end());
     if (auto* stream = streams_.find(streamId); stream != nullptr) {
         http2ReleaseResponseHeaderBlock(*stream);
-        http2ReleaseResponseTrailerBlock(*stream);
     }
 }
 
@@ -2239,14 +2238,6 @@ Http2DataSubmitStatus Http2Connection::submitData(
             return Http2DataSubmitStatus::kBackpressured;
         }
     }
-    if (http2EndsStream(endStream) &&
-        localSend.responseContentOpen() != nullptr &&
-        !stream->responseTrailerBlock().empty()) {
-        // A direct terminal DATA would strand already accepted semantic trailers.
-        // The caller must submit keep-open DATA and use finishResponse(), which
-        // atomically places the terminal trailer section after all DATA.
-        return Http2DataSubmitStatus::kInvalidState;
-    }
     switch (stream->checkLocalContentAccept(chunk.size(), http2EndsStream(endStream))) {
         case Http2LocalContentCheck::kAccepted:
             break;
@@ -2315,8 +2306,7 @@ Http2SubmitStatus Http2Connection::submitConnectResponseHead(
     }
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr ||
-        stream->tunnel().pending() == nullptr ||
-        !stream->responseTrailerBlock().empty()) {
+        stream->tunnel().pending() == nullptr) {
         return Http2SubmitStatus::kInvalidState;
     }
     if (!http2IsValidConnectResponseHead(response)) {
@@ -2366,8 +2356,7 @@ Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
     }
     if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
         stream->localSend().headPending() == nullptr ||
-        !http2IsPendingWebSocketConnect(*stream) ||
-        !stream->responseTrailerBlock().empty()) {
+        !http2IsPendingWebSocketConnect(*stream)) {
         return Http2SubmitStatus::kInvalidState;
     }
     http2EncodeWebSocketHandshakeHeaders(stream->responseHeaderBlock(), subprotocol, extensions);
@@ -2385,41 +2374,9 @@ Http2SubmitStatus Http2Connection::submitWebSocketHandshake(
     return Http2SubmitStatus::kAccepted;
 }
 
-Http2ResponseTrailerSubmitStatus Http2Connection::submitResponseTrailerSection(
+Http2FinishSubmitStatus Http2Connection::finishResponse(
     std::uint32_t streamId,
     std::span<const HttpHeaderView> trailers) {
-    auto* stream = findStream(streamId);
-    if (stream == nullptr || stream->isAborted()) {
-        return Http2ResponseTrailerSubmitStatus::kClosed;
-    }
-    if (role_ != Http2Role::kServer || !http2RemoteFinalHeadDecoded(*stream) ||
-        (stream->localSend().responseContentOpen() == nullptr &&
-         stream->localSend().responseTrailersOnly() == nullptr) ||
-        !stream->responseTrailerBlock().empty()) {
-        return Http2ResponseTrailerSubmitStatus::kInvalidState;
-    }
-    if (trailers.empty()) {
-        return Http2ResponseTrailerSubmitStatus::kEmpty;
-    }
-    if (!responseTrailerSectionValid(trailers)) {
-        return Http2ResponseTrailerSubmitStatus::kInvalidField;
-    }
-    if (!stream->localContent().lengthComplete()) {
-        return Http2ResponseTrailerSubmitStatus::kContentLengthIncomplete;
-    }
-
-    // Encode into detached storage so a later field/allocation failure can never
-    // attach a prefix of the semantic section to the live stream. All protocol
-    // validation above completes before either HPACK bytes or stream state mutate.
-    std::pmr::string encoded(resource_);
-    for (const auto& trailer : trailers) {
-        appendHttp2ResponseTrailer(encoded, trailer.name(), trailer.value());
-    }
-    stream->responseTrailerBlock().swap(encoded);
-    return Http2ResponseTrailerSubmitStatus::kAccepted;
-}
-
-Http2FinishSubmitStatus Http2Connection::finishResponse(std::uint32_t streamId) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2FinishSubmitStatus::kClosed;
@@ -2431,39 +2388,50 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(std::uint32_t streamId) 
     if (!stream->localContent().lengthComplete()) {
         return Http2FinishSubmitStatus::kContentLengthIncomplete;
     }
-    auto& headerBlock = stream->responseTrailerBlock();
     if (stream->localSend().responseTrailersOnly() != nullptr &&
-        headerBlock.empty()) {
+        trailers.empty()) {
         // A trailers-only response cannot fall back to DATA(END_STREAM): its
         // method/status explicitly forbids DATA, including an empty terminal frame.
         return Http2FinishSubmitStatus::kInvalidState;
+    }
+    if (!trailers.empty() && !responseTrailerSectionValid(trailers)) {
+        return Http2FinishSubmitStatus::kInvalidTrailerSection;
+    }
+
+    // The entire semantic trailer section is validated and encoded in detached
+    // storage before output, pending DATA, or stream phase changes. It either joins
+    // the terminal transaction whole or leaves no per-stream staged side channel.
+    std::pmr::string trailerBlock(resource_);
+    for (const auto& trailer : trailers) {
+        appendHttp2ResponseTrailer(
+            trailerBlock,
+            trailer.name(),
+            trailer.value());
     }
     // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
     // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
     // from the body to the trailer (markSendWindowOpened emits it once the body drains).
     for (auto& pending : pendingSends_) {
         if (pending.streamId == streamId) {
-            if (headerBlock.empty()) {
+            if (trailerBlock.empty()) {
                 pending.endStream = Http2EndStream::kEndStream;
             } else {
                 pending.endStream = Http2EndStream::kKeepOpen;
-                pending.trailerBlock.assign(headerBlock.data(), headerBlock.size());
+                pending.trailerBlock.swap(trailerBlock);
             }
-            http2ReleaseResponseTrailerBlock(*stream);
             (void)stream->queueLocalEndStream();
             return Http2FinishSubmitStatus::kQueued;
         }
     }
-    if (headerBlock.empty()) {
+    if (trailerBlock.empty()) {
         appendFrame(Http2FrameType::kData, kHttp2FlagEndStream, streamId, {});
         (void)stream->commitLocalEndStream();
         return Http2FinishSubmitStatus::kAccepted;
     }
     appendResponseHeaderFrames(
         *stream,
-        std::string_view(headerBlock.data(), headerBlock.size()),
+        std::string_view(trailerBlock.data(), trailerBlock.size()),
         Http2EndStream::kEndStream);
-    http2ReleaseResponseTrailerBlock(*stream);
     (void)stream->commitLocalEndStream();
     return Http2FinishSubmitStatus::kAccepted;
 }

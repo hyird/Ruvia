@@ -670,14 +670,30 @@ set(_installed_http2_local_content_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2LocalContentState.h")
 set(_installed_http2_stream_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(_installed_http2_stream_header_blocks_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
 if(NOT EXISTS "${_installed_http2_local_content_path}" OR
-   NOT EXISTS "${_installed_http2_stream_state_path}")
+   NOT EXISTS "${_installed_http2_stream_state_path}" OR
+   NOT EXISTS "${_installed_http2_stream_header_blocks_path}")
     message(FATAL_ERROR "installed HTTP/2 local content accounting contract is missing")
 endif()
 file(READ "${_installed_http2_local_content_path}"
     _installed_http2_local_content)
 file(READ "${_installed_http2_stream_state_path}"
     _installed_http2_stream_state)
+file(READ "${_installed_http2_stream_header_blocks_path}"
+    _installed_http2_stream_header_blocks)
+if(NOT _installed_http2_connection MATCHES
+       "kInvalidTrailerSection" OR
+   NOT _installed_http2_connection MATCHES
+       "finishResponse[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*std::span<const HttpHeaderView>[ \t]+trailers" OR
+   _installed_http2_connection MATCHES
+       "submitResponseTrailerSection|Http2ResponseTrailerSubmitStatus" OR
+   _installed_http2_stream_state MATCHES "responseTrailerBlock" OR
+   _installed_http2_stream_header_blocks MATCHES "responseTrailers")
+    message(FATAL_ERROR
+        "installed HTTP/2 response finish restored staged trailer ownership")
+endif()
 if(_installed_http2_local_content MATCHES "Http2LocalContentMode" OR
    _installed_http2_local_content MATCHES "mode[(][)] const noexcept" OR
    NOT _installed_http2_local_content MATCHES
@@ -785,13 +801,16 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
     set(_installed_http2_stream_session_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http2SansIoSession.h")
+    set(_installed_http2_response_stream_sink_path
+        "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
     foreach(_response_stream_status_contract IN ITEMS
             "${_installed_route_stream_result_path}"
             "${_installed_response_stream_dispatch_path}"
             "${_installed_response_stream_state_path}"
             "${_installed_http1_stream_route_path}"
             "${_installed_http1_stream_session_path}"
-            "${_installed_http2_stream_session_path}")
+            "${_installed_http2_stream_session_path}"
+            "${_installed_http2_response_stream_sink_path}")
         if(NOT EXISTS "${_response_stream_status_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing response-stream status ownership")
@@ -809,6 +828,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_http1_stream_session)
     file(READ "${_installed_http2_stream_session_path}"
         _installed_http2_stream_session)
+    file(READ "${_installed_http2_response_stream_sink_path}"
+        _installed_http2_response_stream_sink)
     if(_installed_route_stream_result MATCHES
            "RouteStreamDispatchOutcome|streamHandled[(][)]|HttpResponse response_[ \t]*;[ \t\r\n]*Route" OR
        _installed_response_stream_dispatch MATCHES
@@ -841,6 +862,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "failed->status[(][)]")
         message(FATAL_ERROR
             "installed Web package restored reconstructed response-stream status")
+    endif()
+    if(NOT _installed_http2_response_stream_sink MATCHES
+           "finishResponse[(]streamId_, trailers[)]" OR
+       NOT _installed_http2_response_stream_sink MATCHES
+           "responseTrailerSectionValid[(]trailers[)]" OR
+       _installed_http2_response_stream_sink MATCHES
+           "submitResponseTrailerSection")
+        message(FATAL_ERROR
+            "installed Web HTTP/2 sink restored staged trailer submission")
     endif()
 
     set(_installed_http2_buffered_response_result_path

@@ -28,23 +28,13 @@ public:
         return response_;
     }
 
-    [[nodiscard]] std::pmr::string& responseTrailers() noexcept {
-        return responseTrailers_;
-    }
-
-    [[nodiscard]] const std::pmr::string& responseTrailers() const noexcept {
-        return responseTrailers_;
-    }
-
 private:
     Http2StreamHeaderBlocks(HttpResolvedPmrResourceTag, std::pmr::memory_resource* resource)
         : request_(resource),
-          response_(resource),
-          responseTrailers_(resource) {}
+          response_(resource) {}
 
     std::pmr::string request_;
     std::pmr::string response_;
-    std::pmr::string responseTrailers_;
 };
 
 }  // namespace ruvia::detail

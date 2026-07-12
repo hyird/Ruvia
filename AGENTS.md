@@ -292,10 +292,16 @@ body-allowed chunked response 可发送 trailer，HTTP/1.0 close-delimited 和 H
 必须报告 unavailable；HTTP/2 必须用 `Http2LocalSendState` 的显式
 `Http2LocalResponseTrailersOnly` alternative 为禁止 DATA 的 response 保留 trailer 终止能力，以
 trailing HEADERS 携带 `END_STREAM`，不得把它标成 body-open
-或回退为空 DATA。`Http2Connection::submitResponseTrailerSection()` 只能在 final response
-head 后原子接管非空 section，必须先验证全部字段及 Content-Length 完成状态再修改 HPACK/stream
-状态，并以 `Http2ResponseTrailerSubmitStatus` 显式报告 closed、wrong phase、empty、invalid field
-或 incomplete length；`finishResponse()` 仍是终止帧顺序的唯一 owner。
+或回退为空 DATA。`Http2Connection::finishResponse(streamId, trailers)` 必须显式接收完整终止
+section（允许为空；trailers-only phase 要求非空），并以一次 atomic transaction 完成全部字段与
+Content-Length 校验、detached HPACK 编码、阻塞 DATA 后排队及 `END_STREAM`。它以
+`Http2FinishSubmitStatus` 显式报告 closed、wrong phase、`kInvalidTrailerSection` 或 incomplete
+length；拒绝时不得修改 output/pending/stream。禁止恢复 `submitResponseTrailerSection()`、
+`Http2ResponseTrailerSubmitStatus` 或 `Http2StreamState`/`Http2StreamHeaderBlocks` 的 per-stream
+trailer 暂存；流控阻塞时编码后的完整 section 只能直接转移给 core-owned `Http2PendingSend`。
+Web sink 在 initial head commit 前必须调用 `ruvia-http` 的 `responseTrailerSectionValid()` 做
+preflight，使非法应用 metadata 仍是 pre-commit failure；最终 mutation boundary 由 core 再校验，
+但 Web 不得复制 trailer 字段规则。
 
 stream route 与 runtime completion 必须使用互斥 alternative：handled route 不得携带 dummy
 `HttpResponse`，buffered/failure-before-commit 才拥有 response；completed、peer-aborted-after-commit
@@ -667,7 +673,7 @@ Content-Length 必须遵循 [§8.1.1](https://www.rfc-editor.org/rfc/rfc9113.htm
 总长度一致性。`kAccepted`/`kQueued` 按整次输入只推进一次 accepted，DATA 真正物化进 outbound
 buffer 时才推进 committed；`kBackpressured`、
 超长输入和短 END_STREAM 都必须零接管且不得修改 output/window/phase。exact body 未达到
-声明长度时 `finishResponse()` 必须拒绝并保持 body-open，WINDOW_UPDATE drain 不得重复推进
+声明长度时 `finishResponse(streamId, trailers)` 必须拒绝并保持 body-open，WINDOW_UPDATE drain 不得重复推进
 accepted。HEAD/204/205/304 的 Content-Length 是无内容或 representation metadata，不得变成
 DATA 长度契约；WebSocket/CONNECT tunnel 保持 unbounded。
 
