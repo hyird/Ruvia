@@ -1,24 +1,14 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
-#include "ruvia/web/detail/server/RequestMemoryArena.h"
-#include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/core/detail/AsioAwait.h"
 #include "ruvia/core/detail/SocketUtils.h"
-
-#include "ruvia/web/Error.h"
-#include "ruvia/http/detail/http1/Http1ServerSemantics.h"
-#include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <asio/bind_allocator.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 #include <asio/steady_timer.hpp>
-#include <array>
 #include <chrono>
-#include <cstddef>
-#include <optional>
-#include <span>
 #include <system_error>
 #include <utility>
 
@@ -54,38 +44,12 @@ Task<void> HttpServer::acceptLoop() {
             closeSocket(socket);
             co_return;
         }
-        configureAcceptedSocket(socket);
-
         if (options_.maxConnections > 0 && activeConnectionCount_ >= options_.maxConnections) {
-            if (options_.tls.enabled) {
-                closeSocket(socket);
-                continue;
-            }
-            std::array<std::byte, kRequestArenaStackBytes> limitArenaBuffer;
-            std::optional<RequestMemory> limitMemoryStorage;
-            auto& limitMemory = emplaceRequestMemory(
-                limitMemoryStorage,
-                memory_,
-                std::span<std::byte>(limitArenaBuffer.data(), limitArenaBuffer.size()));
-            auto response = makeDefaultErrorResponse(
-                limitMemory.resource(),
-                HttpErrorInfo(429));
-            http1MarkConnectionClose(response);
-            const auto writePlan = httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response);
-            const auto responsePlan = http1BufferedResponsePlan(
-                writePlan,
-                Http1ServerConnectionPlan::http11Close());
-            (void)co_await writeResponse(
-                socket,
-                memory_,
-                nullptr,
-                nullptr,
-                response,
-                responsePlan);
             closeSocket(socket);
             continue;
         }
 
+        configureAcceptedSocket(socket);
         ++activeConnectionCount_;
 
         asio::co_spawn(

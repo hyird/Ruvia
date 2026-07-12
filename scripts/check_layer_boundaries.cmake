@@ -1193,6 +1193,16 @@ check_files_no_match("request sessions must not poll cross-thread lifecycle atom
     "${WEB_HTTP1_STREAM_SESSION}"
     "${WEB_HTTP2_SESSION}"
     "${WEB_CLEARTEXT_HTTP2_SESSION}")
+if(EXISTS "${WEB_HTTP_SERVER_ACCEPT}")
+    file(READ "${WEB_HTTP_SERVER_ACCEPT}" web_http_server_accept)
+    if(NOT web_http_server_accept MATCHES
+           "activeConnectionCount_[ 	]*>=[ 	]*options_[.]maxConnections" OR
+       web_http_server_accept MATCHES
+           "Http(Response|Error)|http1|writeResponse|RequestMemory")
+        boundary_error("Connection admission crossed into HTTP response handling"
+            "over-budget sockets must close before TLS/HTTP detection without fabricating protocol bytes")
+    endif()
+endif()
 if(EXISTS "${WEB_HTTP_SERVER}" AND EXISTS "${WEB_HTTP_SERVER_LIFECYCLE}")
     file(READ "${WEB_HTTP_SERVER}" web_http_server_lifecycle_model)
     file(READ "${WEB_HTTP_SERVER_LIFECYCLE}" web_http_server_lifecycle)
