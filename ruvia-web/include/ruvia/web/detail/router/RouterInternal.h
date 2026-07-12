@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/router/RouteTable.h"
-#include "ruvia/web/ControllerDescriptors.h"
+#include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/Router.h"
 
 namespace ruvia::detail {

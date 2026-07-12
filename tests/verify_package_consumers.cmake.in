@@ -921,6 +921,24 @@ endforeach()
 set(_installed_http2_web_runtime_path
     "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
 if(_built_components_csv MATCHES "(^|,)web(,|$)")
+    set(_installed_controller_descriptors_path
+        "${_install_prefix}/include/ruvia/web/detail/controller/ControllerDescriptors.h")
+    set(_installed_controller_runtime_path
+        "${_install_prefix}/include/ruvia/web/detail/controller/ControllerRuntime.h")
+    if(NOT EXISTS "${_installed_controller_descriptors_path}" OR
+       NOT EXISTS "${_installed_controller_runtime_path}")
+        message(FATAL_ERROR
+            "installed Web package is missing its detail controller registration contracts")
+    endif()
+    foreach(_stale_controller_header IN ITEMS
+            "${_install_prefix}/include/ruvia/web/ControllerDescriptors.h"
+            "${_install_prefix}/include/ruvia/web/ControllerRuntime.h"
+            "${_install_prefix}/include/ruvia/web/ControllerTypes.h")
+        if(EXISTS "${_stale_controller_header}")
+            message(FATAL_ERROR
+                "installed Web package restored a public-root controller implementation header")
+        endif()
+    endforeach()
     set(_installed_json_string_path
         "${_install_prefix}/include/ruvia/web/detail/json/JsonString.h")
     set(_installed_json_model_parser_path

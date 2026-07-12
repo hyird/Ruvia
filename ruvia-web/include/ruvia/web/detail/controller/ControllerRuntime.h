@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/ControllerDescriptors.h"
+#include "ruvia/web/detail/controller/ControllerDescriptors.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/web/ContextModel.h"
 #include "ruvia/web/MiddlewareRuntime.h"

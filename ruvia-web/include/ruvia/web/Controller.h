@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/ControllerTypes.h"
+#include "ruvia/web/detail/controller/ControllerRuntime.h"
 
 #include <concepts>
 #include <cstddef>

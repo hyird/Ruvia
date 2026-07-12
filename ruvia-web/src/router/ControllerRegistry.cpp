@@ -1,4 +1,4 @@
-#include "ruvia/web/ControllerDescriptors.h"
+#include "ruvia/web/detail/controller/ControllerDescriptors.h"
 
 #include <memory_resource>
 #include <mutex>

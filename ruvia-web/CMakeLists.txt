@@ -7,7 +7,6 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ruvia.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Controller.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
@@ -32,6 +31,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerDocumentRoot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpServerLifecycle.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/router/ControllerRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterBuild.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/Router.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/router/RouterDispatch.cpp
@@ -144,9 +144,6 @@ ruvia_install_public_headers(web
     include/ruvia/web/Context.inl
     include/ruvia/web/ContextModel.h
     include/ruvia/web/Controller.h
-    include/ruvia/web/ControllerDescriptors.h
-    include/ruvia/web/ControllerRuntime.h
-    include/ruvia/web/ControllerTypes.h
     include/ruvia/web/Csrf.h
     include/ruvia/web/ErrorHandlers.h
     include/ruvia/web/Health.h
