@@ -712,6 +712,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_web_runtime MATCHES "RequestBodyMode" OR
        NOT _installed_http2_web_runtime MATCHES "kModeNotSelected" OR
        NOT _installed_http2_web_runtime MATCHES "modeSelected" OR
+       NOT _installed_http2_web_runtime MATCHES "selectedMode" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "std::optional<RequestBodyMode>" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "std::optional<RouteResolution>" OR
+       NOT _installed_http2_web_runtime MATCHES "selectRoute" OR
        NOT _installed_http2_web_runtime MATCHES
            "std::optional<Http2SansIoStreamSignal>" OR
        NOT _installed_http2_web_runtime MATCHES
@@ -722,6 +728,91 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http2_web_runtime MATCHES "streamingBacklogLimit")
         message(FATAL_ERROR
             "installed Web package lost unified HTTP/2 route/body/signal runtime ownership")
+    endif()
+    if(_installed_http2_web_runtime MATCHES
+           "RequestBodyMode[ \t]+mode_[ \t]*[{]" OR
+       _installed_http2_web_runtime MATCHES
+           "bool[ \t]+modeSelected_")
+        message(FATAL_ERROR
+            "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
+    endif()
+
+    set(_installed_route_modes_path
+        "${_install_prefix}/include/ruvia/web/RouteModes.h")
+    set(_installed_route_resolution_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteResolution.h")
+    set(_installed_route_table_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteTable.h")
+    set(_installed_request_dispatcher_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RequestDispatcher.h")
+    set(_installed_stale_stream_kind_adapter
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamKindAdapter.h")
+    foreach(_route_contract IN ITEMS
+            "${_installed_route_modes_path}"
+            "${_installed_route_resolution_path}"
+            "${_installed_route_table_path}"
+            "${_installed_request_dispatcher_path}")
+        if(NOT EXISTS "${_route_contract}")
+            message(FATAL_ERROR
+                "installed Web package is missing a typed route contract")
+        endif()
+    endforeach()
+    if(EXISTS "${_installed_stale_stream_kind_adapter}")
+        message(FATAL_ERROR
+            "installed Web package retained the removed response-mode adapter")
+    endif()
+    file(READ "${_installed_route_modes_path}" _installed_route_modes)
+    file(READ "${_installed_route_resolution_path}"
+        _installed_route_resolution)
+    file(READ "${_installed_route_table_path}" _installed_route_table)
+    file(READ "${_installed_request_dispatcher_path}"
+        _installed_request_dispatcher)
+    if(_installed_route_modes MATCHES "ResponseBodyMode" OR
+       _installed_route_resolution MATCHES "RouteDisposition" OR
+       _installed_route_resolution MATCHES
+           "bool[ \t]+(found|hasMatch)_" OR
+       NOT _installed_route_resolution MATCHES
+           "class RouteNotFound final" OR
+       NOT _installed_route_resolution MATCHES
+           "class RouteMethodNotAllowed final" OR
+       NOT _installed_route_resolution MATCHES
+           "class ResolvedRoute final" OR
+       NOT _installed_route_resolution MATCHES
+           "using Value = std::variant" OR
+       NOT _installed_route_resolution MATCHES
+           "std::get_if<ResolvedRoute>" OR
+       NOT _installed_route_resolution MATCHES
+           "std::get_if<RouteMethodNotAllowed>" OR
+       NOT _installed_route_resolution MATCHES
+           "std::get_if<RouteNotFound>")
+        message(FATAL_ERROR
+            "installed route resolution lost its exclusive resolved/405/404 alternatives")
+    endif()
+    if(_installed_route_table MATCHES "ResponseBodyMode" OR
+       _installed_route_table MATCHES "RouteDisposition" OR
+       NOT _installed_route_table MATCHES
+           "class BufferedRouteEndpoint final" OR
+       NOT _installed_route_table MATCHES
+           "class ResponseStreamRouteEndpoint final" OR
+       NOT _installed_route_table MATCHES
+           "class WebSocketRouteEndpoint final" OR
+       NOT _installed_route_table MATCHES
+           "class RouteEndpoint final" OR
+       NOT _installed_route_table MATCHES
+           "std::get_if<BufferedRouteEndpoint>" OR
+       NOT _installed_route_table MATCHES
+           "std::get_if<ResponseStreamRouteEndpoint>" OR
+       NOT _installed_route_table MATCHES
+           "std::get_if<WebSocketRouteEndpoint>")
+        message(FATAL_ERROR
+            "installed route table restored split handler/mode endpoint state")
+    endif()
+    if(_installed_request_dispatcher MATCHES
+           "resolve[ \t\r\n]*[(][^)]*RouteMatch[ \t]*&" OR
+       NOT _installed_request_dispatcher MATCHES
+           "const ResolvedRoute& route")
+        message(FATAL_ERROR
+            "installed route dispatcher restored caller-owned match scratch or untyped stream dispatch")
     endif()
 endif()
 if(NOT EXISTS "${_installed_http2_remote_content_path}")

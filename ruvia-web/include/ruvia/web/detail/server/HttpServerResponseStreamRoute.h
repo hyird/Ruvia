@@ -59,7 +59,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
     ResponseHeadBuffer& responseHead,
     ConnectionScanner::Entry& scannerEntry,
     const Http1ServerRequestParseState& parsed,
-    const RouteResolution& routeResolution,
+    const ResolvedRoute& resolved,
     const RouteTable& routes,
     RequestMemory& requestMemory,
     ContextServices baseRouteServices,
@@ -72,13 +72,14 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         nextHttp1ResponseClosePolicy(requestCount, options.keepaliveRequests));
     connectionPlan = streamPlan.requestConnectionPlan();
     using ResponseSink = ResponseStreamSink<Stream, ConnectionScanner::Entry>;
-    const auto& route = routeResolution.route();
+    const auto& route = resolved.route();
+    const auto& endpoint = *route.endpoint().responseStream();
     ResponseSink responseSink(
         stream,
         memory,
         responseHead,
         scannerEntry,
-        route.responseMode(),
+        endpoint.kind(),
         streamPlan);
 
     scannerEntry.setPhase(ConnectionScanner::Phase::kWriting);
@@ -86,7 +87,7 @@ Task<HttpResponseStreamRouteResult> dispatchHttpResponseStreamRoute(
         responseSink,
         routes,
         parsed.request,
-        routeResolution,
+        resolved,
         requestMemory,
         baseRouteServices,
         /*peerAborted=*/[]() noexcept { return false; });

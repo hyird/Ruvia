@@ -96,7 +96,10 @@ namespace {
 }  // namespace
 
 detail::RouteEntry::RouteEntry(std::pmr::memory_resource* resource, Init init)
-    : RouteEntry(detail::ResolvedPmrResourceTag{}, detail::pmrResourceOrDefault(resource), init) {}
+    : RouteEntry(
+          detail::ResolvedPmrResourceTag{},
+          detail::pmrResourceOrDefault(resource),
+          std::move(init)) {}
 
 detail::RouteEntry::RouteEntry(
     detail::ResolvedPmrResourceTag,
@@ -104,15 +107,10 @@ detail::RouteEntry::RouteEntry(
     Init init)
     : method_(init.method),
       path_(init.path, resource),
-      handler_(init.handler),
-      streamHandler_(init.streamHandler),
-      bodyMode_(init.bodyMode),
-      responseMode_(init.responseMode),
+      endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
       middlewareOffset_(init.middlewareOffset),
-      middlewareCount_(init.middlewareCount),
-      webSocketSubprotocols_(init.webSocketSubprotocols, resource),
-      webSocketLifecycle_(init.webSocketLifecycle) {}
+      middlewareCount_(init.middlewareCount) {}
 
 detail::RouteTable::RouteTable(std::pmr::memory_resource* resource)
     : resource_(detail::pmrResourceOrDefault(resource)),
@@ -161,7 +159,8 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
     std::size_t headShadowCandidateCount = 0;
     std::size_t middlewareCount = 0;
     for (const auto& route : pendingRoutes_) {
-        if (route.method() == HttpKnownMethod::kGet && route.isBufferedResponse()) {
+        if (route.method() == HttpKnownMethod::kGet &&
+            route.endpoint().buffered() != nullptr) {
             ++headShadowCandidateCount;
         }
         middlewareCount += route.middlewares().size();
@@ -174,15 +173,10 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         RouteEntry route(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
             .method = pending.method(),
             .path = pending.path(),
-            .handler = pending.handler(),
-            .streamHandler = pending.streamHandler(),
-            .bodyMode = pending.bodyMode(),
-            .responseMode = pending.responseMode(),
+            .endpoint = pending.endpoint().clone(table.resource_),
             .dynamic = pending.dynamic(),
             .middlewareOffset = 0,
-            .middlewareCount = 0,
-            .webSocketSubprotocols = pending.webSocketSubprotocols(),
-            .webSocketLifecycle = pending.webSocketLifecycle()});
+            .middlewareCount = 0});
         route.setMiddlewareRange(table.middlewareFrames_.size(), pendingMiddlewares.size());
         table.middlewareFrames_.insert(
             table.middlewareFrames_.end(),
@@ -214,7 +208,8 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
 
     for (std::size_t i = 0; i < originalRouteCount; ++i) {
         const auto& source = table.routes_[i];
-        if (source.method() != HttpKnownMethod::kGet || !source.isBufferedResponse()) {
+        if (source.method() != HttpKnownMethod::kGet ||
+            source.endpoint().buffered() == nullptr) {
             continue;
         }
         bool conflictsWithExistingHead = false;
@@ -230,15 +225,10 @@ detail::RouteTable detail::RouterImpl::buildRouteTable() const {
         RouteEntry shadow(detail::ResolvedPmrResourceTag{}, table.resource_, RouteEntry::Init{
             .method = HttpKnownMethod::kHead,
             .path = source.path(),
-            .handler = source.handler(),
-            .streamHandler = source.streamHandler(),
-            .bodyMode = source.bodyMode(),
-            .responseMode = source.responseMode(),
+            .endpoint = source.endpoint().clone(table.resource_),
             .dynamic = source.dynamic(),
             .middlewareOffset = source.middlewareOffset(),
-            .middlewareCount = source.middlewareCount(),
-            .webSocketSubprotocols = source.webSocketSubprotocols(),
-            .webSocketLifecycle = source.webSocketLifecycle()});
+            .middlewareCount = source.middlewareCount()});
         table.routes_.push_back(std::move(shadow));
     }
 

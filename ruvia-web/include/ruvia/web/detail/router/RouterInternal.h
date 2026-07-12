@@ -70,31 +70,43 @@ public:
         RouteHandler handler,
         RequestBodyMode bodyMode,
         std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
-        ResponseBodyMode responseMode = ResponseBodyMode::kBuffered);
-    void registerStreamRoute(
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerResponseStreamRoute(
         HttpKnownMethod method,
         std::pmr::string path,
         RouteStreamHandler handler,
-        ResponseBodyMode responseMode,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerSseRoute(
+        HttpKnownMethod method,
+        std::pmr::string path,
+        RouteStreamHandler handler,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+    void registerWebSocketRoute(
+        HttpKnownMethod method,
+        std::pmr::string path,
+        RouteStreamHandler handler,
         std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
         std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
         WebSocketRouteOptions webSocketOptions = {});
 
 private:
+    void registerEndpoint(
+        HttpKnownMethod method,
+        std::pmr::string path,
+        RouteEndpoint endpoint,
+        std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+        std::span<const ControllerMiddlewareDescriptor> routeMiddlewares);
+
     class PendingRoute final {
     public:
         struct Init final {
             HttpKnownMethod method;
             std::pmr::string path;
-            RouteHandler handler;
-            RouteStreamHandler streamHandler;
-            RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-            ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
+            RouteEndpoint endpoint;
             bool dynamic{false};
             std::pmr::vector<RouteMiddleware> middlewares;
-            std::string_view webSocketSubprotocols{};
-            WebSocketLifecycleOptions webSocketLifecycle{};
         };
 
         PendingRoute(std::pmr::memory_resource* resource, Init init);
@@ -111,24 +123,8 @@ private:
             return path_;
         }
 
-        [[nodiscard]] const RouteHandler& handler() const noexcept {
-            return handler_;
-        }
-
-        [[nodiscard]] const RouteStreamHandler& streamHandler() const noexcept {
-            return streamHandler_;
-        }
-
-        [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
-            return bodyMode_;
-        }
-
-        [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
-            return responseMode_;
-        }
-
-        [[nodiscard]] bool isBufferedResponse() const noexcept {
-            return responseMode_ == ResponseBodyMode::kBuffered;
+        [[nodiscard]] const RouteEndpoint& endpoint() const noexcept {
+            return endpoint_;
         }
 
         [[nodiscard]] bool dynamic() const noexcept {
@@ -137,14 +133,6 @@ private:
 
         [[nodiscard]] std::span<const RouteMiddleware> middlewares() const noexcept {
             return middlewares_;
-        }
-
-        [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
-            return webSocketSubprotocols_;
-        }
-
-        [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
-            return webSocketLifecycle_;
         }
 
         void setDynamic(bool dynamic) noexcept {
@@ -158,14 +146,9 @@ private:
     private:
         HttpKnownMethod method_;
         std::pmr::string path_;
-        RouteHandler handler_;
-        RouteStreamHandler streamHandler_;
-        RequestBodyMode bodyMode_{RequestBodyMode::kBuffered};
-        ResponseBodyMode responseMode_{ResponseBodyMode::kBuffered};
+        RouteEndpoint endpoint_;
         bool dynamic_{false};
         std::pmr::vector<RouteMiddleware> middlewares_;
-        std::pmr::string webSocketSubprotocols_;
-        WebSocketLifecycleOptions webSocketLifecycle_{};
     };
 
     void appendPendingRoute(PendingRoute route);

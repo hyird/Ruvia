@@ -5,12 +5,14 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <variant>
 
-#include "ruvia/http/HttpTypes.h"
 #include "ruvia/web/RouteModes.h"
-#include "ruvia/web/WebSocket.h"
 
-// Lightweight route-resolution result types.
+// Lightweight, self-contained route-resolution result types. A materialized
+// resolution is exactly one of resolved, method-not-allowed, or not-found; the
+// payload for another alternative is not observable.
 
 namespace ruvia::detail {
 
@@ -48,97 +50,93 @@ private:
     std::size_t paramCount_{0};
 };
 
-// Context-agnostic copy of the RouteEntry metadata the transport sessions read,
-// so h1/h2/ws can consume it off RouteResolution without dereferencing RouteEntry
-// (which lives in ruvia-web). Populated by RouteTable::resolve at match time.
-struct RouteDisposition final {
-    RequestBodyMode bodyMode{RequestBodyMode::kBuffered};
-    ResponseBodyMode responseMode{ResponseBodyMode::kBuffered};
-    std::string_view webSocketSubprotocols{};
-    WebSocketLifecycleOptions webSocketLifecycle{};
+class RouteNotFound final {
+private:
+    friend class RouteResolution;
+    constexpr RouteNotFound() noexcept = default;
 };
 
-struct RouteResolution final {
-    [[nodiscard]] static RouteResolution foundStatic(
-        const RouteEntry* route, const RouteDisposition& disposition = {}) noexcept {
-        RouteResolution resolution;
-        resolution.route_ = route;
-        resolution.disposition_ = disposition;
-        return resolution;
+class RouteMethodNotAllowed final {
+public:
+    [[nodiscard]] constexpr std::uint32_t allowedMethods() const noexcept {
+        return allowedMethods_;
     }
 
-    [[nodiscard]] static RouteResolution foundDynamic(
-        const RouteEntry* route,
-        const RouteMatch& match,
-        const RouteDisposition& disposition = {}) noexcept {
-        RouteResolution resolution;
-        resolution.route_ = route;
-        resolution.match_ = match;
-        resolution.hasMatch_ = true;
-        resolution.disposition_ = disposition;
-        return resolution;
-    }
+private:
+    friend class RouteResolution;
 
-    [[nodiscard]] static RouteResolution methodNotAllowed(std::uint32_t allowedMethods) noexcept {
-        RouteResolution resolution;
-        resolution.allowedMethods_ = allowedMethods;
-        return resolution;
-    }
+    explicit constexpr RouteMethodNotAllowed(
+        std::uint32_t allowedMethods) noexcept
+        : allowedMethods_(allowedMethods) {}
 
-    [[nodiscard]] bool found() const noexcept {
-        return route_ != nullptr;
-    }
+    std::uint32_t allowedMethods_;
+};
 
-    [[nodiscard]] bool methodNotAllowed() const noexcept {
-        return route_ == nullptr && allowedMethods_ != 0;
-    }
-
+class ResolvedRoute final {
+public:
     [[nodiscard]] const RouteEntry& route() const noexcept {
         return *route_;
     }
 
-    [[nodiscard]] const RouteMatch* match() const noexcept {
-        return hasMatch_ ? &match_ : nullptr;
-    }
-
-    [[nodiscard]] std::uint32_t allowedMethods() const noexcept {
-        return allowedMethods_;
-    }
-
-    // Route metadata, readable without dereferencing RouteEntry (web). Mirrors the
-    // corresponding RouteEntry accessors exactly.
-    [[nodiscard]] RequestBodyMode bodyMode() const noexcept {
-        return disposition_.bodyMode;
-    }
-    [[nodiscard]] ResponseBodyMode responseMode() const noexcept {
-        return disposition_.responseMode;
-    }
-    [[nodiscard]] bool usesStreamRequestBody() const noexcept {
-        return disposition_.bodyMode == RequestBodyMode::kStream;
-    }
-    [[nodiscard]] bool isBufferedResponse() const noexcept {
-        return disposition_.responseMode == ResponseBodyMode::kBuffered;
-    }
-    [[nodiscard]] bool isWebSocketResponse() const noexcept {
-        return disposition_.responseMode == ResponseBodyMode::kWebSocket;
-    }
-    [[nodiscard]] bool usesResponseStream() const noexcept {
-        return disposition_.responseMode == ResponseBodyMode::kStream ||
-            disposition_.responseMode == ResponseBodyMode::kSse;
-    }
-    [[nodiscard]] std::string_view webSocketSubprotocols() const noexcept {
-        return disposition_.webSocketSubprotocols;
-    }
-    [[nodiscard]] const WebSocketLifecycleOptions& webSocketLifecycle() const noexcept {
-        return disposition_.webSocketLifecycle;
+    // Static routes carry an empty match; dynamic routes carry their captured
+    // values in the same value object. Callers never need a nullable match side
+    // channel.
+    [[nodiscard]] const RouteMatch& match() const noexcept {
+        return match_;
     }
 
 private:
-    const RouteEntry* route_{nullptr};
-    RouteMatch match_{};
-    bool hasMatch_{false};
-    std::uint32_t allowedMethods_{0};
-    RouteDisposition disposition_{};
+    friend class RouteResolution;
+
+    ResolvedRoute(const RouteEntry& route, RouteMatch match) noexcept
+        : route_(&route), match_(std::move(match)) {}
+
+    const RouteEntry* route_;
+    RouteMatch match_;
+};
+
+class RouteResolution final {
+public:
+    RouteResolution() noexcept
+        : value_(RouteNotFound{}) {}
+
+    [[nodiscard]] static RouteResolution resolved(
+        const RouteEntry& route,
+        RouteMatch match = {}) noexcept {
+        return RouteResolution(ResolvedRoute(route, std::move(match)));
+    }
+
+    [[nodiscard]] static RouteResolution methodNotAllowed(
+        std::uint32_t allowedMethods) noexcept {
+        if (allowedMethods == 0) {
+            return RouteResolution();
+        }
+        return RouteResolution(RouteMethodNotAllowed(allowedMethods));
+    }
+
+    [[nodiscard]] const ResolvedRoute* resolved() const noexcept {
+        return std::get_if<ResolvedRoute>(&value_);
+    }
+
+    [[nodiscard]] const RouteMethodNotAllowed* methodNotAllowed() const noexcept {
+        return std::get_if<RouteMethodNotAllowed>(&value_);
+    }
+
+    [[nodiscard]] const RouteNotFound* notFound() const noexcept {
+        return std::get_if<RouteNotFound>(&value_);
+    }
+
+private:
+    using Value = std::variant<
+        RouteNotFound,
+        RouteMethodNotAllowed,
+        ResolvedRoute>;
+
+    template <typename Alternative>
+    explicit RouteResolution(Alternative alternative) noexcept
+        : value_(std::move(alternative)) {}
+
+    Value value_;
 };
 
 }  // namespace ruvia::detail

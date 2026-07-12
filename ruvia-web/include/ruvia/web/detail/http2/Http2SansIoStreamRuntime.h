@@ -172,35 +172,23 @@ public:
         : buffered_(pmrResourceOrDefault(resource)),
           queue_(pmrResourceOrDefault(resource)) {}
 
-    [[nodiscard]] RequestBodyMode mode() const noexcept {
-        return mode_;
+    [[nodiscard]] const RequestBodyMode* selectedMode() const noexcept {
+        return mode_ ? &*mode_ : nullptr;
     }
 
     [[nodiscard]] bool modeSelected() const noexcept {
-        return modeSelected_;
+        return mode_.has_value();
     }
 
     [[nodiscard]] bool streaming() const noexcept {
         return mode_ == RequestBodyMode::kStream;
     }
 
-    // Route selection is a one-time pre-DATA decision. Re-selecting the current
-    // mode is harmless, but switching storage would change the body owner and is
-    // rejected even before the first byte arrives.
-    [[nodiscard]] bool selectMode(RequestBodyMode mode) noexcept {
-        if (modeSelected_) {
-            return mode == mode_;
-        }
-        mode_ = mode;
-        modeSelected_ = true;
-        return true;
-    }
-
     [[nodiscard]] Http2RequestBodyStoreResult store(
         std::string_view data,
         std::size_t totalLimit,
         std::size_t streamingBacklogLimit) {
-        if (!modeSelected_) {
+        if (!mode_) {
             return Http2RequestBodyStoreResult::kModeNotSelected;
         }
         if (data.size() >
@@ -244,8 +232,19 @@ public:
     }
 
 private:
-    RequestBodyMode mode_{RequestBodyMode::kBuffered};
-    bool modeSelected_{false};
+    friend class Http2SansIoStreamRuntime;
+
+    // Route selection is the sole owner of this one-time pre-DATA choice. The
+    // body runtime cannot be independently switched away from its stored route.
+    [[nodiscard]] bool selectMode(RequestBodyMode mode) noexcept {
+        if (mode_) {
+            return false;
+        }
+        mode_.emplace(mode);
+        return true;
+    }
+
+    std::optional<RequestBodyMode> mode_;
     std::size_t receivedBytes_{0};
     std::pmr::string buffered_;
     Http2SansIoBodyQueue queue_;
@@ -262,16 +261,18 @@ public:
         return streamId_;
     }
 
-    [[nodiscard]] RouteMatch& routeScratch() noexcept {
-        return routeScratch_;
+    [[nodiscard]] bool selectRoute(
+        RouteResolution resolution,
+        RequestBodyMode bodyMode) noexcept {
+        if (routeResolution_ || !body_.selectMode(bodyMode)) {
+            return false;
+        }
+        routeResolution_.emplace(std::move(resolution));
+        return true;
     }
 
-    [[nodiscard]] RouteResolution& routeResolution() noexcept {
-        return routeResolution_;
-    }
-
-    [[nodiscard]] const RouteResolution& routeResolution() const noexcept {
-        return routeResolution_;
+    [[nodiscard]] const RouteResolution* routeResolution() const noexcept {
+        return routeResolution_ ? &*routeResolution_ : nullptr;
     }
 
     [[nodiscard]] Http2RequestBodyRuntime& body() noexcept {
@@ -300,7 +301,7 @@ private:
     template <typename Executor>
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
         const Executor& executor) {
-        if (dispatchSignal_ || !body_.modeSelected()) {
+        if (dispatchSignal_ || !routeResolution_ || !body_.modeSelected()) {
             return nullptr;
         }
         dispatchSignal_.emplace(executor);
@@ -308,8 +309,7 @@ private:
     }
 
     std::uint32_t streamId_;
-    RouteMatch routeScratch_;
-    RouteResolution routeResolution_;
+    std::optional<RouteResolution> routeResolution_;
     Http2RequestBodyRuntime body_;
     std::optional<Http2SansIoStreamSignal> dispatchSignal_;
 };

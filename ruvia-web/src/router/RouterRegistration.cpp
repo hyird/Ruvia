@@ -73,16 +73,9 @@ template <typename BaseRange, typename ExtraRange>
 detail::RouterImpl::PendingRoute::PendingRoute(std::pmr::memory_resource* resource, Init init)
     : method_(init.method),
       path_(resource),
-      handler_(std::move(init.handler)),
-      streamHandler_(std::move(init.streamHandler)),
-      bodyMode_(init.bodyMode),
-      responseMode_(init.responseMode),
+      endpoint_(std::move(init.endpoint)),
       dynamic_(init.dynamic),
-      middlewares_(resource),
-      webSocketSubprotocols_(
-          init.webSocketSubprotocols,
-          path_.get_allocator().resource()),
-      webSocketLifecycle_(init.webSocketLifecycle) {
+      middlewares_(resource) {
     auto* const routeResource = path_.get_allocator().resource();
     if (init.path.get_allocator().resource() == routeResource) {
         path_ = std::move(init.path);
@@ -107,60 +100,72 @@ void detail::RouterImpl::registerRoute(
     RouteHandler handler,
     RequestBodyMode bodyMode,
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
-    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
-    ResponseBodyMode responseMode) {
-    if (!handler.valid()) {
-        throw std::invalid_argument("route handler must not be empty");
-    }
-    if (responseMode == ResponseBodyMode::kWebSocket) {
-        throw std::invalid_argument("buffered route cannot use the websocket response mode");
-    }
-
-    appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
-        .method = method,
-        .path = std::move(path),
-        .handler = std::move(handler),
-        .streamHandler = {},
-        .bodyMode = bodyMode,
-        .responseMode = responseMode,
-        .dynamic = false,
-        .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
-        .webSocketSubprotocols = {},
-        .webSocketLifecycle = {}}));
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(
+        method,
+        std::move(path),
+        RouteEndpoint::buffered(handler, bodyMode),
+        controllerMiddlewares,
+        routeMiddlewares);
 }
 
-void detail::RouterImpl::registerStreamRoute(
+void detail::RouterImpl::registerResponseStreamRoute(
     HttpKnownMethod method,
     std::pmr::string path,
     RouteStreamHandler handler,
-    ResponseBodyMode responseMode,
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(
+        method,
+        std::move(path),
+        RouteEndpoint::responseStream(
+            handler, ResponseStreamKind::kGeneric),
+        controllerMiddlewares,
+        routeMiddlewares);
+}
+
+void detail::RouterImpl::registerSseRoute(
+    HttpKnownMethod method,
+    std::pmr::string path,
+    RouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
+    registerEndpoint(
+        method,
+        std::move(path),
+        RouteEndpoint::responseStream(handler, ResponseStreamKind::kSse),
+        controllerMiddlewares,
+        routeMiddlewares);
+}
+
+void detail::RouterImpl::registerWebSocketRoute(
+    HttpKnownMethod method,
+    std::pmr::string path,
+    RouteStreamHandler handler,
     std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
     std::span<const ControllerMiddlewareDescriptor> routeMiddlewares,
     WebSocketRouteOptions webSocketOptions) {
-    if (!handler.valid()) {
-        throw std::invalid_argument("route stream handler must not be empty");
-    }
-    if (responseMode == ResponseBodyMode::kBuffered) {
-        throw std::invalid_argument("response stream route requires a streaming response mode");
-    }
-    if (responseMode == ResponseBodyMode::kWebSocket &&
-        (webSocketOptions.lifecycle.pingInterval.count() < 0 ||
-         webSocketOptions.lifecycle.pongTimeout.count() < 0 ||
-         webSocketOptions.lifecycle.closeHandshakeTimeout.count() < 0)) {
-        throw std::invalid_argument("websocket lifecycle timeouts must not be negative");
-    }
+    registerEndpoint(
+        method,
+        std::move(path),
+        RouteEndpoint::webSocket(resource_, handler, webSocketOptions),
+        controllerMiddlewares,
+        routeMiddlewares);
+}
 
+void detail::RouterImpl::registerEndpoint(
+    HttpKnownMethod method,
+    std::pmr::string path,
+    RouteEndpoint endpoint,
+    std::span<const ControllerMiddlewareDescriptor> controllerMiddlewares,
+    std::span<const ControllerMiddlewareDescriptor> routeMiddlewares) {
     appendPendingRoute(PendingRoute(resource_, PendingRoute::Init{
         .method = method,
         .path = std::move(path),
-        .handler = {},
-        .streamHandler = std::move(handler),
-        .bodyMode = RequestBodyMode::kBuffered,
-        .responseMode = responseMode,
+        .endpoint = std::move(endpoint),
         .dynamic = false,
-        .middlewares = materializeMiddlewares(controllerMiddlewares, routeMiddlewares),
-        .webSocketSubprotocols = webSocketOptions.subprotocols,
-        .webSocketLifecycle = webSocketOptions.lifecycle}));
+        .middlewares = materializeMiddlewares(
+            controllerMiddlewares, routeMiddlewares)}));
 }
 
 void detail::RouterImpl::appendPendingRoute(PendingRoute route) {
@@ -205,30 +210,52 @@ void detail::ControllerRouteBuilder::registerRoute(
     std::string_view path,
     ControllerRouteHandler handler,
     RequestBodyMode bodyMode,
-    std::span<const ControllerMiddlewareDescriptor> middlewares,
-    ResponseBodyMode responseMode) const {
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
     RouterImpl::from(impl_->router()).registerRoute(
         method,
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
         bodyMode,
         impl_->middlewares(),
-        middlewares,
-        responseMode);
+        middlewares);
 }
 
-void detail::ControllerRouteBuilder::registerStreamRoute(
+void detail::ControllerRouteBuilder::registerResponseStreamRoute(
     HttpKnownMethod method,
     std::string_view path,
     ControllerRouteStreamHandler handler,
-    ResponseBodyMode responseMode,
-    std::span<const ControllerMiddlewareDescriptor> middlewares,
-    WebSocketRouteOptions webSocketOptions) const {
-    RouterImpl::from(impl_->router()).registerStreamRoute(
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router()).registerResponseStreamRoute(
         method,
         joinControllerPaths(impl_->prefix(), path),
         std::move(handler),
-        responseMode,
+        impl_->middlewares(),
+        middlewares);
+}
+
+void detail::ControllerRouteBuilder::registerSseRoute(
+    HttpKnownMethod method,
+    std::string_view path,
+    ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares) const {
+    RouterImpl::from(impl_->router()).registerSseRoute(
+        method,
+        joinControllerPaths(impl_->prefix(), path),
+        std::move(handler),
+        impl_->middlewares(),
+        middlewares);
+}
+
+void detail::ControllerRouteBuilder::registerWebSocketRoute(
+    HttpKnownMethod method,
+    std::string_view path,
+    ControllerRouteStreamHandler handler,
+    std::span<const ControllerMiddlewareDescriptor> middlewares,
+    WebSocketRouteOptions webSocketOptions) const {
+    RouterImpl::from(impl_->router()).registerWebSocketRoute(
+        method,
+        joinControllerPaths(impl_->prefix(), path),
+        std::move(handler),
         impl_->middlewares(),
         middlewares,
         webSocketOptions);

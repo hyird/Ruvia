@@ -60,19 +60,43 @@ protected:
         scope.registerRoute(method, path, std::move(handler), bodyMode, middlewares);
     }
 
-    static void ruviaAddStreamRoute(
+    static void ruviaAddResponseStreamRoute(
         const detail::ControllerRouteBuilder& scope,
         HttpKnownMethod method,
         std::string_view path,
         detail::ControllerRouteStreamHandler handler,
-        detail::ResponseBodyMode responseMode,
-        std::span<const detail::ControllerMiddlewareDescriptor> middlewares,
-        WebSocketRouteOptions webSocketOptions = {}) {
-        scope.registerStreamRoute(
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerResponseStreamRoute(
             method,
             path,
             std::move(handler),
-            responseMode,
+            middlewares);
+    }
+
+    static void ruviaAddSseRoute(
+        const detail::ControllerRouteBuilder& scope,
+        HttpKnownMethod method,
+        std::string_view path,
+        detail::ControllerRouteStreamHandler handler,
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares) {
+        scope.registerSseRoute(
+            method,
+            path,
+            std::move(handler),
+            middlewares);
+    }
+
+    static void ruviaAddWebSocketRoute(
+        const detail::ControllerRouteBuilder& scope,
+        HttpKnownMethod method,
+        std::string_view path,
+        detail::ControllerRouteStreamHandler handler,
+        std::span<const detail::ControllerMiddlewareDescriptor> middlewares,
+        WebSocketRouteOptions webSocketOptions = {}) {
+        scope.registerWebSocketRoute(
+            method,
+            path,
+            std::move(handler),
             middlewares,
             webSocketOptions);
     }

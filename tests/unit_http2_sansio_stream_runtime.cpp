@@ -1,5 +1,6 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <memory_resource>
 #include <string>
@@ -18,8 +19,17 @@ namespace {
 using ruvia::detail::Http2RequestBodyRuntime;
 using ruvia::detail::Http2RequestBodyStoreResult;
 using ruvia::detail::Http2SansIoBodyQueue;
+using ruvia::detail::Http2SansIoStreamRuntime;
 using ruvia::detail::Http2SansIoStreamRuntimeTable;
 using ruvia::detail::RequestBodyMode;
+using ruvia::detail::RouteResolution;
+
+template <typename T>
+concept HasDirectBodyModeSelection = requires(T& body) {
+    body.selectMode(RequestBodyMode::kBuffered);
+};
+
+static_assert(!HasDirectBodyModeSelection<Http2RequestBodyRuntime>);
 
 }  // namespace
 
@@ -59,21 +69,30 @@ RUVIA_TEST(http2_web_body_queue_reuses_storage_and_ignores_empty_chunks) {
 }
 
 RUVIA_TEST(http2_web_request_body_runtime_selects_storage_before_data) {
-    Http2RequestBodyRuntime buffered(std::pmr::get_default_resource());
-    RUVIA_CHECK(buffered.mode() == RequestBodyMode::kBuffered);
-    RUVIA_CHECK(buffered.store("rejected", 16, 0) ==
+    Http2RequestBodyRuntime unselected(std::pmr::get_default_resource());
+    RUVIA_CHECK(unselected.selectedMode() == nullptr);
+    RUVIA_CHECK(unselected.store("rejected", 16, 0) ==
         Http2RequestBodyStoreResult::kModeNotSelected);
-    RUVIA_CHECK(buffered.selectMode(RequestBodyMode::kBuffered));
-    RUVIA_CHECK(buffered.selectMode(RequestBodyMode::kBuffered));
-    RUVIA_CHECK(!buffered.selectMode(RequestBodyMode::kStream));
+    Http2SansIoStreamRuntime bufferedRuntime(
+        1, std::pmr::get_default_resource());
+    RUVIA_CHECK(bufferedRuntime.selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
+    RUVIA_CHECK(bufferedRuntime.routeResolution() != nullptr);
+    auto& buffered = bufferedRuntime.body();
+    RUVIA_CHECK(buffered.selectedMode() != nullptr);
+    RUVIA_CHECK(*buffered.selectedMode() == RequestBodyMode::kBuffered);
+    RUVIA_CHECK(!bufferedRuntime.selectRoute(
+        RouteResolution{}, RequestBodyMode::kStream));
     RUVIA_CHECK(buffered.store("abc", 3, 0) ==
         Http2RequestBodyStoreResult::kAccepted);
     RUVIA_CHECK_EQ(buffered.buffered(), std::string_view("abc"));
     RUVIA_CHECK_EQ(buffered.receivedBytes(), std::size_t{3});
-    RUVIA_CHECK(!buffered.selectMode(RequestBodyMode::kStream));
 
-    Http2RequestBodyRuntime streaming(std::pmr::get_default_resource());
-    RUVIA_CHECK(streaming.selectMode(RequestBodyMode::kStream));
+    Http2SansIoStreamRuntime streamingRuntime(
+        3, std::pmr::get_default_resource());
+    RUVIA_CHECK(streamingRuntime.selectRoute(
+        RouteResolution{}, RequestBodyMode::kStream));
+    auto& streaming = streamingRuntime.body();
     RUVIA_CHECK(streaming.streaming());
     RUVIA_CHECK(streaming.store("one", 0, 8) ==
         Http2RequestBodyStoreResult::kAccepted);
@@ -84,8 +103,11 @@ RUVIA_TEST(http2_web_request_body_runtime_selects_storage_before_data) {
 }
 
 RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
-    Http2RequestBodyRuntime buffered(std::pmr::get_default_resource());
-    RUVIA_CHECK(buffered.selectMode(RequestBodyMode::kBuffered));
+    Http2SansIoStreamRuntime bufferedRuntime(
+        1, std::pmr::get_default_resource());
+    RUVIA_CHECK(bufferedRuntime.selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
+    auto& buffered = bufferedRuntime.body();
     RUVIA_CHECK(buffered.store("1234", 5, 0) ==
         Http2RequestBodyStoreResult::kAccepted);
     RUVIA_CHECK(buffered.store("67", 5, 0) ==
@@ -93,8 +115,11 @@ RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
     RUVIA_CHECK_EQ(buffered.receivedBytes(), std::size_t{4});
     RUVIA_CHECK_EQ(buffered.buffered(), std::string_view("1234"));
 
-    Http2RequestBodyRuntime streaming(std::pmr::get_default_resource());
-    RUVIA_CHECK(streaming.selectMode(RequestBodyMode::kStream));
+    Http2SansIoStreamRuntime streamingRuntime(
+        3, std::pmr::get_default_resource());
+    RUVIA_CHECK(streamingRuntime.selectRoute(
+        RouteResolution{}, RequestBodyMode::kStream));
+    auto& streaming = streamingRuntime.body();
     RUVIA_CHECK(streaming.store("1234", 0, 5) ==
         Http2RequestBodyStoreResult::kAccepted);
     RUVIA_CHECK(streaming.store("67", 0, 5) ==
@@ -113,7 +138,8 @@ RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
     if (first == nullptr) {
         return;
     }
-    RUVIA_CHECK(first->body().selectMode(RequestBodyMode::kBuffered));
+    RUVIA_CHECK(first->selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
     RUVIA_CHECK(first->body().store("tiny", 16, 0) ==
         Http2RequestBodyStoreResult::kAccepted);
     const auto firstBody = first->body().buffered();
@@ -147,7 +173,8 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     RUVIA_CHECK(runtime->signal() == nullptr);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
     RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
-    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+    RUVIA_CHECK(runtime->selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
 
     auto* signal = table.beginDispatch(1, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
@@ -183,7 +210,8 @@ RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel)
     if (runtime == nullptr) {
         return;
     }
-    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+    RUVIA_CHECK(runtime->selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
     auto* signal = table.beginDispatch(1, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
     if (signal == nullptr) {
@@ -218,7 +246,8 @@ RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     if (runtime == nullptr) {
         return;
     }
-    RUVIA_CHECK(runtime->body().selectMode(RequestBodyMode::kBuffered));
+    RUVIA_CHECK(runtime->selectRoute(
+        RouteResolution{}, RequestBodyMode::kBuffered));
     auto* signal = table.beginDispatch(33, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
     const auto* runtimeAddress = runtime;

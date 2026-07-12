@@ -30,12 +30,12 @@ HttpResponse makeAllowNoContentResponse(RequestMemory& memory, std::uint32_t met
 Context makeRouteContext(
     RequestMemory& memory,
     const HttpRequest& request,
-    const detail::RouteResolution& resolution,
+    const detail::ResolvedRoute& resolved,
     detail::ContextServices services) noexcept {
-    const auto& route = resolution.route();
+    const auto& route = resolved.route();
     const auto routeRateLimitScope = reinterpret_cast<std::uintptr_t>(&route);
-    const auto* match = resolution.match();
-    if (match == nullptr) {
+    const auto values = resolved.match().values();
+    if (values.empty()) {
         return detail::ContextAccess::make(
             memory,
             request,
@@ -46,7 +46,6 @@ Context makeRouteContext(
             services);
     }
 
-    const auto values = match->values();
     return detail::ContextAccess::make(
         memory,
         request,
@@ -138,41 +137,34 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     RequestMemory& memory,
     ContextServices services) const {
-    RouteMatch match;
-    const auto resolution = resolve(request, match);
+    const auto resolution = resolve(request);
     co_return co_await dispatch(request, resolution, memory, services);
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
     const HttpRequest& request,
-    const RouteResolution& resolution,
+    const ResolvedRoute& resolved,
     RequestMemory& memory,
     ResponseStreamWriter& responseStream,
     ContextServices services) const {
-    if (!resolution.found()) {
+    if (resolved.route().endpoint().responseStream() == nullptr) {
         throw std::logic_error("route is not a response stream route");
     }
-    const auto& route = resolution.route();
-    if (!route.usesResponseStream()) {
-        throw std::logic_error("route is not a response stream route");
-    }
-    return dispatchStreamRoute(request, resolution, memory, services.withResponseStream(responseStream));
+    return dispatchStreamRoute(
+        request, resolved, memory, services.withResponseStream(responseStream));
 }
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
     const HttpRequest& request,
-    const RouteResolution& resolution,
+    const ResolvedRoute& resolved,
     RequestMemory& memory,
     WebSocket& webSocket,
     ContextServices services) const {
-    if (!resolution.found()) {
+    if (resolved.route().endpoint().webSocket() == nullptr) {
         throw std::logic_error("route is not a websocket route");
     }
-    const auto& route = resolution.route();
-    if (!route.isWebSocketResponse()) {
-        throw std::logic_error("route is not a websocket route");
-    }
-    return dispatchStreamRoute(request, resolution, memory, services.withWebSocket(webSocket));
+    return dispatchStreamRoute(
+        request, resolved, memory, services.withWebSocket(webSocket));
 }
 
 namespace {
@@ -186,15 +178,15 @@ namespace {
 
 Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
-    const RouteResolution& resolution,
+    const ResolvedRoute& resolved,
     RequestMemory& memory,
     ContextServices services) const {
-    const auto& route = resolution.route();
+    const auto& route = resolved.route();
     auto outcome = RouteStreamDispatchOutcome::kBufferedResponse;
     auto context = makeRouteContext(
         memory,
         request,
-        resolution,
+        resolved,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
     auto* responseStream = services.responseStream();
     if (responseStream != nullptr) {
@@ -204,7 +196,16 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     std::exception_ptr exception;
     try {
         if (!route.hasMiddleware()) {
-            co_await route.streamHandler()(context);
+            const auto& endpoint = route.endpoint();
+            const auto* responseStream = endpoint.responseStream();
+            const auto* webSocket = endpoint.webSocket();
+            if (responseStream == nullptr && webSocket == nullptr) {
+                throw std::logic_error("route is not a stream-handler route");
+            }
+            const auto& handler = responseStream != nullptr
+                ? responseStream->handler()
+                : webSocket->handler();
+            co_await handler(context);
             co_return StreamDispatchResult(
                 HttpResponse(context.resource()),
                 RouteStreamDispatchOutcome::kStreamHandled);
@@ -261,7 +262,8 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const RouteResolution& resolution,
     RequestMemory& memory,
     ContextServices services) const {
-    if (!resolution.found()) {
+    const auto* resolved = resolution.resolved();
+    if (resolved == nullptr) {
         if (request.knownMethod() == HttpKnownMethod::kUnknown) {
             co_return co_await handleError(
                 request,
@@ -274,14 +276,15 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
         }
 
-        if (resolution.methodNotAllowed()) {
+        if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
             if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                co_return makeAllowNoContentResponse(memory, resolution.allowedMethods());
+                co_return makeAllowNoContentResponse(
+                    memory, methodNotAllowed->allowedMethods());
             }
 
             const auto error = HttpErrorInfo(405, {}, "method not allowed");
             auto response = co_await handleError(request, memory, error, services);
-            setAllowHeader(response, resolution.allowedMethods());
+            setAllowHeader(response, methodNotAllowed->allowedMethods());
             co_return response;
         }
 
@@ -291,11 +294,15 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     auto context = makeRouteContext(
         memory,
         request,
-        resolution,
+        *resolved,
         withRouteHandlers(services, errorHandler_, notFoundHandler_));
     std::exception_ptr exception;
     try {
-        const auto& route = resolution.route();
+        const auto& route = resolved->route();
+        if (route.endpoint().buffered() == nullptr) {
+            throw std::logic_error(
+                "streaming route requires its dedicated dispatch path");
+        }
         co_return co_await invokeRoute(route, context);
     } catch (...) {
         exception = std::current_exception();

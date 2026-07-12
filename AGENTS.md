@@ -675,6 +675,9 @@ scratch 或 `Http2ConnectionLimits`；`Http2BodyState.h`、`Http2BodyQueue.h`、
 `ruvia-web` 必须用 PMR-stable `Http2SansIoStreamRuntimeTable`、`Http2RequestBodyRuntime` 与
 `Http2SansIoBodyQueue` 保存每个 active stream 的 route resolution 和 body；同一 `feed()` 内 HEADERS
 后紧跟的 DATA 也必须先按 message-head event 选择 Web `RequestBodyMode`，再应用 total/backlog limit。
+route selection 必须只走 `Http2SansIoStreamRuntime::selectRoute()`，一次性绑定
+`RouteResolution` 与 optional `RequestBodyMode`；`Http2RequestBodyRuntime` 不得公开独立 mode selector，
+不得恢复默认 buffered mode + `modeSelected` 布尔组合。
 同一个 `Http2SansIoStreamRuntime` 还必须拥有 optional `Http2SansIoStreamSignal` 作为 dispatch lease；
 runtime-level `beginDispatch()` 必须是 table-only friend 操作，table 必须在 `co_spawn` 前同步增加
 `dispatchedCount()`，禁止绕过 aggregate lease；body mode 尚未 selected 时必须拒绝 admission。
@@ -803,6 +806,16 @@ HEADERS/END_STREAM 状态转换。
 
 - 路由注册只允许通过 controller/group/route 宏完成。
 - 不暴露直接 `Router::addRoute(...)` 或 `Router::group(...)` 注册 API。
+- 注册到 dispatch 的 endpoint 必须由 move-only `RouteEndpoint` 判别联合唯一表达，只能是
+  `BufferedRouteEndpoint`、`ResponseStreamRouteEndpoint` 或 `WebSocketRouteEndpoint`。handler 形态、
+  request-body mode、`ResponseStreamKind` 与 WebSocket metadata 必须属于对应 alternative；禁止恢复
+  同时保存 `RouteHandler`/`RouteStreamHandler` 再用 `ResponseBodyMode` 选择的笛卡尔积，也禁止恢复
+  `HttpResponseStreamKindAdapter` 二次映射。
+- `RouteResolution` 必须只包含 `ResolvedRoute`、`RouteMethodNotAllowed`、`RouteNotFound` 三种互斥
+  alternative。只有 `ResolvedRoute` 能暴露 route 与其拥有的 `RouteMatch`，只有
+  `RouteMethodNotAllowed` 能暴露非零 Allow mask；禁止恢复 top-level `found()`、`route()`、`match()`、
+  `allowedMethods()` 或 `RouteDisposition` payload tuple。`resolve()` 自己拥有动态 match scratch 并把
+  结果移入 `ResolvedRoute`，HTTP/1、HTTP/2 和其他调用方不得再传入或长期保存第二份 `RouteMatch`。
 - 路由表、中间件链、controller factory 必须在 worker 启动前构建完成。
 - 请求期不得重建 route index、middleware chain 或 `std::function` 链。
 - 同 method + 同 path 的重复 route 必须启动期报错。

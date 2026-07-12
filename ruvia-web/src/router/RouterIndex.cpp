@@ -9,27 +9,16 @@ namespace {
 constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
 constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
 
-// Snapshot the RouteEntry metadata the transport sessions need into a
-// Context-agnostic RouteDisposition, so RouteResolution carries it and the
-// sessions never dereference RouteEntry.
-[[nodiscard]] detail::RouteDisposition dispositionOf(const detail::RouteEntry& route) noexcept {
-    return detail::RouteDisposition{
-        route.bodyMode(),
-        route.responseMode(),
-        route.webSocketSubprotocols(),
-        route.webSocketLifecycle()};
-}
-
 }  // namespace
 
-detail::RouteResolution detail::RouteTable::resolve(const HttpRequest& request, RouteMatch& match) const noexcept {
-    return resolve(request.knownMethod(), request.path(), match);
+detail::RouteResolution detail::RouteTable::resolve(
+    const HttpRequest& request) const noexcept {
+    return resolve(request.knownMethod(), request.path());
 }
 
 detail::RouteResolution detail::RouteTable::resolve(
     HttpKnownMethod method,
-    std::string_view path,
-    RouteMatch& match) const noexcept {
+    std::string_view path) const noexcept {
     // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
     // server as a whole, not any resource, so it must not bind to a route -- a
     // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the
@@ -38,12 +27,13 @@ detail::RouteResolution detail::RouteTable::resolve(
         return RouteResolution{};
     }
     if (const auto* route = findStaticRoute(method, path); route != nullptr) {
-        return RouteResolution::foundStatic(route, dispositionOf(*route));
+        return RouteResolution::resolved(*route);
     }
 
+    RouteMatch match;
     const auto* dynamicRoute = findDynamicRoute(method, path, match);
     if (dynamicRoute != nullptr) {
-        return RouteResolution::foundDynamic(dynamicRoute, match, dispositionOf(*dynamicRoute));
+        return RouteResolution::resolved(*dynamicRoute, std::move(match));
     }
 
     auto methodMask = allowedMethods(path, method);

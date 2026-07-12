@@ -157,7 +157,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     Sink& sink,
     const RequestDispatcher& routes,
     const HttpRequest& request,
-    const RouteResolution& resolution,
+    const ResolvedRoute& route,
     RequestMemory& requestMemory,
     ContextServices services,
     PeerAborted peerAborted) {
@@ -167,7 +167,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
     HttpResponse response(requestMemory.resource());
     try {
         auto result = co_await routes.dispatchResponseStream(
-            request, resolution, requestMemory, responseStream, services);
+            request, route, requestMemory, responseStream, services);
         if (peerAborted()) {
             co_return ResponseStreamDispatchResult::abortedByPeer(std::move(response));
         }
