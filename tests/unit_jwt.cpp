@@ -3,6 +3,7 @@
 #include <chrono>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -21,6 +22,12 @@ using ruvia::jwtSign;
 using ruvia::jwtVerify;
 
 static_assert(std::is_empty_v<ruvia::detail::JwtPayloadAccess>);
+static_assert(std::is_same_v<
+    decltype(JwtSignOptions{}.expiresIn),
+    std::optional<std::chrono::seconds>>);
+static_assert(std::is_same_v<
+    decltype(JwtSignOptions{}.notBeforeDelay),
+    std::optional<std::chrono::seconds>>);
 
 JwtSignOptions signOptions(std::string_view secret) {
     JwtSignOptions options;
@@ -197,15 +204,27 @@ RUVIA_TEST(jwt_verify_rejects_malformed_registered_claim_values) {
 }
 
 RUVIA_TEST(jwt_verify_enforces_time_claims) {
-    // requireExpiration: a token minted without an exp (expiresIn <= 0 emits none)
-    // is rejected by default, and accepted only when the caller opts out.
+    // A token minted without exp is rejected by default, and accepted only when
+    // the caller opts out. Absence is explicit; zero means "expires now".
     auto noExp = signOptions("secret");
-    noExp.expiresIn = std::chrono::seconds{0};
+    noExp.expiresIn = std::nullopt;
     const auto tokenNoExp = sign(noExp);
     RUVIA_CHECK(throwsOn([&] { (void)jwtVerify(tokenNoExp, verifyOptions("secret")); }));
     auto allowNoExp = verifyOptions("secret");
     allowNoExp.requireExpiration = false;
     RUVIA_CHECK_EQ(jwtVerify(tokenNoExp, allowNoExp).subject(), std::string_view("user-1"));
+
+    auto expiresNow = signOptions("secret");
+    expiresNow.expiresIn = std::chrono::seconds(0);
+    const auto tokenExpiresNow = sign(expiresNow);
+    RUVIA_CHECK(throwsOn([&] {
+        (void)jwtVerify(tokenExpiresNow, verifyOptions("secret"));
+    }));
+
+    auto validNow = signOptions("secret");
+    validNow.notBeforeDelay = std::chrono::seconds(0);
+    const auto validNowPayload = ruvia::jwtDecodeUnverified(sign(validNow));
+    RUVIA_CHECK(validNowPayload.notBefore().has_value());
 
     // notBefore: a token whose nbf is in the future is not yet valid, unless the
     // configured leeway covers the gap.

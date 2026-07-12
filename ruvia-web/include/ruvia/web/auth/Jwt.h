@@ -61,8 +61,8 @@ struct JwtSignOptions final {
     std::pmr::string subject;
     std::pmr::string audience;
     std::pmr::string id;
-    std::chrono::seconds expiresIn{std::chrono::hours(1)};
-    std::chrono::seconds notBeforeDelay{0};
+    std::optional<std::chrono::seconds> expiresIn{std::chrono::hours(1)};
+    std::optional<std::chrono::seconds> notBeforeDelay;
     std::pmr::vector<JwtClaim> claims{detail::pmrResourceOrDefault(nullptr)};
 };
 

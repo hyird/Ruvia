@@ -61,6 +61,15 @@
 #include <ruvia/web/redis/Redis.h>
 #endif
 
+#ifdef RUVIA_ENABLE_JWT
+static_assert(std::same_as<
+    decltype(ruvia::JwtSignOptions{}.expiresIn),
+    std::optional<std::chrono::seconds>>);
+static_assert(std::same_as<
+    decltype(ruvia::JwtSignOptions{}.notBeforeDelay),
+    std::optional<std::chrono::seconds>>);
+#endif
+
 template <typename Runtime, typename Executor>
 concept HasDirectHttp2BeginDispatch = requires(
     Runtime& runtime,
