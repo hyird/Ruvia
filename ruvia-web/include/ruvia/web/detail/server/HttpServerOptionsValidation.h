@@ -4,7 +4,7 @@
 
 #include "ruvia/web/detail/app/ConfigValidation.h"
 #include "ruvia/web/detail/http/HttpCorsConfigValidation.h"
-#include "ruvia/web/HttpServerOptions.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 
 namespace ruvia::detail {
 

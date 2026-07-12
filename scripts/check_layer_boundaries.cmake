@@ -176,7 +176,7 @@ set(RULE_STALE_HTTP2_BODY_MODE_SPLIT
 set(RULE_STALE_HTTP2_SESSION_ENV
     "Http2SansIoSessionEnv|kDefaultOptions|localScannerEntry|env[.](databases|redis|rateLimiter|options|scannerEntry|clientCertificate|serverStarted|workerRunning)|Http2SansIoSessionContext[ \t\r\n]+session[ \t\r\n]*=[ \t\r\n]*[{]|const[ \t]+(std::atomic_bool|bool)[*][ \t]+(serverStarted|workerRunning)[ \t]*=[ \t]*nullptr")
 set(RULE_STALE_WEB_SERVER_CONFIG_SPLIT
-    "HttpServerOptions::(Compression|Cors)|validateCorsOptions")
+    "ruvia::HttpServerOptions|HttpServerOptions::(Compression|Cors)|validateCorsOptions|ruvia/web/HttpServerOptions[.]h")
 set(RULE_ROUTER_CONNECTION_POLICY
     "closeConnection(OnError)?|\"Connection\"[ \t]*,[ \t]*\"close\"")
 set(RULE_STALE_ERROR_API
@@ -1357,7 +1357,11 @@ set(WEB_ROUTER_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
 set(WEB_APP_PUBLIC_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h")
+set(WEB_SERVER_CONFIG_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ServerConfig.h")
 set(WEB_SERVER_OPTIONS_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerOptions.h")
+set(WEB_LEGACY_PUBLIC_SERVER_OPTIONS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/HttpServerOptions.h")
 foreach(method_contract_file IN ITEMS
         "${HTTP_METHOD_CONTRACT}"
@@ -1401,20 +1405,30 @@ check_files_no_match("HTTP/2 code must not depend on a frame aggregation header"
 check_files_no_match("App and server runtime must share one compression/CORS model"
     "${RULE_STALE_WEB_SERVER_CONFIG_SPLIT}"
     ${EDGE_REFERENCE_SOURCE})
-if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND EXISTS "${WEB_SERVER_OPTIONS_MODEL}")
+if(EXISTS "${WEB_LEGACY_PUBLIC_SERVER_OPTIONS}")
+    boundary_error("Worker runtime options leaked back into the public Web root"
+        "public callers use ServerConfig.h; HttpServerOptions remains under detail/server")
+endif()
+if(EXISTS "${WEB_APP_PUBLIC_MODEL}" AND
+   EXISTS "${WEB_SERVER_CONFIG_MODEL}" AND
+   EXISTS "${WEB_SERVER_OPTIONS_MODEL}")
     file(READ "${WEB_APP_PUBLIC_MODEL}" web_app_public_model)
+    file(READ "${WEB_SERVER_CONFIG_MODEL}" web_server_config_model)
     file(READ "${WEB_SERVER_OPTIONS_MODEL}" web_server_options_model)
     if(web_app_public_model MATCHES
            "struct[ \t]+(CompressionConfig|CorsConfig)[ \t]+final" OR
-       NOT web_server_options_model MATCHES
+       NOT web_server_config_model MATCHES
            "struct[ \t]+CompressionConfig[ \t]+final" OR
-       NOT web_server_options_model MATCHES
+       NOT web_server_config_model MATCHES
            "struct[ \t]+CorsConfig[ \t]+final" OR
+       NOT web_server_config_model MATCHES "AccessLogCallback" OR
+       NOT web_server_options_model MATCHES
+           "namespace[ \t]+ruvia::detail" OR
        NOT web_server_options_model MATCHES
            "CompressionConfig[ \t]+compression" OR
        NOT web_server_options_model MATCHES "CorsConfig[ \t]+cors")
         boundary_error("Web server configuration regained parallel public models"
-            "HttpServerOptions.h must own the one CompressionConfig/CorsConfig used by App and runtime")
+            "ServerConfig.h owns public values; detail/server/HttpServerOptions.h owns normalized worker state")
     endif()
 endif()
 if(EXISTS "${WEB_LEGACY_SERVER_SESSION_UMBRELLA}")
@@ -2221,7 +2235,7 @@ if(NOT http_protocol_request_tests MATCHES
 endif()
 
 set(WEB_ACCESS_LOG_MODEL
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/HttpServerOptions.h")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ServerConfig.h")
 set(WEB_ACCESS_LOG_ACCESS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/app/AppAccess.h")
 set(WEB_ACCESS_LOG_RECORDER
@@ -2286,12 +2300,14 @@ if(EXISTS "${WEB_ACCESS_LOG_MODEL}" AND
            "return request_[.]knownMethod[(][)]" OR
        NOT web_access_log_model MATCHES
            "return request_[.]path[(][)]" OR
+       NOT web_access_log_model MATCHES "using AccessLogCallback" OR
        NOT web_access_log_access MATCHES
            "const HttpRequest& request" OR
        NOT web_access_log_access MATCHES
            "AccessLogRecord[(][ \t\r\n]*request" OR
        NOT web_access_log_recorder MATCHES
-           "AccessLogRecordAccess::make[(][ \t\r\n]*request")
+           "AccessLogRecordAccess::make[(][ \t\r\n]*request" OR
+       NOT web_access_log_recorder MATCHES "const AccessLogSink&")
         boundary_error("access log restored copied request facts or a protocol boolean"
             "AccessLogRecord must borrow one HttpRequest and derive method/path/version from it")
     endif()
@@ -2313,8 +2329,12 @@ if(EXISTS "${WEB_ACCESS_LOG_MODEL}" AND
            "HasLegacyAccessLogHttp2Flag" OR
        NOT web_access_log_package_consumer MATCHES
            "RecordHttpAccessFunction" OR
+       NOT web_access_log_package_consumer MATCHES
+           "AppOnAccessFunction" OR
        NOT web_access_log_api_surface MATCHES
-           "HasLegacyAccessLogHttp2Flag")
+           "HasLegacyAccessLogHttp2Flag" OR
+       NOT web_access_log_api_surface MATCHES
+           "HasCanonicalAccessLogCallback")
         boundary_error("typed access-log protocol contract lacks regression coverage"
             "unit, installed-package, and public API checks must pin request borrowing, all versions, and removed bool access")
     endif()

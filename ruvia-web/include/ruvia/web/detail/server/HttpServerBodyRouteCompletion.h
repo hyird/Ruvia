@@ -6,6 +6,7 @@
 #include "ruvia/web/detail/server/Http1SessionRequestCompletion.h"
 #include "ruvia/web/detail/server/HttpServerRequestState.h"
 #include "ruvia/web/detail/server/HttpServerResponseState.h"
+#include "ruvia/web/detail/server/HttpServerOptions.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/web/detail/router/RouteTable.h"

@@ -17,7 +17,8 @@
 #include <ruvia/web/ConnInfo.h>
 #include <ruvia/web/Controller.h>
 #include <ruvia/web/Error.h>
-#include <ruvia/web/HttpServerOptions.h>
+#include <ruvia/web/ServerConfig.h>
+#include <ruvia/web/detail/server/HttpServerOptions.h>
 #include <ruvia/web/Middleware.h>
 #include <ruvia/web/Model.h>
 #include <ruvia/web/RequestFields.h>
@@ -360,17 +361,23 @@ concept HasLegacyStreamHandledPredicate = requires(const Result& result) {
 };
 
 using RecordHttpAccessFunction = void (*)(
-    const ruvia::HttpServerOptions::AccessLog&,
+    const ruvia::detail::AccessLogSink&,
     const ruvia::HttpRequest&,
     std::string_view,
     std::uint16_t,
     std::chrono::steady_clock::time_point) noexcept;
+using AppOnAccessFunction = ruvia::App& (ruvia::App::*)(
+    ruvia::AccessLogCallback,
+    void*);
 
 static_assert(std::same_as<
-    decltype(std::declval<ruvia::HttpServerOptions>().compression),
+    decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
+    AppOnAccessFunction>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::HttpServerOptions>().compression),
     ruvia::CompressionConfig>);
 static_assert(std::same_as<
-    decltype(std::declval<ruvia::HttpServerOptions>().cors),
+    decltype(std::declval<ruvia::detail::HttpServerOptions>().cors),
     ruvia::CorsConfig>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::ResponseStreamWriter&>().end(
@@ -677,7 +684,7 @@ static_assert(!std::is_default_constructible_v<
 static_assert(std::is_nothrow_constructible_v<
     ruvia::detail::Http2SansIoSessionContext,
     ruvia::detail::ContextServices,
-    const ruvia::HttpServerOptions&,
+    const ruvia::detail::HttpServerOptions&,
     ruvia::detail::ConnectionScanner::Entry&,
     const bool&>);
 static_assert(std::is_same_v<

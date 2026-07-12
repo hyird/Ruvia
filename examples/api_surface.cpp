@@ -1523,6 +1523,14 @@ concept HasAccessLogRecordPublicFields = requires(T& record) {
 };
 
 template <typename T>
+concept HasCanonicalAccessLogCallback = requires(
+    T& app,
+    ruvia::AccessLogCallback callback,
+    void* user) {
+    { app.onAccess(callback, user) } -> std::same_as<ruvia::App&>;
+};
+
+template <typename T>
 concept HasAccessLogRecordCanonicalReadAccessors = requires(const T& record) {
     { record.method() } -> std::same_as<std::string_view>;
     { record.knownMethod() } -> std::same_as<ruvia::HttpKnownMethod>;
@@ -2301,6 +2309,7 @@ static_assert(!HasAppDocumentRootPathSetter<ruvia::App>);
 static_assert(HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
 static_assert(HasAppHttpListenPortSetter<ruvia::App>);
+static_assert(HasCanonicalAccessLogCallback<ruvia::App>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<
     ruvia::AccessLogRecord,
