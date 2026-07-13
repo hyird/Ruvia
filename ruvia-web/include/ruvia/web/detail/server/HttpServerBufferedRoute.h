@@ -23,6 +23,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpBufferedBodyRoute(
     WorkerMemory& memory,
     ConnectionScanner::Entry& scannerEntry,
     const Http1ServerRequestParseState& parsed,
+    const Http1ServerRequestHeadReady& requestHead,
     const RouteResolution& routeResolution,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -33,7 +34,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpBufferedBodyRoute(
     HttpResponse& response,
     Http1RequestSequence& requestSequence) {
     const auto bodyAndPipeline = httpBodyAndPipeline(
-        parsed,
+        requestHead,
         readBuffer,
         usedBytes);
 

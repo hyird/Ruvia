@@ -123,9 +123,7 @@ RUVIA_TEST(request_state_keep_alive_default_by_version) {
     // survive so a runtime never has to reconstruct it from a cleared version.
     const auto incompleteHttp10 = parser.parseMessage(
         "POST / HTTP/1.0\r\nConnection: keep-alive\r\nContent-Length: 1\r\n\r\n");
-    RUVIA_CHECK(
-        incompleteHttp10.phase() ==
-        ruvia::detail::Http1ServerRequestParsePhase::kNeedRequestBody);
+    RUVIA_CHECK(incompleteHttp10.needRequestBody() != nullptr);
     RUVIA_CHECK(
         incompleteHttp10.connectionPlan.disposition() ==
         Http1ConnectionDisposition::kReuse);
@@ -138,9 +136,7 @@ RUVIA_TEST(request_state_keep_alive_default_by_version) {
     const auto failedHttp10 = parser.parseMessage(
         "POST / HTTP/1.0\r\nConnection: keep-alive\r\n"
         "Content-Length: 16777217\r\n\r\n");
-    RUVIA_CHECK(
-        failedHttp10.phase() ==
-        ruvia::detail::Http1ServerRequestParsePhase::kFailure);
+    RUVIA_CHECK(failedHttp10.failure() != nullptr);
     RUVIA_CHECK(
         failedHttp10.connectionPlan.disposition() ==
         Http1ConnectionDisposition::kClose);

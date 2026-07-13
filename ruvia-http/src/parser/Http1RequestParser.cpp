@@ -25,14 +25,10 @@ void Http1ServerRequestParser::parseRequestHead(
     std::string_view buffer,
     std::size_t headerSearchOffset,
     Http1ServerRequestParseState& state) noexcept {
-    // Reset only the scalar fields and the reachable request state; the
-    // result object is reused across read iterations and requests, so a
-    // full value-initialization here would re-zero the 2KB header table.
-    state.phase_ = Http1ServerRequestParsePhase::kNeedRequestHead;
-    state.error_.reset();
-    state.headerBytes = 0;
-    state.messageBytes = 0;
-    state.requiredTotalBytes.reset();
+    // Reset only the small progress value and reachable request state; the
+    // result object is reused across read iterations and requests, so a full
+    // value-initialization here would re-zero the 2KB header table.
+    state.progress_ = Http1ServerNeedRequestHead{};
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
     state.connectionPlan = Http1ServerConnectionPlan::http11Close();
     state.responseCoding = HttpContentCoding::kNone;
@@ -40,10 +36,7 @@ void Http1ServerRequestParser::parseRequestHead(
 
     const auto fail = [&state](HttpParseError error) noexcept {
         HttpRequestAccess::reset(state.request);
-        state.phase_ = Http1ServerRequestParsePhase::kFailure;
-        state.error_ = error;
-        state.messageBytes = 0;
-        state.requiredTotalBytes.reset();
+        state.progress_ = Http1ServerRequestParseFailure(error);
         state.connectionPlan = Http1ServerConnectionPlan::http11Close();
     };
 
@@ -63,8 +56,6 @@ void Http1ServerRequestParser::parseRequestHead(
     if (const auto error = parseHttpHeaderBlock(buffer, headerBytes, block)) {
         return fail(*error);
     }
-
-    state.headerBytes = headerBytes;
 
     // parseHttpHeaderBlock scans the method through the token table. Preserve the
     // exact wire token: method registration is extensible, while HttpKnownMethod is
@@ -155,7 +146,7 @@ void Http1ServerRequestParser::parseRequestHead(
     state.connectionPlan = protocolVersion == HttpProtocolVersion::kHttp11
         ? http1PlanHttp11RequestConnection(block.connectionOptions)
         : http1PlanHttp10RequestConnection(block.connectionOptions);
-    state.phase_ = Http1ServerRequestParsePhase::kRequestHeadReady;
+    state.progress_ = Http1ServerRequestHeadReady(headerBytes);
 }
 
 void Http1ServerRequestParser::parseHead(
@@ -168,17 +159,17 @@ void Http1ServerRequestParser::parseHead(
 void Http1ServerRequestParser::parseMessageBody(
     std::string_view buffer,
     Http1ServerRequestParseState& state) noexcept {
-    if (!state.headReady()) {
+    const auto* requestHead = state.headReady();
+    if (requestHead == nullptr) {
         return;
     }
+
+    const auto headerBytes = requestHead->headerBytes();
 
     const auto fail = [&state](HttpParseError error) noexcept {
         const auto connectionPlan = state.connectionPlan.requireClose();
         HttpRequestAccess::reset(state.request);
-        state.phase_ = Http1ServerRequestParsePhase::kFailure;
-        state.error_ = error;
-        state.messageBytes = 0;
-        state.requiredTotalBytes.reset();
+        state.progress_ = Http1ServerRequestParseFailure(error);
         state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
         state.connectionPlan = connectionPlan;
     };
@@ -190,25 +181,19 @@ void Http1ServerRequestParser::parseMessageBody(
         // or moving that buffer, so an incomplete message intentionally exposes
         // no apparently reusable request head.
         HttpRequestAccess::reset(state.request);
-        state.phase_ = Http1ServerRequestParsePhase::kNeedRequestBody;
-        state.headerBytes = headerBytes;
+        state.progress_ = Http1ServerNeedRequestBody(
+            headerBytes, requiredTotalBytes);
         state.bodyPlan = bodyPlan;
-        state.messageBytes = 0;
-        state.requiredTotalBytes = requiredTotalBytes;
     };
 
-    const auto headerBytes = state.headerBytes;
     const auto bodyPlan = state.bodyPlan;
     const auto* chunkedBody = bodyPlan.chunked();
     const auto* knownLengthBody = bodyPlan.knownLength();
-    if (buffer.size() < headerBytes) {
-        return needMore(
-            0, Http1RequestBodyPlan(HttpRequestExpectations{}), std::nullopt);
-    }
+    std::size_t messageBytes = 0;
     if (chunkedBody != nullptr) {
         const auto chunked = scanHttpChunkedBody(buffer.substr(headerBytes));
         if (const auto* complete = chunked.complete()) {
-            state.messageBytes = headerBytes + complete->consumedBytes();
+            messageBytes = headerBytes + complete->consumedBytes();
         } else if (chunked.needMore() != nullptr) {
             return needMore(headerBytes, bodyPlan, std::nullopt);
         } else {
@@ -232,15 +217,15 @@ void Http1ServerRequestParser::parseMessageBody(
         if (contentLength > kMaxHttpBodyBytes || contentLength > kMaxHttpRequestBytes - headerBytes) {
             return fail(HttpParseError::kBodyTooLarge);
         }
-        state.messageBytes = headerBytes + contentLength;
+        messageBytes = headerBytes + contentLength;
     } else {
-        state.messageBytes = headerBytes;
+        messageBytes = headerBytes;
     }
-    if (state.messageBytes > kMaxHttpRequestBytes) {
+    if (messageBytes > kMaxHttpRequestBytes) {
         return fail(HttpParseError::kBodyTooLarge);
     }
-    if (buffer.size() < state.messageBytes) {
-        return needMore(headerBytes, bodyPlan, state.messageBytes);
+    if (buffer.size() < messageBytes) {
+        return needMore(headerBytes, bodyPlan, messageBytes);
     }
 
     HttpRequestAccess::setBody(
@@ -248,7 +233,8 @@ void Http1ServerRequestParser::parseMessageBody(
         knownLengthBody != nullptr
             ? buffer.substr(headerBytes, knownLengthBody->contentLength())
             : std::string_view{});
-    state.phase_ = Http1ServerRequestParsePhase::kRequestMessageReady;
+    state.progress_ = Http1ServerRequestMessageReady(
+        headerBytes, messageBytes);
 }
 
 Http1ServerRequestParseState Http1ServerRequestParser::parseMessage(
@@ -266,30 +252,30 @@ namespace ruvia {
 Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const noexcept {
     detail::Http1ServerRequestParser parser;
     auto parsed = parser.parseMessage(buffer);
-    switch (parsed.phase()) {
-        case detail::Http1ServerRequestParsePhase::kNeedRequestHead:
-        case detail::Http1ServerRequestParsePhase::kNeedRequestBody:
-            return detail::Http1RequestParseResultAccess::needMore(
-                parsed.requiredTotalBytes);
-        case detail::Http1ServerRequestParsePhase::kFailure:
-            if (const auto* failure = parsed.failure()) {
-                return detail::Http1RequestParseResultAccess::failure(*failure);
-            }
-            std::terminate();
-        case detail::Http1ServerRequestParsePhase::kRequestMessageReady:
-            break;
-        case detail::Http1ServerRequestParsePhase::kRequestHeadReady:
-            std::terminate();
+    if (parsed.needRequestHead() != nullptr) {
+        return detail::Http1RequestParseResultAccess::needMore(std::nullopt);
+    }
+    if (const auto* needBody = parsed.needRequestBody()) {
+        return detail::Http1RequestParseResultAccess::needMore(
+            needBody->requiredTotalBytes());
+    }
+    if (const auto* failure = parsed.failure()) {
+        return detail::Http1RequestParseResultAccess::failure(
+            failure->error());
+    }
+    const auto* message = parsed.messageReady();
+    if (message == nullptr) {
+        std::terminate();
     }
 
     const auto wireBody = buffer.substr(
-        parsed.headerBytes,
-        parsed.messageBytes - parsed.headerBytes);
+        message->headerBytes(),
+        message->messageBytes() - message->headerBytes());
     return detail::Http1RequestParseResultAccess::parsed(
         std::move(parsed.request),
         parsed.bodyPlan,
         wireBody,
-        parsed.messageBytes);
+        message->messageBytes());
 }
 
 }  // namespace ruvia

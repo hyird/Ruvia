@@ -436,6 +436,27 @@ concept HasStaleHttp1ResponseHeadScalar = requires(const T& plan) {
 };
 
 template <typename T>
+concept HasHttp1ServerParseAlternatives = requires(const T& state) {
+    { state.needRequestHead() } -> std::same_as<const
+        ruvia::detail::Http1ServerNeedRequestHead*>;
+    { state.headReady() } -> std::same_as<const
+        ruvia::detail::Http1ServerRequestHeadReady*>;
+    { state.needRequestBody() } -> std::same_as<const
+        ruvia::detail::Http1ServerNeedRequestBody*>;
+    { state.messageReady() } -> std::same_as<const
+        ruvia::detail::Http1ServerRequestMessageReady*>;
+    { state.failure() } -> std::same_as<const
+        ruvia::detail::Http1ServerRequestParseFailure*>;
+};
+
+template <typename T>
+concept HasStaleHttp1ServerParseScalars =
+    requires(const T& state) { state.phase(); } ||
+    requires(const T& state) { state.headerBytes; } ||
+    requires(const T& state) { state.messageBytes; } ||
+    requires(const T& state) { state.requiredTotalBytes; };
+
+template <typename T>
 concept HasStalePreparedStreamPolicy = requires(const T& prepared) {
     prepared.policy();
 };
@@ -971,7 +992,11 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http1ServerRequestParseState&>().failure()),
-    const ruvia::HttpParseError*>);
+    const ruvia::detail::Http1ServerRequestParseFailure*>);
+static_assert(HasHttp1ServerParseAlternatives<
+    ruvia::detail::Http1ServerRequestParseState>);
+static_assert(!HasStaleHttp1ServerParseScalars<
+    ruvia::detail::Http1ServerRequestParseState>);
 static_assert(HasHttp2RemoteContentAlternatives<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<

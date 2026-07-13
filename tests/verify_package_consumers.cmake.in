@@ -730,14 +730,29 @@ file(READ
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
     _installed_http1_server_request_parser)
 if(NOT _installed_http1_server_request_parser MATCHES
-       "enum class Http1ServerRequestParsePhase" OR
-   NOT _installed_http1_server_request_parser MATCHES "kRequestHeadReady" OR
-   NOT _installed_http1_server_request_parser MATCHES "kRequestMessageReady" OR
+       "class Http1ServerNeedRequestHead final" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerRequestHeadReady final" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerNeedRequestBody final" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerRequestMessageReady final" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "class Http1ServerRequestParseFailure final" OR
    NOT _installed_http1_server_request_parser MATCHES
        "class Http1ServerRequestParseState final" OR
    NOT _installed_http1_server_request_parser MATCHES
+       "using Progress = std::variant" OR
+   NOT _installed_http1_server_request_parser MATCHES
        "class Http1ServerRequestParser final")
-    message(FATAL_ERROR "installed HTTP/1 server parser lost distinct head/message phases")
+    message(FATAL_ERROR "installed HTTP/1 server parser lost discriminated progress alternatives")
+endif()
+if(_installed_http1_server_request_parser MATCHES
+       "Http1ServerRequestParsePhase" OR
+   _installed_http1_server_request_parser MATCHES "phase_" OR
+   _installed_http1_server_request_parser MATCHES
+       "std::optional<HttpParseError>[ \t]+error_")
+    message(FATAL_ERROR "installed HTTP/1 server parser restored parallel progress scalars")
 endif()
 set(_installed_http1_request_body_plan_path
     "${_install_prefix}/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")
@@ -804,9 +819,11 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
    _installed_http1_request_parser MATCHES "HttpParseError::kNone" OR
    _installed_http_parse_error MATCHES "kNone" OR
    NOT _installed_http1_server_request_parser MATCHES
-       "const HttpParseError[*] failure[(][)] const noexcept" OR
+       "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
    NOT _installed_http1_server_request_parser MATCHES
-       "std::optional<HttpParseError> error_" OR
+       "using Progress = std::variant" OR
+   _installed_http1_server_request_parser MATCHES
+       "std::optional<HttpParseError>[ \t]+error_" OR
    NOT _installed_http_header_block_parser MATCHES
        "std::optional<HttpParseError> parseHttpHeaderBlock")
     message(FATAL_ERROR "installed HTTP/1 parser lost its discriminated whole-message contract")

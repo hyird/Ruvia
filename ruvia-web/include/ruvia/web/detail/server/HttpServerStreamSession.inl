@@ -86,7 +86,7 @@ Task<void> HttpServer::handleStreamSession(
             const auto bufferView = std::string_view(readBuffer.data(), usedBytes);
             parser.parseHead(bufferView, parsed, headerSearchOffset);
             HttpRequestAccess::setResource(parsed.request, requestMemory.resource());
-            if (parsed.headReady()) {
+            if (const auto* requestHead = parsed.headReady()) {
                 // Reset phase so clientHeaderTimeout stops counting against dispatch
                 // time. Body readers will set kReadingPayload on their own; the
                 // streaming/websocket paths set their own phases below; the
@@ -182,7 +182,7 @@ Task<void> HttpServer::handleStreamSession(
                         requestCompletion.emplace(
                             Http1SessionRequestCompletion::makeBufferedUnrestored(
                                 connectionPlan,
-                                parsed.headerBytes));
+                                requestHead->headerBytes()));
                         scannerEntry.touch();
                         break;
                     }
@@ -221,8 +221,8 @@ Task<void> HttpServer::handleStreamSession(
 
                 if (endpoint.webSocket() != nullptr) {
                     const auto pendingFrames = std::string_view(
-                        readBuffer.data() + parsed.headerBytes,
-                        usedBytes - parsed.headerBytes);
+                        readBuffer.data() + requestHead->headerBytes(),
+                        usedBytes - requestHead->headerBytes());
                     const auto webSocketResult = co_await dispatchHttpWebSocketRoute(
                         stream,
                         memory_,
@@ -254,6 +254,7 @@ Task<void> HttpServer::handleStreamSession(
                         responseHead,
                         scannerEntry,
                         parsed,
+                        *requestHead,
                         *resolved,
                         routes,
                         requestMemory,
@@ -272,6 +273,7 @@ Task<void> HttpServer::handleStreamSession(
                         memory_,
                         scannerEntry,
                         parsed,
+                        *requestHead,
                         routeResolution,
                         routes,
                         requestMemory,
@@ -290,6 +292,7 @@ Task<void> HttpServer::handleStreamSession(
                         memory_,
                         scannerEntry,
                         parsed,
+                        *requestHead,
                         routeResolution,
                         routes,
                         requestMemory,
@@ -303,7 +306,7 @@ Task<void> HttpServer::handleStreamSession(
             }
 
             if (const auto* failure = parsed.failure()) {
-                const auto error = *failure;
+                const auto error = failure->error();
                 if constexpr (kPlainTcp) {
                     if (!options_.autoHttps.enabled &&
                         shouldDropInvalidCleartextHttp1Input(bufferView, error)) {
@@ -326,7 +329,7 @@ Task<void> HttpServer::handleStreamSession(
             headerSearchOffset = usedBytes > 3 ? usedBytes - 3 : 0;
 
             scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-            growReadBuffer(readBuffer, usedBytes, parsed);
+            growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 constexpr auto error = HttpParseError::kHeaderTooLarge;
                 response = co_await routes.handleError(

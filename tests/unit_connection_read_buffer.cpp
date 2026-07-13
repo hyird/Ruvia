@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -72,14 +71,6 @@ static_assert(std::same_as<
     decltype(std::declval<const Http1RequestBufferCompletion&>()
                  .compaction()),
     const Http1RequestBufferCompaction*>);
-
-// growReadBuffer keys off the typed future requirement only; completed message
-// bytes must never resize a buffer that has already consumed that message.
-Http1ServerRequestParseState required(std::optional<std::size_t> requiredTotalBytes) {
-    Http1ServerRequestParseState parsed;
-    parsed.requiredTotalBytes = requiredTotalBytes;
-    return parsed;
-}
 
 std::pmr::string sizedBuffer(std::size_t size) {
     std::pmr::string out(std::pmr::new_delete_resource());
@@ -237,7 +228,7 @@ RUVIA_TEST(connection_read_buffer_overlapping_move_is_correct) {
 
 RUVIA_TEST(grow_read_buffer_doubles_when_full) {
     auto readBuffer = sizedBuffer(8 * 1024);
-    growReadBuffer(readBuffer, /*usedBytes=*/8 * 1024, required(std::nullopt));  // full -> grow
+    growReadBuffer(readBuffer, /*usedBytes=*/8 * 1024);  // full -> grow
     RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{16 * 1024});
 }
 
@@ -245,27 +236,20 @@ RUVIA_TEST(grow_read_buffer_caps_at_header_limit) {
     // Doubling would overshoot the header limit; growth clamps to it so an
     // attacker cannot drive unbounded buffer growth with header bursts.
     auto readBuffer = sizedBuffer(40 * 1024);
-    growReadBuffer(readBuffer, /*usedBytes=*/40 * 1024, required(std::nullopt));
+    growReadBuffer(readBuffer, /*usedBytes=*/40 * 1024);
     RUVIA_CHECK_EQ(readBuffer.size(), kMaxHttpHeaderBytes);  // min(80K, 64K)
 }
 
 RUVIA_TEST(grow_read_buffer_at_limit_does_not_grow) {
     auto readBuffer = sizedBuffer(kMaxHttpHeaderBytes);
-    growReadBuffer(readBuffer, /*usedBytes=*/kMaxHttpHeaderBytes, required(std::nullopt));
+    growReadBuffer(readBuffer, /*usedBytes=*/kMaxHttpHeaderBytes);
     RUVIA_CHECK_EQ(readBuffer.size(), kMaxHttpHeaderBytes);  // hard ceiling holds
 }
 
 RUVIA_TEST(grow_read_buffer_no_growth_when_not_full) {
     auto readBuffer = sizedBuffer(8 * 1024);
-    growReadBuffer(readBuffer, /*usedBytes=*/100, required(std::nullopt));  // room remains
+    growReadBuffer(readBuffer, /*usedBytes=*/100);  // room remains
     RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{8 * 1024});
-}
-
-RUVIA_TEST(grow_read_buffer_expands_to_known_required_total) {
-    // A parse unit needs more than the current buffer: grow exactly to fit it.
-    auto readBuffer = sizedBuffer(8 * 1024);
-    growReadBuffer(readBuffer, /*usedBytes=*/8 * 1024, required(9000));
-    RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{9000});
 }
 
 RUVIA_TEST(trim_read_buffer_reclaims_overgrown_capacity) {

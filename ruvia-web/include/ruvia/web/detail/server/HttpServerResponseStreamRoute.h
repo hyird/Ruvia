@@ -26,6 +26,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     ResponseHeadBuffer& responseHead,
     ConnectionScanner::Entry& scannerEntry,
     const Http1ServerRequestParseState& parsed,
+    const Http1ServerRequestHeadReady& requestHead,
     const ResolvedRoute& resolved,
     const RouteTable& routes,
     RequestMemory& requestMemory,
@@ -62,14 +63,14 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         co_return Http1SessionRequestCompletion::makeCommittedStream(
             connectionPlan,
             failed->status(),
-            parsed.headerBytes);
+            requestHead.headerBytes());
     }
     if (const auto* peer = result.peerAbortedAfterCommit()) {
         connectionPlan = responseSink.connectionPlan().requireClose();
         co_return Http1SessionRequestCompletion::makeCommittedStream(
             connectionPlan,
             peer->status(),
-            parsed.headerBytes);
+            requestHead.headerBytes());
     }
     if (result.peerAbortedBeforeCommit() != nullptr) {
         throw std::logic_error(
@@ -93,7 +94,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
         scannerEntry.touch();
         co_return Http1SessionRequestCompletion::makeBufferedUnrestored(
             connectionPlan,
-            parsed.headerBytes);
+            requestHead.headerBytes());
     }
 
     const auto* completed = result.completed();
@@ -107,7 +108,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     co_return Http1SessionRequestCompletion::makeCommittedStream(
         connectionPlan,
         completed->status(),
-        parsed.headerBytes);
+        requestHead.headerBytes());
 }
 
 }  // namespace ruvia::detail

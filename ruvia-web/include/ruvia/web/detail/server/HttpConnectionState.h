@@ -76,6 +76,6 @@ void applyReusableHttp1RequestBufferCompletion(
     std::pmr::string& readBuffer,
     std::size_t& usedBytes) noexcept;
 void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes);
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const Http1ServerRequestParseState& parsed);
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes);
 
 }  // namespace ruvia::detail

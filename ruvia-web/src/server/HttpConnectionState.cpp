@@ -145,12 +145,7 @@ void trimReadBufferStorage(std::pmr::string& readBuffer, std::size_t usedBytes) 
     }
 }
 
-void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes, const Http1ServerRequestParseState& parsed) {
-    if (parsed.requiredTotalBytes && *parsed.requiredTotalBytes > readBuffer.size()) {
-        resizePmrStringForOverwrite(readBuffer, *parsed.requiredTotalBytes);
-        return;
-    }
-
+void growReadBuffer(std::pmr::string& readBuffer, std::size_t usedBytes) {
     if (usedBytes == readBuffer.size() && readBuffer.size() < kMaxHttpHeaderBytes) {
         resizePmrStringForOverwrite(readBuffer, std::min(readBuffer.size() * 2, kMaxHttpHeaderBytes));
     }
