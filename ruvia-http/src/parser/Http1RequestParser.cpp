@@ -106,17 +106,21 @@ void Http1ServerRequestParser::parseRequestHead(
     }
 
     const auto contentLength = block.contentLength.value();
-    if (block.transferEncoding.present() && contentLength.has_value()) {
+    const auto transferEncoding = block.transferEncoding.value();
+    if (transferEncoding.has_value() && contentLength.has_value()) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
-    if (block.transferEncoding.present() && !block.transferEncoding.finalChunked()) {
+    const auto* finalChunked = transferEncoding.has_value()
+        ? transferEncoding->finalChunked()
+        : nullptr;
+    if (transferEncoding.has_value() && finalChunked == nullptr) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
     // RFC 9112 section 6.1: Transfer-Encoding in an HTTP/1.0 request must be treated
     // as faulty framing; the error path closes the connection after replying.
-    if (block.transferEncoding.present() &&
+    if (transferEncoding.has_value() &&
         protocolVersion == HttpProtocolVersion::kHttp10) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
@@ -135,9 +139,9 @@ void Http1ServerRequestParser::parseRequestHead(
     if (protocolVersion == HttpProtocolVersion::kHttp10) {
         expectations.ignore100Continue();
     }
-    if (block.transferEncoding.finalChunked()) {
+    if (finalChunked != nullptr) {
         state.bodyPlan = Http1RequestBodyPlan(
-            block.transferEncoding.codings(), expectations);
+            finalChunked->transferCodings(), expectations);
     } else if (contentLength.has_value()) {
         state.bodyPlan = Http1RequestBodyPlan(
             *contentLength, expectations);

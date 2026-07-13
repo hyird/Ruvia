@@ -420,19 +420,23 @@ using ResponsePlanningResult = std::variant<
     }
 
     const auto contentLength = response.contentLength.value();
+    const auto transferEncoding = response.transferEncoding.value();
     if (response.sawTransferEncoding) {
         if (contentLength.has_value()) {
             return Http1ClientResponseParseError::
                 kContentLengthAndTransferEncoding;
         }
-        if (response.transferEncoding.finalChunked()) {
+        if (!transferEncoding.has_value()) {
+            return Http1ClientResponseParseError::kInvalidTransferEncoding;
+        }
+        if (const auto* finalChunked = transferEncoding->finalChunked()) {
             return detail::Http1ClientResponsePlanAccess::chunked(
-                response.transferEncoding.codings(),
+                finalChunked->transferCodings(),
                 persistence,
                 requestContentSignal);
         }
         return detail::Http1ClientResponsePlanAccess::closeDelimited(
-            response.transferEncoding.codings(),
+            transferEncoding->nonChunked()->transferCodings(),
             requestContentSignal);
     }
 

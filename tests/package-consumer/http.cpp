@@ -32,6 +32,7 @@
 #include <ruvia/http/detail/HttpByteRange.h>
 #include <ruvia/http/detail/HttpContentCoding.h>
 #include <ruvia/http/detail/HttpContentLength.h>
+#include <ruvia/http/detail/HttpTransferEncoding.h>
 #include <ruvia/http/detail/HttpResponseBody.h>
 #include <ruvia/http/detail/HttpResponseBodyAccess.h>
 #include <ruvia/http/detail/HttpResponseContentSemantics.h>
@@ -118,6 +119,23 @@ concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) {
 template <typename T>
 concept HasContentLengthPresent = requires(const T& state) {
     state.present();
+};
+
+template <typename T>
+concept HasStaleTransferEncodingAccessors = requires(const T& state) {
+    state.present();
+    state.finalChunked();
+    state.codings();
+};
+
+template <typename T>
+concept ExposesRvalueFinalChunked = requires(const T&& value) {
+    std::move(value).finalChunked();
+};
+
+template <typename T>
+concept ExposesRvalueNonChunked = requires(const T&& value) {
+    std::move(value).nonChunked();
 };
 
 template <typename Output>
@@ -1910,6 +1928,22 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::HttpContentLengthState&>()
         .value()),
     std::optional<std::size_t>>);
+static_assert(!HasStaleTransferEncodingAccessors<
+    ruvia::detail::HttpTransferEncodingState>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpTransferEncodingValue>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpNonChunkedTransferEncoding>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HttpFinalChunkedTransferEncoding>);
+static_assert(!ExposesRvalueFinalChunked<
+    ruvia::detail::HttpTransferEncodingValue>);
+static_assert(!ExposesRvalueNonChunked<
+    ruvia::detail::HttpTransferEncodingValue>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HttpTransferEncodingState&>()
+        .value()),
+    std::optional<ruvia::detail::HttpTransferEncodingValue>>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpContentDecodeResult>);
 static_assert(!std::copy_constructible<

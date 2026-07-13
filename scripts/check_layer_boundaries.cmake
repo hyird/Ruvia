@@ -6962,7 +6962,9 @@ set(WEB_HTTP1_BODY_READER_CORE
 if(EXISTS "${HTTP1_SERVER_PARSER}")
     file(READ "${HTTP1_SERVER_PARSER}" http1_server_parser)
     if(NOT http1_server_parser MATCHES
-           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*block[.]transferEncoding[.]codings[(][)]" OR
+           "const auto transferEncoding = block[.]transferEncoding[.]value[(][)]" OR
+       NOT http1_server_parser MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*finalChunked->transferCodings[(][)]" OR
        NOT http1_server_parser MATCHES
            "const auto contentLength = block[.]contentLength[.]value[(][)]" OR
        NOT http1_server_parser MATCHES
@@ -7493,10 +7495,18 @@ if(NOT EXISTS "${HTTP_TRANSFER_ENCODING_STATE}")
 else()
     file(READ "${HTTP_TRANSFER_ENCODING_STATE}" http_transfer_encoding_state)
     if(NOT http_transfer_encoding_state MATCHES "class HttpTransferEncodingState" OR
-       NOT http_transfer_encoding_state MATCHES "finalChunked" OR
-       NOT http_transfer_encoding_state MATCHES "item\\.find\\(';'")
+       NOT http_transfer_encoding_state MATCHES "class HttpNonChunkedTransferEncoding" OR
+       NOT http_transfer_encoding_state MATCHES "class HttpFinalChunkedTransferEncoding" OR
+       NOT http_transfer_encoding_state MATCHES "class HttpTransferEncodingValue" OR
+       NOT http_transfer_encoding_state MATCHES "std::variant" OR
+       NOT http_transfer_encoding_state MATCHES "std::optional<HttpTransferEncodingValue>" OR
+       NOT http_transfer_encoding_state MATCHES "auto next = value_" OR
+       NOT http_transfer_encoding_state MATCHES "item\\.find\\(';'"
+       OR http_transfer_encoding_state MATCHES "bool present_"
+       OR http_transfer_encoding_state MATCHES "bool finalChunked_"
+       OR http_transfer_encoding_state MATCHES "bool present[(]")
         boundary_error("shared Transfer-Encoding parser lost ordered-list validation"
-            "supported codings, final chunked, and parameter rejection must remain one state machine")
+            "updates must be transactional and framing alternatives discriminated")
     endif()
 endif()
 if(EXISTS "${HTTP1_SERVER_PARSER}" AND EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")

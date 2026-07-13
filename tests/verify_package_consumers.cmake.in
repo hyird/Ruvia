@@ -195,6 +195,29 @@ if(NOT _installed_http_content_length_contract MATCHES
     message(FATAL_ERROR
         "installed Content-Length state lost transactional optional semantics")
 endif()
+set(_installed_http_transfer_encoding
+    "${_install_prefix}/include/ruvia/http/detail/HttpTransferEncoding.h")
+if(NOT EXISTS "${_installed_http_transfer_encoding}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing shared Transfer-Encoding state")
+endif()
+file(READ "${_installed_http_transfer_encoding}"
+    _installed_http_transfer_encoding_contract)
+if(NOT _installed_http_transfer_encoding_contract MATCHES
+       "class HttpNonChunkedTransferEncoding" OR
+   NOT _installed_http_transfer_encoding_contract MATCHES
+       "class HttpFinalChunkedTransferEncoding" OR
+   NOT _installed_http_transfer_encoding_contract MATCHES
+       "class HttpTransferEncodingValue" OR
+   NOT _installed_http_transfer_encoding_contract MATCHES
+       "std::optional<HttpTransferEncodingValue>" OR
+   NOT _installed_http_transfer_encoding_contract MATCHES
+       "auto next = value_" OR
+   _installed_http_transfer_encoding_contract MATCHES
+       "bool present_|bool finalChunked_|bool present[(]")
+    message(FATAL_ERROR
+        "installed Transfer-Encoding state lost discriminated transactional semantics")
+endif()
 set(_installed_url_encoding
     "${_install_prefix}/include/ruvia/http/UrlEncoding.h")
 if(NOT EXISTS "${_installed_url_encoding}")
