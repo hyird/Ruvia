@@ -16,6 +16,7 @@
 #include <ruvia/web/App.h>
 #include <ruvia/web/AppHook.h>
 #include <ruvia/web/ConnInfo.h>
+#include <ruvia/web/ContextRequest.h>
 #include <ruvia/web/Controller.h>
 #include <ruvia/web/Error.h>
 #include <ruvia/web/ServerConfig.h>

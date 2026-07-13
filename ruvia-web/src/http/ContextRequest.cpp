@@ -2,6 +2,8 @@
 #include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
 
 #include "ruvia/web/detail/CookieSignature.h"
+#include "ruvia/web/ModelJson.h"
+#include "ruvia/web/ModelObject.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
@@ -64,6 +66,30 @@ namespace detail {
 }
 
 }  // namespace detail
+
+bool ContextRequest::contentTypeMatches(std::string_view expected) const noexcept {
+    return context_->requestContentTypeMatches(expected);
+}
+
+std::pmr::memory_resource* ContextRequest::resource() const noexcept {
+    return context_->resource();
+}
+
+detail::ValidatedValueStore& ContextRequest::validatedValues() const noexcept {
+    return const_cast<detail::ValidatedValueStore&>(context_->validatedValues_);
+}
+
+Task<JsonValue> ContextRequest::json() const {
+    if (!contentTypeMatches("application/json")) {
+        detail::throwInvalidJsonContentType();
+    }
+    const auto requestBody = co_await text();
+    auto parsed = JsonValue::parse(requestBody, resource());
+    if (!parsed) {
+        detail::throwInvalidJsonBody();
+    }
+    co_return std::move(*parsed);
+}
 
 namespace {
 

@@ -218,6 +218,7 @@ endfunction()
 ruvia_add_internal_guard(ruvia_guard_middleware_next guards/middleware_next_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_http2_stream_table guards/http2_stream_table_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_context_response_state guards/context_response_state_guard.cpp)
+ruvia_add_internal_guard(ruvia_guard_context_request_header guards/context_request_header_guard.cpp)
 ruvia_add_internal_guard(ruvia_guard_cookie_api guards/cookie_api_guard.cpp)
 endif()
 

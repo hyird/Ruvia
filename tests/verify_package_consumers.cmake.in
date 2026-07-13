@@ -1779,13 +1779,19 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         "${_install_prefix}/include/ruvia/web/detail/http/Context.inl")
     set(_installed_context_model_path
         "${_install_prefix}/include/ruvia/web/detail/http/ContextModel.inl")
+    set(_installed_context_request_header_path
+        "${_install_prefix}/include/ruvia/web/ContextRequest.h")
+    set(_installed_context_request_model_path
+        "${_install_prefix}/include/ruvia/web/detail/http/ContextRequestModel.inl")
     foreach(_context_capability_contract IN ITEMS
             "${_installed_context_capabilities_path}"
             "${_installed_context_services_path}"
             "${_installed_context_header_path}"
             "${_installed_validation_target_path}"
             "${_installed_context_inline_path}"
-            "${_installed_context_model_path}")
+            "${_installed_context_model_path}"
+            "${_installed_context_request_header_path}"
+            "${_installed_context_request_model_path}")
         if(NOT EXISTS "${_context_capability_contract}")
             message(FATAL_ERROR
                 "installed Web package is missing a typed Context capability contract")
@@ -1793,7 +1799,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endforeach()
     foreach(_stale_context_inline IN ITEMS
             "${_install_prefix}/include/ruvia/web/Context.inl"
-            "${_install_prefix}/include/ruvia/web/ContextModel.h")
+            "${_install_prefix}/include/ruvia/web/ContextModel.h"
+            "${_install_prefix}/include/ruvia/web/ContextRequestModel.h")
         if(EXISTS "${_stale_context_inline}")
             message(FATAL_ERROR
                 "installed Web package restored a public-root Context implementation header")
@@ -1805,6 +1812,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         _installed_context_services)
     file(READ "${_installed_context_header_path}"
         _installed_context_header)
+    file(READ "${_installed_context_request_header_path}"
+        _installed_context_request_header)
     file(READ "${_installed_validation_target_path}"
         _installed_validation_target)
     if(NOT _installed_context_header MATCHES
@@ -1814,13 +1823,22 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Context.h does not own all public template definitions")
     endif()
-    if(_installed_context_header MATCHES
+    if(NOT _installed_context_header MATCHES
+           "ruvia/web/ContextRequest[.]h" OR
+       NOT _installed_context_request_header MATCHES
+           "ruvia/web/detail/http/ContextRequestModel[.]inl")
+        message(FATAL_ERROR
+            "installed Context request API lost its independent header/template ownership")
+    endif()
+    set(_installed_context_public_api
+        "${_installed_context_header}\n${_installed_context_request_header}")
+    if(_installed_context_public_api MATCHES
            "valid[(]ValidationTarget[ 	]+target[)]" OR
-       _installed_context_header MATCHES
+       _installed_context_public_api MATCHES
            "addValidatedData[(]ValidationTarget[ 	]+target" OR
-       NOT _installed_context_header MATCHES
+       NOT _installed_context_public_api MATCHES
            "const[ 	]+T&[ 	]+valid[(][)][ 	]+const" OR
-       NOT _installed_context_header MATCHES
+       NOT _installed_context_public_api MATCHES
            "void[ 	]+addValidatedData[(]T&&[ 	]+data[)][ 	]+const" OR
        _installed_validation_target MATCHES
            "validationTargetFromName" OR
@@ -1831,12 +1849,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Context validated-model API is not type-only")
     endif()
-    if(_installed_context_header MATCHES "arrayBuffer[(]")
+    if(_installed_context_public_api MATCHES "arrayBuffer[(]")
         message(FATAL_ERROR
             "installed Context request API restored the arrayBuffer alias")
     endif()
-    if(_installed_context_header MATCHES "formData[(]" OR
-       _installed_context_header MATCHES "SingleValueSelection")
+    if(_installed_context_public_api MATCHES "formData[(]" OR
+       _installed_context_public_api MATCHES "SingleValueSelection")
         message(FATAL_ERROR
             "installed Context request API restored split form-body selection semantics")
     endif()
