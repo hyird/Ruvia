@@ -2493,13 +2493,21 @@ if(NOT _installed_http2_remote_receive MATCHES
    NOT _installed_http2_stream_state MATCHES "finalizeRemoteConnectHead" OR
    NOT _installed_http2_stream_state MATCHES "finishRemotePendingConnect" OR
    NOT _installed_http2_stream_state MATCHES "finishRemoteRejectedConnect" OR
+   NOT _installed_http2_request_state MATCHES
+       "const std::uint16_t[*] responseStatus[(][)] const noexcept" OR
+   NOT _installed_http2_request_state MATCHES
+       "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
+   NOT _installed_http2_request_state MATCHES
+       "std::optional<std::uint16_t> responseStatus_" OR
+   NOT _installed_http2_request_state MATCHES
+       "if [(]responseStatus_[)]" OR
    _installed_http2_lifecycle MATCHES
        "(bodyEnded|peerEndStream|markBodyEnded|markPeerEndStream)[(]" OR
    _installed_http2_stream_state MATCHES
        "(headersDecoded|bodyEnded|peerEndStream|markHeadersDecoded|markBodyEnded|markPeerEndStream)[(]" OR
    _installed_http2_request_state MATCHES
-       "headersDecoded_|headersDecoded[(]|markHeadersDecoded")
-    message(FATAL_ERROR "installed HTTP/2 remote receive lifecycle retained a head/body/peer boolean product or lost typed alternatives")
+       "headersDecoded_|headersDecoded[(]|markHeadersDecoded|responseStatus_[{]0[}]|sawStatus")
+    message(FATAL_ERROR "installed HTTP/2 remote receive or client response-status state lost its explicit alternatives")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/detail/parser/HttpRequestTarget.h"
     _installed_http_authority)

@@ -285,6 +285,8 @@ set(RULE_STALE_H2_REMOTE_RECEIVE_PRODUCT
     "Http2RemoteReceivePhase|remoteReceivePhase_|headersDecoded_|peerEndStream_|bodyEnded_|headersDecoded[ \t]*[(]|peerEndStream[ \t]*[(]|bodyEnded[ \t]*[(]|markHeadersDecoded|markPeerEndStream|markBodyEnded|http2MarkBodyEnded")
 set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
     "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|Http2RemoteContentWithoutLength|Http2RemoteContentKnownLength|Http2RemoteContentCheck|checkRemoteContentAccept|acceptRemoteContent|http2RemoteContentTerminalValid|remoteContent[(][)][.]receivedBytes[(][)]|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
+set(RULE_STALE_H2_RESPONSE_STATUS_PRODUCT
+    "responseStatus_[ \t]*[{][ \t]*0[ \t]*[}]|bool[ \t]+sawStatus|hasResponseStatus[ \t]*[(]")
 set(RULE_STALE_205_RESPONSE_BODY
     "205 [(]Reset Content[)] deliberately falls through|response_policy_reset_content_carries_framing")
 set(RULE_STALE_DEPENDENCY
@@ -791,6 +793,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("presence/value HTTP/2 remote-content tuple"
         "${RULE_STALE_H2_REMOTE_CONTENT_TUPLE}"
         "if (stream.hasContentLength()) stream.contentLength();")
+    expect_match("sentinel or parallel HTTP/2 client response status"
+        "${RULE_STALE_H2_RESPONSE_STATUS_PRODUCT}"
+        "std::uint16_t responseStatus_{0}; bool sawStatus{false};")
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
@@ -8449,6 +8454,57 @@ check_files_no_match("protocol byte limits recovered a numeric sentinel"
     "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+
+set(HTTP2_STREAM_REQUEST_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamRequestState.h")
+set(HTTP2_STREAM_STATE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamState.h")
+set(HTTP2_CONNECTION_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(HTTP2_RESPONSE_STATUS_TEST
+    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp")
+set(HTTP_PACKAGE_VERIFY
+    "${RUVIA_ROOT}/tests/verify_package_consumers.cmake.in")
+if(EXISTS "${HTTP2_STREAM_REQUEST_STATE}" AND
+   EXISTS "${HTTP2_STREAM_STATE}" AND
+   EXISTS "${HTTP2_CONNECTION_SOURCE}" AND
+   EXISTS "${HTTP2_RESPONSE_STATUS_TEST}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}" AND
+   EXISTS "${HTTP_PACKAGE_VERIFY}")
+    file(READ "${HTTP2_STREAM_REQUEST_STATE}" http2_stream_request_state)
+    file(READ "${HTTP2_STREAM_STATE}" http2_response_status_stream)
+    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_response_status_connection)
+    file(READ "${HTTP2_RESPONSE_STATUS_TEST}" http2_response_status_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_response_status_consumer)
+    file(READ "${HTTP_PACKAGE_VERIFY}" http2_response_status_package_verify)
+    if(NOT http2_stream_request_state MATCHES
+           "std::optional<std::uint16_t> responseStatus_" OR
+       NOT http2_stream_request_state MATCHES
+           "const std::uint16_t[*] responseStatus[(][)] const noexcept" OR
+       NOT http2_stream_request_state MATCHES
+           "bool setResponseStatus[(]std::uint16_t status[)] noexcept" OR
+       NOT http2_stream_request_state MATCHES "if [(]responseStatus_[)]" OR
+       NOT http2_response_status_stream MATCHES
+           "return requestState_[.]setResponseStatus[(]status[)]" OR
+       NOT http2_response_status_connection MATCHES
+           "std::optional<std::uint16_t> status" OR
+       NOT http2_response_status_connection MATCHES
+           "if [(]!stream[.]setResponseStatus[(][*]context[.]status[)][)]" OR
+       NOT http2_response_status_test MATCHES
+           "h2_response_status_is_optional_and_single_assignment" OR
+       NOT http2_response_status_consumer MATCHES
+           "const std::uint16_t[*]>" OR
+       NOT http2_response_status_package_verify MATCHES
+           "client response-status state lost its explicit alternatives")
+        boundary_error("HTTP/2 client response status lost explicit single assignment"
+            "absence must be optional, final :status must commit once, and unit/install consumers must pin the contract")
+    endif()
+endif()
+check_files_no_match("HTTP/2 client response status recovered a sentinel or parallel seen flag"
+    "${RULE_STALE_H2_RESPONSE_STATUS_PRODUCT}"
+    "${HTTP2_STREAM_REQUEST_STATE}"
+    "${HTTP2_STREAM_STATE}"
+    "${HTTP2_CONNECTION_SOURCE}")
 
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"

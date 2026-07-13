@@ -1097,8 +1097,7 @@ constexpr std::uint8_t kMaxHttp2InterimResponses = 8;
 
 struct Http2ResponseDecodeContext final {
     Http2HeaderDecodeContext base;
-    std::uint16_t status{0};
-    bool sawStatus{false};
+    std::optional<std::uint16_t> status;
     bool sawRegular{false};
 };
 
@@ -1114,30 +1113,30 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
         return false;
     }
     if (name.front() == ':') {
-        if (name != ":status" || context->sawStatus || context->sawRegular) {
+        if (name != ":status" || context->status || context->sawRegular) {
             return false;
         }
-        int status = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), status);
+        int parsedStatus = 0;
+        const auto [ptr, ec] = std::from_chars(
+            value.data(), value.data() + value.size(), parsedStatus);
         if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size() ||
-            status < 100 || status > 999 || status == 101) {
+            parsedStatus < 100 || parsedStatus > 999 || parsedStatus == 101) {
             return false;
         }
-        context->status = static_cast<std::uint16_t>(status);
-        context->sawStatus = true;
+        context->status = static_cast<std::uint16_t>(parsedStatus);
         return true;
     }
-    if (!context->sawStatus || !http2IsValidRegularHeader(name, value)) {
+    if (!context->status || !http2IsValidRegularHeader(name, value)) {
         return false;
     }
     context->sawRegular = true;
-    if (context->status < 200) {
+    if (*context->status < 200) {
         return true;  // interim head: validate only, never stored
     }
     const auto kind = classifyRequestHeader(name);
     const bool successfulConnect =
         httpResponseContentSemantics(
-            stream.requestKnownMethod(), context->status)
+            stream.requestKnownMethod(), *context->status)
             .connectTunnel() != nullptr;
     if (kind == RequestHeaderKind::kContentLength && successfulConnect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
@@ -1165,7 +1164,8 @@ bool http2OnDecodedResponseHeader(void* target, std::string_view name, std::stri
 }  // namespace
 
 HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& stream) {
-    Http2ResponseDecodeContext context{Http2HeaderDecodeContext{stream}};
+    Http2ResponseDecodeContext context{
+        Http2HeaderDecodeContext{stream}, std::nullopt, false};
     const auto result = decoder_.decode(
         stream.requestHeaderBlock(), &context,
         [](void* target, std::string_view name, std::string_view value) {
@@ -1175,10 +1175,10 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
     if (const auto status = http2ClassifyHeaderDecodeResult(result); status != HeaderDecodeStatus::kOk) {
         return status;
     }
-    if (!context.sawStatus) {
+    if (!context.status) {
         return HeaderDecodeStatus::kProtocolError;
     }
-    if (context.status < 200) {
+    if (*context.status < 200) {
         // 1xx interim head cannot carry END_STREAM. Without it, the remote receive
         // state remains head-pending so the next HEADERS is decoded as another head.
         if (stream.remoteReceive().headEndStreamPending() != nullptr) {
@@ -1190,9 +1190,11 @@ HeaderDecodeStatus Http2Connection::decodeResponseHeaderBlock(Http2StreamState& 
         }
         return HeaderDecodeStatus::kOk;
     }
-    stream.setResponseStatus(context.status);
+    if (!stream.setResponseStatus(*context.status)) {
+        return HeaderDecodeStatus::kProtocolError;
+    }
     const auto contentSemantics = httpResponseContentSemantics(
-        stream.requestKnownMethod(), context.status);
+        stream.requestKnownMethod(), *context.status);
     if (contentSemantics.withoutContent() != nullptr &&
         !stream.selectRemoteContentMetadataOnly()) {
         return HeaderDecodeStatus::kProtocolError;

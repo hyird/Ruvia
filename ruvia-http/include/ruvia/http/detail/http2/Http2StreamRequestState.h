@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace ruvia::detail {
 
@@ -75,14 +76,18 @@ public:
         return true;
     }
 
-    // Client role: the decoded response :status for a stream this endpoint opened,
-    // and how many 1xx interim heads preceded the final one (bounded by the owner).
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
-        return responseStatus_;
+    // Client role: nullptr until the final response :status is committed once for
+    // a stream this endpoint opened. The owner bounds preceding 1xx heads.
+    [[nodiscard]] const std::uint16_t* responseStatus() const noexcept {
+        return responseStatus_ ? &*responseStatus_ : nullptr;
     }
 
-    void setResponseStatus(std::uint16_t status) noexcept {
+    [[nodiscard]] bool setResponseStatus(std::uint16_t status) noexcept {
+        if (responseStatus_) {
+            return false;
+        }
         responseStatus_ = status;
+        return true;
     }
 
     [[nodiscard]] std::uint8_t interimResponseCount() const noexcept {
@@ -103,7 +108,7 @@ private:
     bool regularHeaderSeen_ : 1 {false};
     std::uint32_t singletonHeaderBits_{0};
     std::uint16_t schemeDefaultPort_{0};
-    std::uint16_t responseStatus_{0};
+    std::optional<std::uint16_t> responseStatus_;
     std::uint8_t interimResponses_{0};
 };
 

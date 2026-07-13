@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <string>
 #include <string_view>
@@ -21,6 +22,23 @@ std::pmr::memory_resource* res() noexcept {
 }
 
 }  // namespace
+
+RUVIA_TEST(h2_response_status_is_optional_and_single_assignment) {
+    Http2StreamState stream(1, res());
+    RUVIA_CHECK(stream.responseStatus() == nullptr);
+    RUVIA_CHECK(stream.setResponseStatus(200));
+    const auto* status = stream.responseStatus();
+    RUVIA_CHECK(status != nullptr);
+    if (status != nullptr) {
+        RUVIA_CHECK_EQ(*status, std::uint16_t{200});
+    }
+    RUVIA_CHECK(!stream.setResponseStatus(204));
+    status = stream.responseStatus();
+    RUVIA_CHECK(status != nullptr);
+    if (status != nullptr) {
+        RUVIA_CHECK_EQ(*status, std::uint16_t{200});
+    }
+}
 
 RUVIA_TEST(h2_headers_valid_pseudo_headers_stored) {
     Http2StreamState stream(1, res());

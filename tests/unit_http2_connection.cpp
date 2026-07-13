@@ -3053,7 +3053,11 @@ RUVIA_TEST(http2_connection_client_role_get_round_trip) {
         if (const auto* messageHead = event.messageHead()) {
             clientSawHead = true;
             if (auto* stream = client.stream(messageHead->streamId())) {
-                status = stream->responseStatus();
+                const auto* responseStatus = stream->responseStatus();
+                RUVIA_CHECK(responseStatus != nullptr);
+                if (responseStatus != nullptr) {
+                    status = *responseStatus;
+                }
             }
         } else if (const auto* bodyChunk = event.messageBodyChunk()) {
             clientBody.append(bodyChunk->bytes().data(), bodyChunk->bytes().size());
@@ -3211,7 +3215,11 @@ RUVIA_TEST(http2_connection_client_role_interim_response_skipped) {
     RUVIA_CHECK(end);
     auto* stream = client.stream(streamId);
     RUVIA_CHECK(stream != nullptr);
-    RUVIA_CHECK_EQ(stream->responseStatus(), static_cast<std::uint16_t>(200));
+    const auto* responseStatus = stream->responseStatus();
+    RUVIA_CHECK(responseStatus != nullptr);
+    if (responseStatus != nullptr) {
+        RUVIA_CHECK_EQ(*responseStatus, static_cast<std::uint16_t>(200));
+    }
     RUVIA_CHECK_EQ(static_cast<int>(stream->interimResponseCount()), 1);
     RUVIA_CHECK(!client.connectionError().has_value());
 }
