@@ -66,10 +66,16 @@ ctest --test-dir build -C Debug --output-on-failure
 | `RUVIA_BUILD_HTTP` | `ON` | Build standalone `ruvia::http`. |
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
+| `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |
 | `RUVIA_ENABLE_REDIS` | `OFF` | Enable Redis integration in Web. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Enable JWT integration in Web. |
+
+## Performance Baseline
+
+Release benchmark scope, commands, and comparison rules live with the benchmark
+sources in [tests/benchmarks/README.md](tests/benchmarks/README.md).
 
 ## Install and Consume
 
