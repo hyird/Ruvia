@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include <asio/bind_allocator.hpp>
@@ -40,6 +41,7 @@
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/web/detail/http/ContextServices.h"
+#include "ruvia/web/detail/server/HttpResponseWriter.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -196,12 +198,33 @@ Task<void> runHttp2SansIoSession(
                 if (writeFailed) {
                     continue;  // socket is dead; discard, but keep serving handlers
                 }
-                const auto ec = co_await asyncError([&stream, &writeScratch](auto handler) mutable {
-                    asio::async_write(
-                        stream, asio::buffer(writeScratch.data(), writeScratch.size()),
-                        std::move(handler));
-                });
-                if (ec) {
+                // Optimistic synchronous send, same rationale as the HTTP/1
+                // writer: the socket is already non-blocking (the session is
+                // reached through prior async reads), so a full write_some
+                // skips the reactor completion pass entirely.
+                std::error_code writeEc;
+                std::size_t writtenBytes = 0;
+                bool writeDone = false;
+                if constexpr (std::is_same_v<std::remove_cvref_t<Stream>, asio::ip::tcp::socket>) {
+                    writeDone = tryPlainTcpSyncWrite(
+                        stream,
+                        asio::buffer(writeScratch.data(), writeScratch.size()),
+                        writeScratch.size(),
+                        writeEc,
+                        writtenBytes);
+                }
+                if (!writeDone) {
+                    writeEc = co_await asyncError(
+                        [&stream, &writeScratch, writtenBytes](auto handler) mutable {
+                            asio::async_write(
+                                stream,
+                                asio::buffer(
+                                    writeScratch.data() + writtenBytes,
+                                    writeScratch.size() - writtenBytes),
+                                std::move(handler));
+                        });
+                }
+                if (writeEc) {
                     writeFailed = true;
                     continue;
                 }
