@@ -1254,6 +1254,9 @@ concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {
         std::same_as<const ruvia::Http1ClientConnectTunnel*>;
     { plan.protocolUpgrade() } ->
         std::same_as<const ruvia::Http1ClientProtocolUpgrade*>;
+    { plan.requestContentSignal() } ->
+        std::same_as<std::optional<
+            ruvia::Http1ClientRequestContentSignal>>;
 };
 
 template <typename T>

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -31,9 +32,9 @@ enum class Http1ClientResponsePersistence : std::uint8_t {
 // Signal for a request body gated by Expect: 100-continue. It is deliberately
 // separate from wait duration: the protocol core reports Continue or
 // exchange-complete progress, while an external I/O runtime owns its finite
-// timeout policy.
+// timeout policy. Most response heads emit no request-content event, represented
+// by an empty optional rather than a non-event enum member.
 enum class Http1ClientRequestContentSignal : std::uint8_t {
-    kNone,
     kContinue,
     kExchangeComplete,
 };
@@ -194,7 +195,7 @@ public:
         return std::get_if<Http1ClientProtocolUpgrade>(&state_);
     }
 
-    [[nodiscard]] constexpr Http1ClientRequestContentSignal
+    [[nodiscard]] constexpr std::optional<Http1ClientRequestContentSignal>
     requestContentSignal() const noexcept {
         return requestContentSignal_;
     }
@@ -213,13 +214,13 @@ private:
 
     Http1ClientResponsePlan(
         State state,
-        Http1ClientRequestContentSignal requestContentSignal) noexcept
+        std::optional<Http1ClientRequestContentSignal>
+            requestContentSignal) noexcept
         : state_(std::move(state)),
           requestContentSignal_(requestContentSignal) {}
 
     State state_;
-    Http1ClientRequestContentSignal requestContentSignal_{
-        Http1ClientRequestContentSignal::kNone};
+    std::optional<Http1ClientRequestContentSignal> requestContentSignal_;
 };
 
 // Protocol failures are typed and allocation-free. Resource exhaustion can
