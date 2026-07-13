@@ -158,7 +158,7 @@ jobs:
           ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
 
   ubuntu_protocol_sanitizers:
-    name: Ubuntu protocol ASan + UBSan + fuzz
+    name: Ubuntu protocol UBSan + fuzz
     runs-on: ubuntu-24.04
     env:
       CC: clang-18
@@ -202,17 +202,14 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # Instrument the protocol library and its HTTP-only test executables. libFuzzer
-      # coverage is added only to its three dedicated entrypoints. Keep this job
-      # HTTP-only: Linux mimalloc's global override and ASan cannot safely own the
-      # same allocation symbols, while the protocol target has no runtime allocator.
+      # UBSan covers the complete test executable and protocol library. ASan is
+      # deliberately excluded because Linux mimalloc's global override owns the
+      # same allocation symbols. libFuzzer still drives the protocol entrypoints.
       - name: Configure
         run: |
           cmake -S . -B build/protocol-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
-            -DRUVIA_BUILD_CORE=OFF \
-            -DRUVIA_BUILD_WEB=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
             -DRUVIA_BUILD_TESTS=ON \
             -DRUVIA_BUILD_FUZZERS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -220,15 +217,13 @@ jobs:
       - name: Build
         run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
 
-      - name: Test (HTTP, ASan + UBSan)
+      - name: Test (unit, UBSan)
         env:
-          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build/protocol-sanitizers --output-on-failure --build-config "$BUILD_TYPE"
 
       - name: Protocol fuzz smoke
         env:
-          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           set -euo pipefail

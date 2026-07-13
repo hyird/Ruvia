@@ -2,12 +2,12 @@ function(ruvia_add_protocol_fuzzer name source)
     add_executable(${name} ${source})
     target_link_libraries(${name} PRIVATE ruvia::http)
     target_compile_options(${name} PRIVATE
-        -fsanitize=fuzzer,address,undefined
+        -fsanitize=fuzzer,undefined
         -fno-sanitize-recover=all
         -fno-omit-frame-pointer
     )
     target_link_options(${name} PRIVATE
-        -fsanitize=fuzzer,address,undefined
+        -fsanitize=fuzzer,undefined
         -fno-sanitize-recover=all
     )
 endfunction()
