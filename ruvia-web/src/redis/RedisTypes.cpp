@@ -1,5 +1,6 @@
 #include "ruvia/web/redis/Redis.h"
 
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <stdexcept>
@@ -9,7 +10,19 @@ namespace ruvia {
 
 RedisError::RedisError(Code code, std::string_view message)
     : code_(code),
-      message_(message, std::pmr::get_default_resource()) {}
+      message_(message, detail::processResource()) {}
+
+RedisError::RedisError(const RedisError& other)
+    : code_(other.code_),
+      message_(other.message_, detail::processResource()) {}
+
+RedisError& RedisError::operator=(const RedisError& other) {
+    if (this != &other) {
+        code_ = other.code_;
+        message_ = other.message_;
+    }
+    return *this;
+}
 
 const char* RedisError::what() const noexcept {
     return message_.c_str();

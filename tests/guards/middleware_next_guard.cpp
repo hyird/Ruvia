@@ -38,18 +38,25 @@ static_assert(!ruvia::detail::ResponseHandleMiddleware<ByValueNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<ConstNextMiddleware>);
 static_assert(!ruvia::detail::ResponseHandleMiddleware<RvalueNextMiddleware>);
 
+template <typename NextT>
+concept HasPublicNextRuntimeState = requires {
+    typename NextT::State;
+};
+
+static_assert(!HasPublicNextRuntimeState<ruvia::Next>);
+
 int continuationCalls = 0;
 
-ruvia::Task<void> countingContinuation(ruvia::Next::State) {
+ruvia::Task<void> countingContinuation(ruvia::detail::NextState) {
     ++continuationCalls;
     co_return;
 }
 
 ruvia::Task<int> exerciseExpiredNext() {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::Next::State::Control control;
+    ruvia::detail::NextState::Control control;
     auto next = ruvia::detail::NextAccess::make(
-        ruvia::Next::State{.control = &control},
+        ruvia::detail::NextState{.control = &control},
         &countingContinuation);
 
     control.active = false;

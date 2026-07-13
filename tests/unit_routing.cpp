@@ -469,7 +469,7 @@ class ChainMwOverrideAfterNext final
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next& next) {
         co_await next();
-        context.res(context.body("override"));
+        context.respond(context.body("override"));
     }
 };
 
@@ -478,7 +478,7 @@ class ChainMwStop final : public ruvia::Middleware<ChainMwStop> {
 public:
     ruvia::Task<void> handle(ruvia::Context& context, ruvia::Next&) {
         g_chainOrder.push_back(9);
-        context.res(context.body("stopped"));
+        context.respond(context.body("stopped"));
         co_return;
     }
 };

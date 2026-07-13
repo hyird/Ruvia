@@ -1,6 +1,5 @@
 #include "ruvia/web/Health.h"
 
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/web/detail/json/JsonEscape.h"
 
 #include <memory_resource>
@@ -10,13 +9,15 @@ namespace {
 
 [[nodiscard]] HttpResponse makeJsonResponse(
     Context& context,
-    std::pmr::string body,
+    std::pmr::string& body,
     std::uint16_t statusCode = 200) {
-    HttpResponse response(context.resource());
-    response.status(statusCode);
-    response.header("Content-Type", "application/json");
-    detail::setResponseBodyOwned(response, std::move(body));
-    return response;
+    constexpr HttpHeaderView kJsonHeaders[] = {
+        {"Content-Type", "application/json"}};
+    return context.body(
+        body,
+        Context::ResponseInit{
+            .status = statusCode,
+            .headers = kJsonHeaders});
 }
 
 }  // namespace
@@ -24,14 +25,14 @@ namespace {
 HttpResponse makeHealthResponse(Context& context) {
     std::pmr::string body(context.resource());
     body.assign("{\"status\":\"ok\"}");
-    return makeJsonResponse(context, std::move(body));
+    return makeJsonResponse(context, body);
 }
 
 HttpResponse makeReadyResponse(Context& context, bool ready, std::string_view reason) {
     std::pmr::string body(context.resource());
     if (ready) {
         body.assign("{\"status\":\"ready\"}");
-        return makeJsonResponse(context, std::move(body));
+        return makeJsonResponse(context, body);
     }
 
     body.assign("{\"status\":\"not_ready\"");
@@ -40,7 +41,7 @@ HttpResponse makeReadyResponse(Context& context, bool ready, std::string_view re
         detail::appendJsonString(body, reason);
     }
     body.push_back('}');
-    return makeJsonResponse(context, std::move(body), 503);
+    return makeJsonResponse(context, body, 503);
 }
 
 }  // namespace ruvia

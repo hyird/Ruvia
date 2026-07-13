@@ -269,7 +269,7 @@ public:
 
     [[nodiscard]] ResponseStreamWriter& streamText();
 
-    [[nodiscard]] SseWriter streamSSE() const;
+    [[nodiscard]] SseWriter streamSSE();
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() const noexcept {
@@ -346,9 +346,12 @@ public:
         const CookieOptions& options = {}) const;
     [[nodiscard]] std::optional<std::string_view> deleteCookie(std::string_view name, CookieOptions options = {});
 
-    [[nodiscard]] HttpResponse& res();
+    // Observe the response produced by downstream middleware or a terminal
+    // handler. A response exists only after Context::finalized() becomes true.
+    [[nodiscard]] const HttpResponse* response() const noexcept;
 
-    void res(HttpResponse&& response);
+    // End middleware dispatch with an explicitly constructed response.
+    void respond(HttpResponse&& response);
 
     [[nodiscard]] bool finalized() const noexcept {
         return responseFinalized_;
@@ -785,150 +788,12 @@ private:
     detail::ValidatedValueStore validatedValues_;
 };
 
-inline const HttpRequest& ContextRequest::raw() const noexcept {
-    return context_->request_;
-}
-
-inline std::string_view ContextRequest::method() const noexcept {
-    return raw().method();
-}
-
-inline HttpKnownMethod ContextRequest::knownMethod() const noexcept {
-    return raw().knownMethod();
-}
-
-inline std::pmr::string ContextRequest::url() const {
-    const auto requestTarget = raw().target();
-    std::pmr::string result(context_->resource());
-    if (requestTarget.starts_with("http://") || requestTarget.starts_with("https://")) {
-        result.assign(requestTarget.data(), requestTarget.size());
-        return result;
-    }
-
-    const auto host = header("Host");
-    if (!host || host->empty() || requestTarget.empty() || requestTarget.front() != '/') {
-        result.assign(requestTarget.data(), requestTarget.size());
-        return result;
-    }
-
-    result.append(context_->connInfo_.tls() != nullptr ? "https://" : "http://");
-    result.append(host->data(), host->size());
-    result.append(requestTarget.data(), requestTarget.size());
-    return result;
-}
-
-inline std::string_view ContextRequest::path() const noexcept {
-    return raw().path();
-}
-
-inline std::string_view routePath(const Context& context) noexcept {
-    return context.routePath_;
-}
-
-inline std::span<const ContextRequest::MatchedRoute> matchedRoutes(const Context& context) {
-    return context.requestMatchedRoutes();
-}
-
-inline std::string_view routePath(const Context& context, std::ptrdiff_t index) {
-    const auto routes = matchedRoutes(context);
-    if (routes.empty()) {
-        return {};
-    }
-
-    auto resolved = index;
-    if (resolved < 0) {
-        resolved += static_cast<std::ptrdiff_t>(routes.size());
-    }
-    if (resolved < 0 || static_cast<std::size_t>(resolved) >= routes.size()) {
-        return {};
-    }
-    return routes[static_cast<std::size_t>(resolved)].path;
-}
-
-inline std::optional<std::string_view> ContextRequest::header(std::string_view name) const {
-    return context_->requestHeader(name);
-}
-
-inline bool ContextRequest::accepts(std::string_view mediaType) const noexcept {
-    return context_->requestAccepts(mediaType);
-}
-
-inline std::optional<std::string_view> ContextRequest::query(std::string_view name) const {
-    return context_->requestQuery(name);
-}
-
-inline std::optional<std::span<const std::string_view>> ContextRequest::queries(std::string_view name) const {
-    auto values = context_->requestQueries().values(name);
-    if (values.empty()) {
-        return std::nullopt;
-    }
-    return values;
-}
-
-inline std::optional<std::string_view> ContextRequest::cookie(std::string_view name) const {
-    return context_->requestCookie(name);
-}
-
-namespace detail {
-
-inline const RequestNameValueList& requestHeaderFields(const ContextRequest& request) {
-    return request.context_->requestHeaders();
-}
-
-inline const RequestNameValueList& requestQueryFields(const ContextRequest& request) {
-    return request.context_->requestQuery();
-}
-
-inline const RequestNameValueList& requestCookieFields(const ContextRequest& request) {
-    return request.context_->requestCookies();
-}
-
-inline const RequestNameValueList& requestParamFields(const ContextRequest& request) {
-    return request.context_->routeParams();
-}
-
-}  // namespace detail
-
-
-inline Task<std::string_view> ContextRequest::text() const {
-    return context_->requestBody();
-}
-
-inline Task<std::span<const std::byte>> ContextRequest::bytes() const {
-    const auto body = co_await text();
-    co_return std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(body.data()),
-        body.size());
-}
-
-inline Task<ContextRequest::RequestBlob> ContextRequest::blob() const {
-    auto bytes = co_await this->bytes();
-    co_return RequestBlob(bytes, header("Content-Type").value_or(std::string_view{}));
-}
-
-inline Task<void> ContextRequest::discardBody() const {
-    return context_->requestDiscardBody();
-}
-
-inline Task<std::pmr::vector<MultipartPart>> ContextRequest::multipart() const {
-    return context_->requestMultipart();
-}
-
-inline Task<ContextRequest::RequestFormData> ContextRequest::parseBody(ParseBodyOptions options) const {
-    return context_->parseRequestBody(options);
-}
-
-inline BodyReader& ContextRequest::bodyReader() const {
-    return context_->requestBodyReader();
-}
-
-inline MultipartReader ContextRequest::multipartReader() const {
-    return context_->requestMultipartReader();
-}
-
-inline std::optional<std::string_view> ContextRequest::param(std::string_view name) const {
-    return context_->routeParam(name);
-}
+[[nodiscard]] std::string_view routePath(const Context& context) noexcept;
+[[nodiscard]] std::span<const ContextRequest::MatchedRoute> matchedRoutes(
+    const Context& context);
+[[nodiscard]] std::string_view routePath(
+    const Context& context,
+    std::ptrdiff_t index);
 
 namespace detail {
 

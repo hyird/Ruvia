@@ -82,7 +82,7 @@ bool applyRouteRateLimit(
         options.rule.maxRequests());
     setUnsignedHeader(response, "X-RateLimit-Remaining", 0);
     setUnsignedHeader(response, "X-RateLimit-Reset", retryAfter);
-    context.res(std::move(response));
+    context.respond(std::move(response));
     return false;
 }
 

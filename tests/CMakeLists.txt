@@ -101,6 +101,7 @@ add_executable(ruvia_unit_tests
     unit_date_cache.cpp
     unit_error.cpp
     unit_error_response.cpp
+    unit_health.cpp
     unit_validator.cpp
     unit_http_response.cpp
     unit_http_response_body.cpp

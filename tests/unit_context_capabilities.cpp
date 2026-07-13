@@ -251,6 +251,10 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
         request,
         ruvia::detail::ContextServices{}.withResponseStream(writer));
     RUVIA_CHECK(&streamContext.stream() == &writer);
+    (void)streamContext.streamSSE();
+    const auto sseHead = ruvia::detail::ContextAccess::streamingHead(streamContext);
+    RUVIA_CHECK_EQ(sseHead.header("Content-Type"), std::string_view("text/event-stream"));
+    RUVIA_CHECK_EQ(sseHead.header("Cache-Control"), std::string_view("no-cache"));
 
     auto webSocket = ruvia::detail::WebSocketAccess::make(
         nullptr, &readWebSocket, &writeWebSocket, &closeWebSocket);

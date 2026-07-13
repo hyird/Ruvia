@@ -15,27 +15,27 @@ struct NextAccess;
 class RouteEntry;
 class RouteTable;
 class StreamMiddlewareChainState;
+
+struct NextState final {
+    struct Control final {
+        bool invoked{false};
+        bool active{true};
+    };
+
+    const RouteTable* table{nullptr};
+    const RouteEntry* route{nullptr};
+    Context* context{nullptr};
+    StreamMiddlewareChainState* streamChain{nullptr};
+    Control* control{nullptr};
+    std::size_t index{0};
+    bool repeated{false};
+};
+
+using NextInvoke = Task<void> (*)(NextState);
 }  // namespace detail
 
 class Next final {
 public:
-    struct State final {
-        struct Control final {
-            bool invoked{false};
-            bool active{true};
-        };
-
-        const detail::RouteTable* table{nullptr};
-        const detail::RouteEntry* route{nullptr};
-        Context* context{nullptr};
-        detail::StreamMiddlewareChainState* streamChain{nullptr};
-        Control* control{nullptr};
-        std::size_t index{0};
-        bool repeated{false};
-    };
-
-    using Invoke = Task<void> (*)(State);
-
     class Awaitable final {
         class Awaiter final {
         public:
@@ -90,12 +90,12 @@ public:
     private:
         friend class Next;
 
-        constexpr Awaitable(State state, Invoke invoke) noexcept
+        constexpr Awaitable(detail::NextState state, detail::NextInvoke invoke) noexcept
             : state_(state),
               invoke_(invoke) {}
 
-        State state_;
-        Invoke invoke_{nullptr};
+        detail::NextState state_;
+        detail::NextInvoke invoke_{nullptr};
         bool awaited_{false};
     };
 
@@ -114,12 +114,12 @@ public:
 private:
     friend struct detail::NextAccess;
 
-    constexpr Next(State state, Invoke invoke) noexcept
+    constexpr Next(detail::NextState state, detail::NextInvoke invoke) noexcept
         : state_(state),
           invoke_(invoke) {}
 
-    State state_;
-    Invoke invoke_{nullptr};
+    detail::NextState state_;
+    detail::NextInvoke invoke_{nullptr};
 };
 
 }  // namespace ruvia

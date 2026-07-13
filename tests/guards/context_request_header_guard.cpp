@@ -14,4 +14,8 @@ static_assert(std::same_as<
 static_assert(!std::is_copy_constructible_v<
     ruvia::ContextRequest::RawRequestClone>);
 
-int main() {}
+int main() {
+    using Method = std::string_view (ruvia::ContextRequest::*)() const noexcept;
+    volatile Method method = &ruvia::ContextRequest::method;
+    return method == nullptr;
+}

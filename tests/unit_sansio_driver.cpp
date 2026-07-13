@@ -990,16 +990,13 @@ struct StreamAccessObservation final {
     std::uint16_t status{0};
     ruvia::HttpProtocolVersion protocolVersion{
         ruvia::HttpProtocolVersion::kHttp11};
-};
 
-void captureStreamAccess(
-    void* target,
-    const ruvia::AccessLogRecord& record) noexcept {
-    auto& observation = *static_cast<StreamAccessObservation*>(target);
-    ++observation.calls;
-    observation.status = record.status();
-    observation.protocolVersion = record.protocolVersion();
-}
+    void operator()(const ruvia::AccessLogRecord& record) noexcept {
+        ++calls;
+        status = record.status();
+        protocolVersion = record.protocolVersion();
+    }
+};
 
 // Streaming handler pushing one large chunk; used to exercise send-window pacing.
 ruvia::Task<void> streamBigChunkHandler(void*, ruvia::Context& c) {
@@ -1050,8 +1047,8 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.accessLog.callback = &captureStreamAccess;
-            fixture.options.accessLog.user = &accessObservation;
+            fixture.options.accessLog.callback =
+                ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
                 ruvia::detail::runHttp2SansIoSession(
                     sock,
@@ -1238,8 +1235,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
             impl.finalize();
 
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.accessLog.callback = &captureStreamAccess;
-            fixture.options.accessLog.user = &accessObservation;
+            fixture.options.accessLog.callback =
+                ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
                 ruvia::detail::runHttp2SansIoSession(
                     sock,
@@ -1383,8 +1380,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_peer_abort_before_commit_has_no_status) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.accessLog.callback = &captureStreamAccess;
-            fixture.options.accessLog.user = &accessObservation;
+            fixture.options.accessLog.callback =
+                ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
                 ruvia::detail::runHttp2SansIoSession(
                     sock,
@@ -1477,8 +1474,8 @@ RUVIA_TEST(sansio_driver_h2_stream_trailers_emitted) {
                 std::span<const ruvia::detail::ControllerMiddlewareDescriptor>{});
             impl.finalize();
             ruvia::test::Http2SansIoSessionFixture fixture;
-            fixture.options.accessLog.callback = &captureStreamAccess;
-            fixture.options.accessLog.user = &accessObservation;
+            fixture.options.accessLog.callback =
+                ruvia::AccessLogCallback::bind(accessObservation);
             co_await ruvia::detail::taskAsAwaitable(
                 ruvia::detail::runHttp2SansIoSession(
                     sock,

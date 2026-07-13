@@ -20,7 +20,7 @@ inline void recordHttpAccess(
     std::string_view remoteAddress,
     std::uint16_t status,
     std::chrono::steady_clock::time_point start) noexcept {
-    if (accessLog.callback == nullptr) {
+    if (!accessLog.callback) {
         return;
     }
     const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -31,7 +31,7 @@ inline void recordHttpAccess(
         remoteAddress,
         status,
         micros < 0 ? 0 : static_cast<std::uint64_t>(micros));
-    accessLog.callback(accessLog.user, record);
+    accessLog.invoke(record);
 }
 
 }  // namespace ruvia::detail

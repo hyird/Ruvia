@@ -73,11 +73,11 @@ CsrfOutcome runCsrf(HttpKnownMethod method, bool withCookie, std::string_view co
     HttpRequestAccess::setResource(request, memory.resource());
     auto context = ContextAccess::make(memory, request);
 
-    Next::State::Control control;
-    Next::State state{};
+    ruvia::detail::NextState::Control control;
+    ruvia::detail::NextState state{};
     state.context = &context;
     state.control = &control;
-    Next next = NextAccess::make(state, [](Next::State s) -> ruvia::Task<void> {
+    Next next = NextAccess::make(state, [](ruvia::detail::NextState s) -> ruvia::Task<void> {
         if (s.control != nullptr) {
             s.control->invoked = true;
         }

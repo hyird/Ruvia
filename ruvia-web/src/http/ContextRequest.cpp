@@ -67,18 +67,6 @@ namespace detail {
 
 }  // namespace detail
 
-bool ContextRequest::contentTypeMatches(std::string_view expected) const noexcept {
-    return context_->requestContentTypeMatches(expected);
-}
-
-std::pmr::memory_resource* ContextRequest::resource() const noexcept {
-    return context_->resource();
-}
-
-detail::ValidatedValueStore& ContextRequest::validatedValues() const noexcept {
-    return const_cast<detail::ValidatedValueStore&>(context_->validatedValues_);
-}
-
 Task<JsonValue> ContextRequest::json() const {
     if (!contentTypeMatches("application/json")) {
         detail::throwInvalidJsonContentType();
@@ -825,32 +813,6 @@ BodyReader& Context::requestBodyReader() const {
 
 MultipartReader Context::requestMultipartReader() const {
     return MultipartReader(requestBodyReader(), multipartBoundary(), resource());
-}
-
-WebSocket& Context::webSocket() const {
-    const auto* output = responseOutput_.webSocket();
-    if (output == nullptr) {
-        throw std::logic_error("websocket is not available");
-    }
-    return output->webSocket();
-}
-
-ResponseStreamWriter& Context::stream() const {
-    const auto* output = responseOutput_.responseStream();
-    if (output == nullptr) {
-        throw std::logic_error("response body is not streamable");
-    }
-    return output->writer();
-}
-
-ResponseStreamWriter& Context::streamText() {
-    setStableResponseHeader("Content-Type", "text/plain; charset=UTF-8");
-    setStableResponseHeader("X-Content-Type-Options", "nosniff");
-    return stream();
-}
-
-SseWriter Context::streamSSE() const {
-    return SseWriter(stream());
 }
 
 MultipartBoundary Context::multipartBoundary() const {

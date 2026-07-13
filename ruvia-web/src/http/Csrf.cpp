@@ -41,7 +41,7 @@ Task<void> CsrfProtection::handle(Context& c, Next& next) {
         const auto header = c.req().header("X-XSRF-TOKEN");
         if (!cookie || cookie->empty() || !header || header->empty() ||
             !detail::csrfTokensEqual(*cookie, *header)) {
-            c.res(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
+            c.respond(c.error(403, "csrf_token_mismatch", "CSRF token missing or invalid"));
             co_return;
         }
     } else if (!cookie || cookie->empty()) {

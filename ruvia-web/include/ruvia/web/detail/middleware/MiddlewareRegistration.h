@@ -30,7 +30,7 @@ template <typename MiddlewareT>
     Next& next) {
     auto* middleware = static_cast<MiddlewareT*>(target);
     auto response = co_await middleware->handle(context, next);
-    context.res(std::move(response));
+    context.respond(std::move(response));
 }
 
 template <typename MiddlewareT>

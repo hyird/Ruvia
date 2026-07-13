@@ -37,15 +37,15 @@ class RouterImpl;
 
 struct NextAccess final {
     [[nodiscard]] static constexpr Next make(
-        Next::State state,
-        Next::Invoke invoke) noexcept {
+        NextState state,
+        NextInvoke invoke) noexcept {
         return Next(state, invoke);
     }
 
     [[nodiscard]] static Next& makeIn(
         std::pmr::memory_resource* resource,
-        Next::State state,
-        Next::Invoke invoke) {
+        NextState state,
+        NextInvoke invoke) {
         auto* resolved = pmrResourceOrDefault(resource);
         auto* storage = resolved->allocate(sizeof(Next), alignof(Next));
         return *new (storage) Next(state, invoke);
@@ -480,7 +480,7 @@ private:
         const RouteEntry& route,
         std::size_t index,
         Context& context) const;
-    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(Next::State state);
+    [[nodiscard]] static Task<void> invokeMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
         const HttpRequest& request,
         const ResolvedRoute& route,
@@ -491,7 +491,7 @@ private:
         std::size_t index,
         Context& context,
         StreamMiddlewareChainState& chain) const;
-    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(Next::State state);
+    [[nodiscard]] static Task<void> invokeStreamMiddlewareContinuation(NextState state);
     [[nodiscard]] Task<void> storeMiddlewareExceptionResponse(
         Context& context,
         std::exception_ptr exception) const;

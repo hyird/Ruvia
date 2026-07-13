@@ -1024,6 +1024,8 @@ else()
            "makeMiddlewareDescriptor" OR
        NOT web_middleware_guard MATCHES
            "!ruvia::detail::VoidHandleMiddleware<ByValueNextMiddleware>" OR
+       NOT web_middleware_guard MATCHES
+           "!HasPublicNextRuntimeState<ruvia::Next>" OR
        web_middleware_example MATCHES
            "ruvia::detail::(VoidHandleMiddleware|ResponseHandleMiddleware)|detail/middleware")
         boundary_error("middleware public API and registration implementation were mixed"
@@ -1059,6 +1061,8 @@ set(WEB_CONTEXT_CAPABILITY_CONTEXT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
 set(WEB_CONTEXT_REQUEST_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+set(WEB_CONTEXT_RUNTIME_FACADES
+    "${RUVIA_ROOT}/ruvia-web/src/http/HttpRuntimeFacades.cpp")
 set(WEB_CONTEXT_ROUTER_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
 set(WEB_CONTEXT_LAZY_BODY_ROUTE
@@ -1077,6 +1081,7 @@ foreach(context_capability_file IN ITEMS
         "${WEB_CONTEXT_INTERNAL}"
         "${WEB_CONTEXT_CAPABILITY_CONTEXT}"
         "${WEB_CONTEXT_REQUEST_SOURCE}"
+        "${WEB_CONTEXT_RUNTIME_FACADES}"
         "${WEB_CONTEXT_ROUTER_DISPATCH}"
         "${WEB_CONTEXT_LAZY_BODY_ROUTE}"
         "${WEB_CONTEXT_STREAM_BODY_ROUTE}"
@@ -1094,6 +1099,7 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
    EXISTS "${WEB_CONTEXT_INTERNAL}" AND
    EXISTS "${WEB_CONTEXT_CAPABILITY_CONTEXT}" AND
    EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}" AND
+   EXISTS "${WEB_CONTEXT_RUNTIME_FACADES}" AND
    EXISTS "${WEB_CONTEXT_ROUTER_DISPATCH}" AND
    EXISTS "${WEB_CONTEXT_LAZY_BODY_ROUTE}" AND
    EXISTS "${WEB_CONTEXT_STREAM_BODY_ROUTE}" AND
@@ -1105,6 +1111,7 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
     file(READ "${WEB_CONTEXT_INTERNAL}" web_context_internal)
     file(READ "${WEB_CONTEXT_CAPABILITY_CONTEXT}" web_context_header)
     file(READ "${WEB_CONTEXT_REQUEST_SOURCE}" web_context_request_source)
+    file(READ "${WEB_CONTEXT_RUNTIME_FACADES}" web_context_runtime_facades)
     file(READ "${WEB_CONTEXT_ROUTER_DISPATCH}" web_context_router_dispatch)
     file(READ "${WEB_CONTEXT_LAZY_BODY_ROUTE}" web_context_lazy_body_route)
     file(READ "${WEB_CONTEXT_STREAM_BODY_ROUTE}" web_context_stream_body_route)
@@ -1169,9 +1176,9 @@ if(EXISTS "${WEB_CONTEXT_CAPABILITIES}" AND
            "requestBodySource_[.]lazy[(][)]" OR
        NOT web_context_request_source MATCHES
            "requestBodySource_[.]streaming[(][)]" OR
-       NOT web_context_request_source MATCHES
+       NOT web_context_runtime_facades MATCHES
            "responseOutput_[.]responseStream[(][)]" OR
-       NOT web_context_request_source MATCHES
+       NOT web_context_runtime_facades MATCHES
            "responseOutput_[.]webSocket[(][)]" OR
        NOT web_context_router_dispatch MATCHES
            "services[.]responseOutput[(][)][.]responseStream[(][)]" OR
@@ -1583,7 +1590,8 @@ if(EXISTS "${WEB_ACCESS_LOG_MODEL}" AND
            "return request_[.]knownMethod[(][)]" OR
        NOT web_access_log_model MATCHES
            "return request_[.]path[(][)]" OR
-       NOT web_access_log_model MATCHES "using AccessLogCallback" OR
+       NOT web_access_log_model MATCHES "class AccessLogCallback final" OR
+       NOT web_access_log_model MATCHES "AccessLogCallback bind" OR
        NOT web_access_log_access MATCHES
            "const HttpRequest& request" OR
        NOT web_access_log_access MATCHES
@@ -2975,6 +2983,22 @@ check_files_no_match("Next continuation state must remain fully typed"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp")
+check_files_no_match("Router PImpl deleter must not escape the Router private contract"
+    "RouterImplDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Router.h"
+    "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp")
+check_files_no_match("App PImpl deleter must not escape the App private contract"
+    "AppStateDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h"
+    "${RUVIA_ROOT}/ruvia-web/src/app/App.cpp")
+check_files_no_match("Env PImpl deleter must not escape the Env private contract"
+    "EnvStateDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Dotenv.h"
+    "${RUVIA_ROOT}/ruvia-web/src/app/Dotenv.cpp")
+check_files_no_match("StaticRoot PImpl deleter must not escape the StaticRoot private contract"
+    "StaticRootStateDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/StaticFiles.h"
+    "${RUVIA_ROOT}/ruvia-web/src/StaticFiles.cpp")
 check_files_no_match("HTTP/1 session completion must not split wire, connection, and buffer state"
     "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h"
@@ -3960,6 +3984,8 @@ set(WEB_CONTEXT_REQUEST_GUARD
     "${RUVIA_ROOT}/tests/guards/context_request_header_guard.cpp")
 set(WEB_CONTEXT_REQUEST_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+set(WEB_CONTEXT_REQUEST_FACADE_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
 set(WEB_CONTEXT_RESPONSE_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
 set(WEB_ERROR_NORMALIZE
@@ -3988,6 +4014,7 @@ endif()
 if(NOT EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" OR
    NOT EXISTS "${WEB_CONTEXT_MODEL}" OR
    NOT EXISTS "${WEB_CONTEXT_REQUEST_MODEL}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_FACADE_SOURCE}" OR
    NOT EXISTS "${WEB_CONTEXT_CMAKE}" OR
    NOT EXISTS "${WEB_CONTEXT_REQUEST_GUARD}")
     boundary_error("Context request API ownership is incomplete"
@@ -3996,21 +4023,35 @@ elseif(EXISTS "${WEB_CONTEXT_HEADER}")
     file(READ "${WEB_CONTEXT_REQUEST_HEADER}" web_context_request_header)
     file(READ "${WEB_CONTEXT_MODEL}" web_context_model)
     file(READ "${WEB_CONTEXT_REQUEST_MODEL}" web_context_request_model)
+    file(READ "${WEB_CONTEXT_REQUEST_FACADE_SOURCE}"
+        web_context_request_facade_source)
     file(READ "${WEB_CONTEXT_CMAKE}" web_context_cmake)
     file(READ "${WEB_CONTEXT_REQUEST_GUARD}" web_context_request_guard)
     if(NOT web_context_public_header MATCHES
            "ruvia/web/ContextRequest[.]h" OR
        web_context_public_header MATCHES "class ContextRequest final" OR
+       web_context_public_header MATCHES
+           "ContextRequest::[A-Za-z_][A-Za-z0-9_]*[ \t\r\n]*[(]" OR
        NOT web_context_request_header MATCHES "class ContextRequest final" OR
        NOT web_context_request_header MATCHES
            "ruvia/web/detail/http/ContextRequestModel[.]inl" OR
        web_context_model MATCHES "ContextRequest::" OR
+       NOT web_context_request_facade_source MATCHES
+           "ContextRequest::raw[(][)] const noexcept" OR
+       NOT web_context_request_facade_source MATCHES
+           "Task<std::string_view> ContextRequest::text[(][)] const" OR
+       NOT web_context_request_facade_source MATCHES
+           "requestHeaderFields[(]const ContextRequest& request[)]" OR
        NOT web_context_cmake MATCHES
            "include/ruvia/web/ContextRequest[.]h" OR
+       NOT web_context_cmake MATCHES
+           "src/http/ContextRequestFacade[.]cpp" OR
        NOT web_context_request_guard MATCHES
-           "#[ \t]*include[ \t]*[<\"]ruvia/web/ContextRequest[.]h")
+           "#[ \t]*include[ \t]*[<\"]ruvia/web/ContextRequest[.]h" OR
+       NOT web_context_request_guard MATCHES
+           "&ruvia::ContextRequest::method")
         boundary_error("Context request API collapsed back into the response/state header"
-            "Context.h must be an umbrella; request types/templates, installation, and standalone compilation have separate ownership")
+            "Context.h must be an umbrella; request types/templates, linked facade, installation, and standalone compilation have separate ownership")
     endif()
 endif()
 if(EXISTS "${WEB_CONTEXT_HEADER}" AND

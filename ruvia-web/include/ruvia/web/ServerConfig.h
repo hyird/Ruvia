@@ -3,10 +3,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <concepts>
 #include <filesystem>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/HttpKnownMethod.h"
 #include "ruvia/http/HttpProtocolVersion.h"
@@ -17,6 +20,7 @@ namespace ruvia {
 
 namespace detail {
 struct AccessLogRecordAccess;
+struct AccessLogSink;
 }  // namespace detail
 
 struct TlsConfig final {
@@ -99,7 +103,44 @@ private:
     std::uint64_t durationMicros_;
 };
 
-using AccessLogCallback =
-    void (*)(void* user, const AccessLogRecord& record) noexcept;
+// A non-owning, allocation-free access-log listener. The bound object must
+// outlive App::run(); the request hot path performs one null check and one
+// function-pointer call.
+class AccessLogCallback final {
+public:
+    constexpr AccessLogCallback() noexcept = default;
+
+    template <typename Listener>
+    requires (!std::is_function_v<Listener> &&
+              std::is_nothrow_invocable_r_v<void, Listener&, const AccessLogRecord&>)
+    [[nodiscard]] static constexpr AccessLogCallback bind(Listener& listener) noexcept {
+        return AccessLogCallback(
+            std::addressof(listener),
+            [](void* target, const AccessLogRecord& record) noexcept {
+                (*static_cast<Listener*>(target))(record);
+            });
+    }
+
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return invoke_ != nullptr;
+    }
+
+private:
+    friend struct detail::AccessLogRecordAccess;
+    friend struct detail::AccessLogSink;
+
+    using Invoke = void (*)(void*, const AccessLogRecord&) noexcept;
+
+    constexpr AccessLogCallback(void* target, Invoke invoke) noexcept
+        : target_(target),
+          invoke_(invoke) {}
+
+    void invoke(const AccessLogRecord& record) const noexcept {
+        invoke_(target_, record);
+    }
+
+    void* target_{nullptr};
+    Invoke invoke_{nullptr};
+};
 
 }  // namespace ruvia
