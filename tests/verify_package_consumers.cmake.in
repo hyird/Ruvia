@@ -1618,6 +1618,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endif()
 
     set(_installed_http2_buffered_response_result_path
+        "${_install_prefix}/include/ruvia/web/detail/server/Http2BufferedResponseWrite.h")
+    set(_stale_installed_http2_buffered_response_result_path
         "${_install_prefix}/include/ruvia/web/detail/server/Http2BufferedResponseDispatch.h")
     if(NOT EXISTS "${_installed_http2_buffered_response_result_path}")
         message(FATAL_ERROR
@@ -1625,34 +1627,42 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endif()
     file(READ "${_installed_http2_buffered_response_result_path}"
         _installed_http2_buffered_response_result)
+    if(EXISTS "${_stale_installed_http2_buffered_response_result_path}")
+        message(FATAL_ERROR
+            "installed Web package retained the stale HTTP/2 buffered dispatch API")
+    endif()
     if(NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseCompleted" OR
+           "Http2BufferedResponseWriteCompleted" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponsePeerAbortedBeforeCommit" OR
+           "Http2BufferedResponseWritePeerAbortedBeforeCommit" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponsePeerAbortedAfterCommit" OR
+           "Http2BufferedResponseWritePeerAbortedAfterCommit" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseFailedBeforeCommit" OR
+           "Http2BufferedResponseWriteFailedBeforeCommit" OR
        NOT _installed_http2_buffered_response_result MATCHES
-           "Http2BufferedResponseFailedAfterCommit" OR
+           "Http2BufferedResponseWriteFailedAfterCommit" OR
        NOT _installed_http2_buffered_response_result MATCHES
            "using Value = std::variant" OR
-       NOT _installed_http2_stream_session MATCHES
-           "Task<Http2BufferedResponseDispatchResult>" OR
-       NOT _installed_http2_stream_session MATCHES
-           "const auto committedStatus = writePlan[.]responseStatus[(][)]" OR
-       NOT _installed_http2_stream_session MATCHES
-           "All valid buffered branches converge here" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "class Http2BufferedResponseWriter final" OR
+       NOT _installed_http2_buffered_response_result MATCHES
+           "Task<Http2BufferedResponseWriteResult> write" OR
        NOT _installed_http2_stream_session MATCHES
            "const auto responsePreparation = prepareBufferedHttpResponse" OR
        NOT _installed_http2_stream_session MATCHES
            "responsePreparation[.]writePlan[(][)]" OR
+       NOT _installed_http2_stream_session MATCHES
+           "Http2BufferedResponseWriter bufferedResponseWriter" OR
+       NOT _installed_http2_stream_session MATCHES
+           "bufferedResponseWriter[.]write" OR
        _installed_http2_stream_session MATCHES
            "[(]void[)][ \t]*prepareBufferedHttpResponse" OR
        NOT _installed_http2_stream_session MATCHES
            "result[.]peerAbortedBeforeCommit[(][)]" OR
        _installed_http2_stream_session MATCHES
-           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart" OR
+       _installed_http2_stream_session MATCHES
+           "openResponseFileInput|Http2BufferedDataSubmitResult|auto submitResponse")
         message(FATAL_ERROR
             "installed HTTP/2 prepared buffered response plan ownership was split or reconstructed")
     endif()

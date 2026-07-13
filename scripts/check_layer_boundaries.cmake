@@ -2695,6 +2695,7 @@ check_files_no_match("ruvia-web must not pass loose response-body protocol boole
     "${RULE_WEB_RESPONSE_BODY_PROTOCOL_BOOL}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpBufferedResponse.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamState.h")
@@ -2719,8 +2720,8 @@ set(WEB_BUFFERED_RESPONSE_WRITER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
 set(WEB_RESPONSE_COMPRESSION
     "${RUVIA_ROOT}/ruvia-web/src/server/HttpResponseCompression.cpp")
-set(WEB_RESPONSE_H2_SESSION
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
+set(WEB_RESPONSE_H2_WRITER
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
 set(HTTP_RESPONSE_BODY_TEST
     "${RUVIA_ROOT}/tests/unit_http_response_body.cpp")
 set(HTTP_RESPONSE_PACKAGE_CONSUMER
@@ -2736,7 +2737,7 @@ foreach(response_body_contract_file IN ITEMS
         "${HTTP_RESPONSE_H2_CONNECTION}"
         "${WEB_BUFFERED_RESPONSE_WRITER}"
         "${WEB_RESPONSE_COMPRESSION}"
-        "${WEB_RESPONSE_H2_SESSION}"
+        "${WEB_RESPONSE_H2_WRITER}"
         "${HTTP_RESPONSE_BODY_TEST}"
         "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
     if(NOT EXISTS "${response_body_contract_file}")
@@ -2756,7 +2757,7 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
    EXISTS "${HTTP_RESPONSE_H2_CONNECTION}" AND
    EXISTS "${WEB_BUFFERED_RESPONSE_WRITER}" AND
    EXISTS "${WEB_RESPONSE_COMPRESSION}" AND
-   EXISTS "${WEB_RESPONSE_H2_SESSION}" AND
+   EXISTS "${WEB_RESPONSE_H2_WRITER}" AND
    EXISTS "${HTTP_RESPONSE_BODY_TEST}" AND
    EXISTS "${HTTP_RESPONSE_PACKAGE_CONSUMER}")
     file(READ "${HTTP_RESPONSE_BODY_STORAGE}" http_response_body_storage)
@@ -2769,7 +2770,7 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
     read_http2_connection_implementation(http_response_storage_h2)
     file(READ "${WEB_BUFFERED_RESPONSE_WRITER}" web_buffered_response_writer)
     file(READ "${WEB_RESPONSE_COMPRESSION}" web_response_compression)
-    file(READ "${WEB_RESPONSE_H2_SESSION}" web_response_h2_session)
+    file(READ "${WEB_RESPONSE_H2_WRITER}" web_response_h2_writer)
     file(READ "${HTTP_RESPONSE_BODY_TEST}" http_response_body_test)
     file(READ "${HTTP_RESPONSE_PACKAGE_CONSUMER}"
         http_response_package_consumer)
@@ -2836,8 +2837,8 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
            "responseContent[.]file[(][)]" OR
        NOT web_response_compression MATCHES
            "const auto& responseContent = responseBody[(]response[)]" OR
-       NOT web_response_h2_session MATCHES
-           "const auto& responseContent = responseBody[(]response[)]")
+       NOT web_response_h2_writer MATCHES
+           "const auto& content = responseBody[(]response[)]")
         boundary_error("response writers bypass the unified body read contract"
             "HTTP planning, H1/H2 drivers, and compression must derive bytes/file/size from responseBody(response)")
     endif()
@@ -3329,7 +3330,9 @@ set(HTTP2_BUFFERED_RESPONSE_CONNECTION_HEADER
 set(HTTP2_BUFFERED_RESPONSE_CONNECTION_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 set(WEB_HTTP2_BUFFERED_RESPONSE_RESULT
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2BufferedResponseDispatch.h")
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2BufferedResponseWrite.h")
+set(WEB_HTTP2_BUFFERED_RESPONSE_WRITER_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
 set(WEB_HTTP2_BUFFERED_RESPONSE_SESSION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
 set(WEB_HTTP1_BUFFERED_RESPONSE_RESULT
@@ -3347,7 +3350,7 @@ set(BUFFERED_RESPONSE_H1_RESULT_TEST
 set(BUFFERED_RESPONSE_H2_PLAN_TEST
     "${RUVIA_ROOT}/tests/unit_http2_response_headers.cpp")
 set(BUFFERED_RESPONSE_H2_RESULT_TEST
-    "${RUVIA_ROOT}/tests/unit_http2_buffered_response_dispatch.cpp")
+    "${RUVIA_ROOT}/tests/unit_http2_buffered_response_write.cpp")
 set(BUFFERED_RESPONSE_H2_RUNTIME_TEST
     "${RUVIA_ROOT}/tests/unit_sansio_driver.cpp")
 set(BUFFERED_RESPONSE_H2_CONNECTION_TEST
@@ -3366,6 +3369,7 @@ foreach(buffered_response_status_contract IN ITEMS
         "${HTTP2_BUFFERED_RESPONSE_CONNECTION_HEADER}"
         "${HTTP2_BUFFERED_RESPONSE_CONNECTION_SOURCE}"
         "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}"
+        "${WEB_HTTP2_BUFFERED_RESPONSE_WRITER_SOURCE}"
         "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}"
         "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}"
         "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}"
@@ -3394,6 +3398,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
    EXISTS "${HTTP2_BUFFERED_RESPONSE_CONNECTION_HEADER}" AND
    EXISTS "${HTTP2_BUFFERED_RESPONSE_CONNECTION_SOURCE}" AND
    EXISTS "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}" AND
+   EXISTS "${WEB_HTTP2_BUFFERED_RESPONSE_WRITER_SOURCE}" AND
    EXISTS "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}" AND
    EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}" AND
    EXISTS "${WEB_HTTP1_BUFFERED_RESPONSE_WRITER}" AND
@@ -3422,6 +3427,8 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
         buffered_response_h2_connection_source)
     file(READ "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}"
         buffered_response_h2_result)
+    file(READ "${WEB_HTTP2_BUFFERED_RESPONSE_WRITER_SOURCE}"
+        buffered_response_h2_writer_source)
     file(READ "${WEB_HTTP2_BUFFERED_RESPONSE_SESSION}"
         buffered_response_h2_session)
     file(READ "${WEB_HTTP1_BUFFERED_RESPONSE_RESULT}"
@@ -3502,27 +3509,37 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
     endif()
 
     if(NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponsePeerAbortedBeforeCommit" OR
+           "Http2BufferedResponseWritePeerAbortedBeforeCommit" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponsePeerAbortedAfterCommit" OR
+           "Http2BufferedResponseWritePeerAbortedAfterCommit" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseFailedBeforeCommit" OR
+           "Http2BufferedResponseWriteFailedBeforeCommit" OR
        NOT buffered_response_h2_result MATCHES
-           "Http2BufferedResponseFailedAfterCommit" OR
+           "Http2BufferedResponseWriteFailedAfterCommit" OR
        NOT buffered_response_h2_result MATCHES
            "std::variant" OR
-       NOT buffered_response_h2_session MATCHES
-           "Task<Http2BufferedResponseDispatchResult>" OR
-       NOT buffered_response_h2_session MATCHES
-           "const auto committedStatus = writePlan[.]responseStatus[(][)]" OR
-       NOT buffered_response_h2_session MATCHES
-           "All valid buffered branches converge here" OR
+       NOT buffered_response_h2_result MATCHES
+           "class Http2BufferedResponseWriter final" OR
+       NOT buffered_response_h2_result MATCHES
+           "Task<Http2BufferedResponseWriteResult> write" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "Task<Http2BufferedResponseWriteResult>" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "const auto committedStatus = committedPlan[.]responseStatus[(][)]" OR
+       NOT buffered_response_h2_writer_source MATCHES
+           "openResponseFileInput" OR
        NOT buffered_response_h2_session MATCHES
            "prepareBufferedHttpResponse" OR
        NOT buffered_response_h2_session MATCHES
-           "result[.]peerAbortedBeforeCommit[(][)]")
+           "Http2BufferedResponseWriter bufferedResponseWriter" OR
+       NOT buffered_response_h2_session MATCHES
+           "bufferedResponseWriter[.]write" OR
+       NOT buffered_response_h2_session MATCHES
+           "result[.]peerAbortedBeforeCommit[(][)]" OR
+       buffered_response_h2_session MATCHES
+           "openResponseFileInput|Http2BufferedDataSubmitResult|auto submitResponse")
         boundary_error("HTTP/2 buffered completion restored a loose status/result path"
-            "all valid buffered responses must share preparation and exclusive pre/post-commit outcomes")
+            "the non-template writer must own file/data flow while the session consumes exclusive pre/post-commit outcomes")
     endif()
 
     if(NOT buffered_response_h1_result MATCHES
@@ -3578,7 +3595,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h2_plan_test MATCHES
            "http2_response_head_rejects_representation_plan_mismatch" OR
        NOT buffered_response_h2_result_test MATCHES
-           "http2_buffered_response_dispatch_result_owns_only_committed_status" OR
+           "http2_buffered_response_write_result_owns_only_committed_status" OR
        NOT buffered_response_h2_runtime_test MATCHES
            "sansio_driver_h2_buffered_access_uses_only_committed_plan_status" OR
        NOT buffered_response_h2_connection_test MATCHES
@@ -3594,7 +3611,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_http_package_consumer MATCHES
            "AcceptsUnpreparedBufferedResponseHead" OR
        NOT buffered_response_web_package_consumer MATCHES
-           "Http2BufferedResponseDispatchResult" OR
+           "Http2BufferedResponseWriteResult" OR
        NOT buffered_response_web_package_consumer MATCHES
            "Http1BufferedResponseWriteResult" OR
        NOT buffered_response_web_package_consumer MATCHES
@@ -4479,18 +4496,18 @@ if(EXISTS "${WEB_BUFFERED_RESPONSE}")
     endif()
 endif()
 
-set(WEB_H2_SESSION
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h")
-if(EXISTS "${WEB_H2_SESSION}")
-    file(READ "${WEB_H2_SESSION}" web_h2_session)
-    if(NOT web_h2_session MATCHES "writePlan\\.sendBody" OR
-       NOT web_h2_session MATCHES "headResult[.]submitted[(][)]" OR
-       NOT web_h2_session MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
-       NOT web_h2_session MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
-       NOT web_h2_session MATCHES "submittedHead[-][>]plan[(][)]" OR
-       NOT web_h2_session MATCHES "Http2ErrorCode::kInternalError")
+set(WEB_H2_BUFFERED_WRITER
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp")
+if(EXISTS "${WEB_H2_BUFFERED_WRITER}")
+    file(READ "${WEB_H2_BUFFERED_WRITER}" web_h2_buffered_writer)
+    if(NOT web_h2_buffered_writer MATCHES "committedPlan[.]sendBody" OR
+       NOT web_h2_buffered_writer MATCHES "headResult[.]submitted[(][)]" OR
+       NOT web_h2_buffered_writer MATCHES "headResult[.]failure[(][)][-][>]error[(][)]" OR
+       NOT web_h2_buffered_writer MATCHES "Http2ResponseHeadSubmitError::kClosed" OR
+       NOT web_h2_buffered_writer MATCHES "submittedHead[-][>]plan[(][)]" OR
+       NOT web_h2_buffered_writer MATCHES "Http2ErrorCode::kInternalError")
         boundary_error("ruvia-web HTTP/2 runtime bypasses the HTTP-owned send-body verdict"
-            "Http2SansIoSession.h must consume only a submitted plan and terminate typed final-head failures")
+            "Http2BufferedResponseWrite.cpp must consume only a submitted plan and terminate typed final-head failures")
     endif()
 endif()
 
@@ -5928,7 +5945,7 @@ if(EXISTS "${CORE_SANSIO_DRIVER}")
 endif()
 
 foreach(web_h2_content_consumer IN ITEMS
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2SansIoSession.h"
+    "${RUVIA_ROOT}/ruvia-web/src/server/Http2BufferedResponseWrite.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
     if(EXISTS "${web_h2_content_consumer}")
