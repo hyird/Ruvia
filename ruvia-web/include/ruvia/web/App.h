@@ -68,7 +68,7 @@ public:
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     App& setGlobalRateLimit(std::optional<RateLimitRule> rule);
-    App& onAccess(AccessLogCallback callback, void* user = nullptr);
+    App& onAccess(AccessLogCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_MARIADB
