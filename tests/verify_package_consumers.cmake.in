@@ -176,6 +176,25 @@ if(NOT _installed_http_content_coding_contract MATCHES
     message(FATAL_ERROR
         "installed HTTP content coding lost its owning discriminated contract")
 endif()
+set(_installed_http_content_length
+    "${_install_prefix}/include/ruvia/http/detail/HttpContentLength.h")
+if(NOT EXISTS "${_installed_http_content_length}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing shared Content-Length state")
+endif()
+file(READ "${_installed_http_content_length}"
+    _installed_http_content_length_contract)
+if(NOT _installed_http_content_length_contract MATCHES
+       "class HttpContentLengthState" OR
+   NOT _installed_http_content_length_contract MATCHES
+       "std::optional<std::size_t> value" OR
+   NOT _installed_http_content_length_contract MATCHES
+       "auto parsedValue = value_" OR
+   _installed_http_content_length_contract MATCHES
+       "bool present[(]|bool present_|std::size_t value_[{]0[}]")
+    message(FATAL_ERROR
+        "installed Content-Length state lost transactional optional semantics")
+endif()
 set(_installed_url_encoding
     "${_install_prefix}/include/ruvia/http/UrlEncoding.h")
 if(NOT EXISTS "${_installed_url_encoding}")

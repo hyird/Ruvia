@@ -12,6 +12,8 @@ namespace {
 
 using ruvia::HttpParseError;
 using ruvia::detail::findHttpHeaderEnd;
+using ruvia::detail::HttpContentLengthParseStatus;
+using ruvia::detail::HttpContentLengthState;
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 
@@ -29,10 +31,28 @@ Parsed parse(std::string_view head) {
     ParsedRequestHeaderBlock block{};
     const auto headerBytes = findHttpHeaderEnd(head, 0);
     const auto error = parseHttpHeaderBlock(head, headerBytes, block);
+    const auto contentLength = block.contentLength.value();
     return {error, block.hostHeaderIndex >= 0, block.transferEncoding.finalChunked(),
-            block.contentLength.present(), block.contentLength.value(),
+            contentLength.has_value(), contentLength.value_or(0),
             block.transferEncoding.codings().count,
             block.transferEncoding.codings().values[0]};
+}
+
+RUVIA_TEST(content_length_field_updates_are_transactional) {
+    HttpContentLengthState state;
+    RUVIA_CHECK(
+        state.parseField("5") == HttpContentLengthParseStatus::kOk);
+    RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
+
+    RUVIA_CHECK(
+        state.parseField("5, invalid") ==
+        HttpContentLengthParseStatus::kInvalid);
+    RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
+
+    RUVIA_CHECK(
+        state.parseField("6, 6") ==
+        HttpContentLengthParseStatus::kConflicting);
+    RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
 }
 
 }  // namespace

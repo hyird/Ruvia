@@ -6964,7 +6964,9 @@ if(EXISTS "${HTTP1_SERVER_PARSER}")
     if(NOT http1_server_parser MATCHES
            "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*block[.]transferEncoding[.]codings[(][)]" OR
        NOT http1_server_parser MATCHES
-           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*block[.]contentLength[.]value[(][)]" OR
+           "const auto contentLength = block[.]contentLength[.]value[(][)]" OR
+       NOT http1_server_parser MATCHES
+           "Http1RequestBodyPlan[ \t\r\n]*[(][ \t\r\n]*[*]contentLength" OR
        NOT http1_server_parser MATCHES
            "Http1RequestBodyPlan[(]expectations[)]" OR
        NOT http1_server_parser MATCHES "bodyPlan[.]chunked[(][)]" OR
@@ -7475,9 +7477,14 @@ else()
     file(READ "${HTTP_CONTENT_LENGTH_STATE}" http_content_length_state)
     if(NOT http_content_length_state MATCHES "class HttpContentLengthState" OR
        NOT http_content_length_state MATCHES "HttpContentLengthParseStatus::kConflicting" OR
-       NOT http_content_length_state MATCHES "httpVisitCommaSeparatedQuotedItems")
+       NOT http_content_length_state MATCHES "httpVisitCommaSeparatedQuotedItems" OR
+       NOT http_content_length_state MATCHES "std::optional<std::size_t> value" OR
+       NOT http_content_length_state MATCHES "auto parsedValue = value_" OR
+       http_content_length_state MATCHES "bool present[(]" OR
+       http_content_length_state MATCHES "bool present_" OR
+       http_content_length_state MATCHES "std::size_t value_[{]0[}]")
         boundary_error("shared Content-Length parser lost full-list validation"
-            "every combined/repeated decimal member must be parsed and compared")
+            "field updates must be transactional and absence must remain optional")
     endif()
 endif()
 if(NOT EXISTS "${HTTP_TRANSFER_ENCODING_STATE}")

@@ -105,7 +105,8 @@ void Http1ServerRequestParser::parseRequestHead(
         }
     }
 
-    if (block.transferEncoding.present() && block.contentLength.present()) {
+    const auto contentLength = block.contentLength.value();
+    if (block.transferEncoding.present() && contentLength.has_value()) {
         return fail(HttpParseError::kInvalidTransferEncoding);
     }
 
@@ -137,9 +138,9 @@ void Http1ServerRequestParser::parseRequestHead(
     if (block.transferEncoding.finalChunked()) {
         state.bodyPlan = Http1RequestBodyPlan(
             block.transferEncoding.codings(), expectations);
-    } else if (block.contentLength.present()) {
+    } else if (contentLength.has_value()) {
         state.bodyPlan = Http1RequestBodyPlan(
-            block.contentLength.value(), expectations);
+            *contentLength, expectations);
     } else {
         state.bodyPlan = Http1RequestBodyPlan(expectations);
     }

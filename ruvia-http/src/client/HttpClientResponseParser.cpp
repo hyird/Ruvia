@@ -419,8 +419,9 @@ using ResponsePlanningResult = std::variant<
             requestContentSignal);
     }
 
+    const auto contentLength = response.contentLength.value();
     if (response.sawTransferEncoding) {
-        if (response.contentLength.present()) {
+        if (contentLength.has_value()) {
             return Http1ClientResponseParseError::
                 kContentLengthAndTransferEncoding;
         }
@@ -435,9 +436,9 @@ using ResponsePlanningResult = std::variant<
             requestContentSignal);
     }
 
-    if (response.contentLength.present()) {
+    if (contentLength.has_value()) {
         return detail::Http1ClientResponsePlanAccess::knownLength(
-            response.contentLength.value(),
+            *contentLength,
             persistence,
             requestContentSignal);
     }
