@@ -1273,6 +1273,28 @@ check_files_no_match("ruvia-http must not include core/web headers"
 check_files_no_match("Cookie option tokens must remain typed"
     "std::string_view[ \t]+(sameSite|priority)|std::int64_t[ \t]+maxAge"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Cookies.h")
+set(COOKIE_OPTIONS_HEADER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Cookies.h")
+if(EXISTS "${COOKIE_OPTIONS_HEADER}")
+    file(READ "${COOKIE_OPTIONS_HEADER}" cookie_options_header)
+    if(NOT cookie_options_header MATCHES
+           "std::optional<CookiePrefix>[ \t]+prefix" OR
+       NOT cookie_options_header MATCHES
+           "std::optional<CookieSameSite>[ \t]+sameSite" OR
+       NOT cookie_options_header MATCHES
+           "std::optional<CookiePriority>[ \t]+priority")
+        boundary_error("Cookie attribute absence lost its optional contract"
+            "prefix, SameSite, and Priority absence must not be encoded as fake enum values")
+    endif()
+endif()
+check_files_no_match("Cookie attribute enums restored absence sentinels"
+    "CookiePrefix::kNone|CookieSameSite::kUnspecified|CookiePriority::kUnspecified|enum class CookiePrefix[^{]*[{][^}]*kNone|enum class CookieSameSite[^{]*[{][^}]*kUnspecified|enum class CookiePriority[^{]*[{][^}]*kUnspecified"
+    "${COOKIE_OPTIONS_HEADER}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/CookieValidation.h"
+    "${RUVIA_ROOT}/ruvia-http/src/Cookies.cpp"
+    "${RUVIA_ROOT}/tests/unit_cookie_validation.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    "${RUVIA_ROOT}/examples/api_surface.cpp")
 check_files_no_match("Set-Cookie wire serialization belongs to ruvia-http"
     "\";[ ]+(Path=|Domain=|Max-Age=|Expires=|HttpOnly|Secure|SameSite=|Priority=|Partitioned)"
     ${WEB_SOURCE})

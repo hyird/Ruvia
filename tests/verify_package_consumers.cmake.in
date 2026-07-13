@@ -338,6 +338,22 @@ if(_installed_http1_client_response_parser_content MATCHES
        "kNone,[\r\n \t]*kContinue")
     message(FATAL_ERROR "installed HTTP/1 client request-content signal restored a no-event sentinel")
 endif()
+file(READ "${_install_prefix}/include/ruvia/http/Cookies.h"
+    _installed_cookie_options)
+if(NOT _installed_cookie_options MATCHES
+       "std::optional<CookiePrefix>[ \t]+prefix" OR
+   NOT _installed_cookie_options MATCHES
+       "std::optional<CookieSameSite>[ \t]+sameSite" OR
+   NOT _installed_cookie_options MATCHES
+       "std::optional<CookiePriority>[ \t]+priority" OR
+   _installed_cookie_options MATCHES
+       "enum class CookiePrefix[^{]*[{][^}]*kNone" OR
+   _installed_cookie_options MATCHES
+       "enum class CookieSameSite[^{]*[{][^}]*kUnspecified" OR
+   _installed_cookie_options MATCHES
+       "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
+    message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
+endif()
 set(_installed_http1_client_request_writer
     "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")
 if(NOT EXISTS "${_installed_http1_client_request_writer}")
