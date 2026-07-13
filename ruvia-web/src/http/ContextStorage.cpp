@@ -44,11 +44,11 @@ HttpResponse& Context::responseStorage() {
     return *response_;
 }
 
-HttpResponse& Context::res() {
-    return responseStorage();
+const HttpResponse* Context::response() const noexcept {
+    return response_;
 }
 
-void Context::res(HttpResponse&& response) {
+void Context::respond(HttpResponse&& response) {
     storeAssignedResponse(std::move(response));
 }
 

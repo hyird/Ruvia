@@ -1,10 +1,12 @@
 #include "ruvia/web/SecurityHeaders.h"
 
+#include "ruvia/web/detail/http/ContextInternal.h"
+
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool hasSecurityHeader(Context& context, std::string_view name) noexcept {
-    return !context.res().header(name).empty();
+[[nodiscard]] bool hasSecurityHeader(Context& context, std::string_view name) {
+    return !detail::ContextAccess::responseStorage(context).header(name).empty();
 }
 
 [[nodiscard]] bool hasSecurityHeader(HttpResponse& response, std::string_view name) noexcept {
@@ -61,7 +63,7 @@ void applySecurityHeaders(HttpResponse& response, const SecurityHeadersOptions& 
 Task<void> SecurityHeadersMiddleware::handle(Context& context, Next& next) {
     applySecurityHeaders(context);
     co_await next();
-    applySecurityHeaders(context.res());
+    applySecurityHeaders(detail::ContextAccess::responseStorage(context));
 }
 
 }  // namespace ruvia

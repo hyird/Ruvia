@@ -139,6 +139,10 @@ struct ContextAccess final {
         context.storeResponse(std::move(response));
     }
 
+    [[nodiscard]] static HttpResponse& responseStorage(Context& context) {
+        return context.responseStorage();
+    }
+
     static void setError(Context& context, std::exception_ptr exception) noexcept {
         context.storeError(std::move(exception));
     }

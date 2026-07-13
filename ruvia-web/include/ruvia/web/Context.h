@@ -346,9 +346,12 @@ public:
         const CookieOptions& options = {}) const;
     [[nodiscard]] std::optional<std::string_view> deleteCookie(std::string_view name, CookieOptions options = {});
 
-    [[nodiscard]] HttpResponse& res();
+    // Observe the response produced by downstream middleware or a terminal
+    // handler. A response exists only after Context::finalized() becomes true.
+    [[nodiscard]] const HttpResponse* response() const noexcept;
 
-    void res(HttpResponse&& response);
+    // End middleware dispatch with an explicitly constructed response.
+    void respond(HttpResponse&& response);
 
     [[nodiscard]] bool finalized() const noexcept {
         return responseFinalized_;
