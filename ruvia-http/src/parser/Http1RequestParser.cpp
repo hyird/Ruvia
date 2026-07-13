@@ -29,7 +29,7 @@ void Http1ServerRequestParser::parseRequestHead(
     // result object is reused across read iterations and requests, so a
     // full value-initialization here would re-zero the 2KB header table.
     state.phase_ = Http1ServerRequestParsePhase::kNeedRequestHead;
-    state.error = HttpParseError::kNone;
+    state.error_.reset();
     state.headerBytes = 0;
     state.messageBytes = 0;
     state.requiredTotalBytes.reset();
@@ -41,7 +41,7 @@ void Http1ServerRequestParser::parseRequestHead(
     const auto fail = [&state](HttpParseError error) noexcept {
         HttpRequestAccess::reset(state.request);
         state.phase_ = Http1ServerRequestParsePhase::kFailure;
-        state.error = error;
+        state.error_ = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
         state.connectionPlan = Http1ServerConnectionPlan::http11Close();
@@ -60,8 +60,8 @@ void Http1ServerRequestParser::parseRequestHead(
     }
 
     ParsedRequestHeaderBlock block;
-    if (const auto error = parseHttpHeaderBlock(buffer, headerBytes, block); error != HttpParseError::kNone) {
-        return fail(error);
+    if (const auto error = parseHttpHeaderBlock(buffer, headerBytes, block)) {
+        return fail(*error);
     }
 
     state.headerBytes = headerBytes;
@@ -176,7 +176,7 @@ void Http1ServerRequestParser::parseMessageBody(
         const auto connectionPlan = state.connectionPlan.requireClose();
         HttpRequestAccess::reset(state.request);
         state.phase_ = Http1ServerRequestParsePhase::kFailure;
-        state.error = error;
+        state.error_ = error;
         state.messageBytes = 0;
         state.requiredTotalBytes.reset();
         state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
@@ -272,7 +272,10 @@ Http1RequestParseResult Http1RequestParser::parse(std::string_view buffer) const
             return detail::Http1RequestParseResultAccess::needMore(
                 parsed.requiredTotalBytes);
         case detail::Http1ServerRequestParsePhase::kFailure:
-            return detail::Http1RequestParseResultAccess::failure(parsed.error);
+            if (const auto* failure = parsed.failure()) {
+                return detail::Http1RequestParseResultAccess::failure(*failure);
+            }
+            std::terminate();
         case detail::Http1ServerRequestParsePhase::kRequestMessageReady:
             break;
         case detail::Http1ServerRequestParsePhase::kRequestHeadReady:

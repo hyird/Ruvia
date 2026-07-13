@@ -46,7 +46,7 @@ std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset)
     return std::string_view::npos;
 }
 
-HttpParseError parseHttpHeaderBlock(
+std::optional<HttpParseError> parseHttpHeaderBlock(
     std::string_view buffer,
     std::size_t headerBytes,
     ParsedRequestHeaderBlock& block) noexcept {
@@ -215,7 +215,7 @@ HttpParseError parseHttpHeaderBlock(
         cursor += 2;
     }
 
-    return HttpParseError::kNone;
+    return std::nullopt;
 }
 
 }  // namespace ruvia::detail

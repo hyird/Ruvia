@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -15,7 +16,7 @@ using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 
 struct Parsed final {
-    HttpParseError error;
+    std::optional<HttpParseError> error;
     bool hasHost;
     bool sawChunked;
     bool hasContentLength;
@@ -38,7 +39,7 @@ Parsed parse(std::string_view head) {
 
 RUVIA_TEST(header_block_parses_valid_request) {
     const auto result = parse("GET / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(!result.error.has_value());
     RUVIA_CHECK(result.hasHost);
     RUVIA_CHECK(result.hasContentLength);
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
@@ -55,14 +56,14 @@ RUVIA_TEST(header_block_rejects_conflicting_content_length) {
 RUVIA_TEST(header_block_allows_repeated_equal_content_length) {
     const auto result = parse(
         "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(!result.error.has_value());
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
 }
 
 RUVIA_TEST(header_block_allows_combined_equal_content_length) {
     const auto result = parse(
         "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5, 5\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(!result.error.has_value());
     RUVIA_CHECK(result.hasContentLength);
     RUVIA_CHECK_EQ(result.contentLength, std::size_t{5});
 
@@ -92,7 +93,7 @@ RUVIA_TEST(header_block_uses_recipient_connection_and_upgrade_list_rules) {
         "Connection: , keep-alive,\r\n"
         "Connection: Upgrade\r\n"
         "Upgrade: , custom/1, websocket,\r\n\r\n");
-    RUVIA_CHECK(tolerant.error == HttpParseError::kNone);
+    RUVIA_CHECK(!tolerant.error.has_value());
 
     RUVIA_CHECK(
         parse(
@@ -155,13 +156,14 @@ RUVIA_TEST(header_block_rejects_duplicate_auth_and_cors_singletons) {
 }
 
 RUVIA_TEST(header_block_rejects_invalid_bracketed_host_literal) {
-    RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error == HttpParseError::kNone);
+    RUVIA_CHECK(!parse(
+        "GET / HTTP/1.1\r\nHost: [::1]\r\n\r\n").error.has_value());
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: [::::]\r\n\r\n").error == HttpParseError::kInvalidHost);
 }
 
 RUVIA_TEST(header_block_accepts_transfer_encoding_chunked) {
     const auto result = parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
-    RUVIA_CHECK(result.error == HttpParseError::kNone);
+    RUVIA_CHECK(!result.error.has_value());
     RUVIA_CHECK(result.sawChunked);
 }
 
@@ -182,7 +184,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     const auto gzipChunked = parse(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Transfer-Encoding: gzip, chunked\r\n\r\n");
-    RUVIA_CHECK(gzipChunked.error == HttpParseError::kNone);
+    RUVIA_CHECK(!gzipChunked.error.has_value());
     RUVIA_CHECK(gzipChunked.sawChunked);
     RUVIA_CHECK_EQ(gzipChunked.transferCodingCount, std::size_t{1});
     RUVIA_CHECK(
@@ -192,7 +194,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     const auto split = parse(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Transfer-Encoding: deflate\r\nTransfer-Encoding: chunked\r\n\r\n");
-    RUVIA_CHECK(split.error == HttpParseError::kNone);
+    RUVIA_CHECK(!split.error.has_value());
     RUVIA_CHECK(split.sawChunked);
     RUVIA_CHECK_EQ(split.transferCodingCount, std::size_t{1});
     RUVIA_CHECK(
@@ -202,7 +204,7 @@ RUVIA_TEST(header_block_accepts_one_transfer_coding_before_final_chunked) {
     // A lone non-chunked coding is recorded here, then rejected by the request-level
     // body planner because request Transfer-Encoding requires final chunked framing.
     const auto lone = parse("POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
-    RUVIA_CHECK(lone.error == HttpParseError::kNone);
+    RUVIA_CHECK(!lone.error.has_value());
     RUVIA_CHECK(!lone.sawChunked);
     RUVIA_CHECK_EQ(lone.transferCodingCount, std::size_t{1});
     RUVIA_CHECK(lone.firstTransferCoding == ruvia::detail::HttpTransferCoding::kGzip);
@@ -231,11 +233,11 @@ RUVIA_TEST(header_block_rejects_smuggling_transfer_encodings) {
 RUVIA_TEST(header_block_content_length_edge_cases) {
     // OWS around the value is trimmed.
     const auto ows = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length:   42  \r\n\r\n");
-    RUVIA_CHECK(ows.error == HttpParseError::kNone);
+    RUVIA_CHECK(!ows.error.has_value());
     RUVIA_CHECK_EQ(ows.contentLength, std::size_t{42});
     // Leading zeros parse to the same numeric value (no desync).
     const auto zeros = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 007\r\n\r\n");
-    RUVIA_CHECK(zeros.error == HttpParseError::kNone);
+    RUVIA_CHECK(!zeros.error.has_value());
     RUVIA_CHECK_EQ(zeros.contentLength, std::size_t{7});
     // A '+' sign, a hex form, and overflow are all rejected rather than wrapped.
     RUVIA_CHECK(parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: +5\r\n\r\n").error ==

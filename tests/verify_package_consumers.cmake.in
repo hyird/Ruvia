@@ -785,6 +785,14 @@ if(NOT _installed_http1_request_body_plan MATCHES
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/Http1RequestParser.h"
     _installed_http1_request_parser)
+file(READ "${_install_prefix}/include/ruvia/http/HttpParseError.h"
+    _installed_http_parse_error)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1ServerRequestParser.h"
+    _installed_http1_server_request_parser)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/parser/HttpHeaderBlockParser.h"
+    _installed_http_header_block_parser)
 if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
    NOT _installed_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
@@ -793,7 +801,14 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
    NOT _installed_http1_request_parser MATCHES "requiredTotalBytes" OR
    NOT _installed_http1_request_parser MATCHES "bodyPlan" OR
    NOT _installed_http1_request_parser MATCHES "wireBody" OR
-   NOT _installed_http1_request_parser MATCHES "error_[ \t]*==[ \t]*HttpParseError::kNone")
+   _installed_http1_request_parser MATCHES "HttpParseError::kNone" OR
+   _installed_http_parse_error MATCHES "kNone" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "const HttpParseError[*] failure[(][)] const noexcept" OR
+   NOT _installed_http1_server_request_parser MATCHES
+       "std::optional<HttpParseError> error_" OR
+   NOT _installed_http_header_block_parser MATCHES
+       "std::optional<HttpParseError> parseHttpHeaderBlock")
     message(FATAL_ERROR "installed HTTP/1 parser lost its discriminated whole-message contract")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/HttpClient.h" _installed_http_client)

@@ -302,8 +302,8 @@ Task<void> HttpServer::handleStreamSession(
                 break;
             }
 
-            if (parsed.failed()) {
-                const auto error = parsed.error;
+            if (const auto* failure = parsed.failure()) {
+                const auto error = *failure;
                 if constexpr (kPlainTcp) {
                     if (!options_.autoHttps.enabled &&
                         shouldDropInvalidCleartextHttp1Input(bufferView, error)) {

@@ -4,8 +4,6 @@ namespace ruvia {
 
 std::string_view httpParseErrorMessage(HttpParseError error) noexcept {
     switch (error) {
-        case HttpParseError::kNone:
-            return "no parse error";
         case HttpParseError::kHeaderTooLarge:
             return "request header is too large";
         case HttpParseError::kBodyTooLarge:
@@ -61,7 +59,6 @@ std::uint16_t httpParseErrorStatus(HttpParseError error) noexcept {
             return 501;
         case HttpParseError::kUnsupportedHttpVersion:
             return 505;
-        case HttpParseError::kNone:
         case HttpParseError::kInvalidRequestLine:
         case HttpParseError::kInvalidHeader:
         case HttpParseError::kInvalidConnection:

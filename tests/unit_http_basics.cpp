@@ -109,7 +109,6 @@ RUVIA_TEST(http_parse_error_messages) {
     RUVIA_CHECK_EQ(httpParseErrorMessage(HttpParseError::kInvalidContentLength),
                    httpParseErrorMessage(HttpParseError::kConflictingContentLength));
     // Reachable errors all map to a non-empty message.
-    RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kNone).empty());
     RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kChunkSizeOverflow).empty());
     RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kInvalidTransferEncoding).empty());
     RUVIA_CHECK(!httpParseErrorMessage(HttpParseError::kInvalidConnection).empty());
