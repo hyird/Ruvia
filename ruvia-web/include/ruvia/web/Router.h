@@ -7,9 +7,6 @@ namespace ruvia {
 namespace detail {
 
 class RouterImpl;
-struct RouterImplDeleter final {
-    void operator()(RouterImpl* impl) const noexcept;
-};
 
 }  // namespace detail
 
@@ -27,11 +24,15 @@ public:
     Router& operator=(Router&&) = delete;
 
 private:
+    struct ImplDeleter final {
+        void operator()(detail::RouterImpl* impl) const noexcept;
+    };
+
     template <typename ControllerT>
     friend class Controller;
     friend class detail::RouterImpl;
 
-    std::unique_ptr<detail::RouterImpl, detail::RouterImplDeleter> impl_;
+    std::unique_ptr<detail::RouterImpl, ImplDeleter> impl_;
 };
 
 }  // namespace ruvia
