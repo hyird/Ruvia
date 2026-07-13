@@ -29,9 +29,6 @@ namespace ruvia {
 namespace detail {
 
 struct AppState;
-struct AppStateDeleter final {
-    void operator()(AppState* state) const noexcept;
-};
 
 }  // namespace detail
 
@@ -83,12 +80,16 @@ public:
     void stop();
 
 private:
+    struct StateDeleter final {
+        void operator()(detail::AppState* state) const noexcept;
+    };
+
     App();
 
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    std::unique_ptr<detail::AppState, detail::AppStateDeleter> state_;
+    std::unique_ptr<detail::AppState, StateDeleter> state_;
 };
 
 App& app();
