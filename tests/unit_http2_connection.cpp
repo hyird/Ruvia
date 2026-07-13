@@ -545,6 +545,31 @@ RUVIA_TEST(http2_connection_begin_server_connection_emits_settings_once) {
     RUVIA_CHECK(!conn.wantsWrite());
 }
 
+RUVIA_TEST(http2_connection_output_consumption_is_transactional) {
+    Http2Connection connection(
+        std::pmr::get_default_resource(),
+        ruvia::detail::Http2Role::kServer);
+    connection.beginConnection();
+    const std::string original(connection.pendingOutput());
+    RUVIA_CHECK(!original.empty());
+
+    RUVIA_CHECK(
+        connection.consumeOutput(original.size() + 1) ==
+        ruvia::detail::Http2OutputConsumeStatus::kOutOfRange);
+    RUVIA_CHECK_EQ(connection.pendingOutput(), std::string_view(original));
+
+    RUVIA_CHECK(
+        connection.consumeOutput(1) ==
+        ruvia::detail::Http2OutputConsumeStatus::kPending);
+    RUVIA_CHECK_EQ(
+        connection.pendingOutput(), std::string_view(original).substr(1));
+    RUVIA_CHECK(
+        connection.consumeOutput(original.size() - 1) ==
+        ruvia::detail::Http2OutputConsumeStatus::kDrained);
+    RUVIA_CHECK(connection.pendingOutput().empty());
+    RUVIA_CHECK(!connection.wantsWrite());
+}
+
 RUVIA_TEST(http2_connection_begin_client_connection_prefixes_same_settings_once) {
     std::pmr::monotonic_buffer_resource resource;
     Http2Connection client(&resource, ruvia::detail::Http2Role::kClient);

@@ -20,7 +20,9 @@
 // and a mismatch is rejected before output/window/state mutation.
 //
 // All protocol primitives it builds on (frame codec, HPACK, stream state, flow
-// control, input buffer, settings) are already pure and reused as-is.
+// control, input buffer, settings) are already pure and reused as-is. Receive/frame
+// progression and local message submission live in separate implementation units;
+// Http2OutputBuffer is the sole owner of outbound storage and its consumed cursor.
 
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +43,7 @@
 #include "ruvia/http/detail/http2/Http2HeaderDecode.h"
 #include "ruvia/http/detail/http2/Http2Hpack.h"
 #include "ruvia/http/detail/http2/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/Http2OutputBuffer.h"
 #include "ruvia/http/detail/http2/Http2PeerSettings.h"
 #include "ruvia/http/detail/http2/Http2ReadyQueue.h"
 #include "ruvia/http/detail/http2/Http2RequestContent.h"
@@ -451,13 +454,17 @@ public:
     // --- outbound --------------------------------------------------------------
     // Bytes the core wants written to the peer (frame headers + payloads, batched).
     [[nodiscard]] std::string_view pendingOutput() const noexcept;
-    void consumeOutput(std::size_t n) noexcept;
+    // Acknowledges at most the current pending size. An out-of-range count is
+    // rejected without clearing bytes or advancing the cursor.
+    Http2OutputConsumeStatus consumeOutput(std::size_t bytes) noexcept;
     // Move ALL pending outbound bytes into `into` (allocator-matching swap when nothing
     // was partially consumed, so the common path is copy-free) and reset the buffer.
     // REQUIRED for any writer that awaits mid-write: a pendingOutput() view dangles if
     // a concurrent submit reallocates the buffer during the write.
     void takeOutput(std::pmr::string& into);
-    [[nodiscard]] bool wantsWrite() const noexcept { return outOffset_ < outBuffer_.size(); }
+    [[nodiscard]] bool wantsWrite() const noexcept {
+        return output_.wantsWrite();
+    }
 
     // Submit a final response for `streamId`. The caller must pass the write plan
     // prepared after its last body/header transformation; method provenance,
@@ -609,14 +616,7 @@ public:
     void unpinStream(std::uint32_t streamId);
 
 private:
-    // Outbound frame emission: encode a 9-byte header + payload into outBuffer_.
-    // Replaces the coroutine writeFramePayload; the encoders are pure.
-    void appendFrame(
-        Http2FrameType type, std::uint8_t flags, std::uint32_t streamId,
-        std::string_view first, std::string_view second = {});
-    void appendGoawayFrame(std::uint32_t lastStreamId, Http2ErrorCode error, std::string_view debug);
     void appendGoaway(Http2ErrorCode error, std::string_view debug = {});
-    void appendRstStream(std::uint32_t streamId, Http2ErrorCode error);
 
     // A WINDOW_UPDATE/SETTINGS change drains core-owned DATA remainders into the
     // outbound buffer. A stream whose remainder fully drains is reported through
@@ -738,9 +738,9 @@ private:
     std::pmr::string input_;
     std::size_t inputOffset_{0};
 
-    // outbound byte buffer (batched writes; outOffset_ = flushed cursor)
-    std::pmr::string outBuffer_;
-    std::size_t outOffset_{0};
+    // Outbound serialization and consumed-prefix ownership are isolated from
+    // connection state transitions.
+    Http2OutputBuffer output_;
 
     // pure protocol state (all reused as-is)
     Http2StreamTable streams_;

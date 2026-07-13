@@ -11,7 +11,7 @@
 // Contract required of Connection:
 //   <any>            feed(std::string_view);          // advance the protocol
 //   std::string_view pendingOutput() const noexcept;  // bytes to write out
-//   void             consumeOutput(std::size_t) noexcept;
+//   <any>            consumeOutput(std::size_t) noexcept;
 //   bool             wantsWrite() const noexcept;
 // ShouldStop is an inlinable protocol adapter returning bool. Keeping transport-stop
 // policy explicit avoids forcing every protocol to collapse graceful drain, close
@@ -52,7 +52,9 @@ Task<void> pumpSansIoConnection(
             if (ec) {
                 co_return;
             }
-            connection.consumeOutput(out.size());
+            // `out` is the exact complete span supplied to asio::async_write, so
+            // protocol-specific partial/out-of-range statuses cannot occur here.
+            (void)connection.consumeOutput(out.size());
         }
         if (shouldStop(connection)) {
             co_return;
