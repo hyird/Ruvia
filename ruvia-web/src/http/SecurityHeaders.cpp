@@ -6,7 +6,7 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] bool hasSecurityHeader(Context& context, std::string_view name) {
-    return !detail::ContextAccess::responseStorage(context).header(name).empty();
+    return detail::ContextAccess::hasResponseHeader(context, name);
 }
 
 [[nodiscard]] bool hasSecurityHeader(HttpResponse& response, std::string_view name) noexcept {
