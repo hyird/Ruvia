@@ -87,6 +87,11 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     RUVIA_CHECK(invalidResult.failure() != nullptr);
     RUVIA_CHECK(invalidResult.failure()->error() ==
         Http1ChunkDecodeError::kInvalidFraming);
+    const auto repeatedInvalid = invalid.decode("0\r\n\r\n");
+    RUVIA_CHECK(repeatedInvalid.failure() != nullptr);
+    RUVIA_CHECK(repeatedInvalid.failure()->error() ==
+        Http1ChunkDecodeError::kInvalidFraming);
+    RUVIA_CHECK_EQ(repeatedInvalid.consumedBytes(), std::size_t{0});
 
     Http1ChunkedBodyDecoder singleLimit(ProtocolByteLimit::limited(10));
     const auto singleLimitResult = singleLimit.decode("b\r\n");

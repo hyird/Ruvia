@@ -316,6 +316,8 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
    NOT _installed_http1_chunk_decoder_content MATCHES
        "using Value = std::variant" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
+       "using State = std::variant<ProgressState, Http1ChunkDecodeError>" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
        "std::size_t consumedBytes[(][)] const" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::string_view bytes[(][)] const" OR
@@ -323,6 +325,8 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
        "std::get_if<Http1ChunkDecodeBodyChunk>" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::get_if<Http1ChunkDecodeFailure>" OR
+   _installed_http1_chunk_decoder_content MATCHES
+       "State::kFailed|Http1ChunkDecodeError[ \t]+failure_" OR
    _installed_http1_chunk_decoder_content MATCHES
        "class Http1ChunkDecoder")
     message(FATAL_ERROR "installed HTTP/1 streaming chunk decoder lost its discriminated result contract")

@@ -276,10 +276,14 @@ if(EXISTS "${HTTP1_CHUNK_DECODER}" AND EXISTS "${HTTP1_CHUNK_SCANNER}")
        NOT http1_chunk_decoder MATCHES "enum class Http1ChunkDecodeError" OR
        NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeFailure final" OR
        NOT http1_chunk_decoder MATCHES "using Value = std::variant" OR
+       NOT http1_chunk_decoder MATCHES
+           "using State = std::variant<ProgressState, Http1ChunkDecodeError>" OR
        NOT http1_chunk_decoder MATCHES "std::size_t consumedBytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::string_view bytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeFailure>" OR
+       http1_chunk_decoder MATCHES
+           "${RULE_STALE_CHUNK_DECODER_FAILURE_SPLIT}" OR
        http1_chunk_decoder MATCHES "class Http1ChunkDecoder" OR
        http1_chunk_decoder MATCHES
            "throw[ \t]+(std::invalid_argument|HttpProtocolError)")
@@ -7986,6 +7990,7 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
            "chunked_body_decoder_handles_single_byte_input_fragmentation" OR
        NOT http1_chunk_decoder_test MATCHES
            "chunked_body_decoder_reports_typed_size_and_limit_failures" OR
+       NOT http1_chunk_decoder_test MATCHES "repeatedInvalid" OR
        NOT http1_chunk_decoder_test MATCHES
            "HasChunkBytes<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_scanner_test MATCHES
