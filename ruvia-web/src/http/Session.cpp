@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/http/SessionInternal.h"
 
 #include "ruvia/web/Session.h"
+#include "ruvia/web/detail/http/ContextInternal.h"
 
 #ifdef RUVIA_ENABLE_REDIS
 
