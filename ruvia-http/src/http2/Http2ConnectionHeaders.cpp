@@ -441,10 +441,19 @@ bool Http2Connection::processHeaders(const Http2FrameHeader& header, std::string
                 appendGoaway(Http2ErrorCode::kStreamClosed, "HEADERS after peer RST_STREAM");
                 return false;
             }
-            // Opening a higher peer stream implicitly closes every lower unused ID.
-            // Whether this one was explicitly locally closed or aged out of bounded
-            // history, it is not idle; tolerate the closed-stream frame by decoding and
-            // discarding it so HPACK can never desynchronize.
+            if (!source.has_value()) {
+                // HEADERS is the only frame that could establish this peer stream, but
+                // a newly established identifier must be greater than every identifier
+                // the peer already opened (RFC 9113 5.1.1). A skipped lower identifier
+                // cannot be reopened as a new request.
+                appendGoaway(
+                    Http2ErrorCode::kProtocolError,
+                    "new peer stream id is not increasing");
+                return false;
+            }
+            // A stream explicitly closed by this endpoint can still have an in-flight
+            // field block. Minimally decode and discard it so HPACK remains synchronized
+            // as permitted by RFC 9113 5.1.
             discardedAction = DiscardedHeaderAction::kIgnore;
         } else {
             // Record every genuinely new peer stream ID, even when it is malformed or

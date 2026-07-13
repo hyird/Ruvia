@@ -94,6 +94,7 @@ jobs:
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
             -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
@@ -156,12 +157,12 @@ jobs:
           cmake --build build/http-only --config "$BUILD_TYPE"
           ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
 
-  ubuntu_ubsan:
-    name: Ubuntu UBSan
+  ubuntu_protocol_sanitizers:
+    name: Ubuntu protocol ASan + UBSan + fuzz
     runs-on: ubuntu-24.04
     env:
-      CC: gcc-13
-      CXX: g++-13
+      CC: clang-18
+      CXX: clang++-18
       GIT_CONFIG_COUNT: 1
       GIT_CONFIG_KEY_0: init.defaultBranch
       GIT_CONFIG_VALUE_0: main
@@ -176,7 +177,8 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar
+          sudo apt-get install -y clang-18 ninja-build curl zip unzip tar
+          clang++-18 --version
 
       - name: Cache vcpkg
         uses: actions/cache@v5
@@ -184,10 +186,10 @@ jobs:
           path: |
             ${{ env.VCPKG_ROOT }}
             ~/.cache/vcpkg/archives
-            ${{ github.workspace }}/build/ubsan/vcpkg_installed
-          key: vcpkg-ubsan-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+            ${{ github.workspace }}/build/protocol-sanitizers/vcpkg_installed
+          key: vcpkg-protocol-sanitizers-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
-            vcpkg-ubsan-${{ runner.os }}-
+            vcpkg-protocol-sanitizers-${{ runner.os }}-
 
       - name: Bootstrap vcpkg
         run: |
@@ -200,22 +202,54 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # UBSan over the core + HTTP surface (the security-critical protocol parsers).
-      # Feature backends (mariadb/redis/jwt) stay on the plain Debug job above;
-      # -fno-sanitize-recover aborts on the first violation so any UB fails the run.
+      # Instrument the complete test executable and protocol library. libFuzzer
+      # coverage is added only to its three dedicated entrypoints, so the ordinary
+      # unit-test main remains valid while ASan/UBSan still observe protocol code.
       - name: Configure
         run: |
-          cmake -S . -B build/ubsan -G Ninja \
+          cmake -S . -B build/protocol-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
             -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_FUZZERS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        run: cmake --build build/ubsan --config "$BUILD_TYPE"
+        run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
 
-      - name: Test (unit, UBSan)
-        run: ctest --test-dir build/ubsan --output-on-failure --build-config "$BUILD_TYPE"
+      - name: Test (unit, ASan + UBSan)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build/protocol-sanitizers --output-on-failure --build-config "$BUILD_TYPE"
+
+      - name: Protocol fuzz smoke
+        env:
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          set -euo pipefail
+          mkdir -p build/fuzz-artifacts
+          for target in \
+            ruvia_fuzz_http1_request \
+            ruvia_fuzz_http2_connection \
+            ruvia_fuzz_hpack
+          do
+            "build/protocol-sanitizers/tests/fuzz/$target" \
+              -max_total_time=20 \
+              -timeout=5 \
+              -rss_limit_mb=2048 \
+              -artifact_prefix=build/fuzz-artifacts/
+          done
+
+      - name: Upload fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-fuzz-findings-${{ github.sha }}
+          path: build/fuzz-artifacts
+          if-no-files-found: ignore
+          retention-days: 30
 
   windows_build:
     name: Windows build
