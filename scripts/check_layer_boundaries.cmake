@@ -2991,6 +2991,10 @@ check_files_no_match("App PImpl deleter must not escape the App private contract
     "AppStateDeleter"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/App.h"
     "${RUVIA_ROOT}/ruvia-web/src/app/App.cpp")
+check_files_no_match("Env PImpl deleter must not escape the Env private contract"
+    "EnvStateDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Dotenv.h"
+    "${RUVIA_ROOT}/ruvia-web/src/app/Dotenv.cpp")
 check_files_no_match("HTTP/1 session completion must not split wire, connection, and buffer state"
     "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h"

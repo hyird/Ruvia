@@ -15,9 +15,6 @@ namespace detail {
 struct EnvAccess;
 struct DotenvResultAccess;
 struct EnvState;
-struct EnvStateDeleter final {
-    void operator()(EnvState* state) const noexcept;
-};
 
 }  // namespace detail
 
@@ -70,6 +67,10 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
+    struct StateDeleter final {
+        void operator()(detail::EnvState* state) const noexcept;
+    };
+
     friend struct detail::EnvAccess;
 
     [[nodiscard]] static std::optional<bool> parseBoolValue(std::string_view value) noexcept;
@@ -83,7 +84,7 @@ private:
     template <typename>
     static constexpr bool kUnsupportedTypedEnvValue = false;
 
-    std::unique_ptr<detail::EnvState, detail::EnvStateDeleter> state_;
+    std::unique_ptr<detail::EnvState, StateDeleter> state_;
 };
 
 template <typename T>
