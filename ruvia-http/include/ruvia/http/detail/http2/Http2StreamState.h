@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/HttpKnownMethod.h"
@@ -280,11 +281,12 @@ public:
         return expectations_;
     }
 
-    [[nodiscard]] HttpServerExpectationAction expectationAction() const noexcept {
+    [[nodiscard]] std::optional<HttpServerExpectationAction>
+    expectationAction() const noexcept {
         return expectations_.serverAction(
             remoteReceive().contentOpen() != nullptr
                 ? HttpRequestContentIndication::kWillFollow
-                : HttpRequestContentIndication::kNone);
+                : HttpRequestContentIndication::kNoContent);
     }
 
     [[nodiscard]] std::string_view requestMethod() const noexcept {

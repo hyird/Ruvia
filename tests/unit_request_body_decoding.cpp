@@ -373,9 +373,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     }
     RUVIA_CHECK(!emptyLength.requiresConsumption());
     RUVIA_CHECK(emptyLength.expectations().has100Continue());
-    RUVIA_CHECK(
-        emptyLength.expectationAction() ==
-        HttpServerExpectationAction::kNone);
+    RUVIA_CHECK(!emptyLength.expectationAction());
 
     const auto compressedChunkedState = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"

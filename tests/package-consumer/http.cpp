@@ -1202,6 +1202,12 @@ concept HasHttp1RequestPlanTransferCodings = requires(const T& framing) {
 };
 
 template <typename T>
+concept HasOptionalHttpServerExpectationAction = requires(const T& state) {
+    { state.expectationAction() } -> std::same_as<std::optional<
+        ruvia::detail::HttpServerExpectationAction>>;
+};
+
+template <typename T>
 concept HasPublicHttp1RequestBodyPlanFactories = requires {
     T::makeWithoutBody();
     T::makeKnownLength(std::size_t{});
@@ -1240,6 +1246,10 @@ static_assert(!std::constructible_from<
 static_assert(!std::constructible_from<
     ruvia::detail::Http1ChunkedRequestBody,
     ruvia::detail::HttpTransferCodings>);
+static_assert(HasOptionalHttpServerExpectationAction<
+    ruvia::detail::Http1RequestBodyPlan>);
+static_assert(HasOptionalHttpServerExpectationAction<
+    ruvia::detail::Http2StreamState>);
 
 template <typename T>
 concept HasHttp1ClientResponsePlanAlternatives = requires(const T& plan) {

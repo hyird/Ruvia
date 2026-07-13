@@ -354,6 +354,28 @@ if(NOT _installed_cookie_options MATCHES
        "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
     message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
 endif()
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/HttpExpectations.h"
+    _installed_http_expectations)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h"
+    _installed_http1_request_body_plan_expectations)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h"
+    _installed_http2_stream_state_expectations)
+if(NOT _installed_http_expectations MATCHES "kNoContent" OR
+   NOT _installed_http_expectations MATCHES
+       "std::optional<HttpServerExpectationAction> serverAction" OR
+   NOT _installed_http1_request_body_plan_expectations MATCHES
+       "std::optional<HttpServerExpectationAction>" OR
+   NOT _installed_http2_stream_state_expectations MATCHES
+       "std::optional<HttpServerExpectationAction>" OR
+   _installed_http_expectations MATCHES
+       "enum class HttpServerExpectationAction[^{]*[{][^}]*kNone" OR
+   _installed_http_expectations MATCHES
+       "HttpRequestContentIndication::kNone")
+    message(FATAL_ERROR "installed Expect contract lost optional server actions")
+endif()
 set(_installed_http1_client_request_writer
     "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")
 if(NOT EXISTS "${_installed_http1_client_request_writer}")
