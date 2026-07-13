@@ -89,8 +89,8 @@ set(RULE_STALE_HTTP1_CLIENT_RESPONSE_MODE_TUPLE
     "Http1ClientResponseBodyMode|Http1ClientConnectionDisposition|ResponsePlanData|plan[(][)][.](mode|hasContentLength|contentLength|requiresBodyConsumption|selfDelimited|transferCodings|connectionDisposition|isCloseDelimited|isChunked|isOpaque|isConnectTunnel|isUpgrade)[ \t]*[(]")
 set(RULE_STALE_HTTP1_CLIENT_RESPONSE_PARSER_API
     "detail/(client/HttpClientResponseParser|http1/Http1ClientResponsePlan)[.]h|parseHttpClientResponseHead|class[ \t]+HttpClientResponseHead|[.]bodyOffset[ \t]*[(]|responseContext[ \t]*[(]|Http1ClientResponseParser[ \t]*[(][ \t]*[)]")
-set(RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_MUTATION
-    "status_[ \t]*[{][ \t]*0[ \t]*[}]|setStatus[ \t]*[(]")
+set(RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_PRODUCT
+    "status(Code)?_[ \t]*[{][ \t]*0[ \t]*[}]|statusCode[ \t]*[{][ \t]*0[ \t]*[}]|setStatus[ \t]*[(]|parseStatusLine[ \t\r\n]*[(][^)]*ParsedStatusLine[ \t]*&|parseResponseHeadFields[ \t\r\n]*[(][^)]*ParsedResponseHead[ \t]*&")
 set(RULE_STALE_HTTP1_CLIENT_REQUEST_SPLIT
     "request[.]body|std::string_view[ \t]+body[ \t]*[{]|serializeHttpClientRequest|bool[ \t]+hasRequestBody")
 set(RULE_STALE_OUTBOUND_REQUEST_CONTENT_MODE_TUPLE
@@ -799,8 +799,11 @@ if(RUVIA_BOUNDARY_SELF_TEST)
         "${RULE_STALE_H2_RESPONSE_STATUS_PRODUCT}"
         "std::uint16_t responseStatus_{0}; bool sawStatus{false};")
     expect_match("mutable or sentinel HTTP/1 client response status"
-        "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_MUTATION}"
+        "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_PRODUCT}"
         "std::uint16_t status_{0}; setStatus(response, 200);")
+    expect_match("output-parameter HTTP/1 client response parsing"
+        "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_PRODUCT}"
+        "parseStatusLine(wire, ParsedStatusLine& output, Error& error);")
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
@@ -2255,6 +2258,14 @@ if(EXISTS "${HTTP_PROTOCOL_VERSION_HEADER}" AND
        NOT http_protocol_client_parser MATCHES "make[(]" OR
        NOT http_protocol_client_parser MATCHES
            "parsed[.]statusCode, parsed[.]protocolVersion" OR
+       NOT http_protocol_client_parser MATCHES
+           "using StatusLineParseResult = std::variant" OR
+       NOT http_protocol_client_parser MATCHES
+           "using ResponseHeadParseResult = std::variant" OR
+       NOT http_protocol_client_parser MATCHES
+           "std::get_if<ParsedStatusLine>" OR
+       NOT http_protocol_client_parser MATCHES
+           "std::get_if<Http1ClientResponseParseError>[(]&parsedHead[)]" OR
        http_protocol_client_parser MATCHES
            "HttpClientResponseAccess::setStatus" OR
        NOT http_protocol_client_parser MATCHES "parsed[.]protocolVersion" OR
@@ -2264,8 +2275,8 @@ if(EXISTS "${HTTP_PROTOCOL_VERSION_HEADER}" AND
             "H1/H2 request, client response, connection, and final-response control must share HttpProtocolVersion")
     endif()
 endif()
-check_files_no_match("HTTP/1 client response status recovered mutation or a zero sentinel"
-    "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_MUTATION}"
+check_files_no_match("HTTP/1 client response status recovered mutation, output parameters, or a zero sentinel"
+    "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_PRODUCT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientAccess.h"
     "${HTTP1_CLIENT_RESPONSE_SOURCE}")

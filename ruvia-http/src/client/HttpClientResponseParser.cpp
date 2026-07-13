@@ -3,6 +3,7 @@
 #include <array>
 #include <charconv>
 #include <system_error>
+#include <variant>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
@@ -105,15 +106,19 @@ namespace ruvia {
 namespace {
 
 struct ParsedStatusLine final {
-    std::uint16_t statusCode{0};
-    HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
+    std::uint16_t statusCode;
+    HttpProtocolVersion protocolVersion;
 };
 
 struct ParsedResponseHead final {
+    explicit ParsedResponseHead(const ParsedStatusLine& statusLine) noexcept
+        : statusCode(statusLine.statusCode),
+          protocolVersion(statusLine.protocolVersion) {}
+
     std::array<HttpHeaderView, kMaxHttpHeaderFields> headers;
     std::size_t headerCount{0};
-    std::uint16_t statusCode{0};
-    HttpProtocolVersion protocolVersion{HttpProtocolVersion::kHttp11};
+    std::uint16_t statusCode;
+    HttpProtocolVersion protocolVersion;
     bool contentLengthFieldPresent{false};
     bool sawTransferEncoding{false};
     detail::HttpConnectionOptions connectionOptions;
@@ -122,32 +127,33 @@ struct ParsedResponseHead final {
     detail::HttpTransferEncodingState transferEncoding;
 };
 
+using StatusLineParseResult = std::variant<
+    ParsedStatusLine,
+    Http1ClientResponseParseError>;
+using ResponseHeadParseResult = std::variant<
+    ParsedResponseHead,
+    Http1ClientResponseParseError>;
 using ResponsePlanningResult = std::variant<
     Http1ClientResponsePlan,
     Http1ClientResponseParseError>;
 
-[[nodiscard]] bool parseStatusLine(
-    std::string_view statusLine,
-    ParsedStatusLine& output,
-    Http1ClientResponseParseError& error) noexcept {
+[[nodiscard]] StatusLineParseResult parseStatusLine(
+    std::string_view statusLine) noexcept {
     const auto separator = statusLine.find(' ');
     if (separator == std::string_view::npos) {
-        error = Http1ClientResponseParseError::kInvalidStatusLine;
-        return false;
+        return Http1ClientResponseParseError::kInvalidStatusLine;
     }
 
     const auto version = statusLine.substr(0, separator);
     if (version != "HTTP/1.0" && version != "HTTP/1.1") {
-        error = Http1ClientResponseParseError::kUnsupportedHttpVersion;
-        return false;
+        return Http1ClientResponseParseError::kUnsupportedHttpVersion;
     }
 
     // status-line = HTTP-version SP status-code SP [ reason-phrase ]. The
     // separator after the three digits is mandatory even for an empty phrase.
     if (statusLine.size() < separator + 5 ||
         statusLine[separator + 4] != ' ') {
-        error = Http1ClientResponseParseError::kInvalidStatusCode;
-        return false;
+        return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
     int statusCode = 0;
@@ -156,25 +162,22 @@ using ResponsePlanningResult = std::variant<
         code.data(), code.data() + code.size(), statusCode);
     if (ec != std::errc{} || end != code.data() + code.size() ||
         statusCode < 100 || statusCode > 999) {
-        error = Http1ClientResponseParseError::kInvalidStatusCode;
-        return false;
+        return Http1ClientResponseParseError::kInvalidStatusCode;
     }
 
     // Unlike a field value, reason-phrase can legitimately begin or end with
     // SP/HTAB. Validate bytes directly instead of applying OWS trimming rules.
     for (const auto ch : statusLine.substr(separator + 5)) {
         if (!detail::isHttpFieldValueChar(static_cast<unsigned char>(ch))) {
-            error = Http1ClientResponseParseError::kInvalidReasonPhrase;
-            return false;
+            return Http1ClientResponseParseError::kInvalidReasonPhrase;
         }
     }
 
-    output = ParsedStatusLine{
+    return ParsedStatusLine{
         .statusCode = static_cast<std::uint16_t>(statusCode),
         .protocolVersion = version == "HTTP/1.1"
             ? HttpProtocolVersion::kHttp11
             : HttpProtocolVersion::kHttp10};
-    return true;
 }
 
 [[nodiscard]] bool requestOffersProtocol(
@@ -254,21 +257,21 @@ using ResponsePlanningResult = std::variant<
     return Http1ClientResponsePersistence::kClose;
 }
 
-[[nodiscard]] bool parseResponseHeadFields(
+[[nodiscard]] ResponseHeadParseResult parseResponseHeadFields(
     std::string_view headSection,
-    const detail::Http1ClientRequestContext& request,
-    ParsedResponseHead& output,
-    Http1ClientResponseParseError& error) noexcept {
+    const detail::Http1ClientRequestContext& request) noexcept {
     const auto firstLineEnd = headSection.find("\r\n");
     const auto firstLine = firstLineEnd == std::string_view::npos
         ? headSection
         : headSection.substr(0, firstLineEnd);
-    ParsedStatusLine statusLine;
-    if (!parseStatusLine(firstLine, statusLine, error)) {
-        return false;
+    auto statusLineResult = parseStatusLine(firstLine);
+    const auto* statusLine = std::get_if<ParsedStatusLine>(&statusLineResult);
+    if (statusLine == nullptr) {
+        return std::get<Http1ClientResponseParseError>(statusLineResult);
     }
-    output.statusCode = statusLine.statusCode;
-    output.protocolVersion = statusLine.protocolVersion;
+    ResponseHeadParseResult result(
+        std::in_place_type<ParsedResponseHead>, *statusLine);
+    auto& output = std::get<ParsedResponseHead>(result);
 
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), output.statusCode);
@@ -285,19 +288,16 @@ using ResponsePlanningResult = std::variant<
             : remaining.substr(0, lineEnd);
         const auto colon = line.find(':');
         if (colon == std::string_view::npos) {
-            error = Http1ClientResponseParseError::kInvalidHeader;
-            return false;
+            return Http1ClientResponseParseError::kInvalidHeader;
         }
 
         const auto name = line.substr(0, colon);
         const auto value = detail::httpTrimOws(line.substr(colon + 1));
         if (!isValidHttpHeaderName(name) || !isValidHttpHeaderValue(value)) {
-            error = Http1ClientResponseParseError::kInvalidHeader;
-            return false;
+            return Http1ClientResponseParseError::kInvalidHeader;
         }
         if (output.headerCount == kMaxHttpHeaderFields) {
-            error = Http1ClientResponseParseError::kTooManyHeaders;
-            return false;
+            return Http1ClientResponseParseError::kTooManyHeaders;
         }
         output.headers[output.headerCount++] = HttpHeaderView{name, value};
 
@@ -312,11 +312,9 @@ using ResponsePlanningResult = std::variant<
                     case detail::HttpContentLengthParseStatus::kOk:
                         break;
                     case detail::HttpContentLengthParseStatus::kInvalid:
-                        error = Http1ClientResponseParseError::kInvalidContentLength;
-                        return false;
+                        return Http1ClientResponseParseError::kInvalidContentLength;
                     case detail::HttpContentLengthParseStatus::kConflicting:
-                        error = Http1ClientResponseParseError::kConflictingContentLength;
-                        return false;
+                        return Http1ClientResponseParseError::kConflictingContentLength;
                 }
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Connection")) {
@@ -324,8 +322,7 @@ using ResponsePlanningResult = std::variant<
                     value,
                     detail::HttpFieldListRole::kRecipient) !=
                 detail::HttpFieldListParseStatus::kOk) {
-                error = Http1ClientResponseParseError::kInvalidConnection;
-                return false;
+                return Http1ClientResponseParseError::kInvalidConnection;
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Transfer-Encoding")) {
             output.sawTransferEncoding = true;
@@ -338,11 +335,9 @@ using ResponsePlanningResult = std::variant<
                     case detail::HttpTransferEncodingParseStatus::kOk:
                         break;
                     case detail::HttpTransferEncodingParseStatus::kMalformed:
-                        error = Http1ClientResponseParseError::kInvalidTransferEncoding;
-                        return false;
+                        return Http1ClientResponseParseError::kInvalidTransferEncoding;
                     case detail::HttpTransferEncodingParseStatus::kUnsupported:
-                        error = Http1ClientResponseParseError::kUnsupportedTransferEncoding;
-                        return false;
+                        return Http1ClientResponseParseError::kUnsupportedTransferEncoding;
                 }
             }
         } else if (detail::httpAsciiEqualsIgnoreCase(name, "Upgrade")) {
@@ -352,8 +347,7 @@ using ResponsePlanningResult = std::variant<
                     [](const detail::HttpUpgradeProtocol&) noexcept {
                         return true;
                     }) != detail::HttpFieldListParseStatus::kOk) {
-                error = Http1ClientResponseParseError::kInvalidUpgrade;
-                return false;
+                return Http1ClientResponseParseError::kInvalidUpgrade;
             }
         }
 
@@ -365,10 +359,9 @@ using ResponsePlanningResult = std::variant<
 
     if (output.protocolVersion == HttpProtocolVersion::kHttp10 &&
         output.sawTransferEncoding) {
-        error = Http1ClientResponseParseError::kTransferEncodingInHttp10;
-        return false;
+        return Http1ClientResponseParseError::kTransferEncodingInHttp10;
     }
-    return true;
+    return result;
 }
 
 [[nodiscard]] ResponsePlanningResult planResponse(
@@ -526,12 +519,12 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     // Remove the terminal CRLF CRLF. The last field line then has the same
     // shape as every preceding line except that it has no trailing delimiter.
     const auto headSection = buffer.substr(0, headerBytes - 4);
-    ParsedResponseHead parsed;
-    Http1ClientResponseParseError error =
-        Http1ClientResponseParseError::kInvalidStatusLine;
-    if (!parseResponseHeadFields(headSection, request_, parsed, error)) {
-        return fail(error);
+    auto parsedHead = parseResponseHeadFields(headSection, request_);
+    if (const auto* parseError =
+            std::get_if<Http1ClientResponseParseError>(&parsedHead)) {
+        return fail(*parseError);
     }
+    const auto& parsed = std::get<ParsedResponseHead>(parsedHead);
 
     auto planning = planResponse(
         request_,
