@@ -7,9 +7,9 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/app/App.h"
-#include "ruvia/db/Db.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/db/Db.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 
@@ -66,7 +66,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
-        const auto name = co_await c.body();
+        const auto name = co_await c.req().text();
         std::uint64_t id = 0;
         co_await insertUser(c, name, id);
         std::pmr::string body(c.allocator<char>());
@@ -83,7 +83,7 @@ private:
 
     static ruvia::Task<void> loadUserFound(ruvia::Context& c, bool& found) {
         std::array<ruvia::DbValue, 1> params{
-            ruvia::DbValue{c.param("id").toStringView().value_or("")}};
+            ruvia::DbValue{c.req().param("id").value_or("")}};
         auto result = co_await c.db().query(
             "SELECT id, name FROM users WHERE id = ?",
             std::span<const ruvia::DbValue>(params));
@@ -162,7 +162,8 @@ int main() {
     }
 
     app
-        .setListenAddress("0.0.0.0", 8086)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8086)
         .setThreadNum(2)
         .run();
 }

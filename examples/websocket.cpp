@@ -1,7 +1,7 @@
 #include <chrono>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 class WebSocketController final : public ruvia::Controller<WebSocketController> {
 public:
@@ -10,9 +10,11 @@ public:
     RUVIA_ROUTES_BEGIN
     const auto chatOptions = ruvia::WebSocketRouteOptions{
         .subprotocols = "chat.v1",
-        .heartbeat = {
-            .pingInterval = std::chrono::seconds(30),
-            .pongTimeout = std::chrono::seconds(10),
+        .lifecycle = {
+            .heartbeat = ruvia::WebSocketHeartbeatPolicy::periodic(
+                std::chrono::seconds(30),
+                std::chrono::seconds(10)),
+            .closeHandshakeTimeout = std::chrono::seconds(5),
         },
     };
     RUVIA_GET_WS("/echo", echo);
@@ -24,9 +26,9 @@ private:
         auto& ws = c.webSocket();
         while (auto message = co_await ws.read()) {
             if (message->text()) {
-                co_await ws.text(message->payload);
+                co_await ws.text(message->payload());
             } else if (message->binary()) {
-                co_await ws.binary(message->payload);
+                co_await ws.binary(message->payload());
             }
         }
     }
@@ -36,7 +38,7 @@ private:
         co_await ws.text("welcome");
         while (auto message = co_await ws.read()) {
             if (message->text()) {
-                co_await ws.text(message->payload);
+                co_await ws.text(message->payload());
             }
         }
         co_await ws.close(1000, "bye");
@@ -45,7 +47,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8084)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8084)
         .setThreadNum(2)
         .setMaxWebSocketMessageBytes(16 * 1024 * 1024)
         .run();

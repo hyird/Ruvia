@@ -1,0 +1,32 @@
+#include "ruvia/web/detail/server/HttpServer.h"
+
+#include "ruvia/web/detail/http/ContextInternal.h"
+#include "ruvia/web/Error.h"
+
+namespace ruvia::detail {
+
+std::optional<HttpResponse> HttpServer::tryDocumentRootResponse(
+    const HttpRequest& request,
+    RequestMemory& memory) const {
+    const auto* const root = options_.documentRoot.root;
+    if (root == nullptr) {
+        return std::nullopt;
+    }
+    if (request.knownMethod() != HttpKnownMethod::kGet) {
+        return std::nullopt;
+    }
+
+    auto relative = request.path();
+    if (!relative.empty() && relative.front() == '/') {
+        relative.remove_prefix(1);
+    }
+
+    auto context = ContextAccess::make(memory, request);
+    try {
+        return context.staticFile(*root, relative);
+    } catch (const HttpError&) {
+        return std::nullopt;
+    }
+}
+
+}  // namespace ruvia::detail

@@ -7,20 +7,28 @@ on:
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
-      - "include/**"
-      - "src/**"
+      - "ruvia-core/**"
+      - "ruvia-http/**"
+      - "ruvia-web/**"
       - "examples/**"
-      - "benchmarks/**"
+      - "tests/**"
+      - "scripts/**"
+      - "README.md"
+      - "AGENTS.md"
       - ".github/workflows/build.yml"
   pull_request:
     branches: [main]
     paths:
       - "CMakeLists.txt"
       - "vcpkg.json"
-      - "include/**"
-      - "src/**"
+      - "ruvia-core/**"
+      - "ruvia-http/**"
+      - "ruvia-web/**"
       - "examples/**"
-      - "benchmarks/**"
+      - "tests/**"
+      - "scripts/**"
+      - "README.md"
+      - "AGENTS.md"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -34,18 +42,6 @@ jobs:
   ubuntu_build:
     name: Ubuntu build
     runs-on: ubuntu-24.04
-    services:
-      mariadb:
-        image: mariadb:lts
-        env:
-          MARIADB_ROOT_PASSWORD: summit
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mariadb-admin ping -uroot -psummit --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
     env:
       CC: gcc-13
       CXX: g++-13
@@ -63,7 +59,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar mariadb-client
+          sudo apt-get install -y gcc-13 g++-13 ninja-build curl zip unzip tar
           gcc-13 --version
           g++-13 --version
 
@@ -73,7 +69,7 @@ jobs:
           path: |
             ${{ env.VCPKG_ROOT }}
             ~/.cache/vcpkg/archives
-            ${{ github.workspace }}/build-test/vcpkg_installed
+            ${{ github.workspace }}/build/test/vcpkg_installed
           key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-build-${{ runner.os }}-
@@ -91,82 +87,167 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build-test -G Ninja \
+          cmake -S . -B build/test -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DRUVIA_ENABLE_MARIADB=ON \
             -DRUVIA_ENABLE_REDIS=ON \
             -DRUVIA_ENABLE_JWT=ON \
             -DRUVIA_BUILD_EXAMPLES=ON \
-            -DRUVIA_BUILD_TECHEMPOWER=ON \
-            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        run: cmake --build build-test --config "$BUILD_TYPE"
+        run: cmake --build build/test --config "$BUILD_TYPE"
 
-      - name: Initialize TechEmpower database
+      - name: Test
+        run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
+
+      - name: Configure HTTP hot-path benchmarks
+        run: |
+          cmake -S . -B build/benchmarks -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DRUVIA_BUILD_CORE=OFF \
+            -DRUVIA_BUILD_HTTP=ON \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_BENCHMARKS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Record HTTP hot-path benchmarks
+        run: |
+          cmake --build build/benchmarks --target ruvia_benchmarks
+          build/benchmarks/tests/benchmarks/ruvia_benchmark_http_hot_paths \
+            --warmup-ms 50 \
+            --duration-ms 250 \
+            --output build/benchmarks/http-hot-paths.json
+
+      - name: Upload HTTP hot-path benchmark record
+        uses: actions/upload-artifact@v4
+        with:
+          name: http-hot-paths-${{ github.sha }}
+          path: build/benchmarks/http-hot-paths.json
+          retention-days: 30
+
+      - name: Verify component-only builds
+        run: |
+          cmake -S . -B build/core-only -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_BUILD_CORE=ON \
+            -DRUVIA_BUILD_HTTP=OFF \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_ZLIB=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_unofficial-brotli=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_zstd=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build build/core-only --config "$BUILD_TYPE"
+          ctest --test-dir build/core-only --output-on-failure --build-config "$BUILD_TYPE"
+
+          cmake -S . -B build/http-only -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DRUVIA_BUILD_CORE=OFF \
+            -DRUVIA_BUILD_HTTP=ON \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_asio=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_mimalloc=ON \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build build/http-only --config "$BUILD_TYPE"
+          ctest --test-dir build/http-only --output-on-failure --build-config "$BUILD_TYPE"
+
+  ubuntu_protocol_sanitizers:
+    name: Ubuntu protocol UBSan + fuzz
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-18
+      CXX: clang++-18
+      GIT_CONFIG_COUNT: 1
+      GIT_CONFIG_KEY_0: init.defaultBranch
+      GIT_CONFIG_VALUE_0: main
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      BUILD_TYPE: Debug
+    steps:
+      - name: Checkout ruvia
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 ninja-build curl zip unzip tar
+          clang++-18 --version
+
+      - name: Cache vcpkg
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}
+            ~/.cache/vcpkg/archives
+            ${{ github.workspace }}/build/protocol-sanitizers/vcpkg_installed
+          key: vcpkg-protocol-sanitizers-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
+          restore-keys: |
+            vcpkg-protocol-sanitizers-${{ runner.os }}-
+
+      - name: Bootstrap vcpkg
         run: |
           set -euo pipefail
-          mariadb -h127.0.0.1 -P3306 -uroot -psummit <<'SQL'
-          CREATE DATABASE IF NOT EXISTS hello_world;
-          CREATE USER IF NOT EXISTS 'benchmarkdbuser'@'%' IDENTIFIED BY 'benchmarkdbpass';
-          GRANT ALL PRIVILEGES ON hello_world.* TO 'benchmarkdbuser'@'%';
-          FLUSH PRIVILEGES;
-          USE hello_world;
-          CREATE TABLE IF NOT EXISTS World (id INT NOT NULL PRIMARY KEY, randomNumber INT NOT NULL);
-          CREATE TABLE IF NOT EXISTS CachedWorld (id INT NOT NULL PRIMARY KEY, randomNumber INT NOT NULL);
-          CREATE TABLE IF NOT EXISTS Fortune (id INT NOT NULL PRIMARY KEY, message VARCHAR(2048) NOT NULL);
-          INSERT IGNORE INTO World(id, randomNumber)
-            SELECT seq, 1 + MOD(seq * 7919, 10000) FROM seq_1_to_10000;
-          INSERT IGNORE INTO CachedWorld(id, randomNumber)
-            SELECT seq, 1 + MOD(seq * 3571, 10000) FROM seq_1_to_10000;
-          INSERT IGNORE INTO Fortune(id, message) VALUES
-            (1, 'fortune: No such file or directory'),
-            (2, 'A computer scientist is someone who fixes things that aren''t broken.'),
-            (3, 'After enough decimal places, nobody gives a damn.'),
-            (4, 'A bad random number generator: 1, 1, 1, 1, 1'),
-            (5, 'A computer program does what you tell it to do, not what you want it to do.'),
-            (6, 'Emacs is a nice operating system, but I prefer UNIX.'),
-            (7, 'Any program that runs right is obsolete.'),
-            (8, 'A list is only as strong as its weakest link.'),
-            (9, 'Feature: A bug with seniority.'),
-            (10, 'Computers make very fast, very accurate mistakes.'),
-            (11, '<script>alert("This should not be displayed in a browser alert box.");</script>'),
-            (12, 'フレームワークのベンチマーク');
-          SQL
+          if [ ! -d "$VCPKG_ROOT/.git" ]; then
+            git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            git -C "$VCPKG_ROOT" fetch --depth 1 origin master
+            git -C "$VCPKG_ROOT" reset --hard origin/master
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      - name: TechEmpower spec smoke test
+      # UBSan covers the complete test executable and protocol library. ASan is
+      # deliberately excluded because Linux mimalloc's global override owns the
+      # same allocation symbols. libFuzzer still drives the protocol entrypoints.
+      - name: Configure
+        run: |
+          cmake -S . -B build/protocol-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DRUVIA_BUILD_TESTS=ON \
+            -DRUVIA_BUILD_FUZZERS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
+
+      - name: Test (unit, UBSan)
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build/protocol-sanitizers --output-on-failure --build-config "$BUILD_TYPE"
+
+      - name: Protocol fuzz smoke
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           set -euo pipefail
-          RUVIA_THREADS=1 \
-          RUVIA_DB_HOST=127.0.0.1 \
-          RUVIA_DB_PORT=3306 \
-          RUVIA_DB_USER=benchmarkdbuser \
-          RUVIA_DB_PASSWORD=benchmarkdbpass \
-          RUVIA_DB_DATABASE=hello_world \
-            ./build-test/benchmarks/techempower/ruvia/ruvia_techempower > ruvia_techempower.log 2>&1 &
-          server_pid=$!
-          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
-
-          for attempt in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/plaintext >/dev/null 2>&1; then
-              break
-            fi
-            sleep 1
-            if [ "$attempt" -eq 30 ]; then
-              cat ruvia_techempower.log
-              exit 1
-            fi
+          mkdir -p build/fuzz-artifacts
+          for target in \
+            ruvia_fuzz_http1_request \
+            ruvia_fuzz_http2_connection \
+            ruvia_fuzz_hpack
+          do
+            "build/protocol-sanitizers/tests/fuzz/$target" \
+              -max_total_time=20 \
+              -timeout=5 \
+              -rss_limit_mb=2048 \
+              -artifact_prefix=build/fuzz-artifacts/
           done
 
-          curl -fsS http://127.0.0.1:8080/json | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"message":"Hello, World!"}'
-          test "$(curl -fsS http://127.0.0.1:8080/plaintext)" = "Hello, World!"
-          curl -fsS http://127.0.0.1:8080/db | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data["id"], int) and isinstance(data["randomNumber"], int)'
-          curl -fsS 'http://127.0.0.1:8080/queries?queries=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
-          curl -fsS http://127.0.0.1:8080/fortunes | grep -q 'Additional fortune added at request time.'
-          curl -fsS 'http://127.0.0.1:8080/updates?queries=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
-          curl -fsS 'http://127.0.0.1:8080/cached-worlds?count=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
-          curl -fsS 'http://127.0.0.1:8080/cached-queries?count=2' | python3 -c 'import json,sys; data=json.load(sys.stdin); assert len(data) == 2'
+      - name: Upload fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-fuzz-findings-${{ github.sha }}
+          path: build/fuzz-artifacts
+          if-no-files-found: ignore
+          retention-days: 30
 
   windows_build:
     name: Windows build
@@ -189,7 +270,7 @@ jobs:
         with:
           path: |
             ${{ env.VCPKG_ROOT }}
-            ${{ github.workspace }}\build-test\vcpkg_installed
+            ${{ github.workspace }}\build\test\vcpkg_installed
           key: vcpkg-build-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'triplets/**', 'CMakeLists.txt') }}
           restore-keys: |
             vcpkg-build-${{ runner.os }}-
@@ -208,15 +289,19 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build-test `
+          cmake -S . -B build/test `
             -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
             -DRUVIA_ENABLE_MARIADB=ON `
             -DRUVIA_ENABLE_REDIS=ON `
             -DRUVIA_ENABLE_JWT=ON `
             -DRUVIA_BUILD_EXAMPLES=ON `
-            -DVCPKG_MANIFEST_FEATURES="mariadb;redis;jwt" `
+            -DRUVIA_BUILD_TESTS=ON `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
       - name: Build
         shell: pwsh
-        run: cmake --build build-test --config "$env:BUILD_TYPE"
+        run: cmake --build build/test --config "$env:BUILD_TYPE"
+
+      - name: Test
+        shell: pwsh
+        run: ctest --test-dir build/test --output-on-failure --build-config "$env:BUILD_TYPE"
