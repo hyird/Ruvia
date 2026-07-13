@@ -14,6 +14,9 @@ using ruvia::HttpParseError;
 using ruvia::detail::findHttpHeaderEnd;
 using ruvia::detail::HttpContentLengthParseStatus;
 using ruvia::detail::HttpContentLengthState;
+using ruvia::detail::HttpTransferCoding;
+using ruvia::detail::HttpTransferEncodingParseStatus;
+using ruvia::detail::HttpTransferEncodingState;
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 
@@ -32,10 +35,23 @@ Parsed parse(std::string_view head) {
     const auto headerBytes = findHttpHeaderEnd(head, 0);
     const auto error = parseHttpHeaderBlock(head, headerBytes, block);
     const auto contentLength = block.contentLength.value();
-    return {error, block.hostHeaderIndex >= 0, block.transferEncoding.finalChunked(),
+    const auto transferEncoding = block.transferEncoding.value();
+    const auto* finalChunked = transferEncoding.has_value()
+        ? transferEncoding->finalChunked()
+        : nullptr;
+    const auto* nonChunked = transferEncoding.has_value()
+        ? transferEncoding->nonChunked()
+        : nullptr;
+    ruvia::detail::HttpTransferCodings transferCodings;
+    if (finalChunked != nullptr) {
+        transferCodings = finalChunked->transferCodings();
+    } else if (nonChunked != nullptr) {
+        transferCodings = nonChunked->transferCodings();
+    }
+    return {error, block.hostHeaderIndex >= 0, finalChunked != nullptr,
             contentLength.has_value(), contentLength.value_or(0),
-            block.transferEncoding.codings().count,
-            block.transferEncoding.codings().values[0]};
+            transferCodings.count,
+            transferCodings.values[0]};
 }
 
 RUVIA_TEST(content_length_field_updates_are_transactional) {
@@ -53,6 +69,40 @@ RUVIA_TEST(content_length_field_updates_are_transactional) {
         state.parseField("6, 6") ==
         HttpContentLengthParseStatus::kConflicting);
     RUVIA_CHECK(state.value() == std::optional<std::size_t>(5));
+}
+
+RUVIA_TEST(transfer_encoding_field_updates_are_transactional_and_discriminated) {
+    HttpTransferEncodingState state;
+    RUVIA_CHECK(!state.value().has_value());
+    RUVIA_CHECK(
+        state.parseField("gzip") == HttpTransferEncodingParseStatus::kOk);
+
+    auto value = state.value();
+    RUVIA_CHECK(value.has_value());
+    RUVIA_CHECK(value->nonChunked() != nullptr);
+    RUVIA_CHECK(value->finalChunked() == nullptr);
+    if (const auto* nonChunked = value->nonChunked()) {
+        RUVIA_CHECK_EQ(nonChunked->transferCodings().count, std::size_t{1});
+        RUVIA_CHECK(
+            nonChunked->transferCodings().values[0] ==
+            HttpTransferCoding::kGzip);
+    }
+
+    RUVIA_CHECK(
+        state.parseField("chunked, deflate") ==
+        HttpTransferEncodingParseStatus::kMalformed);
+    value = state.value();
+    RUVIA_CHECK(value->nonChunked() != nullptr);
+    RUVIA_CHECK(value->finalChunked() == nullptr);
+
+    RUVIA_CHECK(
+        state.parseField("chunked") == HttpTransferEncodingParseStatus::kOk);
+    value = state.value();
+    RUVIA_CHECK(value->nonChunked() == nullptr);
+    RUVIA_CHECK(value->finalChunked() != nullptr);
+    if (const auto* finalChunked = value->finalChunked()) {
+        RUVIA_CHECK_EQ(finalChunked->transferCodings().count, std::size_t{1});
+    }
 }
 
 }  // namespace
