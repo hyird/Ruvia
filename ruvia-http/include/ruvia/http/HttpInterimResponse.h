@@ -20,7 +20,8 @@ class HttpInterimResponseHead final {
 public:
     class HeaderInit final {
     public:
-        constexpr HeaderInit() noexcept = default;
+        constexpr HeaderInit() noexcept
+            : headers_() {}
 
         constexpr HeaderInit(std::span<const HttpHeaderView> headers) noexcept
             : headers_(headers) {}
@@ -46,7 +47,7 @@ public:
         }
 
     private:
-        std::span<const HttpHeaderView> headers_{};
+        std::span<const HttpHeaderView> headers_;
     };
 
     explicit HttpInterimResponseHead(
