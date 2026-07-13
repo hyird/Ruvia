@@ -6744,25 +6744,39 @@ if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
         boundary_error("HTTP/1 parser stopped owning the connection plan"
             "the validated request version and flags must produce one plan stored in Http1ServerRequestParseState, and body-framing failure must preserve its version while forcing close")
     endif()
-    if(NOT http1_parser_internal MATCHES "enum class Http1ServerRequestParsePhase" OR
-       NOT http1_parser_internal MATCHES "kNeedRequestHead" OR
-       NOT http1_parser_internal MATCHES "kRequestHeadReady" OR
-       NOT http1_parser_internal MATCHES "kNeedRequestBody" OR
-       NOT http1_parser_internal MATCHES "kRequestMessageReady" OR
+    if(NOT http1_parser_internal MATCHES "class Http1ServerNeedRequestHead final" OR
+       NOT http1_parser_internal MATCHES "class Http1ServerRequestHeadReady final" OR
+       NOT http1_parser_internal MATCHES "class Http1ServerNeedRequestBody final" OR
+       NOT http1_parser_internal MATCHES "class Http1ServerRequestMessageReady final" OR
+       NOT http1_parser_internal MATCHES "class Http1ServerRequestParseFailure final" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParseState final" OR
        NOT http1_parser_internal MATCHES
-           "const HttpParseError[*] failure[(][)] const noexcept" OR
+           "const Http1ServerRequestHeadReady[*][\r\n \t]*headReady[(][)] const noexcept" OR
        NOT http1_parser_internal MATCHES
-           "std::optional<HttpParseError> error_" OR
+           "const Http1ServerNeedRequestBody[*][\r\n \t]*needRequestBody[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "const Http1ServerRequestMessageReady[*][\r\n \t]*messageReady[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "const Http1ServerRequestParseFailure[*][\r\n \t]*failure[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES "using Progress = std::variant" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParser final" OR
        NOT http1_parser_internal MATCHES "void parseHead" OR
        NOT http1_parser_internal MATCHES "parseMessage" OR
        NOT http1_parser_source MATCHES
-           "state\\.phase_[ \\t]*=[ \\t]*Http1ServerRequestParsePhase::kRequestHeadReady" OR
+           "state\\.progress_[ \\t]*=[ \\t]*Http1ServerRequestHeadReady" OR
        NOT http1_parser_source MATCHES
-           "state\\.phase_[ \\t]*=[ \\t]*Http1ServerRequestParsePhase::kRequestMessageReady")
-        boundary_error("HTTP/1 parser lost its distinct head/message phases"
-            "the hot-path head parser and whole-message scanner must have different typed readiness states")
+           "state\\.progress_[ \\t]*=[ \\t]*Http1ServerRequestMessageReady")
+        boundary_error("HTTP/1 parser lost its discriminated progress state"
+            "head/message readiness, body requirements, and failures must be separate lightweight alternatives while the heavy request storage stays reusable")
+    endif()
+    if(http1_parser_internal MATCHES "Http1ServerRequestParsePhase" OR
+       http1_parser_internal MATCHES "phase_" OR
+       http1_parser_internal MATCHES
+           "std::optional<HttpParseError>[ \\t]+error_" OR
+       http1_parser_source MATCHES
+           "parsed\\.(headerBytes|messageBytes|requiredTotalBytes)")
+        boundary_error("HTTP/1 parser restored parallel progress scalars"
+            "phase-specific metadata must live only in its active Progress alternative")
     endif()
 endif()
 if(NOT EXISTS "${PUBLIC_HTTP1_REQUEST_PARSER}")
@@ -6800,23 +6814,60 @@ check_files_no_match("HTTP parse failures recovered a no-error sentinel"
     "${RUVIA_ROOT}/ruvia-http/src/parser/HttpHeaderBlockParser.cpp")
 if(EXISTS "${HTTP1_PARSER_INTERNAL}")
     file(READ "${HTTP1_PARSER_INTERNAL}" public_http1_request_parser_state)
-    if(NOT public_http1_request_parser_state MATCHES "std::size_t messageBytes" OR
+    if(NOT public_http1_request_parser_state MATCHES
+           "requiredTotalBytes[(][)] const noexcept" OR
        NOT public_http1_request_parser_state MATCHES
-           "std::optional<std::size_t> requiredTotalBytes")
-        boundary_error("HTTP/1 internal parse state conflates completed and required bytes"
-            "messageBytes and optional requiredTotalBytes must remain distinct")
+           "messageBytes[(][)] const noexcept" OR
+       NOT public_http1_request_parser_state MATCHES
+           "std::optional<std::size_t> requiredTotalBytes_" OR
+       NOT public_http1_request_parser_state MATCHES
+           "std::size_t messageBytes_")
+        boundary_error("HTTP/1 internal parse progress conflates completed and required bytes"
+            "message bytes and optional required totals must belong to different alternatives")
     endif()
 endif()
 if(EXISTS "${HTTP1_PARSER_SOURCE}")
     file(READ "${HTTP1_PARSER_SOURCE}" public_http1_request_parser_source)
     if(NOT public_http1_request_parser_source MATCHES
-           "parsed\\.requiredTotalBytes" OR
+           "needBody->requiredTotalBytes[(][)]" OR
        NOT public_http1_request_parser_source MATCHES
-           "buffer\\.substr[(][\r\n \t]*parsed\\.headerBytes,[\r\n \t]*parsed\\.messageBytes[ \t]*-[ \t]*parsed\\.headerBytes")
+           "buffer\\.substr[(][\r\n \t]*message->headerBytes[(][)],[\r\n \t]*message->messageBytes[(][)][ \t]*-[ \t]*message->headerBytes[(][)]")
         boundary_error("public HTTP/1 parser collapsed required size or discarded wire body"
             "incomplete fixed lengths and successful body bytes need separate typed outputs")
     endif()
 endif()
+set(HTTP1_WEB_CONNECTION_STATE_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpConnectionState.h")
+set(HTTP1_WEB_CONNECTION_STATE_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpConnectionState.cpp")
+set(HTTP1_WEB_STREAM_SESSION
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamSession.inl")
+if(EXISTS "${HTTP1_WEB_CONNECTION_STATE_SOURCE}" AND
+   EXISTS "${HTTP1_WEB_STREAM_SESSION}")
+    file(READ "${HTTP1_WEB_CONNECTION_STATE_SOURCE}"
+        http1_web_connection_state_source)
+    file(READ "${HTTP1_WEB_STREAM_SESSION}" http1_web_stream_session)
+    if(NOT http1_web_stream_session MATCHES
+           "if[ \t]*[(]const auto[*] requestHead = parsed[.]headReady[(][)][)]" OR
+       NOT http1_web_stream_session MATCHES
+           "requestHead->headerBytes[(][)]" OR
+       NOT http1_web_stream_session MATCHES
+           "growReadBuffer[(]readBuffer, usedBytes[)]" OR
+       http1_web_connection_state_source MATCHES
+           "parsed[.]requiredTotalBytes")
+        boundary_error("HTTP/1 Web runtime lost typed request-head metadata"
+            "header bytes must flow from the HeadReady alternative, while header-buffer growth must not depend on whole-message body requirements")
+    endif()
+endif()
+check_files_no_match("HTTP/1 Web runtime restored phase-wide parse scalars"
+    "parsed[.](headerBytes|messageBytes|requiredTotalBytes)|growReadBuffer[(][^)]*Http1ServerRequestParseState"
+    "${HTTP1_WEB_CONNECTION_STATE_HEADER}"
+    "${HTTP1_WEB_CONNECTION_STATE_SOURCE}"
+    "${HTTP1_WEB_STREAM_SESSION}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerBufferedRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerStreamBodyRoute.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseStreamRoute.h")
 
 set(HTTP1_REQUEST_BODY_PLAN
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1RequestBodyPlan.h")

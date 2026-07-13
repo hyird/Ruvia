@@ -1,10 +1,11 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
+#include <exception>
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
@@ -37,43 +38,127 @@ struct Http1RequestParseResultAccess final {
     }
 };
 
-// The server runtime deliberately dispatches as soon as a valid request head is
-// available, while the public sans-I/O parser scans the complete framed message.
-// These phases make those two readiness boundaries impossible to confuse.
-enum class Http1ServerRequestParsePhase : std::uint8_t {
-    kNeedRequestHead,
-    kRequestHeadReady,
-    kNeedRequestBody,
-    kRequestMessageReady,
-    kFailure
+class Http1ServerNeedRequestHead final {};
+
+class Http1ServerRequestHeadReady final {
+public:
+    [[nodiscard]] constexpr std::size_t headerBytes() const noexcept {
+        return headerBytes_;
+    }
+
+private:
+    friend class Http1ServerRequestParser;
+
+    explicit constexpr Http1ServerRequestHeadReady(
+        std::size_t headerBytes) noexcept
+        : headerBytes_(headerBytes) {
+        if (headerBytes_ == 0) {
+            std::terminate();
+        }
+    }
+
+    std::size_t headerBytes_;
+};
+
+class Http1ServerNeedRequestBody final {
+public:
+    [[nodiscard]] constexpr std::size_t headerBytes() const noexcept {
+        return headerBytes_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::size_t>
+    requiredTotalBytes() const noexcept {
+        return requiredTotalBytes_;
+    }
+
+private:
+    friend class Http1ServerRequestParser;
+
+    constexpr Http1ServerNeedRequestBody(
+        std::size_t headerBytes,
+        std::optional<std::size_t> requiredTotalBytes) noexcept
+        : headerBytes_(headerBytes),
+          requiredTotalBytes_(requiredTotalBytes) {
+        if (headerBytes_ == 0 ||
+            (requiredTotalBytes_ && *requiredTotalBytes_ <= headerBytes_)) {
+            std::terminate();
+        }
+    }
+
+    std::size_t headerBytes_;
+    std::optional<std::size_t> requiredTotalBytes_;
+};
+
+class Http1ServerRequestMessageReady final {
+public:
+    [[nodiscard]] constexpr std::size_t headerBytes() const noexcept {
+        return headerBytes_;
+    }
+
+    [[nodiscard]] constexpr std::size_t messageBytes() const noexcept {
+        return messageBytes_;
+    }
+
+private:
+    friend class Http1ServerRequestParser;
+
+    constexpr Http1ServerRequestMessageReady(
+        std::size_t headerBytes,
+        std::size_t messageBytes) noexcept
+        : headerBytes_(headerBytes), messageBytes_(messageBytes) {
+        if (headerBytes_ == 0 || messageBytes_ < headerBytes_) {
+            std::terminate();
+        }
+    }
+
+    std::size_t headerBytes_;
+    std::size_t messageBytes_;
+};
+
+class Http1ServerRequestParseFailure final {
+public:
+    [[nodiscard]] constexpr HttpParseError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class Http1ServerRequestParser;
+
+    explicit constexpr Http1ServerRequestParseFailure(
+        HttpParseError error) noexcept
+        : error_(error) {}
+
+    HttpParseError error_;
 };
 
 class Http1ServerRequestParseState final {
 public:
-    [[nodiscard]] Http1ServerRequestParsePhase phase() const noexcept {
-        return phase_;
+    [[nodiscard]] const Http1ServerNeedRequestHead*
+    needRequestHead() const noexcept {
+        return std::get_if<Http1ServerNeedRequestHead>(&progress_);
     }
 
-    [[nodiscard]] bool headReady() const noexcept {
-        return phase_ == Http1ServerRequestParsePhase::kRequestHeadReady;
+    [[nodiscard]] const Http1ServerRequestHeadReady*
+    headReady() const noexcept {
+        return std::get_if<Http1ServerRequestHeadReady>(&progress_);
     }
 
-    [[nodiscard]] bool messageReady() const noexcept {
-        return phase_ == Http1ServerRequestParsePhase::kRequestMessageReady;
+    [[nodiscard]] const Http1ServerNeedRequestBody*
+    needRequestBody() const noexcept {
+        return std::get_if<Http1ServerNeedRequestBody>(&progress_);
     }
 
-    [[nodiscard]] const HttpParseError* failure() const noexcept {
-        return phase_ == Http1ServerRequestParsePhase::kFailure && error_
-            ? &*error_
-            : nullptr;
+    [[nodiscard]] const Http1ServerRequestMessageReady*
+    messageReady() const noexcept {
+        return std::get_if<Http1ServerRequestMessageReady>(&progress_);
+    }
+
+    [[nodiscard]] const Http1ServerRequestParseFailure*
+    failure() const noexcept {
+        return std::get_if<Http1ServerRequestParseFailure>(&progress_);
     }
 
     HttpRequest request{HttpRequestAccess::make()};
-    std::size_t headerBytes{0};
-    // Valid only in kRequestMessageReady. A future fixed-length buffer target is
-    // a separate fact and is present only in kNeedRequestBody.
-    std::size_t messageBytes{0};
-    std::optional<std::size_t> requiredTotalBytes;
     Http1RequestBodyPlan bodyPlan{
         Http1RequestBodyPlan(HttpRequestExpectations{})};
     Http1ServerConnectionPlan connectionPlan{
@@ -83,9 +168,17 @@ public:
 private:
     friend class Http1ServerRequestParser;
 
-    std::optional<HttpParseError> error_;
-    Http1ServerRequestParsePhase phase_{
-        Http1ServerRequestParsePhase::kNeedRequestHead};
+    // The heavy request/header storage stays in place across parse attempts.
+    // Only this small progress value changes, so head/message/required/error
+    // metadata exists solely in the alternative where it is meaningful.
+    using Progress = std::variant<
+        Http1ServerNeedRequestHead,
+        Http1ServerRequestHeadReady,
+        Http1ServerNeedRequestBody,
+        Http1ServerRequestMessageReady,
+        Http1ServerRequestParseFailure>;
+
+    Progress progress_{Http1ServerNeedRequestHead{}};
 };
 
 class Http1ServerRequestParser final {

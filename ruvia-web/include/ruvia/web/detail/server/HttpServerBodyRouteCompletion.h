@@ -81,10 +81,13 @@ inline void prepareHttpLazyBufferedBodyRoute(
 }
 
 [[nodiscard]] inline std::string_view httpBodyAndPipeline(
-    const Http1ServerRequestParseState& parsed,
+    const Http1ServerRequestHeadReady& requestHead,
     const std::pmr::string& readBuffer,
     std::size_t usedBytes) noexcept {
-    return std::string_view(readBuffer.data() + parsed.headerBytes, usedBytes - parsed.headerBytes);
+    const auto headerBytes = requestHead.headerBytes();
+    return std::string_view(
+        readBuffer.data() + headerBytes,
+        usedBytes - headerBytes);
 }
 
 inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
