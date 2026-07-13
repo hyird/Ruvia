@@ -129,12 +129,12 @@ Task<void> HttpServer::handleStreamSession(
                     // reports the semantic fact; this Web product deliberately does
                     // not implement extensions beyond 100-continue and chooses the
                     // RFC 9110-permitted 417 response before reading request content.
-                    closingError.emplace(417, std::string_view{}, "unsupported Expect header");
+                    closingError = HttpErrorInfo(417, {}, "unsupported Expect header");
                     break;
                 }
                 if (options_.autoHttps.enabled) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
-                        closingError.emplace(400, std::string_view{}, "missing Host header");
+                        closingError = HttpErrorInfo(400, {}, "missing Host header");
                         break;
                     }
                     response = makeAutoHttpsRedirectResponse(
@@ -153,7 +153,7 @@ Task<void> HttpServer::handleStreamSession(
                 routeResolution = routes.resolve(parsed.request);
                 const auto appRateLimit = rateLimitRequestAllowed(&rateLimiter_, remoteAddress);
                 if (!appRateLimit.allowed) {
-                    closingError.emplace(429, std::string_view{}, "rate limit exceeded");
+                    closingError = HttpErrorInfo(429, {}, "rate limit exceeded");
                     closingRetryAfter.emplace(appRateLimit.resetAfterMs);
                     break;
                 }
@@ -163,7 +163,7 @@ Task<void> HttpServer::handleStreamSession(
                             parsed.bodyPlan,
                             ProtocolByteLimit::limited(
                                 options_.maxBufferedBodyBytes))) {
-                        closingError.emplace(413, std::string_view{}, "request body is too large");
+                        closingError = HttpErrorInfo(413, {}, "request body is too large");
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
@@ -204,7 +204,7 @@ Task<void> HttpServer::handleStreamSession(
                     options_.maxStreamBodyBytes,
                     options_.maxBufferedBodyBytes);
                 if (contentLengthExceedsLimit(parsed.bodyPlan, maxRequestBodyBytes)) {
-                    closingError.emplace(413, std::string_view{}, "request body is too large");
+                    closingError = HttpErrorInfo(413, {}, "request body is too large");
                     break;
                 }
 
@@ -347,9 +347,9 @@ Task<void> HttpServer::handleStreamSession(
                         co_return;
                     }
                 }
-                closingError.emplace(
+                closingError = HttpErrorInfo(
                     httpParseErrorStatus(error),
-                    std::string_view{},
+                    {},
                     httpParseErrorMessage(error));
                 break;
             }
@@ -360,9 +360,9 @@ Task<void> HttpServer::handleStreamSession(
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 constexpr auto error = HttpParseError::kHeaderTooLarge;
-                closingError.emplace(
+                closingError = HttpErrorInfo(
                     httpParseErrorStatus(error),
-                    std::string_view{},
+                    {},
                     httpParseErrorMessage(error));
                 break;
             }

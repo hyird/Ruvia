@@ -338,7 +338,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
             std::optional<HttpErrorInfo> error;
             std::uint32_t allowedMethods = 0;
             if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-                error.emplace(501, std::string_view{}, "method not implemented");
+                error = HttpErrorInfo(501, {}, "method not implemented");
             } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
                 co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
             } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
@@ -346,7 +346,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
                     co_return makeAllowNoContentResponse(
                         memory, methodNotAllowed->allowedMethods());
                 }
-                error.emplace(405, std::string_view{}, "method not allowed");
+                error = HttpErrorInfo(405, {}, "method not allowed");
                 allowedMethods = methodNotAllowed->allowedMethods();
             }
 
