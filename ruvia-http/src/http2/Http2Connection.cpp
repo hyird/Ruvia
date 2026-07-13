@@ -2452,9 +2452,9 @@ Http2SubmitStatus Http2Connection::submitReset(
     }
     auto* stream = findStream(streamId);
     if (stream == nullptr) {
-        return closedStreams_.source(streamId) == Http2StreamCloseSource::kNone
-            ? Http2SubmitStatus::kInvalidState
-            : Http2SubmitStatus::kClosed;
+        return closedStreams_.source(streamId).has_value()
+            ? Http2SubmitStatus::kClosed
+            : Http2SubmitStatus::kInvalidState;
     }
     if (stream->isAborted()) {
         return Http2SubmitStatus::kClosed;

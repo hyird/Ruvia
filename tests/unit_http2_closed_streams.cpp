@@ -14,7 +14,7 @@ using ruvia::detail::Http2StreamCloseSource;
 
 RUVIA_TEST(closed_streams_remember_and_update) {
     Http2ClosedStreamHistory history;
-    RUVIA_CHECK(history.source(5) == Http2StreamCloseSource::kNone);  // never remembered
+    RUVIA_CHECK(!history.source(5).has_value());  // never remembered
     history.remember(5, Http2StreamCloseSource::kLocal);
     RUVIA_CHECK(history.source(5) == Http2StreamCloseSource::kLocal);
     // Remembering the same stream updates its source rather than duplicating it.
@@ -22,12 +22,12 @@ RUVIA_TEST(closed_streams_remember_and_update) {
     RUVIA_CHECK(history.source(5) == Http2StreamCloseSource::kPeer);
 }
 
-RUVIA_TEST(closed_streams_ignores_zero_and_none_source) {
+RUVIA_TEST(closed_streams_ignores_zero_and_invalid_source) {
     Http2ClosedStreamHistory history;
     history.remember(0, Http2StreamCloseSource::kLocal);  // stream 0 is not a real stream
-    RUVIA_CHECK(history.source(0) == Http2StreamCloseSource::kNone);
-    history.remember(7, Http2StreamCloseSource::kNone);   // a kNone source is a no-op
-    RUVIA_CHECK(history.source(7) == Http2StreamCloseSource::kNone);
+    RUVIA_CHECK(!history.source(0).has_value());
+    history.remember(7, static_cast<Http2StreamCloseSource>(0xFF));
+    RUVIA_CHECK(!history.source(7).has_value());
 }
 
 RUVIA_TEST(closed_streams_evict_oldest_when_full) {
@@ -41,7 +41,7 @@ RUVIA_TEST(closed_streams_evict_oldest_when_full) {
     RUVIA_CHECK(history.source(limit) == Http2StreamCloseSource::kLocal);
     // One past the limit evicts the oldest record (id 1) but keeps the rest.
     history.remember(limit + 1, Http2StreamCloseSource::kPeer);
-    RUVIA_CHECK(history.source(1) == Http2StreamCloseSource::kNone);       // evicted
+    RUVIA_CHECK(!history.source(1).has_value());                           // evicted
     RUVIA_CHECK(history.source(2) == Http2StreamCloseSource::kLocal);      // retained
     RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kPeer);
 }
@@ -59,15 +59,15 @@ RUVIA_TEST(closed_streams_eviction_survives_ring_buffer_wraparound) {
     for (std::uint32_t id = 1; id <= 2 * limit; ++id) {
         history.remember(id, Http2StreamCloseSource::kLocal);
     }
-    RUVIA_CHECK(history.source(1) == Http2StreamCloseSource::kNone);           // long evicted
-    RUVIA_CHECK(history.source(limit) == Http2StreamCloseSource::kNone);       // evicted at the wrap
+    RUVIA_CHECK(!history.source(1).has_value());                               // long evicted
+    RUVIA_CHECK(!history.source(limit).has_value());                           // evicted at the wrap
     RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kLocal);  // oldest still-tracked
     RUVIA_CHECK(history.source(2 * limit) == Http2StreamCloseSource::kLocal);  // newest
 
     // One further insert evicts exactly the current oldest (limit+1), proving the
     // wrapped cursor still points at the true FIFO front rather than a stale slot.
     history.remember(2 * limit + 1, Http2StreamCloseSource::kPeer);
-    RUVIA_CHECK(history.source(limit + 1) == Http2StreamCloseSource::kNone);   // evicted post-wrap
+    RUVIA_CHECK(!history.source(limit + 1).has_value());                       // evicted post-wrap
     RUVIA_CHECK(history.source(limit + 2) == Http2StreamCloseSource::kLocal);  // still tracked
     RUVIA_CHECK(history.source(2 * limit + 1) == Http2StreamCloseSource::kPeer);
 }

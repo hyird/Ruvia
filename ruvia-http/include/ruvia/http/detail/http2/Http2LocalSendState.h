@@ -72,7 +72,7 @@ private:
 // Only abnormal whole-stream termination owns a close source. This covers a local
 // or peer RST_STREAM as well as a GOAWAY last-stream-id exclusion; GOAWAY is not a
 // reset, so naming this alternative after RST_STREAM would be protocol-inaccurate.
-// Open and normally ended states cannot expose a fake kNone source.
+// Open and normally ended states cannot expose a close source.
 class Http2StreamAborted final {
 public:
     [[nodiscard]] constexpr Http2StreamCloseSource source() const noexcept {
@@ -174,7 +174,7 @@ private:
     }
 
     [[nodiscard]] bool abort(Http2StreamCloseSource source) noexcept {
-        if (!validCloseSource(source) || aborted() != nullptr) {
+        if (!http2IsValidStreamCloseSource(source) || aborted() != nullptr) {
             return false;
         }
         state_ = State(Http2StreamAborted(source));
@@ -233,13 +233,6 @@ private:
             responseContentOpen() != nullptr ||
             responseTrailersOnly() != nullptr ||
             tunnelOpen() != nullptr;
-    }
-
-    [[nodiscard]] static constexpr bool validCloseSource(
-        Http2StreamCloseSource source) noexcept {
-        return source == Http2StreamCloseSource::kLocal ||
-            source == Http2StreamCloseSource::kPeer ||
-            source == Http2StreamCloseSource::kPeerGoaway;
     }
 
     using State = std::variant<

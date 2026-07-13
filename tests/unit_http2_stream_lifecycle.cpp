@@ -229,7 +229,6 @@ RUVIA_TEST(http2_local_send_state_abort_owns_immutable_close_source) {
     std::pmr::monotonic_buffer_resource resource;
     Http2StreamState stream(1, &resource);
     const auto& state = stream.localSend();
-    RUVIA_CHECK(!stream.abort(Http2StreamCloseSource::kNone));
     RUVIA_CHECK(!stream.abort(static_cast<Http2StreamCloseSource>(0xFF)));
     RUVIA_CHECK(state.headPending() != nullptr);
     RUVIA_CHECK(stream.abort(Http2StreamCloseSource::kLocal));
@@ -298,7 +297,6 @@ RUVIA_TEST(stream_lifecycle_abort_sets_all_terminal_state) {
     RUVIA_CHECK(!stream.isAborted());
     RUVIA_CHECK(stream.remoteReceive().headPending() != nullptr);
     RUVIA_CHECK(stream.localSend().headPending() != nullptr);
-    RUVIA_CHECK(!stream.abort(Http2StreamCloseSource::kNone));
     RUVIA_CHECK(!stream.abort(
         static_cast<Http2StreamCloseSource>(0xFF)));
     RUVIA_CHECK(stream.localSend().headPending() != nullptr);
