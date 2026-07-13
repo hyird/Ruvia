@@ -43,7 +43,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 
 [[nodiscard]] inline std::string_view cookiePriorityToken(CookiePriority priority) noexcept {
     switch (priority) {
-        case CookiePriority::kUnspecified: return {};
         case CookiePriority::kLow: return "Low";
         case CookiePriority::kMedium: return "Medium";
         case CookiePriority::kHigh: return "High";
@@ -53,7 +52,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 
 [[nodiscard]] inline std::string_view cookieSameSiteToken(CookieSameSite sameSite) noexcept {
     switch (sameSite) {
-        case CookieSameSite::kUnspecified: return {};
         case CookieSameSite::kStrict: return "Strict";
         case CookieSameSite::kLax: return "Lax";
         case CookieSameSite::kNone: return "None";
@@ -63,7 +61,6 @@ inline constexpr std::int64_t kMaxCookieAgeSeconds = 34560000;
 
 [[nodiscard]] inline std::string_view cookiePrefixText(CookiePrefix prefix) noexcept {
     switch (prefix) {
-        case CookiePrefix::kNone: return {};
         case CookiePrefix::kSecure: return "__Secure-";
         case CookiePrefix::kHost: return "__Host-";
     }
@@ -112,19 +109,16 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
         *options.expires > std::chrono::system_clock::now() + std::chrono::seconds(kMaxCookieAgeSeconds)) {
         throw std::invalid_argument("cookie Expires must not exceed 400 days ahead");
     }
-    if (options.priority != CookiePriority::kUnspecified &&
-        cookiePriorityToken(options.priority).empty()) {
+    if (options.priority && cookiePriorityToken(*options.priority).empty()) {
         throw std::invalid_argument("invalid cookie Priority");
     }
-    if (options.sameSite != CookieSameSite::kUnspecified &&
-        cookieSameSiteToken(options.sameSite).empty()) {
+    if (options.sameSite && cookieSameSiteToken(*options.sameSite).empty()) {
         throw std::invalid_argument("invalid cookie SameSite");
     }
     if (options.sameSite == CookieSameSite::kNone && !options.secure) {
         throw std::invalid_argument("SameSite=None cookie requires Secure");
     }
-    if (options.prefix != CookiePrefix::kNone &&
-        cookiePrefixText(options.prefix).empty()) {
+    if (options.prefix && cookiePrefixText(*options.prefix).empty()) {
         throw std::invalid_argument("invalid cookie prefix");
     }
     if (options.partitioned && !options.secure) {
@@ -132,16 +126,17 @@ inline void validateCookie(std::string_view name, std::string_view value, const 
     }
     // RFC 6265bis §4.1.3: the __Host-/__Secure- rules apply to the cookie's actual
     // wire name -- cookiePrefixText(prefix) + name -- however the prefix was formed.
-    // Keying only on the CookiePrefix enum let a hand-typed "__Host-"/"__Secure-"
-    // name passed with prefix=kNone ship without the required attributes, producing
+    // Keying only on the optional CookiePrefix let a hand-typed
+    // "__Host-"/"__Secure-" name passed without a prefix ship without the
+    // required attributes, producing
     // a cookie every browser silently drops. Derive the effective prefix from the
     // wire name (case-insensitive) so the enum and literal-name routes enforce
     // identically. When the enum sets a prefix, it is exactly the wire prefix; a
     // present enum thus takes precedence over any prefix-looking bytes in `name`.
     const bool hostPrefixed = options.prefix == CookiePrefix::kHost ||
-        (options.prefix == CookiePrefix::kNone && cookieNameHasPrefix(name, "__host-"));
+        (!options.prefix && cookieNameHasPrefix(name, "__host-"));
     const bool securePrefixed = options.prefix == CookiePrefix::kSecure ||
-        (options.prefix == CookiePrefix::kNone && cookieNameHasPrefix(name, "__secure-"));
+        (!options.prefix && cookieNameHasPrefix(name, "__secure-"));
     if (hostPrefixed) {
         if (!options.secure || options.path != "/" || !options.domain.empty()) {
             throw std::invalid_argument("__Host- cookie requires Secure, Path=/, and no Domain");

@@ -25,10 +25,13 @@ bool rejects(const ruvia::CookieOptions& options) {
 
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),
-    ruvia::CookieSameSite>);
+    std::optional<ruvia::CookieSameSite>>);
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.priority),
-    ruvia::CookiePriority>);
+    std::optional<ruvia::CookiePriority>>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.prefix),
+    std::optional<ruvia::CookiePrefix>>);
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.maxAge),
     std::optional<std::chrono::seconds>>);
@@ -47,8 +50,7 @@ RUVIA_TEST(cookie_samesite_enum_maps_to_wire_tokens) {
     none.secure = true;
     RUVIA_CHECK(!rejects(none));
 
-    RUVIA_CHECK(ruvia::detail::cookieSameSiteToken(
-        ruvia::CookieSameSite::kUnspecified).empty());
+    RUVIA_CHECK(!ruvia::CookieOptions{}.sameSite.has_value());
     RUVIA_CHECK_EQ(
         ruvia::detail::cookieSameSiteToken(ruvia::CookieSameSite::kStrict),
         std::string_view("Strict"));
@@ -110,7 +112,7 @@ RUVIA_TEST(cookie_attribute_char_validation) {
 
 RUVIA_TEST(cookie_priority_enum_maps_to_wire_tokens) {
     using ruvia::detail::cookiePriorityToken;
-    RUVIA_CHECK(cookiePriorityToken(ruvia::CookiePriority::kUnspecified).empty());
+    RUVIA_CHECK(!ruvia::CookieOptions{}.priority.has_value());
     RUVIA_CHECK_EQ(
         cookiePriorityToken(ruvia::CookiePriority::kLow),
         std::string_view("Low"));
@@ -196,7 +198,7 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
     };
 
     // RFC 6265bis §4.1.3: the prefix rules apply to the cookie's actual wire name,
-    // so a hand-typed "__Host-"/"__Secure-" name (CookiePrefix enum = kNone) must be
+    // so a hand-typed "__Host-"/"__Secure-" name (with no CookiePrefix) must be
     // enforced like the enum, case-insensitively -- not silently shipped for the
     // browser to drop. Keying only on the enum let these through.
     ruvia::CookieOptions insecure;  // secure defaults to false

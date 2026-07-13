@@ -808,10 +808,13 @@ static_assert(std::same_as<
     std::optional<std::uint64_t>>);
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.sameSite),
-    ruvia::CookieSameSite>);
+    std::optional<ruvia::CookieSameSite>>);
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.priority),
-    ruvia::CookiePriority>);
+    std::optional<ruvia::CookiePriority>>);
+static_assert(std::same_as<
+    decltype(ruvia::CookieOptions{}.prefix),
+    std::optional<ruvia::CookiePrefix>>);
 static_assert(std::same_as<
     decltype(ruvia::CookieOptions{}.maxAge),
     std::optional<std::chrono::seconds>>);

@@ -20,9 +20,15 @@ SetCookiePlan::SetCookiePlan(
       value_(value),
       path_(options.path),
       domain_(options.domain),
-      prefixText_(cookiePrefixText(options.prefix)),
-      priorityText_(cookiePriorityToken(options.priority)),
-      sameSiteText_(cookieSameSiteToken(options.sameSite)),
+      prefixText_(options.prefix
+          ? cookiePrefixText(*options.prefix)
+          : std::string_view{}),
+      priorityText_(options.priority
+          ? cookiePriorityToken(*options.priority)
+          : std::string_view{}),
+      sameSiteText_(options.sameSite
+          ? cookieSameSiteToken(*options.sameSite)
+          : std::string_view{}),
       hasMaxAge_(options.maxAge.has_value()),
       httpOnly_(options.httpOnly),
       secure_(options.secure),
