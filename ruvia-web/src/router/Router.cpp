@@ -11,7 +11,7 @@ using namespace detail;
 
 namespace {
 
-Task<void> ignoreExpiredNext(Next::State) {
+Task<void> ignoreExpiredNext(NextState) {
     co_return;
 }
 

@@ -68,10 +68,6 @@ struct WebSocketAccess;
 
 class WebSocket final {
 public:
-    using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
-    using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
-    using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
-
     WebSocket(const WebSocket&) = delete;
     WebSocket& operator=(const WebSocket&) = delete;
 
@@ -89,6 +85,10 @@ public:
 
 private:
     friend struct detail::WebSocketAccess;
+
+    using Read = Task<std::optional<WebSocketMessage>> (*)(void*);
+    using Write = Task<void> (*)(void*, WebSocketOpcode, std::string_view);
+    using Close = Task<void> (*)(void*, std::uint16_t, std::string_view);
 
     constexpr WebSocket(void* target, Read read, Write write, Close close) noexcept
         : target_(target), read_(read), write_(write), close_(close) {}

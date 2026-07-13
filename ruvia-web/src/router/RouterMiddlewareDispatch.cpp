@@ -24,16 +24,18 @@ void storeRepeatedNextError(Context& context) {
             HttpErrorInfo(500, "next_called_multiple_times", "next() called multiple times")));
 }
 
-Next::State::Control* makeNextControl(Context& context) {
-    auto* control = static_cast<Next::State::Control*>(
-        context.resource()->allocate(sizeof(Next::State::Control), alignof(Next::State::Control)));
+detail::NextState::Control* makeNextControl(Context& context) {
+    auto* control = static_cast<detail::NextState::Control*>(
+        context.resource()->allocate(
+            sizeof(detail::NextState::Control),
+            alignof(detail::NextState::Control)));
     std::construct_at(control);
     return control;
 }
 
 class NextControlScope final {
 public:
-    explicit NextControlScope(Next::State::Control& control) noexcept
+    explicit NextControlScope(detail::NextState::Control& control) noexcept
         : control_(&control) {}
 
     NextControlScope(const NextControlScope&) = delete;
@@ -44,10 +46,10 @@ public:
     }
 
 private:
-    Next::State::Control* control_;
+    detail::NextState::Control* control_;
 };
 
-NextControlScope makeNextControlScope(Next::State::Control& control) noexcept {
+NextControlScope makeNextControlScope(detail::NextState::Control& control) noexcept {
     return NextControlScope(control);
 }
 
@@ -99,7 +101,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     auto controlScope = makeNextControlScope(control);
     auto& next = NextAccess::makeIn(
         context.resource(),
-        Next::State{
+        detail::NextState{
             .table = this,
             .route = &route,
             .context = &context,
@@ -111,7 +113,7 @@ Task<void> detail::RouteTable::invokeMiddlewareAt(
     co_return;
 }
 
-Task<void> detail::RouteTable::invokeMiddlewareContinuation(Next::State state) {
+Task<void> detail::RouteTable::invokeMiddlewareContinuation(NextState state) {
     auto* context = state.context;
     if (state.repeated) {
         storeRepeatedNextError(*context);
@@ -158,7 +160,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     auto controlScope = makeNextControlScope(control);
     auto& next = NextAccess::makeIn(
         context.resource(),
-        Next::State{
+        detail::NextState{
             .table = this,
             .route = &route,
             .context = &context,
@@ -171,7 +173,7 @@ Task<void> detail::RouteTable::invokeStreamMiddlewareAt(
     co_return;
 }
 
-Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(Next::State state) {
+Task<void> detail::RouteTable::invokeStreamMiddlewareContinuation(NextState state) {
     auto* context = state.context;
     if (state.repeated) {
         storeRepeatedNextError(*context);

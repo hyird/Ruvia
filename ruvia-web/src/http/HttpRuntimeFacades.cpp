@@ -1,9 +1,36 @@
-#include "ruvia/web/Streaming.h"
-#include "ruvia/web/WebSocket.h"
+#include "ruvia/web/Context.h"
+
+#include <stdexcept>
 
 #include "ruvia/core/Task.h"
 
 namespace ruvia {
+
+WebSocket& Context::webSocket() const {
+    const auto* output = responseOutput_.webSocket();
+    if (output == nullptr) {
+        throw std::logic_error("websocket is not available");
+    }
+    return output->webSocket();
+}
+
+ResponseStreamWriter& Context::stream() const {
+    const auto* output = responseOutput_.responseStream();
+    if (output == nullptr) {
+        throw std::logic_error("response body is not streamable");
+    }
+    return output->writer();
+}
+
+ResponseStreamWriter& Context::streamText() {
+    setStableResponseHeader("Content-Type", "text/plain; charset=UTF-8");
+    setStableResponseHeader("X-Content-Type-Options", "nosniff");
+    return stream();
+}
+
+SseWriter Context::streamSSE() const {
+    return SseWriter(stream());
+}
 
 Task<std::optional<std::string_view>> BodyReader::read() {
     return read_();

@@ -2,7 +2,8 @@
 
 // Request-side public API is owned independently from Context response/state
 // construction. Context.h remains the convenient umbrella, while request-only
-// consumers can depend on this narrower contract.
+// consumers can depend on this narrower contract. Non-template facade methods
+// are provided by ruvia::web; only model-dependent templates remain inline.
 
 #include <cstddef>
 #include <memory_resource>
