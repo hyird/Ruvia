@@ -18,6 +18,8 @@ option(RUVIA_BUILD_WEB "Build the complete ruvia-web framework" ON)
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)
 option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
 option(RUVIA_BUILD_BENCHMARKS "Build Ruvia protocol hot-path benchmarks" OFF)
+option(RUVIA_BUILD_FUZZERS "Build Clang libFuzzer protocol targets" OFF)
+option(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS "Run RFC 9113 wire conformance tests against a Ruvia h2c server" OFF)
 
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
@@ -39,6 +41,13 @@ if(RUVIA_BUILD_EXAMPLES AND NOT RUVIA_BUILD_WEB)
 endif()
 if(RUVIA_BUILD_BENCHMARKS AND NOT RUVIA_BUILD_HTTP)
     message(FATAL_ERROR "RUVIA_BUILD_BENCHMARKS=ON requires RUVIA_BUILD_HTTP=ON")
+endif()
+if(RUVIA_BUILD_FUZZERS AND NOT RUVIA_BUILD_HTTP)
+    message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires RUVIA_BUILD_HTTP=ON")
+endif()
+if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS AND (NOT RUVIA_BUILD_TESTS OR NOT RUVIA_BUILD_WEB))
+    message(FATAL_ERROR
+        "RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON requires RUVIA_BUILD_TESTS=ON and RUVIA_BUILD_WEB=ON")
 endif()
 
 # Keep manifest-mode dependency installation aligned with the selected targets.
@@ -78,6 +87,10 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 project(ruvia VERSION 0.0.6 LANGUAGES CXX)
+
+if(RUVIA_BUILD_FUZZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "RUVIA_BUILD_FUZZERS=ON requires Clang with libFuzzer")
+endif()
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -343,6 +356,22 @@ endif()
 
 if(RUVIA_BUILD_BENCHMARKS)
     add_subdirectory(tests/benchmarks)
+endif()
+
+if(RUVIA_BUILD_FUZZERS)
+    # Instrument the protocol library itself, not only the thin fuzz entrypoints.
+    # The sanitizer runtime link flags propagate to every executable that consumes
+    # the instrumented static library in this opt-in build.
+    target_compile_options(ruvia-http PRIVATE
+        -fsanitize=fuzzer-no-link,address,undefined
+        -fno-sanitize-recover=all
+        -fno-omit-frame-pointer
+    )
+    target_link_options(ruvia-http INTERFACE
+        -fsanitize=address,undefined
+        -fno-sanitize-recover=all
+    )
+    add_subdirectory(tests/fuzz)
 endif()
 
 set(_ruvia_config [=[
