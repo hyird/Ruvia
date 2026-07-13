@@ -268,7 +268,7 @@ void appendHeaders(
         return detail::Http1ClientRequestPrepareResultAccess::failure(error);
     }
     const bool expectContinue =
-        policy.expectation() == Http1ClientRequestExpectation::k100Continue;
+        policy.continueExpectation() != nullptr;
     if (expectContinue &&
         (!explicitContent || contentBytes->value().empty())) {
         return detail::Http1ClientRequestPrepareResultAccess::failure(

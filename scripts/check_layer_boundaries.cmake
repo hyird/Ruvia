@@ -7097,6 +7097,16 @@ else()
     if(NOT http1_client_request_writer_header MATCHES
            "class Http1ClientRequestWirePolicy final" OR
        NOT http1_client_request_writer_header MATCHES
+           "class Http1ClientNoRequestExpectation final" OR
+       NOT http1_client_request_writer_header MATCHES
+           "class Http1ClientContinueExpectation final" OR
+       NOT http1_client_request_writer_header MATCHES
+           "using Expectation = std::variant" OR
+       NOT http1_client_request_writer_header MATCHES
+           "std::get_if<Http1ClientNoRequestExpectation>" OR
+       NOT http1_client_request_writer_header MATCHES
+           "std::get_if<Http1ClientContinueExpectation>" OR
+       NOT http1_client_request_writer_header MATCHES
            "class Http1ClientRequestContentPlan final" OR
        NOT http1_client_request_writer_header MATCHES
            "class Http1ClientRequestWithoutContent final" OR
@@ -7139,6 +7149,8 @@ else()
        NOT http1_client_request_writer MATCHES "kMaxHttpHeaderFields" OR
        NOT http1_client_request_writer MATCHES "kExpectHeaderManagedByWriter" OR
        NOT http1_client_request_writer MATCHES "kExpectationWithoutContent" OR
+       NOT http1_client_request_writer MATCHES
+           "policy[.]continueExpectation[(][)] != nullptr" OR
        NOT http1_client_request_writer MATCHES "content[.]borrowedBytes" OR
        NOT http1_client_request_writer MATCHES "preparedWithoutContent" OR
        NOT http1_client_request_writer MATCHES "preparedImmediateContent" OR
@@ -7153,6 +7165,13 @@ else()
        http1_client_request_writer MATCHES "std::pmr::string")
         boundary_error("HTTP/1 client request serialization split or became allocating"
             "one allocation-free writer must validate target/fields/method content, generate Host/framing/close, and size before writing")
+    endif()
+    if(http1_client_request_writer_header MATCHES
+           "Http1ClientRequestExpectation" OR
+       http1_client_request_writer_header MATCHES
+           "enum class Http1ClientRequestExpectation[^{]*[{][^}]*kNone")
+        boundary_error("HTTP/1 client wire policy restored an expectation sentinel"
+            "without-expectation and 100-continue must remain exclusive typed alternatives")
     endif()
 endif()
 if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
@@ -7175,6 +7194,13 @@ if(EXISTS "${HTTP1_CLIENT_REQUEST_TEST}")
            "http1_client_request_context_binds_the_actual_close_signal")
         boundary_error("HTTP/1 client request writer invariants are under-tested"
             "tests must pin content presence/gating, target forms, Host/framing/Expect ownership, buffer atomicity, method semantics, and Prepared-bound response state")
+    endif()
+    if(NOT http1_client_request_test MATCHES
+           "kWithoutExpectation[.]noExpectation[(][)] != nullptr" OR
+       NOT http1_client_request_test MATCHES
+           "kExpectContinue[.]continueExpectation[(][)] != nullptr")
+        boundary_error("HTTP/1 client expectation alternatives are under-tested"
+            "both wire-policy factories must expose only their active alternative")
     endif()
     if(NOT http1_client_request_test MATCHES
            "!HasRequestContentMode<ruvia::HttpClientRequestContent>" OR
@@ -7219,6 +7245,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "HasHttp1ClientPreparedContentPlan<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
        NOT http1_client_api_surface MATCHES
+           "HasHttp1ClientExpectationAlternatives<[\r\n \t]*ruvia::Http1ClientRequestWirePolicy>" OR
+       NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientPreparedContentTuple<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
        NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientResponseContext<[\r\n \t]*ruvia::PreparedHttp1ClientRequest>" OR
@@ -7241,6 +7269,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
            "HasHttpClientRequestContentAlternatives" OR
        NOT http1_client_package_consumer MATCHES
            "HasHttp1PreparedContentAlternatives" OR
+       NOT http1_client_package_consumer MATCHES
+           "HasHttp1ClientExpectationAlternatives" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestWirePolicy::expectContinue" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_package_consumer MATCHES "completeRequestContent" OR

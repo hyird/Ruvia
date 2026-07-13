@@ -67,6 +67,15 @@ static_assert(!std::default_initializable<
     ruvia::Http1ClientImmediateRequestContent>);
 static_assert(!std::default_initializable<
     ruvia::Http1ClientContinueGatedRequestContent>);
+static_assert(!std::default_initializable<Http1ClientRequestWirePolicy>);
+constexpr auto kWithoutExpectation =
+    Http1ClientRequestWirePolicy::withoutExpectation();
+constexpr auto kExpectContinue =
+    Http1ClientRequestWirePolicy::expectContinue();
+static_assert(kWithoutExpectation.noExpectation() != nullptr);
+static_assert(kWithoutExpectation.continueExpectation() == nullptr);
+static_assert(kExpectContinue.noExpectation() == nullptr);
+static_assert(kExpectContinue.continueExpectation() != nullptr);
 
 template <std::size_t N = 2048>
 struct PreparedFixture final {
