@@ -227,7 +227,7 @@ public:
 
         template <typename T>
         [[nodiscard]] T json() const {
-            static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
+            static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_REQUEST_MODEL");
             auto parsed = JsonBody<T>::parse(body(), body_.get_allocator().resource());
             if (!parsed) {
                 detail::throwInvalidJsonBody();

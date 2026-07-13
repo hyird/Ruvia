@@ -16,7 +16,8 @@ public:
     constexpr explicit ModelOptions(OptionTs... options) noexcept : options_(options...) {
         static_assert((isModelOption<OptionTs>() && ...),
             "RUVIA_FIELD accepts only model options: RUVIA_DEFAULT, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL. "
-            "Move validation rules to RUVIA_VALIDATE_JSON or RUVIA_VALIDATE_FORM with RUVIA_RULE.");
+            "Use RUVIA_DEFAULT only in request models, response JSON options only in response models, "
+            "and move validation rules to RUVIA_VALIDATE_* with RUVIA_RULE.");
     }
 
     [[nodiscard]] constexpr bool emitNull() const noexcept {
@@ -25,6 +26,10 @@ public:
 
     [[nodiscard]] constexpr bool omitEmpty() const noexcept {
         return containsOption<OmitEmpty>(std::index_sequence_for<OptionTs...>{});
+    }
+
+    [[nodiscard]] constexpr bool hasDefault() const noexcept {
+        return containsDefault(std::index_sequence_for<OptionTs...>{});
     }
 
     template <typename OptionalT>
@@ -43,6 +48,11 @@ private:
     template <typename OptionT, std::size_t... Indexes>
     [[nodiscard]] constexpr bool containsOption(std::index_sequence<Indexes...>) const noexcept {
         return ((std::is_same_v<std::remove_cvref_t<decltype(std::get<Indexes>(options_))>, OptionT>) || ... || false);
+    }
+
+    template <std::size_t... Indexes>
+    [[nodiscard]] constexpr bool containsDefault(std::index_sequence<Indexes...>) const noexcept {
+        return ((isDefaultRule<std::remove_cvref_t<decltype(std::get<Indexes>(options_))>>()) || ... || false);
     }
 
     template <typename OptionalT, typename OptionT>

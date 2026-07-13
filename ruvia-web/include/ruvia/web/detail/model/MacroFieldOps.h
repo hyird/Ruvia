@@ -17,8 +17,8 @@
     RUVIA_MODEL_FIELD_STORAGE_I(RUVIA_MODEL_UNPAREN x)
 #define RUVIA_MODEL_FIELD_STORAGE_I(...) RUVIA_MODEL_FIELD_STORAGE_IMPL(__VA_ARGS__)
 #define RUVIA_MODEL_FIELD_STORAGE_IMPL(type, field, wire, rules) \
-    static_assert(::ruvia::detail::isModelField<RUVIA_MODEL_UNPAREN type>, \
-        "RUVIA_MODEL field type must be a Ruvia model type such as ruvia::String, ruvia::List<T>, ruvia::Bool, ruvia::Int32, or nested RUVIA_MODEL"); \
+    static_assert(::ruvia::detail::isRequestModelField<RUVIA_MODEL_UNPAREN type>, \
+        "RUVIA_REQUEST_MODEL field type must be a Ruvia value type or nested RUVIA_REQUEST_MODEL"); \
     ::ruvia::detail::ModelFieldState ruviaState_##field##_ {::ruvia::detail::ModelFieldState::kMissing}; \
     ::std::optional<RUVIA_MODEL_UNPAREN type> ruviaField_##field##_ {};
 
@@ -121,3 +121,62 @@
             ruviaState_##field##_ = ::ruvia::detail::ModelFieldState::kParsed; \
         } \
     }
+
+#define RUVIA_RESPONSE_MODEL_FIELD_STORAGE(T, x) \
+    RUVIA_RESPONSE_MODEL_FIELD_STORAGE_I(RUVIA_MODEL_UNPAREN x)
+#define RUVIA_RESPONSE_MODEL_FIELD_STORAGE_I(...) RUVIA_RESPONSE_MODEL_FIELD_STORAGE_IMPL(__VA_ARGS__)
+#define RUVIA_RESPONSE_MODEL_FIELD_STORAGE_IMPL(type, field, wire, rules) \
+    static_assert(::ruvia::detail::isResponseModelField<RUVIA_MODEL_UNPAREN type>, \
+        "RUVIA_RESPONSE_MODEL field type must be a Ruvia value type or nested RUVIA_RESPONSE_MODEL"); \
+    ::std::optional<RUVIA_MODEL_UNPAREN type> ruviaField_##field##_ {};
+
+#define RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS(T, x) \
+    RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_I(T, RUVIA_MODEL_UNPAREN x)
+#define RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_I(T, ...) \
+    RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_IMPL(T, __VA_ARGS__)
+#define RUVIA_RESPONSE_MODEL_FIELD_ACCESSORS_IMPL(model_type, type, field, wire, rules) \
+    [[nodiscard]] const ::std::optional<RUVIA_MODEL_UNPAREN type>& field() const { \
+        return ruviaField_##field##_; \
+    } \
+    [[nodiscard]] RUVIA_MODEL_UNPAREN type& field##Ensure() { \
+        auto* const ruviaResource = ruviaResource_; \
+        if (!ruviaField_##field##_) { \
+            ruviaField_##field##_.emplace(::ruvia::detail::makeResponseValue<RUVIA_MODEL_UNPAREN type>( \
+                ::ruvia::detail::ResolvedPmrResourceTag{}, \
+                ruviaResource)); \
+        } \
+        return *ruviaField_##field##_; \
+    } \
+    void field##Reset() noexcept { \
+        ruviaField_##field##_.reset(); \
+    } \
+    template <typename RuviaFieldValueT> \
+        requires ((::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
+                      (::std::is_convertible_v<RuviaFieldValueT&&, ::std::string_view> || \
+                          ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) || \
+                  (!::ruvia::detail::isRuviaString<RUVIA_MODEL_UNPAREN type> && \
+                      ::std::constructible_from<RUVIA_MODEL_UNPAREN type, RuviaFieldValueT&&>)) \
+    model_type& field(RuviaFieldValueT&& value) { \
+        auto* const ruviaResource = ruviaResource_; \
+        ::ruvia::detail::model::assignFieldValue( \
+            ruviaField_##field##_, \
+            ::std::forward<RuviaFieldValueT>(value), \
+            ruviaResource); \
+        return *this; \
+    }
+
+#define RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD(T, x) \
+    RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD_I(RUVIA_MODEL_UNPAREN x)
+#define RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD_I(...) \
+    RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD_IMPL(__VA_ARGS__)
+#define RUVIA_REQUEST_MODEL_FIELD_OPTION_GUARD_IMPL(type, field, wire, rules) \
+    static_assert(!(rules).omitEmpty() && !(rules).emitNull(), \
+        "RUVIA_REQUEST_MODEL fields accept RUVIA_DEFAULT only; response JSON options belong to RUVIA_RESPONSE_MODEL");
+
+#define RUVIA_RESPONSE_MODEL_FIELD_OPTION_GUARD(T, x) \
+    RUVIA_RESPONSE_MODEL_FIELD_OPTION_GUARD_I(RUVIA_MODEL_UNPAREN x)
+#define RUVIA_RESPONSE_MODEL_FIELD_OPTION_GUARD_I(...) \
+    RUVIA_RESPONSE_MODEL_FIELD_OPTION_GUARD_IMPL(__VA_ARGS__)
+#define RUVIA_RESPONSE_MODEL_FIELD_OPTION_GUARD_IMPL(type, field, wire, rules) \
+    static_assert(!(rules).hasDefault(), \
+        "RUVIA_RESPONSE_MODEL fields accept RUVIA_OMIT_EMPTY and RUVIA_EMIT_NULL only; request defaults belong to RUVIA_REQUEST_MODEL");

@@ -3066,7 +3066,7 @@ check_files_no_match("generated model fields must remain const-correct"
 check_files_no_match("generated model fields must expose one const getter"
     "${RULE_STALE_MODEL_NONCONST_FIELD_GETTER}"
     "${WEB_MODEL_FIELD_OPS_CONTRACT}")
-check_files_no_match("model JSON writing must use the typed JsonBody boundary"
+check_files_no_match("response model JSON writing must use its nominal schema boundary"
     "${RULE_STALE_MODEL_JSON_WRITER_DUCK_TYPING}"
     "${WEB_MODEL_JSON_WRITER_CONTRACT}")
 check_files_no_match("generated model fields must use their declared names"
@@ -3127,11 +3127,17 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
     if(NOT web_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT web_model_macros_contract MATCHES
-           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ModelSchemaTag" OR
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::RequestModelSchemaTag" OR
+       NOT web_model_macros_contract MATCHES
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ResponseModelSchemaTag" OR
        NOT web_model_types_contract MATCHES
            "struct[ \t]+ModelSchemaTag[ \t]*[{][}]" OR
        NOT web_model_types_contract MATCHES
-           "is_base_of_v<detail::ModelSchemaTag,[ \t]*T>" OR
+           "struct[ \t]+RequestModelSchemaTag[ \t]*:[ \t]*ModelSchemaTag" OR
+       NOT web_model_types_contract MATCHES
+           "struct[ \t]+ResponseModelSchemaTag[ \t]*:[ \t]*ModelSchemaTag" OR
+       NOT web_model_types_contract MATCHES
+           "is_base_of_v<detail::RequestModelSchemaTag,[ \t]*T>" OR
        web_model_types_contract MATCHES
            "void_t<decltype[(]T::ruviaParse(Json|Form)Body" OR
        NOT web_model_macros_contract MATCHES
@@ -3175,7 +3181,7 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_json_writer_contract MATCHES
            "struct[ \t]+ModelJsonAccess[ \t]+final" OR
        NOT web_model_json_writer_contract MATCHES
-           "JsonBody<T>::value" OR
+           "isResponseModel<T>" OR
        NOT web_model_json_writer_contract MATCHES
            "ModelJsonAccess::sizeHint[(]value[)]" OR
        NOT web_model_json_writer_contract MATCHES
@@ -3193,7 +3199,7 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_materialization_test MATCHES
            "model_factory_materializes_before_publication" OR
        NOT web_model_materialization_test MATCHES
-           "JsonBody<AccessorSurfaceModel>::parse" OR
+           "JsonBody<AccessorSurfaceRequest>::parse" OR
        NOT web_model_materialization_test MATCHES
            "ModelValidationAccess::fieldState<\"message\">" OR
        NOT web_model_materialization_test MATCHES
@@ -3219,33 +3225,43 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_model_api_surface MATCHES
            "!HasModelPublicFieldStateHook<ClonePayload>" OR
        NOT web_model_api_surface MATCHES
+           "RequestModelSchemaTag,[ \t]*ClonePayload" OR
+       NOT web_model_api_surface MATCHES
+           "ResponseModelSchemaTag,[ \t]*SurfaceJsonResponse" OR
+       NOT web_model_api_surface MATCHES
+           "!ruvia::JsonBody<SurfaceJsonResponse>::value" OR
+       NOT web_model_api_surface MATCHES
+           "isResponseModel<SurfaceJsonResponse>" OR
+       NOT web_model_api_surface MATCHES
            "!ruvia::JsonBody<ModelBodyDuckProbe>::value" OR
        NOT web_model_api_surface MATCHES
            "!ruvia::FormBody<ModelBodyDuckProbe>::value" OR
        NOT web_model_api_surface MATCHES
            "ruvia::detail::ModelInputKind" OR
        NOT web_json_package_consumer MATCHES
-           "RUVIA_MODEL[(]InstalledPackageModel" OR
+           "RUVIA_REQUEST_MODEL[(]InstalledPackageRequest" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelDynamicGet<InstalledPackageModel>" OR
+           "RUVIA_RESPONSE_MODEL[(]InstalledPackageResponse" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>" OR
+           "!HasGeneratedModelDynamicGet<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelCompileTimeGetAlias<InstalledPackageModel>" OR
+           "!HasGeneratedModelTypedDynamicGet<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelPublicBodyParseHooks<InstalledPackageModel>" OR
+           "!HasGeneratedModelCompileTimeGetAlias<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelInputAccessor<InstalledPackageModel>" OR
+           "!HasGeneratedModelPublicBodyParseHooks<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>" OR
+           "!HasGeneratedModelInputAccessor<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>" OR
+           "!HasGeneratedModelPublicJsonDepthHook<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>" OR
+           "!HasGeneratedModelPublicFormFieldsHook<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>" OR
+           "!HasGeneratedModelNonConstNameGetter<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
-           "!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>" OR
+           "!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageRequest>" OR
+       NOT web_json_package_consumer MATCHES
+           "!HasGeneratedModelPublicFieldStateHook<InstalledPackageRequest>" OR
        NOT web_json_package_consumer MATCHES
            "!ruvia::JsonBody<InstalledModelBodyDuckProbe>::value" OR
        NOT web_json_package_consumer MATCHES
@@ -3255,15 +3271,15 @@ if(EXISTS "${WEB_MODEL_MACROS_CONTRACT}" AND
        NOT web_json_package_consumer MATCHES
            "ruvia::toJson" OR
        NOT web_json_package_consumer MATCHES
-           "JsonBody<InstalledPackageModel>::parse" OR
+           "JsonBody<InstalledPackageRequest>::parse" OR
        NOT web_json_package_consumer MATCHES
            "installedModelJson[ \t]*!=[ \t]*R" OR
        NOT web_json_package_consumer MATCHES
            "std::default_initializable<ruvia::detail::ModelInput>" OR
        NOT web_json_package_consumer MATCHES
            "name[(][)][-][>]resource[(][)][ \t]*!=[ \t]*&installedModelResource")
-        boundary_error("generated model schema boundary regressed"
-            "a nominal ModelSchemaTag plus detail accessors must exclusively mediate model parsing, JSON writing, and validation state")
+        boundary_error("request/response model schema boundary regressed"
+            "request parsing and validation state must remain separate from response JSON writing")
     endif()
 endif()
 set(HTTP_URL_ENCODING_CONTRACT
