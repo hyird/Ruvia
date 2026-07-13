@@ -71,6 +71,6 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // A coding at q=0 is excluded even under a permissive wildcard.
     RUVIA_CHECK(httpSelectResponseCoding("br;q=0, *;q=0.5") == HttpContentCoding::kZstd);
     // No acceptable coding.
-    RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kNone);
-    RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kNone);
+    RUVIA_CHECK(httpSelectResponseCoding("identity") == HttpContentCoding::kIdentity);
+    RUVIA_CHECK(httpSelectResponseCoding("") == HttpContentCoding::kIdentity);
 }

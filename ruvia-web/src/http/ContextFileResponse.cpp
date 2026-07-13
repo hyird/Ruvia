@@ -432,7 +432,7 @@ HttpResponse Context::file(
         true,
         {},
         {},
-        detail::HttpContentCoding::kNone,
+        detail::HttpContentCoding::kIdentity,
         false,  // Context::file serves one path with no Accept-Encoding negotiation
         applyState);
 }
@@ -471,7 +471,7 @@ private:
     detail::StaticRootEntryView identity) {
     StaticFileRepresentation selected(
         identity,
-        detail::HttpContentCoding::kNone);
+        detail::HttpContentCoding::kIdentity);
     const auto acceptEncoding =
         detail::requestKnownHeader(request, detail::RequestKnownHeader::kAcceptEncoding);
     if (acceptEncoding.empty()) {

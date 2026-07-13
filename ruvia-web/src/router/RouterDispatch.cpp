@@ -12,6 +12,7 @@
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
+#include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
 
 namespace ruvia {
 namespace {
@@ -110,6 +111,11 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         }
     } catch (const ValidationError& error) {
         errorInfo.assign(error.info());
+    } catch (const detail::UnsupportedRequestContentCoding& error) {
+        errorInfo.assign(HttpErrorInfo(
+            error.status(),
+            "unsupported_content_coding",
+            error.what()));
     } catch (const HttpError& error) {
         errorInfo.assign(error.info());
     } catch (const HttpProtocolError& error) {
@@ -128,6 +134,29 @@ void assignExceptionError(OwnedHttpErrorInfo& errorInfo, std::exception_ptr exce
         errorInfo.assign(HttpErrorInfo(500, {}, {}));
     } catch (...) {
         errorInfo.assign(HttpErrorInfo(500, {}, {}));
+    }
+}
+
+[[nodiscard]] bool isUnsupportedRequestContentCoding(
+    std::exception_ptr exception) noexcept {
+    try {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+    } catch (const detail::UnsupportedRequestContentCoding&) {
+        return true;
+    } catch (...) {
+    }
+    return false;
+}
+
+void applyExceptionResponseMetadata(
+    HttpResponse& response,
+    std::exception_ptr exception) {
+    if (isUnsupportedRequestContentCoding(exception)) {
+        response.header(
+            "Accept-Encoding",
+            detail::httpSupportedRequestContentCodings());
     }
 }
 
@@ -381,7 +410,9 @@ Task<HttpResponse> detail::RouteTable::handleException(
     ContextServices services) const {
     if (errorHandler_ == nullptr) {
         OwnedHttpErrorInfo errorInfo(memory.resource(), exception);
-        co_return makeDefaultErrorResponse(memory.resource(), errorInfo.info);
+        auto response = makeDefaultErrorResponse(memory.resource(), errorInfo.info);
+        applyExceptionResponseMetadata(response, exception);
+        co_return response;
     }
 
     auto context = detail::ContextAccess::make(
@@ -427,7 +458,9 @@ Task<HttpResponse> detail::RouteTable::handleException(
     detail::ContextAccess::setError(context, exception);
     OwnedHttpErrorInfo errorInfo(context.resource(), exception);
 
-    co_return co_await handleError(context, errorInfo.info);
+    auto response = co_await handleError(context, errorInfo.info);
+    applyExceptionResponseMetadata(response, exception);
+    co_return response;
 }
 
 }  // namespace ruvia

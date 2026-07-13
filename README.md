@@ -170,3 +170,5 @@ content negotiation, redirects, and content decoding.
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket, TLS,
 connection pool, runtime timeout, static-root policy, DB, Redis, or JWT integration.
+Content-Encoding parsing distinguishes identity, one supported coding, and an
+unsupported coding stack; Web request decoding reports the latter as HTTP 415.

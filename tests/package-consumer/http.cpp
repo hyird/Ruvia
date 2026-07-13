@@ -104,6 +104,16 @@ concept ExposesRvalueEncodeFailure = requires(const T&& result) {
     std::move(result).failure();
 };
 
+template <typename T>
+concept ExposesRvalueContentCoding = requires(const T&& result) {
+    std::move(result).coding();
+};
+
+template <typename T>
+concept ExposesRvalueUnsupportedContentCoding = requires(const T&& result) {
+    std::move(result).unsupported();
+};
+
 template <typename Output>
 concept AcceptsUrlDecodeOutputParameter = requires(Output& output) {
     ruvia::detail::decodeUrlComponent(
@@ -1870,6 +1880,25 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::ResponseFileBody>);
 static_assert(!std::default_initializable<
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(
+    ruvia::detail::HttpUnsupportedContentCoding::status() == 415);
+static_assert(
+    ruvia::detail::httpSupportedRequestContentCodings() ==
+    std::string_view("gzip, br, zstd"));
+static_assert(!ExposesRvalueContentCoding<
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(!ExposesRvalueUnsupportedContentCoding<
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::httpContentCodingFromFieldValue(
+        std::string_view{})),
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::httpClientResponseContentCoding(
+        std::declval<const ruvia::HttpClientResponse&>())),
+    ruvia::detail::HttpContentCodingFieldResult>);
+static_assert(!std::default_initializable<
     ruvia::detail::HttpContentDecodeResult>);
 static_assert(!std::copy_constructible<
     ruvia::detail::HttpContentDecodeResult>);
@@ -1973,15 +2002,14 @@ int main() {
         encodedContent.encoded()->bytes().empty()) {
         return 50;
     }
-    const auto unsupportedDecode = ruvia::detail::decodeHttpContent(
-        ruvia::detail::HttpContentCoding::kNone,
-        {},
-        0,
+    const auto identityDecode = ruvia::detail::decodeHttpContent(
+        ruvia::detail::HttpContentCoding::kIdentity,
+        "identity",
+        8,
         std::pmr::get_default_resource());
-    if (unsupportedDecode.decoded() != nullptr ||
-        unsupportedDecode.failure() == nullptr ||
-        unsupportedDecode.failure()->error() !=
-            ruvia::detail::HttpContentDecodeError::kUnsupportedCoding) {
+    if (identityDecode.decoded() == nullptr ||
+        identityDecode.failure() != nullptr ||
+        identityDecode.decoded()->bytes() != "identity") {
         return 49;
     }
     const ruvia::HttpResponse emptyResponse;

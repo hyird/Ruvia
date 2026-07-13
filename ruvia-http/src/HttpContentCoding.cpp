@@ -484,29 +484,57 @@ std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept {
             return "zstd";
         case HttpContentCoding::kGzip:
             return "gzip";
-        case HttpContentCoding::kNone:
+        case HttpContentCoding::kIdentity:
             return {};
     }
     return {};
 }
 
-HttpContentCoding httpContentCodingFromFieldValue(
+void HttpContentCodingFieldParser::update(std::string_view value) noexcept {
+    std::size_t begin = 0;
+    while (begin <= value.size()) {
+        const auto comma = value.find(',', begin);
+        const auto token = httpTrimOws(value.substr(
+            begin,
+            comma == std::string_view::npos
+                ? std::string_view::npos
+                : comma - begin));
+        if (!token.empty()) {
+            ++codingCount_;
+            if (codingCount_ > 1) {
+                unsupported_ = true;
+            } else if (httpAsciiEqualsIgnoreCase(token, "identity")) {
+                coding_ = HttpContentCoding::kIdentity;
+            } else if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
+                       httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
+                coding_ = HttpContentCoding::kGzip;
+            } else if (httpAsciiEqualsIgnoreCase(token, "br")) {
+                coding_ = HttpContentCoding::kBrotli;
+            } else if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
+                coding_ = HttpContentCoding::kZstd;
+            } else {
+                unsupported_ = true;
+            }
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        begin = comma + 1;
+    }
+}
+
+HttpContentCodingFieldResult HttpContentCodingFieldParser::finish() const noexcept {
+    if (unsupported_) {
+        return HttpContentCodingFieldResult(HttpUnsupportedContentCoding{});
+    }
+    return HttpContentCodingFieldResult(coding_);
+}
+
+HttpContentCodingFieldResult httpContentCodingFromFieldValue(
     std::string_view value) noexcept {
-    const auto token = httpTrimOws(value);
-    if (token.empty() || token.find(',') != std::string_view::npos) {
-        return HttpContentCoding::kNone;
-    }
-    if (httpAsciiEqualsIgnoreCase(token, "gzip") ||
-        httpAsciiEqualsIgnoreCase(token, "x-gzip")) {
-        return HttpContentCoding::kGzip;
-    }
-    if (httpAsciiEqualsIgnoreCase(token, "br")) {
-        return HttpContentCoding::kBrotli;
-    }
-    if (httpAsciiEqualsIgnoreCase(token, "zstd")) {
-        return HttpContentCoding::kZstd;
-    }
-    return HttpContentCoding::kNone;
+    HttpContentCodingFieldParser parser;
+    parser.update(value);
+    return parser.finish();
 }
 
 HttpContentDecodeResult decodeHttpContent(
@@ -534,8 +562,15 @@ HttpContentDecodeResult decodeHttpContent(
                 maxDecodedBytes,
                 resource);
             break;
-        case HttpContentCoding::kNone:
+        case HttpContentCoding::kIdentity: {
+            std::pmr::string decoded(input, resource);
+            if (decoded.size() > maxDecodedBytes) {
+                attempt = HttpContentDecodeError::kDecodedSizeExceeded;
+            } else {
+                attempt = std::move(decoded);
+            }
             break;
+        }
     }
     if (auto* decoded = std::get_if<std::pmr::string>(&attempt)) {
         return HttpContentDecodeResult::makeDecoded(std::move(*decoded));
@@ -549,7 +584,7 @@ HttpContentEncodeResult encodeHttpContent(
     std::string_view input,
     std::size_t maxEncodedBytes,
     std::pmr::memory_resource* resource) {
-    ContentEncodeAttempt attempt = HttpContentEncodeError::kUnsupportedCoding;
+    ContentEncodeAttempt attempt = HttpContentEncodeError::kEncoderFailure;
     switch (coding) {
         case HttpContentCoding::kBrotli:
             attempt = encodeBrotliContent(
@@ -569,8 +604,15 @@ HttpContentEncodeResult encodeHttpContent(
                 maxEncodedBytes,
                 resource);
             break;
-        case HttpContentCoding::kNone:
+        case HttpContentCoding::kIdentity: {
+            std::pmr::string encoded(input, resource);
+            if (encoded.size() > maxEncodedBytes) {
+                attempt = HttpContentEncodeError::kEncodedSizeExceeded;
+            } else {
+                attempt = std::move(encoded);
+            }
             break;
+        }
     }
     if (auto* encoded = std::get_if<std::pmr::string>(&attempt)) {
         return HttpContentEncodeResult::makeEncoded(std::move(*encoded));

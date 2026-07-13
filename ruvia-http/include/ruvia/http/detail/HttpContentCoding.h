@@ -10,19 +10,85 @@
 #include <utility>
 #include <variant>
 
+namespace ruvia {
+class HttpClientResponse;
+}
+
 namespace ruvia::detail {
 
 [[nodiscard]] std::string_view httpContentCodingToken(HttpContentCoding coding) noexcept;
 
-// Maps one complete Content-Encoding field value to the single coding this
-// decoder supports directly. Identity, unknown codings, and coding stacks map
-// to kNone so their encoded representation remains observable to a caller that
-// has not opted into a complete coding stack.
-[[nodiscard]] HttpContentCoding httpContentCodingFromFieldValue(
+class HttpUnsupportedContentCoding final {
+public:
+    [[nodiscard]] static constexpr std::uint16_t status() noexcept {
+        return 415;
+    }
+};
+
+[[nodiscard]] inline constexpr std::string_view
+httpSupportedRequestContentCodings() noexcept {
+    return "gzip, br, zstd";
+}
+
+// A Content-Encoding field section is either one coding this library can
+// decode (including the identity representation), or a coding stack it cannot
+// decode completely. The result cannot collapse unsupported wire metadata into
+// identity.
+class HttpContentCodingFieldResult final {
+public:
+    explicit HttpContentCodingFieldResult(HttpContentCoding coding) noexcept
+        : value_(coding) {}
+
+    explicit HttpContentCodingFieldResult(
+        HttpUnsupportedContentCoding unsupported) noexcept
+        : value_(unsupported) {}
+
+    [[nodiscard]] const HttpContentCoding* coding() const & noexcept {
+        return std::get_if<HttpContentCoding>(&value_);
+    }
+    const HttpContentCoding* coding() const && = delete;
+
+    [[nodiscard]] const HttpUnsupportedContentCoding* unsupported() const & noexcept {
+        return std::get_if<HttpUnsupportedContentCoding>(&value_);
+    }
+    const HttpUnsupportedContentCoding* unsupported() const && = delete;
+
+private:
+    std::variant<HttpContentCoding, HttpUnsupportedContentCoding> value_;
+};
+
+// Accumulates the list grammar across every Content-Encoding field line (RFC
+// 9110 section 8.4). Empty list members are ignored. Ruvia currently decodes
+// exactly one gzip, br, or zstd coding; an unknown token or a stack with more
+// than one coding is explicit unsupported metadata.
+class HttpContentCodingFieldParser final {
+public:
+    void update(std::string_view value) noexcept;
+
+    [[nodiscard]] HttpContentCodingFieldResult finish() const noexcept;
+
+private:
+    HttpContentCoding coding_{HttpContentCoding::kIdentity};
+    std::size_t codingCount_{0};
+    bool unsupported_{false};
+};
+
+[[nodiscard]] HttpContentCodingFieldResult httpContentCodingFromFieldValue(
     std::string_view value) noexcept;
 
+template <typename Headers>
+[[nodiscard]] inline HttpContentCodingFieldResult httpContentCodingFromHeaders(
+    const Headers& headers) noexcept {
+    HttpContentCodingFieldParser parser;
+    for (const auto& header : headers) {
+        if (httpAsciiEqualsIgnoreCase(header.name(), "Content-Encoding")) {
+            parser.update(header.value());
+        }
+    }
+    return parser.finish();
+}
+
 enum class HttpContentEncodeError : std::uint8_t {
-    kUnsupportedCoding,
     kEncodedSizeExceeded,
     kEncoderFailure
 };
@@ -206,6 +272,10 @@ public:
     const HttpContentDecodeFailure* failure() const && = delete;
 
 private:
+    friend HttpContentDecodeResult decodeHttpClientResponseContentEncoding(
+        const HttpClientResponse&,
+        std::size_t,
+        std::pmr::memory_resource*);
     friend HttpContentDecodeResult decodeHttpContent(
         HttpContentCoding,
         std::string_view,

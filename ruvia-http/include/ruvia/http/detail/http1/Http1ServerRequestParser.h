@@ -163,7 +163,7 @@ public:
         Http1RequestBodyPlan(HttpRequestExpectations{})};
     Http1ServerConnectionPlan connectionPlan{
         Http1ServerConnectionPlan::http11Close()};
-    HttpContentCoding responseCoding{HttpContentCoding::kNone};
+    HttpContentCoding responseCoding{HttpContentCoding::kIdentity};
 
 private:
     friend class Http1ServerRequestParser;

@@ -9,26 +9,13 @@
 
 namespace ruvia::detail {
 
-// A single decodable Content-Encoding, or kNone if absent, unknown, identity,
-// or listed more than once (a multi-coding stack is delivered as received).
 template <typename Headers>
-[[nodiscard]] inline HttpContentCoding httpClientContentCodingOf(const Headers& headers) noexcept {
-    bool seen = false;
-    HttpContentCoding coding = HttpContentCoding::kNone;
-    for (const auto& header : headers) {
-        if (!httpAsciiEqualsIgnoreCase(header.name(), "content-encoding")) {
-            continue;
-        }
-        if (seen) {
-            return HttpContentCoding::kNone;
-        }
-        seen = true;
-        coding = httpContentCodingFromFieldValue(header.value());
-    }
-    return coding;
+[[nodiscard]] inline HttpContentCodingFieldResult httpClientContentCodingOf(
+    const Headers& headers) noexcept {
+    return httpContentCodingFromHeaders(headers);
 }
 
-[[nodiscard]] inline HttpContentCoding httpClientResponseContentCoding(
+[[nodiscard]] inline HttpContentCodingFieldResult httpClientResponseContentCoding(
     const HttpClientResponse& response) noexcept {
     return httpClientContentCodingOf(response.headers());
 }
@@ -41,9 +28,14 @@ decodeHttpClientResponseContentEncoding(
     // The parsed wire response remains untouched. A decoded representation has
     // different Content-Encoding/Content-Length metadata, so returning owned
     // bytes avoids constructing an internally contradictory response object.
-    const auto coding = httpClientResponseContentCoding(response);
+    const auto parsedCoding = httpClientResponseContentCoding(response);
+    const auto* coding = parsedCoding.coding();
+    if (coding == nullptr) {
+        return HttpContentDecodeResult::makeFailure(
+            HttpContentDecodeError::kUnsupportedCoding);
+    }
     return decodeHttpContent(
-        coding,
+        *coding,
         response.body(),
         maxDecodedBytes,
         resource);

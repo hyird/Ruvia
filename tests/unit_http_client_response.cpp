@@ -908,7 +908,7 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
 
     struct Case final {
         std::string_view headers;
-        HttpContentCoding expected;
+        std::optional<HttpContentCoding> expected;
     };
     const Case cases[] = {
         {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 0",
@@ -922,23 +922,51 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
         {"HTTP/1.1 200 OK\r\nContent-Encoding: zstd\r\nContent-Length: 0",
          HttpContentCoding::kZstd},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0",
-         HttpContentCoding::kNone},
+         HttpContentCoding::kIdentity},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\nContent-Length: 0",
-         HttpContentCoding::kNone},
+         std::nullopt},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip, br\r\nContent-Length: 0",
-         HttpContentCoding::kNone},
+         std::nullopt},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"
          "Content-Encoding: br\r\nContent-Length: 0",
-         HttpContentCoding::kNone},
-        {"HTTP/1.1 200 OK\r\nContent-Length: 0", HttpContentCoding::kNone},
+         std::nullopt},
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0", HttpContentCoding::kIdentity},
     };
 
     for (const auto& test : cases) {
         auto parsed = parseResponse("GET", test.headers);
         RUVIA_CHECK_EQ(parsed.response.status(), std::uint16_t{200});
-        RUVIA_CHECK(
-            httpClientResponseContentCoding(parsed.response) == test.expected);
+        const auto coding = httpClientResponseContentCoding(parsed.response);
+        RUVIA_CHECK((coding.coding() != nullptr) == test.expected.has_value());
+        RUVIA_CHECK((coding.unsupported() != nullptr) == !test.expected.has_value());
+        if (coding.coding() != nullptr && test.expected.has_value()) {
+            RUVIA_CHECK(*coding.coding() == *test.expected);
+        }
     }
+}
+
+RUVIA_TEST(http_client_content_decode_reports_unsupported_wire_coding) {
+    auto parsed = parseResponse(
+        "GET",
+        "HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\n"
+        "Content-Length: 7");
+    auto& body = ruvia::detail::HttpClientResponseAccess::body(
+        parsed.response);
+    body = "encoded";
+
+    const auto decoded =
+        ruvia::detail::decodeHttpClientResponseContentEncoding(
+            parsed.response,
+            1024,
+            std::pmr::get_default_resource());
+    RUVIA_CHECK(decoded.decoded() == nullptr);
+    RUVIA_CHECK(decoded.failure() != nullptr);
+    if (decoded.failure() != nullptr) {
+        RUVIA_CHECK(
+            decoded.failure()->error() ==
+            ruvia::detail::HttpContentDecodeError::kUnsupportedCoding);
+    }
+    RUVIA_CHECK_EQ(parsed.response.body(), std::string_view("encoded"));
 }
 
 RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
@@ -981,9 +1009,13 @@ RUVIA_TEST(http_client_content_decode_consumes_concatenated_gzip_members) {
     // Decoding is a separate representation. The parsed wire response remains
     // internally coherent instead of retaining gzip metadata over decoded bytes.
     RUVIA_CHECK_EQ(parsed.response.body(), std::string_view(encodedBody));
-    RUVIA_CHECK(
-        ruvia::detail::httpClientResponseContentCoding(parsed.response) ==
-        ruvia::detail::HttpContentCoding::kGzip);
+    const auto coding =
+        ruvia::detail::httpClientResponseContentCoding(parsed.response);
+    RUVIA_CHECK(coding.coding() != nullptr);
+    if (coding.coding() != nullptr) {
+        RUVIA_CHECK(
+            *coding.coding() == ruvia::detail::HttpContentCoding::kGzip);
+    }
 }
 
 RUVIA_TEST(http_client_content_decode_failure_preserves_encoded_body) {

@@ -118,7 +118,31 @@ RUVIA_TEST(request_content_coding_rejects_repeated_header_fields) {
     RUVIA_CHECK(HttpRequestAccess::addHeader(request, HttpHeaderView{"Content-Encoding", "gzip"}, slot));
 
     RUVIA_CHECK_EQ(requestKnownHeader(request, RequestKnownHeader::kContentEncoding), std::string_view("gzip"));
-    RUVIA_CHECK(requestContentCoding(request) == HttpContentCoding::kNone);
+    const auto coding = requestContentCoding(request);
+    RUVIA_CHECK(coding.coding() == nullptr);
+    RUVIA_CHECK(coding.unsupported() != nullptr);
+}
+
+RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    const auto slot = HttpRequestAccess::knownHeaderSlot(
+        RequestKnownHeader::kContentEncoding);
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Encoding", ","},
+        slot));
+    RUVIA_CHECK(HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Encoding", "gzip"},
+        slot));
+
+    const auto coding = requestContentCoding(request);
+    RUVIA_CHECK(coding.unsupported() == nullptr);
+    RUVIA_CHECK(coding.coding() != nullptr);
+    if (coding.coding() != nullptr) {
+        RUVIA_CHECK(*coding.coding() == HttpContentCoding::kGzip);
+    }
 }
 
 RUVIA_TEST(request_access_query_lookup_uses_last_match) {

@@ -144,6 +144,16 @@ endif()
 file(READ "${_installed_http_content_coding}"
     _installed_http_content_coding_contract)
 if(NOT _installed_http_content_coding_contract MATCHES
+       "class HttpUnsupportedContentCoding final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "HttpUnsupportedContentCoding::status|static constexpr std::uint16_t status" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "httpSupportedRequestContentCodings" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "class HttpContentCodingFieldResult final" OR
+   NOT _installed_http_content_coding_contract MATCHES
+       "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
+   NOT _installed_http_content_coding_contract MATCHES
        "class HttpDecodedContent final" OR
    NOT _installed_http_content_coding_contract MATCHES
        "class HttpContentDecodeFailure final" OR
@@ -162,7 +172,7 @@ if(NOT _installed_http_content_coding_contract MATCHES
    NOT _installed_http_content_coding_contract MATCHES
        "encodeHttpContent" OR
    _installed_http_content_coding_contract MATCHES
-       "decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes|bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&")
+       "HttpContentCoding::kNone|decodeRequestContentEncoding|kMaxDecodedRequestBodyBytes|bool[ \t\r\n]+encodeHttpContent|encodeHttpContent[ \t\r\n]*[(][^)]*std::pmr::string[ \t]*&")
     message(FATAL_ERROR
         "installed HTTP content coding lost its owning discriminated contract")
 endif()
