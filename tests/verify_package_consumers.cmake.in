@@ -218,6 +218,39 @@ if(NOT _installed_http_transfer_encoding_contract MATCHES
     message(FATAL_ERROR
         "installed Transfer-Encoding state lost discriminated transactional semantics")
 endif()
+set(_installed_transfer_decoder
+    "${_install_prefix}/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h")
+if(NOT EXISTS "${_installed_transfer_decoder}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing transfer-coding decoder")
+endif()
+file(READ "${_installed_transfer_decoder}"
+    _installed_transfer_decoder_contract)
+if(NOT _installed_transfer_decoder_contract MATCHES
+       "enum class TransferCodingDecodeError" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "class TransferCodingDecodeNeedInput final" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "class TransferCodingDecodeOutput final" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "class TransferCodingDecodeComplete final" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "class TransferCodingDecodeFailure final" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "class TransferCodingDecodeResult final" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "TransferCodingDecodeResult decode" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "std::span<char> output" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "enum class TransferCodingFinishStatus" OR
+   NOT _installed_transfer_decoder_contract MATCHES
+       "TransferCodingFinishStatus finishInput" OR
+   _installed_transfer_decoder_contract MATCHES
+       "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]")
+    message(FATAL_ERROR
+        "installed transfer-coding decoder lost its single typed decode contract")
+endif()
 set(_installed_url_encoding
     "${_install_prefix}/include/ruvia/http/UrlEncoding.h")
 if(NOT EXISTS "${_installed_url_encoding}")
@@ -277,13 +310,21 @@ if(NOT _installed_http1_chunk_decoder_content MATCHES
    NOT _installed_http1_chunk_decoder_content MATCHES
        "class Http1ChunkDecodeComplete final" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
+       "enum class Http1ChunkDecodeError" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkDecodeFailure final" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
        "using Value = std::variant" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::size_t consumedBytes[(][)] const" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
        "std::string_view bytes[(][)] const" OR
    NOT _installed_http1_chunk_decoder_content MATCHES
-       "std::get_if<Http1ChunkDecodeBodyChunk>")
+       "std::get_if<Http1ChunkDecodeBodyChunk>" OR
+   NOT _installed_http1_chunk_decoder_content MATCHES
+       "std::get_if<Http1ChunkDecodeFailure>" OR
+   _installed_http1_chunk_decoder_content MATCHES
+       "class Http1ChunkDecoder")
     message(FATAL_ERROR "installed HTTP/1 streaming chunk decoder lost its discriminated result contract")
 endif()
 if(NOT _installed_http1_chunk_scanner_content MATCHES
@@ -1068,9 +1109,12 @@ set(_installed_http2_stream_state_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamState.h")
 set(_installed_http2_stream_header_blocks_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
+set(_installed_response_trailers_path
+    "${_install_prefix}/include/ruvia/http/detail/server/HttpResponseTrailers.h")
 if(NOT EXISTS "${_installed_http2_local_content_path}" OR
    NOT EXISTS "${_installed_http2_stream_state_path}" OR
-   NOT EXISTS "${_installed_http2_stream_header_blocks_path}")
+   NOT EXISTS "${_installed_http2_stream_header_blocks_path}" OR
+   NOT EXISTS "${_installed_response_trailers_path}")
     message(FATAL_ERROR "installed HTTP/2 local content accounting contract is missing")
 endif()
 file(READ "${_installed_http2_local_content_path}"
@@ -1079,10 +1123,18 @@ file(READ "${_installed_http2_stream_state_path}"
     _installed_http2_stream_state)
 file(READ "${_installed_http2_stream_header_blocks_path}"
     _installed_http2_stream_header_blocks)
-if(NOT _installed_http2_connection MATCHES
-       "kInvalidTrailerSection" OR
+file(READ "${_installed_response_trailers_path}"
+    _installed_response_trailers)
+if(NOT _installed_response_trailers MATCHES
+       "class HttpResponseTrailerSection final" OR
+   NOT _installed_response_trailers MATCHES
+       "class HttpResponseTrailerSectionFailure final" OR
+   NOT _installed_response_trailers MATCHES
+       "class HttpResponseTrailerSectionResult final" OR
+   NOT _installed_response_trailers MATCHES "using Value = std::variant" OR
    NOT _installed_http2_connection MATCHES
-       "finishResponse[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*std::span<const HttpHeaderView>[ \t]+trailers" OR
+       "finishResponse[ \t\r\n]*[(][ \t\r\n]*std::uint32_t[ \t]+streamId[ \t]*,[ \t\r\n]*const HttpResponseTrailerSection&[ \t]+trailers" OR
+   _installed_http2_connection MATCHES "kInvalidTrailerSection" OR
    _installed_http2_connection MATCHES
        "submitResponseTrailerSection|Http2ResponseTrailerSubmitStatus" OR
    _installed_http2_stream_state MATCHES "responseTrailerBlock" OR
@@ -1651,9 +1703,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web package restored split HTTP/1 request completion state")
     endif()
     if(NOT _installed_http2_response_stream_sink MATCHES
-           "finishResponse[(]streamId_, trailers[)]" OR
+           "finishResponse[^(]*[(][ \t\r\n]*streamId_,[ \t\r\n]*trailerSection[)]" OR
        NOT _installed_http2_response_stream_sink MATCHES
-           "responseTrailerSectionValid[(]trailers[)]" OR
+           "httpResponseTrailerSection[(]trailers[)]" OR
        _installed_http2_response_stream_sink MATCHES
            "submitResponseTrailerSection")
         message(FATAL_ERROR
@@ -2488,6 +2540,18 @@ if(NOT _installed_http1_response_head_plan MATCHES
        "Http1ResponseHeadPlan responseHeadPlan_" OR
    NOT _installed_http1_server_semantics MATCHES
        "const Http1ResponseHeadPlan& responseHeadPlan[(][)] const noexcept" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "class Http1FinalResponseCommit final" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "class Http1FinalResponseCommitFailure final" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "class Http1FinalResponseCommitResult final" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "class PreparedHttp1ResponseStreamResult final" OR
+   NOT _installed_http1_server_semantics MATCHES
+       "http1CommitFinalResponse" OR
+   _installed_http1_server_semantics MATCHES
+       "http1FinalizeResponseConnection|throw std::invalid_argument" OR
    _installed_http1_server_semantics MATCHES
        "const ResponseWritePolicy& policy[(][)] const noexcept" OR
    _installed_response_head MATCHES

@@ -6,7 +6,6 @@
 
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/HttpStatus.h"
-#include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 #include "ruvia/web/Error.h"
 
 namespace {
@@ -39,19 +38,6 @@ RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(defaultErrorCode(404), std::string_view("not_found"));
     RUVIA_CHECK_EQ(defaultErrorCode(405), std::string_view("method_not_allowed"));
     RUVIA_CHECK_EQ(defaultErrorCode(413), std::string_view("payload_too_large"));
-}
-
-RUVIA_TEST(throw_request_body_too_large_is_413) {
-    using ruvia::detail::throwRequestBodyTooLarge;
-    bool caught = false;
-    try {
-        throwRequestBodyTooLarge();
-    } catch (const HttpProtocolError& error) {
-        caught = true;
-        RUVIA_CHECK_EQ(error.status(), std::uint16_t{413});
-        RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("request body is too large"));
-    }
-    RUVIA_CHECK(caught);
 }
 
 RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {

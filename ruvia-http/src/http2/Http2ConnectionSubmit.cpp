@@ -697,7 +697,7 @@ Http2Connection::submitWebSocketHandshake(
 
 Http2FinishSubmitStatus Http2Connection::finishResponse(
     std::uint32_t streamId,
-    std::span<const HttpHeaderView> trailers) {
+    const HttpResponseTrailerSection& trailers) {
     auto* stream = findStream(streamId);
     if (stream == nullptr || stream->isAborted()) {
         return Http2FinishSubmitStatus::kClosed;
@@ -715,20 +715,12 @@ Http2FinishSubmitStatus Http2Connection::finishResponse(
         // method/status explicitly forbids DATA, including an empty terminal frame.
         return Http2FinishSubmitStatus::kInvalidState;
     }
-    if (!trailers.empty() && !responseTrailerSectionValid(trailers)) {
-        return Http2FinishSubmitStatus::kInvalidTrailerSection;
-    }
-
-    // The entire semantic trailer section is validated and encoded in detached
+    // The entire semantic trailer section was validated before the initial head
+    // commit and is encoded in detached
     // storage before output, pending DATA, or stream phase changes. It either joins
     // the terminal transaction whole or leaves no per-stream staged side channel.
     std::pmr::string trailerBlock(resource_);
-    for (const auto& trailer : trailers) {
-        appendHttp2ResponseTrailer(
-            trailerBlock,
-            trailer.name(),
-            trailer.value());
-    }
+    appendHttp2ResponseTrailers(trailerBlock, trailers);
     // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
     // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
     // from the body to the trailer (markSendWindowOpened emits it once the body drains).

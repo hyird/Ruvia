@@ -133,33 +133,32 @@ public:
             co_return;
         }
 
-        const auto trailerIntent = trailers.empty()
-            ? ResponseTrailerIntent::kNone
-            : ResponseTrailerIntent::kPresent;
-        // Preflight through the HTTP-owned rule before committing the initial
-        // response head, so invalid application metadata remains a pre-commit
-        // failure. The core validates again at its final mutation boundary.
-        if (!trailers.empty() && !responseTrailerSectionValid(trailers)) {
+        const auto trailerResult = httpResponseTrailerSection(trailers);
+        if (trailerResult.failure() != nullptr) {
             throw std::invalid_argument("invalid response trailer section");
         }
+        const auto& trailerSection = *trailerResult.section();
+        const auto trailerIntent = trailerSection.empty()
+            ? ResponseTrailerIntent::kNone
+            : ResponseTrailerIntent::kPresent;
+        // Preflight through the HTTP-owned result before committing the initial
+        // response head. The typed section carries that proof to finishResponse.
         co_await commit(trailerIntent);
         if (state_.ended()) {
             co_return;
         }
-        if (!trailers.empty()) {
+        if (!trailerSection.empty()) {
             state_.ensureTrailersAllowed(
                 ResponseStreamTrailerFraming::kHttp2TrailingHeaders);
         }
-        const auto result = connection_.finishResponse(streamId_, trailers);
+        const auto result = connection_.finishResponse(
+            streamId_, trailerSection);
         wakeWriter();
         if (result == Http2FinishSubmitStatus::kClosed) {
             throw std::system_error(std::make_error_code(std::errc::connection_reset));
         }
         if (result == Http2FinishSubmitStatus::kInvalidState) {
             throw std::logic_error("invalid HTTP/2 response stream finish state");
-        }
-        if (result == Http2FinishSubmitStatus::kInvalidTrailerSection) {
-            throw std::invalid_argument("invalid response trailer section");
         }
         if (result == Http2FinishSubmitStatus::kContentLengthIncomplete) {
             throw std::length_error("HTTP/2 response ended before Content-Length");

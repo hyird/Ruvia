@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <memory_resource>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -38,17 +37,15 @@ private:
     std::size_t offset_{storage_.size()};
 };
 
-inline void appendHttp1TrailerField(
+inline void appendHttp1TrailerSection(
     std::pmr::string& output,
-    std::string_view name,
-    std::string_view value) {
-    if (!responseTrailerFieldValid(name, value)) {
-        throw std::invalid_argument("invalid response trailer field");
+    const HttpResponseTrailerSection& section) {
+    for (const auto& trailer : section.fields()) {
+        output.append(trailer.name().data(), trailer.name().size());
+        output.append(": ");
+        output.append(trailer.value().data(), trailer.value().size());
+        output.append(kHttp1ChunkDataTerminator);
     }
-    output.append(name.data(), name.size());
-    output.append(": ");
-    output.append(value.data(), value.size());
-    output.append(kHttp1ChunkDataTerminator);
 }
 
 }  // namespace ruvia::detail

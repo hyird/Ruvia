@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/http1/Http1ChunkedFraming.h"
 #include "ruvia/http/detail/http1/Http1ServerSemantics.h"
 #include "ruvia/web/detail/server/HttpResponseStreamState.h"
+#include "ruvia/web/detail/server/HttpServerResponseState.h"
 #include "ruvia/core/Task.h"
 #include "ruvia/web/Context.h"
 #include "ruvia/http/detail/PmrString.h"
@@ -90,11 +91,15 @@ private:
             co_return;
         }
 
-        auto streamHead = prepareHttp1ResponseStreamHead(
+        auto prepareResult = prepareHttp1ResponseStreamHead(
             state_.streamingHead(),
             kind_,
             plan_,
             trailerIntent);
+        if (const auto* failure = prepareResult.failure()) {
+            throwHttp1FinalResponseCommitFailure(failure->error());
+        }
+        auto streamHead = std::move(prepareResult).takePrepared();
         if (trailerIntent == ResponseTrailerIntent::kPresent &&
             streamHead.commitPlan().trailerFraming() !=
                 ResponseStreamTrailerFraming::kHttp1Chunked) {
@@ -175,18 +180,17 @@ private:
             co_return;
         }
 
-        const auto trailerIntent = trailers.empty()
+        const auto trailerResult = httpResponseTrailerSection(trailers);
+        if (trailerResult.failure() != nullptr) {
+            throw std::invalid_argument("invalid response trailer section");
+        }
+        const auto& trailerSection = *trailerResult.section();
+        const auto trailerIntent = trailerSection.empty()
             ? ResponseTrailerIntent::kNone
             : ResponseTrailerIntent::kPresent;
-        if (!trailers.empty()) {
-            if (!responseTrailerSectionValid(trailers)) {
-                throw std::invalid_argument("invalid response trailer section");
-            }
+        if (!trailerSection.empty()) {
             clearPmrStringRetainingSmall(trailers_);
-            for (const auto& trailer : trailers) {
-                appendHttp1TrailerField(
-                    trailers_, trailer.name(), trailer.value());
-            }
+            appendHttp1TrailerSection(trailers_, trailerSection);
         } else {
             clearPmrStringRetainingSmall(trailers_);
         }

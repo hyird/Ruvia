@@ -244,20 +244,18 @@ inline void http2ReleaseResponseHeaderBlock(Http2StreamState& stream) {
     clearPmrStringRetainingSmall(stream.responseHeaderBlock());
 }
 
-inline void appendHttp2ResponseTrailer(
+inline void appendHttp2ResponseTrailers(
     std::pmr::string& trailerBlock,
-    std::string_view name,
-    std::string_view value) {
-    if (!responseTrailerFieldValid(name, value)) {
-        throw std::invalid_argument("invalid response trailer field");
+    const HttpResponseTrailerSection& section) {
+    for (const auto& trailer : section.fields()) {
+        std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
+        std::pmr::string lowerNameScratch(trailerBlock.get_allocator());
+        HpackEncoder::encodeHeader(
+            trailerBlock,
+            http2LowerHeaderName(
+                trailer.name(), lowerNameStack, lowerNameScratch),
+            trailer.value());
     }
-
-    std::array<char, kHttp2LowerHeaderStackBytes> lowerNameStack{};
-    std::pmr::string lowerNameScratch(trailerBlock.get_allocator());
-    HpackEncoder::encodeHeader(
-        trailerBlock,
-        http2LowerHeaderName(name, lowerNameStack, lowerNameScratch),
-        value);
 }
 
 }  // namespace ruvia::detail

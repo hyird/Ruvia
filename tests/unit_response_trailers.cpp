@@ -11,7 +11,7 @@ using ruvia::detail::isForbiddenResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerName;
 using ruvia::detail::isValidResponseTrailerValue;
 using ruvia::detail::responseTrailerFieldValid;
-using ruvia::detail::responseTrailerSectionValid;
+using ruvia::detail::httpResponseTrailerSection;
 
 }  // namespace
 
@@ -104,13 +104,17 @@ RUVIA_TEST(response_trailer_section_validation_is_all_fields_or_none) {
     const std::array<ruvia::HttpHeaderView, 2> valid{
         ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
         ruvia::HttpHeaderView{"Server-Timing", "db;dur=5"}};
-    RUVIA_CHECK(responseTrailerSectionValid(valid));
+    const auto validResult = httpResponseTrailerSection(valid);
+    RUVIA_CHECK(validResult.section() != nullptr);
+    RUVIA_CHECK(validResult.failure() == nullptr);
 
     const std::array<ruvia::HttpHeaderView, 2> mixed{
         ruvia::HttpHeaderView{"X-Trace-Id", "abc"},
         ruvia::HttpHeaderView{"Content-Length", "5"}};
-    RUVIA_CHECK(!responseTrailerSectionValid(mixed));
+    const auto mixedResult = httpResponseTrailerSection(mixed);
+    RUVIA_CHECK(mixedResult.section() == nullptr);
+    RUVIA_CHECK(mixedResult.failure() != nullptr);
     // An empty field sequence is the valid absence of a trailer section; the
     // submission API reports kEmpty separately when asked to submit one.
-    RUVIA_CHECK(responseTrailerSectionValid({}));
+    RUVIA_CHECK(httpResponseTrailerSection({}).section() != nullptr);
 }

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -27,7 +28,6 @@ using ruvia::detail::Http1ConnectionDisposition;
 using ruvia::detail::Http1ServerClosePolicy;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::http1PlanResponseStream;
-using ruvia::detail::prepareHttp1ResponseStreamHead;
 using ruvia::detail::requestBodyByteLimit;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::ResponseTrailerIntent;
@@ -37,6 +37,19 @@ using ruvia::detail::ResponseStreamKind;
 using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::ResponseHeadBuffer;
+
+ruvia::detail::PreparedHttp1ResponseStream prepareStream(
+    ruvia::HttpResponse response,
+    ResponseStreamKind kind,
+    const ruvia::detail::Http1ResponseStreamPlan& plan,
+    ResponseTrailerIntent trailerIntent) {
+    auto result = ruvia::detail::prepareHttp1ResponseStreamHead(
+        std::move(response), kind, plan, trailerIntent);
+    if (result.failure() != nullptr || result.prepared() == nullptr) {
+        throw std::logic_error("expected prepared HTTP/1 response stream");
+    }
+    return std::move(result).takePrepared();
+}
 
 std::string withHttpsPort(std::string_view base, std::uint16_t port) {
     std::pmr::string location(std::pmr::get_default_resource());
@@ -238,7 +251,7 @@ RUVIA_TEST(http1_prepared_stream_head_binds_wire_signal_to_final_connection_disp
         if (!responseConnection.empty()) {
             response.header("Connection", responseConnection);
         }
-        auto prepared = prepareHttp1ResponseStreamHead(
+        auto prepared = prepareStream(
             std::move(response),
             ResponseStreamKind::kGeneric,
             plan,
@@ -295,7 +308,7 @@ RUVIA_TEST(http1_prepared_stream_head_owns_exact_wire_framing) {
         response.status(200);
         response.header("Transfer-Encoding", "gzip, chunked");
         response.header("Content-Length", "99");
-        return prepareHttp1ResponseStreamHead(
+        return prepareStream(
             std::move(response),
             ResponseStreamKind::kGeneric,
             plan,
@@ -350,7 +363,7 @@ RUVIA_TEST(http1_prepared_body_suppressed_stream_is_self_delimited) {
             parser.parseMessage(request), closePolicy);
         ruvia::HttpResponse response(std::pmr::get_default_resource());
         response.status(status);
-        return prepareHttp1ResponseStreamHead(
+        return prepareStream(
             std::move(response),
             ResponseStreamKind::kGeneric,
             plan,
@@ -412,7 +425,7 @@ RUVIA_TEST(http1_stream_commit_plan_exposes_exact_trailer_capability) {
             Http1ServerClosePolicy::kAllowReuse);
         ruvia::HttpResponse response(std::pmr::get_default_resource());
         response.status(200);
-        return prepareHttp1ResponseStreamHead(
+        return prepareStream(
             std::move(response),
             ResponseStreamKind::kGeneric,
             plan,

@@ -186,6 +186,23 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
     }
 }
 
+RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
+    static_assert(std::same_as<
+        Context::HeaderOptions,
+        ruvia::HttpResponse::HeaderOptions>);
+    RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+
+    bool threw = false;
+    try {
+        context.header("Connection", "close,");
+    } catch (const std::invalid_argument&) {
+        threw = true;
+    }
+    RUVIA_CHECK(threw);
+    const auto response = context.body("unchanged");
+    RUVIA_CHECK(response.header("Connection").empty());
+}
+
 RUVIA_TEST(context_body_applies_init_headers) {
     RUVIA_MAKE_CONTEXT(worker, memory, request, context);
     const HttpHeaderView headers[] = {{"Content-Type", "text/plain"}, {"X-Custom", "v"}};

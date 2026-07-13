@@ -105,7 +105,7 @@ inline Task<Http1SessionRequestCompletion> completeFailedHttpBodyRoute(
         exceptionServices);
     materializeResponseBody(response);
     scannerEntry.touch();
-    const auto connectionPlan = http1FinalizeResponseConnection(
+    const auto connectionPlan = requireHttp1FinalResponseCommit(
         response, parsed.connectionPlan.requireClose());
     co_return Http1SessionRequestCompletion::makeBufferedClosing(
         connectionPlan);

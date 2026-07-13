@@ -2,154 +2,156 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 #include <stdexcept>
 
-#include "ruvia/http/HttpProtocolError.h"
+#include "ruvia/http/detail/PmrResource.h"
 
 namespace ruvia::detail {
 
-void throwRequestBodyTooLarge() {
-    throw HttpProtocolError(413, "request body is too large");
-}
-
 TransferCodingDecoder::TransferCodingDecoder(
-    HttpTransferCodings codings,
-    std::pmr::polymorphic_allocator<char> allocator,
+    HttpTransferCoding coding,
+    std::pmr::memory_resource* resource,
     ProtocolByteLimit bodyLimit)
-    : codings_(codings),
-      output_(allocator),
-      resource_(allocator.resource()),
+    : resource_(httpPmrResourceOrDefault(resource)),
       bodyLimit_(bodyLimit) {
-    if (codings_.count > kMaxTransferCodings) {
-        throw std::invalid_argument("invalid Transfer-Encoding header");
+    stream_.zalloc = &TransferCodingDecoder::zallocThunk;
+    stream_.zfree = &TransferCodingDecoder::zfreeThunk;
+    stream_.opaque = this;
+    const int rc = coding == HttpTransferCoding::kGzip
+        ? inflateInit2(&stream_, 15 + 16)
+        : inflateInit(&stream_);
+    if (rc == Z_MEM_ERROR) {
+        throw std::bad_alloc();
     }
-    if (!codings_.empty()) {
-        stream_.zalloc = &TransferCodingDecoder::zallocThunk;
-        stream_.zfree = &TransferCodingDecoder::zfreeThunk;
-        stream_.opaque = this;
-        const auto coding = codings_.values[0];
-        const int rc = coding == HttpTransferCoding::kGzip
-            ? inflateInit2(&stream_, 15 + 16)
-            : inflateInit(&stream_);
-        if (rc != Z_OK) {
-            throw std::invalid_argument("invalid transfer-coding state");
-        }
-        initialized_ = true;
+    if (rc != Z_OK) {
+        throw std::runtime_error("failed to initialize transfer-coding decoder");
     }
+    initialized_ = true;
 }
 
 TransferCodingDecoder::~TransferCodingDecoder() {
     cleanup();
 }
 
-bool TransferCodingDecoder::empty() const noexcept {
-    return codings_.count == 0;
-}
-
-bool TransferCodingDecoder::finished() const noexcept {
-    if (codings_.count == 0) {
-        return true;
+TransferCodingDecodeResult TransferCodingDecoder::decode(
+    std::string_view input,
+    std::span<char> outputBuffer) noexcept {
+    if (failed_) {
+        return TransferCodingDecodeResult(
+            TransferCodingDecodeFailure(0, failure_));
     }
-    return ended_;
-}
-
-void TransferCodingDecoder::setInput(std::string_view input) {
     if (ended_) {
-        if (!input.empty()) {
-            throw std::invalid_argument("invalid transfer-coding body");
+        return input.empty()
+            ? complete(0)
+            : fail(0, TransferCodingDecodeError::kInvalidContent);
+    }
+    if (outputBuffer.empty()) {
+        return fail(0, TransferCodingDecodeError::kDecoderFailure);
+    }
+
+    const auto step = inflateStep(input, outputBuffer);
+    if (bodyLimit_.additionExceeds(decodedBytes_, step.produced)) {
+        return fail(
+            step.consumed,
+            TransferCodingDecodeError::kDecodedSizeExceeded);
+    }
+
+    if (step.status == Z_STREAM_END) {
+        if (step.consumed != input.size()) {
+            return fail(
+                step.consumed,
+                TransferCodingDecodeError::kInvalidContent);
         }
-        return;
+        decodedBytes_ += step.produced;
+        ended_ = true;
+        return step.produced != 0
+            ? output(
+                  step.consumed,
+                  std::string_view(outputBuffer.data(), step.produced))
+            : complete(step.consumed);
     }
-    if (pendingOffset_ < pendingInput_.size()) {
-        throw std::logic_error("transfer-coding input not fully consumed");
+
+    if (step.status != Z_OK && step.status != Z_BUF_ERROR) {
+        const auto error = step.status == Z_DATA_ERROR ||
+                step.status == Z_NEED_DICT
+            ? TransferCodingDecodeError::kInvalidContent
+            : TransferCodingDecodeError::kDecoderFailure;
+        return fail(step.consumed, error);
     }
-    pendingInput_ = input;
-    pendingOffset_ = 0;
+
+    decodedBytes_ += step.produced;
+    if (step.produced != 0) {
+        return output(
+            step.consumed,
+            std::string_view(outputBuffer.data(), step.produced));
+    }
+    if (step.consumed != input.size()) {
+        return fail(
+            step.consumed,
+            TransferCodingDecodeError::kInvalidContent);
+    }
+    return needInput(step.consumed);
 }
 
-std::string_view TransferCodingDecoder::produce() {
-    if (!initialized_ || ended_) {
-        return {};
+TransferCodingFinishStatus TransferCodingDecoder::finishInput() noexcept {
+    if (ended_ && !failed_) {
+        return TransferCodingFinishStatus::kComplete;
     }
-    if (output_.empty()) {
-        resizePmrStringForOverwrite(output_, kBodyReadChunkBytes);
-    }
-    const auto step = inflateStep(output_.data(), output_.size());
-    applyStatus(step);
-    return std::string_view(output_.data(), step.produced);
+    failed_ = true;
+    failure_ = TransferCodingDecodeError::kInvalidContent;
+    return TransferCodingFinishStatus::kIncomplete;
 }
 
-void TransferCodingDecoder::decodeAppend(std::string_view input, std::pmr::string& target) {
-    if (codings_.count == 0) {
-        if (bodyLimit_.additionExceeds(target.size(), input.size()) ||
-            bodyLimit_.additionExceeds(decodedBytes_, input.size())) {
-            throwRequestBodyTooLarge();
-        }
-        target.append(input.data(), input.size());
-        decodedBytes_ += input.size();
-        return;
-    }
-    setInput(input);
-    // Inflate straight into the target tail; resize_and_overwrite skips the
-    // zero-fill a plain resize() would pay for each window.
-    while (!ended_) {
-        const auto oldSize = target.size();
-        InflateStep step;
-        target.resize_and_overwrite(
-            oldSize + kBodyReadChunkBytes,
-            [this, oldSize, &step](char* data, std::size_t) noexcept {
-                step = inflateStep(data + oldSize, kBodyReadChunkBytes);
-                return oldSize + step.produced;
-            });
-        applyStatus(step);
-        if (step.produced == 0) {
-            return;
-        }
-    }
-}
-
-void TransferCodingDecoder::finish() {
-    if (codings_.count == 0) {
-        return;
-    }
-    if (!ended_) {
-        throw std::invalid_argument("incomplete transfer-coding body");
-    }
-}
-
-TransferCodingDecoder::InflateStep TransferCodingDecoder::inflateStep(char* out, std::size_t capacity) noexcept {
+TransferCodingDecoder::InflateStep TransferCodingDecoder::inflateStep(
+    std::string_view input,
+    std::span<char> output) noexcept {
     const auto inputBytes = std::min<std::size_t>(
-        pendingInput_.size() - pendingOffset_,
+        input.size(),
         (std::numeric_limits<uInt>::max)());
     stream_.next_in = inputBytes == 0
         ? Z_NULL
-        : reinterpret_cast<Bytef*>(const_cast<char*>(pendingInput_.data() + pendingOffset_));
+        : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
     stream_.avail_in = static_cast<uInt>(inputBytes);
-    stream_.next_out = reinterpret_cast<Bytef*>(out);
-    stream_.avail_out = static_cast<uInt>(capacity);
+    const auto outputBytes = std::min<std::size_t>(
+        output.size(),
+        (std::numeric_limits<uInt>::max)());
+    stream_.next_out = reinterpret_cast<Bytef*>(output.data());
+    stream_.avail_out = static_cast<uInt>(outputBytes);
 
     const auto status = inflate(&stream_, Z_NO_FLUSH);
-    pendingOffset_ += inputBytes - stream_.avail_in;
-    return InflateStep{capacity - stream_.avail_out, status};
+    return InflateStep{
+        inputBytes - stream_.avail_in,
+        outputBytes - stream_.avail_out,
+        status};
 }
 
-void TransferCodingDecoder::applyStatus(const InflateStep& step) {
-    checkProducedLimit(step.produced);
-    decodedBytes_ += step.produced;
-    if (step.status == Z_STREAM_END) {
-        ended_ = true;
-        if (pendingOffset_ != pendingInput_.size()) {
-            throw std::invalid_argument("invalid transfer-coding body");
-        }
-    } else if (step.status == Z_BUF_ERROR) {
-        // Benign "no progress" signal: legal only while waiting for more
-        // input. With unconsumed input it means the stream is corrupt.
-        if (step.produced == 0 && pendingOffset_ < pendingInput_.size()) {
-            throw std::invalid_argument("invalid transfer-coding body");
-        }
-    } else if (step.status != Z_OK) {
-        throw std::invalid_argument("invalid transfer-coding body");
-    }
+TransferCodingDecodeResult TransferCodingDecoder::needInput(
+    std::size_t consumed) noexcept {
+    return TransferCodingDecodeResult(
+        TransferCodingDecodeNeedInput(consumed));
+}
+
+TransferCodingDecodeResult TransferCodingDecoder::output(
+    std::size_t consumed,
+    std::string_view bytes) noexcept {
+    return TransferCodingDecodeResult(
+        TransferCodingDecodeOutput(consumed, bytes));
+}
+
+TransferCodingDecodeResult TransferCodingDecoder::complete(
+    std::size_t consumed) noexcept {
+    return TransferCodingDecodeResult(
+        TransferCodingDecodeComplete(consumed));
+}
+
+TransferCodingDecodeResult TransferCodingDecoder::fail(
+    std::size_t consumed,
+    TransferCodingDecodeError error) noexcept {
+    failed_ = true;
+    failure_ = error;
+    return TransferCodingDecodeResult(
+        TransferCodingDecodeFailure(consumed, error));
 }
 
 voidpf TransferCodingDecoder::zallocThunk(voidpf opaque, uInt items, uInt size) noexcept {
@@ -191,15 +193,6 @@ void TransferCodingDecoder::cleanup() noexcept {
     if (initialized_) {
         (void)inflateEnd(&stream_);
         initialized_ = false;
-    }
-}
-
-void TransferCodingDecoder::checkProducedLimit(std::size_t produced) const {
-    if (produced == 0) {
-        return;
-    }
-    if (bodyLimit_.additionExceeds(decodedBytes_, produced)) {
-        throwRequestBodyTooLarge();
     }
 }
 

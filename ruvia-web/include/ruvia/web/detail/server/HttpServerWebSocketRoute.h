@@ -102,7 +102,7 @@ Task<HttpWebSocketRouteResult> dispatchHttpWebSocketRoute(
             requestMemory,
             HttpErrorInfo(400, {}, "invalid websocket upgrade"),
             baseRouteServices);
-        const auto connectionPlan = http1FinalizeResponseConnection(
+        const auto connectionPlan = requireHttp1FinalResponseCommit(
             response, parsed.connectionPlan.requireClose());
         co_return HttpWebSocketRouteResult::makeBuffered(
             Http1SessionRequestCompletion::makeBufferedClosing(

@@ -141,7 +141,7 @@ Task<void> HttpServer::handleStreamSession(
                         parsed.request,
                         requestMemory,
                         options_.autoHttps.httpsPort);
-                    const auto connectionPlan = http1FinalizeResponseConnection(
+                    const auto connectionPlan = requireHttp1FinalResponseCommit(
                         response,
                         parsed.connectionPlan.requireClose());
                     requestCompletion.emplace(
@@ -189,7 +189,7 @@ Task<void> HttpServer::handleStreamSession(
                         routeResolution,
                         requestMemory,
                         baseRouteServices);
-                    const auto connectionPlan = http1FinalizeResponseConnection(
+                    const auto connectionPlan = requireHttp1FinalResponseCommit(
                         response, parsed.connectionPlan.requireClose());
                     requestCompletion.emplace(
                         Http1SessionRequestCompletion::makeBufferedClosing(
@@ -395,7 +395,7 @@ Task<void> HttpServer::handleStreamSession(
             }
             requestCompletion.emplace(
                 Http1SessionRequestCompletion::makeBufferedClosing(
-                    http1FinalizeResponseConnection(
+                    requireHttp1FinalResponseCommit(
                         response, parsed.connectionPlan.requireClose())));
         }
 

@@ -9,10 +9,12 @@
 
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/http/ProtocolByteLimit.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/http/detail/body/HttpTransferCodingDecoder.h"
 #include "ruvia/http/detail/http1/Http1ChunkedBodyDecoder.h"
 #include "ruvia/http/detail/http1/Http1RequestBodyPlan.h"
 #include "ruvia/http/HttpLimits.h"
+#include "ruvia/http/detail/PmrString.h"
 #include "ruvia/core/Task.h"
 
 namespace ruvia::detail {
@@ -60,13 +62,18 @@ private:
         std::size_t contentLength);
     Task<std::optional<std::string_view>> readChunked();
     Task<std::optional<std::string_view>> readTransferDecodedChunked();
+    void decodeTransferAppend(
+        std::string_view input,
+        std::pmr::string& target);
     [[nodiscard]] bool exceedsLimit(std::size_t bytes) const noexcept;
     void markFinished() noexcept;
 
     Stream& stream_;
     std::pmr::string buffer_;
+    std::pmr::string transferOutput_;
     std::pmr::polymorphic_allocator<TransferCodingDecoder> transferDecoderAllocator_;
     TransferCodingDecoder* transferDecoder_{nullptr};
+    std::string_view transferInput_;
     std::string_view initialBodyAndPipeline_;
     Http1RequestBodyPlan bodyPlan_;
     ProtocolByteLimit bodyLimit_;
@@ -76,6 +83,7 @@ private:
     std::size_t pendingCompactUntil_{0};
     std::size_t deliveredBytes_{0};
     bool finished_{false};
+    bool transferFinished_{false};
     bool continueSent_{false};
 };
 

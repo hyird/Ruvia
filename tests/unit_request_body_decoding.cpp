@@ -1,10 +1,14 @@
 #include "test_harness.h"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,11 +55,23 @@ using ruvia::detail::HttpServerExpectationAction;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferCodings;
 using ruvia::detail::TransferCodingDecoder;
+using ruvia::detail::TransferCodingDecodeError;
+using ruvia::detail::TransferCodingDecodeFailure;
+using ruvia::detail::TransferCodingDecodeNeedInput;
+using ruvia::detail::TransferCodingDecodeOutput;
+using ruvia::detail::TransferCodingDecodeResult;
+using ruvia::detail::TransferCodingFinishStatus;
 using ruvia::detail::decodeHttpContent;
 using ruvia::detail::encodeHttpContent;
 using ruvia::detail::httpContentCodingFromFieldValue;
 
 inline constexpr std::size_t kDecodedBodyLimit = 16 * 1024 * 1024;
+
+static_assert(std::same_as<
+    decltype(std::declval<TransferCodingDecoder&>().decode(
+        std::string_view{}, std::span<char>{})),
+    TransferCodingDecodeResult>);
+static_assert(!std::default_initializable<TransferCodingDecodeResult>);
 
 std::string gzipCompress(std::string_view data) {
     z_stream stream{};
@@ -75,6 +91,25 @@ std::string gzipCompress(std::string_view data) {
     } while (status == Z_OK);
     (void)deflateEnd(&stream);
     return out;
+}
+
+std::optional<TransferCodingDecodeError> appendTransferDecoded(
+    TransferCodingDecoder& decoder,
+    std::string_view input,
+    std::pmr::string& output) {
+    std::array<char, ruvia::detail::kBodyReadChunkBytes> window{};
+    for (;;) {
+        const auto result = decoder.decode(input, window);
+        input.remove_prefix(std::min(input.size(), result.consumedBytes()));
+        if (const auto* decoded = result.output()) {
+            output.append(decoded->bytes());
+            continue;
+        }
+        if (const auto* failure = result.failure()) {
+            return failure->error();
+        }
+        return std::nullopt;
+    }
 }
 
 std::string brotliCompress(std::string_view data) {
@@ -684,19 +719,16 @@ RUVIA_TEST(web_request_decode_rejects_empty_encoded_representation) {
 
 RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     auto* resource = std::pmr::get_default_resource();
-    HttpTransferCodings codings{};
-    codings.values[0] = HttpTransferCoding::kGzip;
-    codings.count = 1;
     TransferCodingDecoder decoder(
-        codings,
-        std::pmr::polymorphic_allocator<char>(resource),
+        HttpTransferCoding::kGzip,
+        resource,
         ProtocolByteLimit::limited(1u << 20));
 
     const std::string plain = "transfer-encoding gzip body content, repeated repeated repeated";
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
-    decoder.decodeAppend(gz, output);
-    decoder.finish();
+    RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).has_value());
+    RUVIA_CHECK(decoder.finishInput() == TransferCodingFinishStatus::kComplete);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
 
@@ -726,8 +758,8 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     auto* resource = std::pmr::get_default_resource();
     Http1ChunkedBodyDecoder chunks(ProtocolByteLimit::limited(1u << 20));
     TransferCodingDecoder transfer(
-        chunkedBody->transferCodings(),
-        std::pmr::polymorphic_allocator<char>(resource),
+        chunkedBody->transferCodings().values[0],
+        resource,
         ProtocolByteLimit::limited(1u << 20));
     std::pmr::string output(resource);
     std::string_view pending(wireBody);
@@ -739,14 +771,16 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
             break;
         }
         if (const auto* bodyChunk = result.bodyChunk()) {
-            transfer.decodeAppend(bodyChunk->bytes(), output);
+            RUVIA_CHECK(!appendTransferDecoded(
+                transfer, bodyChunk->bytes(), output).has_value());
         } else if (result.complete() != nullptr) {
             complete = true;
         }
         pending.remove_prefix(result.consumedBytes());
     }
     RUVIA_CHECK(complete);
-    transfer.finish();
+    RUVIA_CHECK(
+        transfer.finishInput() == TransferCodingFinishStatus::kComplete);
     RUVIA_CHECK_EQ(
         std::string_view(output.data(), output.size()),
         std::string_view(plain));
@@ -754,25 +788,56 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
 
 RUVIA_TEST(transfer_coding_decoder_rejects_bomb) {
     auto* resource = std::pmr::get_default_resource();
-    HttpTransferCodings codings{};
-    codings.values[0] = HttpTransferCoding::kGzip;
-    codings.count = 1;
     // A 1 MiB body compresses to a tiny gzip; the decoder must abort the
     // expansion once it passes the small cap, not stage the whole megabyte.
     TransferCodingDecoder decoder(
-        codings,
-        std::pmr::polymorphic_allocator<char>(resource),
+        HttpTransferCoding::kGzip,
+        resource,
         ProtocolByteLimit::limited(1024));
 
     const std::string big(1u << 20, 'a');
     const std::string gz = gzipCompress(big);
     std::pmr::string output(resource);
-    bool threw = false;
-    try {
-        decoder.decodeAppend(gz, output);
-        decoder.finish();
-    } catch (const std::exception&) {
-        threw = true;
-    }
-    RUVIA_CHECK(threw);
+    const auto error = appendTransferDecoded(decoder, gz, output);
+    RUVIA_CHECK(error.has_value());
+    RUVIA_CHECK(*error ==
+        TransferCodingDecodeError::kDecodedSizeExceeded);
+}
+
+RUVIA_TEST(transfer_coding_decoder_reports_typed_wire_failures) {
+    auto* resource = std::pmr::get_default_resource();
+    std::array<char, ruvia::detail::kBodyReadChunkBytes> window{};
+
+    TransferCodingDecoder invalid(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    const auto invalidResult = invalid.decode("not-gzip", window);
+    RUVIA_CHECK(invalidResult.failure() != nullptr);
+    RUVIA_CHECK(invalidResult.failure()->error() ==
+        TransferCodingDecodeError::kInvalidContent);
+
+    std::string truncated = gzipCompress("truncated");
+    truncated.resize(truncated.size() - 4);
+    TransferCodingDecoder incomplete(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    std::pmr::string ignored(resource);
+    RUVIA_CHECK(!appendTransferDecoded(
+        incomplete, truncated, ignored).has_value());
+    RUVIA_CHECK(
+        incomplete.finishInput() == TransferCodingFinishStatus::kIncomplete);
+
+    std::string trailing = gzipCompress("complete");
+    trailing.push_back('x');
+    TransferCodingDecoder extra(
+        HttpTransferCoding::kGzip,
+        resource,
+        ProtocolByteLimit::limited(1024));
+    const auto trailingError = appendTransferDecoded(
+        extra, trailing, ignored);
+    RUVIA_CHECK(trailingError.has_value());
+    RUVIA_CHECK(*trailingError ==
+        TransferCodingDecodeError::kInvalidContent);
 }

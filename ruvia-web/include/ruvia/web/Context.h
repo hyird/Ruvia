@@ -122,9 +122,7 @@ public:
         std::string_view body,
         RenderOptions options);
 
-    struct HeaderOptions final {
-        bool append{false};
-    };
+    using HeaderOptions = HttpResponse::HeaderOptions;
 
     class ResponseHeaderInit final {
     public:
@@ -684,14 +682,6 @@ private:
 
     Context& setStableResponseHeader(std::string_view name, std::string_view value);
     Context& removeResponseHeader(std::string_view name);
-    void rebuildResponseHeaderIndexes() noexcept;
-
-    [[nodiscard]] HttpResponseHeader* findResponseHeaderForUpdate(
-        std::string_view name,
-        std::uint32_t knownBit) noexcept;
-
-    void recordResponseKnownHeaderIndex(std::uint32_t knownBit, std::size_t index) noexcept;
-
     void applyResponseState(
         HttpResponse& response,
         std::optional<std::uint16_t> statusCode,
@@ -738,8 +728,6 @@ private:
         return values_;
     }
 
-    static constexpr std::size_t kResponseIndexSlots = 22;
-
     RequestMemory& memory_;
     const HttpRequest& request_;
     ConnInfo connInfo_;
@@ -760,8 +748,7 @@ private:
     detail::ContextResponseOutput responseOutput_;
     Renderer renderer_{nullptr};
     Layout layout_{nullptr};
-    std::uint16_t responseStatusCode_{200};
-    HttpResponseHeaders responseHeaders_;
+    HttpResponse responseMetadata_;
     // Holds the decoded request body when Content-Encoding was applied, so
     // body() can return a stable view; mutable because body() is const.
     mutable std::pmr::string* decodedBody_{nullptr};
@@ -783,7 +770,6 @@ private:
     bool sessionDirty_ : 1 {false};
     bool sessionRegenerate_ : 1 {false};
     bool responseFinalized_ : 1 {false};
-    std::array<std::int16_t, kResponseIndexSlots> responseHeaderIndexes_{};
 
     detail::ValidatedValueStore validatedValues_;
 };

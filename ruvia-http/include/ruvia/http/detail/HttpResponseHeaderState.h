@@ -35,6 +35,15 @@ struct HttpResponseHeaderStateAccess final {
         response.appendHeaderValidated(key, value, knownBit);
     }
 
+    [[nodiscard]] static HttpResponseHeader& appendUninitializedValue(
+        HttpResponse& response,
+        std::string_view key,
+        std::size_t valueSize,
+        std::uint32_t knownBit) {
+        return response.appendHeaderUninitializedValue(
+            key, valueSize, knownBit);
+    }
+
     static void setUnsigned(
         HttpResponse& response,
         std::string_view key,
@@ -107,6 +116,15 @@ inline void appendResponseHeaderValidated(
     std::string_view value,
     std::uint32_t knownBit) {
     HttpResponseHeaderStateAccess::appendValidated(response, key, value, knownBit);
+}
+
+[[nodiscard]] inline HttpResponseHeader& appendResponseHeaderUninitializedValue(
+    HttpResponse& response,
+    std::string_view key,
+    std::size_t valueSize,
+    std::uint32_t knownBit) {
+    return HttpResponseHeaderStateAccess::appendUninitializedValue(
+        response, key, valueSize, knownBit);
 }
 
 inline void setResponseHeaderUnsigned(

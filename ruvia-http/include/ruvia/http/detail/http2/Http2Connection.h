@@ -52,6 +52,7 @@
 #include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/http/detail/http2/Http2StreamTable.h"
 #include "ruvia/http/detail/server/HttpResponseStreamHead.h"
+#include "ruvia/http/detail/server/HttpResponseTrailers.h"
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/http/detail/websocket/WebSocketServerNegotiation.h"
 #include "ruvia/http/HttpInterimResponse.h"
@@ -303,8 +304,6 @@ enum class Http2FinishSubmitStatus : std::uint8_t {
     // The stream is not in an open response body/trailers phase, or a
     // trailers-only response has no submitted terminal section.
     kInvalidState,
-    // The complete trailer section is rejected before HPACK/output/state mutation.
-    kInvalidTrailerSection,
     // The response remains body-open so the caller can submit the missing bytes.
     kContentLengthIncomplete
 };
@@ -515,14 +514,14 @@ public:
     [[nodiscard]] Http2SubmitStatus submitConnectResponseHead(
         std::uint32_t streamId, const HttpResponse& response);
     // Finish a response exactly once with its complete terminal trailer section
-    // (possibly empty). Validation, HPACK encoding, DATA/trailer ordering, and
-    // END_STREAM are one transaction: no independently staged trailer state exists.
-    // An incomplete declared Content-Length or invalid trailer section is rejected
-    // without changing the body-open phase. A flow-control-blocked body keeps the
+    // (possibly empty). Its typed value proves shared validation already completed;
+    // HPACK encoding, DATA/trailer ordering, and END_STREAM are one transaction.
+    // An incomplete declared Content-Length is rejected without changing the
+    // body-open phase. A flow-control-blocked body keeps the
     // terminal marker queued behind it once the full length is core-owned.
     [[nodiscard]] Http2FinishSubmitStatus finishResponse(
         std::uint32_t streamId,
-        std::span<const HttpHeaderView> trailers);
+        const HttpResponseTrailerSection& trailers);
     [[nodiscard]] Http2SubmitStatus submitReset(
         std::uint32_t streamId, Http2ErrorCode error);
 

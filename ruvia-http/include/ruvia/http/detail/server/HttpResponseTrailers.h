@@ -5,7 +5,9 @@
 #include "ruvia/http/HttpHeader.h"
 
 #include <span>
+#include <cstdint>
 #include <string_view>
+#include <variant>
 
 namespace ruvia::detail {
 
@@ -120,17 +122,94 @@ namespace ruvia::detail {
         isValidResponseTrailerValue(value);
 }
 
-// Validate a complete trailer section before any encoder mutates protocol state.
-// This gives HTTP/1 and HTTP/2 the same all-fields-or-none semantic contract for
-// invalid input; allocation failure can still propagate normally.
-[[nodiscard]] inline bool responseTrailerSectionValid(
+enum class HttpResponseTrailerSectionError : std::uint8_t {
+    kInvalidField
+};
+
+class HttpResponseTrailerSectionResult;
+
+// Borrowed proof that the complete terminal section passed the shared response-
+// trailer rules. Protocol encoders accept this value instead of revalidating raw
+// fields independently. The source span must outlive its synchronous consumption.
+class HttpResponseTrailerSection final {
+public:
+    [[nodiscard]] std::span<const HttpHeaderView> fields() const noexcept {
+        return fields_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return fields_.empty();
+    }
+
+private:
+    friend class HttpResponseTrailerSectionResult;
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
+        std::span<const HttpHeaderView>) noexcept;
+
+    explicit HttpResponseTrailerSection(
+        std::span<const HttpHeaderView> fields) noexcept
+        : fields_(fields) {}
+
+    std::span<const HttpHeaderView> fields_;
+};
+
+class HttpResponseTrailerSectionFailure final {
+public:
+    [[nodiscard]] HttpResponseTrailerSectionError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class HttpResponseTrailerSectionResult;
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
+        std::span<const HttpHeaderView>) noexcept;
+
+    explicit HttpResponseTrailerSectionFailure(
+        HttpResponseTrailerSectionError error) noexcept
+        : error_(error) {}
+
+    HttpResponseTrailerSectionError error_;
+};
+
+class HttpResponseTrailerSectionResult final {
+public:
+    [[nodiscard]] const HttpResponseTrailerSection* section() const noexcept {
+        return std::get_if<HttpResponseTrailerSection>(&value_);
+    }
+
+    [[nodiscard]] const HttpResponseTrailerSectionFailure*
+    failure() const noexcept {
+        return std::get_if<HttpResponseTrailerSectionFailure>(&value_);
+    }
+
+private:
+    friend HttpResponseTrailerSectionResult httpResponseTrailerSection(
+        std::span<const HttpHeaderView>) noexcept;
+
+    using Value = std::variant<
+        HttpResponseTrailerSection,
+        HttpResponseTrailerSectionFailure>;
+
+    template <typename Alternative>
+    explicit HttpResponseTrailerSectionResult(Alternative alternative) noexcept
+        : value_(alternative) {}
+
+    Value value_;
+};
+
+// Validate the whole section before head, encoder, output, or stream mutation.
+[[nodiscard]] inline HttpResponseTrailerSectionResult
+httpResponseTrailerSection(
     std::span<const HttpHeaderView> trailers) noexcept {
     for (const auto& trailer : trailers) {
         if (!responseTrailerFieldValid(trailer.name(), trailer.value())) {
-            return false;
+            return HttpResponseTrailerSectionResult(
+                HttpResponseTrailerSectionFailure(
+                    HttpResponseTrailerSectionError::kInvalidField));
         }
     }
-    return true;
+    return HttpResponseTrailerSectionResult(
+        HttpResponseTrailerSection(trailers));
 }
 
 }  // namespace ruvia::detail

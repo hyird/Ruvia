@@ -499,6 +499,9 @@ static_assert(std::same_as<
 static_assert(std::same_as<
     decltype(ruvia::Context::ResponseInit{}.status),
     std::optional<std::uint16_t>>);
+static_assert(std::same_as<
+    ruvia::Context::HeaderOptions,
+    ruvia::HttpResponse::HeaderOptions>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<

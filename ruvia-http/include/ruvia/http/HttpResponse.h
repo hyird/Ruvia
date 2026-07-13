@@ -183,6 +183,10 @@ private:
     void setContentRangeUnsatisfied(std::uint64_t size);
     void setHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
     void appendHeaderValidated(std::string_view key, std::string_view value, std::uint32_t knownBit);
+    HttpResponseHeader& appendHeaderUninitializedValue(
+        std::string_view key,
+        std::size_t valueSize,
+        std::uint32_t knownBit);
     bool removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept;
     void rebuildKnownHeaderIndex() noexcept;
     void reserveHeaders(std::size_t count);

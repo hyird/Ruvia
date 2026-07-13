@@ -2,6 +2,34 @@
 
 namespace ruvia::detail {
 
+[[noreturn]] inline void throwRequestBodyTooLarge() {
+    throw HttpProtocolError(413, "request body is too large");
+}
+
+[[noreturn]] inline void throwIncompleteRequestBody() {
+    throw HttpProtocolError(400, "incomplete request body");
+}
+
+[[noreturn]] inline void throwTransferCodingDecodeFailure(
+    TransferCodingDecodeError error) {
+    switch (error) {
+        case TransferCodingDecodeError::kInvalidContent:
+            throw HttpProtocolError(400, "invalid transfer-coding body");
+        case TransferCodingDecodeError::kDecodedSizeExceeded:
+            throwRequestBodyTooLarge();
+        case TransferCodingDecodeError::kDecoderFailure:
+            throw std::runtime_error("transfer-coding decoder failure");
+    }
+    throw std::runtime_error("transfer-coding decoder failure");
+}
+
+inline void requireCompleteTransferCoding(
+    TransferCodingDecoder& decoder) {
+    if (decoder.finishInput() != TransferCodingFinishStatus::kComplete) {
+        throw HttpProtocolError(400, "incomplete transfer-coding body");
+    }
+}
+
 template <typename Stream>
 StreamBodyReader<Stream>::StreamBodyReader(
     Stream& stream,
@@ -12,6 +40,7 @@ StreamBodyReader<Stream>::StreamBodyReader(
     ConnectionScanner::Entry& scannerEntry)
     : stream_(stream),
       buffer_(allocator),
+      transferOutput_(allocator),
       transferDecoderAllocator_(allocator.resource()),
       initialBodyAndPipeline_(initialBodyAndPipeline),
       bodyPlan_(bodyPlan),
@@ -25,8 +54,8 @@ StreamBodyReader<Stream>::StreamBodyReader(
         try {
             std::construct_at(
                 transferDecoder_,
-                chunked->transferCodings(),
-                allocator,
+                chunked->transferCodings().values[0],
+                allocator.resource(),
                 bodyLimit);
         } catch (...) {
             transferDecoderAllocator_.deallocate(transferDecoder_, 1);
@@ -46,7 +75,7 @@ StreamBodyReader<Stream>::~StreamBodyReader() {
 
 template <typename Stream>
 Http1RequestBodyConsumption StreamBodyReader<Stream>::consumption() const noexcept {
-    return finished_ && (transferDecoder_ == nullptr || transferDecoder_->finished())
+    return finished_ && (transferDecoder_ == nullptr || transferFinished_)
         ? Http1RequestBodyConsumption::kComplete
         : Http1RequestBodyConsumption::kIncomplete;
 }
@@ -90,7 +119,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
     co_await ensureContinue();
     while (auto chunk = co_await readChunked()) {
         if (transferDecoder_ != nullptr) {
-            transferDecoder_->decodeAppend(*chunk, body);
+            decodeTransferAppend(*chunk, body);
         } else {
             if (bodyLimit_.additionExceeds(body.size(), chunk->size())) {
                 throwRequestBodyTooLarge();
@@ -99,9 +128,42 @@ Task<std::string_view> StreamBodyReader<Stream>::readAll(std::pmr::string& body)
         }
     }
     if (transferDecoder_ != nullptr) {
-        transferDecoder_->finish();
+        requireCompleteTransferCoding(*transferDecoder_);
+        transferFinished_ = true;
     }
     co_return std::string_view(body.data(), body.size());
+}
+
+template <typename Stream>
+void StreamBodyReader<Stream>::decodeTransferAppend(
+    std::string_view input,
+    std::pmr::string& target) {
+    for (;;) {
+        const auto oldSize = target.size();
+        resizePmrStringForOverwrite(
+            target, oldSize + kBodyReadChunkBytes);
+        const auto result = transferDecoder_->decode(
+            input,
+            std::span<char>(
+                target.data() + oldSize,
+                kBodyReadChunkBytes));
+        input.remove_prefix(std::min(input.size(), result.consumedBytes()));
+        if (const auto* output = result.output()) {
+            target.resize(oldSize + output->bytes().size());
+            continue;
+        }
+        target.resize(oldSize);
+        if (const auto* failure = result.failure()) {
+            throwTransferCodingDecodeFailure(failure->error());
+        }
+        if (result.complete() != nullptr) {
+            return;
+        }
+        if (result.needInput() != nullptr) {
+            return;
+        }
+        throw std::logic_error("unexpected transfer-coding decode result");
+    }
 }
 
 template <typename Stream>
@@ -143,7 +205,7 @@ Task<void> StreamBodyReader<Stream>::readMore() {
                 std::move(handler));
         });
     if (ec || bytesRead == 0) {
-        throw std::invalid_argument("incomplete request body");
+        throwIncompleteRequestBody();
     }
 
     buffer_.resize(oldSize + bytesRead);

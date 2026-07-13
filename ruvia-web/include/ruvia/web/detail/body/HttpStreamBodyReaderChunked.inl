@@ -2,6 +2,19 @@
 
 namespace ruvia::detail {
 
+[[noreturn]] inline void throwHttp1ChunkDecodeFailure(
+    Http1ChunkDecodeError error) {
+    switch (error) {
+        case Http1ChunkDecodeError::kInvalidFraming:
+            throw HttpProtocolError(400, "invalid chunked request body");
+        case Http1ChunkDecodeError::kBodyTooLarge:
+            throw HttpProtocolError(413, "request body is too large");
+        case Http1ChunkDecodeError::kFramingTooLarge:
+            throw HttpProtocolError(413, "request body framing is too large");
+    }
+    throw HttpProtocolError(400, "invalid chunked request body");
+}
+
 template <typename Stream>
 Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
     compactPending();
@@ -25,6 +38,9 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readChunked() {
             compactPending();
             co_return std::nullopt;
         }
+        if (const auto* failure = result.failure()) {
+            throwHttp1ChunkDecodeFailure(failure->error());
+        }
         if (result.needMore() == nullptr) {
             throw std::logic_error("unexpected HTTP/1 chunk decode result");
         }
@@ -40,20 +56,40 @@ Task<std::optional<std::string_view>> StreamBodyReader<Stream>::readTransferDeco
         co_return co_await readChunked();
     }
 
-    // Drain pending decoder output before pulling more encoded bytes:
-    // readChunked() compacts the buffer the decoder input view points at,
-    // and a single encoded chunk may inflate into many output windows.
+    if (transferOutput_.empty()) {
+        resizePmrStringForOverwrite(
+            transferOutput_, kBodyReadChunkBytes);
+    }
+
+    // Keep the borrowed encoded chunk until the decoder reports its consumed
+    // prefix. readChunked() is called only after that view is empty, so its
+    // compaction cannot invalidate decoder input across application reads.
     for (;;) {
-        const auto decoded = transferDecoder_->produce();
-        if (!decoded.empty()) {
-            co_return decoded;
+        const auto result = transferDecoder_->decode(
+            transferInput_,
+            std::span<char>(
+                transferOutput_.data(), transferOutput_.size()));
+        transferInput_.remove_prefix(
+            std::min(transferInput_.size(), result.consumedBytes()));
+        if (const auto* output = result.output()) {
+            co_return output->bytes();
         }
+        if (const auto* failure = result.failure()) {
+            throwTransferCodingDecodeFailure(failure->error());
+        }
+        if (result.complete() == nullptr &&
+            result.needInput() == nullptr) {
+            throw std::logic_error(
+                "unexpected transfer-coding decode result");
+        }
+
         auto chunk = co_await readChunked();
         if (!chunk) {
-            transferDecoder_->finish();
+            requireCompleteTransferCoding(*transferDecoder_);
+            transferFinished_ = true;
             co_return std::nullopt;
         }
-        transferDecoder_->setInput(*chunk);
+        transferInput_ = *chunk;
     }
 }
 

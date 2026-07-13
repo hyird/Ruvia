@@ -273,12 +273,18 @@ if(EXISTS "${HTTP1_CHUNK_DECODER}" AND EXISTS "${HTTP1_CHUNK_SCANNER}")
        NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeNeedMore final" OR
        NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeBodyChunk final" OR
        NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeComplete final" OR
+       NOT http1_chunk_decoder MATCHES "enum class Http1ChunkDecodeError" OR
+       NOT http1_chunk_decoder MATCHES "class Http1ChunkDecodeFailure final" OR
        NOT http1_chunk_decoder MATCHES "using Value = std::variant" OR
        NOT http1_chunk_decoder MATCHES "std::size_t consumedBytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::string_view bytes[(][)] const" OR
-       NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeBodyChunk>")
+       NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeBodyChunk>" OR
+       NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeFailure>" OR
+       http1_chunk_decoder MATCHES "class Http1ChunkDecoder" OR
+       http1_chunk_decoder MATCHES
+           "throw[ \t]+(std::invalid_argument|HttpProtocolError)")
         boundary_error("HTTP/1 streaming chunk decoder lost field ownership"
-            "need-more/body/complete must be discriminated; only body owns borrowed bytes and every incremental outcome owns its consumed prefix")
+            "need-more/body/complete/failure must be discriminated and the outer decoder must be the only state machine")
     endif()
     if(NOT http1_chunk_scanner MATCHES "class HttpChunkScanNeedMore final" OR
        NOT http1_chunk_scanner MATCHES "class HttpChunkScanComplete final" OR
@@ -4214,6 +4220,31 @@ check_files_no_match("Context storage re-inferred explicit status 200"
     "response[.]status[(][)][ \t]*==[ \t]*200"
     "${WEB_CONTEXT_RESPONSE_SOURCE}")
 
+if(EXISTS "${WEB_CONTEXT_HEADER}" AND
+   EXISTS "${WEB_CONTEXT_RESPONSE_SOURCE}" AND
+   EXISTS "${WEB_CONTEXT_INTERNAL}")
+    file(READ "${WEB_CONTEXT_HEADER}" web_context_status_header)
+    file(READ "${WEB_CONTEXT_RESPONSE_SOURCE}" web_context_response_metadata)
+    file(READ "${WEB_CONTEXT_INTERNAL}" web_context_internal_metadata)
+    if(NOT web_context_status_header MATCHES
+           "using HeaderOptions = HttpResponse::HeaderOptions" OR
+       NOT web_context_status_header MATCHES
+           "HttpResponse responseMetadata_" OR
+       NOT web_context_internal_metadata MATCHES
+           "responseMetadata_[(]memory[.]resource[(][)][)]" OR
+       NOT web_context_response_metadata MATCHES
+           "responseMetadata_[.]status[(]statusCode[)]" OR
+       NOT web_context_response_metadata MATCHES
+           "responseMetadata_[.]header" OR
+       web_context_status_header MATCHES
+           "responseStatusCode_|responseHeaders_|responseHeaderIndexes_" OR
+       web_context_response_metadata MATCHES
+           "httpFinalStatusCodeValid|isValidHttpHeaderName|isValidHttpHeaderValue")
+        boundary_error("Context duplicated HTTP response metadata ownership"
+            "pending status, headers, indexes, and validation must remain owned by one HttpResponse")
+    endif()
+endif()
+
 set(RESPONSE_STATUS_MODEL_TEST
     "${RUVIA_ROOT}/tests/unit_http_response.cpp")
 set(RESPONSE_REASON_PHRASE_TEST
@@ -4412,14 +4443,16 @@ else()
         boundary_error("final response status/Upgrade paths have diverged"
             "one discriminated result must own exact H1/H2 alternatives, typed failure, parsed H1 fields, and RFC 9113 connection-field rejection before encoding")
     endif()
-    if(NOT http1_server_semantics MATCHES "controlResult[.]failure[(][)]" OR
+    if(NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitResult final" OR
+       NOT http1_server_semantics MATCHES "using Value = std::variant" OR
+       NOT http1_server_semantics MATCHES "controlResult[.]failure[(][)]" OR
        NOT http1_server_semantics MATCHES "controlResult[.]plan[(][)]" OR
        NOT http1_server_semantics MATCHES "controlPlan->http1[(][)]" OR
        NOT http1_server_semantics MATCHES "connectionOptions[(][)]" OR
        NOT http1_server_semantics MATCHES "upgradeProtocols[(][)]" OR
        http1_server_semantics MATCHES "http1ResponseConnectionOptions")
         boundary_error("HTTP/1 final response control was reparsed or flattened"
-            "the finalizer must unwrap the shared result and consume the H1 alternative's already parsed Connection and Upgrade states")
+            "the typed commit must retain failures and consume the H1 alternative's already parsed Connection and Upgrade states")
     endif()
     string(REGEX MATCHALL "httpFinalResponseControlPlan[(]"
         http2_final_control_calls "${http2_connection_source}")
@@ -6086,26 +6119,51 @@ if(EXISTS "${HTTP1_SERVER_SEMANTICS}")
     if(NOT http1_server_semantics MATCHES "Http1RequestBodyConsumption" OR
        NOT http1_server_semantics MATCHES "Http1ServerConnectionPlan requestConnectionPlan" OR
        NOT http1_server_semantics MATCHES "Http1ServerClosePolicy closePolicy" OR
-       NOT http1_server_semantics MATCHES "controlResult[.]failure[(][)]" OR
-       NOT http1_server_semantics MATCHES "controlResult[.]plan[(][)]" OR
-       NOT http1_server_semantics MATCHES "controlPlan->http1[(][)]" OR
+       NOT http1_server_semantics MATCHES "class Http1FinalResponseCommit final" OR
+       NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitFailure final" OR
+       NOT http1_server_semantics MATCHES "class Http1FinalResponseCommitResult final" OR
+       NOT http1_server_semantics MATCHES "class PreparedHttp1ResponseStreamResult final" OR
+       NOT http1_server_semantics MATCHES "http1CommitFinalResponse" OR
        NOT http1_server_semantics MATCHES "std::nullopt" OR
        NOT http1_server_semantics MATCHES "bodyPlan\\.bodySuppressed\\(\\)" OR
-       NOT http1_server_semantics MATCHES "http1FinalizeResponseConnection" OR
        NOT http1_server_semantics MATCHES "plan[.]protocolVersion[(][)]")
         boundary_error("HTTP/1 connection lifecycle lost its commit-time typed plan"
             "request version, shared final-control result, runtime policy, response body semantics, status-line bytes, and socket disposition must share one typed path")
     endif()
     if(http1_server_semantics MATCHES "http1RequestNeedsKeepAliveSignal" OR
        http1_server_semantics MATCHES "needsKeepAliveSignal" OR
-       http1_server_semantics MATCHES "http1RequestConnectionDisposition")
+       http1_server_semantics MATCHES "http1RequestConnectionDisposition" OR
+       http1_server_semantics MATCHES "http1FinalizeResponseConnection" OR
+       http1_server_semantics MATCHES "throw std::invalid_argument")
         boundary_error("HTTP/1 connection plan was split back into scalar facts"
-            "exact protocol version and disposition must remain bound in Http1ServerConnectionPlan")
+            "exact protocol version, disposition, and typed final-commit failure must remain bound")
     endif()
     if(http1_server_semantics MATCHES
            "httpFinalResponseControlPlan\\([^)]*HttpProtocolVersion::kHttp11")
         boundary_error("HTTP/1 final response control hard-coded its version"
             "HttpFinalResponseControlPlan must consume the exact version retained by Http1ServerConnectionPlan")
+    endif()
+endif()
+set(WEB_HTTP1_FINAL_RESPONSE_COMMIT
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpServerResponseState.h")
+set(WEB_HTTP1_STREAM_SINK
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
+if(EXISTS "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}" AND
+   EXISTS "${WEB_HTTP1_STREAM_SINK}")
+    file(READ "${WEB_HTTP1_FINAL_RESPONSE_COMMIT}"
+        web_http1_final_response_commit)
+    file(READ "${WEB_HTTP1_STREAM_SINK}" web_http1_stream_sink)
+    if(NOT web_http1_final_response_commit MATCHES
+           "throwHttp1FinalResponseCommitFailure" OR
+       NOT web_http1_final_response_commit MATCHES
+           "requireHttp1FinalResponseCommit" OR
+       NOT web_http1_final_response_commit MATCHES
+           "http1CommitFinalResponse" OR
+       NOT web_http1_stream_sink MATCHES "prepareResult[.]failure[(][)]" OR
+       NOT web_http1_stream_sink MATCHES
+           "throwHttp1FinalResponseCommitFailure")
+        boundary_error("Web bypassed the typed HTTP/1 final response commit"
+            "buffered and streaming paths must map the same typed HTTP failure at one Web boundary")
     endif()
 endif()
 if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
@@ -6941,6 +6999,10 @@ set(RESPONSE_TRAILER_H2_HEADER_BLOCKS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamHeaderBlocks.h")
 set(RESPONSE_TRAILER_H2_SINK
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
+set(RESPONSE_TRAILER_HTTP_CONTRACT
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/server/HttpResponseTrailers.h")
+set(RESPONSE_TRAILER_H1_SINK
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamSink.h")
 set(RESPONSE_TRAILER_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 set(RESPONSE_TRAILER_PACKAGE_VERIFY
@@ -6952,6 +7014,8 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
    EXISTS "${RESPONSE_TRAILER_H2_STREAM_STATE}" AND
    EXISTS "${RESPONSE_TRAILER_H2_HEADER_BLOCKS}" AND
    EXISTS "${RESPONSE_TRAILER_H2_SINK}" AND
+   EXISTS "${RESPONSE_TRAILER_HTTP_CONTRACT}" AND
+   EXISTS "${RESPONSE_TRAILER_H1_SINK}" AND
    EXISTS "${RESPONSE_TRAILER_PACKAGE_CONSUMER}" AND
    EXISTS "${RESPONSE_TRAILER_PACKAGE_VERIFY}")
     file(READ "${RESPONSE_TRAILER_H2_TEST}" response_trailer_h2_test)
@@ -6966,14 +7030,27 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
         response_trailer_h2_header_blocks)
     file(READ "${RESPONSE_TRAILER_H2_SINK}"
         response_trailer_h2_sink)
+    file(READ "${RESPONSE_TRAILER_HTTP_CONTRACT}"
+        response_trailer_http_contract)
+    file(READ "${RESPONSE_TRAILER_H1_SINK}"
+        response_trailer_h1_sink)
     file(READ "${RESPONSE_TRAILER_PACKAGE_CONSUMER}"
         response_trailer_package_consumer)
     file(READ "${RESPONSE_TRAILER_PACKAGE_VERIFY}"
         response_trailer_package_verify)
-    if(NOT response_trailer_h2_connection MATCHES
-           "kInvalidTrailerSection" OR
+    if(NOT response_trailer_http_contract MATCHES
+           "class HttpResponseTrailerSection final" OR
+       NOT response_trailer_http_contract MATCHES
+           "class HttpResponseTrailerSectionFailure final" OR
+       NOT response_trailer_http_contract MATCHES
+           "class HttpResponseTrailerSectionResult final" OR
+       NOT response_trailer_http_contract MATCHES
+           "using Value = std::variant" OR
        NOT response_trailer_h2_connection MATCHES
-           "std::span<const HttpHeaderView> trailers" OR
+           "const HttpResponseTrailerSection& trailers" OR
+       response_trailer_h2_connection MATCHES "kInvalidTrailerSection" OR
+       response_trailer_h2_connection_source MATCHES
+           "responseTrailerSectionValid|responseTrailerFieldValid" OR
        NOT response_trailer_h2_connection_source MATCHES
            "std::pmr::string trailerBlock[(]resource_[)]" OR
        NOT response_trailer_h2_connection_source MATCHES
@@ -6981,9 +7058,13 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
        response_trailer_h2_stream_state MATCHES "responseTrailerBlock" OR
        response_trailer_h2_header_blocks MATCHES "responseTrailers" OR
        NOT response_trailer_h2_sink MATCHES
-           "finishResponse[(]streamId_, trailers[)]" OR
+           "finishResponse[^(]*[(][ \t\r\n]*streamId_,[ \t\r\n]*trailerSection[)]" OR
        NOT response_trailer_h2_sink MATCHES
-           "responseTrailerSectionValid[(]trailers[)]" OR
+           "httpResponseTrailerSection[(]trailers[)]" OR
+       NOT response_trailer_h1_sink MATCHES
+           "httpResponseTrailerSection[(]trailers[)]" OR
+       NOT response_trailer_h1_sink MATCHES
+           "appendHttp1TrailerSection[(]trailers_, trailerSection[)]" OR
        NOT response_trailer_package_consumer MATCHES
            "AcceptsStagedResponseTrailerSection" OR
        NOT response_trailer_package_consumer MATCHES
@@ -6993,7 +7074,7 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
        NOT response_trailer_package_verify MATCHES
            "installed Web HTTP/2 sink restored staged trailer submission")
         boundary_error("HTTP/2 response finish lost atomic trailer ownership"
-            "the HTTP preflight must preserve pre-commit failure, then finishResponse must receive the whole section, encode detached, queue behind DATA, and expose no per-stream staging API")
+            "one typed HTTP preflight must prove the section for H1/H2 encoding and H2 finish before any commit or mutation")
     endif()
     if(NOT response_trailer_h2_test MATCHES
            "http2_connection_head_response_can_end_with_trailers_only" OR
@@ -7886,7 +7967,10 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
     if(NOT http1_chunk_web_driver MATCHES "result[.]consumedBytes[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]bodyChunk[(][)]" OR
        NOT http1_chunk_web_driver MATCHES "result[.]complete[(][)]" OR
-       NOT http1_chunk_web_driver MATCHES "result[.]needMore[(][)]")
+       NOT http1_chunk_web_driver MATCHES "result[.]needMore[(][)]" OR
+       NOT http1_chunk_web_driver MATCHES "result[.]failure[(][)]" OR
+       NOT http1_chunk_web_driver MATCHES
+           "throwHttp1ChunkDecodeFailure")
         boundary_error("ruvia-web bypasses the typed HTTP/1 chunk decoder result"
             "the runtime must drive consumed/body/complete/need-more accessors without reconstructing protocol state")
     endif()
@@ -7894,6 +7978,8 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
            "chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline" OR
        NOT http1_chunk_decoder_test MATCHES
            "chunked_body_decoder_handles_single_byte_input_fragmentation" OR
+       NOT http1_chunk_decoder_test MATCHES
+           "chunked_body_decoder_reports_typed_size_and_limit_failures" OR
        NOT http1_chunk_decoder_test MATCHES
            "HasChunkBytes<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_scanner_test MATCHES
@@ -7903,9 +7989,91 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
        NOT http1_chunk_package_consumer MATCHES
            "default_initializable<ruvia::detail::Http1ChunkDecodeResult>" OR
        NOT http1_chunk_package_consumer MATCHES
+           "Http1ChunkDecodeFailure" OR
+       NOT http1_chunk_package_consumer MATCHES
            "HasConsumedBytes<ruvia::detail::HttpChunkScanComplete>")
         boundary_error("typed HTTP/1 chunk result ownership is insufficiently tested"
             "unit and installed-consumer contracts must pin fragmentation, pipeline preservation, and alternative-specific fields")
+    endif()
+endif()
+
+set(HTTP_TRANSFER_DECODER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h")
+set(HTTP_TRANSFER_DECODER_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/body/HttpTransferCodingDecoder.cpp")
+set(WEB_BODY_READER_CORE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl")
+set(WEB_BODY_READER_CHUNKED
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
+set(HTTP_TRANSFER_DECODER_TEST
+    "${RUVIA_ROOT}/tests/unit_request_body_decoding.cpp")
+set(WEB_BODY_READER_TEST
+    "${RUVIA_ROOT}/tests/unit_http_stream_body_reader.cpp")
+if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
+   EXISTS "${HTTP_TRANSFER_DECODER_SOURCE}" AND
+   EXISTS "${WEB_BODY_READER_CORE}" AND
+   EXISTS "${WEB_BODY_READER_CHUNKED}" AND
+   EXISTS "${HTTP_TRANSFER_DECODER_TEST}" AND
+   EXISTS "${WEB_BODY_READER_TEST}" AND
+   EXISTS "${HTTP1_CHUNK_PACKAGE_CONSUMER}")
+    file(READ "${HTTP_TRANSFER_DECODER}" transfer_decoder)
+    file(READ "${HTTP_TRANSFER_DECODER_SOURCE}" transfer_decoder_source)
+    file(READ "${WEB_BODY_READER_CORE}" body_reader_core)
+    file(READ "${WEB_BODY_READER_CHUNKED}" body_reader_chunked)
+    file(READ "${HTTP_TRANSFER_DECODER_TEST}" transfer_decoder_test)
+    file(READ "${WEB_BODY_READER_TEST}" body_reader_test)
+    file(READ "${HTTP1_CHUNK_PACKAGE_CONSUMER}" transfer_package_consumer)
+    if(NOT transfer_decoder MATCHES
+           "enum class TransferCodingDecodeError" OR
+       NOT transfer_decoder MATCHES
+           "class TransferCodingDecodeNeedInput final" OR
+       NOT transfer_decoder MATCHES
+           "class TransferCodingDecodeOutput final" OR
+       NOT transfer_decoder MATCHES
+           "class TransferCodingDecodeComplete final" OR
+       NOT transfer_decoder MATCHES
+           "class TransferCodingDecodeFailure final" OR
+       NOT transfer_decoder MATCHES
+           "class TransferCodingDecodeResult final" OR
+       NOT transfer_decoder MATCHES
+           "TransferCodingDecodeResult decode" OR
+       NOT transfer_decoder MATCHES "std::span<char> output" OR
+       NOT transfer_decoder MATCHES
+           "enum class TransferCodingFinishStatus" OR
+       NOT transfer_decoder MATCHES
+           "TransferCodingFinishStatus finishInput" OR
+       transfer_decoder MATCHES
+           "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]" OR
+       transfer_decoder_source MATCHES
+           "throw[ \t]+(std::invalid_argument|HttpProtocolError)")
+        boundary_error("transfer-coding recovered parallel buffered/streaming APIs"
+            "one typed decode(input, output-span) primitive must own wire, limit, and terminal results")
+    endif()
+    if(NOT body_reader_core MATCHES
+           "transferDecoder_->decode[(]" OR
+       NOT body_reader_chunked MATCHES
+           "transferDecoder_->decode[(]" OR
+       NOT body_reader_core MATCHES
+           "throwTransferCodingDecodeFailure" OR
+       NOT body_reader_core MATCHES
+           "requireCompleteTransferCoding" OR
+       body_reader_core MATCHES "decodeAppend[(]" OR
+       body_reader_chunked MATCHES "produce[(]|setInput[(]")
+        boundary_error("Web request body reader bypasses the typed transfer decoder"
+            "buffered and streaming reads must adapt storage around the same HTTP decode result")
+    endif()
+    if(NOT transfer_decoder_test MATCHES
+           "transfer_coding_decoder_reports_typed_wire_failures" OR
+       NOT transfer_decoder_test MATCHES
+           "TransferCodingDecodeResult" OR
+       NOT body_reader_test MATCHES
+           "http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads" OR
+       NOT body_reader_test MATCHES
+           "http1_transfer_coding_failure_maps_once_for_both_read_surfaces" OR
+       NOT transfer_package_consumer MATCHES
+           "TransferCodingDecodeResult")
+        boundary_error("typed transfer-coding chain is insufficiently tested"
+            "core alternatives, both Web read surfaces, failure mapping, and installed consumers must stay pinned")
     endif()
 endif()
 

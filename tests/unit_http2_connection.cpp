@@ -6,6 +6,7 @@
 #include <cstring>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,6 +54,15 @@ using ruvia::detail::ResponseStreamTrailerFraming;
 using ruvia::detail::ResponseTrailerIntent;
 using ruvia::detail::HpackDecoder;
 using ruvia::detail::HpackEncoder;
+
+ruvia::detail::HttpResponseTrailerSection validatedTrailers(
+    std::span<const ruvia::HttpHeaderView> fields) {
+    const auto result = ruvia::detail::httpResponseTrailerSection(fields);
+    if (result.section() == nullptr) {
+        throw std::logic_error("expected valid response trailer section");
+    }
+    return *result.section();
+}
 
 template <typename T>
 concept HasLooseHttp2EventFields = requires(T& event) {
@@ -1593,7 +1603,7 @@ RUVIA_TEST(http2_connection_buffered_response_length_is_transactional) {
 
     // All mismatches are rejected before output, flow-window, counters, or phase
     // change. The caller can correct the submission and continue the same stream.
-    RUVIA_CHECK(conn.finishResponse(1, {}) ==
+    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers({})) ==
         Http2FinishSubmitStatus::kContentLengthIncomplete);
     RUVIA_CHECK(conn.submitData(1, "four", Http2EndStream::kEndStream) ==
         Http2DataSubmitStatus::kContentLengthIncomplete);
@@ -2435,7 +2445,7 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
     const std::array<ruvia::HttpHeaderView, 1> trailers{
         ruvia::HttpHeaderView{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, trailers) ==
+        conn.finishResponse(1, validatedTrailers(trailers)) ==
         Http2FinishSubmitStatus::kContentLengthIncomplete);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
     RUVIA_CHECK(conn.pendingOutput().empty());
@@ -2444,7 +2454,7 @@ RUVIA_TEST(http2_connection_streaming_content_length_finish_and_trailers_are_exa
         Http2DataSubmitStatus::kAccepted);
     conn.consumeOutput(conn.pendingOutput().size());
     RUVIA_CHECK(
-        conn.finishResponse(1, trailers) ==
+        conn.finishResponse(1, validatedTrailers(trailers)) ==
         Http2FinishSubmitStatus::kAccepted);
     const auto trailer = conn.pendingOutput();
     const auto trailerBytes = trailer.size();
@@ -2484,7 +2494,8 @@ RUVIA_TEST(http2_connection_streaming_zero_content_length_stays_open_for_finish)
     RUVIA_CHECK(conn.submitData(1, "x", Http2EndStream::kKeepOpen) ==
         Http2DataSubmitStatus::kContentLengthExceeded);
     RUVIA_CHECK(conn.pendingOutput().empty());
-    RUVIA_CHECK(conn.finishResponse(1, {}) == Http2FinishSubmitStatus::kAccepted);
+    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers({})) ==
+        Http2FinishSubmitStatus::kAccepted);
     const auto terminal = ruvia::detail::http2ParseFrameHeader(
         conn.pendingOutput().substr(0, 9));
     RUVIA_CHECK_EQ(terminal.type, static_cast<std::uint8_t>(Http2FrameType::kData));
@@ -2571,7 +2582,7 @@ RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
 
     // Declaring trailer intent cannot fall back to an empty DATA terminator.
     RUVIA_CHECK(
-        conn.finishResponse(1, {}) ==
+        conn.finishResponse(1, validatedTrailers({})) ==
         Http2FinishSubmitStatus::kInvalidState);
     RUVIA_CHECK(conn.pendingOutput().empty());
     RUVIA_CHECK(stream->localSend().responseTrailersOnly() != nullptr);
@@ -2579,7 +2590,7 @@ RUVIA_TEST(http2_connection_head_response_can_end_with_trailers_only) {
     const std::array<ruvia::HttpHeaderView, 1> trailers{
         ruvia::HttpHeaderView{"Server-Timing", "db;dur=4"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, trailers) ==
+        conn.finishResponse(1, validatedTrailers(trailers)) ==
         Http2FinishSubmitStatus::kAccepted);
     const auto terminal = conn.pendingOutput();
     const auto terminalFrame = ruvia::detail::http2ParseFrameHeader(
@@ -2600,7 +2611,7 @@ RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     const std::array<ruvia::HttpHeaderView, 1> validTrailers{
         ruvia::HttpHeaderView{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, validTrailers) ==
+        conn.finishResponse(1, validatedTrailers(validTrailers)) ==
         Http2FinishSubmitStatus::kInvalidState);
 
     ruvia::HttpResponse response(&resource);
@@ -2616,20 +2627,21 @@ RUVIA_TEST(http2_response_finish_owns_trailer_section_atomically) {
     const std::array<ruvia::HttpHeaderView, 2> mixedTrailers{
         ruvia::HttpHeaderView{"X-Checksum", "ok"},
         ruvia::HttpHeaderView{"Content-Length", "2"}};
-    RUVIA_CHECK(
-        conn.finishResponse(1, mixedTrailers) ==
-        Http2FinishSubmitStatus::kInvalidTrailerSection);
+    const auto mixedResult =
+        ruvia::detail::httpResponseTrailerSection(mixedTrailers);
+    RUVIA_CHECK(mixedResult.section() == nullptr);
+    RUVIA_CHECK(mixedResult.failure() != nullptr);
     RUVIA_CHECK(conn.pendingOutput().empty());
     RUVIA_CHECK(
         conn.stream(1)->localSend().responseContentOpen() != nullptr);
 
     RUVIA_CHECK(
-        conn.finishResponse(1, validTrailers) ==
+        conn.finishResponse(1, validatedTrailers(validTrailers)) ==
         Http2FinishSubmitStatus::kAccepted);
     const auto acceptedBytes = conn.pendingOutput().size();
     RUVIA_CHECK(acceptedBytes != 0);
     RUVIA_CHECK(
-        conn.finishResponse(1, validTrailers) ==
+        conn.finishResponse(1, validatedTrailers(validTrailers)) ==
         Http2FinishSubmitStatus::kInvalidState);
     RUVIA_CHECK_EQ(conn.pendingOutput().size(), acceptedBytes);
 }
@@ -2758,7 +2770,7 @@ RUVIA_TEST(http2_connection_short_finish_does_not_mutate_queued_data) {
     RUVIA_CHECK(stream != nullptr);
     RUVIA_CHECK_EQ(stream->localContent().acceptedBytes(), std::uint64_t{5});
     RUVIA_CHECK_EQ(stream->localContent().committedBytes(), std::uint64_t{3});
-    RUVIA_CHECK(conn.finishResponse(1, {}) ==
+    RUVIA_CHECK(conn.finishResponse(1, validatedTrailers({})) ==
         Http2FinishSubmitStatus::kContentLengthIncomplete);
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
     RUVIA_CHECK(conn.hasQueuedData(1));
@@ -2851,7 +2863,7 @@ RUVIA_TEST(http2_connection_peer_reset_discards_queued_data_and_trailers) {
     const std::array<ruvia::HttpHeaderView, 1> trailers{
         ruvia::HttpHeaderView{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, trailers) ==
+        conn.finishResponse(1, validatedTrailers(trailers)) ==
         Http2FinishSubmitStatus::kQueued);
 
     char rst[13];
@@ -4163,16 +4175,17 @@ RUVIA_TEST(http2_connection_trailers_wait_for_blocked_body) {
     // Queue trailers while the remaining 4 bytes are still window-blocked.
     const std::array<ruvia::HttpHeaderView, 1> invalidTrailers{
         ruvia::HttpHeaderView{"Content-Length", "8"}};
-    RUVIA_CHECK(
-        conn.finishResponse(1, invalidTrailers) ==
-        Http2FinishSubmitStatus::kInvalidTrailerSection);
+    const auto invalidResult =
+        ruvia::detail::httpResponseTrailerSection(invalidTrailers);
+    RUVIA_CHECK(invalidResult.section() == nullptr);
+    RUVIA_CHECK(invalidResult.failure() != nullptr);
     RUVIA_CHECK(conn.hasQueuedData(1));
     RUVIA_CHECK(stream->localSend().responseContentOpen() != nullptr);
     RUVIA_CHECK(conn.pendingOutput().empty());
     const std::array<ruvia::HttpHeaderView, 1> trailers{
         ruvia::HttpHeaderView{"X-Checksum", "ok"}};
     RUVIA_CHECK(
-        conn.finishResponse(1, trailers) ==
+        conn.finishResponse(1, validatedTrailers(trailers)) ==
         Http2FinishSubmitStatus::kQueued);
     RUVIA_CHECK(conn.pendingOutput().empty());  // nothing emitted yet (still blocked)
 

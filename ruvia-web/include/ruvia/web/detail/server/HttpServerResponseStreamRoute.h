@@ -78,7 +78,7 @@ Task<Http1SessionRequestCompletion> dispatchHttpResponseStreamRoute(
     }
     if (auto* failed = result.failedBeforeCommit()) {
         response = std::move(*failed).takeResponse();
-        connectionPlan = http1FinalizeResponseConnection(
+        connectionPlan = requireHttp1FinalResponseCommit(
             response,
             streamPlan.requestConnectionPlan().requireClose());
         scannerEntry.touch();

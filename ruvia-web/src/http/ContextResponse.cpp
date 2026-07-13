@@ -5,12 +5,9 @@
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
-#include "ruvia/http/detail/HttpResponseHeadersAccess.h"
 #include "ruvia/http/detail/AsciiCase.h"
-#include "ruvia/http/detail/ResponseHeaderIndexCache.h"
 #include "ruvia/http/detail/SetCookiePlan.h"
 #include "ruvia/http/detail/Hex.h"
-#include "ruvia/http/HttpStatus.h"
 #include "ruvia/web/detail/http/HttpErrorResponse.h"
 
 #include <chrono>
@@ -183,85 +180,15 @@ void appendPercentEncodedByte(std::pmr::string& output, unsigned char ch) {
 
 }  // namespace
 
-HttpResponseHeader* Context::findResponseHeaderForUpdate(
-    std::string_view name,
-    std::uint32_t knownBit) noexcept {
-    auto* const begin = detail::HttpResponseHeadersAccess::begin(responseHeaders_);
-    auto* const end = detail::HttpResponseHeadersAccess::end(responseHeaders_);
-    auto* const header = detail::findResponseHeaderIndexed(
-        begin,
-        end,
-        responseHeaderIndexes_,
-        detail::responseKnownHeaderSlot(knownBit),
-        name,
-        knownBit);
-    return header == end ? nullptr : header;
-}
-
-void Context::recordResponseKnownHeaderIndex(
-    std::uint32_t knownBit,
-    std::size_t index) noexcept {
-    detail::recordResponseHeaderIndex(
-        responseHeaderIndexes_,
-        detail::responseKnownHeaderSlot(knownBit),
-        index);
-}
-
-void Context::rebuildResponseHeaderIndexes() noexcept {
-    responseHeaderIndexes_.fill(detail::kMissingResponseHeaderIndexSlot);
-    const auto& headers = responseHeaders_;
-    const auto* const begin = headers.begin();
-    const auto* const end = headers.end();
-    for (auto* cursor = begin; cursor != end; ++cursor) {
-        const auto knownBit = detail::responseHeaderKnownBit(*cursor);
-        if (knownBit == 0) {
-            continue;
-        }
-        recordResponseKnownHeaderIndex(knownBit, static_cast<std::size_t>(cursor - begin));
-    }
-}
-
 void Context::status(std::uint16_t statusCode) {
-    if (!detail::httpFinalStatusCodeValid(statusCode)) {
-        throw std::invalid_argument("invalid final HTTP status code");
-    }
-    responseStatusCode_ = statusCode;
+    responseMetadata_.status(statusCode);
     if (response_ != nullptr) {
         response_->status(statusCode);
     }
 }
 
 Context& Context::removeResponseHeader(std::string_view name) {
-    if (!isValidHttpHeaderName(name)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-
-    const auto knownBit = detail::classifyResponseKnownHeader(name);
-    auto* const begin = detail::HttpResponseHeadersAccess::begin(responseHeaders_);
-    auto* const end = detail::HttpResponseHeadersAccess::end(responseHeaders_);
-    auto* write = begin;
-    bool removed = false;
-
-    for (auto* read = begin; read != end; ++read) {
-        const auto headerKnownBit = detail::responseHeaderKnownBit(*read);
-        const bool matches = knownBit != 0
-            ? headerKnownBit == knownBit
-            : detail::httpAsciiEqualsIgnoreCase(read->name(), name);
-        if (matches) {
-            detail::HttpResponseHeadersAccess::release(responseHeaders_, *read);
-            removed = true;
-            continue;
-        }
-        if (write != read) {
-            *write = *read;
-        }
-        ++write;
-    }
-
-    if (removed) {
-        detail::HttpResponseHeadersAccess::truncate(responseHeaders_, begin, write);
-        rebuildResponseHeaderIndexes();
-    }
+    responseMetadata_.header(name, std::nullopt);
     if (response_ != nullptr) {
         responseStorage().header(name, std::nullopt);
     }
@@ -269,38 +196,17 @@ Context& Context::removeResponseHeader(std::string_view name) {
 }
 
 void Context::header(std::string_view name, std::string_view value, HeaderOptions options) {
-    if (!isValidHttpHeaderName(name)) {
-        throw std::invalid_argument("invalid HTTP header name");
-    }
-    if (!isValidHttpHeaderValue(value)) {
-        throw std::invalid_argument("invalid HTTP header value");
-    }
+    responseMetadata_.header(
+        name,
+        value,
+        HttpResponse::HeaderOptions{.append = options.append});
     const auto knownBit = detail::classifyResponseKnownHeader(name);
     if (options.append) {
-        if (detail::responseHeaderAppendForbidden(knownBit)) {
-            throw std::invalid_argument("HTTP response header cannot be appended");
-        }
-        const auto index = responseHeaders_.size();
-        auto& header = detail::HttpResponseHeadersAccess::add(responseHeaders_, name, value, knownBit);
-        detail::setResponseHeaderAppend(header, true);
-        recordResponseKnownHeaderIndex(knownBit, index);
         if (response_ != nullptr) {
             detail::appendResponseHeaderValidated(responseStorage(), name, value, knownBit);
         }
         return;
     }
-
-    if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
-        detail::HttpResponseHeadersAccess::assign(responseHeaders_, *header, name, value, knownBit);
-        if (response_ != nullptr) {
-            detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
-        }
-        return;
-    }
-
-    const auto index = responseHeaders_.size();
-    (void)detail::HttpResponseHeadersAccess::add(responseHeaders_, name, value, knownBit);
-    recordResponseKnownHeaderIndex(knownBit, index);
     if (response_ != nullptr) {
         detail::setResponseHeaderValidated(responseStorage(), name, value, knownBit);
     }
@@ -333,13 +239,11 @@ namespace {
 
 void Context::setCookie(std::string_view name, std::string_view value, const CookieOptions& options) {
     const detail::SetCookiePlan plan(name, value, options);
-    const auto index = responseHeaders_.size();
-    auto& header = detail::HttpResponseHeadersAccess::addUninitializedValue(
-        responseHeaders_,
+    auto& header = detail::appendResponseHeaderUninitializedValue(
+        responseMetadata_,
         "Set-Cookie",
         plan.size(),
         detail::kResponseHeaderSetCookie);
-    recordResponseKnownHeaderIndex(detail::kResponseHeaderSetCookie, index);
     plan.write(detail::responseHeaderValueBegin(header));
     if (response_ != nullptr) {
         detail::appendResponseHeaderValidated(
@@ -393,11 +297,11 @@ void Context::storeResponse(HttpResponse&& response) {
     }
 
     if (!hadResponseSlot) {
-        const auto contextHeaderCount = responseHeaders_.size();
+        const auto contextHeaderCount = responseMetadata_.headers().size();
         if (contextHeaderCount > 0) {
             detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
         }
-        const auto& headers = responseHeaders_;
+        const auto& headers = responseMetadata_.headers();
         for (const auto& header : headers) {
             const auto knownBit = detail::responseHeaderKnownBit(header);
             const auto name = header.name();
@@ -743,16 +647,7 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
 }
 
 Context& Context::setStableResponseHeader(std::string_view name, std::string_view value) {
-    const auto knownBit = detail::classifyResponseKnownHeader(name);
-    if (auto* const header = findResponseHeaderForUpdate(name, knownBit)) {
-        detail::HttpResponseHeadersAccess::assignStableView(
-            responseHeaders_, *header, name, value, knownBit);
-        return *this;
-    }
-
-    const auto index = responseHeaders_.size();
-    (void)detail::HttpResponseHeadersAccess::addStableView(responseHeaders_, name, value, knownBit);
-    recordResponseKnownHeaderIndex(knownBit, index);
+    detail::setResponseHeaderStableView(responseMetadata_, name, value);
     return *this;
 }
 
@@ -760,21 +655,16 @@ void Context::applyResponseState(
     HttpResponse& response,
     std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
-    const auto finalStatusCode = statusCode.value_or(responseStatusCode_);
-    if (!detail::httpFinalStatusCodeValid(finalStatusCode)) {
-        throw std::invalid_argument("invalid final HTTP status code");
-    }
-    if (finalStatusCode != 200) {
-        response.status(finalStatusCode);
-    }
+    const auto finalStatusCode = statusCode.value_or(responseMetadata_.status());
+    response.status(finalStatusCode);
     if (response_ != nullptr && response_ != &response) {
         mergeResponseSlotHeaders(response, *response_);
     }
-    const auto contextHeaderCount = responseHeaders_.size();
+    const auto contextHeaderCount = responseMetadata_.headers().size();
     if (contextHeaderCount > 0) {
         detail::reserveResponseHeaders(response, response.headers().size() + contextHeaderCount);
     }
-    for (const auto& header : responseHeaders_) {
+    for (const auto& header : responseMetadata_.headers()) {
         const auto knownBit = detail::responseHeaderKnownBit(header);
         const auto name = header.name();
         const auto value = header.value();

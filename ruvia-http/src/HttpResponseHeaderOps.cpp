@@ -261,6 +261,17 @@ void HttpResponse::appendHeaderValidated(
     recordKnownHeaderIndex(knownBit, index);
 }
 
+HttpResponseHeader& HttpResponse::appendHeaderUninitializedValue(
+    std::string_view key,
+    std::size_t valueSize,
+    std::uint32_t knownBit) {
+    const auto index = headers_.size();
+    auto& header = headers_.addUninitializedValue(key, valueSize, knownBit);
+    detail::setResponseHeaderAppend(header, true);
+    recordKnownHeaderIndex(knownBit, index);
+    return header;
+}
+
 bool HttpResponse::removeHeaderValidated(std::string_view key, std::uint32_t knownBit) noexcept {
     auto* const begin = headers_.begin();
     auto* const end = headers_.end();

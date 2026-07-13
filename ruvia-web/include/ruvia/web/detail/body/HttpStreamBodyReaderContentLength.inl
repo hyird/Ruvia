@@ -37,7 +37,7 @@ Task<std::string_view> StreamBodyReader<Stream>::readKnownLengthAll(
                     std::move(handler));
             });
         if (ec || bytesRead == 0) {
-            throw std::invalid_argument("incomplete request body");
+            throwIncompleteRequestBody();
         }
         offset += bytesRead;
         scannerEntry_.touch();
