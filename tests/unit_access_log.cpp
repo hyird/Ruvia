@@ -58,21 +58,20 @@ struct AccessLogObservation final {
     std::uint16_t status{0};
     std::uint64_t durationMicros{0};
     std::array<HttpProtocolVersion, 3> versions{};
-};
 
-void observeAccessLog(void* user, const AccessLogRecord& record) noexcept {
-    auto& observation = *static_cast<AccessLogObservation*>(user);
-    observation.method = record.method();
-    observation.knownMethod = record.knownMethod();
-    observation.path = record.path();
-    observation.remoteAddress = record.remoteAddress();
-    observation.status = record.status();
-    observation.durationMicros = record.durationMicros();
-    if (observation.calls < observation.versions.size()) {
-        observation.versions[observation.calls] = record.protocolVersion();
+    void operator()(const AccessLogRecord& record) noexcept {
+        method = record.method();
+        knownMethod = record.knownMethod();
+        path = record.path();
+        remoteAddress = record.remoteAddress();
+        status = record.status();
+        durationMicros = record.durationMicros();
+        if (calls < versions.size()) {
+            versions[calls] = record.protocolVersion();
+        }
+        ++calls;
     }
-    ++observation.calls;
-}
+};
 
 [[nodiscard]] HttpRequest makeRequest(
     std::string_view method,
@@ -96,8 +95,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
         HttpProtocolVersion::kHttp10);
     AccessLogObservation observation;
     AccessLogSink accessLog;
-    accessLog.callback = &observeAccessLog;
-    accessLog.user = &observation;
+    accessLog.callback = ruvia::AccessLogCallback::bind(observation);
 
     recordHttpAccess(
         accessLog,
@@ -121,8 +119,7 @@ RUVIA_TEST(access_log_record_borrows_one_typed_request) {
 RUVIA_TEST(access_log_preserves_all_protocol_versions_without_transport_bool) {
     AccessLogObservation observation;
     AccessLogSink accessLog;
-    accessLog.callback = &observeAccessLog;
-    accessLog.user = &observation;
+    accessLog.callback = ruvia::AccessLogCallback::bind(observation);
     constexpr std::array versions{
         HttpProtocolVersion::kHttp10,
         HttpProtocolVersion::kHttp11,

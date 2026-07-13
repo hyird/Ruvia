@@ -11,7 +11,7 @@ using namespace detail;
 
 namespace {
 
-Task<void> ignoreExpiredNext(Next::State) {
+Task<void> ignoreExpiredNext(NextState) {
     co_return;
 }
 
@@ -72,7 +72,7 @@ detail::RouterImpl::RouterImpl(Router& router) noexcept
       middlewareLifetimes_(resource_),
       routeTable_(nullptr, RouteTableDeleter{resource_}) {}
 
-void detail::RouterImplDeleter::operator()(RouterImpl* impl) const noexcept {
+void Router::ImplDeleter::operator()(detail::RouterImpl* impl) const noexcept {
     destroyPmrObject(impl, registrationResource());
 }
 

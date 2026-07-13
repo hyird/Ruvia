@@ -126,7 +126,10 @@ RUVIA_TEST(security_headers_context_respects_overwrite_existing_flag) {
     auto keep = makeContext(worker, keepMemory);
     keep.header("X-Frame-Options", "SAMEORIGIN");
     applySecurityHeaders(keep, SecurityHeadersOptions{});
-    RUVIA_CHECK_EQ(keep.res().header("X-Frame-Options"), std::string_view("SAMEORIGIN"));
+    RUVIA_CHECK(keep.response() == nullptr);
+    RUVIA_CHECK_EQ(
+        ruvia::detail::ContextAccess::responseStorage(keep).header("X-Frame-Options"),
+        std::string_view("SAMEORIGIN"));
 
     RequestMemory replaceMemory(worker);
     auto replace = makeContext(worker, replaceMemory);
@@ -134,5 +137,8 @@ RUVIA_TEST(security_headers_context_respects_overwrite_existing_flag) {
     SecurityHeadersOptions overwrite;
     overwrite.overwriteExisting = true;
     applySecurityHeaders(replace, overwrite);
-    RUVIA_CHECK_EQ(replace.res().header("X-Frame-Options"), std::string_view("DENY"));
+    RUVIA_CHECK(replace.response() == nullptr);
+    RUVIA_CHECK_EQ(
+        ruvia::detail::ContextAccess::responseStorage(replace).header("X-Frame-Options"),
+        std::string_view("DENY"));
 }

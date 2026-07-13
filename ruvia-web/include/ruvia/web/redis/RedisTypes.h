@@ -262,6 +262,10 @@ public:
     };
 
     RedisError(Code code, std::string_view message);
+    RedisError(const RedisError& other);
+    RedisError& operator=(const RedisError& other);
+    RedisError(RedisError&&) noexcept = default;
+    RedisError& operator=(RedisError&&) noexcept = default;
 
     [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] Code code() const noexcept;

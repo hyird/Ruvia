@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/db/DbSql.h"
 
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/web/detail/db/DbUtils.h"
 
 #include <mysql/mysql.h>
@@ -75,7 +76,7 @@ std::runtime_error mysqlError(const st_mysql& connection, std::string_view opera
     const auto* message = mysql_error(mutableConnection);
     const auto code = mysql_errno(mutableConnection);
     const auto* state = mysql_sqlstate(mutableConnection);
-    std::pmr::string error(operation, std::pmr::get_default_resource());
+    std::pmr::string error(operation, detail::processResource());
     error.append(" failed");
     if (code != 0) {
         error.append(" [errno=");

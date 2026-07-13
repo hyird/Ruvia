@@ -79,8 +79,8 @@ App::App()
 
 App::~App() = default;
 
-void detail::AppStateDeleter::operator()(AppState* state) const noexcept {
-    destroyPmrObject(state, detail::appResource());
+void App::StateDeleter::operator()(detail::AppState* state) const noexcept {
+    detail::destroyPmrObject(state, detail::appResource());
 }
 
 const Env& App::env() const noexcept {

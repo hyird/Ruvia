@@ -29,9 +29,6 @@ namespace ruvia {
 namespace detail {
 
 struct AppState;
-struct AppStateDeleter final {
-    void operator()(AppState* state) const noexcept;
-};
 
 }  // namespace detail
 
@@ -68,7 +65,7 @@ public:
     App& onError(HttpErrorHandler handler);
     App& notFound(HttpNotFoundHandler handler);
     App& setGlobalRateLimit(std::optional<RateLimitRule> rule);
-    App& onAccess(AccessLogCallback callback, void* user = nullptr);
+    App& onAccess(AccessLogCallback callback);
     App& onStart(AppHook hook);
     App& onStop(AppHook hook);
 #ifdef RUVIA_ENABLE_MARIADB
@@ -83,12 +80,16 @@ public:
     void stop();
 
 private:
+    struct StateDeleter final {
+        void operator()(detail::AppState* state) const noexcept;
+    };
+
     App();
 
     App(const App&) = delete;
     App& operator=(const App&) = delete;
 
-    std::unique_ptr<detail::AppState, detail::AppStateDeleter> state_;
+    std::unique_ptr<detail::AppState, StateDeleter> state_;
 };
 
 App& app();

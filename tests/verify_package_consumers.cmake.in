@@ -1763,7 +1763,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "return request_[.]knownMethod[(][)]" OR
        NOT _installed_access_log_model MATCHES
            "return request_[.]path[(][)]" OR
-       NOT _installed_access_log_model MATCHES "using AccessLogCallback" OR
+       NOT _installed_access_log_model MATCHES "class AccessLogCallback final" OR
+       NOT _installed_access_log_model MATCHES "AccessLogCallback bind" OR
        NOT _installed_access_log_access MATCHES
            "const HttpRequest& request" OR
        NOT _installed_access_log_recorder MATCHES
@@ -1835,10 +1836,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     endif()
     if(NOT _installed_context_header MATCHES
            "ruvia/web/ContextRequest[.]h" OR
+       _installed_context_header MATCHES
+           "ContextRequest::[A-Za-z_][A-Za-z0-9_]*[ \t\r\n]*[(]" OR
        NOT _installed_context_request_header MATCHES
            "ruvia/web/detail/http/ContextRequestModel[.]inl")
         message(FATAL_ERROR
-            "installed Context request API lost its independent header/template ownership")
+            "installed Context request API lost its independent header/facade ownership")
     endif()
     set(_installed_context_public_api
         "${_installed_context_header}\n${_installed_context_request_header}")

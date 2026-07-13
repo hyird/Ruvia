@@ -35,7 +35,7 @@ void check(bool condition) {
 // and the context header list; response builders must emit it exactly once.
 void exerciseAppendHeaderNotDuplicated(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    (void)context.res();
+    (void)ruvia::detail::ContextAccess::responseStorage(context);
     context.header("X-Trace", "abc", ruvia::Context::HeaderOptions{.append = true});
     auto response = context.text("hi");
     check(countHeaders(response, "X-Trace") == 1);
@@ -43,7 +43,7 @@ void exerciseAppendHeaderNotDuplicated(ruvia::RequestMemory& memory, const ruvia
 
 void exerciseSetCookieNotDuplicated(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    (void)context.res();
+    (void)ruvia::detail::ContextAccess::responseStorage(context);
     context.setCookie("session", "id", ruvia::CookieOptions{});
     auto response = context.text("hi");
     check(countHeaders(response, "Set-Cookie") == 1);
@@ -62,8 +62,8 @@ void exerciseExplicitStatusWinsOnReturn(ruvia::RequestMemory& memory, const ruvi
 void exerciseExplicitStatusWinsOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(404);
-    context.res(context.text("failed", 500));
-    check(context.res().status() == 500);
+    context.respond(context.text("failed", 500));
+    check(context.response() != nullptr && context.response()->status() == 500);
 }
 
 // The redirect target wins over a prepared context Location header.

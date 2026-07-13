@@ -33,7 +33,7 @@ Task<void> SessionMiddleware::handle(Context& c, Next& next) {
     co_await next();
 
     if (detail::SessionAccess::dirty(c)) {
-        auto& response = c.res();
+        auto& response = detail::ContextAccess::responseStorage(c);
         std::array<char, 64> idBuffer;
         auto id = detail::SessionAccess::id(c);
         // Mint a fresh id for a brand-new session AND whenever the client

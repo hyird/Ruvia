@@ -649,6 +649,11 @@ concept HasContextSetHeaderAlias = requires(T& context) {
 };
 
 template <typename T>
+concept HasContextResponseSlotAlias = requires(T& context, ruvia::HttpResponse response) {
+    context.res(std::move(response));
+};
+
+template <typename T>
 concept HasResponseSetHeaderAlias = requires(T& response) {
     response.setHeader(std::string_view{}, std::string_view{});
 };
@@ -1011,6 +1016,13 @@ concept HasWebSocketPublicCallbackConstructor = requires(
     typename T::Write write,
     typename T::Close close) {
     T(target, read, write, close);
+};
+
+template <typename T>
+concept HasWebSocketRuntimeCallbacks = requires {
+    typename T::Read;
+    typename T::Write;
+    typename T::Close;
 };
 
 template <typename T>
@@ -1535,9 +1547,17 @@ concept HasAccessLogRecordPublicFields = requires(T& record) {
 template <typename T>
 concept HasCanonicalAccessLogCallback = requires(
     T& app,
-    ruvia::AccessLogCallback callback,
-    void* user) {
-    { app.onAccess(callback, user) } -> std::same_as<ruvia::App&>;
+    ruvia::AccessLogCallback callback) {
+    { app.onAccess(callback) } -> std::same_as<ruvia::App&>;
+};
+
+struct AccessLogListener final {
+    void operator()(const ruvia::AccessLogRecord&) noexcept;
+};
+
+template <typename T>
+concept HasBoundAccessLogCallback = requires(AccessLogListener& listener) {
+    { T::bind(listener) } -> std::same_as<T>;
 };
 
 template <typename T>
@@ -2078,6 +2098,7 @@ static_assert(HasByteSpanResponseBody<ruvia::Context>);
 static_assert(!HasStdStringResponseBody<ruvia::Context>);
 static_assert(!HasContextNewResponseAlias<ruvia::Context>);
 static_assert(!HasContextSetHeaderAlias<ruvia::Context>);
+static_assert(!HasContextResponseSlotAlias<ruvia::Context>);
 static_assert(!HasResponseSetHeaderAlias<ruvia::HttpResponse>);
 static_assert(HasResponseHeaderSetter<ruvia::HttpResponse>);
 static_assert(!HasResponseAppendHeaderAlias<ruvia::HttpResponse>);
@@ -2210,6 +2231,7 @@ static_assert(HasWebSocketMessageCanonicalReadAccessors<ruvia::WebSocketMessage>
 static_assert(!std::is_default_constructible_v<ruvia::WebSocketMessage>);
 static_assert(!std::is_constructible_v<ruvia::WebSocketMessage, ruvia::WebSocketOpcode, std::string_view>);
 static_assert(!HasWebSocketPublicCallbackConstructor<ruvia::WebSocket>);
+static_assert(!HasWebSocketRuntimeCallbacks<ruvia::WebSocket>);
 static_assert(!HasContextGetIfAlias<ruvia::Context>);
 static_assert(!HasContextVarIfAlias<ruvia::Context>);
 static_assert(!HasContextVarHasAlias<ruvia::Context>);
@@ -2341,6 +2363,7 @@ static_assert(HasAppListenAddressSetter<ruvia::App>);
 static_assert(!HasAppListenAddressPortSetter<ruvia::App>);
 static_assert(HasAppHttpListenPortSetter<ruvia::App>);
 static_assert(HasCanonicalAccessLogCallback<ruvia::App>);
+static_assert(HasBoundAccessLogCallback<ruvia::AccessLogCallback>);
 static_assert(!std::is_default_constructible_v<ruvia::AccessLogRecord>);
 static_assert(!std::is_constructible_v<
     ruvia::AccessLogRecord,
@@ -2563,8 +2586,11 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::Context&>().var().get<CurrentUser>(kCurrentUser)),
     const CurrentUser*>);
 static_assert(std::is_same_v<
-    decltype(std::declval<ruvia::Context&>().res(std::declval<ruvia::HttpResponse&&>())),
+    decltype(std::declval<ruvia::Context&>().respond(std::declval<ruvia::HttpResponse&&>())),
     void>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::Context&>().response()),
+    const ruvia::HttpResponse*>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::Context&>().setCookie(std::string_view{}, std::string_view{})),
     void>);
@@ -2612,6 +2638,9 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ResponseStreamWriter&>().aborted()),
     bool>);
+static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().streamSSE()),
+    ruvia::SseWriter>);
 static_assert(std::is_same_v<
     decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})),
     ruvia::Task<void>>);
@@ -2720,7 +2749,7 @@ public:
         if (c.error()) {
             const bool hadDownstreamErrorResponse = c.finalized();
             const auto downstreamStatus = hadDownstreamErrorResponse
-                ? c.res().status()
+                ? c.response()->status()
                 : 0;
             auto response = c.text("caught by middleware\n", 500);
             response.header("X-Surface-Error", "true");
@@ -2730,11 +2759,11 @@ public:
             response.header(
                 "X-Surface-Error-Status",
                 downstreamStatus == 500 ? "500" : "other");
-            c.res(std::move(response));
+            c.respond(std::move(response));
             co_return;
         }
         c.header("X-Surface-Finalized", c.finalized() ? "true" : "false");
-        c.res().header("X-Surface-Middleware", "after-next", {.append = true});
+        c.header("X-Surface-Middleware", "after-next", {.append = true});
     }
 };
 
@@ -2748,7 +2777,7 @@ public:
 class SurfacePreDirectResponseMiddleware final : public ruvia::Middleware<SurfacePreDirectResponseMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
-        c.res().header("X-Surface-Pre-Direct", "true");
+        c.header("X-Surface-Pre-Direct", "true");
         co_await next();
     }
 };
@@ -2764,7 +2793,8 @@ public:
 class SurfaceResSlotOnlyMiddleware final : public ruvia::Middleware<SurfaceResSlotOnlyMiddleware> {
 public:
     ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next&) {
-        c.res().header("X-Surface-Res-Slot-Only", "true");
+        c.header("X-Surface-Res-Slot-Only", "true");
+        c.respond(c.body(nullptr));
         co_return;
     }
 };
@@ -2905,10 +2935,9 @@ private:
         response.status(203);
         response.header("X-Response-Remove", "drop");
         response.setBodyCopy("response slot\n");
-        c.res(std::move(response));
-        c.res().header("X-Response-Slot", "true", {.append = true});
-        c.res().header("X-Response-Remove", std::nullopt);
-        co_return std::move(c.res());
+        response.header("X-Response-Slot", "true", {.append = true});
+        response.header("X-Response-Remove", std::nullopt);
+        co_return response;
     }
 
     ruvia::Task<ruvia::HttpResponse> resSlotOnly(ruvia::Context& c) {
@@ -3009,17 +3038,13 @@ private:
 
     ruvia::Task<ruvia::HttpResponse> directBufferedResponse(ruvia::Context& c) {
         c.header("X-Direct-Buffered", "true");
-        c.res().setBodyCopy("direct buffered response\n");
-        co_return std::move(c.res());
+        co_return c.body("direct buffered response\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> removeBufferedResponse(ruvia::Context& c) {
         c.header("X-Remove-Buffered", "drop");
-        c.res().header("X-Remove-Buffered", std::nullopt);
-        ruvia::HttpResponse response(c.resource());
-        response.setBodyCopy("removed buffered response\n");
-        c.res(std::move(response));
-        co_return std::move(c.res());
+        c.header("X-Remove-Buffered", std::nullopt);
+        co_return c.body("removed buffered response\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> assignedPreparedResponse(ruvia::Context& c) {
@@ -3027,8 +3052,7 @@ private:
         ruvia::HttpResponse response(c.resource());
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.setBodyCopy("assigned prepared response\n");
-        c.res(std::move(response));
-        co_return std::move(c.res());
+        co_return response;
     }
 
     ruvia::Task<ruvia::HttpResponse> bufferedMultipart(ruvia::Context& c) {
@@ -3414,18 +3438,17 @@ public:
 
 private:
     ruvia::Task<ruvia::HttpResponse> responseSlotMerge(ruvia::Context& c) {
-        c.res().header("X-Res-Slot", "kept");
+        c.header("X-Res-Slot", "kept");
         co_return c.text("response slot merge\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> responseSetterHeaders(ruvia::Context& c) {
-        c.res().header("X-Setter-Override", "slot");
-        c.res().header("Content-Type", "application/slot");
+        c.header("X-Setter-Override", "slot");
+        c.header("Content-Type", "application/slot");
         auto response = c.text("response setter headers\n");
         response.header("X-Setter-Override", "response");
         response.header("X-Assigned-Only", "response");
-        c.res(std::move(response));
-        co_return std::move(c.res());
+        co_return response;
     }
 
     ruvia::Task<ruvia::HttpResponse> bodyResponse(ruvia::Context& c) {

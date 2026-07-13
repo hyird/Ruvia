@@ -30,9 +30,6 @@ namespace detail {
 
 class StaticRootAccess;
 struct StaticRootState;
-struct StaticRootStateDeleter final {
-    void operator()(StaticRootState* state) const noexcept;
-};
 
 }  // namespace detail
 
@@ -49,9 +46,13 @@ public:
     [[nodiscard]] std::filesystem::path path() const;
 
 private:
+    struct StateDeleter final {
+        void operator()(detail::StaticRootState* state) const noexcept;
+    };
+
     friend class detail::StaticRootAccess;
 
-    std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter> state_;
+    std::unique_ptr<detail::StaticRootState, StateDeleter> state_;
 };
 
 }  // namespace ruvia
