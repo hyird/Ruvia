@@ -22,6 +22,35 @@
 
 namespace ruvia::detail {
 
+// Optimistic synchronous send for plain TCP. The socket is already
+// non-blocking (the session always reads asynchronously before it writes), so
+// write_some issues the same single send syscall async_write would -- but a
+// full write completes without suspending or re-entering the reactor, which
+// lets the session release its work set in the same tick instead of holding
+// it across a queued completion. Under high connection counts that collapses
+// the peak number of live work sets. Returns true when the attempt finished
+// the write or hit a hard error (outcome in ec/bytesWritten); false when the
+// remainder must go through async_write (would_block or a partial write).
+template <typename ConstBufferSequence>
+[[nodiscard]] inline bool tryPlainTcpSyncWrite(
+    asio::ip::tcp::socket& socket,
+    const ConstBufferSequence& buffers,
+    std::size_t totalBytes,
+    std::error_code& ec,
+    std::size_t& bytesWritten) noexcept {
+    ec.clear();
+    bytesWritten = socket.write_some(buffers, ec);
+    if (!ec) {
+        return bytesWritten == totalBytes;
+    }
+    if (ec == asio::error::would_block || ec == asio::error::try_again ||
+        ec == asio::error::interrupted) {
+        ec.clear();
+        return false;
+    }
+    return true;
+}
+
 template <typename Stream>
 Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
     Stream& stream,
@@ -96,49 +125,73 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
             responseHeadBytes);
     }
 
-    const auto body = writePlan.sendBody()
+    constexpr bool kPlainTcpStream = std::is_same_v<
+        std::remove_cvref_t<Stream>,
+        asio::ip::tcp::socket>;
+    auto body = writePlan.sendBody()
         ? responseContent.bytes()
         : std::string_view{};
-    if (body.empty()) {
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
-            [&stream, headView = head.view()](auto handler) mutable {
-                asio::async_write(
-                    stream,
-                    asio::buffer(headView),
-                    std::move(handler));
-            });
-        co_return classifyHttp1BufferedResponseWrite(
-            responsePlan,
-            responseHeadBytes,
-            ec,
-            bytesTransferred);
-    }
-    if (head.canAppendOnStack(body.size())) {
+    if (!body.empty() && head.canAppendOnStack(body.size())) {
         head.append(body);
-        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
-            [&stream, headView = head.view()](auto handler) mutable {
-                asio::async_write(
-                    stream,
-                    asio::buffer(headView),
-                    std::move(handler));
-            });
+        body = {};
+    }
+    if (body.empty()) {
+        const auto headView = head.view();
+        std::error_code writeEc;
+        std::size_t writtenBytes = 0;
+        bool writeDone = false;
+        if constexpr (kPlainTcpStream) {
+            writeDone = tryPlainTcpSyncWrite(
+                stream, asio::buffer(headView), headView.size(), writeEc, writtenBytes);
+        }
+        if (!writeDone) {
+            auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+                [&stream, remaining = headView.substr(writtenBytes)](auto handler) mutable {
+                    asio::async_write(
+                        stream,
+                        asio::buffer(remaining),
+                        std::move(handler));
+                });
+            writeEc = ec;
+            writtenBytes += bytesTransferred;
+        }
         co_return classifyHttp1BufferedResponseWrite(
             responsePlan,
             responseHeadBytes,
-            ec,
-            bytesTransferred);
+            writeEc,
+            writtenBytes);
     }
     const auto headView = head.view();
     const std::array<asio::const_buffer, 2> buffers{asio::buffer(headView), asio::buffer(body)};
-    auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
-        [&stream, &buffers](auto handler) mutable {
-            asio::async_write(stream, buffers, std::move(handler));
-        });
+    const auto totalBytes = headView.size() + body.size();
+    std::error_code writeEc;
+    std::size_t writtenBytes = 0;
+    bool writeDone = false;
+    if constexpr (kPlainTcpStream) {
+        writeDone = tryPlainTcpSyncWrite(
+            stream, buffers, totalBytes, writeEc, writtenBytes);
+    }
+    if (!writeDone) {
+        const std::array<asio::const_buffer, 2> remaining =
+            writtenBytes < headView.size()
+                ? std::array<asio::const_buffer, 2>{
+                      asio::buffer(headView.substr(writtenBytes)),
+                      asio::buffer(body)}
+                : std::array<asio::const_buffer, 2>{
+                      asio::buffer(body.substr(writtenBytes - headView.size())),
+                      asio::const_buffer{}};
+        auto [ec, bytesTransferred] = co_await asyncResult<std::size_t>(
+            [&stream, &remaining](auto handler) mutable {
+                asio::async_write(stream, remaining, std::move(handler));
+            });
+        writeEc = ec;
+        writtenBytes += bytesTransferred;
+    }
     co_return classifyHttp1BufferedResponseWrite(
         responsePlan,
         responseHeadBytes,
-        ec,
-        bytesTransferred);
+        writeEc,
+        writtenBytes);
 }
 
 template <typename Stream>
