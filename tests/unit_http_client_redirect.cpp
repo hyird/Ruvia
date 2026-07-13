@@ -190,6 +190,7 @@ RUVIA_TEST(http_client_redirect_request_plan_follows_rfc) {
 
 RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) {
     auto response = ruvia::detail::HttpClientResponseAccess::make(
+        302,
         ruvia::HttpProtocolVersion::kHttp11,
         std::pmr::get_default_resource());
     auto& headers = ruvia::detail::HttpClientResponseAccess::headers(response);

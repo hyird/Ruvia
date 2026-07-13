@@ -299,22 +299,26 @@ private:
     friend struct detail::HttpClientResponseAccess;
 
     HttpClientResponse(
+        std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
         : HttpClientResponse(
               detail::HttpResolvedPmrResourceTag{},
+              status,
               protocolVersion,
               detail::httpPmrResourceOrDefault(resource)) {}
 
     HttpClientResponse(
         detail::HttpResolvedPmrResourceTag,
+        std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource)
-        : protocolVersion_(protocolVersion),
+        : status_(status),
+          protocolVersion_(protocolVersion),
           headers_(resource),
           body_(resource) {}
 
-    std::uint16_t status_{0};
+    std::uint16_t status_;
     HttpProtocolVersion protocolVersion_;
     std::pmr::vector<HttpClientResponseHeader> headers_;
     std::pmr::string body_;

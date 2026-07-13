@@ -797,6 +797,9 @@ if(NOT _installed_http1_request_parser MATCHES "class Http1RequestNeedMore final
     message(FATAL_ERROR "installed HTTP/1 parser lost its discriminated whole-message contract")
 endif()
 file(READ "${_install_prefix}/include/ruvia/http/HttpClient.h" _installed_http_client)
+file(READ
+    "${_install_prefix}/include/ruvia/http/detail/client/HttpClientAccess.h"
+    _installed_http_client_access)
 if(_installed_http_client MATCHES
    "HttpFetchOptions|FetchResponse(Header|Access)?|bodyStream|maxRedirects|decodeStream|static[ \\t]+constexpr[ \\t]+HttpOrigin[ \\t]+(http|https)|std::string_view[ \\t]+body[ \\t]*\\{")
     message(FATAL_ERROR "installed outbound client model contains stale runtime-era API")
@@ -814,7 +817,13 @@ if(NOT _installed_http_client MATCHES "enum class HttpScheme" OR
    NOT _installed_http_client MATCHES "std::get_if<HttpClientRequestBytes>" OR
    NOT _installed_http_client MATCHES "borrowedBytes" OR
    NOT _installed_http_client MATCHES "struct HttpClientRequest" OR
-   NOT _installed_http_client MATCHES "class HttpClientResponse final")
+   NOT _installed_http_client MATCHES "class HttpClientResponse final" OR
+   NOT _installed_http_client MATCHES
+       "HttpClientResponse[(][ \t\r\n]*std::uint16_t status" OR
+   _installed_http_client MATCHES "status_[ \t]*[{][ \t]*0[ \t]*[}]" OR
+   NOT _installed_http_client_access MATCHES
+       "make[(][ \t\r\n]*std::uint16_t status" OR
+   _installed_http_client_access MATCHES "setStatus[(]")
     message(FATAL_ERROR "installed outbound client model lost its typed sans-I/O API")
 endif()
 if(_installed_http_client MATCHES "HttpClientRequestContentMode" OR
