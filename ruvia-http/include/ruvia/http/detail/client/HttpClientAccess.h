@@ -32,13 +32,10 @@ struct HttpClientResponseHeaderAccess final {
 
 struct HttpClientResponseAccess final {
     [[nodiscard]] static HttpClientResponse make(
+        std::uint16_t status,
         HttpProtocolVersion protocolVersion,
         std::pmr::memory_resource* resource) {
-        return HttpClientResponse(protocolVersion, resource);
-    }
-
-    static void setStatus(HttpClientResponse& response, std::uint16_t status) noexcept {
-        response.status_ = status;
+        return HttpClientResponse(status, protocolVersion, resource);
     }
 
     [[nodiscard]] static std::pmr::vector<HttpClientResponseHeader>& headers(

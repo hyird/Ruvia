@@ -549,8 +549,7 @@ Http1ClientResponseParseResult Http1ClientResponseParser::parse(
     // plan have validated. Protocol failure therefore has no partially mutated
     // out-parameter and performs no PMR allocation.
     auto response = detail::HttpClientResponseAccess::make(
-        parsed.protocolVersion, resource_);
-    detail::HttpClientResponseAccess::setStatus(response, parsed.statusCode);
+        parsed.statusCode, parsed.protocolVersion, resource_);
     auto& headers = detail::HttpClientResponseAccess::headers(response);
     if (parsed.headerCount != 0) {
         headers.reserve(parsed.headerCount);

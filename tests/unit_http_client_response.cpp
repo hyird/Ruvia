@@ -33,6 +33,15 @@ using ruvia::Http1ParsedClientResponseHead;
 using ruvia::HttpProtocolVersion;
 using ruvia::isValidHttpClientOriginTarget;
 
+template <typename Access>
+concept CanMutateHttpClientResponseStatus = requires(
+    HttpClientResponse& response) {
+    Access::setStatus(response, std::uint16_t{200});
+};
+
+static_assert(!CanMutateHttpClientResponseStatus<
+    ruvia::detail::HttpClientResponseAccess>);
+
 Http1ClientResponseParseResult parseWire(
     std::string_view method,
     std::string_view wire,
@@ -277,6 +286,15 @@ static_assert(std::same_as<
     const ruvia::Http1ClientProtocolUpgrade*>);
 
 }  // namespace
+
+RUVIA_TEST(http_client_response_commits_status_and_version_at_construction) {
+    auto response = ruvia::detail::HttpClientResponseAccess::make(
+        207,
+        HttpProtocolVersion::kHttp10,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(response.status(), std::uint16_t{207});
+    RUVIA_CHECK(response.protocolVersion() == HttpProtocolVersion::kHttp10);
+}
 
 RUVIA_TEST(http_client_origin_target_validation) {
     RUVIA_CHECK(isValidHttpClientOriginTarget("/ok%2F?q=%7B%7D"));
