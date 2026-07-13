@@ -5,6 +5,7 @@
 #include <concepts>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -138,6 +139,45 @@ RUVIA_TEST(websocket_liveness_aborts_transport_not_scanner_owner) {
     // transport.
     RUVIA_CHECK(!WebSocketConnection<RecordingTransport>::heartbeatTickThunk(&connection, 12));
     RUVIA_CHECK(state.aborted);
+}
+
+RUVIA_TEST(websocket_runtime_maps_typed_outbound_rejections) {
+    asio::io_context io;
+    RecordingTransportState state;
+    ConnectionScanner::Entry scannerEntry;
+    ruvia::WorkerMemory memory;
+    WebSocketConnection<RecordingTransport> connection(
+        RecordingTransport(io, state),
+        scannerEntry,
+        {},
+        ruvia::ProtocolByteLimit::limited(4),
+        memory.resource());
+    bool messageRejected = false;
+    bool closeRejected = false;
+
+    asio::co_spawn(
+        io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await ruvia::detail::taskAsAwaitable(
+                    connection.write(WebSocketOpcode::kText, "12345"));
+            } catch (const std::invalid_argument&) {
+                messageRejected = true;
+            }
+            try {
+                co_await ruvia::detail::taskAsAwaitable(
+                    connection.close(1005, {}));
+            } catch (const std::invalid_argument&) {
+                closeRejected = true;
+            }
+        },
+        asio::detached);
+
+    io.run();
+    RUVIA_CHECK(messageRejected);
+    RUVIA_CHECK(closeRejected);
+    RUVIA_CHECK_EQ(state.writes, std::size_t{0});
+    RUVIA_CHECK(!state.aborted);
 }
 
 // HTTP/1 upgraded-byte-stream bridge: Ping is answered by the protocol core,

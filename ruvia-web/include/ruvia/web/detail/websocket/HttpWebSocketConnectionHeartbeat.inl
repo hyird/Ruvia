@@ -15,7 +15,7 @@ template <typename Transport>
 bool WebSocketConnection<Transport>::heartbeatTick(std::int64_t now) noexcept {
     switch (webSocketLivenessDecision(
         lifecycleOptions_,
-        protocol_.closePhase(),
+        protocol_.livenessMode(),
         awaitingPong_,
         writeActive_,
         scannerEntry_.lastActiveMs(),

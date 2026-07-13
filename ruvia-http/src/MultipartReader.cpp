@@ -41,83 +41,66 @@ MultipartParser::MultipartParser(MultipartBoundary boundary, std::pmr::memory_re
       currentFilename_(resource_),
       currentContentType_(resource_) {}
 
-std::pmr::vector<MultipartPart> parseMultipartBody(
+MultipartParser::MultipartParser(
+    std::string_view completeBody,
+    MultipartBoundary boundary,
+    std::pmr::memory_resource* resource,
+    CompleteInputTag)
+    : resource_(detail::httpPmrResourceOrDefault(resource)),
+      boundary_(std::move(boundary)),
+      buffer_(resource_),
+      currentName_(resource_),
+      currentFilename_(resource_),
+      currentContentType_(resource_),
+      borrowedInput_(completeBody),
+      borrowedInputMode_(true),
+      inputFinished_(true) {}
+
+MultipartBodyParseResult parseMultipartBody(
     std::string_view body,
     MultipartBoundary boundary,
     std::pmr::memory_resource* resource) {
     resource = detail::httpPmrResourceOrDefault(resource);
+    MultipartParser parser(
+        body, std::move(boundary), resource, MultipartParser::CompleteInputTag{});
     std::pmr::vector<MultipartPart> parts(resource);
-    const auto first = detail::httpFindInitialMultipartDelimiter(
-        body, boundary, /*inputFinished=*/true);
-    const auto* firstPart = first.part();
-    const auto* firstClose = first.close();
-    if (firstPart == nullptr && firstClose == nullptr) {
-        throw std::invalid_argument("invalid multipart body");
-    }
-    if (firstClose != nullptr) {
-        return parts;
-    }
-    auto cursor = firstPart->offset() + firstPart->lineBytes();
     for (;;) {
-        const auto headersEnd = body.find("\r\n\r\n", cursor);
-        if (headersEnd == std::string_view::npos) {
-            throw std::invalid_argument("invalid multipart body");
+        auto result = parser.poll();
+        if (const auto* part = result.part()) {
+            parts.push_back(detail::MultipartPartAccess::makeDecoded(
+                part->name(),
+                part->filename(),
+                part->contentType(),
+                part->body(),
+                resource));
+            continue;
         }
-
-        const auto parsedHeaders = detail::httpParseMultipartPartHeaders(
-            body.substr(cursor, headersEnd - cursor));
-        if (const auto* failure = parsedHeaders.failure()) {
-            switch (failure->error()) {
-            case detail::HttpMultipartPartHeaderParseError::kInvalidDisposition:
-                throw std::invalid_argument("invalid multipart content disposition");
-            case detail::HttpMultipartPartHeaderParseError::kMissingName:
-                throw std::invalid_argument("invalid multipart field name");
-            }
+        if (result.done() != nullptr) {
+            return MultipartBodyParseResult(std::move(parts));
         }
-        const auto* partHeaders = parsedHeaders.headers();
-        if (partHeaders == nullptr) {
-            throw std::logic_error("unexpected multipart part-header result");
+        if (const auto* failure = result.failure()) {
+            return MultipartBodyParseResult(failure->error());
         }
-
-        cursor = headersEnd + 4;
-        const auto delimiter = detail::httpFindMultipartBodyDelimiter(
-            body.substr(cursor), boundary, /*inputFinished=*/true);
-        const auto* partDelimiter = delimiter.part();
-        const auto* closeDelimiter = delimiter.close();
-        if (partDelimiter == nullptr && closeDelimiter == nullptr) {
-            throw std::invalid_argument("invalid multipart body");
-        }
-        const auto delimiterOffset = partDelimiter != nullptr
-            ? partDelimiter->offset()
-            : closeDelimiter->offset();
-        const auto delimiterLineBytes = partDelimiter != nullptr
-            ? partDelimiter->lineBytes()
-            : closeDelimiter->lineBytes();
-
-        parts.push_back(detail::MultipartPartAccess::make(
-            partHeaders->name(),
-            partHeaders->filename(),
-            partHeaders->contentType(),
-            body.substr(cursor, delimiterOffset),
-            resource));
-        cursor += delimiterOffset + 2 + delimiterLineBytes;
-        if (closeDelimiter != nullptr) {
-            break;
-        }
+        return MultipartBodyParseResult(MultipartParseError::kIncompleteBody);
     }
-    return parts;
 }
 
 std::string_view MultipartParser::bufferView() const noexcept {
-    if (bufferOffset_ >= buffer_.size()) {
+    const auto source = borrowedInputMode_
+        ? borrowedInput_
+        : std::string_view(buffer_.data(), buffer_.size());
+    if (bufferOffset_ >= source.size()) {
         return {};
     }
-    return std::string_view(buffer_.data() + bufferOffset_, buffer_.size() - bufferOffset_);
+    return source.substr(bufferOffset_);
 }
 
 void MultipartParser::consume(std::size_t bytes) noexcept {
     const auto available = bufferView().size();
     bufferOffset_ += std::min(bytes, available);
+    if (borrowedInputMode_) {
+        return;
+    }
     if (bufferOffset_ == buffer_.size()) {
         buffer_.clear();
         bufferOffset_ = 0;
@@ -125,6 +108,9 @@ void MultipartParser::consume(std::size_t bytes) noexcept {
 }
 
 void MultipartParser::compactConsumedPrefix() {
+    if (borrowedInputMode_) {
+        return;
+    }
     detail::compactConsumedPrefix(buffer_, bufferOffset_, kCompactConsumedPrefixBytes);
 }
 
@@ -137,7 +123,7 @@ void MultipartParser::compactPending() {
 }
 
 void MultipartParser::feed(std::string_view chunk) {
-    if (inputFinished_ || state_ == State::kDone) {
+    if (borrowedInputMode_ || inputFinished_ || state_ == State::kDone) {
         throw std::logic_error("multipart parser cannot accept input after completion");
     }
     compactConsumedPrefix();
@@ -295,14 +281,20 @@ MultipartParser::StepStatus MultipartParser::processHeaders() {
         detail::httpAppendDecodedQuotedPairs(currentName_, partHeaders->name());
         currentFilename_.clear();
         currentContentType_.clear();
+        currentContentTypeView_ = {};
         if (!partHeaders->filename().empty()) {
             detail::httpAppendDecodedQuotedPairs(
                 currentFilename_, partHeaders->filename());
         }
         if (!partHeaders->contentType().empty()) {
-            currentContentType_.assign(
-                partHeaders->contentType().data(),
-                partHeaders->contentType().size());
+            if (borrowedInputMode_) {
+                currentContentTypeView_ = partHeaders->contentType();
+            } else {
+                currentContentType_.assign(
+                    partHeaders->contentType().data(),
+                    partHeaders->contentType().size());
+                currentContentTypeView_ = currentContentType_;
+            }
         }
         consume(headersEnd + 4);
         nextChunkIsFirst_ = true;
@@ -318,7 +310,7 @@ MultipartStreamPart MultipartParser::makePart(std::string_view body, bool partEn
     auto part = detail::MultipartStreamPartAccess::make(
         currentName_,
         currentFilename_,
-        currentContentType_,
+        currentContentTypeView_,
         body,
         phase);
     nextChunkIsFirst_ = false;

@@ -289,6 +289,50 @@ concept HasWsReason = requires(const T& event) {
 };
 
 template <typename T>
+concept HasWsSubmitMessageAlias = requires(T& connection) {
+    connection.submitMessage(
+        ruvia::WebSocketOpcode::kText,
+        std::string_view{});
+};
+
+template <typename T>
+concept HasWsSubmitPingAlias = requires(T& connection) {
+    connection.submitPing(std::string_view{});
+};
+
+template <typename T>
+concept HasWsSubmitPongAlias = requires(T& connection) {
+    connection.submitPong(std::string_view{});
+};
+
+template <typename T>
+concept HasWsApplicationFrameStateSideChannel = requires(
+    const T& connection) {
+    connection.acceptsApplicationFrames();
+};
+
+template <typename T>
+concept HasWsEndsTransportAlias = requires(const T& plan) {
+    plan.endsTransport();
+};
+
+template <typename T>
+concept HasWsTransportEndPendingSideChannel = requires(
+    const T& connection) {
+    connection.transportEndPending();
+};
+
+template <typename T>
+concept HasWsClosedStateSideChannel = requires(const T& connection) {
+    connection.closed();
+};
+
+template <typename T>
+concept HasWsClosePhaseSideChannel = requires(const T& connection) {
+    connection.closePhase();
+};
+
+template <typename T>
 concept HasWebSocketNegotiationAccessor = requires(const T& value) {
     { value.negotiation() } ->
         std::same_as<const ruvia::detail::WebSocketServerNegotiation&>;
@@ -1732,6 +1776,56 @@ static_assert(!std::constructible_from<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::WsConnection&>().poll()),
     std::optional<ruvia::detail::WsEvent>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WsConnection&>().submitFrame(
+        ruvia::WebSocketOpcode::kText,
+        std::string_view{})),
+    ruvia::detail::WsFrameSubmitStatus>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WsConnection&>().submitClose(
+        std::uint16_t{},
+        std::string_view{})),
+    ruvia::detail::WsCloseSubmitStatus>);
+static_assert(!HasWsSubmitMessageAlias<ruvia::detail::WsConnection>);
+static_assert(!HasWsSubmitPingAlias<ruvia::detail::WsConnection>);
+static_assert(!HasWsSubmitPongAlias<ruvia::detail::WsConnection>);
+static_assert(!HasWsApplicationFrameStateSideChannel<
+    ruvia::detail::WsConnection>);
+static_assert(!HasWsEndsTransportAlias<ruvia::detail::WsOutputPlan>);
+static_assert(!HasWsTransportEndPendingSideChannel<
+    ruvia::detail::WsConnection>);
+static_assert(!HasWsClosedStateSideChannel<ruvia::detail::WsConnection>);
+static_assert(!HasWsClosePhaseSideChannel<ruvia::detail::WsConnection>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WsConnection&>()
+        .livenessMode()),
+    ruvia::detail::WsLivenessMode>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::WsConnection&>().abort()),
+    ruvia::detail::WsAbortDisposition>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::WsOutputPlan&>()
+        .disposition()),
+    ruvia::detail::WsTransportDisposition>);
+static_assert(std::same_as<
+    decltype(ruvia::detail::encodeWebSocketClosePayload(
+        std::uint16_t{},
+        std::string_view{})),
+    ruvia::detail::WebSocketClosePayloadEncodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        WebSocketClosePayloadEncodeResult&>().encoded()),
+    const ruvia::detail::WebSocketEncodedClosePayload*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        WebSocketClosePayloadEncodeResult&>().failure()),
+    const ruvia::detail::WebSocketClosePayloadEncodeFailure*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::
+        WebSocketEncodedClosePayload&>().bytes()),
+    std::string_view>);
+static_assert(!std::default_initializable<
+    ruvia::detail::WebSocketClosePayloadEncodeResult>);
 static_assert(!std::default_initializable<ruvia::detail::WsEvent>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::WsEvent&>().message()),
@@ -1833,6 +1927,17 @@ static_assert(!HasMultipartParseError<ruvia::MultipartPollNeedInput>);
 static_assert(!HasMultipartParseError<ruvia::MultipartStreamPart>);
 static_assert(!HasMultipartParseError<ruvia::MultipartPollDone>);
 static_assert(HasMultipartParseError<ruvia::MultipartPollFailure>);
+static_assert(std::same_as<
+    decltype(ruvia::parseMultipartBody(
+        std::string_view{}, ruvia::MultipartBoundary("x"))),
+    ruvia::MultipartBodyParseResult>);
+static_assert(!std::default_initializable<ruvia::MultipartBodyParseResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::MultipartBodyParseResult&>().body()),
+    const ruvia::MultipartBody*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::MultipartBodyParseResult&>().failure()),
+    const ruvia::MultipartBodyParseFailure*>);
 static_assert(!std::default_initializable<
     ruvia::detail::HttpMultipartDelimiterResult>);
 static_assert(!HasMultipartStatus<
@@ -2294,7 +2399,8 @@ int main() {
     }
     const auto multipart = ruvia::parseMultipartBody(
         "--x--\r\n", ruvia::MultipartBoundary("x"));
-    if (!multipart.empty()) {
+    if (multipart.failure() != nullptr || multipart.body() == nullptr ||
+        !multipart.body()->parts().empty()) {
         return 3;
     }
     ruvia::MultipartParser multipartParser(

@@ -22,7 +22,6 @@ class HttpRequest;
 namespace detail {
 
 using WebSocketFrameHeader = std::array<char, 10>;
-using WebSocketClosePayload = std::array<char, 125>;
 using WebSocketAcceptKey = std::array<char, 28>;
 
 // Wire failures are protocol values, not exceptions. The numeric values are the
@@ -227,10 +226,89 @@ void encodeWebSocketAccept(WebSocketAcceptKey& output, std::string_view key);
 [[nodiscard]] bool isValidWebSocketRequest(const HttpRequest& request) noexcept;
 [[nodiscard]] bool isValidWebSocketCloseCode(std::uint16_t code) noexcept;
 [[nodiscard]] bool isValidUtf8(std::string_view value) noexcept;
-[[nodiscard]] std::size_t encodeWebSocketClosePayload(
-    WebSocketClosePayload& payload,
+
+enum class WebSocketClosePayloadEncodeError : std::uint8_t {
+    kInvalidCode,
+    kInvalidReason,
+    kReasonTooLarge,
+};
+
+class WebSocketClosePayloadEncodeResult;
+
+class WebSocketEncodedClosePayload final {
+public:
+    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+        return std::string_view(bytes_.data(), size_);
+    }
+
+private:
+    friend class WebSocketClosePayloadEncodeResult;
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
+        std::uint16_t,
+        std::string_view) noexcept;
+
+    WebSocketEncodedClosePayload(
+        std::uint16_t code,
+        std::string_view reason) noexcept;
+
+    std::array<char, 125> bytes_{};
+    std::uint8_t size_{0};
+};
+
+class WebSocketClosePayloadEncodeFailure final {
+public:
+    [[nodiscard]] constexpr WebSocketClosePayloadEncodeError error()
+        const noexcept {
+        return error_;
+    }
+
+private:
+    friend class WebSocketClosePayloadEncodeResult;
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
+        std::uint16_t,
+        std::string_view) noexcept;
+
+    explicit constexpr WebSocketClosePayloadEncodeFailure(
+        WebSocketClosePayloadEncodeError error) noexcept
+        : error_(error) {}
+
+    WebSocketClosePayloadEncodeError error_;
+};
+
+class WebSocketClosePayloadEncodeResult final {
+public:
+    [[nodiscard]] constexpr const WebSocketEncodedClosePayload* encoded()
+        const noexcept {
+        return std::get_if<WebSocketEncodedClosePayload>(&value_);
+    }
+
+    [[nodiscard]] constexpr const WebSocketClosePayloadEncodeFailure* failure()
+        const noexcept {
+        return std::get_if<WebSocketClosePayloadEncodeFailure>(&value_);
+    }
+
+private:
+    friend WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
+        std::uint16_t,
+        std::string_view) noexcept;
+
+    explicit WebSocketClosePayloadEncodeResult(
+        WebSocketEncodedClosePayload encoded) noexcept
+        : value_(encoded) {}
+
+    explicit constexpr WebSocketClosePayloadEncodeResult(
+        WebSocketClosePayloadEncodeFailure failure) noexcept
+        : value_(failure) {}
+
+    using Value = std::variant<
+        WebSocketEncodedClosePayload,
+        WebSocketClosePayloadEncodeFailure>;
+    Value value_;
+};
+
+[[nodiscard]] WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
     std::uint16_t code,
-    std::string_view reason);
+    std::string_view reason) noexcept;
 [[nodiscard]] std::optional<WebSocketProtocolFailure>
 webSocketClosePayloadFailure(std::string_view payload) noexcept;
 [[nodiscard]] std::string_view chooseWebSocketSubprotocol(

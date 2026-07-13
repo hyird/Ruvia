@@ -15,18 +15,15 @@ enum class WebSocketLivenessDecision : std::uint8_t {
 
 [[nodiscard]] inline WebSocketLivenessDecision webSocketLivenessDecision(
     const WebSocketLifecycleOptions& options,
-    WsClosePhase closePhase,
+    WsLivenessMode livenessMode,
     bool awaitingPong,
     bool writeActive,
     std::int64_t lastActiveMs,
     std::int64_t heartbeatPingSentMs,
     std::int64_t localCloseStartedMs,
     std::int64_t now) noexcept {
-    if (closePhase != WsClosePhase::kOpen) {
-        const bool awaitingPeerClose =
-            closePhase == WsClosePhase::kLocalCloseQueued ||
-            closePhase == WsClosePhase::kAwaitingPeerClose;
-        return awaitingPeerClose &&
+    if (livenessMode != WsLivenessMode::kOpen) {
+        return livenessMode == WsLivenessMode::kAwaitingPeerClose &&
                 options.closeHandshakeTimeout.has_value() &&
                 localCloseStartedMs >= 0 &&
                 now - localCloseStartedMs >=

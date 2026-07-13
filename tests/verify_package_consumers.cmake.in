@@ -732,6 +732,54 @@ if(_installed_ws_event MATCHES "struct[ \t]+WsEvent[ \t]+final" OR
    _installed_ws_event MATCHES "Kind::kNone")
     message(FATAL_ERROR "installed WebSocket core restored the loose sentinel event tuple")
 endif()
+if(NOT _installed_ws_connection MATCHES "submitFrame[(]" OR
+   NOT _installed_ws_connection MATCHES "submitClose[(]" OR
+   NOT _installed_ws_connection MATCHES "enum class WsFrameSubmitStatus" OR
+   NOT _installed_ws_connection MATCHES "enum class WsCloseSubmitStatus" OR
+   NOT _installed_ws_connection MATCHES
+       "WsFrameSubmitStatus submitFrame" OR
+   NOT _installed_ws_connection MATCHES
+       "WsCloseSubmitStatus submitClose" OR
+   _installed_ws_connection MATCHES "submit(Message|Ping|Pong)[(]" OR
+   _installed_ws_connection MATCHES "acceptsApplicationFrames[(]" OR
+   _installed_ws_connection MATCHES "closePhase[(]" OR
+   _installed_ws_connection MATCHES "closed[(]")
+    message(FATAL_ERROR
+        "installed WebSocket core lost its single generic frame submission entry")
+endif()
+if(NOT _installed_ws_connection MATCHES "enum class WsLivenessMode" OR
+   NOT _installed_ws_connection MATCHES "enum class WsAbortDisposition" OR
+   NOT _installed_ws_connection MATCHES "WsLivenessMode livenessMode" OR
+   NOT _installed_ws_connection MATCHES "WsAbortDisposition abort")
+    message(FATAL_ERROR
+        "installed WebSocket core lost its typed liveness/abort operations")
+endif()
+if(NOT _installed_ws_connection MATCHES "class WsOutputPlan final" OR
+   NOT _installed_ws_connection MATCHES
+       "WsTransportDisposition disposition[(][)] const noexcept" OR
+   _installed_ws_connection MATCHES "endsTransport[(]" OR
+   _installed_ws_connection MATCHES "transportEndPending[(]")
+    message(FATAL_ERROR
+        "installed WebSocket output plan restored a transport-end boolean side channel")
+endif()
+if(NOT _installed_ws_inbound MATCHES
+       "enum class WebSocketClosePayloadEncodeError" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketEncodedClosePayload final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketClosePayloadEncodeFailure final" OR
+   NOT _installed_ws_inbound MATCHES
+       "class WebSocketClosePayloadEncodeResult final" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketEncodedClosePayload>" OR
+   NOT _installed_ws_inbound MATCHES
+       "std::get_if<WebSocketClosePayloadEncodeFailure>" OR
+   _installed_ws_inbound MATCHES "using WebSocketClosePayload" OR
+   _installed_ws_inbound MATCHES
+       "encodeWebSocketClosePayload[(][^)]*WebSocketClosePayload&")
+    message(FATAL_ERROR
+        "installed WebSocket close encoder lost its owned discriminated result")
+endif()
 set(_installed_ws_deflate_negotiation_path
     "${_install_prefix}/include/ruvia/http/detail/websocket/HttpWebSocketPermessageDeflate.h")
 set(_installed_ws_server_negotiation_path
@@ -2794,6 +2842,10 @@ if(NOT _installed_multipart_parser MATCHES "class MultipartBoundary final" OR
    NOT _installed_multipart_parser MATCHES "enum class MultipartParseError" OR
    NOT _installed_multipart_parser MATCHES "class MultipartPollFailure final" OR
    NOT _installed_multipart_parser MATCHES "class MultipartPollResult final" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartBody final" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartBodyParseFailure final" OR
+   NOT _installed_multipart_parser MATCHES "class MultipartBodyParseResult final" OR
+   NOT _installed_multipart_parser MATCHES "MultipartBodyParseResult parseMultipartBody" OR
    NOT _installed_multipart_parser MATCHES "using Value = std::variant" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT _installed_multipart_parser MATCHES "std::get_if<MultipartPollFailure>" OR

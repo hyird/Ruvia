@@ -1,7 +1,5 @@
 #include "ruvia/http/detail/websocket/WsConnection.h"
 
-#include <stdexcept>
-
 namespace ruvia::detail {
 
 WsConnection::WsConnection(
@@ -23,15 +21,15 @@ WsOutputPlan WsConnection::outputPlan() const noexcept {
     // EOF/abort may race an async transport write. Keep the backing allocation
     // untouched until destruction, but make discarded bytes unreachable from the
     // protocol driver once transport termination has become authoritative.
-    if (closePhase_ == WsClosePhase::kTransportEndReady ||
-        closePhase_ == WsClosePhase::kClosed) {
-        return WsOutputPlan({}, closePhase_ == WsClosePhase::kTransportEndReady
+    if (closePhase_ == ClosePhase::kTransportEndReady ||
+        closePhase_ == ClosePhase::kClosed) {
+        return WsOutputPlan({}, closePhase_ == ClosePhase::kTransportEndReady
             ? WsTransportDisposition::kEndTransport
             : WsTransportDisposition::kKeepOpen);
     }
     const auto bytes = std::string_view(
         outBuffer_.data() + outOffset_, outBuffer_.size() - outOffset_);
-    const auto disposition = transportEndPending()
+    const auto disposition = closePhase_ == ClosePhase::kFinalCloseQueued
         ? WsTransportDisposition::kEndTransport
         : WsTransportDisposition::kKeepOpen;
     return WsOutputPlan(bytes, disposition);
@@ -43,29 +41,48 @@ void WsConnection::consumeOutput(std::size_t n) noexcept {
     if (outOffset_ >= outBuffer_.size()) {
         outBuffer_.clear();
         outOffset_ = 0;
-        if (closePhase_ == WsClosePhase::kLocalCloseQueued) {
-            closePhase_ = WsClosePhase::kAwaitingPeerClose;
-        } else if (closePhase_ == WsClosePhase::kFinalCloseQueued) {
-            closePhase_ = WsClosePhase::kTransportEndReady;
+        if (closePhase_ == ClosePhase::kLocalCloseQueued) {
+            closePhase_ = ClosePhase::kAwaitingPeerClose;
+        } else if (closePhase_ == ClosePhase::kFinalCloseQueued) {
+            closePhase_ = ClosePhase::kTransportEndReady;
         }
     }
 }
 
 void WsConnection::commitTransportEnd() noexcept {
-    if (closePhase_ == WsClosePhase::kTransportEndReady) {
-        closePhase_ = WsClosePhase::kClosed;
+    if (closePhase_ == ClosePhase::kTransportEndReady) {
+        closePhase_ = ClosePhase::kClosed;
     }
 }
 
 void WsConnection::notifyTransportEof() noexcept {
-    if (closePhase_ == WsClosePhase::kClosed) {
+    if (closePhase_ == ClosePhase::kClosed) {
         return;
     }
-    closePhase_ = WsClosePhase::kTransportEndReady;
+    closePhase_ = ClosePhase::kTransportEndReady;
 }
 
-void WsConnection::abort() noexcept {
-    closePhase_ = WsClosePhase::kClosed;
+WsAbortDisposition WsConnection::abort() noexcept {
+    if (closePhase_ == ClosePhase::kClosed) {
+        return WsAbortDisposition::kNoTransportAction;
+    }
+    closePhase_ = ClosePhase::kClosed;
+    return WsAbortDisposition::kAbortTransport;
+}
+
+WsLivenessMode WsConnection::livenessMode() const noexcept {
+    switch (closePhase_) {
+        case ClosePhase::kOpen:
+            return WsLivenessMode::kOpen;
+        case ClosePhase::kLocalCloseQueued:
+        case ClosePhase::kAwaitingPeerClose:
+            return WsLivenessMode::kAwaitingPeerClose;
+        case ClosePhase::kFinalCloseQueued:
+        case ClosePhase::kTransportEndReady:
+        case ClosePhase::kClosed:
+            return WsLivenessMode::kInactive;
+    }
+    return WsLivenessMode::kInactive;
 }
 
 void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1) {
@@ -76,52 +93,49 @@ void WsConnection::appendFrame(WebSocketOpcode opcode, std::string_view payload,
 }
 
 void WsConnection::fail(std::uint16_t code, std::string_view reason) {
-    if (closePhase_ == WsClosePhase::kOpen) {
-        WebSocketClosePayload payload;
-        const auto size = encodeWebSocketClosePayload(payload, code, reason);
-        appendFrame(WebSocketOpcode::kClose, std::string_view(payload.data(), size));
-        closePhase_ = WsClosePhase::kFinalCloseQueued;
+    if (closePhase_ == ClosePhase::kOpen) {
+        const auto payload = encodeWebSocketClosePayload(code, reason);
+        const auto* encoded = payload.encoded();
+        if (encoded == nullptr) {
+            return;
+        }
+        appendFrame(WebSocketOpcode::kClose, encoded->bytes());
+        closePhase_ = ClosePhase::kFinalCloseQueued;
         return;
     }
-    if (closePhase_ == WsClosePhase::kLocalCloseQueued) {
-        closePhase_ = WsClosePhase::kFinalCloseQueued;
-    } else if (closePhase_ == WsClosePhase::kAwaitingPeerClose) {
-        closePhase_ = WsClosePhase::kTransportEndReady;
+    if (closePhase_ == ClosePhase::kLocalCloseQueued) {
+        closePhase_ = ClosePhase::kFinalCloseQueued;
+    } else if (closePhase_ == ClosePhase::kAwaitingPeerClose) {
+        closePhase_ = ClosePhase::kTransportEndReady;
     }
 }
 
 void WsConnection::receivePeerClose() noexcept {
-    if (closePhase_ == WsClosePhase::kLocalCloseQueued) {
-        closePhase_ = WsClosePhase::kFinalCloseQueued;
-    } else if (closePhase_ == WsClosePhase::kAwaitingPeerClose) {
-        closePhase_ = WsClosePhase::kTransportEndReady;
+    if (closePhase_ == ClosePhase::kLocalCloseQueued) {
+        closePhase_ = ClosePhase::kFinalCloseQueued;
+    } else if (closePhase_ == ClosePhase::kAwaitingPeerClose) {
+        closePhase_ = ClosePhase::kTransportEndReady;
     }
 }
 
-void WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload) {
-    if (opcode == WebSocketOpcode::kClose) {
-        if (closePhase_ != WsClosePhase::kOpen) {
-            return;
-        }
-        if (webSocketClosePayloadFailure(payload).has_value()) {
-            throw std::invalid_argument("invalid websocket close payload");
-        }
-        appendFrame(opcode, payload);
-        closePhase_ = WsClosePhase::kLocalCloseQueued;
-        return;
-    }
-    if (closePhase_ != WsClosePhase::kOpen) {
-        throw std::logic_error("cannot submit a websocket frame after Close");
+WsFrameSubmitStatus WsConnection::submitFrame(
+    WebSocketOpcode opcode,
+    std::string_view payload) {
+    if (closePhase_ != ClosePhase::kOpen) {
+        return WsFrameSubmitStatus::kNotOpen;
     }
 
     const bool dataFrame = opcode == WebSocketOpcode::kText || opcode == WebSocketOpcode::kBinary;
     const bool controlFrame = opcode == WebSocketOpcode::kPing ||
-        opcode == WebSocketOpcode::kPong || opcode == WebSocketOpcode::kClose;
+        opcode == WebSocketOpcode::kPong;
+    if (!dataFrame && !controlFrame) {
+        return WsFrameSubmitStatus::kInvalidOpcode;
+    }
     if (dataFrame && webSocketMessageExceedsLimit(payload.size(), messageLimit_)) {
-        throw std::invalid_argument("websocket message is too large");
+        return WsFrameSubmitStatus::kMessageTooLarge;
     }
     if (controlFrame && payload.size() > 125) {
-        throw std::invalid_argument("websocket control frame is too large");
+        return WsFrameSubmitStatus::kControlFrameTooLarge;
     }
     bool rsv1 = false;
     if (dataFrame && deflate_.has_value()) {
@@ -132,33 +146,39 @@ void WsConnection::submitFrame(WebSocketOpcode opcode, std::string_view payload)
         }
     }
     appendFrame(opcode, payload, rsv1);
+    return WsFrameSubmitStatus::kAccepted;
 }
 
-void WsConnection::submitMessage(WebSocketOpcode opcode, std::string_view payload) {
-    submitFrame(opcode, payload);
-}
-
-void WsConnection::submitPing(std::string_view payload) {
-    submitFrame(WebSocketOpcode::kPing, payload);
-}
-
-void WsConnection::submitPong(std::string_view payload) {
-    submitFrame(WebSocketOpcode::kPong, payload);
-}
-
-void WsConnection::submitClose(std::uint16_t code, std::string_view reason) {
-    if (closePhase_ != WsClosePhase::kOpen) {
-        return;
+WsCloseSubmitStatus WsConnection::submitClose(
+    std::uint16_t code,
+    std::string_view reason) {
+    if (closePhase_ == ClosePhase::kClosed) {
+        return WsCloseSubmitStatus::kClosed;
     }
-    WebSocketClosePayload payload;
-    const auto size = encodeWebSocketClosePayload(payload, code, reason);
-    appendFrame(WebSocketOpcode::kClose, std::string_view(payload.data(), size));
-    closePhase_ = WsClosePhase::kLocalCloseQueued;
+    if (closePhase_ != ClosePhase::kOpen) {
+        return WsCloseSubmitStatus::kAlreadyClosing;
+    }
+    const auto payload = encodeWebSocketClosePayload(code, reason);
+    if (const auto* failure = payload.failure()) {
+        switch (failure->error()) {
+            case WebSocketClosePayloadEncodeError::kInvalidCode:
+                return WsCloseSubmitStatus::kInvalidCode;
+            case WebSocketClosePayloadEncodeError::kInvalidReason:
+                return WsCloseSubmitStatus::kInvalidReason;
+            case WebSocketClosePayloadEncodeError::kReasonTooLarge:
+                return WsCloseSubmitStatus::kReasonTooLarge;
+        }
+    }
+    appendFrame(WebSocketOpcode::kClose, payload.encoded()->bytes());
+    closePhase_ = ClosePhase::kLocalCloseQueued;
+    return WsCloseSubmitStatus::kAccepted;
 }
 
 std::optional<WsEvent> WsConnection::poll() {
     inboundInflated_.clear();
-    if (transportEndPending() || closed()) {
+    if (closePhase_ == ClosePhase::kFinalCloseQueued ||
+        closePhase_ == ClosePhase::kTransportEndReady ||
+        closePhase_ == ClosePhase::kClosed) {
         return WsEvent::makeTransportEnd();
     }
 
@@ -206,9 +226,9 @@ std::optional<WsEvent> WsConnection::poll() {
                 const auto reason = payload.size() > 2
                     ? payload.substr(2)
                     : std::string_view{};
-                if (closePhase_ == WsClosePhase::kOpen) {
+                if (closePhase_ == ClosePhase::kOpen) {
                     appendFrame(WebSocketOpcode::kClose, payload);
-                    closePhase_ = WsClosePhase::kFinalCloseQueued;
+                    closePhase_ = ClosePhase::kFinalCloseQueued;
                 } else {
                     receivePeerClose();
                 }
@@ -222,7 +242,7 @@ std::optional<WsEvent> WsConnection::poll() {
         const auto& message = inboundMessage.message();
         if (inboundMessage.contentEncoding() ==
             WebSocketInboundContentEncoding::kIdentity) {
-            if (closePhase_ != WsClosePhase::kOpen) {
+            if (closePhase_ != ClosePhase::kOpen) {
                 continue;
             }
             return WsEvent::message(message.opcode(), message.payload());
@@ -246,7 +266,7 @@ std::optional<WsEvent> WsConnection::poll() {
             return protocolFailureEvent(
                 WebSocketProtocolFailure::kInvalidPayloadData);
         }
-        if (closePhase_ != WsClosePhase::kOpen) {
+        if (closePhase_ != ClosePhase::kOpen) {
             continue;
         }
         return WsEvent::message(message.opcode(), view);

@@ -3,7 +3,6 @@
 #include <array>
 #include <cstring>
 #include <optional>
-#include <stdexcept>
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
 #include "ruvia/http/detail/HttpConnectionFields.h"
@@ -201,22 +200,37 @@ bool isValidUtf8(std::string_view value) noexcept {
     return remaining == 0;
 }
 
-std::size_t encodeWebSocketClosePayload(
-    WebSocketClosePayload& payload,
+WebSocketEncodedClosePayload::WebSocketEncodedClosePayload(
     std::uint16_t code,
-    std::string_view reason) {
-    if (!isValidWebSocketCloseCode(code) || !isValidUtf8(reason)) {
-        throw std::invalid_argument("invalid websocket close payload");
+    std::string_view reason) noexcept
+    : size_(static_cast<std::uint8_t>(reason.size() + 2)) {
+    bytes_[0] = static_cast<char>((code >> 8) & 0xFF);
+    bytes_[1] = static_cast<char>(code & 0xFF);
+    if (!reason.empty()) {
+        std::memcpy(bytes_.data() + 2, reason.data(), reason.size());
+    }
+}
+
+WebSocketClosePayloadEncodeResult encodeWebSocketClosePayload(
+    std::uint16_t code,
+    std::string_view reason) noexcept {
+    if (!isValidWebSocketCloseCode(code)) {
+        return WebSocketClosePayloadEncodeResult(
+            WebSocketClosePayloadEncodeFailure(
+                WebSocketClosePayloadEncodeError::kInvalidCode));
     }
     if (reason.size() > 123) {
-        throw std::invalid_argument("websocket close payload is too large");
+        return WebSocketClosePayloadEncodeResult(
+            WebSocketClosePayloadEncodeFailure(
+                WebSocketClosePayloadEncodeError::kReasonTooLarge));
     }
-    payload[0] = static_cast<char>((code >> 8) & 0xFF);
-    payload[1] = static_cast<char>(code & 0xFF);
-    if (!reason.empty()) {
-        std::memcpy(payload.data() + 2, reason.data(), reason.size());
+    if (!isValidUtf8(reason)) {
+        return WebSocketClosePayloadEncodeResult(
+            WebSocketClosePayloadEncodeFailure(
+                WebSocketClosePayloadEncodeError::kInvalidReason));
     }
-    return reason.size() + 2;
+    return WebSocketClosePayloadEncodeResult(
+        WebSocketEncodedClosePayload(code, reason));
 }
 
 std::optional<WebSocketProtocolFailure>

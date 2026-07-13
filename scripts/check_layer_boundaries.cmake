@@ -1811,6 +1811,9 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
    NOT multipart_public_api MATCHES "enum class MultipartParseError" OR
    NOT multipart_public_api MATCHES "class MultipartPollFailure final" OR
    NOT multipart_public_api MATCHES "class MultipartPollResult final" OR
+   NOT multipart_public_api MATCHES "class MultipartBody final" OR
+   NOT multipart_public_api MATCHES "class MultipartBodyParseFailure final" OR
+   NOT multipart_public_api MATCHES "class MultipartBodyParseResult final" OR
    NOT multipart_public_api MATCHES "using Value = std::variant" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartPollFailure>" OR
@@ -1818,7 +1821,7 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
    NOT multipart_public_api MATCHES "MultipartParser[(]MultipartBoundary boundary" OR
    NOT multipart_public_api MATCHES "void feed[(]std::string_view chunk[)]" OR
    NOT multipart_public_api MATCHES "void finishInput[(][)] noexcept" OR
-   NOT multipart_public_api MATCHES "parseMultipartBody[(][^)]*MultipartBoundary boundary")
+   NOT multipart_public_api MATCHES "MultipartBodyParseResult parseMultipartBody")
     boundary_error("multipart public API lost its typed sans-I/O contract"
         "MultipartParser.h must validate boundary ownership once and expose discriminated phase/need-input/part/done results")
 endif()
@@ -1854,13 +1857,21 @@ else()
        NOT multipart_incremental_implementation MATCHES
            "MultipartPollResult::makeFailure" OR
        NOT multipart_parser_implementation MATCHES
-           "multipartParseErrorMessage")
+           "multipartParseErrorMessage" OR
+       multipart_parser_implementation MATCHES
+           "throw[ \t]+std::invalid_argument" OR
+       NOT multipart_parser_implementation MATCHES
+           "MultipartParser parser[(]" OR
+       NOT multipart_parser_implementation MATCHES
+           "borrowedInputMode_[(]true[)]")
         boundary_error("incremental multipart wire failures bypass typed results"
-            "poll/processBoundary/processHeaders/readBodyChunk must return MultipartPollFailure; only the complete-body convenience may throw invalid_argument")
+            "buffered and incremental parsing must share MultipartParser and return typed wire failures")
     endif()
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-web/src/http/MultipartReader.cpp"
     multipart_web_driver)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
+    multipart_buffered_web_driver)
 if(NOT multipart_web_driver MATCHES "parser_[.]finishInput[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]part[(][)]" OR
    NOT multipart_web_driver MATCHES "result[.]done[(][)]" OR
@@ -1872,6 +1883,15 @@ if(NOT multipart_web_driver MATCHES "parser_[.]finishInput[(][)]" OR
     boundary_error("multipart Web facade stopped driving the complete HTTP body lifecycle"
         "the runtime must drive typed results, signal EOF to the protocol parser, and drain RFC 2046 epilogue bytes")
 endif()
+if(NOT multipart_buffered_web_driver MATCHES
+       "parseCompleteMultipartBody" OR
+   NOT multipart_buffered_web_driver MATCHES "parsed[.]failure[(][)]" OR
+   NOT multipart_buffered_web_driver MATCHES "failure->error[(][)]" OR
+   NOT multipart_buffered_web_driver MATCHES "HttpProtocolError" OR
+   NOT multipart_buffered_web_driver MATCHES "takeParts[(][)]")
+    boundary_error("buffered multipart Web facade bypasses the typed parser result"
+        "Context request parsing must map one HTTP result and consume its owned part vector")
+endif()
 file(READ "${RUVIA_ROOT}/tests/unit_multipart.cpp" multipart_unit_test)
 file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
     multipart_package_consumer)
@@ -1880,8 +1900,12 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_unit_test MATCHES "multipart_parser_reports_typed_incomplete_body" OR
    NOT multipart_unit_test MATCHES "multipart_part_header_result_is_discriminated" OR
    NOT multipart_unit_test MATCHES "default_initializable<ruvia::MultipartPollResult>" OR
+   NOT multipart_unit_test MATCHES "ruvia::MultipartBodyParseResult" OR
+   NOT multipart_unit_test MATCHES "multipart_complete_body_parser_rejects_malformed_body" OR
+   NOT multipart_unit_test MATCHES "multipart_complete_body_parser_shares_incremental_limits" OR
    NOT multipart_unit_test MATCHES "HasMultipartLineBytes" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartPollResult" OR
+   NOT multipart_package_consumer MATCHES "ruvia::MultipartBodyParseResult" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
    NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>")
     boundary_error("typed multipart result ownership is insufficiently tested"
@@ -1933,6 +1957,16 @@ check_files_no_match("WebSocket events must remain optional and discriminated"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h"
     "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionRead.inl")
+check_files_no_match("WebSocket core must keep one generic frame submission entry"
+    "submit(Message|Ping|Pong)[(]"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h"
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl")
+check_files_no_match("WebSocket transport end must use only typed disposition"
+    "endsTransport[(]|transportEndPending[(]"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/WsConnection.h"
+    "${RUVIA_ROOT}/ruvia-http/src/websocket/WsConnection.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/websocket/HttpWebSocketConnectionWrite.inl")
 check_files_no_match("WebSocket inbound parsing must remain nonthrowing and discriminated"
     "${RULE_STALE_WS_INBOUND_RESULT}"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/websocket/HttpWebSocketUtils.h"
@@ -7555,13 +7589,52 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
     file(READ "${WS_H2_TRANSPORT}" ws_h2_transport)
     file(READ "${WS_LIVENESS_POLICY}" ws_liveness)
     file(READ "${WS_PUBLIC_CONFIG}" ws_public_config)
-    if(NOT ws_protocol MATCHES "enum class WsClosePhase" OR
+    if(NOT ws_protocol MATCHES "enum class WsLivenessMode" OR
+       NOT ws_protocol MATCHES "enum class WsAbortDisposition" OR
        NOT ws_protocol MATCHES "class WsOutputPlan" OR
        NOT ws_protocol MATCHES "WsTransportDisposition" OR
+       NOT ws_protocol MATCHES
+           "WsTransportDisposition disposition[(][)] const noexcept" OR
+       ws_protocol MATCHES "endsTransport[(]" OR
+       ws_protocol MATCHES "transportEndPending[(]" OR
+       ws_protocol MATCHES "closePhase[(]" OR
+       ws_protocol MATCHES "closed[(]" OR
        NOT ws_protocol MATCHES "std::optional<WsEvent> poll" OR
        NOT ws_protocol MATCHES "ruvia/http/detail/websocket/WsEvent.h")
         boundary_error("WebSocket close lifecycle lost its protocol-owned plan"
-            "WsClosePhase, WsOutputPlan, typed transport disposition, and optional poll() must stay bound")
+            "liveness, abort, output, and event operations must expose typed plans without close-state side channels")
+    endif()
+    if(NOT ws_protocol MATCHES "enum class WsFrameSubmitStatus" OR
+       NOT ws_protocol MATCHES "enum class WsCloseSubmitStatus" OR
+       NOT ws_protocol MATCHES "WsFrameSubmitStatus submitFrame" OR
+       NOT ws_protocol MATCHES "WsCloseSubmitStatus submitClose" OR
+       ws_protocol MATCHES "acceptsApplicationFrames[(]" OR
+       ws_protocol_source MATCHES
+           "throw[ \\t]+std::(invalid_argument|logic_error)" OR
+       NOT ws_runtime_write MATCHES
+           "switch [(]protocol_[.]submitFrame" OR
+       NOT ws_runtime_write MATCHES
+           "switch [(]protocol_[.]submitClose")
+        boundary_error("WebSocket outbound submission lost its typed ownership"
+            "the protocol core must own opcode, size, and close-state decisions while Web maps typed failures")
+    endif()
+    if(NOT ws_inbound MATCHES
+           "enum class WebSocketClosePayloadEncodeError" OR
+       NOT ws_inbound MATCHES
+           "class WebSocketEncodedClosePayload final" OR
+       NOT ws_inbound MATCHES
+           "class WebSocketClosePayloadEncodeFailure final" OR
+       NOT ws_inbound MATCHES
+           "class WebSocketClosePayloadEncodeResult final" OR
+       NOT ws_inbound MATCHES
+           "std::get_if<WebSocketEncodedClosePayload>" OR
+       NOT ws_inbound MATCHES
+           "std::get_if<WebSocketClosePayloadEncodeFailure>" OR
+       ws_inbound MATCHES "using WebSocketClosePayload" OR
+       ws_validation_source MATCHES
+           "throw[ \\t]+std::invalid_argument")
+        boundary_error("WebSocket close encoding lost its owned result"
+            "outbound close validation must return an allocation-free discriminated value without an output buffer")
     endif()
     if(NOT ws_event MATCHES "enum class WsEventKind" OR
        NOT ws_event MATCHES "using Value = std::variant" OR
@@ -7635,7 +7708,7 @@ if(EXISTS "${WS_PROTOCOL_HEADER}" AND EXISTS "${WS_EVENT_HEADER}" AND
        ws_public_config MATCHES "milliseconds pongTimeout[{]" OR
        NOT ws_public_config MATCHES "closeHandshakeTimeout" OR
        NOT ws_liveness MATCHES "options[.]heartbeat[.]has_value" OR
-       NOT ws_liveness MATCHES "WsClosePhase closePhase" OR
+       NOT ws_liveness MATCHES "WsLivenessMode livenessMode" OR
        NOT ws_runtime MATCHES "WebSocketLifecycleOptions lifecycleOptions_")
         boundary_error("WebSocket liveness policy is not Web-owned"
             "timer configuration and enforcement must remain in ruvia-web")

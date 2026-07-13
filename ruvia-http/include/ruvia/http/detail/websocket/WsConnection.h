@@ -28,23 +28,39 @@
 
 namespace ruvia::detail {
 
-enum class WsClosePhase : std::uint8_t {
-    kOpen,
-    // A locally initiated Close is at the tail of pending output. Once flushed,
-    // the connection must keep receiving until the peer's Close arrives.
-    kLocalCloseQueued,
-    kAwaitingPeerClose,
-    // A peer Close was received (or the connection failed) and the final local
-    // Close bytes still need to be flushed before ending the transport.
-    kFinalCloseQueued,
-    // No WebSocket bytes remain; the transport must now be ended orderly.
-    kTransportEndReady,
-    kClosed,
-};
-
 enum class WsTransportDisposition : std::uint8_t {
     kKeepOpen,
     kEndTransport,
+};
+
+// Runtime timeout policy needs only this protocol-owned classification, not the
+// internal close-handshake state machine.
+enum class WsLivenessMode : std::uint8_t {
+    kOpen,
+    kAwaitingPeerClose,
+    kInactive,
+};
+
+enum class WsFrameSubmitStatus : std::uint8_t {
+    kAccepted,
+    kNotOpen,
+    kInvalidOpcode,
+    kMessageTooLarge,
+    kControlFrameTooLarge,
+};
+
+enum class WsCloseSubmitStatus : std::uint8_t {
+    kAccepted,
+    kAlreadyClosing,
+    kClosed,
+    kInvalidCode,
+    kInvalidReason,
+    kReasonTooLarge,
+};
+
+enum class WsAbortDisposition : std::uint8_t {
+    kAbortTransport,
+    kNoTransportAction,
 };
 
 class WsOutputPlan final {
@@ -55,10 +71,6 @@ public:
 
     [[nodiscard]] constexpr WsTransportDisposition disposition() const noexcept {
         return disposition_;
-    }
-
-    [[nodiscard]] constexpr bool endsTransport() const noexcept {
-        return disposition_ == WsTransportDisposition::kEndTransport;
     }
 
 private:
@@ -91,34 +103,34 @@ public:
     void consumeOutput(std::size_t n) noexcept;
     void commitTransportEnd() noexcept;
     void notifyTransportEof() noexcept;
-    void abort() noexcept;
-
-    [[nodiscard]] WsClosePhase closePhase() const noexcept {
-        return closePhase_;
-    }
-
-    [[nodiscard]] bool acceptsApplicationFrames() const noexcept {
-        return closePhase_ == WsClosePhase::kOpen;
-    }
-
-    [[nodiscard]] bool transportEndPending() const noexcept {
-        return closePhase_ == WsClosePhase::kFinalCloseQueued ||
-            closePhase_ == WsClosePhase::kTransportEndReady;
-    }
-
-    [[nodiscard]] bool closed() const noexcept {
-        return closePhase_ == WsClosePhase::kClosed;
-    }
+    [[nodiscard]] WsAbortDisposition abort() noexcept;
+    [[nodiscard]] WsLivenessMode livenessMode() const noexcept;
 
     // Submit one already-formed logical frame payload. Server masking, optional
     // data-message compression and wire header encoding stay inside the core.
-    void submitFrame(WebSocketOpcode opcode, std::string_view payload);
-    void submitMessage(WebSocketOpcode opcode, std::string_view payload);
-    void submitPing(std::string_view payload);
-    void submitPong(std::string_view payload);
-    void submitClose(std::uint16_t code, std::string_view reason);
+    // Close has a separate typed entry because it owns code/reason validation
+    // and close-handshake state rather than accepting a pre-encoded payload.
+    [[nodiscard]] WsFrameSubmitStatus submitFrame(
+        WebSocketOpcode opcode,
+        std::string_view payload);
+    [[nodiscard]] WsCloseSubmitStatus submitClose(
+        std::uint16_t code,
+        std::string_view reason);
 
 private:
+    enum class ClosePhase : std::uint8_t {
+        kOpen,
+        // A locally initiated Close is at the tail of pending output. Once
+        // flushed, the connection keeps receiving until the peer Close.
+        kLocalCloseQueued,
+        kAwaitingPeerClose,
+        // A peer Close was received (or the connection failed) and the final
+        // local Close bytes still need to be flushed before transport end.
+        kFinalCloseQueued,
+        kTransportEndReady,
+        kClosed,
+    };
+
     void appendFrame(WebSocketOpcode opcode, std::string_view payload, bool rsv1 = false);
     void fail(std::uint16_t code, std::string_view reason = {});
     void receivePeerClose() noexcept;
@@ -137,7 +149,7 @@ private:
     std::pmr::string inboundInflated_;
     std::pmr::string outboundDeflated_;
 
-    WsClosePhase closePhase_{WsClosePhase::kOpen};
+    ClosePhase closePhase_{ClosePhase::kOpen};
 };
 
 }  // namespace ruvia::detail

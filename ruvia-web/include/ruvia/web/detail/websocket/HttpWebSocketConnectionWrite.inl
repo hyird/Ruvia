@@ -4,28 +4,40 @@ namespace ruvia::detail {
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::write(WebSocketOpcode opcode, std::string_view payload) {
-    if (!protocol_.acceptsApplicationFrames()) {
-        co_return;
-    }
     co_await writeExclusive(opcode, payload);
 }
 
 template <typename Transport>
 Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string_view reason) {
-    if (protocol_.closed()) {
-        co_return;
-    }
     co_await waitForHeartbeatWrite();
     if (writeActive_) {
         throw std::logic_error("concurrent websocket writes are not supported");
     }
     writeActive_ = true;
+    bool flushOutput = false;
+    bool awaitPeerClose = false;
     try {
-        if (protocol_.acceptsApplicationFrames()) {
-            protocol_.submitClose(code, reason);
-            localCloseStartedMs_ = scannerEntry_.lastActiveMs();
+        switch (protocol_.submitClose(code, reason)) {
+            case WsCloseSubmitStatus::kAccepted:
+                localCloseStartedMs_ = scannerEntry_.lastActiveMs();
+                flushOutput = true;
+                awaitPeerClose = true;
+                break;
+            case WsCloseSubmitStatus::kAlreadyClosing:
+                flushOutput = true;
+                break;
+            case WsCloseSubmitStatus::kClosed:
+                break;
+            case WsCloseSubmitStatus::kInvalidCode:
+                throw std::invalid_argument("invalid websocket close code");
+            case WsCloseSubmitStatus::kInvalidReason:
+                throw std::invalid_argument("invalid websocket close reason");
+            case WsCloseSubmitStatus::kReasonTooLarge:
+                throw std::invalid_argument("websocket close reason is too large");
         }
-        co_await flushProtocolOutputNow();
+        if (flushOutput) {
+            co_await flushProtocolOutputNow();
+        }
     } catch (...) {
         writeActive_ = false;
         notifyWriteIdle();
@@ -38,7 +50,7 @@ Task<void> WebSocketConnection<Transport>::close(std::uint16_t code, std::string
     // Keep parsing transport input until the peer Close arrives (or EOF/timeout
     // aborts this transport). The core suppresses application messages in this
     // phase while still validating frames and handling control traffic.
-    if (!protocol_.closed()) {
+    if (awaitPeerClose) {
         (void)co_await read();
     }
 }
@@ -51,9 +63,7 @@ Task<void> WebSocketConnection<Transport>::detachAndDrainBackgroundWrites() {
             backgroundWriteTimer_.async_wait(std::move(handler));
         });
     }
-    if (!protocol_.closed()) {
-        abortTransport();
-    }
+    abortTransport();
 }
 
 template <typename Transport>
@@ -106,7 +116,18 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::writeFrameNow(
     WebSocketOpcode opcode,
     std::string_view payload) {
-    protocol_.submitFrame(opcode, payload);
+    switch (protocol_.submitFrame(opcode, payload)) {
+        case WsFrameSubmitStatus::kAccepted:
+            break;
+        case WsFrameSubmitStatus::kNotOpen:
+            co_return;
+        case WsFrameSubmitStatus::kInvalidOpcode:
+            throw std::logic_error("invalid outbound websocket opcode");
+        case WsFrameSubmitStatus::kMessageTooLarge:
+            throw std::invalid_argument("websocket message is too large");
+        case WsFrameSubmitStatus::kControlFrameTooLarge:
+            throw std::invalid_argument("websocket control frame is too large");
+    }
     co_await flushProtocolOutputNow();
 }
 
@@ -129,18 +150,21 @@ template <typename Transport>
 Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
     for (;;) {
         const auto plan = protocol_.outputPlan();
-        if (plan.bytes().empty() && !plan.endsTransport()) {
+        const auto disposition = plan.disposition();
+        if (plan.bytes().empty() &&
+            disposition == WsTransportDisposition::kKeepOpen) {
             co_return;
         }
-        const auto ec = co_await transport_.writeBytes(plan.bytes(), plan.disposition());
+        const auto ec = co_await transport_.writeBytes(
+            plan.bytes(), disposition);
         if (ec) {
             transport_.abort();
-            protocol_.abort();
+            (void)protocol_.abort();
             throw std::system_error(ec, "failed to write websocket bytes");
         }
         protocol_.consumeOutput(plan.bytes().size());
         scannerEntry_.touch();
-        if (plan.endsTransport()) {
+        if (disposition == WsTransportDisposition::kEndTransport) {
             protocol_.commitTransportEnd();
             co_return;
         }
@@ -149,12 +173,10 @@ Task<void> WebSocketConnection<Transport>::flushProtocolOutputNow() {
 
 template <typename Transport>
 void WebSocketConnection<Transport>::abortTransport() noexcept {
-    if (protocol_.closed()) {
-        return;
+    if (protocol_.abort() == WsAbortDisposition::kAbortTransport) {
+        transport_.abort();
+        notifyWriteIdle();
     }
-    protocol_.abort();
-    transport_.abort();
-    notifyWriteIdle();
 }
 
 }  // namespace ruvia::detail

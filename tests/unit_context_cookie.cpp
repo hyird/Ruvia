@@ -15,6 +15,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/http/HttpHeader.h"
 #include "ruvia/http/HttpKnownMethod.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/core/memory/MemoryPool.h"
 
 namespace {
@@ -457,6 +458,38 @@ RUVIA_TEST(context_parse_body_rejects_malformed_urlencoded) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(context_parse_body_maps_multipart_failure_to_http_protocol_error) {
+    WorkerMemory worker;
+    HttpRequest request = HttpRequestAccess::make();
+    HttpRequestAccess::reset(request);
+    HttpRequestAccess::addHeader(
+        request,
+        HttpHeaderView{"Content-Type", "multipart/form-data; boundary=BOUNDARY"},
+        HttpRequestAccess::knownHeaderSlot(RequestKnownHeader::kContentType));
+    HttpRequestAccess::setBody(
+        request,
+        "--BOUNDARY\r\n"
+        "Content-Disposition: form-data; name=\"field\"\r\n\r\n"
+        "truncated");
+
+    RequestMemory requestMemory(worker);
+    HttpRequestAccess::setResource(request, requestMemory.resource());
+    auto context = ContextAccess::make(requestMemory, request);
+
+    asio::io_context io;
+    auto future = asio::co_spawn(
+        io, cloneParseBodyDiscard(context), asio::use_future);
+    io.run();
+    bool mapped = false;
+    try {
+        future.get();
+    } catch (const ruvia::HttpProtocolError& error) {
+        mapped = error.status() == 400 &&
+            error.what() == std::string_view("incomplete multipart body");
+    }
+    RUVIA_CHECK(mapped);
 }
 
 RUVIA_TEST(context_parse_body_skips_empty_urlencoded_segments) {

@@ -25,6 +25,19 @@ struct MultipartPartAccess final {
         httpAppendDecodedQuotedPairs(decodedFilename, filename);
         return MultipartPart(std::move(decodedName), std::move(decodedFilename), contentType, body);
     }
+
+    [[nodiscard]] static MultipartPart makeDecoded(
+        std::string_view name,
+        std::string_view filename,
+        std::string_view contentType,
+        std::string_view body,
+        std::pmr::memory_resource* resource) {
+        return MultipartPart(
+            std::pmr::string(name, resource),
+            std::pmr::string(filename, resource),
+            contentType,
+            body);
+    }
 };
 
 }  // namespace ruvia::detail

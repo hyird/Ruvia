@@ -7,6 +7,7 @@
 #include "ruvia/http/detail/HeaderTokenUtils.h"
 #include "ruvia/http/detail/HeaderAcceptUtils.h"
 #include "ruvia/http/detail/HttpRequestInternal.h"
+#include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/ContextRequestInternal.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
 #include "ruvia/http/detail/MultipartParsing.h"
@@ -318,12 +319,29 @@ void compactParsedBodyFields(
     return ContextRequest::RequestFormData(std::move(fields));
 }
 
+[[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(
+    std::string_view requestBody,
+    MultipartBoundary boundary,
+    std::pmr::memory_resource* resource) {
+    auto parsed = parseMultipartBody(requestBody, std::move(boundary), resource);
+    if (const auto* failure = parsed.failure()) {
+        throw HttpProtocolError(
+            400, multipartParseErrorMessage(failure->error()));
+    }
+    auto* body = parsed.body();
+    if (body == nullptr) {
+        throw std::logic_error("unexpected multipart body parse result");
+    }
+    return std::move(*body).takeParts();
+}
+
 [[nodiscard]] ContextRequest::RequestFormData parseMultipartFormBody(
     std::string_view requestBody,
     MultipartBoundary boundary,
     std::pmr::memory_resource* resource,
     ContextRequest::ParseBodyOptions options) {
-    auto parts = parseMultipartBody(requestBody, std::move(boundary), resource);
+    auto parts = parseCompleteMultipartBody(
+        requestBody, std::move(boundary), resource);
     std::pmr::vector<ContextRequest::RequestFormField> fields(resource);
     fields.reserve(parts.size());
     for (const auto& part : parts) {
@@ -780,7 +798,7 @@ bool Context::requestContentTypeMatches(std::string_view expected) const noexcep
 Task<std::pmr::vector<MultipartPart>> Context::requestMultipart() const {
     const auto boundary = multipartBoundary();
     const auto requestBody = co_await this->requestBody();
-    co_return parseMultipartBody(requestBody, boundary, resource());
+    co_return parseCompleteMultipartBody(requestBody, boundary, resource());
 }
 
 Task<ContextRequest::RequestFormData> Context::parseRequestBody(

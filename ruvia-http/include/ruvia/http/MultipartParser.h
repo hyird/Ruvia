@@ -266,6 +266,87 @@ private:
     Value value_;
 };
 
+class MultipartBody final {
+public:
+    MultipartBody(const MultipartBody&) = delete;
+    MultipartBody& operator=(const MultipartBody&) = delete;
+    MultipartBody(MultipartBody&&) noexcept = default;
+    MultipartBody& operator=(MultipartBody&&) = delete;
+
+    [[nodiscard]] const std::pmr::vector<MultipartPart>& parts() const & noexcept {
+        return parts_;
+    }
+    const std::pmr::vector<MultipartPart>& parts() const && = delete;
+
+    [[nodiscard]] std::pmr::vector<MultipartPart> takeParts() && noexcept {
+        return std::move(parts_);
+    }
+
+private:
+    friend class MultipartBodyParseResult;
+
+    explicit MultipartBody(std::pmr::vector<MultipartPart> parts) noexcept
+        : parts_(std::move(parts)) {}
+
+    std::pmr::vector<MultipartPart> parts_;
+};
+
+class MultipartBodyParseFailure final {
+public:
+    [[nodiscard]] constexpr MultipartParseError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class MultipartBodyParseResult;
+
+    explicit constexpr MultipartBodyParseFailure(
+        MultipartParseError error) noexcept
+        : error_(error) {}
+
+    MultipartParseError error_;
+};
+
+class MultipartBodyParseResult final {
+public:
+    MultipartBodyParseResult(const MultipartBodyParseResult&) = delete;
+    MultipartBodyParseResult& operator=(const MultipartBodyParseResult&) = delete;
+    MultipartBodyParseResult(MultipartBodyParseResult&&) noexcept = default;
+    MultipartBodyParseResult& operator=(MultipartBodyParseResult&&) = delete;
+
+    [[nodiscard]] MultipartBody* body() & noexcept {
+        return std::get_if<MultipartBody>(&value_);
+    }
+
+    [[nodiscard]] const MultipartBody* body() const & noexcept {
+        return std::get_if<MultipartBody>(&value_);
+    }
+    MultipartBody* body() && = delete;
+    const MultipartBody* body() const && = delete;
+
+    [[nodiscard]] const MultipartBodyParseFailure* failure() const & noexcept {
+        return std::get_if<MultipartBodyParseFailure>(&value_);
+    }
+    const MultipartBodyParseFailure* failure() const && = delete;
+
+private:
+    friend MultipartBodyParseResult parseMultipartBody(
+        std::string_view,
+        MultipartBoundary,
+        std::pmr::memory_resource*);
+
+    using Value = std::variant<MultipartBody, MultipartBodyParseFailure>;
+
+    explicit MultipartBodyParseResult(std::pmr::vector<MultipartPart> parts) noexcept
+        : value_(MultipartBody(std::move(parts))) {}
+
+    explicit MultipartBodyParseResult(
+        MultipartParseError error) noexcept
+        : value_(MultipartBodyParseFailure(error)) {}
+
+    Value value_;
+};
+
 class MultipartParser final {
 public:
     MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
@@ -279,6 +360,19 @@ public:
     [[nodiscard]] MultipartPollResult poll();
 
 private:
+    struct CompleteInputTag final {};
+
+    friend MultipartBodyParseResult parseMultipartBody(
+        std::string_view,
+        MultipartBoundary,
+        std::pmr::memory_resource*);
+
+    MultipartParser(
+        std::string_view completeBody,
+        MultipartBoundary boundary,
+        std::pmr::memory_resource* resource,
+        CompleteInputTag);
+
     enum class State {
         kBoundary,
         kHeaders,
@@ -316,6 +410,9 @@ private:
     std::pmr::string currentName_;
     std::pmr::string currentFilename_;
     std::pmr::string currentContentType_;
+    std::string_view currentContentTypeView_;
+    std::string_view borrowedInput_;
+    bool borrowedInputMode_{false};
     State state_{State::kBoundary};
     std::size_t bufferOffset_{0};
     std::size_t pendingEraseBytes_{0};
@@ -326,7 +423,7 @@ private:
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // and content types borrow `body`; decoded name/filename values own PMR storage.
-[[nodiscard]] std::pmr::vector<MultipartPart> parseMultipartBody(
+[[nodiscard]] MultipartBodyParseResult parseMultipartBody(
     std::string_view body,
     MultipartBoundary boundary,
     std::pmr::memory_resource* resource = nullptr);
