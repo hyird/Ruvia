@@ -1,9 +1,9 @@
 #include <chrono>
 #include <string_view>
 
-#include "ruvia/app/App.h"
-#include "ruvia/auth/Jwt.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/auth/Jwt.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 
@@ -15,9 +15,7 @@ ruvia::JwtSignOptions signOptions(ruvia::Context& c) {
     options.issuer.assign("ruvia-example");
     options.audience.assign("ruvia-api");
     options.expiresIn = std::chrono::minutes(30);
-    options.claims.emplace_back(
-        std::pmr::string("scope", c.resource()),
-        std::pmr::string("example", c.resource()));
+    options.claims.emplace_back("scope", "example");
     return options;
 }
 
@@ -34,20 +32,22 @@ ruvia::JwtVerifyOptions verifyOptions() {
 
 class JwtAuthMiddleware final : public ruvia::Middleware<JwtAuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        const auto token = ruvia::jwtBearerToken(c.header(ruvia::HttpRequest::KnownHeader::kAuthorization));
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        const auto token = ruvia::jwtBearerToken(c.req().header("Authorization").value_or(""));
         if (!token) {
-            co_return c.error(401, "missing_token", "missing bearer token");
+            c.respond(c.error(401, "missing_token", "missing bearer token"));
+            co_return;
         }
 
         try {
             const auto payload = ruvia::jwtVerify(*token, verifyOptions(), c.resource());
-            c.setHeader("X-Jwt-Subject", payload.subject());
+            c.header("X-Jwt-Subject", payload.subject());
         } catch (...) {
-            co_return c.error(401, "invalid_token", "invalid bearer token");
+            c.respond(c.error(401, "invalid_token", "invalid bearer token"));
+            co_return;
         }
 
-        co_return co_await next(c);
+        co_await next();
     }
 };
 
@@ -63,7 +63,7 @@ public:
 private:
     ruvia::Task<ruvia::HttpResponse> token(ruvia::Context& c) {
         auto options = signOptions(c);
-        options.subject.assign(c.query("sub").toStringView().value_or("example-user"));
+        options.subject.assign(c.req().query("sub").value_or("example-user"));
         auto jwt = ruvia::jwtSign(options, c.resource());
         co_return c.text(jwt);
     }
@@ -75,7 +75,8 @@ private:
 
 int main() {
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8085)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8085)
         .setThreadNum(2)
         .run();
 }

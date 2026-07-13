@@ -1,9 +1,9 @@
 #include <filesystem>
 #include <memory>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
-#include "ruvia/http/StaticFiles.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
+#include "ruvia/web/StaticFiles.h"
 
 namespace {
 
@@ -30,7 +30,7 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> asset(ruvia::Context& c) {
-        co_return c.staticFile(*gAssets, c.param("*").toStringView().value_or("index.html"));
+        co_return c.staticFile(*gAssets, c.req().param("*").value_or("index.html"));
     }
 };
 
@@ -49,9 +49,10 @@ int main() {
     documentRoot.staticOptions.cacheControl = "public, max-age=3600";
 
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8083)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8083)
         .setThreadNum(2)
-        .setCompression(ruvia::CompressionConfig{.enabled = true, .minBytes = 128})
+        .setCompression(ruvia::CompressionConfig{.minBytes = 128})
         .setDocumentRoot(std::move(documentRoot))
         .run();
 }

@@ -1,6 +1,0 @@
-#pragma once
-
-#define RUVIA_VERSION_MAJOR 0
-#define RUVIA_VERSION_MINOR 0
-#define RUVIA_VERSION_PATCH 6
-#define RUVIA_VERSION_STRING "0.0.6"
