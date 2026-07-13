@@ -325,9 +325,7 @@ RUVIA_TEST(h2_headers_expect_is_an_extensible_repeated_list) {
         HttpServerExpectationAction::kSend100Continue);
 
     RUVIA_CHECK(supported.finishRemoteContent());
-    RUVIA_CHECK(
-        supported.expectationAction() ==
-        HttpServerExpectationAction::kNone);
+    RUVIA_CHECK(!supported.expectationAction());
 
     Http2StreamState extension(3, res());
     Http2HeaderDecodeContext extensionContext{extension};

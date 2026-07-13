@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <variant>
 
 namespace ruvia::detail {
@@ -93,11 +94,12 @@ public:
         return expectations_;
     }
 
-    [[nodiscard]] HttpServerExpectationAction expectationAction() const noexcept {
+    [[nodiscard]] std::optional<HttpServerExpectationAction>
+    expectationAction() const noexcept {
         return expectations_.serverAction(
             requiresConsumption()
                 ? HttpRequestContentIndication::kWillFollow
-                : HttpRequestContentIndication::kNone);
+                : HttpRequestContentIndication::kNoContent);
     }
 
 private:

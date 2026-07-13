@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -11,15 +12,15 @@ namespace ruvia::detail {
 // follow the initial head. Keep this typed: HTTP/1 derives it from its body plan,
 // while HTTP/2 derives it from END_STREAM rather than from Content-Length alone.
 enum class HttpRequestContentIndication : std::uint8_t {
-    kNone,
+    kNoContent,
     kWillFollow
 };
 
-// A protocol fact consumed by a server runtime. kUnsupported is deliberately not
-// a parse error: Expect is extensible and RFC 9110 permits (rather than requires)
-// a server to answer an unknown expectation with 417.
+// A protocol action consumed by a server runtime. Absence is returned as an
+// empty optional. kUnsupported is deliberately not a parse error: Expect is
+// extensible and RFC 9110 permits (rather than requires) a server to answer an
+// unknown expectation with 417.
 enum class HttpServerExpectationAction : std::uint8_t {
-    kNone,
     kSend100Continue,
     kUnsupported
 };
@@ -58,7 +59,7 @@ public:
         flags_ &= static_cast<std::uint8_t>(~k100Continue);
     }
 
-    [[nodiscard]] HttpServerExpectationAction serverAction(
+    [[nodiscard]] std::optional<HttpServerExpectationAction> serverAction(
         HttpRequestContentIndication content) const noexcept {
         if (hasUnsupported()) {
             return HttpServerExpectationAction::kUnsupported;
@@ -67,7 +68,7 @@ public:
             content == HttpRequestContentIndication::kWillFollow) {
             return HttpServerExpectationAction::kSend100Continue;
         }
-        return HttpServerExpectationAction::kNone;
+        return std::nullopt;
     }
 
 private:

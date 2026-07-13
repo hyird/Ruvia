@@ -43,9 +43,8 @@ RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
 
     RUVIA_CHECK(expectations.has100Continue());
     RUVIA_CHECK(!expectations.hasUnsupported());
-    RUVIA_CHECK(
-        expectations.serverAction(HttpRequestContentIndication::kNone) ==
-        HttpServerExpectationAction::kNone);
+    RUVIA_CHECK(!expectations.serverAction(
+        HttpRequestContentIndication::kNoContent));
     RUVIA_CHECK(
         expectations.serverAction(HttpRequestContentIndication::kWillFollow) ==
         HttpServerExpectationAction::kSend100Continue);

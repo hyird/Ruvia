@@ -6911,6 +6911,8 @@ else()
        NOT http1_request_body_plan MATCHES "transferCodings" OR
        NOT http1_request_body_plan MATCHES "HttpRequestExpectations" OR
        NOT http1_request_body_plan MATCHES "expectationAction" OR
+       NOT http1_request_body_plan MATCHES
+           "std::optional<HttpServerExpectationAction>" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParseState" OR
        NOT http1_request_body_plan MATCHES "friend class Http1ServerRequestParser" OR
        NOT http1_request_body_plan MATCHES
@@ -6995,10 +6997,15 @@ elseif(EXISTS "${HTTP1_HEADER_BLOCK_STATE}" AND
        NOT http_request_expectations MATCHES "httpVisitCommaSeparatedQuoted" OR
        NOT http_request_expectations MATCHES "HttpRequestContentIndication" OR
        NOT http_request_expectations MATCHES "HttpServerExpectationAction" OR
+       NOT http_request_expectations MATCHES "kNoContent" OR
+       NOT http_request_expectations MATCHES
+           "std::optional<HttpServerExpectationAction> serverAction" OR
        NOT http_request_expectations MATCHES "kUnsupported" OR
        NOT http1_header_block_state MATCHES "HttpRequestExpectations expectations" OR
        NOT http1_header_block_parser MATCHES "expectations[.]parseField" OR
        NOT http2_stream_state MATCHES "HttpRequestExpectations expectations_" OR
+       NOT http2_stream_state MATCHES
+           "std::optional<HttpServerExpectationAction>" OR
        NOT http2_request_headers MATCHES "parseRequestExpectationField" OR
        NOT web_http1_session MATCHES "HttpErrorInfo[(]417" OR
        NOT web_http1_session MATCHES "HttpServerExpectationAction::kUnsupported" OR
@@ -7010,6 +7017,17 @@ elseif(EXISTS "${HTTP1_HEADER_BLOCK_STATE}" AND
             "shared list state must feed HTTP/1/H2 actions; Web alone chooses 417 and drives typed 100 writers")
     endif()
 endif()
+check_files_no_match("server Expect actions restored no-action sentinels"
+    "HttpServerExpectationAction::kNone|HttpRequestContentIndication::kNone|enum class HttpServerExpectationAction[^{]*[{][^}]*kNone"
+    "${HTTP_REQUEST_EXPECTATIONS}"
+    "${HTTP1_REQUEST_BODY_PLAN}"
+    "${HTTP2_STREAM_STATE}"
+    "${WEB_HTTP1_SESSION}"
+    "${WEB_HTTP2_SESSION}"
+    "${RUVIA_ROOT}/tests/unit_header_params.cpp"
+    "${RUVIA_ROOT}/tests/unit_http_server_request_state.cpp"
+    "${RUVIA_ROOT}/tests/unit_http2_request_headers.cpp"
+    "${RUVIA_ROOT}/tests/package-consumer/http.cpp")
 
 set(HTTP_EXPECTATION_LIST_TEST "${RUVIA_ROOT}/tests/unit_header_params.cpp")
 set(HTTP1_EXPECTATION_TEST "${RUVIA_ROOT}/tests/unit_http1_parser.cpp")
