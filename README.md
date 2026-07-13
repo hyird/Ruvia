@@ -67,7 +67,7 @@ ctest --test-dir build -C Debug --output-on-failure
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
-| `RUVIA_BUILD_FUZZERS` | `OFF` | Build the HTTP/1, HTTP/2, and HPACK Clang/libFuzzer targets with ASan and UBSan; requires HTTP. |
+| `RUVIA_BUILD_FUZZERS` | `OFF` | Build the HTTP/1, HTTP/2, and HPACK Clang/libFuzzer targets with UBSan; requires HTTP. |
 | `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |

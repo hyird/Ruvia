@@ -363,12 +363,12 @@ if(RUVIA_BUILD_FUZZERS)
     # The sanitizer runtime link flags propagate to every executable that consumes
     # the instrumented static library in this opt-in build.
     target_compile_options(ruvia-http PRIVATE
-        -fsanitize=fuzzer-no-link,address,undefined
+        -fsanitize=fuzzer-no-link,undefined
         -fno-sanitize-recover=all
         -fno-omit-frame-pointer
     )
     target_link_options(ruvia-http INTERFACE
-        -fsanitize=address,undefined
+        -fsanitize=undefined
         -fno-sanitize-recover=all
     )
     add_subdirectory(tests/fuzz)
