@@ -8,6 +8,7 @@
 #include "ruvia/web/Context.h"
 #include "ruvia/web/Middleware.h"
 #include "ruvia/web/detail/RegistrationResource.h"
+#include "ruvia/web/detail/ValidatedValues.h"
 #include "ruvia/web/detail/middleware/MiddlewareDescriptor.h"
 
 namespace ruvia::detail {
@@ -60,6 +61,15 @@ void destroyMiddleware(void* target) noexcept {
 }
 
 template <typename MiddlewareT>
+[[nodiscard]] const void* middlewareValidatedModelTypeKey() noexcept {
+    if constexpr (requires { typename MiddlewareT::RuviaValidationBody; }) {
+        return validatedValueTypeKey<typename MiddlewareT::RuviaValidationBody>();
+    } else {
+        return nullptr;
+    }
+}
+
+template <typename MiddlewareT>
 [[nodiscard]] ControllerMiddlewareDescriptor makeMiddlewareDescriptor() {
     static_assert(
         std::is_base_of_v<Middleware<MiddlewareT>, MiddlewareT>,
@@ -70,7 +80,8 @@ template <typename MiddlewareT>
     return ControllerMiddlewareDescriptor(
         &invokeMiddleware<MiddlewareT>,
         &createMiddleware<MiddlewareT>,
-        &destroyMiddleware<MiddlewareT>);
+        &destroyMiddleware<MiddlewareT>,
+        middlewareValidatedModelTypeKey<MiddlewareT>());
 }
 
 }  // namespace ruvia::detail

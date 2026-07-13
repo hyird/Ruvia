@@ -215,18 +215,16 @@ concept HasLegacyContextBodyRefinement = requires(
 };
 
 template <typename Request>
-concept HasStringValidationTarget = requires(
-    const Request& request,
-    std::string_view target) {
-    request.template valid<int>(target);
-    request.addValidatedData(target, int{});
+concept HasTypeOnlyValidation = requires(const Request& request) {
+    {
+        request.template valid<int>()
+    } -> std::same_as<const int&>;
+    request.addValidatedData(int{});
 };
 
 template <typename Request>
-concept HasTypedValidationTarget = requires(const Request& request) {
-    {
-        request.template valid<int>(ruvia::ValidationTarget::kJson)
-    } -> std::same_as<const int&>;
+concept HasExplicitValidationTarget = requires(const Request& request) {
+    request.template valid<int>(ruvia::ValidationTarget::kJson);
     request.addValidatedData(ruvia::ValidationTarget::kQuery, int{});
 };
 
@@ -543,8 +541,8 @@ static_assert(std::same_as<
     ruvia::Task<ruvia::ContextRequest::RequestFormData>>);
 static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest>);
 static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest::RawRequestClone>);
-static_assert(HasTypedValidationTarget<ruvia::ContextRequest>);
-static_assert(!HasStringValidationTarget<ruvia::ContextRequest>);
+static_assert(HasTypeOnlyValidation<ruvia::ContextRequest>);
+static_assert(!HasExplicitValidationTarget<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::AccessLogRecord&>().method()),
     std::string_view>);

@@ -66,7 +66,7 @@ const RequestNameValueList& requestQueryFields(const ContextRequest& request);
 const RequestNameValueList& requestCookieFields(const ContextRequest& request);
 const RequestNameValueList& requestParamFields(const ContextRequest& request);
 template <typename T>
-void setValidatedBody(Context& context, ValidationTarget target, T&& body);
+void setValidatedModel(Context& context, T&& model);
 [[noreturn]] void throwInvalidJsonContentType();
 [[noreturn]] void throwInvalidJsonBody();
 [[noreturn]] void throwInvalidFormContentType();
@@ -976,13 +976,10 @@ public:
     [[nodiscard]] Task<T> form() const;
 
     template <typename T>
-    [[nodiscard]] const T& valid() const = delete;
+    [[nodiscard]] const T& valid() const;
 
     template <typename T>
-    [[nodiscard]] const T& valid(ValidationTarget target) const;
-
-    template <typename T>
-    void addValidatedData(ValidationTarget target, T&& data) const;
+    void addValidatedData(T&& data) const;
 
     [[nodiscard]] Task<std::pmr::vector<MultipartPart>> multipart() const;
 
@@ -1033,7 +1030,7 @@ private:
     friend ConnInfo getConnInfo(const Context& context) noexcept;
     friend struct detail::SessionAccess;
     template <typename T>
-    friend void detail::setValidatedBody(Context& context, ValidationTarget target, T&& body);
+    friend void detail::setValidatedModel(Context& context, T&& model);
 
     Context(
         RequestMemory& memory,
@@ -1877,24 +1874,23 @@ inline std::optional<std::string_view> ContextRequest::param(std::string_view na
 }
 
 template <typename T>
-inline const T& ContextRequest::valid(ValidationTarget target) const {
-    return context_->validatedValues_.get<T>(target);
+inline const T& ContextRequest::valid() const {
+    return context_->validatedValues_.get<T>();
 }
 
 namespace detail {
 
 template <typename T>
-void setValidatedBody(Context& context, ValidationTarget target, T&& body) {
-    context.validatedValues_.set(target, std::forward<T>(body), context.resource());
+void setValidatedModel(Context& context, T&& model) {
+    context.validatedValues_.set(std::forward<T>(model), context.resource());
 }
 
 }  // namespace detail
 
 template <typename T>
-inline void ContextRequest::addValidatedData(ValidationTarget target, T&& data) const {
-    detail::setValidatedBody(
+inline void ContextRequest::addValidatedData(T&& data) const {
+    detail::setValidatedModel(
         const_cast<Context&>(*context_),
-        target,
         std::forward<T>(data));
 }
 
