@@ -125,7 +125,7 @@ public:
 
 private:
     struct Entry final {
-        explicit Entry(std::pmr::memory_resource* resource = std::pmr::get_default_resource())
+        explicit Entry(std::pmr::memory_resource* resource)
             : name(resource) {}
 
         Entry(const Entry&) = delete;

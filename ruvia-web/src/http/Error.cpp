@@ -1,5 +1,6 @@
 #include "ruvia/web/Error.h"
 
+#include "ruvia/core/memory/ProcessResource.h"
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/http/detail/HttpResponseHeaderState.h"
@@ -74,9 +75,25 @@ HttpError::HttpError(
     std::string_view message,
     std::string_view statusText)
     : status_(status),
-      statusText_(statusText, std::pmr::get_default_resource()),
-      code_(code, std::pmr::get_default_resource()),
-      message_(message, std::pmr::get_default_resource()) {}
+      statusText_(statusText, detail::processResource()),
+      code_(code, detail::processResource()),
+      message_(message, detail::processResource()) {}
+
+HttpError::HttpError(const HttpError& other)
+    : status_(other.status_),
+      statusText_(other.statusText_, detail::processResource()),
+      code_(other.code_, detail::processResource()),
+      message_(other.message_, detail::processResource()) {}
+
+HttpError& HttpError::operator=(const HttpError& other) {
+    if (this != &other) {
+        status_ = other.status_;
+        statusText_ = other.statusText_;
+        code_ = other.code_;
+        message_ = other.message_;
+    }
+    return *this;
+}
 
 const char* HttpError::what() const noexcept {
     return message_.c_str();

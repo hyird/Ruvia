@@ -60,6 +60,10 @@ public:
         std::string_view code,
         std::string_view message,
         std::string_view statusText = {});
+    HttpError(const HttpError& other);
+    HttpError& operator=(const HttpError& other);
+    HttpError(HttpError&&) noexcept = default;
+    HttpError& operator=(HttpError&&) noexcept = default;
 
     [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] HttpErrorInfo info() const noexcept;
