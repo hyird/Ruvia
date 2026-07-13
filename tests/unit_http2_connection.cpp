@@ -1055,6 +1055,38 @@ RUVIA_TEST(http2_connection_feed_extension_method_emits_request_event) {
     }
 }
 
+RUVIA_TEST(http2_connection_rejects_non_increasing_new_peer_stream_id) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string firstBlock(&resource);
+    encodeGetRequest(firstBlock);
+    const auto first = headersFrame(
+        &resource,
+        5,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(firstBlock.data(), firstBlock.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(first.data(), first.size())) ==
+        Http2FeedResult::kAccepted);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageHead);
+    RUVIA_CHECK(conn.nextEvent().value().kind() == Http2EventKind::kMessageEnd);
+    RUVIA_CHECK(!conn.nextEvent().has_value());
+
+    std::pmr::string lowerBlock(&resource);
+    encodeGetRequest(lowerBlock);
+    const auto lower = headersFrame(
+        &resource,
+        3,
+        ruvia::detail::kHttp2FlagEndHeaders |
+            ruvia::detail::kHttp2FlagEndStream,
+        std::string_view(lowerBlock.data(), lowerBlock.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(lower.data(), lower.size())) ==
+        Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.connectionError() == Http2ErrorCode::kProtocolError);
+}
+
 // A HEADERS frame WITHOUT END_HEADERS leaves the block open (awaiting CONTINUATION); a
 // CONTINUATION carrying the rest with END_HEADERS completes the head and emits the event.
 RUVIA_TEST(http2_connection_feed_headers_continuation_completes_head) {

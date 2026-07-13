@@ -50,7 +50,7 @@ private:
     friend HttpResponseBodyPlan httpResponseBodyPlan(HttpKnownMethod, std::uint16_t) noexcept;
     friend class HttpBufferedResponseWritePlan;
 
-    HttpResponseBodyPlan(
+    constexpr HttpResponseBodyPlan(
         HttpKnownMethod requestMethod,
         std::uint16_t responseStatus,
         ResponseWritePolicy policy,

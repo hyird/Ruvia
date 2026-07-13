@@ -67,10 +67,43 @@ ctest --test-dir build -C Debug --output-on-failure
 | `RUVIA_BUILD_WEB` | `ON` | Build `ruvia::web`; requires core and HTTP. |
 | `RUVIA_BUILD_TESTS` | `OFF` | Build unit, guard, and package-consumer tests. |
 | `RUVIA_BUILD_BENCHMARKS` | `OFF` | Build Release-oriented HTTP hot-path benchmarks; requires HTTP. |
+| `RUVIA_BUILD_FUZZERS` | `OFF` | Build the HTTP/1, HTTP/2, and HPACK Clang/libFuzzer targets with UBSan; requires HTTP. |
+| `RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS` | `OFF` | Add the repository-owned RFC 9113 wire conformance suite against a real Ruvia h2c server; requires tests, Web, and Python 3. |
 | `RUVIA_BUILD_EXAMPLES` | `OFF` | Build examples; requires Web. |
 | `RUVIA_ENABLE_MARIADB` | `OFF` | Enable MariaDB integration in Web. |
 | `RUVIA_ENABLE_REDIS` | `OFF` | Enable Redis integration in Web. |
 | `RUVIA_ENABLE_JWT` | `OFF` | Enable JWT integration in Web. |
+
+### Protocol conformance and fuzzing
+
+The regular Linux CI runs a repository-owned wire-level suite against Ruvia's actual
+cleartext HTTP/2 server. Its connection-per-case, handcrafted-frame, and wire-error
+assertion model follows the proven h2spec approach, but every expectation is maintained
+directly against RFC 9113 instead of filtering RFC 7540 results. To reproduce it
+locally, install Python 3 and configure:
+
+```powershell
+cmake -S . -B build-conformance `
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+  -DRUVIA_BUILD_TESTS=ON `
+  -DRUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS=ON `
+  -DPython3_EXECUTABLE="C:/Python312/python.exe"
+cmake --build build-conformance --config Debug --target ruvia_http2_conformance_server
+ctest --test-dir build-conformance -C Debug -R ruvia_http2_conformance --output-on-failure
+```
+
+Protocol fuzzing requires Clang with libFuzzer. Enabling the option instruments
+`ruvia-http` and builds three independent fuzz targets:
+
+```bash
+cmake -S . -B build-fuzz -G Ninja \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DRUVIA_BUILD_FUZZERS=ON \
+  -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+cmake --build build-fuzz
+build-fuzz/tests/fuzz/ruvia_fuzz_http2_connection -max_total_time=60
+```
 
 ## Performance Baseline
 

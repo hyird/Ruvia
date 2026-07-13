@@ -171,6 +171,28 @@ endif()
 
 add_test(NAME ruvia_unit_tests COMMAND ruvia_unit_tests)
 set_tests_properties(ruvia_unit_tests PROPERTIES TIMEOUT 180)
+
+if(RUVIA_ENABLE_HTTP2_CONFORMANCE_TESTS)
+    add_executable(ruvia_http2_conformance_server http2_conformance_server.cpp)
+    target_link_libraries(ruvia_http2_conformance_server PRIVATE ruvia::web)
+    if(MSVC)
+        target_compile_options(ruvia_http2_conformance_server PRIVATE /bigobj /FS)
+    endif()
+
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME ruvia_http2_conformance
+        COMMAND
+            ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/conformance/http2_wire_conformance.py
+            --server $<TARGET_FILE:ruvia_http2_conformance_server>
+    )
+    set_tests_properties(ruvia_http2_conformance PROPERTIES
+        LABELS "protocol;http2;conformance"
+        RUN_SERIAL TRUE
+        TIMEOUT 120
+    )
+endif()
 endif()
 
 if(RUVIA_BUILD_CORE)
