@@ -943,6 +943,10 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .localContent()),
     const ruvia::detail::Http2LocalContentState&>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2StreamState&>()
+        .responseStatus()),
+    const std::uint16_t*>);
 static_assert(HasHttp2RemoteContentAlternatives<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<

@@ -455,12 +455,12 @@ public:
         return tunnelState_;
     }
 
-    [[nodiscard]] std::uint16_t responseStatus() const noexcept {
+    [[nodiscard]] const std::uint16_t* responseStatus() const noexcept {
         return requestState_.responseStatus();
     }
 
-    void setResponseStatus(std::uint16_t status) noexcept {
-        requestState_.setResponseStatus(status);
+    [[nodiscard]] bool setResponseStatus(std::uint16_t status) noexcept {
+        return requestState_.setResponseStatus(status);
     }
 
     [[nodiscard]] std::uint8_t interimResponseCount() const noexcept {
