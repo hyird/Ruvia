@@ -2827,7 +2827,19 @@ if(EXISTS "${HTTP_CONTENT_CODING_CONTRACT}" AND
         web_response_compression_source)
     file(READ "${WEB_RESPONSE_COMPRESSION_TEST}"
         web_response_compression_test)
-    if(NOT http_content_coding_contract MATCHES
+    if(http_content_coding_contract MATCHES
+           "HttpContentCoding::kNone" OR
+       NOT http_content_coding_contract MATCHES
+           "class HttpUnsupportedContentCoding final" OR
+       NOT http_content_coding_contract MATCHES
+           "static constexpr std::uint16_t status" OR
+       NOT http_content_coding_contract MATCHES
+           "httpSupportedRequestContentCodings" OR
+       NOT http_content_coding_contract MATCHES
+           "class HttpContentCodingFieldResult final" OR
+       NOT http_content_coding_contract MATCHES
+           "std::variant<HttpContentCoding, HttpUnsupportedContentCoding>" OR
+       NOT http_content_coding_contract MATCHES
            "class HttpEncodedContent final" OR
        NOT http_content_coding_contract MATCHES
            "class HttpContentEncodeFailure final" OR

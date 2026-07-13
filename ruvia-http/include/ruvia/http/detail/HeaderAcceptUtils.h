@@ -13,7 +13,7 @@ namespace ruvia::detail {
 // RFC 1952, br (Brotli) is RFC 7932, and zstd follows RFC 8878 plus the
 // mandatory 8 MiB HTTP window limit from RFC 9659.
 enum class HttpContentCoding : std::uint8_t {
-    kNone,
+    kIdentity,
     kGzip,
     kBrotli,
     kZstd,
@@ -139,7 +139,7 @@ struct HttpAcceptedEncodingQuality {
         {HttpContentCoding::kZstd, httpAcceptedEncodingScore(zstd)},
         {HttpContentCoding::kGzip, httpAcceptedEncodingScore(gzip)},
     };
-    HttpContentCoding best = HttpContentCoding::kNone;
+    HttpContentCoding best = HttpContentCoding::kIdentity;
     int bestScore = 0;
     for (const auto& candidate : candidates) {
         if (candidate.score > bestScore) {

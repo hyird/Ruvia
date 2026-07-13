@@ -851,6 +851,13 @@ ruvia::Task<ruvia::HttpResponse> okHandler(void*, ruvia::Context& context) {
     co_return context.body("ok");
 }
 
+ruvia::Task<ruvia::HttpResponse> readsRequestBodyHandler(
+    void*,
+    ruvia::Context& context) {
+    (void)co_await context.req().text();
+    co_return context.body("ok");
+}
+
 // The dispatched response's storage lives in the per-request arena, which is
 // destroyed when the helper returns -- so values must be copied out here, while
 // the arena is still alive, rather than returning the HttpResponse itself.
@@ -859,6 +866,7 @@ struct DispatchResult final {
     std::string body;
     std::string allow;
     std::string connection;
+    std::string acceptEncoding;
 };
 
 DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
@@ -870,6 +878,8 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
     result.allow.assign(allow.data(), allow.size());
     const auto connection = response.header("Connection");
     result.connection.assign(connection.data(), connection.size());
+    const auto acceptEncoding = response.header("Accept-Encoding");
+    result.acceptEncoding.assign(acceptEncoding.data(), acceptEncoding.size());
     return result;
 }
 
@@ -878,7 +888,9 @@ DispatchResult extractDispatchResult(const ruvia::HttpResponse& response) {
 DispatchResult dispatchOneToken(
     RouteHandler handler,
     std::string_view method,
-    std::string_view p) {
+    std::string_view p,
+    std::string_view contentEncoding = {},
+    std::string_view body = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     impl.registerRoute(HttpKnownMethod::kGet, path("/x"), handler, RequestBodyMode::kBuffered,
@@ -894,6 +906,15 @@ DispatchResult dispatchOneToken(
     ruvia::detail::HttpRequestAccess::setMethod(request, method);
     ruvia::detail::HttpRequestAccess::setPath(request, p);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    if (!contentEncoding.empty()) {
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
+            ruvia::detail::RequestKnownHeader::kContentEncoding);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(
+            request,
+            ruvia::HttpHeaderView{"Content-Encoding", contentEncoding},
+            slot);
+    }
+    ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
@@ -927,6 +948,19 @@ RUVIA_TEST(dispatch_maps_handler_exceptions_to_error_responses) {
     // library error (SQL text, paths) could otherwise be disclosed to the client.
     RUVIA_CHECK(generic.body.find("boom") == std::string::npos);
     RUVIA_CHECK(generic.body.find("Internal Server Error") != std::string::npos);
+}
+
+RUVIA_TEST(dispatch_rejects_unsupported_request_content_coding_with_advertisement) {
+    const auto result = dispatchOneToken(
+        RouteHandler(nullptr, &readsRequestBodyHandler),
+        "GET",
+        "/x",
+        "deflate",
+        "encoded");
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
+    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
+    RUVIA_CHECK(
+        result.body.find("unsupported_content_coding") != std::string::npos);
 }
 
 RUVIA_TEST(dispatch_produces_404_and_405_for_unmatched_routes) {
@@ -972,7 +1006,9 @@ ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorI
 
 DispatchResult dispatchWithHandlersToken(
     RouteHandler handler, HttpErrorHandler errorH, HttpNotFoundHandler notFoundH,
-    std::string_view method, std::string_view p) {
+    std::string_view method, std::string_view p,
+    std::string_view contentEncoding = {},
+    std::string_view body = {}) {
     ruvia::Router router;
     auto& impl = ruvia::detail::RouterImpl::from(router);
     if (errorH != nullptr) {
@@ -994,6 +1030,15 @@ DispatchResult dispatchWithHandlersToken(
     ruvia::detail::HttpRequestAccess::setMethod(request, method);
     ruvia::detail::HttpRequestAccess::setPath(request, p);
     ruvia::detail::HttpRequestAccess::setResource(request, memory.resource());
+    if (!contentEncoding.empty()) {
+        const auto slot = ruvia::detail::HttpRequestAccess::knownHeaderSlot(
+            ruvia::detail::RequestKnownHeader::kContentEncoding);
+        (void)ruvia::detail::HttpRequestAccess::addHeader(
+            request,
+            ruvia::HttpHeaderView{"Content-Encoding", contentEncoding},
+            slot);
+    }
+    ruvia::detail::HttpRequestAccess::setBody(request, body);
 
     asio::io_context ctx(1);
     auto future = asio::co_spawn(
@@ -1029,6 +1074,20 @@ RUVIA_TEST(dispatch_uses_custom_error_handler_with_thrown_status) {
         RouteHandler(nullptr, &throwsHttpErrorHandler), &customError, nullptr, HttpKnownMethod::kGet, "/x");
     RUVIA_CHECK_EQ(result.status, std::uint16_t{403});
     RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
+}
+
+RUVIA_TEST(dispatch_preserves_content_coding_advertisement_with_custom_error_handler) {
+    const auto result = dispatchWithHandlersToken(
+        RouteHandler(nullptr, &readsRequestBodyHandler),
+        &customError,
+        nullptr,
+        "GET",
+        "/x",
+        "compress",
+        "encoded");
+    RUVIA_CHECK_EQ(result.status, std::uint16_t{415});
+    RUVIA_CHECK_EQ(result.body, std::string("custom-error"));
+    RUVIA_CHECK_EQ(result.acceptEncoding, std::string("gzip, br, zstd"));
 }
 
 RUVIA_TEST(dispatch_routes_unimplemented_method_through_custom_error_handler) {

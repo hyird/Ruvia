@@ -396,15 +396,26 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
 }
 
 RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
-    RUVIA_CHECK(httpContentCodingFromFieldValue("gzip") == HttpContentCoding::kGzip);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("x-gzip") == HttpContentCoding::kGzip);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("GZIP") == HttpContentCoding::kGzip);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("  br ") == HttpContentCoding::kBrotli);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("zstd") == HttpContentCoding::kZstd);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("identity") == HttpContentCoding::kNone);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("deflate") == HttpContentCoding::kNone);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("") == HttpContentCoding::kNone);
-    RUVIA_CHECK(httpContentCodingFromFieldValue("gzip, br") == HttpContentCoding::kNone);
+    const auto checkCoding = [&](std::string_view value, HttpContentCoding expected) {
+        const auto parsed = httpContentCodingFromFieldValue(value);
+        RUVIA_CHECK(parsed.unsupported() == nullptr);
+        RUVIA_CHECK(parsed.coding() != nullptr);
+        if (parsed.coding() != nullptr) {
+            RUVIA_CHECK(*parsed.coding() == expected);
+        }
+    };
+    checkCoding("gzip", HttpContentCoding::kGzip);
+    checkCoding("x-gzip", HttpContentCoding::kGzip);
+    checkCoding("GZIP", HttpContentCoding::kGzip);
+    checkCoding("  br ", HttpContentCoding::kBrotli);
+    checkCoding("zstd", HttpContentCoding::kZstd);
+    checkCoding("identity", HttpContentCoding::kIdentity);
+    checkCoding("", HttpContentCoding::kIdentity);
+
+    const auto unsupported = httpContentCodingFromFieldValue("deflate");
+    const auto stacked = httpContentCodingFromFieldValue("gzip, br");
+    RUVIA_CHECK(unsupported.unsupported() != nullptr);
+    RUVIA_CHECK(stacked.unsupported() != nullptr);
 }
 
 RUVIA_TEST(request_body_gzip_round_trip) {
@@ -579,21 +590,31 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
         }
     }
 
-    const auto unsupported = encodeHttpContent(
-        HttpContentCoding::kNone,
-        {},
+    const auto identity = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        "identity",
+        8,
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(identity.encoded() != nullptr);
+    RUVIA_CHECK(identity.failure() == nullptr);
+    if (const auto* encoded = identity.encoded()) {
+        RUVIA_CHECK_EQ(encoded->bytes(), std::string_view("identity"));
+    }
+    const auto identityTooLarge = encodeHttpContent(
+        HttpContentCoding::kIdentity,
+        "identity",
         0,
         std::pmr::get_default_resource());
-    RUVIA_CHECK(unsupported.encoded() == nullptr);
-    RUVIA_CHECK(unsupported.failure() != nullptr);
-    if (const auto* failure = unsupported.failure()) {
+    RUVIA_CHECK(identityTooLarge.encoded() == nullptr);
+    RUVIA_CHECK(identityTooLarge.failure() != nullptr);
+    if (const auto* failure = identityTooLarge.failure()) {
         RUVIA_CHECK(
             failure->error() ==
-            HttpContentEncodeError::kUnsupportedCoding);
+            HttpContentEncodeError::kEncodedSizeExceeded);
     }
 }
 
-RUVIA_TEST(http_content_decode_rejects_empty_or_unsupported_encoded_input) {
+RUVIA_TEST(http_content_decode_rejects_empty_encoded_input) {
     RUVIA_CHECK(
         decodeError(HttpContentCoding::kGzip, {}) ==
         HttpContentDecodeError::kInvalidContent);
@@ -603,9 +624,9 @@ RUVIA_TEST(http_content_decode_rejects_empty_or_unsupported_encoded_input) {
     RUVIA_CHECK(
         decodeError(HttpContentCoding::kZstd, {}) ==
         HttpContentDecodeError::kInvalidContent);
-    RUVIA_CHECK(
-        decodeError(HttpContentCoding::kNone, {}) ==
-        HttpContentDecodeError::kUnsupportedCoding);
+    RUVIA_CHECK_EQ(
+        decoded(HttpContentCoding::kIdentity, {}, 0),
+        std::string{});
 }
 
 RUVIA_TEST(http_content_decode_zero_cap_allows_only_empty_content) {

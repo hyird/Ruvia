@@ -234,7 +234,7 @@ RUVIA_TEST(buffered_response_absent_policies_skip_cors_and_compression) {
 RUVIA_TEST(compress_skips_when_no_coding_but_preserves_head_metadata) {
     {
         auto response = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kNone));
+        RUVIA_CHECK(!tryCompress(response, Compression{.minBytes = 16}, HttpContentCoding::kIdentity));
     }
     {
         auto response = responseWithBody(kCompressibleBody);
@@ -295,7 +295,7 @@ RUVIA_TEST(compress_declares_vary_for_negotiated_but_uncompressed_responses) {
     }
     {
         auto r = responseWithBody(kCompressibleBody);
-        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}, HttpContentCoding::kNone));
+        RUVIA_CHECK(!tryCompress(r, Compression{.minBytes = 16}, HttpContentCoding::kIdentity));
         RUVIA_CHECK(varies(r));
     }
 

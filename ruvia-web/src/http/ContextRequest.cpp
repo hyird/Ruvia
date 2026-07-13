@@ -1,4 +1,5 @@
 #include "ruvia/web/Context.h"
+#include "ruvia/web/detail/http/UnsupportedRequestContentCoding.h"
 
 #include "ruvia/web/detail/CookieSignature.h"
 #include "ruvia/http/detail/HeaderTokenUtils.h"
@@ -675,8 +676,12 @@ Task<std::string_view> Context::requestBody() const {
 
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
-    const auto coding = detail::requestContentCoding(request_);
-    if (coding == detail::HttpContentCoding::kNone) {
+    const auto parsedCoding = detail::requestContentCoding(request_);
+    if (const auto* unsupported = parsedCoding.unsupported()) {
+        throw detail::UnsupportedRequestContentCoding(*unsupported);
+    }
+    const auto coding = *parsedCoding.coding();
+    if (coding == detail::HttpContentCoding::kIdentity) {
         co_return raw;
     }
     auto decodeResult = detail::decodeHttpContent(

@@ -31,7 +31,7 @@ void Http1ServerRequestParser::parseRequestHead(
     state.progress_ = Http1ServerNeedRequestHead{};
     state.bodyPlan = Http1RequestBodyPlan(HttpRequestExpectations{});
     state.connectionPlan = Http1ServerConnectionPlan::http11Close();
-    state.responseCoding = HttpContentCoding::kNone;
+    state.responseCoding = HttpContentCoding::kIdentity;
     HttpRequestAccess::reset(state.request);
 
     const auto fail = [&state](HttpParseError error) noexcept {

@@ -120,7 +120,7 @@ void applyResponseCompression(
     // previously lived only on the compress-success path.
     addVaryToken(response, "Accept-Encoding");
 
-    if (coding == HttpContentCoding::kNone ||
+    if (coding == HttpContentCoding::kIdentity ||
         responseContent.size() < options.minBytes) {
         return;
     }
