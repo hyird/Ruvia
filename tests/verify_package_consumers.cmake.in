@@ -398,6 +398,16 @@ if(NOT _installed_http1_client_request_writer_content MATCHES
    NOT _installed_http1_client_request_writer_content MATCHES
        "class Http1ClientRequestWirePolicy final" OR
    NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientNoRequestExpectation final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "class Http1ClientContinueExpectation final" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "using Expectation = std::variant" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::get_if<Http1ClientNoRequestExpectation>" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
+       "std::get_if<Http1ClientContinueExpectation>" OR
+   NOT _installed_http1_client_request_writer_content MATCHES
        "class Http1ClientRequestContentPlan final" OR
    NOT _installed_http1_client_request_writer_content MATCHES
        "class Http1ClientRequestWithoutContent final" OR
@@ -421,6 +431,8 @@ if(NOT _installed_http1_client_request_writer_content MATCHES
 endif()
 if(_installed_http1_client_request_writer_content MATCHES
        "Http1ClientRequestContentDisposition" OR
+   _installed_http1_client_request_writer_content MATCHES
+       "Http1ClientRequestExpectation" OR
    _installed_http1_client_request_writer_content MATCHES "expectsContinue" OR
    _installed_http1_client_request_writer_content MATCHES
        "disposition[(][)] const noexcept" OR

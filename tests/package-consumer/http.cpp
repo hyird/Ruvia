@@ -388,6 +388,14 @@ concept HasHttp1PreparedContentAlternatives = requires(const T& plan) {
 };
 
 template <typename T>
+concept HasHttp1ClientExpectationAlternatives = requires(const T& policy) {
+    { policy.noExpectation() } -> std::same_as<const
+        ruvia::Http1ClientNoRequestExpectation*>;
+    { policy.continueExpectation() } -> std::same_as<const
+        ruvia::Http1ClientContinueExpectation*>;
+};
+
+template <typename T>
 concept HasHttp1PreparedContentDisposition = requires(const T& plan) {
     plan.disposition();
 };
@@ -835,6 +843,8 @@ static_assert(!std::default_initializable<ruvia::HttpClientRequestBytes>);
 
 static_assert(HasHttp1PreparedContentAlternatives<
     ruvia::Http1ClientRequestContentPlan>);
+static_assert(HasHttp1ClientExpectationAlternatives<
+    ruvia::Http1ClientRequestWirePolicy>);
 static_assert(!HasHttp1PreparedContentDisposition<
     ruvia::Http1ClientRequestContentPlan>);
 static_assert(!HasHttp1PreparedContentBytes<

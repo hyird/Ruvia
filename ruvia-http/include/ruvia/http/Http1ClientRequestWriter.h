@@ -19,9 +19,16 @@ enum class Http1ClientRequestClosePolicy : std::uint8_t {
     kCloseAfterResponse,
 };
 
-enum class Http1ClientRequestExpectation : std::uint8_t {
-    kNone,
-    k100Continue,
+class Http1ClientNoRequestExpectation final {
+private:
+    friend class Http1ClientRequestWirePolicy;
+    constexpr Http1ClientNoRequestExpectation() noexcept = default;
+};
+
+class Http1ClientContinueExpectation final {
+private:
+    friend class Http1ClientRequestWirePolicy;
+    constexpr Http1ClientContinueExpectation() noexcept = default;
 };
 
 // One immutable wire policy for request preparation. Expect is writer-owned so
@@ -34,32 +41,43 @@ public:
         Http1ClientRequestClosePolicy closePolicy =
             Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
         return Http1ClientRequestWirePolicy(
-            closePolicy, Http1ClientRequestExpectation::kNone);
+            closePolicy, Http1ClientNoRequestExpectation());
     }
 
     [[nodiscard]] static constexpr Http1ClientRequestWirePolicy expectContinue(
         Http1ClientRequestClosePolicy closePolicy =
             Http1ClientRequestClosePolicy::kAllowReuse) noexcept {
         return Http1ClientRequestWirePolicy(
-            closePolicy, Http1ClientRequestExpectation::k100Continue);
+            closePolicy, Http1ClientContinueExpectation());
     }
 
     [[nodiscard]] constexpr Http1ClientRequestClosePolicy closePolicy() const noexcept {
         return closePolicy_;
     }
 
-    [[nodiscard]] constexpr Http1ClientRequestExpectation expectation() const noexcept {
-        return expectation_;
+    [[nodiscard]] constexpr const Http1ClientNoRequestExpectation*
+    noExpectation() const noexcept {
+        return std::get_if<Http1ClientNoRequestExpectation>(&expectation_);
+    }
+
+    [[nodiscard]] constexpr const Http1ClientContinueExpectation*
+    continueExpectation() const noexcept {
+        return std::get_if<Http1ClientContinueExpectation>(&expectation_);
     }
 
 private:
+    using Expectation = std::variant<
+        Http1ClientNoRequestExpectation,
+        Http1ClientContinueExpectation>;
+
+    template <typename ExpectationAlternative>
     constexpr Http1ClientRequestWirePolicy(
         Http1ClientRequestClosePolicy closePolicy,
-        Http1ClientRequestExpectation expectation) noexcept
+        ExpectationAlternative expectation) noexcept
         : closePolicy_(closePolicy), expectation_(expectation) {}
 
     Http1ClientRequestClosePolicy closePolicy_;
-    Http1ClientRequestExpectation expectation_;
+    Expectation expectation_;
 };
 
 namespace detail {
