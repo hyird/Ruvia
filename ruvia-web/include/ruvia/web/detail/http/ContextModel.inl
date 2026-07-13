@@ -22,7 +22,7 @@ inline Task<JsonValue> ContextRequest::json() const {
 
 template <typename T>
 Task<T> ContextRequest::json() const {
-    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_MODEL");
+    static_assert(JsonBody<T>::value, "JSON body type must use RUVIA_REQUEST_MODEL");
     if (!context_->requestContentTypeMatches("application/json")) {
         detail::throwInvalidJsonContentType();
     }
@@ -36,7 +36,7 @@ Task<T> ContextRequest::json() const {
 
 template <typename T>
 Task<T> ContextRequest::form() const {
-    static_assert(FormBody<T>::value, "form body type must use RUVIA_MODEL");
+    static_assert(FormBody<T>::value, "form body type must use RUVIA_REQUEST_MODEL");
     if (!context_->requestContentTypeMatches("application/x-www-form-urlencoded")) {
         detail::throwInvalidFormContentType();
     }

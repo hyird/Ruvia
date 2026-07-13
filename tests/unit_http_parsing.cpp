@@ -69,15 +69,19 @@ static_assert(!HasCookiesAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueryListAccessor<ruvia::HttpRequest>);
 static_assert(!HasQueriesVectorAccessor<ruvia::HttpRequest>);
 
-RUVIA_MODEL(AccessorSurfaceModel,
+RUVIA_REQUEST_MODEL(AccessorSurfaceRequest,
+    RUVIA_FIELD(message, ruvia::String)
+);
+
+RUVIA_RESPONSE_MODEL(AccessorSurfaceResponse,
     RUVIA_FIELD(message, ruvia::String)
 );
 
 static_assert(std::same_as<
-    std::remove_cvref_t<decltype(std::declval<AccessorSurfaceModel&>().message())>,
+    std::remove_cvref_t<decltype(std::declval<AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
 static_assert(std::same_as<
-    std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceModel&>().message())>,
+    std::remove_cvref_t<decltype(std::declval<const AccessorSurfaceRequest&>().message())>,
     std::optional<ruvia::String>>);
 
 std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t truncateBy) {
@@ -106,12 +110,12 @@ std::optional<std::string> zstdRoundTrip(std::string_view plain, std::size_t tru
 
 RUVIA_TEST(model_factory_materializes_before_publication) {
     std::pmr::monotonic_buffer_resource modelResource;
-    const auto parsed = ruvia::JsonBody<AccessorSurfaceModel>::parse(
+    const auto parsed = ruvia::JsonBody<AccessorSurfaceRequest>::parse(
         R"({"message":"ready"})",
         &modelResource);
     RUVIA_CHECK(parsed.has_value());
     if (parsed.has_value()) {
-        const AccessorSurfaceModel& model = *parsed;
+        const AccessorSurfaceRequest& model = *parsed;
         RUVIA_CHECK(model.message().has_value());
         if (model.message().has_value()) {
             RUVIA_CHECK_EQ(model.message()->view(), std::string_view("ready"));
@@ -122,7 +126,7 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             ruvia::detail::ModelFieldState::kParsed);
     }
 
-    const auto invalidField = ruvia::JsonBody<AccessorSurfaceModel>::parse(
+    const auto invalidField = ruvia::JsonBody<AccessorSurfaceRequest>::parse(
         R"({"message":42})",
         std::pmr::get_default_resource());
     RUVIA_CHECK(invalidField.has_value());
@@ -133,12 +137,12 @@ RUVIA_TEST(model_factory_materializes_before_publication) {
             ruvia::detail::ModelFieldState::kInvalidType);
     }
 
-    const auto malformed = ruvia::JsonBody<AccessorSurfaceModel>::parse(
+    const auto malformed = ruvia::JsonBody<AccessorSurfaceRequest>::parse(
         R"({"message":"incomplete")",
         &modelResource);
     RUVIA_CHECK(!malformed.has_value());
 
-    AccessorSurfaceModel response(&modelResource);
+    AccessorSurfaceResponse response(&modelResource);
     RUVIA_CHECK(response.messageEnsure().resource() == &modelResource);
 }
 

@@ -27,6 +27,8 @@ namespace detail {
 class ModelInput;
 struct ModelValueFactory;
 struct ModelSchemaTag {};
+struct RequestModelSchemaTag : ModelSchemaTag {};
+struct ResponseModelSchemaTag : ModelSchemaTag {};
 
 }  // namespace detail
 
@@ -36,7 +38,7 @@ struct JsonBody {
 };
 
 template <typename T>
-struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::ModelSchemaTag, T>>> {
+struct JsonBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(
@@ -64,7 +66,7 @@ struct FormBody {
 };
 
 template <typename T>
-struct FormBody<T, std::enable_if_t<std::is_base_of_v<detail::ModelSchemaTag, T>>> {
+struct FormBody<T, std::enable_if_t<std::is_base_of_v<detail::RequestModelSchemaTag, T>>> {
     static constexpr bool value = true;
 
     static std::optional<T> parse(

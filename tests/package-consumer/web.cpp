@@ -306,26 +306,34 @@ struct InstalledModelBodyDuckProbe final {
     static int ruviaParseFormBody(std::string_view, std::pmr::memory_resource*);
 };
 
-RUVIA_MODEL(InstalledPackageModel,
+RUVIA_REQUEST_MODEL(InstalledPackageRequest,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(count, ruvia::Int32)
 );
 
-static_assert(!std::copy_constructible<InstalledPackageModel>);
-static_assert(std::movable<InstalledPackageModel>);
-static_assert(!HasGeneratedModelDynamicGet<InstalledPackageModel>);
-static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageModel>);
-static_assert(!HasGeneratedModelCompileTimeGetAlias<InstalledPackageModel>);
-static_assert(!HasGeneratedModelPublicBodyParseHooks<InstalledPackageModel>);
-static_assert(!HasGeneratedModelInputAccessor<InstalledPackageModel>);
-static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageModel>);
-static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageModel>);
-static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageModel>);
-static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageModel>);
-static_assert(!HasGeneratedModelPublicFieldStateHook<InstalledPackageModel>);
+RUVIA_RESPONSE_MODEL(InstalledPackageResponse,
+    RUVIA_FIELD(name, ruvia::String),
+    RUVIA_FIELD(count, ruvia::Int32)
+);
+
+static_assert(!std::copy_constructible<InstalledPackageRequest>);
+static_assert(std::movable<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelDynamicGet<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelTypedDynamicGet<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelCompileTimeGetAlias<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelPublicBodyParseHooks<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelInputAccessor<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelPublicJsonDepthHook<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelPublicFormFieldsHook<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelNonConstNameGetter<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelPublicJsonWriterHooks<InstalledPackageRequest>);
+static_assert(!HasGeneratedModelPublicFieldStateHook<InstalledPackageRequest>);
 static_assert(std::is_base_of_v<
-    ruvia::detail::ModelSchemaTag,
-    InstalledPackageModel>);
+    ruvia::detail::RequestModelSchemaTag,
+    InstalledPackageRequest>);
+static_assert(!ruvia::JsonBody<InstalledPackageResponse>::value);
+static_assert(!ruvia::FormBody<InstalledPackageResponse>::value);
+static_assert(ruvia::detail::isResponseModel<InstalledPackageResponse>);
 static_assert(!ruvia::JsonBody<InstalledModelBodyDuckProbe>::value);
 static_assert(!ruvia::FormBody<InstalledModelBodyDuckProbe>::value);
 static_assert(!std::default_initializable<ruvia::detail::ModelInput>);
@@ -1070,7 +1078,7 @@ int main() {
         return 17;
     }
     std::pmr::monotonic_buffer_resource installedModelResource;
-    const auto installedModel = ruvia::JsonBody<InstalledPackageModel>::parse(
+    const auto installedModel = ruvia::JsonBody<InstalledPackageRequest>::parse(
         R"({"name":"installed model","count":7})",
         &installedModelResource);
     if (!installedModel.has_value() ||
@@ -1081,13 +1089,15 @@ int main() {
         static_cast<std::int32_t>(*installedModel->count()) != 7) {
         return 18;
     }
-    const auto installedModelJson = ruvia::toJson(
-        *installedModel,
-        &installedModelResource);
+    InstalledPackageResponse installedResponse(&installedModelResource);
+    installedResponse
+        .name(installedModel->name()->view())
+        .count(*installedModel->count());
+    const auto installedModelJson = ruvia::toJson(installedResponse, &installedModelResource);
     if (installedModelJson != R"({"name":"installed model","count":7})") {
         return 18;
     }
-    const auto invalidFieldModel = ruvia::JsonBody<InstalledPackageModel>::parse(
+    const auto invalidFieldModel = ruvia::JsonBody<InstalledPackageRequest>::parse(
         R"({"name":42,"count":7})",
         std::pmr::get_default_resource());
     if (!invalidFieldModel.has_value() ||
@@ -1097,7 +1107,7 @@ int main() {
             ruvia::detail::ModelFieldState::kInvalidType) {
         return 19;
     }
-    const auto malformedModel = ruvia::JsonBody<InstalledPackageModel>::parse(
+    const auto malformedModel = ruvia::JsonBody<InstalledPackageRequest>::parse(
         R"({"name":"incomplete")",
         std::pmr::get_default_resource());
     if (malformedModel.has_value()) {

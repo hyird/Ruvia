@@ -39,7 +39,7 @@ template <typename ValueT>
         return 32;
     } else if constexpr (isRuviaString<T>) {
         return jsonStringSizeHint(value.view());
-    } else if constexpr (JsonBody<T>::value) {
+    } else if constexpr (isResponseModel<T>) {
         return ModelJsonAccess::sizeHint(value);
     } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
         std::size_t size = 2;
@@ -53,7 +53,7 @@ template <typename ValueT>
         }
         return size;
     } else {
-        static_assert(alwaysFalse<T>, "RUVIA_MODEL field type is not JSON serializable");
+        static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
     }
 }
 
@@ -98,12 +98,12 @@ void appendJsonValue(std::pmr::string& output, const ValueT& value) {
         }
     } else if constexpr (isRuviaString<T>) {
         appendJsonString(output, value.view());
-    } else if constexpr (JsonBody<T>::value) {
+    } else if constexpr (isResponseModel<T>) {
         ModelJsonAccess::append(output, value);
     } else if constexpr (isRuviaArray<T> || isRuviaList<T>) {
         appendJsonSequence(output, value);
     } else {
-        static_assert(alwaysFalse<T>, "RUVIA_MODEL field type is not JSON serializable");
+        static_assert(alwaysFalse<T>, "JSON output must use Ruvia scalar types or RUVIA_RESPONSE_MODEL");
     }
 }
 

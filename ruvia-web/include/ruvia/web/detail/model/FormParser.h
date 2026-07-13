@@ -15,7 +15,7 @@
 #include "ruvia/http/UrlEncoding.h"
 #include "ruvia/web/detail/model/Traits.h"
 
-// Internal URL-encoded form parser layer for RUVIA_MODEL.
+// Internal URL-encoded form parser for RUVIA_REQUEST_MODEL.
 
 namespace ruvia::detail {
 
@@ -109,7 +109,7 @@ template <typename T>
                 : std::nullopt;
         }
     } else {
-        static_assert(alwaysFalse<FieldT>, "RUVIA_MODEL form field type is not supported");
+        static_assert(alwaysFalse<FieldT>, "RUVIA_REQUEST_MODEL form field type is not supported");
     }
 }
 
