@@ -1,18 +1,24 @@
 function(ruvia_add_example name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE ruvia::ruvia)
+    target_link_libraries(${name} PRIVATE ruvia::web)
     target_compile_definitions(${name}
         PRIVATE
             RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(MSVC)
+        target_compile_options(${name} PRIVATE /bigobj /FS)
+    endif()
 endfunction()
 
 ruvia_add_example(ruvia_example_basic_http basic_http.cpp)
+ruvia_add_example(ruvia_example_bench_server bench_server.cpp)
 ruvia_add_example(ruvia_example_api_surface api_surface.cpp)
 ruvia_add_example(ruvia_example_models_validation models_validation.cpp)
 ruvia_add_example(ruvia_example_streaming streaming.cpp)
 ruvia_add_example(ruvia_example_files_static files_static.cpp)
 ruvia_add_example(ruvia_example_websocket websocket.cpp)
 ruvia_add_example(ruvia_example_runtime_config runtime_config.cpp)
+ruvia_add_example(ruvia_example_ops ops.cpp)
+ruvia_add_example(ruvia_example_middleware_next middleware_next.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt auth_jwt.cpp)

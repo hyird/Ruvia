@@ -1,0 +1,202 @@
+#pragma once
+
+#include "ruvia/http/detail/HttpTransferCoding.h"
+#include "ruvia/http/ProtocolByteLimit.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory_resource>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <variant>
+
+#include <zlib.h>
+
+namespace ruvia::detail {
+
+inline constexpr std::size_t kBodyReadChunkBytes = 8 * 1024;
+
+enum class TransferCodingDecodeError : std::uint8_t {
+    kInvalidContent,
+    kDecodedSizeExceeded,
+    kDecoderFailure,
+};
+
+class TransferCodingDecodeNeedInput final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+private:
+    friend class TransferCodingDecodeResult;
+    friend class TransferCodingDecoder;
+    explicit constexpr TransferCodingDecodeNeedInput(
+        std::size_t consumedBytes) noexcept
+        : consumedBytes_(consumedBytes) {}
+    std::size_t consumedBytes_;
+};
+
+class TransferCodingDecodeOutput final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+        return bytes_;
+    }
+
+private:
+    friend class TransferCodingDecodeResult;
+    friend class TransferCodingDecoder;
+    constexpr TransferCodingDecodeOutput(
+        std::size_t consumedBytes,
+        std::string_view bytes) noexcept
+        : consumedBytes_(consumedBytes), bytes_(bytes) {}
+    std::size_t consumedBytes_;
+    std::string_view bytes_;
+};
+
+class TransferCodingDecodeComplete final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+private:
+    friend class TransferCodingDecodeResult;
+    friend class TransferCodingDecoder;
+    explicit constexpr TransferCodingDecodeComplete(
+        std::size_t consumedBytes) noexcept
+        : consumedBytes_(consumedBytes) {}
+    std::size_t consumedBytes_;
+};
+
+class TransferCodingDecodeFailure final {
+public:
+    [[nodiscard]] constexpr std::size_t consumedBytes() const noexcept {
+        return consumedBytes_;
+    }
+
+    [[nodiscard]] constexpr TransferCodingDecodeError error() const noexcept {
+        return error_;
+    }
+
+private:
+    friend class TransferCodingDecodeResult;
+    friend class TransferCodingDecoder;
+    constexpr TransferCodingDecodeFailure(
+        std::size_t consumedBytes,
+        TransferCodingDecodeError error) noexcept
+        : consumedBytes_(consumedBytes), error_(error) {}
+    std::size_t consumedBytes_;
+    TransferCodingDecodeError error_;
+};
+
+// One inflate step consumes a prefix of caller-owned input and exclusively
+// requests more input, exposes output in the caller-owned span, completes, or
+// reports a wire/limit/decoder failure. No input view or output storage is kept
+// by the decoder across calls.
+class TransferCodingDecodeResult final {
+public:
+    [[nodiscard]] std::size_t consumedBytes() const noexcept {
+        return std::visit(
+            [](const auto& result) { return result.consumedBytes(); },
+            value_);
+    }
+
+    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const noexcept {
+        return std::get_if<TransferCodingDecodeNeedInput>(&value_);
+    }
+
+    [[nodiscard]] const TransferCodingDecodeOutput* output() const noexcept {
+        return std::get_if<TransferCodingDecodeOutput>(&value_);
+    }
+
+    [[nodiscard]] const TransferCodingDecodeComplete* complete() const noexcept {
+        return std::get_if<TransferCodingDecodeComplete>(&value_);
+    }
+
+    [[nodiscard]] const TransferCodingDecodeFailure* failure() const noexcept {
+        return std::get_if<TransferCodingDecodeFailure>(&value_);
+    }
+
+private:
+    friend class TransferCodingDecoder;
+    using Value = std::variant<
+        TransferCodingDecodeNeedInput,
+        TransferCodingDecodeOutput,
+        TransferCodingDecodeComplete,
+        TransferCodingDecodeFailure>;
+
+    template <typename Result>
+    explicit TransferCodingDecodeResult(Result result) noexcept
+        : value_(std::move(result)) {}
+
+    Value value_;
+};
+
+enum class TransferCodingFinishStatus : std::uint8_t {
+    kComplete,
+    kIncomplete,
+};
+
+class TransferCodingDecoder final {
+public:
+    TransferCodingDecoder(
+        HttpTransferCoding coding,
+        std::pmr::memory_resource* resource,
+        ProtocolByteLimit bodyLimit);
+    ~TransferCodingDecoder();
+
+    TransferCodingDecoder(const TransferCodingDecoder&) = delete;
+    TransferCodingDecoder& operator=(const TransferCodingDecoder&) = delete;
+
+    [[nodiscard]] TransferCodingDecodeResult decode(
+        std::string_view input,
+        std::span<char> output) noexcept;
+    [[nodiscard]] TransferCodingFinishStatus finishInput() noexcept;
+
+private:
+    struct InflateStep {
+        std::size_t consumed{0};
+        std::size_t produced{0};
+        int status{Z_OK};
+    };
+
+    [[nodiscard]] InflateStep inflateStep(
+        std::string_view input,
+        std::span<char> output) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult needInput(
+        std::size_t consumed) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult output(
+        std::size_t consumed,
+        std::string_view bytes) noexcept;
+    [[nodiscard]] static TransferCodingDecodeResult complete(
+        std::size_t consumed) noexcept;
+    [[nodiscard]] TransferCodingDecodeResult fail(
+        std::size_t consumed,
+        TransferCodingDecodeError error) noexcept;
+
+    struct alignas(std::max_align_t) ZlibAllocationHeader {
+        std::pmr::memory_resource* resource;
+        std::size_t bytes;
+    };
+
+    static voidpf zallocThunk(voidpf opaque, uInt items, uInt size) noexcept;
+    static void zfreeThunk(voidpf opaque, voidpf address) noexcept;
+
+    void cleanup() noexcept;
+    z_stream stream_{};
+    bool initialized_{false};
+    bool ended_{false};
+    bool failed_{false};
+    TransferCodingDecodeError failure_{TransferCodingDecodeError::kInvalidContent};
+    std::pmr::memory_resource* resource_{nullptr};
+    ProtocolByteLimit bodyLimit_;
+    std::size_t decodedBytes_{0};
+};
+
+}  // namespace ruvia::detail

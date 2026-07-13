@@ -2,39 +2,56 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <system_error>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
-#include "ruvia/http/Error.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
+#include "ruvia/web/Error.h"
 
 class RequestIdMiddleware final : public ruvia::Middleware<RequestIdMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        auto response = co_await next(c);
-        response.setHeader("X-Example", "basic-http");
-        co_return response;
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        co_await next();
+        c.header("X-Example", "basic-http");
     }
 };
 
 class AdminAuthMiddleware final : public ruvia::Middleware<AdminAuthMiddleware> {
 public:
-    ruvia::Task<ruvia::HttpResponse> handle(ruvia::Context& c, const ruvia::Next& next) {
-        if (c.header("X-Admin-Token") != "secret") {
-            co_return c.error(401, "unauthorized", "missing admin token");
+    ruvia::Task<void> handle(ruvia::Context& c, ruvia::Next& next) {
+        if (c.req().header("X-Admin-Token").value_or("") != "secret") {
+            c.respond(c.error(401, "unauthorized", "missing admin token"));
+            co_return;
         }
-        co_return co_await next(c);
+        co_await next();
     }
 };
 
-RUVIA_MODEL(UserResponse,
+RUVIA_RESPONSE_MODEL(UserResponse,
     RUVIA_FIELD(id, ruvia::String),
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(active, ruvia::Bool)
 );
 
 ruvia::Task<ruvia::HttpResponse> exampleErrorHandler(ruvia::Context& c, ruvia::HttpErrorInfo error) {
-    return ruvia::makeErrorResponse(c, error, true, nullptr);
+    co_return c.error(error.status(), error.code(), error.message(), error.statusText());
+}
+
+std::optional<std::uint32_t> parseUInt32(std::optional<std::string_view> input) noexcept {
+    if (!input || input->empty()) {
+        return std::nullopt;
+    }
+
+    std::uint32_t value{};
+    const auto* const begin = input->data();
+    const auto* const end = begin + input->size();
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
+    if (ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return value;
 }
 
 class BasicHttpController final : public ruvia::Controller<BasicHttpController> {
@@ -64,7 +81,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> user(ruvia::Context& c) {
         UserResponse response(c);
         response
-            .id(c.param("id").toStringView().value_or("unknown"))
+            .id(c.req().param("id").value_or("unknown"))
             .name("example-user")
             .active(ruvia::Bool{true});
         co_return c.json(response);
@@ -73,7 +90,7 @@ private:
     ruvia::Task<ruvia::HttpResponse> wildcard(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("wildcard=");
-        body.append(c.param("*").toStringView().value_or(""));
+        body.append(c.req().param("*").value_or(""));
         body.push_back('\n');
         co_return c.text(body);
     }
@@ -81,11 +98,11 @@ private:
     ruvia::Task<ruvia::HttpResponse> inputs(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         body.append("remote=");
-        body.append(c.remoteAddress());
+        body.append(getConnInfo(c).remote().address());
         body.append("\nuser-agent=");
-        body.append(c.header(ruvia::HttpRequest::KnownHeader::kUserAgent));
+        body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
-        if (const auto page = c.query("page").toUInt32()) {
+        if (const auto page = parseUInt32(c.req().query("page"))) {
             char buffer[16]{};
             const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), *page);
             if (ec == std::errc{}) {
@@ -93,16 +110,17 @@ private:
             }
         }
         body.append("\nsession=");
-        body.append(c.cookie("session").value_or(""));
+        body.append(c.req().cookie("session").value_or(""));
         body.push_back('\n');
         co_return c.text(body);
     }
 
     ruvia::Task<ruvia::HttpResponse> echo(ruvia::Context& c) {
-        const auto body = co_await c.body();
+        const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        co_return c.status(201).setHeader("X-Echo", "true").text(owned);
+        constexpr ruvia::HttpHeaderView headers[] = {{"X-Echo", "true"}};
+        co_return c.text(owned, 201, headers);
     }
 
     ruvia::Task<ruvia::HttpResponse> redirect(ruvia::Context& c) {
@@ -118,7 +136,9 @@ private:
     }
 
     ruvia::Task<ruvia::HttpResponse> options(ruvia::Context& c) {
-        co_return c.status(204).setHeader("Allow", "GET, HEAD, OPTIONS").text("");
+        c.status(204);
+        c.header("Allow", "GET, HEAD, OPTIONS");
+        co_return c.text("");
     }
 
     ruvia::Task<ruvia::HttpResponse> adminStatus(ruvia::Context& c) {
@@ -131,15 +151,16 @@ int main() {
     memory.requestInitialBufferBytes = 4096;
 
     ruvia::app()
-        .setListenAddress("0.0.0.0", 8080)
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(8080)
         .setThreadNum(2)
-        .setIdleTimeout(std::chrono::seconds(60))
-        .setHeaderTimeout(std::chrono::seconds(15))
-        .setBodyTimeout(std::chrono::seconds(30))
-        .setWriteTimeout(std::chrono::seconds(30))
+        .setKeepaliveTimeout(std::chrono::seconds(75))
+        .setClientHeaderTimeout(std::chrono::seconds(60))
+        .setClientBodyTimeout(std::chrono::seconds(60))
+        .setSendTimeout(std::chrono::seconds(60))
         .setMaxConnectionsPerWorker(10000)
-        .setMaxRequestsPerConnection(1000)
+        .setKeepaliveRequests(1000)
         .setMemoryPoolConfig(memory)
-        .setErrorHandler(&exampleErrorHandler)
+        .onError(&exampleErrorHandler)
         .run();
 }

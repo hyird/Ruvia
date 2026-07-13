@@ -10,8 +10,8 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/app/App.h"
-#include "ruvia/http/Controller.h"
+#include "ruvia/web/App.h"
+#include "ruvia/web/Controller.h"
 
 namespace {
 
@@ -81,7 +81,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
-        auto value = co_await c.redis().get(c.param("key").toStringView().value_or(""));
+        auto value = co_await c.redis().get(c.req().param("key").value_or(""));
         if (!value) {
             co_return c.error(404, "not_found", "redis key not found");
         }
@@ -89,13 +89,13 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> setValue(ruvia::Context& c) {
-        auto body = co_await c.body();
-        co_await c.redis().set(c.param("key").toStringView().value_or(""), body);
+        auto body = co_await c.req().text();
+        co_await c.redis().set(c.req().param("key").value_or(""), body);
         co_return c.text("OK\n");
     }
 
     ruvia::Task<ruvia::HttpResponse> increment(ruvia::Context& c) {
-        const auto value = co_await c.redis().incr(c.param("key").toStringView().value_or(""));
+        const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
         std::pmr::string body(c.allocator<char>());
         appendSigned(body, value);
         body.push_back('\n');
@@ -103,7 +103,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> keyMetadata(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto exists = co_await c.redis().exists(key);
         const auto touched = co_await c.redis().touch(key);
         const auto type = co_await c.redis().type(key);
@@ -129,8 +129,8 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
-        const auto value = co_await c.body();
+        const auto key = c.req().param("key").value_or("");
+        const auto value = co_await c.req().text();
         const std::array<std::pair<std::string_view, std::string_view>, 2> items{{
             {"ruvia:example:mset:a", "one"},
             {"ruvia:example:mset:b", "two"},
@@ -139,7 +139,7 @@ public:
 
         co_await c.redis().set(key, value);
         ruvia::RedisSetOptions setOptions;
-        setOptions.get = true;
+        setOptions.returnPrevious = true;
         auto previous = co_await c.redis().set(key, "fresh", setOptions);
         co_await c.redis().setEx("ruvia:example:ttl", std::chrono::seconds(60), "ttl");
         const auto inserted = co_await c.redis().setNx("ruvia:example:nx", "first");
@@ -179,7 +179,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> hashes(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const std::array<std::pair<std::string_view, std::string_view>, 2> fields{{
             {"name", "ruvia"},
             {"kind", "framework"},
@@ -224,7 +224,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> lists(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto left = co_await c.redis().lpush(key, "left");
         const auto right = co_await c.redis().rpush(key, "right");
         const auto length = co_await c.redis().llen(key);
@@ -258,7 +258,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> sets(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto added = co_await c.redis().sadd(key, "one");
         const auto alsoAdded = co_await c.redis().sadd("ruvia:example:set:other", "one");
         auto members = co_await c.redis().smembers(key);
@@ -298,7 +298,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> sortedSets(ruvia::Context& c) {
-        const auto key = c.param("key").toStringView().value_or("");
+        const auto key = c.req().param("key").value_or("");
         const auto added = co_await c.redis().zadd(key, 1.0, "one");
         const auto addedTwo = co_await c.redis().zadd(key, 2.0, "two");
         auto values = co_await c.redis().zrange(key, 0, -1);
@@ -340,18 +340,19 @@ public:
 
         std::pmr::string body(c.allocator<char>());
         body.append("keys=");
-        appendSigned(body, static_cast<std::int64_t>(keys.values.size()));
+        appendSigned(body, static_cast<std::int64_t>(keys.values().size()));
         body.append("\nhash=");
-        appendSigned(body, static_cast<std::int64_t>(hash.entries.size()));
+        appendSigned(body, static_cast<std::int64_t>(hash.entries().size()));
         body.append("\nset=");
-        appendSigned(body, static_cast<std::int64_t>(set.values.size()));
+        appendSigned(body, static_cast<std::int64_t>(set.values().size()));
         body.append("\nzset=");
-        appendSigned(body, static_cast<std::int64_t>(zset.entries.size()));
+        appendSigned(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
         co_return c.text(body);
     }
 
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
+        const std::array<std::string_view, 2> typeCommand{"TYPE", "ruvia:example:pipeline"};
         auto pipeline = c.redis().pipeline();
         auto results = co_await pipeline
             .set("ruvia:example:pipeline", "1")
@@ -362,7 +363,7 @@ public:
             .lpush("ruvia:example:pipeline:list", "item")
             .sadd("ruvia:example:pipeline:set", "member")
             .zadd("ruvia:example:pipeline:zset", 1.0, "member")
-            .command({"TYPE", "ruvia:example:pipeline"})
+            .command(typeCommand)
             .exec();
 
         std::pmr::string body(c.allocator<char>());
@@ -427,7 +428,7 @@ public:
     }
 
     ruvia::Task<ruvia::HttpResponse> aliasValue(ruvia::Context& c) {
-        auto value = co_await c.redis("cache").get(c.param("key").toStringView().value_or(""));
+        auto value = co_await c.redis("cache").get(c.req().param("key").value_or(""));
         std::pmr::string body(c.allocator<char>());
         if (value) {
             body.append(*value);
@@ -445,7 +446,8 @@ int main() {
     app
         .useRedis(config)
         .useRedis("cache", std::move(config))
-        .setListenAddress("0.0.0.0", app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))
+        .setListenAddress("0.0.0.0")
+        .setHttpListenPort(app.env().get<std::uint16_t>("RUVIA_PORT").value_or(8090))
         .setThreadNum(app.env().get<std::uint32_t>("RUVIA_THREADS").value_or(2))
         .run();
 }
