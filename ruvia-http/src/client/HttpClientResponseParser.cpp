@@ -19,8 +19,11 @@
 namespace ruvia::detail {
 
 struct Http1ClientResponsePlanAccess final {
+    using RequestContentSignal =
+        std::optional<Http1ClientRequestContentSignal>;
+
     [[nodiscard]] static Http1ClientResponsePlan informational(
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(Http1ClientInformationalResponse()),
             requestContentSignal);
@@ -28,7 +31,7 @@ struct Http1ClientResponsePlanAccess final {
 
     [[nodiscard]] static Http1ClientResponsePlan withoutContent(
         Http1ClientResponsePersistence persistence,
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientResponseWithoutContent(persistence)),
@@ -38,7 +41,7 @@ struct Http1ClientResponsePlanAccess final {
     [[nodiscard]] static Http1ClientResponsePlan knownLength(
         std::size_t contentLength,
         Http1ClientResponsePersistence persistence,
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientKnownLengthResponse(contentLength, persistence)),
@@ -48,7 +51,7 @@ struct Http1ClientResponsePlanAccess final {
     [[nodiscard]] static Http1ClientResponsePlan chunked(
         HttpTransferCodings transferCodings,
         Http1ClientResponsePersistence persistence,
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientChunkedResponse(transferCodings, persistence)),
@@ -57,7 +60,7 @@ struct Http1ClientResponsePlanAccess final {
 
     [[nodiscard]] static Http1ClientResponsePlan closeDelimited(
         HttpTransferCodings transferCodings,
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(
                 Http1ClientCloseDelimitedResponse(transferCodings)),
@@ -65,14 +68,14 @@ struct Http1ClientResponsePlanAccess final {
     }
 
     [[nodiscard]] static Http1ClientResponsePlan connectTunnel(
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(Http1ClientConnectTunnel()),
             requestContentSignal);
     }
 
     [[nodiscard]] static Http1ClientResponsePlan protocolUpgrade(
-        Http1ClientRequestContentSignal requestContentSignal) noexcept {
+        RequestContentSignal requestContentSignal) noexcept {
         return Http1ClientResponsePlan(
             Http1ClientResponsePlan::State(Http1ClientProtocolUpgrade()),
             requestContentSignal);
@@ -373,7 +376,8 @@ using ResponsePlanningResult = std::variant<
     const auto contentSemantics = detail::httpResponseContentSemantics(
         request.method(), response.statusCode);
 
-    auto requestContentSignal = Http1ClientRequestContentSignal::kNone;
+    auto requestContentSignal =
+        std::optional<Http1ClientRequestContentSignal>{};
     if (continueGated) {
         if (response.statusCode == 100) {
             requestContentSignal = Http1ClientRequestContentSignal::kContinue;

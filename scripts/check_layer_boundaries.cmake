@@ -7191,6 +7191,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_api_surface MATCHES
            "HasHttp1ClientResponsePlanAlternatives<[\r\n \t]*ruvia::Http1ClientResponsePlan>" OR
        NOT http1_client_api_surface MATCHES
+           "std::same_as<std::optional<[\r\n \t]*ruvia::Http1ClientRequestContentSignal>>" OR
+       NOT http1_client_api_surface MATCHES
            "!HasStaleHttp1ClientResponseMode<[\r\n \t]*ruvia::Http1ClientResponsePlan>" OR
        NOT http1_client_api_surface MATCHES
            "!HasHttp1ClientResponsePersistence<[\r\n \t]*ruvia::Http1ClientCloseDelimitedResponse>" OR
@@ -7203,6 +7205,8 @@ if(EXISTS "${HTTP1_CLIENT_API_SURFACE}" AND
        NOT http1_client_package_consumer MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_package_consumer MATCHES "completeRequestContent" OR
        NOT http1_client_package_consumer MATCHES "HasHttp1ClientResponsePlanAlternatives" OR
+       NOT http1_client_package_consumer MATCHES
+           "std::same_as<std::optional<[\r\n \t]*ruvia::Http1ClientRequestContentSignal>>" OR
        NOT http1_client_package_consumer MATCHES "Http1ClientProtocolUpgrade" OR
        http1_client_package_consumer MATCHES "responseContext[(][)]")
         boundary_error("installed HTTP/1 API can bypass protocol preparation"
@@ -7248,6 +7252,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "protocolUpgrade[(][)]" OR
        NOT http1_client_response_parser_header MATCHES "Http1ClientRequestContentSignal" OR
        NOT http1_client_response_parser_header MATCHES "requestContentSignal" OR
+       NOT http1_client_response_parser_header MATCHES
+           "std::optional<Http1ClientRequestContentSignal>" OR
        NOT http1_client_response_parser_header MATCHES "Http1ClientRequestContentCompletionStatus" OR
        NOT http1_client_response_parser_header MATCHES "completeRequestContent" OR
        NOT http1_client_response_parser_header MATCHES "const PreparedHttp1ClientRequest& request" OR
@@ -7269,6 +7275,13 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
         boundary_error("public HTTP/1 client response parser lost its discriminated contract"
             "NeedMore, owning Parsed, typed Failure, exact head consumption, and one immutable plan must stay bound")
     endif()
+    if(http1_client_response_parser_header MATCHES
+           "Http1ClientRequestContentSignal::kNone" OR
+       http1_client_response_parser_header MATCHES
+           "kNone,[\r\n \t]*kContinue")
+        boundary_error("HTTP/1 client request-content signal restored a no-event sentinel"
+            "absence must be represented by optional, while the enum contains only real protocol events")
+    endif()
     if(NOT http1_client_response_parser MATCHES "findHttpHeaderEnd" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::withoutContent" OR
        NOT http1_client_response_parser MATCHES "Http1ClientResponsePlanAccess::knownLength" OR
@@ -7285,6 +7298,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES "requestContentComplete_ = true" OR
        NOT http1_client_response_parser MATCHES "sawContinue_ = true" OR
        NOT http1_client_response_parser MATCHES "phase_ = Phase::kComplete" OR
+       NOT http1_client_response_parser MATCHES
+           "std::optional<Http1ClientRequestContentSignal>[{][}]" OR
        NOT http1_client_response_parser MATCHES "Http1ClientRequestContentSignal::kContinue" OR
        NOT http1_client_response_parser MATCHES "Http1ClientRequestContentSignal::kExchangeComplete" OR
        NOT http1_client_response_parser MATCHES
@@ -7293,6 +7308,8 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser MATCHES
            "detail::httpResponseContentSemantics" OR
        http1_client_response_parser MATCHES "request[.]expectsContinue" OR
+       http1_client_response_parser MATCHES
+           "Http1ClientRequestContentSignal::kNone" OR
        http1_client_response_parser MATCHES "throw[ \t]+std::runtime_error")
         boundary_error("HTTP/1 client response parser bypasses its typed plan"
             "head scanning, Prepared-bound informational/final state, content signals, RFC body precedence, persistence, CONNECT, and Upgrade must have one output without wire exceptions")

@@ -1707,7 +1707,8 @@ concept HasHttp1ClientResponseParserContract = requires(
 template <typename T>
 concept HasHttp1ClientRequestContentSignal = requires(const T& plan) {
     { plan.requestContentSignal() } ->
-        std::same_as<ruvia::Http1ClientRequestContentSignal>;
+        std::same_as<std::optional<
+            ruvia::Http1ClientRequestContentSignal>>;
 };
 
 template <typename T>

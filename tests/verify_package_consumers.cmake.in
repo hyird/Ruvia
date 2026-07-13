@@ -319,6 +319,8 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "requestContentSignal" OR
    NOT _installed_http1_client_response_parser_content MATCHES
+       "std::optional<Http1ClientRequestContentSignal>" OR
+   NOT _installed_http1_client_response_parser_content MATCHES
        "Http1ClientRequestContentCompletionStatus" OR
    NOT _installed_http1_client_response_parser_content MATCHES
        "completeRequestContent" OR
@@ -329,6 +331,12 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
    NOT _installed_http1_client_response_parser_content MATCHES
        "consumedBytes")
     message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
+endif()
+if(_installed_http1_client_response_parser_content MATCHES
+       "Http1ClientRequestContentSignal::kNone" OR
+   _installed_http1_client_response_parser_content MATCHES
+       "kNone,[\r\n \t]*kContinue")
+    message(FATAL_ERROR "installed HTTP/1 client request-content signal restored a no-event sentinel")
 endif()
 set(_installed_http1_client_request_writer
     "${_install_prefix}/include/ruvia/http/Http1ClientRequestWriter.h")

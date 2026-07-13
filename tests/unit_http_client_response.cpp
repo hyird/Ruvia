@@ -525,8 +525,7 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
     RUVIA_CHECK(earlyHints.parsed() != nullptr);
     if (earlyHints.parsed() != nullptr) {
         RUVIA_CHECK(
-            earlyHints.parsed()->plan().requestContentSignal() ==
-            Http1ClientRequestContentSignal::kNone);
+            !earlyHints.parsed()->plan().requestContentSignal());
         RUVIA_CHECK(
             earlyHints.parsed()->plan().informational() != nullptr);
     }
