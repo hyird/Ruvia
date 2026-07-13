@@ -202,14 +202,17 @@ jobs:
           fi
           "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
 
-      # Instrument the complete test executable and protocol library. libFuzzer
-      # coverage is added only to its three dedicated entrypoints, so the ordinary
-      # unit-test main remains valid while ASan/UBSan still observe protocol code.
+      # Instrument the protocol library and its HTTP-only test executables. libFuzzer
+      # coverage is added only to its three dedicated entrypoints. Keep this job
+      # HTTP-only: Linux mimalloc's global override and ASan cannot safely own the
+      # same allocation symbols, while the protocol target has no runtime allocator.
       - name: Configure
         run: |
           cmake -S . -B build/protocol-sanitizers -G Ninja \
             -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
             -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DRUVIA_BUILD_CORE=OFF \
+            -DRUVIA_BUILD_WEB=OFF \
             -DRUVIA_BUILD_TESTS=ON \
             -DRUVIA_BUILD_FUZZERS=ON \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
@@ -217,7 +220,7 @@ jobs:
       - name: Build
         run: cmake --build build/protocol-sanitizers --config "$BUILD_TYPE"
 
-      - name: Test (unit, ASan + UBSan)
+      - name: Test (HTTP, ASan + UBSan)
         env:
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
