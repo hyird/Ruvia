@@ -392,12 +392,6 @@ void Context::storeResponse(HttpResponse&& response) {
         mergeResponseSlotHeaders(response, *response_);
     }
 
-    // The context status is a default: a status already carried by the
-    // response (an explicit helper argument or setStatus call) wins.
-    if (responseStatusCode_ != 200 && response.status() == 200) {
-        response.status(responseStatusCode_);
-    }
-
     if (!hadResponseSlot) {
         const auto contextHeaderCount = responseHeaders_.size();
         if (contextHeaderCount > 0) {
@@ -428,10 +422,6 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
         assignResponseSlotHeaders(response, *response_);
     }
 
-    if (responseStatusCode_ != 200 && response.status() == 200) {
-        response.status(responseStatusCode_);
-    }
-
     if (response_ == nullptr) {
         response_ = &memory_.emplace<HttpResponse>(std::move(response));
     } else {
@@ -442,7 +432,7 @@ void Context::storeAssignedResponse(HttpResponse&& response) {
 
 HttpResponse Context::body(
     std::string_view body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     response.setBodyView(body);
     applyResponseState(response, statusCode);
@@ -451,7 +441,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(
     std::string_view body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     response.setBodyView(body);
@@ -468,7 +458,7 @@ HttpResponse Context::body(std::string_view body, ResponseInit init) const {
 
 HttpResponse Context::body(
     std::nullptr_t,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     applyResponseState(response, statusCode);
     return response;
@@ -476,7 +466,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(
     std::nullptr_t,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     applyResponseState(response, statusCode, headers);
@@ -491,7 +481,7 @@ HttpResponse Context::body(std::nullptr_t, ResponseInit init) const {
 
 HttpResponse Context::body(
     std::pmr::string& body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseBodyOwned(response, std::move(body));
     applyResponseState(response, statusCode);
@@ -500,7 +490,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(
     std::pmr::string& body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseBodyOwned(response, std::move(body));
@@ -517,7 +507,7 @@ HttpResponse Context::body(std::pmr::string& body, ResponseInit init) const {
 
 HttpResponse Context::body(
     std::span<const std::byte> body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     response.setBodyCopy(byteBodyView(body));
     applyResponseState(response, statusCode);
@@ -526,7 +516,7 @@ HttpResponse Context::body(
 
 HttpResponse Context::body(
     std::span<const std::byte> body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     response.setBodyCopy(byteBodyView(body));
@@ -543,7 +533,7 @@ HttpResponse Context::body(std::span<const std::byte> body, ResponseInit init) c
 
 HttpResponse Context::text(
     std::string_view body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     response.setBodyView(body);
@@ -553,7 +543,7 @@ HttpResponse Context::text(
 
 HttpResponse Context::text(
     std::string_view body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
@@ -572,7 +562,7 @@ HttpResponse Context::text(std::string_view body, ResponseInit init) const {
 
 HttpResponse Context::text(
     std::pmr::string& body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
@@ -582,7 +572,7 @@ HttpResponse Context::text(
 
 HttpResponse Context::text(
     std::pmr::string& body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
@@ -601,7 +591,7 @@ HttpResponse Context::text(std::pmr::string& body, ResponseInit init) const {
 
 HttpResponse Context::textStaticView(
     std::string_view body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/plain; charset=UTF-8");
     detail::setResponseBodyStaticView(response, body);
@@ -611,7 +601,7 @@ HttpResponse Context::textStaticView(
 
 HttpResponse Context::jsonSerialized(
     std::pmr::string& body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "application/json");
     detail::setResponseBodyOwned(response, std::move(body));
@@ -621,7 +611,7 @@ HttpResponse Context::jsonSerialized(
 
 HttpResponse Context::html(
     std::string_view body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     response.setBodyView(body);
@@ -631,7 +621,7 @@ HttpResponse Context::html(
 
 HttpResponse Context::html(
     std::string_view body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
@@ -650,7 +640,7 @@ HttpResponse Context::html(std::string_view body, ResponseInit init) const {
 
 HttpResponse Context::html(
     std::pmr::string& body,
-    std::uint16_t statusCode) const {
+    std::optional<std::uint16_t> statusCode) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
     detail::setResponseBodyOwned(response, std::move(body));
@@ -660,7 +650,7 @@ HttpResponse Context::html(
 
 HttpResponse Context::html(
     std::pmr::string& body,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
     HttpResponse response(resource());
     detail::setResponseHeaderStableView(response, "Content-Type", "text/html; charset=UTF-8");
@@ -748,7 +738,7 @@ HttpResponse Context::streamingHead(std::string_view contentType) const {
     if (!contentType.empty()) {
         response.header("Content-Type", contentType);
     }
-    applyResponseState(response, 0);
+    applyResponseState(response, std::nullopt);
     return response;
 }
 
@@ -768,9 +758,9 @@ Context& Context::setStableResponseHeader(std::string_view name, std::string_vie
 
 void Context::applyResponseState(
     HttpResponse& response,
-    std::uint16_t statusCode,
+    std::optional<std::uint16_t> statusCode,
     std::span<const HttpHeaderView> headers) const {
-    const auto finalStatusCode = statusCode == 0 ? responseStatusCode_ : statusCode;
+    const auto finalStatusCode = statusCode.value_or(responseStatusCode_);
     if (!detail::httpFinalStatusCodeValid(finalStatusCode)) {
         throw std::invalid_argument("invalid final HTTP status code");
     }

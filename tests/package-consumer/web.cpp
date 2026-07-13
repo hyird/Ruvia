@@ -442,6 +442,9 @@ using AppSetConnectionTimeoutFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::chrono::milliseconds>);
 using AppSetOptionalSizeFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::size_t>);
+using ContextTextStatusFunction = ruvia::HttpResponse (ruvia::Context::*)(
+    std::string_view,
+    std::optional<std::uint16_t>) const;
 
 static_assert(std::same_as<
     decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
@@ -480,6 +483,12 @@ static_assert(std::same_as<
     decltype(static_cast<AppSetOptionalSizeFunction>(
         &ruvia::App::setMaxStreamBodyBytes)),
     AppSetOptionalSizeFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<ContextTextStatusFunction>(&ruvia::Context::text)),
+    ContextTextStatusFunction>);
+static_assert(std::same_as<
+    decltype(ruvia::Context::ResponseInit{}.status),
+    std::optional<std::uint16_t>>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CompressionConfig>);
 static_assert(!HasEmbeddedPolicyEnabledFlag<ruvia::CorsConfig>);
 static_assert(std::same_as<

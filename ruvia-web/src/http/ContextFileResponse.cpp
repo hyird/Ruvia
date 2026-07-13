@@ -307,13 +307,15 @@ template <typename ApplyResponseState>
     auto setFullFileBody = [&](HttpResponse& response) {
         filePath.setFullBody(response, size);
     };
-    auto makeHeaderOnlyResponse = [&](std::uint16_t statusCode) {
+    auto makeHeaderOnlyResponse = [&](
+        std::optional<std::uint16_t> statusCode) {
         HttpResponse response(context.resource());
         addFileHeaders(response);
         applyResponseState(response, statusCode);
         return response;
     };
-    auto makeFullFileResponse = [&](std::uint16_t statusCode) {
+    auto makeFullFileResponse = [&](
+        std::optional<std::uint16_t> statusCode) {
         HttpResponse response(context.resource());
         addFileHeaders(response);
         setFullFileBody(response);
@@ -362,7 +364,7 @@ template <typename ApplyResponseState>
             // no If-Range is still honored without validators.
             if (!conditional.ifRange.empty() &&
                 (!enableValidators || !ifRangeAllows(conditional.ifRange, etag, modifiedSeconds))) {
-                return makeFullFileResponse(0);
+                return makeFullFileResponse(std::nullopt);
             }
 
             const auto rangeResolution = detail::resolveHttpByteRange(
@@ -370,7 +372,7 @@ template <typename ApplyResponseState>
             if (rangeResolution.ignored()) {
                 // Unknown units, invalid/unsupported sets, and ranges over an
                 // empty representation follow the RFC 9110 §14.2 ignore policy.
-                return makeFullFileResponse(0);
+                return makeFullFileResponse(std::nullopt);
             }
             if (rangeResolution.unsatisfiable()) {
                 HttpResponse response(context.resource());
@@ -391,7 +393,7 @@ template <typename ApplyResponseState>
         }
     }
 
-    return makeFullFileResponse(0);
+    return makeFullFileResponse(std::nullopt);
 }
 
 }  // namespace
@@ -414,7 +416,9 @@ HttpResponse Context::file(
         throw HttpError(404, "not_found", "file not found");
     }
 
-    const auto applyState = [this](HttpResponse& response, std::uint16_t statusCode) {
+    const auto applyState = [this](
+        HttpResponse& response,
+        std::optional<std::uint16_t> statusCode) {
         applyResponseState(response, statusCode, {});
     };
     return makeFileResponse(
@@ -575,7 +579,9 @@ HttpResponse Context::staticFile(
         baseEntry);
     const auto& servedEntry = served.entry();
 
-    const auto applyState = [this](HttpResponse& response, std::uint16_t statusCode) {
+    const auto applyState = [this](
+        HttpResponse& response,
+        std::optional<std::uint16_t> statusCode) {
         applyResponseState(response, statusCode, {});
     };
     return makeFileResponse(

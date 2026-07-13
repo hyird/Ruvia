@@ -49,14 +49,14 @@ void exerciseSetCookieNotDuplicated(ruvia::RequestMemory& memory, const ruvia::H
     check(countHeaders(response, "Set-Cookie") == 1);
 }
 
-// An explicit per-response status wins over the context default, matching the
-// creation-time rule (statusCode == 0 means "use the context status").
+// An explicit per-response status wins over the context default; only absence
+// means "use the context status".
 void exerciseExplicitStatusWinsOnReturn(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(404);
-    ruvia::detail::ContextAccess::setResponse(context, context.text("created", 201));
+    ruvia::detail::ContextAccess::setResponse(context, context.text("ok", 200));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.status() == 201);
+    check(response.status() == 200);
 }
 
 void exerciseExplicitStatusWinsOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
@@ -78,9 +78,23 @@ void exerciseRedirectLocationWins(ruvia::RequestMemory& memory, const ruvia::Htt
 void exerciseContextStatusAppliesAsDefault(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(404);
-    ruvia::detail::ContextAccess::setResponse(context, ruvia::HttpResponse(context.resource()));
+    ruvia::detail::ContextAccess::setResponse(
+        context,
+        context.text("not found"));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
     check(response.status() == 404);
+}
+
+void exerciseRawResponseStatusIsNotReinterpreted(
+    ruvia::RequestMemory& memory,
+    const ruvia::HttpRequest& request) {
+    auto context = ruvia::detail::ContextAccess::make(memory, request);
+    context.status(404);
+    ruvia::detail::ContextAccess::setResponse(
+        context,
+        ruvia::HttpResponse(context.resource()));
+    auto response = ruvia::detail::ContextAccess::takeResponse(context);
+    check(response.status() == 200);
 }
 
 }  // namespace
@@ -96,6 +110,7 @@ int main() {
     exerciseExplicitStatusWinsOnAssign(memory, request);
     exerciseRedirectLocationWins(memory, request);
     exerciseContextStatusAppliesAsDefault(memory, request);
+    exerciseRawResponseStatusIsNotReinterpreted(memory, request);
 
     return failures;
 }

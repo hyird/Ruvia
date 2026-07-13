@@ -39,7 +39,7 @@ detail::ContextValueStore& Context::values() {
 HttpResponse& Context::responseStorage() {
     if (response_ == nullptr) {
         response_ = &memory_.emplace<HttpResponse>(resource());
-        applyResponseState(*response_, 0, {});
+        applyResponseState(*response_, std::nullopt, {});
     }
     return *response_;
 }

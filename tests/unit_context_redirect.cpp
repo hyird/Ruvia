@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstdint>
 #include <exception>
 #include <iterator>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -127,6 +129,9 @@ RUVIA_TEST(context_body_sets_body_and_status) {
 }
 
 RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
+    static_assert(std::same_as<
+        decltype(Context::ResponseInit{}.status),
+        std::optional<std::uint16_t>>);
     {
         RUVIA_MAKE_CONTEXT(worker, memory, request, context);
         bool threw = false;
@@ -142,6 +147,28 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
         bool threw = false;
         try {
             (void)context.body("not final", Context::ResponseInit{.status = 103});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    {
+        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+        bool threw = false;
+        try {
+            (void)context.body("zero", std::uint16_t{0});
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    {
+        RUVIA_MAKE_CONTEXT(worker, memory, request, context);
+        bool threw = false;
+        try {
+            (void)context.body(
+                "zero",
+                Context::ResponseInit{.status = std::uint16_t{0}});
         } catch (const std::invalid_argument&) {
             threw = true;
         }
