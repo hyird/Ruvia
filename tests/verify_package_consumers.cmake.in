@@ -1210,11 +1210,17 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     if(NOT _installed_model_macros_contract MATCHES
            "ruviaMaterializeInput" OR
        NOT _installed_model_macros_contract MATCHES
-           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ModelSchemaTag" OR
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::RequestModelSchemaTag" OR
+       NOT _installed_model_macros_contract MATCHES
+           "class[ \t]+T[ \t]*:[ \t]*private[ \t]+::ruvia::detail::ResponseModelSchemaTag" OR
        NOT _installed_model_types_contract MATCHES
            "struct[ \t]+ModelSchemaTag[ \t]*[{][}]" OR
        NOT _installed_model_types_contract MATCHES
-           "is_base_of_v<detail::ModelSchemaTag,[ \t]*T>" OR
+           "struct[ \t]+RequestModelSchemaTag[ \t]*:[ \t]*ModelSchemaTag" OR
+       NOT _installed_model_types_contract MATCHES
+           "struct[ \t]+ResponseModelSchemaTag[ \t]*:[ \t]*ModelSchemaTag" OR
+       NOT _installed_model_types_contract MATCHES
+           "is_base_of_v<detail::RequestModelSchemaTag,[ \t]*T>" OR
        _installed_model_types_contract MATCHES
            "void_t<decltype[(]T::ruviaParse(Json|Form)Body" OR
        NOT _installed_model_macros_contract MATCHES
@@ -1258,7 +1264,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_model_json_writer_contract MATCHES
            "struct[ \t]+ModelJsonAccess[ \t]+final" OR
        NOT _installed_model_json_writer_contract MATCHES
-           "JsonBody<T>::value" OR
+           "isResponseModel<T>" OR
        NOT _installed_model_json_writer_contract MATCHES
            "ModelJsonAccess::sizeHint[(]value[)]" OR
        NOT _installed_model_json_writer_contract MATCHES
@@ -1278,7 +1284,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        _installed_model_macros_contract MATCHES "RequestObject" OR
        _installed_model_input_visitors_contract MATCHES "RequestObject")
         message(FATAL_ERROR
-            "installed generated model input or JSON writer contracts regressed")
+            "installed request/response model capability boundary regressed")
     endif()
     if(NOT EXISTS "${_installed_http2_web_runtime_path}")
         message(FATAL_ERROR "installed Web-owned HTTP/2 stream runtime is missing")

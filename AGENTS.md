@@ -207,10 +207,10 @@ Router/error handler 不得设置 `Connection: close` 或接收 `closeConnection
 
 ## Model 和校验
 
-- `RUVIA_MODEL` 是请求 body 和响应 JSON 的统一 schema 入口。
+- `RUVIA_REQUEST_MODEL` 是请求解析和校验 schema；`RUVIA_RESPONSE_MODEL` 只约束响应字段类型并生成 JSON，不参与请求解析或校验。
 - 字段必须使用 Ruvia 模型类型，不使用 raw `std::string`、`std::vector`、`std::string_view` 或基础整数。
 - 校验规则通过 route validation middleware 声明，不写进 `RUVIA_FIELD`。
-- JSON 支持嵌套模型和数组；form 只支持扁平 key-value 基础字段。
+- 请求 JSON 只嵌套请求模型，响应 JSON 只嵌套响应模型；两者都支持数组。form 只支持扁平 key-value 基础字段。
 - validation 不应为 invalid type 或 duplicate 再扫描 body。
 - 同一 `RUVIA_PATTERN` 只能编译一次并复用。
 

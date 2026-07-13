@@ -29,7 +29,7 @@ public:
     }
 };
 
-RUVIA_MODEL(UserResponse,
+RUVIA_RESPONSE_MODEL(UserResponse,
     RUVIA_FIELD(id, ruvia::String),
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(active, ruvia::Bool)
