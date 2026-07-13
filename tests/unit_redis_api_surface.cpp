@@ -85,7 +85,11 @@ static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::RedisSetOptions>().condition),
-    ruvia::RedisSetCondition>);
+    std::optional<ruvia::RedisSetCondition>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::RedisSetOptions>().expiration),
+    std::optional<ruvia::RedisSetExpiration>>);
+static_assert(!std::default_initializable<ruvia::RedisSetExpiration>);
 static_assert(std::same_as<
     decltype(ruvia::RedisScanOptions{}.count),
     std::optional<std::uint64_t>>);

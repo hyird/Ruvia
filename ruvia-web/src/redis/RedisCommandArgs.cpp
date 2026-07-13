@@ -80,25 +80,26 @@ std::pmr::vector<std::pmr::string> redisSetArgs(
     emplaceRedisString(args, "SET");
     emplaceRedisString(args, key);
     emplaceRedisString(args, value);
-    if (const auto* duration = options.expiration.duration();
-        duration != nullptr) {
-        emplaceRedisString(args, "PX");
-        args.emplace_back(redisMillisecondsString(*duration, resource));
+    if (options.expiration) {
+        if (const auto* duration = options.expiration->duration()) {
+            emplaceRedisString(args, "PX");
+            args.emplace_back(redisMillisecondsString(*duration, resource));
+        }
     }
-    switch (options.condition) {
-    case RedisSetCondition::kNone:
-        break;
-    case RedisSetCondition::kIfAbsent:
-        emplaceRedisString(args, "NX");
-        break;
-    case RedisSetCondition::kIfPresent:
-        emplaceRedisString(args, "XX");
-        break;
+    if (options.condition) {
+        switch (*options.condition) {
+        case RedisSetCondition::kIfAbsent:
+            emplaceRedisString(args, "NX");
+            break;
+        case RedisSetCondition::kIfPresent:
+            emplaceRedisString(args, "XX");
+            break;
+        }
     }
     if (options.returnPrevious) {
         emplaceRedisString(args, "GET");
     }
-    if (options.expiration.keepsExisting()) {
+    if (options.expiration && options.expiration->keepsExisting()) {
         emplaceRedisString(args, "KEEPTTL");
     }
     return args;
