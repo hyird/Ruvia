@@ -5233,6 +5233,8 @@ set(HTTP2_LOCAL_SEND_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2LocalSendState.h")
 set(HTTP2_STREAM_CLOSE_SOURCE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamCloseSource.h")
+set(HTTP2_CLOSED_STREAMS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2ClosedStreams.h")
 set(HTTP2_STREAM_LIFECYCLE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
 set(HTTP2_STREAM_TABLE
@@ -5306,6 +5308,7 @@ else()
 endif()
 if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
    NOT EXISTS "${HTTP2_STREAM_CLOSE_SOURCE}" OR
+   NOT EXISTS "${HTTP2_CLOSED_STREAMS}" OR
    NOT EXISTS "${HTTP2_STREAM_LIFECYCLE}" OR
    NOT EXISTS "${HTTP2_STREAM_TABLE}" OR
    NOT EXISTS "${HTTP2_STREAM_STATE}" OR
@@ -5315,16 +5318,25 @@ if(NOT EXISTS "${HTTP2_LOCAL_SEND_STATE}" OR
 else()
     file(READ "${HTTP2_LOCAL_SEND_STATE}" http2_local_send_state)
     file(READ "${HTTP2_STREAM_CLOSE_SOURCE}" http2_stream_close_source)
+    file(READ "${HTTP2_CLOSED_STREAMS}" http2_closed_streams)
     file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_stream_lifecycle)
     file(READ "${HTTP2_STREAM_TABLE}" http2_stream_table)
     file(READ "${HTTP2_STREAM_STATE}" http2_local_send_stream_state)
     file(READ "${HTTP2_CONNECTION_SOURCE}" http2_local_send_connection)
     if(NOT http2_stream_close_source MATCHES
            "enum class Http2StreamCloseSource" OR
-       NOT http2_stream_close_source MATCHES "kNone" OR
+       http2_stream_close_source MATCHES "kNone" OR
        NOT http2_stream_close_source MATCHES "kPeerGoaway" OR
+       NOT http2_stream_close_source MATCHES
+           "http2IsValidStreamCloseSource" OR
+       NOT http2_closed_streams MATCHES
+           "std::optional<Http2StreamCloseSource>" OR
+       NOT http2_closed_streams MATCHES "return std::nullopt" OR
+       http2_closed_streams MATCHES "Http2StreamCloseSource::kNone" OR
        NOT http2_local_send_state MATCHES
            "Http2StreamCloseSource[.]h" OR
+       NOT http2_local_send_state MATCHES
+           "http2IsValidStreamCloseSource[(]source[)]" OR
        NOT http2_local_send_state MATCHES
            "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
        http2_local_send_state MATCHES
@@ -5367,8 +5379,6 @@ else()
        NOT http2_local_send_state MATCHES "std::get_if<Http2StreamAborted>" OR
        NOT http2_local_send_state MATCHES
            "Http2StreamCloseSource source[(][)] const noexcept" OR
-       http2_local_send_state MATCHES
-           "source == Http2StreamCloseSource::kNone" OR
        NOT http2_stream_lifecycle MATCHES
            "const Http2LocalSendState& localSend[(][)] const noexcept" OR
        NOT http2_stream_lifecycle MATCHES
@@ -5394,7 +5404,7 @@ else()
        NOT http2_local_send_connection MATCHES "queueLocalEndStream" OR
        NOT http2_local_send_connection MATCHES "commitLocalEndStream")
         boundary_error("HTTP/2 local send lifecycle lost its discriminated state"
-            "head, request/response content, trailers, CONNECT, queued/committed END_STREAM, and whole-stream abort must remain exclusive; only abort owns a non-none close source and it must atomically clear queue ownership")
+            "head, request/response content, trailers, CONNECT, queued/committed END_STREAM, and whole-stream abort must remain exclusive; only abort owns a real close source and it must atomically clear queue ownership")
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_REMOTE_RECEIVE_STATE}" OR
@@ -6008,8 +6018,6 @@ elseif(EXISTS "${HTTP_PACKAGE_CONSUMER}")
            "!HasStaleMarkReset<Http2StreamLifecycle>" OR
        NOT http2_local_send_test MATCHES
            "!HasStaleMarkClosed<Http2StreamLifecycle>" OR
-       NOT http2_local_send_test MATCHES
-           "stream[.]abort[(]Http2StreamCloseSource::kNone[)]" OR
        NOT http2_local_send_test MATCHES "!queuedThenAborted[.]queued[(][)]" OR
        NOT http2_local_send_test MATCHES
            "static_cast<Http2StreamCloseSource>[(]0xFF[)]" OR

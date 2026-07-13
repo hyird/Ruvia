@@ -42,6 +42,7 @@
 #include <ruvia/http/detail/http1/Http1ServerRequestParser.h>
 #include <ruvia/http/detail/http1/Http1ServerSemantics.h>
 #include <ruvia/http/detail/http2/Http2Connection.h>
+#include <ruvia/http/detail/http2/Http2ClosedStreams.h>
 #include <ruvia/http/detail/http2/Http2Event.h>
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
@@ -947,6 +948,10 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2StreamState&>()
         .responseStatus()),
     const std::uint16_t*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::Http2ClosedStreamHistory&>()
+        .source(std::uint32_t{})),
+    std::optional<ruvia::detail::Http2StreamCloseSource>>);
 static_assert(HasHttp2RemoteContentAlternatives<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<
@@ -1958,7 +1963,6 @@ int main() {
         localSend.endStreamQueued() == nullptr ||
         !localSendStream.commitLocalEndStream() ||
         localSend.endStreamCommitted() == nullptr ||
-        localSendStream.abort(ruvia::detail::Http2StreamCloseSource::kNone) ||
         !localSendStream.abort(ruvia::detail::Http2StreamCloseSource::kPeer) ||
         localSend.aborted() == nullptr ||
         localSend.aborted()->source() !=

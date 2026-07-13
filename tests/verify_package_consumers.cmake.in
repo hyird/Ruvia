@@ -2371,12 +2371,15 @@ set(_installed_http2_local_send_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2LocalSendState.h")
 set(_installed_http2_close_source_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamCloseSource.h")
+set(_installed_http2_closed_streams_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2ClosedStreams.h")
 set(_installed_http2_lifecycle_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamLifecycle.h")
 set(_installed_http2_stream_table_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2StreamTable.h")
 if(NOT EXISTS "${_installed_http2_local_send_path}" OR
    NOT EXISTS "${_installed_http2_close_source_path}" OR
+   NOT EXISTS "${_installed_http2_closed_streams_path}" OR
    NOT EXISTS "${_installed_http2_lifecycle_path}" OR
    NOT EXISTS "${_installed_http2_stream_table_path}")
     message(FATAL_ERROR "installed HTTP/2 local send state is missing")
@@ -2385,15 +2388,26 @@ file(READ "${_installed_http2_local_send_path}"
     _installed_http2_local_send)
 file(READ "${_installed_http2_close_source_path}"
     _installed_http2_close_source)
+file(READ "${_installed_http2_closed_streams_path}"
+    _installed_http2_closed_streams)
 file(READ "${_installed_http2_lifecycle_path}"
     _installed_http2_lifecycle)
 file(READ "${_installed_http2_stream_table_path}"
     _installed_http2_stream_table)
 if(NOT _installed_http2_close_source MATCHES
        "enum class Http2StreamCloseSource" OR
-   NOT _installed_http2_close_source MATCHES "kNone" OR
+   _installed_http2_close_source MATCHES "kNone" OR
    NOT _installed_http2_close_source MATCHES "kPeerGoaway" OR
+   NOT _installed_http2_close_source MATCHES
+       "http2IsValidStreamCloseSource" OR
+   NOT _installed_http2_closed_streams MATCHES
+       "std::optional<Http2StreamCloseSource>" OR
+   NOT _installed_http2_closed_streams MATCHES "return std::nullopt" OR
+   _installed_http2_closed_streams MATCHES
+       "Http2StreamCloseSource::kNone" OR
    NOT _installed_http2_local_send MATCHES "Http2StreamCloseSource[.]h" OR
+   NOT _installed_http2_local_send MATCHES
+       "http2IsValidStreamCloseSource[(]source[)]" OR
    NOT _installed_http2_local_send MATCHES
        "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
    _installed_http2_local_send MATCHES "enum class Http2StreamCloseSource" OR
@@ -2434,8 +2448,6 @@ if(NOT _installed_http2_close_source MATCHES
    NOT _installed_http2_local_send MATCHES "std::get_if<Http2StreamAborted>" OR
    NOT _installed_http2_local_send MATCHES
        "Http2StreamCloseSource source[(][)] const noexcept" OR
-   NOT _installed_http2_local_send MATCHES
-       "source == Http2StreamCloseSource::kPeerGoaway" OR
    NOT _installed_http2_lifecycle MATCHES
        "const Http2LocalSendState& localSend[(][)] const noexcept" OR
    NOT _installed_http2_lifecycle MATCHES

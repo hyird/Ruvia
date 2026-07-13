@@ -150,7 +150,7 @@ private:
         Http2ErrorCode error) noexcept
         : streamId_(streamId), source_(source), error_(error) {}
     std::uint32_t streamId_{0};
-    Http2StreamCloseSource source_{Http2StreamCloseSource::kNone};
+    Http2StreamCloseSource source_;
     Http2ErrorCode error_{Http2ErrorCode::kNoError};
 };
 
