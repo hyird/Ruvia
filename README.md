@@ -23,39 +23,6 @@ outbound HTTP client provide their own I/O runtime and drive its sans-I/O client
 APIs; `ruvia-web` intentionally does not provide `fetch`, proxy, connection-pool,
 or client TLS runtime APIs.
 
-## Architecture
-
-The layer boundary follows ownership of behavior:
-
-- `ruvia-core` owns reusable runtime infrastructure with no HTTP/Web semantics.
-- `ruvia-http` owns wire parsing, framing, serialization, connection semantics,
-  protocol state machines, and reusable protocol helpers.
-- `ruvia-web` owns application policy and runtime integration: routing,
-  middleware, error envelopes, sessions, CSRF, CORS, rate limits, static-root
-  policy, TLS/socket drivers, DB, Redis, and JWT integration.
-
-If code decides how protocol bytes are interpreted or emitted, it belongs in
-`ruvia-http`. If it decides what an application or Web product does with those
-facts, it belongs in `ruvia-web`. Cross-target reuse happens only through installed
-public headers and `target_link_libraries()` include interfaces.
-
-Runtime highlights:
-
-- One standalone Asio `io_context`, acceptor, server, and thread per worker.
-- Connections remain owned by one worker for their entire lifetime.
-- HTTP/1 request parsing is zero-copy; the header limit is 64KB and the ordinary
-  buffered-body limit is 16MB.
-- Large request bodies, response streaming, SSE, and WebSocket handlers use
-  explicit route modes.
-- Response heads use fixed buffers and scatter-gather writes; file responses are
-  not loaded into memory and use platform zero-copy paths when available.
-- Request-local containers use a PMR arena; worker and process lifetimes use the
-  corresponding Ruvia memory resources.
-
-The detailed invariants are executable: unit tests, package-consumer tests, and
-`scripts/check_layer_boundaries.cmake` guard protocol and target boundaries. This
-README describes the supported product, not the history of internal refactors.
-
 ## Requirements
 
 - CMake 3.24 or newer.
@@ -79,7 +46,7 @@ cmake -S . -B build `
 cmake --build build --config Debug
 ```
 
-Build tests and examples:
+Add tests and examples to the same configuration when needed:
 
 ```powershell
 cmake -S . -B build `
@@ -89,31 +56,6 @@ cmake -S . -B build `
   -DRUVIA_BUILD_EXAMPLES=ON
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
-```
-
-Build only the standalone core component:
-
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-  -DRUVIA_BUILD_CORE=ON `
-  -DRUVIA_BUILD_HTTP=OFF `
-  -DRUVIA_BUILD_WEB=OFF
-```
-
-For HTTP-only builds, enable `RUVIA_BUILD_HTTP` and disable core and Web. A Web
-build always requires both lower targets.
-
-Optional Web integrations are strict build features:
-
-```powershell
-cmake -S . -B build `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-  -DRUVIA_ENABLE_MARIADB=ON `
-  -DRUVIA_ENABLE_REDIS=ON `
-  -DRUVIA_ENABLE_JWT=ON
 ```
 
 ## Build Options
@@ -210,46 +152,12 @@ Route tables, middleware chains, and controller factories are finalized before
 workers start. The request path does not rebuild them or use a per-request virtual
 dispatcher.
 
-## Request and Response Models
-
-Request and response schemas are deliberately separate. A request model can be
-parsed from JSON/form/fields and used with `RUVIA_VALIDATE_*`; it is not a JSON
-response type:
-
-```cpp
-RUVIA_REQUEST_MODEL(CreateUserRequest,
-    RUVIA_FIELD(name, ruvia::String),
-    RUVIA_FIELD(age, ruvia::UInt32)
-);
-
-class CreateUserValidator final
-    : public ruvia::Middleware<CreateUserValidator> {
-public:
-    RUVIA_VALIDATE_JSON(CreateUserRequest,
-        RUVIA_RULE(name, RUVIA_REQUIRED("name is required")),
-        RUVIA_RULE(age, RUVIA_MIN(1, "age must be positive")))
-};
-```
-
-A response model provides typed setters and JSON serialization only. It cannot be
-parsed as a request or passed to `RUVIA_VALIDATE_*`:
-
-```cpp
-RUVIA_RESPONSE_MODEL(CreateUserResponse,
-    RUVIA_FIELD(id, ruvia::UInt32),
-    RUVIA_FIELD(name, ruvia::String)
-);
-
-ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
-    CreateUserResponse response(c);
-    response.id(ruvia::UInt32{1}).name("Ruvia");
-    co_return c.json(response, 201);
-}
-```
-
-`RUVIA_DEFAULT` belongs to request fields. `RUVIA_OMIT_EMPTY` and
-`RUVIA_EMIT_NULL` belong to response fields. Request models may nest only request
-models; response models may nest only response models.
+Request and response schemas are deliberately separate. Request models support
+JSON/form parsing and validation; response models provide typed setters and JSON
+serialization. Defaults apply to request fields, while omit-empty and emit-null
+apply to response fields. See the compiled
+[`models_validation.cpp`](examples/models_validation.cpp) example for the complete
+API.
 
 ## HTTP Protocol Library
 
@@ -262,46 +170,3 @@ content negotiation, redirects, and content decoding.
 The library is sans-I/O: callers feed bytes, consume typed results/events, and drive
 transport I/O themselves. It contains no App, Context, Router, socket, TLS,
 connection pool, runtime timeout, static-root policy, DB, Redis, or JWT integration.
-
-## Repository Layout
-
-```text
-.
-|-- CMakeLists.txt
-|-- ruvia-core/
-|   |-- CMakeLists.txt
-|   |-- include/ruvia/core/
-|   `-- src/
-|-- ruvia-http/
-|   |-- CMakeLists.txt
-|   |-- include/ruvia/http/
-|   `-- src/{body,client,http2,parser,server,websocket}/
-|-- ruvia-web/
-|   |-- CMakeLists.txt
-|   |-- include/ruvia/web/
-|   `-- src/{app,auth,db,http,redis,router,server}/
-|-- examples/
-|-- tests/
-`-- vcpkg.json
-```
-
-Each target compiles only its own sources and installs headers only under its
-matching namespace. Build directories, `vcpkg_installed`, and local tool indexes are
-ignored and must not be committed.
-
-## Verification
-
-The normal local verification loop is:
-
-```powershell
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-cmake --install build --config Debug --prefix build/install
-```
-
-Repository checks also include:
-
-```powershell
-git diff --check
-cmake -P scripts/check_layer_boundaries.cmake
-```
