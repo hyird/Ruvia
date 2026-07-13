@@ -6679,6 +6679,10 @@ set(HTTP1_PARSER_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/parser/Http1RequestParser.cpp")
 set(PUBLIC_HTTP1_REQUEST_PARSER
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1RequestParser.h")
+set(HTTP_PARSE_ERROR
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpParseError.h")
+set(HTTP_HEADER_BLOCK_PARSER
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/parser/HttpHeaderBlockParser.h")
 if(NOT EXISTS "${HTTP1_SERVER_CONNECTION_PLAN}")
     boundary_error("HTTP/1 server connection plan is missing"
         "ruvia-http must own Http1ServerConnectionPlan")
@@ -6746,6 +6750,10 @@ if(EXISTS "${HTTP1_PARSER_INTERNAL}" AND EXISTS "${HTTP1_PARSER_SOURCE}")
        NOT http1_parser_internal MATCHES "kNeedRequestBody" OR
        NOT http1_parser_internal MATCHES "kRequestMessageReady" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParseState final" OR
+       NOT http1_parser_internal MATCHES
+           "const HttpParseError[*] failure[(][)] const noexcept" OR
+       NOT http1_parser_internal MATCHES
+           "std::optional<HttpParseError> error_" OR
        NOT http1_parser_internal MATCHES "class Http1ServerRequestParser final" OR
        NOT http1_parser_internal MATCHES "void parseHead" OR
        NOT http1_parser_internal MATCHES "parseMessage" OR
@@ -6762,6 +6770,8 @@ if(NOT EXISTS "${PUBLIC_HTTP1_REQUEST_PARSER}")
         "ruvia-http/include/ruvia/http/Http1RequestParser.h")
 else()
     file(READ "${PUBLIC_HTTP1_REQUEST_PARSER}" public_http1_request_parser)
+    file(READ "${HTTP_PARSE_ERROR}" public_http_parse_error)
+    file(READ "${HTTP_HEADER_BLOCK_PARSER}" http_header_block_parser)
     if(NOT public_http1_request_parser MATCHES "class Http1RequestNeedMore final" OR
        NOT public_http1_request_parser MATCHES "class Http1ParsedRequest final" OR
        NOT public_http1_request_parser MATCHES "class Http1RequestParseFailure final" OR
@@ -6770,14 +6780,24 @@ else()
        NOT public_http1_request_parser MATCHES "requiredTotalBytes" OR
        NOT public_http1_request_parser MATCHES "bodyPlan" OR
        NOT public_http1_request_parser MATCHES "wireBody" OR
-       NOT public_http1_request_parser MATCHES
-           "error_[ \t]*==[ \t]*HttpParseError::kNone" OR
+       public_http1_request_parser MATCHES "HttpParseError::kNone" OR
+       public_http_parse_error MATCHES "kNone" OR
+       NOT http_header_block_parser MATCHES
+           "std::optional<HttpParseError> parseHttpHeaderBlock" OR
        NOT public_http1_request_parser MATCHES
            "requiredTotalBytes_[^\r\n]*==[ \t]*0")
         boundary_error("public HTTP/1 parse result lost its discriminated contract"
             "need-more, parsed request, and failure must own disjoint facts while success retains framing bytes")
     endif()
 endif()
+check_files_no_match("HTTP parse failures recovered a no-error sentinel"
+    "HttpParseError::kNone|kNone,[ \t\r\n]*kHeaderTooLarge"
+    "${HTTP_PARSE_ERROR}"
+    "${PUBLIC_HTTP1_REQUEST_PARSER}"
+    "${HTTP1_PARSER_INTERNAL}"
+    "${HTTP1_PARSER_SOURCE}"
+    "${HTTP_HEADER_BLOCK_PARSER}"
+    "${RUVIA_ROOT}/ruvia-http/src/parser/HttpHeaderBlockParser.cpp")
 if(EXISTS "${HTTP1_PARSER_INTERNAL}")
     file(READ "${HTTP1_PARSER_INTERNAL}" public_http1_request_parser_state)
     if(NOT public_http1_request_parser_state MATCHES "std::size_t messageBytes" OR
@@ -8324,7 +8344,7 @@ set(HTTP1_WEB_SESSION
 if(EXISTS "${HTTP1_WEB_SESSION}")
     file(READ "${HTTP1_WEB_SESSION}" http1_web_session)
     if(NOT http1_web_session MATCHES "parsed\\.headReady[(][)]" OR
-       NOT http1_web_session MATCHES "parsed\\.failed[(][)]")
+       NOT http1_web_session MATCHES "parsed\\.failure[(][)]")
         boundary_error("ruvia-web stopped respecting the HTTP/1 head/message boundary"
             "route dispatch consumes head-ready while body readers own completion")
     endif()

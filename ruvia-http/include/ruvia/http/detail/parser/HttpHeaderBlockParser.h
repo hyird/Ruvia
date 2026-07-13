@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 namespace ruvia::detail {
@@ -57,7 +58,7 @@ struct ParsedRequestHeaderBlock {
 };
 
 [[nodiscard]] std::size_t findHttpHeaderEnd(std::string_view buffer, std::size_t searchOffset) noexcept;
-[[nodiscard]] HttpParseError parseHttpHeaderBlock(
+[[nodiscard]] std::optional<HttpParseError> parseHttpHeaderBlock(
     std::string_view buffer,
     std::size_t headerBytes,
     ParsedRequestHeaderBlock& block) noexcept;

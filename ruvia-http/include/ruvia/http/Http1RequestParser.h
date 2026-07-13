@@ -99,11 +99,7 @@ private:
     friend struct detail::Http1RequestParseResultAccess;
 
     explicit constexpr Http1RequestParseFailure(HttpParseError error) noexcept
-        : error_(error) {
-        if (error_ == HttpParseError::kNone) {
-            std::terminate();
-        }
-    }
+        : error_(error) {}
 
     HttpParseError error_;
 };

@@ -6,7 +6,6 @@
 namespace ruvia {
 
 enum class HttpParseError {
-    kNone,
     kHeaderTooLarge,
     kBodyTooLarge,
     kInvalidRequestLine,

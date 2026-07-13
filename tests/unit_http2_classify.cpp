@@ -64,7 +64,6 @@ RUVIA_TEST(classify_header_decode_result) {
 
 RUVIA_TEST(drop_invalid_cleartext_only_for_request_line_errors) {
     // Only request-line-shaped parse failures are candidates for a silent drop.
-    RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("blah blah\r\n", HttpParseError::kNone));
     RUVIA_CHECK(!shouldDropInvalidCleartextHttp1Input("blah blah\r\n", HttpParseError::kMissingHost));
 }
 

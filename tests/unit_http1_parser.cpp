@@ -186,14 +186,14 @@ RUVIA_TEST(http1_parse_incomplete_head) {
 RUVIA_TEST(http1_parse_missing_host_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("GET / HTTP/1.1\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kMissingHost);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kMissingHost);
 }
 
 RUVIA_TEST(http1_parse_rejects_header_smuggling_vectors) {
     const auto rejected = [](std::string_view request) {
         Http1ServerRequestParser parser;
-        return parser.parseMessage(request).failed();
+        return parser.parseMessage(request).failure() != nullptr;
     };
 
     // obs-fold: a continuation line (leading SP or HTAB) must be rejected, not
@@ -215,7 +215,7 @@ RUVIA_TEST(http1_parse_rejects_header_smuggling_vectors) {
 RUVIA_TEST(http1_parse_invalid_request_line_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("!!!garbage!!!\r\n\r\n");
-    RUVIA_CHECK(result.failed());
+    RUVIA_CHECK(result.failure() != nullptr);
 }
 
 RUVIA_TEST(http1_parse_content_length_body) {
@@ -234,8 +234,8 @@ RUVIA_TEST(http1_parse_conflicting_content_length_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kConflictingContentLength);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kConflictingContentLength);
 }
 
 RUVIA_TEST(http1_parse_content_length_combined_equal_values) {
@@ -254,8 +254,8 @@ RUVIA_TEST(http1_parse_content_length_combined_equal_values) {
     const auto conflict = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Content-Length: 5, 6\r\n\r\n");
-    RUVIA_CHECK(conflict.failed());
-    RUVIA_CHECK(conflict.error == HttpParseError::kConflictingContentLength);
+    RUVIA_CHECK(conflict.failure() != nullptr);
+    RUVIA_CHECK(conflict.failure() != nullptr && *conflict.failure() == HttpParseError::kConflictingContentLength);
 }
 
 RUVIA_TEST(http1_parse_invalid_content_length_forms_rejected) {
@@ -266,8 +266,8 @@ RUVIA_TEST(http1_parse_invalid_content_length_forms_rejected) {
         const std::string raw =
             std::string("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: ") + value + "\r\n\r\n";
         const auto result = parser.parseMessage(raw);
-        RUVIA_CHECK(result.failed());
-        RUVIA_CHECK(result.error == HttpParseError::kInvalidContentLength);
+        RUVIA_CHECK(result.failure() != nullptr);
+        RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidContentLength);
     }
 }
 
@@ -292,7 +292,7 @@ RUVIA_TEST(http1_parse_content_length_with_transfer_encoding_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n");
-    RUVIA_CHECK(result.failed());
+    RUVIA_CHECK(result.failure() != nullptr);
 }
 
 RUVIA_TEST(http1_parse_duplicate_content_type_rejected) {
@@ -302,8 +302,8 @@ RUVIA_TEST(http1_parse_duplicate_content_type_rejected) {
         "Content-Type: text/plain\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: 2\r\n\r\n{}");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(http1_parse_duplicate_range_rejected) {
@@ -312,8 +312,8 @@ RUVIA_TEST(http1_parse_duplicate_range_rejected) {
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "Range: bytes=0-99\r\n"
         "Range: bytes=200-299\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(http1_parse_duplicate_conditional_header_rejected) {
@@ -322,8 +322,8 @@ RUVIA_TEST(http1_parse_duplicate_conditional_header_rejected) {
         "GET /file HTTP/1.1\r\nHost: x\r\n"
         "If-None-Match: \"old\"\r\n"
         "If-None-Match: \"new\"\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
@@ -332,8 +332,8 @@ RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Authorization: Bearer first\r\n"
         "Authorization: Bearer second\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHeader);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidHeader);
 }
 
 RUVIA_TEST(http1_parse_chunked_body) {
@@ -361,8 +361,8 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
 RUVIA_TEST(http1_parse_unsupported_version_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("GET / HTTP/2.0\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kUnsupportedHttpVersion);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kUnsupportedHttpVersion);
 }
 
 RUVIA_TEST(http1_parse_extension_method_preserves_case_sensitive_token) {
@@ -385,8 +385,8 @@ RUVIA_TEST(http1_parse_invalid_method_token_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "BAD(METHOD / HTTP/1.1\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestLine);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidRequestLine);
 }
 
 RUVIA_TEST(http1_parse_transfer_encoding_not_chunked_rejected) {
@@ -394,8 +394,8 @@ RUVIA_TEST(http1_parse_transfer_encoding_not_chunked_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidTransferEncoding);
 }
 
 RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
@@ -403,8 +403,8 @@ RUVIA_TEST(http1_parse_transfer_encoding_in_http10_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "POST / HTTP/1.0\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidTransferEncoding);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidTransferEncoding);
 }
 
 RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
@@ -413,8 +413,8 @@ RUVIA_TEST(http1_parse_absolute_uri_host_mismatch_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "GET http://a.example/ HTTP/1.1\r\nHost: b.example\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidHost);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidHost);
 }
 
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {
@@ -450,14 +450,14 @@ RUVIA_TEST(http1_parse_connect_requires_authority_form) {
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("CONNECT / HTTP/1.1\r\nHost: example.com\r\n\r\n");
-        RUVIA_CHECK(result.failed());
-        RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+        RUVIA_CHECK(result.failure() != nullptr);
+        RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidRequestTarget);
     }
     {
         Http1ServerRequestParser parser;
         const auto result = parser.parseMessage("CONNECT http://example.com:443 HTTP/1.1\r\nHost: example.com\r\n\r\n");
-        RUVIA_CHECK(result.failed());
-        RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+        RUVIA_CHECK(result.failure() != nullptr);
+        RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidRequestTarget);
     }
 }
 
@@ -475,8 +475,8 @@ RUVIA_TEST(http1_parse_http10_without_host_allowed) {
 RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidContentLength);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidContentLength);
 }
 
 RUVIA_TEST(http1_parse_too_many_headers_rejected) {
@@ -487,8 +487,8 @@ RUVIA_TEST(http1_parse_too_many_headers_rejected) {
     request += "\r\n";
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(request);
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kTooManyHeaders);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kTooManyHeaders);
 }
 
 RUVIA_TEST(http1_parse_chunk_size_overflow_rejected) {
@@ -496,16 +496,16 @@ RUVIA_TEST(http1_parse_chunk_size_overflow_rejected) {
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
         "10000000000000000\r\nx\r\n0\r\n\r\n");  // 2^64 chunk size overflows
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kChunkSizeOverflow);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kChunkSizeOverflow);
 }
 
 RUVIA_TEST(http1_parse_invalid_chunk_size_rejected) {
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(
         "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\nx\r\n0\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidChunkSize);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidChunkSize);
 }
 
 RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
@@ -543,8 +543,8 @@ RUVIA_TEST(http1_parse_header_block_too_large_rejected) {
     request += std::string(64 * 1024, 'a');  // pushes past the cap, no blank line
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage(request);
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kHeaderTooLarge);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kHeaderTooLarge);
 }
 
 RUVIA_TEST(http1_parse_invalid_request_target_rejected) {
@@ -552,6 +552,6 @@ RUVIA_TEST(http1_parse_invalid_request_target_rejected) {
     // request target for GET.
     Http1ServerRequestParser parser;
     const auto result = parser.parseMessage("GET foobar HTTP/1.1\r\nHost: x\r\n\r\n");
-    RUVIA_CHECK(result.failed());
-    RUVIA_CHECK(result.error == HttpParseError::kInvalidRequestTarget);
+    RUVIA_CHECK(result.failure() != nullptr);
+    RUVIA_CHECK(result.failure() != nullptr && *result.failure() == HttpParseError::kInvalidRequestTarget);
 }

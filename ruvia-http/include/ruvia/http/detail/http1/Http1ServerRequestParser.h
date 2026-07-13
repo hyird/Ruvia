@@ -62,11 +62,12 @@ public:
         return phase_ == Http1ServerRequestParsePhase::kRequestMessageReady;
     }
 
-    [[nodiscard]] bool failed() const noexcept {
-        return phase_ == Http1ServerRequestParsePhase::kFailure;
+    [[nodiscard]] const HttpParseError* failure() const noexcept {
+        return phase_ == Http1ServerRequestParsePhase::kFailure && error_
+            ? &*error_
+            : nullptr;
     }
 
-    HttpParseError error{HttpParseError::kNone};
     HttpRequest request{HttpRequestAccess::make()};
     std::size_t headerBytes{0};
     // Valid only in kRequestMessageReady. A future fixed-length buffer target is
@@ -82,6 +83,7 @@ public:
 private:
     friend class Http1ServerRequestParser;
 
+    std::optional<HttpParseError> error_;
     Http1ServerRequestParsePhase phase_{
         Http1ServerRequestParsePhase::kNeedRequestHead};
 };
