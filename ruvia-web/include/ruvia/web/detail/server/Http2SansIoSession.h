@@ -851,7 +851,12 @@ Task<void> runHttp2SansIoSession(
 
     // Reader loop: feed inbound bytes, then act on the drained events.
     if (!connection.connectionError().has_value() && !initialInputRetained) {
-        std::array<char, 16384> readBuffer;
+        // 4 KB read scratch. Requests are the small direction of HTTP/2
+        // traffic (responses never pass through here), so a max-size 16 KB
+        // frame arriving in several reads is the rare case, while the buffer
+        // is resident in every connection's coroutine frame for the whole
+        // connection.
+        std::array<char, 4096> readBuffer;
         for (;;) {
             // Pick the inactivity phase: mid-header-block -> the tight header timeout;
             // no active Web runtime (including a pre-dispatch buffered request body)

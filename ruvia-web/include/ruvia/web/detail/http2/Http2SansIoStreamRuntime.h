@@ -436,7 +436,10 @@ public:
     }
 
 private:
-    static constexpr std::size_t kInlineCapacity = 16;
+    // Mirrors Http2StreamTable::kInlineCapacity: two inline slots for the
+    // typical cadence, pmr overflow for deeper multiplexing, so the table's
+    // resident footprint stays small in every connection.
+    static constexpr std::size_t kInlineCapacity = 2;
     using OverflowRuntime = std::unique_ptr<
         Http2SansIoStreamRuntime,
         PmrObjectDeleter<Http2SansIoStreamRuntime>>;
