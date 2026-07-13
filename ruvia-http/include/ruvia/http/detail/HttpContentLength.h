@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 #include <system_error>
 
@@ -19,16 +20,18 @@ enum class HttpContentLengthParseStatus : std::uint8_t {
 // Incremental field-line parser shared by HTTP/1 request and response heads.
 // RFC 9112 section 6.3 permits a comma-combined Content-Length only when every
 // list member is a valid decimal value and all values (including values from
-// repeated field lines) are identical.
+// repeated field lines) are identical. A failed field is transactional: it
+// cannot leak a partial value, and absence is exposed only as std::nullopt.
 class HttpContentLengthState final {
 public:
     [[nodiscard]] HttpContentLengthParseStatus parseField(
         std::string_view fieldValue) noexcept {
         auto status = HttpContentLengthParseStatus::kOk;
         bool sawValue = false;
+        auto parsedValue = value_;
         httpVisitCommaSeparatedQuotedItems(
             fieldValue,
-            [this, &status, &sawValue](std::string_view item) noexcept {
+            [&parsedValue, &status, &sawValue](std::string_view item) noexcept {
                 if (item.empty()) {
                     status = HttpContentLengthParseStatus::kInvalid;
                     return false;
@@ -42,30 +45,28 @@ public:
                     return false;
                 }
                 sawValue = true;
-                if (present_ && value_ != parsed) {
+                if (parsedValue.has_value() && *parsedValue != parsed) {
                     status = HttpContentLengthParseStatus::kConflicting;
                     return false;
                 }
-                present_ = true;
-                value_ = parsed;
+                parsedValue = parsed;
                 return true;
             });
-        return status == HttpContentLengthParseStatus::kOk && !sawValue
-            ? HttpContentLengthParseStatus::kInvalid
-            : status;
+        if (status == HttpContentLengthParseStatus::kOk && !sawValue) {
+            return HttpContentLengthParseStatus::kInvalid;
+        }
+        if (status == HttpContentLengthParseStatus::kOk) {
+            value_ = parsedValue;
+        }
+        return status;
     }
 
-    [[nodiscard]] bool present() const noexcept {
-        return present_;
-    }
-
-    [[nodiscard]] std::size_t value() const noexcept {
+    [[nodiscard]] std::optional<std::size_t> value() const noexcept {
         return value_;
     }
 
 private:
-    std::size_t value_{0};
-    bool present_{false};
+    std::optional<std::size_t> value_;
 };
 
 }  // namespace ruvia::detail
