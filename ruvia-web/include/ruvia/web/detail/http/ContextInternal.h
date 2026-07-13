@@ -143,6 +143,20 @@ struct ContextAccess final {
         return context.responseStorage();
     }
 
+    [[nodiscard]] static bool hasResponseHeader(
+        const Context& context,
+        std::string_view name) noexcept {
+        if (context.response_ != nullptr && !context.response_->header(name).empty()) {
+            return true;
+        }
+        for (const auto& header : context.responseHeaders_) {
+            if (header.name() == name && !header.value().empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static void setError(Context& context, std::exception_ptr exception) noexcept {
         context.storeError(std::move(exception));
     }
