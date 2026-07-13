@@ -20,6 +20,7 @@ using ruvia::detail::applyReusableHttp1RequestBufferCompletion;
 using ruvia::detail::compactConnectionReadBuffer;
 using ruvia::detail::ConnectionCountGuard;
 using ruvia::detail::growReadBuffer;
+using ruvia::detail::kInitialReadBufferBytes;
 using ruvia::detail::Http1BufferedResponseReady;
 using ruvia::detail::Http1CommittedStreamResponse;
 using ruvia::detail::Http1ConnectionDisposition;
@@ -260,24 +261,25 @@ RUVIA_TEST(trim_read_buffer_reclaims_overgrown_capacity) {
     readBuffer[1] = 'B';
     readBuffer[2] = 'C';
     trimReadBufferStorage(readBuffer, /*usedBytes=*/3);
-    RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{8 * 1024});      // back to initial
+    RUVIA_CHECK_EQ(readBuffer.size(), kInitialReadBufferBytes);    // back to initial
     RUVIA_CHECK(readBuffer.capacity() < kMaxHttpHeaderBytes);      // capacity reclaimed
     RUVIA_CHECK(readBuffer[0] == 'A' && readBuffer[1] == 'B' && readBuffer[2] == 'C');
 }
 
 RUVIA_TEST(trim_read_buffer_normalizes_moderately_grown_buffer_in_place) {
-    // The common case: a buffer that doubled to 16K (capacity still under the 64K
+    // The common case: a buffer that doubled (capacity still under the 64K
     // shrink threshold) and is now mostly drained is resized back to the initial
     // size IN PLACE -- the normalize branch, distinct from the fresh-allocation
     // reclaim path for buffers that overgrew past the header limit. The live prefix
     // (within the initial size) must survive the in-place shrink.
-    auto readBuffer = sizedBuffer(16 * 1024);
+    const auto liveIndex = kInitialReadBufferBytes - 100;
+    auto readBuffer = sizedBuffer(2 * kInitialReadBufferBytes);
     readBuffer[0] = 'X';
-    readBuffer[7000] = 'Y';
-    trimReadBufferStorage(readBuffer, /*usedBytes=*/7001);
-    RUVIA_CHECK_EQ(readBuffer.size(), std::size_t{8 * 1024});  // normalized to initial
+    readBuffer[liveIndex] = 'Y';
+    trimReadBufferStorage(readBuffer, /*usedBytes=*/liveIndex + 1);
+    RUVIA_CHECK_EQ(readBuffer.size(), kInitialReadBufferBytes);  // normalized to initial
     RUVIA_CHECK(readBuffer[0] == 'X');
-    RUVIA_CHECK(readBuffer[7000] == 'Y');                      // live bytes preserved
+    RUVIA_CHECK(readBuffer[liveIndex] == 'Y');                   // live bytes preserved
 }
 
 RUVIA_TEST(trim_read_buffer_keeps_buffer_when_still_heavily_used) {
