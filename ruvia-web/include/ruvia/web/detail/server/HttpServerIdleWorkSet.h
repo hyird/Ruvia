@@ -12,15 +12,19 @@
 
 namespace ruvia::detail {
 
+// Bytes of the connection-resident buffer an idle plain-TCP connection reads
+// into while it holds no work set. Sized so a typical request line arrives in
+// one read; longer heads finish in the regular read loop after the work set
+// is re-acquired.
+inline constexpr std::size_t kIdleResidentReadBytes = 256;
+
 [[nodiscard]] inline bool plainTcpShouldWaitForNextRequest(
-    asio::ip::tcp::socket& socket,
-    std::size_t usedBytes) {
-    if (usedBytes != 0) {
-        return false;
-    }
-    std::error_code availabilityEc;
-    const auto pendingBytes = socket.available(availabilityEc);
-    return !availabilityEc && pendingBytes == 0;
+    std::size_t usedBytes) noexcept {
+    // No available() probe here: FIONREAD costs a syscall per keep-alive
+    // request, while a readiness wait on a socket that already has bytes
+    // completes inline in the reactor without one. Bytes already parsed into
+    // the read buffer are the only state the wait cannot see.
+    return usedBytes == 0;
 }
 
 inline void releaseIdleWorkSet(
@@ -30,15 +34,6 @@ inline void releaseIdleWorkSet(
         pool.release(workSet);
         workSet = nullptr;
     }
-}
-
-inline Task<std::error_code> waitForPlainTcpReadable(
-    asio::ip::tcp::socket& socket,
-    ConnectionScanner::Entry& scannerEntry) {
-    scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
-    co_return co_await asyncError([&socket](auto handler) mutable {
-        socket.async_wait(asio::ip::tcp::socket::wait_read, std::move(handler));
-    });
 }
 
 }  // namespace ruvia::detail

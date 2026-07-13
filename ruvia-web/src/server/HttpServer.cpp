@@ -1,6 +1,8 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 
 #include <asio/ssl.hpp>
+#include <array>
+#include <cstring>
 #include <stdexcept>
 #include <type_traits>
 

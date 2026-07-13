@@ -324,53 +324,63 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     const HttpRequest& request,
     const RouteResolution& resolution,
     RequestMemory& memory,
-    ContextServices services) const {
-    const auto* resolved = resolution.resolved();
-    if (resolved == nullptr) {
-        if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-            co_return co_await handleError(
-                request,
-                memory,
-                HttpErrorInfo(501, {}, "method not implemented"),
-                services);
-        }
-
-        if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
-            co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
-        }
-
-        if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
-            if (request.knownMethod() == HttpKnownMethod::kOptions) {
-                co_return makeAllowNoContentResponse(
-                    memory, methodNotAllowed->allowedMethods());
+    ContextServices services,
+    RouteDispatchFailure failure) const {
+    std::exception_ptr dispatchException;
+    try {
+        const auto* resolved = resolution.resolved();
+        if (resolved == nullptr) {
+            if (request.knownMethod() == HttpKnownMethod::kUnknown) {
+                co_return co_await handleError(
+                    request,
+                    memory,
+                    HttpErrorInfo(501, {}, "method not implemented"),
+                    services);
             }
 
-            const auto error = HttpErrorInfo(405, {}, "method not allowed");
-            auto response = co_await handleError(request, memory, error, services);
-            setAllowHeader(response, methodNotAllowed->allowedMethods());
-            co_return response;
+            if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
+                co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
+            }
+
+            if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
+                if (request.knownMethod() == HttpKnownMethod::kOptions) {
+                    co_return makeAllowNoContentResponse(
+                        memory, methodNotAllowed->allowedMethods());
+                }
+
+                const auto error = HttpErrorInfo(405, {}, "method not allowed");
+                auto response = co_await handleError(request, memory, error, services);
+                setAllowHeader(response, methodNotAllowed->allowedMethods());
+                co_return response;
+            }
+
+            co_return co_await handleNotFound(request, memory, services);
         }
 
-        co_return co_await handleNotFound(request, memory, services);
-    }
-
-    auto context = makeRouteContext(
-        memory,
-        request,
-        *resolved,
-        withRouteHandlers(services, errorHandler_, notFoundHandler_));
-    std::exception_ptr exception;
-    try {
-        const auto& route = resolved->route();
-        if (route.endpoint().buffered() == nullptr) {
-            throw std::logic_error(
-                "streaming route requires its dedicated dispatch path");
+        auto context = makeRouteContext(
+            memory,
+            request,
+            *resolved,
+            withRouteHandlers(services, errorHandler_, notFoundHandler_));
+        std::exception_ptr exception;
+        try {
+            const auto& route = resolved->route();
+            if (route.endpoint().buffered() == nullptr) {
+                throw std::logic_error(
+                    "streaming route requires its dedicated dispatch path");
+            }
+            co_return co_await invokeRoute(route, context);
+        } catch (...) {
+            exception = std::current_exception();
         }
-        co_return co_await invokeRoute(route, context);
+        co_return co_await handleException(context, exception);
     } catch (...) {
-        exception = std::current_exception();
+        if (failure == RouteDispatchFailure::kPropagate) {
+            throw;
+        }
+        dispatchException = std::current_exception();
     }
-    co_return co_await handleException(context, exception);
+    co_return co_await handleException(request, memory, dispatchException, services);
 }
 
 Task<HttpResponse> detail::RouteTable::dispatchBuffered(
@@ -378,13 +388,10 @@ Task<HttpResponse> detail::RouteTable::dispatchBuffered(
     const RouteResolution& resolution,
     RequestMemory& memory,
     ContextServices services) const {
-    std::exception_ptr exception;
-    try {
-        co_return co_await dispatch(request, resolution, memory, services);
-    } catch (...) {
-        exception = std::current_exception();
-    }
-    co_return co_await handleException(request, memory, exception, services);
+    // Plain forwarding, not a coroutine: the failure policy folds the old
+    // wrapper's try/catch into dispatch itself, so no extra frame is paid.
+    return dispatch(
+        request, resolution, memory, services, RouteDispatchFailure::kRespond);
 }
 
 Task<HttpResponse> detail::RouteTable::handleError(
