@@ -304,6 +304,15 @@ private:
     std::size_t middlewareCount_{0};
 };
 
+// How dispatch treats a failure escaping the routing machinery itself (the
+// handler's own exceptions are always turned into responses inside dispatch):
+// kPropagate rethrows to the caller, kRespond routes it through the
+// request-level exception handler so the coroutine never throws.
+enum class RouteDispatchFailure : std::uint8_t {
+    kPropagate,
+    kRespond,
+};
+
 class RouteTable final {
 public:
     explicit RouteTable(std::pmr::memory_resource* resource);
@@ -326,7 +335,8 @@ public:
         const HttpRequest& request,
         const RouteResolution& resolution,
         RequestMemory& memory,
-        ContextServices services = {}) const;
+        ContextServices services = {},
+        RouteDispatchFailure failure = RouteDispatchFailure::kPropagate) const;
     // Never throws: dispatches a resolved route and turns any failure -- a
     // handler exception (already handled inside dispatch) or one escaping the
     // routing machinery itself -- into an error response. It never decides
