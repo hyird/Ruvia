@@ -18,6 +18,7 @@
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
 #include "ruvia/http/detail/http2/Http2FrameCodec.h"
+#include "ruvia/http/detail/http2/Http2Hpack.h"
 
 namespace {
 
@@ -125,6 +126,35 @@ template <typename Batch>
         .elapsedNanoseconds = static_cast<std::uint64_t>(elapsed.count())};
 }
 
+void beginHttp2ServerBenchmarkConnection(
+    ruvia::detail::Http2Connection& connection) {
+    connection.beginConnection();
+
+    std::array<char,
+        ruvia::detail::kHttp2ClientPreface.size() +
+            ruvia::detail::kHttp2FrameHeaderBytes> handshake{};
+    auto* cursor = std::copy(
+        ruvia::detail::kHttp2ClientPreface.begin(),
+        ruvia::detail::kHttp2ClientPreface.end(),
+        handshake.data());
+    ruvia::detail::http2EncodeFrameHeader(
+        cursor,
+        0,
+        ruvia::detail::Http2FrameType::kSettings,
+        0,
+        0);
+    if (connection.feed(
+            std::string_view(handshake.data(), handshake.size())) !=
+        ruvia::detail::Http2FeedResult::kAccepted) {
+        throw std::runtime_error("HTTP/2 benchmark handshake failed");
+    }
+    if (connection.consumeOutput(connection.pendingOutput().size()) !=
+        ruvia::detail::Http2OutputConsumeStatus::kDrained) {
+        throw std::runtime_error(
+            "HTTP/2 benchmark handshake output did not drain");
+    }
+}
+
 class Http1ServerHeadParseBatch final {
 public:
     static constexpr std::size_t kOperations = 128;
@@ -196,32 +226,7 @@ public:
 
     Http2PingFeedBatch()
         : connection_(&resource_, ruvia::detail::Http2Role::kServer) {
-        connection_.beginConnection();
-
-        std::array<char,
-            ruvia::detail::kHttp2ClientPreface.size() +
-                ruvia::detail::kHttp2FrameHeaderBytes> handshake{};
-        auto* cursor = handshake.data();
-        cursor = std::copy(
-            ruvia::detail::kHttp2ClientPreface.begin(),
-            ruvia::detail::kHttp2ClientPreface.end(),
-            cursor);
-        ruvia::detail::http2EncodeFrameHeader(
-            cursor,
-            0,
-            ruvia::detail::Http2FrameType::kSettings,
-            0,
-            0);
-        if (connection_.feed(
-                std::string_view(handshake.data(), handshake.size())) !=
-            ruvia::detail::Http2FeedResult::kAccepted) {
-            throw std::runtime_error("HTTP/2 benchmark handshake failed");
-        }
-        if (connection_.consumeOutput(connection_.pendingOutput().size()) !=
-            ruvia::detail::Http2OutputConsumeStatus::kDrained) {
-            throw std::runtime_error(
-                "HTTP/2 benchmark handshake output did not drain");
-        }
+        beginHttp2ServerBenchmarkConnection(connection_);
 
         ruvia::detail::http2EncodeFrameHeader(
             ping_.data(),
@@ -258,6 +263,85 @@ private:
     ruvia::detail::Http2Connection connection_;
     std::array<char, ruvia::detail::kHttp2FrameHeaderBytes + 8> ping_{};
     std::uint32_t sequence_{0};
+};
+
+class Http2RequestHeadFeedBatch final {
+public:
+    static constexpr std::size_t kOperations = 64;
+
+    Http2RequestHeadFeedBatch()
+        : connection_(&resource_, ruvia::detail::Http2Role::kServer),
+          frame_(&resource_) {
+        beginHttp2ServerBenchmarkConnection(connection_);
+
+        std::pmr::string block(&resource_);
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, ":method", "GET");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, ":scheme", "https");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, ":path", "/items/42?expand=owner");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, ":authority", "benchmark.example");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, "accept", "application/json");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, "accept-encoding", "gzip, br");
+        ruvia::detail::HpackEncoder::encodeHeader(
+            block, "user-agent", "ruvia-benchmark");
+
+        frame_.resize(ruvia::detail::kHttp2FrameHeaderBytes);
+        frame_.append(block.data(), block.size());
+    }
+
+    [[nodiscard]] std::uint64_t operator()() {
+        std::uint64_t checksum = 0;
+        for (std::size_t i = 0; i < kOperations; ++i) {
+            const auto streamId = nextStreamId_;
+            nextStreamId_ += 2;
+            ruvia::detail::http2EncodeFrameHeader(
+                frame_.data(),
+                static_cast<std::uint32_t>(
+                    frame_.size() - ruvia::detail::kHttp2FrameHeaderBytes),
+                ruvia::detail::Http2FrameType::kHeaders,
+                ruvia::detail::kHttp2FlagEndHeaders |
+                    ruvia::detail::kHttp2FlagEndStream,
+                streamId);
+            if (connection_.feed(
+                    std::string_view(frame_.data(), frame_.size())) !=
+                ruvia::detail::Http2FeedResult::kAccepted) {
+                throw std::runtime_error(
+                    "HTTP/2 request-head benchmark feed failed");
+            }
+
+            std::size_t eventCount = 0;
+            while (connection_.nextEvent().has_value()) {
+                ++eventCount;
+            }
+            if (eventCount != 2 ||
+                connection_.submitReset(
+                    streamId,
+                    ruvia::detail::Http2ErrorCode::kCancel) !=
+                    ruvia::detail::Http2SubmitStatus::kAccepted) {
+                throw std::runtime_error(
+                    "HTTP/2 request-head benchmark cleanup failed");
+            }
+            const auto output = connection_.pendingOutput();
+            checksum += streamId + eventCount + output.size();
+            if (connection_.consumeOutput(output.size()) !=
+                ruvia::detail::Http2OutputConsumeStatus::kDrained) {
+                throw std::runtime_error(
+                    "HTTP/2 request-head benchmark output did not drain");
+            }
+        }
+        return checksum;
+    }
+
+private:
+    std::pmr::unsynchronized_pool_resource resource_;
+    ruvia::detail::Http2Connection connection_;
+    std::pmr::string frame_;
+    std::uint32_t nextStreamId_{1};
 };
 
 [[nodiscard]] std::string renderJson(
@@ -305,9 +389,10 @@ int main(int argc, char** argv) {
         Http1ServerHeadParseBatch http1;
         Http2FrameCodecBatch frameCodec;
         Http2PingFeedBatch pingFeed;
+        Http2RequestHeadFeedBatch requestHeadFeed;
 
         std::vector<Result> results;
-        results.reserve(3);
+        results.reserve(4);
         results.push_back(runBenchmark(
             "http1_server_request_head_parse",
             Http1ServerHeadParseBatch::kOperations,
@@ -326,6 +411,12 @@ int main(int argc, char** argv) {
             options.warmup,
             options.duration,
             pingFeed));
+        results.push_back(runBenchmark(
+            "http2_request_head_feed",
+            Http2RequestHeadFeedBatch::kOperations,
+            options.warmup,
+            options.duration,
+            requestHeadFeed));
 
         const auto json = renderJson(options, results);
         std::cout << json;

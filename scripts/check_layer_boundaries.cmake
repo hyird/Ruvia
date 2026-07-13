@@ -9,6 +9,7 @@ set(HTTP2_CONNECTION_PRIMARY_SOURCE
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
 set(HTTP2_CONNECTION_IMPLEMENTATION_FILES
     "${HTTP2_CONNECTION_PRIMARY_SOURCE}"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionHeaders.cpp"
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
 
 function(read_http2_connection_implementation output)
@@ -4543,6 +4544,8 @@ set(HTTP2_REMOTE_CONTENT_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteContentState.h")
 set(HTTP2_REMOTE_RECEIVE_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
+set(HTTP2_REMOTE_RECEIVE_SEMANTICS
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h")
 set(HTTP2_STALE_BODY_ACCOUNTING
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2StreamBodyAccounting.h")
 set(HTTP2_STALE_WEB_RUNTIME_HEADERS
@@ -4705,6 +4708,7 @@ else()
     endif()
 endif()
 if(NOT EXISTS "${HTTP2_REMOTE_RECEIVE_STATE}" OR
+   NOT EXISTS "${HTTP2_REMOTE_RECEIVE_SEMANTICS}" OR
    NOT EXISTS "${HTTP2_STREAM_LIFECYCLE}" OR
    NOT EXISTS "${HTTP2_STREAM_STATE}" OR
    NOT EXISTS "${HTTP2_CONNECTION_SOURCE}")
@@ -4712,6 +4716,8 @@ if(NOT EXISTS "${HTTP2_REMOTE_RECEIVE_STATE}" OR
         "remote HEADERS, content, CONNECT, tunnel, END_STREAM, and abort permission must be one installed discriminated state")
 else()
     file(READ "${HTTP2_REMOTE_RECEIVE_STATE}" http2_remote_receive_state)
+    file(READ "${HTTP2_REMOTE_RECEIVE_SEMANTICS}"
+        http2_remote_receive_semantics)
     file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_remote_receive_lifecycle)
     file(READ "${HTTP2_STREAM_STATE}" http2_remote_receive_stream)
     read_http2_connection_implementation(http2_remote_receive_connection)
@@ -4750,6 +4756,10 @@ else()
        NOT http2_remote_receive_stream MATCHES "finalizeRemoteConnectHead" OR
        NOT http2_remote_receive_stream MATCHES "finishRemotePendingConnect" OR
        NOT http2_remote_receive_stream MATCHES "finishRemoteRejectedConnect" OR
+       NOT http2_remote_receive_semantics MATCHES
+           "inline bool http2RemoteFinalHeadDecoded" OR
+       NOT http2_remote_receive_semantics MATCHES
+           "inline bool http2RemotePeerHalfClosed" OR
        NOT http2_remote_receive_connection MATCHES
            "http2RemoteFinalHeadDecoded" OR
        NOT http2_remote_receive_connection MATCHES

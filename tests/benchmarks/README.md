@@ -1,8 +1,9 @@
 # Protocol Hot-Path Benchmarks
 
 These benchmarks measure the reusable HTTP/1 server request-head parser,
-HTTP/2 frame-header encode/decode, and the HTTP/2 `feed()` PING fast path. They
-are timing records, not CTest correctness gates: compare JSON only for the same
+HTTP/2 frame-header encode/decode, the HTTP/2 `feed()` PING fast path, and a
+complete HTTP/2 request HEADERS decode/event/stream-cleanup cycle. They are
+timing records, not CTest correctness gates: compare JSON only for the same
 runner, compiler, architecture, configuration, and flags.
 
 Configure an optimized HTTP-only build and run the aggregate target:
