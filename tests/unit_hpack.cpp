@@ -13,6 +13,7 @@
 namespace {
 
 using ruvia::detail::HpackDecoder;
+using ruvia::detail::HpackDecodeError;
 using ruvia::detail::HpackEncoder;
 
 struct Collector final {
@@ -36,7 +37,7 @@ std::string bytes(std::initializer_list<int> values) {
 // Decode an HPACK block into (name, value) pairs; returns whether it succeeded.
 bool decodeBlock(std::string_view block, Collector& out) {
     HpackDecoder decoder(std::pmr::get_default_resource());
-    return decoder.decode(block, &out, &collect).ok();
+    return decoder.decode(block, &out, &collect).decoded() != nullptr;
 }
 
 }  // namespace
@@ -151,7 +152,6 @@ RUVIA_TEST(hpack_rejects_truncated_and_bad_index) {
 }
 
 RUVIA_TEST(hpack_integer_overflow_is_rejected) {
-    using ruvia::detail::HpackError;
     // An indexed field whose index integer overflows uint32 (FF FF FF FF FF 0F)
     // must be reported as an integer overflow, not silently wrapped to a small
     // (and possibly valid) index (RFC 7541 5.1).
@@ -159,12 +159,14 @@ RUVIA_TEST(hpack_integer_overflow_is_rejected) {
     Collector out;
     const auto block = bytes({0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F});
     const auto result = decoder.decode(block, &out, &collect);
-    RUVIA_CHECK(!result.ok());
-    RUVIA_CHECK(result.error == HpackError::kIntegerOverflow);
+    const auto* failure = result.failure();
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kIntegerOverflow);
+    }
 }
 
 RUVIA_TEST(hpack_integer_overflow_chunk_bound_is_rejected) {
-    using ruvia::detail::HpackError;
     // The continuation decode has a second, distinct overflow guard from the
     // accumulated-sum one above: once the shift reaches 28, a chunk whose 7-bit
     // payload exceeds 0x0f is rejected up front, because (payload << 28) would
@@ -176,8 +178,11 @@ RUVIA_TEST(hpack_integer_overflow_chunk_bound_is_rejected) {
     Collector out;
     const auto block = bytes({0xFF, 0x80, 0x80, 0x80, 0x80, 0x1F});
     const auto result = decoder.decode(block, &out, &collect);
-    RUVIA_CHECK(!result.ok());
-    RUVIA_CHECK(result.error == HpackError::kIntegerOverflow);
+    const auto* failure = result.failure();
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kIntegerOverflow);
+    }
 }
 
 RUVIA_TEST(hpack_long_value_round_trips) {
@@ -284,7 +289,6 @@ RUVIA_TEST(hpack_size_update_exceeding_settings_max_is_rejected) {
 }
 
 RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
-    using ruvia::detail::HpackError;
     // The dynamic table persists across decode() calls, so use one decoder.
     HpackDecoder decoder(std::pmr::get_default_resource());
 
@@ -296,22 +300,25 @@ RUVIA_TEST(hpack_size_update_to_zero_evicts_dynamic_table) {
     add += static_cast<char>(0x0C);  // value length 12
     add += "custom-value";
     Collector added;
-    RUVIA_CHECK(decoder.decode(add, &added, &collect).ok());
+    RUVIA_CHECK(decoder.decode(add, &added, &collect).decoded() != nullptr);
 
     // Index 62 (static 61 + newest dynamic) resolves to the entry just added.
     Collector referenced;
-    RUVIA_CHECK(decoder.decode(bytes({0xBE}), &referenced, &collect).ok());
+    RUVIA_CHECK(decoder.decode(bytes({0xBE}), &referenced, &collect).decoded() != nullptr);
     RUVIA_CHECK_EQ(referenced.headers.size(), std::size_t{1});
 
     // A size update to 0 (0x20) must evict every dynamic entry (RFC 7541 4.3).
     Collector evicted;
-    RUVIA_CHECK(decoder.decode(bytes({0x20}), &evicted, &collect).ok());
+    RUVIA_CHECK(decoder.decode(bytes({0x20}), &evicted, &collect).decoded() != nullptr);
 
     // The evicted entry is no longer in the table: index 62 is now out of range.
     Collector dangling;
     const auto result = decoder.decode(bytes({0xBE}), &dangling, &collect);
-    RUVIA_CHECK(!result.ok());
-    RUVIA_CHECK(result.error == HpackError::kInvalidIndex);
+    const auto* failure = result.failure();
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kInvalidIndex);
+    }
 }
 
 // A callback that rejects at a chosen header index (mid-block), like the h2 core does
@@ -359,7 +366,11 @@ RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
 
     RejectAt rejectAt{.rejectIndex = 1};
     const auto resultA = decoder.decode(blockA, &rejectAt, &rejectAtCallback);
-    RUVIA_CHECK(!resultA.ok());  // rejection surfaced to the caller...
+    const auto* failure = resultA.failure();
+    RUVIA_CHECK(failure != nullptr);  // rejection surfaced to the caller...
+    if (failure != nullptr) {
+        RUVIA_CHECK(failure->error() == HpackDecodeError::kCallbackRejected);
+    }
     // The callback is suppressed after it rejects, so it fires only for a-one (emitted)
     // and b-two (the rejecting call) -- never c-three. But c-three is STILL inserted
     // into the dynamic table (verified by block B below), which is the whole point.
@@ -371,7 +382,7 @@ RUVIA_TEST(hpack_callback_rejection_keeps_dynamic_table_consistent) {
     // desynced and this would decode wrong (or fail). 0xBE = indexed, dynamic idx 62.
     Collector out;
     const auto resultB = decoder.decode(bytes({0xBE}), &out, &collect);
-    RUVIA_CHECK(resultB.ok());
+    RUVIA_CHECK(resultB.decoded() != nullptr);
     RUVIA_CHECK_EQ(out.headers.size(), static_cast<std::size_t>(1));
     RUVIA_CHECK(out.headers[0].first == "c-three");
     RUVIA_CHECK(out.headers[0].second == "3");

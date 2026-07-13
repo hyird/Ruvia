@@ -105,7 +105,7 @@ bool decodeResponseHeaders(
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
-    return decoder.decode(stream.responseHeaderBlock(), &out, &collect).ok();
+    return decoder.decode(stream.responseHeaderBlock(), &out, &collect).decoded() != nullptr;
 }
 
 bool decodeInterimResponseHeaders(
@@ -118,7 +118,7 @@ bool decodeInterimResponseHeaders(
     }
 
     HpackDecoder decoder(std::pmr::get_default_resource());
-    return decoder.decode(stream.responseHeaderBlock(), &out, &collect).ok();
+    return decoder.decode(stream.responseHeaderBlock(), &out, &collect).decoded() != nullptr;
 }
 
 bool hasHeader(const Collector& headers, std::string_view name, std::string_view value) {

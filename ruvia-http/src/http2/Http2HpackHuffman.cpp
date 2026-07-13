@@ -42,7 +42,7 @@ static_assert(kHpackHuffmanTree.size <= kHpackHuffmanNodeCapacity);
 
 }  // namespace
 
-HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::string& output) {
+HpackDecoder::StepResult HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::string& output) {
     output.clear();
     output.reserve(encoded.size());
     std::int16_t node = 0;
@@ -55,7 +55,7 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
             const auto bit = static_cast<std::uint8_t>((byte >> bitIndex) & 0x1U);
             const auto next = kHpackHuffmanTree.nodes[static_cast<std::size_t>(node)].child[bit];
             if (next < 0) {
-                return HpackError::kInvalidHuffman;
+                return HpackDecodeError::kInvalidHuffman;
             }
             node = next;
             ++depth;
@@ -64,7 +64,7 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
             const auto symbol = kHpackHuffmanTree.nodes[static_cast<std::size_t>(node)].symbol;
             if (symbol >= 0) {
                 if (symbol == 256) {
-                    return HpackError::kInvalidHuffman;
+                    return HpackDecodeError::kInvalidHuffman;
                 }
                 output.push_back(static_cast<char>(symbol));
                 node = 0;
@@ -75,9 +75,9 @@ HpackError HpackDecoder::decodeHuffman(std::string_view encoded, std::pmr::strin
     }
 
     if (node != 0 && (depth > 7 || !allOnes)) {
-        return HpackError::kInvalidHuffman;
+        return HpackDecodeError::kInvalidHuffman;
     }
-    return HpackError::kNone;
+    return std::nullopt;
 }
 
 }  // namespace ruvia::detail

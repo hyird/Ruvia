@@ -2467,6 +2467,25 @@ if(NOT _installed_http2_close_source MATCHES
        "(localSendPhase|localMessageKind|localEndStream|localEndStreamCommitted|canSubmitLocalHead|localBodyOpen|localTrailersOnly|closeSource|isReset|markReset|markClosed)[(]")
     message(FATAL_ERROR "installed HTTP/2 local send lifecycle retained a phase/kind/boolean product, reset vocabulary, or forwarding accessors")
 endif()
+set(_installed_http2_hpack_path
+    "${_install_prefix}/include/ruvia/http/detail/http2/Http2Hpack.h")
+if(NOT EXISTS "${_installed_http2_hpack_path}")
+    message(FATAL_ERROR "installed HTTP/2 HPACK result contract is missing")
+endif()
+file(READ "${_installed_http2_hpack_path}" _installed_http2_hpack)
+if(_installed_http2_hpack MATCHES "HpackError|HpackDecodeError::kNone" OR
+   _installed_http2_hpack MATCHES "struct HpackDecodeResult" OR
+   _installed_http2_hpack MATCHES "bool ok[(][)]" OR
+   NOT _installed_http2_hpack MATCHES "class HpackDecoded final" OR
+   NOT _installed_http2_hpack MATCHES "class HpackDecodeFailure final" OR
+   NOT _installed_http2_hpack MATCHES "class HpackDecodeResult final" OR
+   NOT _installed_http2_hpack MATCHES "std::variant<HpackDecoded" OR
+   NOT _installed_http2_hpack MATCHES
+       "const HpackDecoded[*] decoded[(][)] const noexcept" OR
+   NOT _installed_http2_hpack MATCHES
+       "const HpackDecodeFailure[*] failure[(][)] const noexcept")
+    message(FATAL_ERROR "installed HPACK decode result lost its discriminated success/failure contract")
+endif()
 set(_installed_http2_remote_receive_path
     "${_install_prefix}/include/ruvia/http/detail/http2/Http2RemoteReceiveState.h")
 set(_installed_http2_request_state_path

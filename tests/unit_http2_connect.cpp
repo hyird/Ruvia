@@ -211,7 +211,7 @@ HeaderObservation decodeSingleHeaderFrame(
     }
     HpackDecoder decoder(resource);
     RUVIA_CHECK(decoder.decode(
-        bytes.substr(9, header.length), &observation, &observeHeader).ok());
+        bytes.substr(9, header.length), &observation, &observeHeader).decoded() != nullptr);
     return observation;
 }
 

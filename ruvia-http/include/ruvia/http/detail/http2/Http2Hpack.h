@@ -3,14 +3,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace ruvia::detail {
 
-enum class HpackError {
-    kNone,
+enum class HpackDecodeError {
     kNeedMore,
     kIntegerOverflow,
     kInvalidIndex,
@@ -20,12 +21,48 @@ enum class HpackError {
     kCallbackRejected
 };
 
-struct HpackDecodeResult final {
-    HpackError error{HpackError::kNone};
+class HpackDecoded final {
+private:
+    friend class HpackDecodeResult;
 
-    [[nodiscard]] bool ok() const noexcept {
-        return error == HpackError::kNone;
+    constexpr HpackDecoded() noexcept = default;
+};
+
+class HpackDecodeFailure final {
+public:
+    [[nodiscard]] constexpr HpackDecodeError error() const noexcept {
+        return error_;
     }
+
+private:
+    friend class HpackDecodeResult;
+
+    explicit constexpr HpackDecodeFailure(HpackDecodeError error) noexcept
+        : error_(error) {}
+
+    HpackDecodeError error_;
+};
+
+class HpackDecodeResult final {
+public:
+    [[nodiscard]] constexpr const HpackDecoded* decoded() const noexcept {
+        return std::get_if<HpackDecoded>(&state_);
+    }
+
+    [[nodiscard]] constexpr const HpackDecodeFailure* failure() const noexcept {
+        return std::get_if<HpackDecodeFailure>(&state_);
+    }
+
+private:
+    friend class HpackDecoder;
+
+    constexpr HpackDecodeResult() noexcept
+        : state_(HpackDecoded()) {}
+
+    explicit constexpr HpackDecodeResult(HpackDecodeError error) noexcept
+        : state_(HpackDecodeFailure(error)) {}
+
+    std::variant<HpackDecoded, HpackDecodeFailure> state_;
 };
 
 struct HpackStaticIndex final {
@@ -85,6 +122,8 @@ public:
     [[nodiscard]] HpackDecodeResult decode(std::string_view block, void* target, HeaderCallback callback);
 
 private:
+    using StepResult = std::optional<HpackDecodeError>;
+
     struct Entry final {
         std::pmr::string name;
         std::pmr::string value;
@@ -96,12 +135,12 @@ private:
     };
 
     [[nodiscard]] static std::size_t entrySize(std::string_view name, std::string_view value) noexcept;
-    [[nodiscard]] HpackError decodeInteger(
+    [[nodiscard]] StepResult decodeInteger(
         const unsigned char*& cursor,
         const unsigned char* end,
         std::uint8_t prefixBits,
         std::uint32_t& value) const noexcept;
-    [[nodiscard]] HpackError decodeString(
+    [[nodiscard]] StepResult decodeString(
         const unsigned char*& cursor,
         const unsigned char* end,
         std::pmr::string& scratch,
@@ -111,7 +150,7 @@ private:
     // apply (including this entry's) so the connection-global table stays consistent
     // -- RFC 7541 requires the whole field block to be processed. Set true here when a
     // fresh callback rejects; the caller reports it after finishing the block.
-    [[nodiscard]] HpackError decodeLiteralHeader(
+    [[nodiscard]] StepResult decodeLiteralHeader(
         const unsigned char*& cursor,
         const unsigned char* end,
         std::uint8_t nameIndexPrefixBits,
@@ -119,10 +158,16 @@ private:
         void* target,
         HeaderCallback callback,
         bool& rejected);
-    [[nodiscard]] HpackError decodeHuffman(std::string_view encoded, std::pmr::string& output);
+    [[nodiscard]] StepResult decodeHuffman(
+        std::string_view encoded,
+        std::pmr::string& output);
     void releaseScratch();
-    [[nodiscard]] HpackError indexedHeader(std::uint32_t index, HeaderView& header) const noexcept;
-    [[nodiscard]] HpackError indexedName(std::uint32_t index, std::string_view& name) const noexcept;
+    [[nodiscard]] StepResult indexedHeader(
+        std::uint32_t index,
+        HeaderView& header) const noexcept;
+    [[nodiscard]] StepResult indexedName(
+        std::uint32_t index,
+        std::string_view& name) const noexcept;
     [[nodiscard]] std::size_t dynamicEntryCount() const noexcept;
     [[nodiscard]] const Entry& dynamicEntryByNewestIndex(std::size_t newestIndex) const noexcept;
     void addDynamic(std::string_view name, std::string_view value);

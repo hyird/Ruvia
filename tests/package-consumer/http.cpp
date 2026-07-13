@@ -44,6 +44,7 @@
 #include <ruvia/http/detail/http2/Http2Connection.h>
 #include <ruvia/http/detail/http2/Http2ClosedStreams.h>
 #include <ruvia/http/detail/http2/Http2Event.h>
+#include <ruvia/http/detail/http2/Http2Hpack.h>
 #include <ruvia/http/detail/http2/Http2LocalSendState.h>
 #include <ruvia/http/detail/http2/Http2PeerSettings.h>
 #include <ruvia/http/detail/http2/Http2RemoteContentState.h>
@@ -952,6 +953,16 @@ static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::Http2ClosedStreamHistory&>()
         .source(std::uint32_t{})),
     std::optional<ruvia::detail::Http2StreamCloseSource>>);
+static_assert(!std::default_initializable<
+    ruvia::detail::HpackDecodeResult>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HpackDecodeResult&>()
+        .decoded()),
+    const ruvia::detail::HpackDecoded*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::detail::HpackDecodeResult&>()
+        .failure()),
+    const ruvia::detail::HpackDecodeFailure*>);
 static_assert(HasHttp2RemoteContentAlternatives<
     ruvia::detail::Http2RemoteContentState>);
 static_assert(!HasStaleHttp2RemoteContentTuple<
