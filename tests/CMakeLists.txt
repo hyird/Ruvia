@@ -67,7 +67,7 @@ add_executable(ruvia_unit_tests
     unit_static_response_headers.cpp
     unit_streaming.cpp
     unit_response_stream_dispatch.cpp
-    unit_http2_buffered_response_dispatch.cpp
+    unit_http2_buffered_response_write.cpp
     unit_http_cache.cpp
     unit_vary_headers.cpp
     unit_http_byte_range.cpp

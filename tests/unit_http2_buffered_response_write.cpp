@@ -3,7 +3,7 @@
 #include <concepts>
 #include <cstdint>
 
-#include "ruvia/web/detail/server/Http2BufferedResponseDispatch.h"
+#include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
 
 namespace {
 
@@ -19,24 +19,24 @@ concept HasSubmitError = requires(const Alternative& value) {
 };
 
 static_assert(!std::default_initializable<
-    ruvia::detail::Http2BufferedResponseDispatchResult>);
+    ruvia::detail::Http2BufferedResponseWriteResult>);
 static_assert(HasStatus<
-    ruvia::detail::Http2BufferedResponseCompleted>);
+    ruvia::detail::Http2BufferedResponseWriteCompleted>);
 static_assert(HasStatus<
-    ruvia::detail::Http2BufferedResponsePeerAbortedAfterCommit>);
+    ruvia::detail::Http2BufferedResponseWritePeerAbortedAfterCommit>);
 static_assert(HasStatus<
-    ruvia::detail::Http2BufferedResponseFailedAfterCommit>);
+    ruvia::detail::Http2BufferedResponseWriteFailedAfterCommit>);
 static_assert(!HasStatus<
-    ruvia::detail::Http2BufferedResponsePeerAbortedBeforeCommit>);
+    ruvia::detail::Http2BufferedResponseWritePeerAbortedBeforeCommit>);
 static_assert(!HasStatus<
-    ruvia::detail::Http2BufferedResponseFailedBeforeCommit>);
+    ruvia::detail::Http2BufferedResponseWriteFailedBeforeCommit>);
 static_assert(HasSubmitError<
-    ruvia::detail::Http2BufferedResponseFailedBeforeCommit>);
+    ruvia::detail::Http2BufferedResponseWriteFailedBeforeCommit>);
 
 }  // namespace
 
-RUVIA_TEST(http2_buffered_response_dispatch_result_owns_only_committed_status) {
-    using Result = ruvia::detail::Http2BufferedResponseDispatchResult;
+RUVIA_TEST(http2_buffered_response_write_result_owns_only_committed_status) {
+    using Result = ruvia::detail::Http2BufferedResponseWriteResult;
 
     const auto completed = Result::makeCompleted(207);
     RUVIA_CHECK(completed.completed() != nullptr);

@@ -27,7 +27,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ios>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -40,9 +39,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/http/detail/HttpRequestInternal.h"
-#include "ruvia/http/detail/HttpResponseBodyAccess.h"
 #include "ruvia/web/detail/http/ContextServices.h"
-#include "ruvia/web/detail/server/HttpFileOpen.h"
 #include "ruvia/web/detail/server/RequestMemoryArena.h"
 #include "ruvia/web/detail/body/HttpRequestBodyFacade.h"
 #include "ruvia/http/detail/http2/Http2Connection.h"
@@ -53,8 +50,7 @@
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
 #include "ruvia/web/detail/server/HttpBufferedResponse.h"
-#include "ruvia/web/detail/server/Http2BufferedResponseDispatch.h"
-#include "ruvia/web/detail/server/HttpFileChunkBuffer.h"
+#include "ruvia/web/detail/server/Http2BufferedResponseWrite.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
 #include "ruvia/web/detail/server/HttpResponseStreamDispatch.h"
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
@@ -125,12 +121,6 @@ private:
         : ConnectionScanner::Phase::kReadingPayload;
 }
 
-enum class Http2BufferedDataSubmitResult : std::uint8_t {
-    kCompleted,
-    kPeerAborted,
-    kFailed
-};
-
 template <typename Stream>
 Task<void> runHttp2SansIoSession(
     Stream& stream,
@@ -179,6 +169,11 @@ Task<void> runHttp2SansIoSession(
         auto* runtime = streamRuntimes.find(streamId);
         return runtime != nullptr ? runtime->signal() : nullptr;
     };
+    Http2BufferedResponseWriter bufferedResponseWriter(
+        connection,
+        streamRuntimes,
+        worker,
+        writeSignal);
 
     // Single writer: serialize all outbound writes; sleep on writeSignal when idle.
     // The pending bytes are MOVED out before each write (takeOutput): concurrent
@@ -227,196 +222,6 @@ Task<void> runHttp2SansIoSession(
         }
     };
 
-    // Wait until the reader reports this stream's window-blocked remainder drained
-    // (via takeDrainedDataStreams -> signal wake). Loops on hasQueuedData so a false
-    // wake (a request-body chunk, or another stream's unblock) does NOT let the caller
-    // read the next body chunk ahead while still blocked -- that would grow the core's
-    // pendingSends_ without bound and defeat the backpressure. Returns false (stop) if
-    // the stream died or the signal ended (session teardown).
-    auto awaitSendWindow = [&](std::uint32_t streamId) -> Task<bool> {
-        auto* signal = findSignal(streamId);
-        for (;;) {
-            auto* live = connection.stream(streamId);
-            if (live == nullptr || live->isAborted()) {
-                co_return false;
-            }
-            if (!connection.hasQueuedData(streamId)) {
-                co_return true;  // window reopened; the remainder drained
-            }
-            if (signal == nullptr || signal->ended()) {
-                co_return false;
-            }
-            co_await signal->wait();
-        }
-    };
-
-    // Submit one stable DATA view with explicit ownership. kQueued means the core
-    // copied any unsent suffix, so this call waits for that owned input to drain and
-    // never resubmits it. kBackpressured accepted nothing; after the older queued
-    // input drains, retry this exact view before its owner advances or refills it.
-    auto submitData = [&](std::uint32_t streamId,
-                          std::string_view chunk,
-                          Http2EndStream endStream)
-        -> Task<Http2BufferedDataSubmitResult> {
-        for (;;) {
-            const auto result = connection.submitData(streamId, chunk, endStream);
-            wakeWriter();
-            if (result == Http2DataSubmitStatus::kAccepted) {
-                co_return Http2BufferedDataSubmitResult::kCompleted;
-            }
-            if (result == Http2DataSubmitStatus::kClosed) {
-                co_return Http2BufferedDataSubmitResult::kPeerAborted;
-            }
-            if (result == Http2DataSubmitStatus::kInvalidState ||
-                result == Http2DataSubmitStatus::kContentLengthExceeded ||
-                result == Http2DataSubmitStatus::kContentLengthIncomplete) {
-                co_return Http2BufferedDataSubmitResult::kFailed;
-            }
-            if (!(co_await awaitSendWindow(streamId))) {
-                co_return Http2BufferedDataSubmitResult::kPeerAborted;
-            }
-            if (result == Http2DataSubmitStatus::kQueued) {
-                co_return Http2BufferedDataSubmitResult::kCompleted;
-            }
-            // kBackpressured: the input is still caller-owned; retry unchanged.
-        }
-    };
-
-    // Submit a complete buffered/file response through the core. Explicit response
-    // streaming has its own route dispatch and ResponseStreamSink call chain.
-    auto submitResponse = [&](std::uint32_t streamId,
-                              const HttpResponse& response,
-                              HttpBufferedResponseWritePlan preparedWritePlan)
-        -> Task<Http2BufferedResponseDispatchResult> {
-        auto* streamState = connection.stream(streamId);
-        if (streamState == nullptr || streamState->isAborted()) {
-            co_return Http2BufferedResponseDispatchResult::
-                makePeerAbortedBeforeCommit();
-        }
-        const auto headResult = connection.submitResponseHead(
-            streamId,
-            response,
-            std::move(preparedWritePlan));
-        const auto* submittedHead = headResult.submitted();
-        if (submittedHead == nullptr) {
-            const auto error = headResult.failure()->error();
-            if (error == Http2ResponseHeadSubmitError::kClosed) {
-                co_return Http2BufferedResponseDispatchResult::
-                    makePeerAbortedBeforeCommit();
-            }
-            // A handler supplied metadata that cannot form a conformant final
-            // HTTP/2 response (for example 426, which would require forbidden
-            // Upgrade metadata). Do not strand the peer waiting forever on an
-            // open stream after the transactional head rejection.
-            (void)connection.submitReset(
-                streamId,
-                Http2ErrorCode::kInternalError);
-            wakeWriter();
-            co_return Http2BufferedResponseDispatchResult::
-                makeFailedBeforeCommit(error);
-        }
-        wakeWriter();
-        const auto& writePlan = submittedHead->plan();
-        const auto committedStatus = writePlan.responseStatus();
-        if (!writePlan.sendBody()) {
-            co_return Http2BufferedResponseDispatchResult::makeCompleted(
-                committedStatus);
-        }
-        const auto& responseContent = responseBody(response);
-        if (const auto fileBody = responseContent.file()) {
-            auto input = openResponseFileInput(*fileBody);
-            bool ready = static_cast<bool>(input);
-            if (ready) {
-                input.seekg(
-                    static_cast<std::streamoff>(fileBody->offset()),
-                    std::ios::beg);
-                ready = static_cast<bool>(input);
-            }
-            if (!ready) {
-                // The advertised content-length can no longer be honoured (file gone
-                // or shrank): abort the stream rather than under-send (RFC 9113 §8.1.1).
-                (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
-                wakeWriter();
-                co_return Http2BufferedResponseDispatchResult::
-                    makeFailedAfterCommit(committedStatus);
-            }
-            std::pmr::string fileChunk(worker.allocator<char>());
-            ensureFileChunkBuffer(fileChunk);
-            std::uint64_t remaining = fileBody->length();
-            while (remaining > 0) {
-                auto* live = connection.stream(streamId);
-                if (live == nullptr || live->isAborted()) {
-                    co_return Http2BufferedResponseDispatchResult::
-                        makePeerAbortedAfterCommit(committedStatus);
-                }
-                const auto next = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(fileChunk.size(), remaining));
-                input.read(fileChunk.data(), static_cast<std::streamsize>(next));
-                const auto readBytes = input.gcount();
-                if (readBytes <= 0) {
-                    (void)connection.submitReset(streamId, Http2ErrorCode::kInternalError);
-                    wakeWriter();
-                    co_return Http2BufferedResponseDispatchResult::
-                        makeFailedAfterCommit(committedStatus);
-                }
-                remaining -= static_cast<std::uint64_t>(readBytes);
-                const auto submitResult = co_await submitData(
-                    streamId,
-                    std::string_view(fileChunk.data(), static_cast<std::size_t>(readBytes)),
-                    remaining == 0
-                        ? Http2EndStream::kEndStream
-                        : Http2EndStream::kKeepOpen);
-                if (submitResult == Http2BufferedDataSubmitResult::kPeerAborted) {
-                    co_return Http2BufferedResponseDispatchResult::
-                        makePeerAbortedAfterCommit(committedStatus);
-                }
-                if (submitResult == Http2BufferedDataSubmitResult::kFailed) {
-                    (void)connection.submitReset(
-                        streamId,
-                        Http2ErrorCode::kInternalError);
-                    wakeWriter();
-                    co_return Http2BufferedResponseDispatchResult::
-                        makeFailedAfterCommit(committedStatus);
-                }
-            }
-            co_return Http2BufferedResponseDispatchResult::makeCompleted(
-                committedStatus);
-        }
-        // Buffered bytes: pace in frame-sized slices instead of one whole submit. The
-        // body view is stable (owned by `response` on this handler frame), so a slow
-        // client only ever makes the core buffer at most ONE slice as a window-blocked
-        // remainder (vs. a copy of the entire windowed-out tail for a large response).
-        const auto body = responseContent.bytes();
-        constexpr std::size_t kSlice = 16 * 1024;
-        std::size_t offset = 0;
-        while (offset < body.size()) {
-            const auto n = std::min<std::size_t>(kSlice, body.size() - offset);
-            const auto endStream = offset + n == body.size()
-                ? Http2EndStream::kEndStream
-                : Http2EndStream::kKeepOpen;
-            const auto submitResult = co_await submitData(
-                streamId,
-                body.substr(offset, n),
-                endStream);
-            if (submitResult == Http2BufferedDataSubmitResult::kPeerAborted) {
-                co_return Http2BufferedResponseDispatchResult::
-                    makePeerAbortedAfterCommit(committedStatus);
-            }
-            if (submitResult == Http2BufferedDataSubmitResult::kFailed) {
-                (void)connection.submitReset(
-                    streamId,
-                    Http2ErrorCode::kInternalError);
-                wakeWriter();
-                co_return Http2BufferedResponseDispatchResult::
-                    makeFailedAfterCommit(committedStatus);
-            }
-            offset += n;
-        }
-        // An empty write plan returned earlier; submitResponseHead END_STREAM'd it.
-        co_return Http2BufferedResponseDispatchResult::makeCompleted(
-            committedStatus);
-    };
-
     // Handler body for one admitted stream; a 1:1 port of the coroutine
     // dispatchStream. Early co_returns are safe -- dispatchOne (below) owns cleanup.
     auto dispatchOneInner = [&](std::uint32_t streamId) -> Task<void> {
@@ -462,7 +267,7 @@ Task<void> runHttp2SansIoSession(
                 request, requestMemory,
                 HttpErrorInfo(400, {}, "invalid http2 request headers"),
                 baseServices);
-            (void)co_await submitResponse(
+            (void)co_await bufferedResponseWriter.write(
                 streamId,
                 response,
                 httpBufferedResponseWritePlan(
@@ -658,7 +463,7 @@ Task<void> runHttp2SansIoSession(
             request,
             response,
             options);
-        const auto result = co_await submitResponse(
+        const auto result = co_await bufferedResponseWriter.write(
             streamId,
             response,
             responsePreparation.writePlan());
