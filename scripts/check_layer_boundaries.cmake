@@ -3927,12 +3927,19 @@ set(HTTP1_INTERIM_RESPONSE_WRITER
     "${RUVIA_ROOT}/ruvia-http/src/server/Http1InterimResponseWriter.cpp")
 set(WEB_CONTEXT_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+set(WEB_CONTEXT_REQUEST_HEADER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h")
 set(WEB_VALIDATION_TARGET_HEADER
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ValidationTypes.h")
 set(WEB_CONTEXT_INLINE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/Context.inl")
 set(WEB_CONTEXT_MODEL
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextModel.inl")
+set(WEB_CONTEXT_REQUEST_MODEL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextRequestModel.inl")
+set(WEB_CONTEXT_CMAKE "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt")
+set(WEB_CONTEXT_REQUEST_GUARD
+    "${RUVIA_ROOT}/tests/guards/context_request_header_guard.cpp")
 set(WEB_CONTEXT_REQUEST_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
 set(WEB_CONTEXT_RESPONSE_SOURCE
@@ -3942,7 +3949,8 @@ set(WEB_ERROR_NORMALIZE
 
 foreach(stale_context_inline IN ITEMS
         "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.inl"
-        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextModel.h")
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextModel.h"
+        "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequestModel.h")
     if(EXISTS "${stale_context_inline}")
         file(RELATIVE_PATH relative "${RUVIA_ROOT}" "${stale_context_inline}")
         boundary_error("Context implementation escaped detail/http ownership"
@@ -3959,13 +3967,44 @@ if(EXISTS "${WEB_CONTEXT_HEADER}")
             "Context.h must include both detail/http inline implementation headers")
     endif()
 endif()
+if(NOT EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" OR
+   NOT EXISTS "${WEB_CONTEXT_MODEL}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_MODEL}" OR
+   NOT EXISTS "${WEB_CONTEXT_CMAKE}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_GUARD}")
+    boundary_error("Context request API ownership is incomplete"
+        "ContextRequest.h, its detail/http model templates, install entry, and standalone guard must remain")
+elseif(EXISTS "${WEB_CONTEXT_HEADER}")
+    file(READ "${WEB_CONTEXT_REQUEST_HEADER}" web_context_request_header)
+    file(READ "${WEB_CONTEXT_MODEL}" web_context_model)
+    file(READ "${WEB_CONTEXT_REQUEST_MODEL}" web_context_request_model)
+    file(READ "${WEB_CONTEXT_CMAKE}" web_context_cmake)
+    file(READ "${WEB_CONTEXT_REQUEST_GUARD}" web_context_request_guard)
+    if(NOT web_context_public_header MATCHES
+           "ruvia/web/ContextRequest[.]h" OR
+       web_context_public_header MATCHES "class ContextRequest final" OR
+       NOT web_context_request_header MATCHES "class ContextRequest final" OR
+       NOT web_context_request_header MATCHES
+           "ruvia/web/detail/http/ContextRequestModel[.]inl" OR
+       web_context_model MATCHES "ContextRequest::" OR
+       NOT web_context_cmake MATCHES
+           "include/ruvia/web/ContextRequest[.]h" OR
+       NOT web_context_request_guard MATCHES
+           "#[ \t]*include[ \t]*[<\"]ruvia/web/ContextRequest[.]h")
+        boundary_error("Context request API collapsed back into the response/state header"
+            "Context.h must be an umbrella; request types/templates, installation, and standalone compilation have separate ownership")
+    endif()
+endif()
 if(EXISTS "${WEB_CONTEXT_HEADER}" AND
+   EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" AND
    EXISTS "${WEB_VALIDATION_TARGET_HEADER}")
     file(READ "${WEB_VALIDATION_TARGET_HEADER}"
         web_validation_target_header)
-    if(web_context_public_header MATCHES
+    set(web_context_public_api
+        "${web_context_public_header}\n${web_context_request_header}")
+    if(web_context_public_api MATCHES
            "valid[(]std::string_view[ 	]+target[)]" OR
-       web_context_public_header MATCHES
+       web_context_public_api MATCHES
            "addValidatedData[(]std::string_view[ 	]+target" OR
        web_validation_target_header MATCHES
            "validationTargetFromName" OR
@@ -3974,12 +4013,12 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
         boundary_error("validation targets regained parallel string APIs"
             "Context validation must use only the scoped ValidationTarget vocabulary")
     endif()
-    if(web_context_public_header MATCHES "arrayBuffer[(]")
+    if(web_context_public_api MATCHES "arrayBuffer[(]")
         boundary_error("binary request bodies regained a parallel name"
             "ContextRequest, RawRequestClone and RequestBlob must use bytes()")
     endif()
-    if(web_context_public_header MATCHES "formData[(]" OR
-       web_context_public_header MATCHES "SingleValueSelection")
+    if(web_context_public_api MATCHES "formData[(]" OR
+       web_context_public_api MATCHES "SingleValueSelection")
         boundary_error("form body parsing regained entry-dependent semantics"
             "parseBody() must be the only RequestFormData constructor path and duplicate scalar lookup must select the last value")
     endif()

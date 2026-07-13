@@ -11,6 +11,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextErrorResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextFileResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextRequestForm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextResponse.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/ContextStorage.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http/Csrf.cpp
@@ -141,6 +142,7 @@ ruvia_install_public_headers(web
     include/ruvia/web/StaticFiles.h
     include/ruvia/web/ConnInfo.h
     include/ruvia/web/Context.h
+    include/ruvia/web/ContextRequest.h
     include/ruvia/web/Controller.h
     include/ruvia/web/Csrf.h
     include/ruvia/web/ErrorHandlers.h
