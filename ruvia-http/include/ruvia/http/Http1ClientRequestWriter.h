@@ -36,6 +36,17 @@ private:
 // I/O runtime waits before releasing a continue-gated body remains runtime
 // policy, not an HTTP message-model setting.
 class Http1ClientRequestWirePolicy final {
+private:
+    using Expectation = std::variant<
+        Http1ClientNoRequestExpectation,
+        Http1ClientContinueExpectation>;
+
+    template <typename ExpectationAlternative>
+    constexpr Http1ClientRequestWirePolicy(
+        Http1ClientRequestClosePolicy closePolicy,
+        ExpectationAlternative expectation) noexcept
+        : closePolicy_(closePolicy), expectation_(expectation) {}
+
 public:
     [[nodiscard]] static constexpr Http1ClientRequestWirePolicy withoutExpectation(
         Http1ClientRequestClosePolicy closePolicy =
@@ -66,16 +77,6 @@ public:
     }
 
 private:
-    using Expectation = std::variant<
-        Http1ClientNoRequestExpectation,
-        Http1ClientContinueExpectation>;
-
-    template <typename ExpectationAlternative>
-    constexpr Http1ClientRequestWirePolicy(
-        Http1ClientRequestClosePolicy closePolicy,
-        ExpectationAlternative expectation) noexcept
-        : closePolicy_(closePolicy), expectation_(expectation) {}
-
     Http1ClientRequestClosePolicy closePolicy_;
     Expectation expectation_;
 };
