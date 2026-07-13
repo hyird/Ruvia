@@ -1784,7 +1784,7 @@ RUVIA_TEST(http2_connection_request_content_alternatives_own_wire_framing) {
         RUVIA_CHECK(decoder.decode(
             out.substr(9, frame.length),
             &observation,
-            &observeRequestContentLength).ok());
+            &observeRequestContentLength).decoded() != nullptr);
         if (expectedContentLength.empty()) {
             RUVIA_CHECK_EQ(observation.count, static_cast<std::size_t>(0));
         } else {

@@ -13,11 +13,11 @@ enum class HeaderDecodeStatus : std::uint8_t {
 };
 
 [[nodiscard]] inline HeaderDecodeStatus http2ClassifyHeaderDecodeResult(
-    HpackDecodeResult result) noexcept {
-    if (result.ok()) {
+    const HpackDecodeResult& result) noexcept {
+    if (result.decoded() != nullptr) {
         return HeaderDecodeStatus::kOk;
     }
-    return result.error == HpackError::kCallbackRejected
+    return result.failure()->error() == HpackDecodeError::kCallbackRejected
         ? HeaderDecodeStatus::kProtocolError
         : HeaderDecodeStatus::kCompressionError;
 }

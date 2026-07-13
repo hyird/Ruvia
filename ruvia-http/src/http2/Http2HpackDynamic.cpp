@@ -8,31 +8,31 @@ std::size_t HpackDecoder::entrySize(std::string_view name, std::string_view valu
     return name.size() + value.size() + 32;
 }
 
-HpackError HpackDecoder::indexedHeader(std::uint32_t index, HeaderView& header) const noexcept {
+HpackDecoder::StepResult HpackDecoder::indexedHeader(std::uint32_t index, HeaderView& header) const noexcept {
     if (index == 0) {
-        return HpackError::kInvalidIndex;
+        return HpackDecodeError::kInvalidIndex;
     }
     if (index <= kHpackStaticTableSize) {
         const auto& entry = hpackStaticHeaderAt(index);
         header = HeaderView{entry.name, entry.value};
-        return HpackError::kNone;
+        return std::nullopt;
     }
     const auto dynamicIndex = index - static_cast<std::uint32_t>(kHpackStaticTableSize);
     if (dynamicIndex == 0 || dynamicIndex > dynamicEntryCount()) {
-        return HpackError::kInvalidIndex;
+        return HpackDecodeError::kInvalidIndex;
     }
     const auto& entry = dynamicEntryByNewestIndex(static_cast<std::size_t>(dynamicIndex - 1));
     header = HeaderView{entry.name, entry.value};
-    return HpackError::kNone;
+    return std::nullopt;
 }
 
-HpackError HpackDecoder::indexedName(std::uint32_t index, std::string_view& name) const noexcept {
+HpackDecoder::StepResult HpackDecoder::indexedName(std::uint32_t index, std::string_view& name) const noexcept {
     HeaderView header;
-    if (const auto error = indexedHeader(index, header); error != HpackError::kNone) {
+    if (const auto error = indexedHeader(index, header); error.has_value()) {
         return error;
     }
     name = header.name;
-    return HpackError::kNone;
+    return std::nullopt;
 }
 
 void HpackDecoder::addDynamic(std::string_view name, std::string_view value) {

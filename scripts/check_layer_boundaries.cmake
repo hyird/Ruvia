@@ -289,6 +289,8 @@ set(RULE_STALE_H2_REMOTE_CONTENT_TUPLE
     "Http2StreamBodyAccounting|bodyAccounting_|http2BodyLengthComplete|Http2RemoteContentWithoutLength|Http2RemoteContentKnownLength|Http2RemoteContentCheck|checkRemoteContentAccept|acceptRemoteContent|http2RemoteContentTerminalValid|remoteContent[(][)][.]receivedBytes[(][)]|(setContentLength|hasContentLength|setReceivedBodyBytes|addReceivedBodyBytes|receivedBodyBytes|receivedBodyExceedsContentLength|bufferedBodyExceedsContentLength|bodyLengthComplete)[ \t]*[(]")
 set(RULE_STALE_H2_RESPONSE_STATUS_PRODUCT
     "responseStatus_[ \t]*[{][ \t]*0[ \t]*[}]|bool[ \t]+sawStatus|hasResponseStatus[ \t]*[(]")
+set(RULE_STALE_HPACK_DECODE_RESULT
+    "HpackError|HpackDecodeError::kNone|struct[ \t]+HpackDecodeResult|bool[ \t]+ok[(][)]|[.]error[ \t]*(==|!=)")
 set(RULE_STALE_205_RESPONSE_BODY
     "205 [(]Reset Content[)] deliberately falls through|response_policy_reset_content_carries_framing")
 set(RULE_STALE_DEPENDENCY
@@ -804,6 +806,9 @@ if(RUVIA_BOUNDARY_SELF_TEST)
     expect_match("output-parameter HTTP/1 client response parsing"
         "${RULE_STALE_HTTP_CLIENT_RESPONSE_STATUS_PRODUCT}"
         "parseStatusLine(wire, ParsedStatusLine& output, Error& error);")
+    expect_match("sentinel HPACK decode result"
+        "${RULE_STALE_HPACK_DECODE_RESULT}"
+        "struct HpackDecodeResult { HpackError error{HpackError::kNone}; bool ok(); };")
     expect_match("stale incremental response trailer side channel"
         "${RULE_STALE_RESPONSE_TRAILER_SIDE_CHANNEL}"
         "stream.addTrailer(name, value);")
@@ -8544,6 +8549,49 @@ check_files_no_match("HTTP/2 client response status recovered a sentinel or para
     "${HTTP2_STREAM_REQUEST_STATE}"
     "${HTTP2_STREAM_STATE}"
     "${HTTP2_CONNECTION_SOURCE}")
+
+set(HTTP2_HPACK
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2Hpack.h")
+set(HTTP2_HPACK_HEADER_DECODE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http2/Http2HeaderDecode.h")
+set(HTTP2_HPACK_SOURCES
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Hpack.cpp"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2HpackDynamic.cpp"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2HpackHuffman.cpp")
+set(HTTP2_HPACK_TEST "${RUVIA_ROOT}/tests/unit_hpack.cpp")
+if(EXISTS "${HTTP2_HPACK}" AND
+   EXISTS "${HTTP2_HPACK_HEADER_DECODE}" AND
+   EXISTS "${HTTP2_HPACK_TEST}" AND
+   EXISTS "${HTTP_PACKAGE_CONSUMER}" AND
+   EXISTS "${HTTP_PACKAGE_VERIFY}")
+    file(READ "${HTTP2_HPACK}" http2_hpack)
+    file(READ "${HTTP2_HPACK_HEADER_DECODE}" http2_hpack_header_decode)
+    file(READ "${HTTP2_HPACK_TEST}" http2_hpack_test)
+    file(READ "${HTTP_PACKAGE_CONSUMER}" http2_hpack_consumer)
+    file(READ "${HTTP_PACKAGE_VERIFY}" http2_hpack_package_verify)
+    if(NOT http2_hpack MATCHES "class HpackDecoded final" OR
+       NOT http2_hpack MATCHES "class HpackDecodeFailure final" OR
+       NOT http2_hpack MATCHES "class HpackDecodeResult final" OR
+       NOT http2_hpack MATCHES "std::variant<HpackDecoded" OR
+       NOT http2_hpack MATCHES "using StepResult = std::optional" OR
+       NOT http2_hpack_header_decode MATCHES
+           "result[.]failure[(][)][-][>]error[(][)]" OR
+       NOT http2_hpack_test MATCHES
+           "hpack_integer_overflow_is_rejected" OR
+       NOT http2_hpack_test MATCHES "failure[-][>]error[(][)]" OR
+       NOT http2_hpack_consumer MATCHES
+           "!std::default_initializable<[^>]*HpackDecodeResult" OR
+       NOT http2_hpack_package_verify MATCHES
+           "installed HPACK decode result lost its discriminated success/failure contract")
+        boundary_error("HPACK decode result lost its discriminated contract"
+            "success, callback rejection, and compression faults must not share an error sentinel")
+    endif()
+endif()
+check_files_no_match("HPACK decode result recovered an error sentinel"
+    "${RULE_STALE_HPACK_DECODE_RESULT}"
+    "${HTTP2_HPACK}"
+    "${HTTP2_HPACK_HEADER_DECODE}"
+    ${HTTP2_HPACK_SOURCES})
 
 set(BOUNDARY_DOCS "${RUVIA_ROOT}/README.md" "${RUVIA_ROOT}/AGENTS.md")
 check_files_no_match("docs reference the deleted coroutine h2 server session"

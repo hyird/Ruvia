@@ -1,6 +1,7 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/http/detail/http2/Http2HeaderContinuation.h"
@@ -12,13 +13,16 @@ namespace {
 
 using ruvia::HttpParseError;
 using ruvia::detail::HeaderDecodeStatus;
-using ruvia::detail::HpackDecodeResult;
-using ruvia::detail::HpackError;
+using ruvia::detail::HpackDecoder;
 using ruvia::detail::CleartextHttp2Probe;
 using ruvia::detail::http2ClassifyHeaderDecodeResult;
 using ruvia::detail::kHttp2ClientPreface;
 using ruvia::detail::probeCleartextHttp2Preface;
 using ruvia::detail::shouldDropInvalidCleartextHttp1Input;
+
+bool rejectHeader(void*, std::string_view, std::string_view) {
+    return false;
+}
 
 }  // namespace
 
@@ -44,18 +48,17 @@ RUVIA_TEST(http2_cleartext_startup_accepts_only_prior_knowledge_preface) {
 }
 
 RUVIA_TEST(classify_header_decode_result) {
+    HpackDecoder decoder(std::pmr::get_default_resource());
     // A clean decode is OK.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(HpackDecodeResult{HpackError::kNone}) ==
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode({}, nullptr, nullptr)) ==
                 HeaderDecodeStatus::kOk);
     // A header-validation callback rejection is a protocol error.
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(HpackDecodeResult{HpackError::kCallbackRejected}) ==
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(
+                    std::string_view("\x82", 1), nullptr, &rejectHeader)) ==
                 HeaderDecodeStatus::kProtocolError);
     // Any HPACK decoding fault is a compression error (RFC 7541 4.1).
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(HpackDecodeResult{HpackError::kIntegerOverflow}) ==
-                HeaderDecodeStatus::kCompressionError);
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(HpackDecodeResult{HpackError::kInvalidIndex}) ==
-                HeaderDecodeStatus::kCompressionError);
-    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(HpackDecodeResult{HpackError::kInvalidHuffman}) ==
+    RUVIA_CHECK(http2ClassifyHeaderDecodeResult(decoder.decode(
+                    std::string_view("\x80", 1), nullptr, nullptr)) ==
                 HeaderDecodeStatus::kCompressionError);
 }
 

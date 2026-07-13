@@ -1138,8 +1138,8 @@ RUVIA_TEST(sansio_driver_h2_expectation_decision_precedes_request_content) {
                     HpackCollect fields;
                     const auto decoded = decoder.decode(
                         payload, &fields, &HpackCollect::onHeader);
-                    RUVIA_CHECK(decoded.ok());
-                    if (!decoded.ok()) {
+                    RUVIA_CHECK(decoded.decoded() != nullptr);
+                    if (decoded.failure() != nullptr) {
                         break;
                     }
                     if (header.streamId == 1 &&
@@ -1324,8 +1324,8 @@ RUVIA_TEST(sansio_driver_h2_buffered_access_uses_only_committed_plan_status) {
                         payload,
                         &fields,
                         &HpackCollect::onHeader);
-                    RUVIA_CHECK(decoded.ok());
-                    gotStatus = decoded.ok() &&
+                    RUVIA_CHECK(decoded.decoded() != nullptr);
+                    gotStatus = decoded.decoded() != nullptr &&
                         fields.joined.find(":status=207;") !=
                             std::string::npos;
                 } else if (header.streamId == 1 &&
