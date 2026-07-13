@@ -1825,13 +1825,17 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
    NOT multipart_public_api MATCHES "class MultipartBodyParseFailure final" OR
    NOT multipart_public_api MATCHES "class MultipartBodyParseResult final" OR
    NOT multipart_public_api MATCHES "using Value = std::variant" OR
+   NOT multipart_public_api MATCHES
+       "using State = std::variant<ProgressState, MultipartParseError>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartPollFailure>" OR
    NOT multipart_public_api MATCHES "multipartParseErrorMessage" OR
    NOT multipart_public_api MATCHES "MultipartParser[(]MultipartBoundary boundary" OR
    NOT multipart_public_api MATCHES "void feed[(]std::string_view chunk[)]" OR
    NOT multipart_public_api MATCHES "void finishInput[(][)] noexcept" OR
-   NOT multipart_public_api MATCHES "MultipartBodyParseResult parseMultipartBody")
+   NOT multipart_public_api MATCHES "MultipartBodyParseResult parseMultipartBody" OR
+   multipart_public_api MATCHES
+       "${RULE_STALE_MULTIPART_NONTERMINAL_FAILURE}")
     boundary_error("multipart public API lost its typed sans-I/O contract"
         "MultipartParser.h must validate boundary ownership once and expose discriminated phase/need-input/part/done results")
 endif()
@@ -1866,6 +1870,12 @@ else()
            "throw[ \\t]+std::invalid_argument" OR
        NOT multipart_incremental_implementation MATCHES
            "MultipartPollResult::makeFailure" OR
+       NOT multipart_parser_implementation MATCHES
+           "MultipartPollResult MultipartParser::fail" OR
+       NOT multipart_parser_implementation MATCHES
+           "state_ = error" OR
+       NOT multipart_parser_implementation MATCHES
+           "std::get_if<MultipartParseError>[(]&state_[)]" OR
        NOT multipart_parser_implementation MATCHES
            "multipartParseErrorMessage" OR
        multipart_parser_implementation MATCHES
@@ -1913,9 +1923,13 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_unit_test MATCHES "ruvia::MultipartBodyParseResult" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_rejects_malformed_body" OR
    NOT multipart_unit_test MATCHES "multipart_complete_body_parser_shares_incremental_limits" OR
+   NOT multipart_unit_test MATCHES "feedAfterFailureThrew" OR
+   NOT multipart_unit_test MATCHES "const auto repeated = incremental[.]poll[(][)]" OR
    NOT multipart_unit_test MATCHES "HasMultipartLineBytes" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartPollResult" OR
    NOT multipart_package_consumer MATCHES "ruvia::MultipartBodyParseResult" OR
+   NOT multipart_package_consumer MATCHES "repeatedMultipartFailure" OR
+   NOT multipart_package_consumer MATCHES "failedMultipartParser[.]feed" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
    NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>")
     boundary_error("typed multipart result ownership is insufficiently tested"
