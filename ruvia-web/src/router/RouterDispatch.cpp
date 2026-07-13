@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -330,27 +331,30 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     try {
         const auto* resolved = resolution.resolved();
         if (resolved == nullptr) {
+            // One handleError co_await serves both rejection kinds: each
+            // co_await expression reserves its own slots for the call's
+            // temporaries in the frame, so distinct inline sites would each
+            // add a resident HttpResponse-sized block.
+            std::optional<HttpErrorInfo> error;
+            std::uint32_t allowedMethods = 0;
             if (request.knownMethod() == HttpKnownMethod::kUnknown) {
-                co_return co_await handleError(
-                    request,
-                    memory,
-                    HttpErrorInfo(501, {}, "method not implemented"),
-                    services);
-            }
-
-            if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
+                error.emplace(501, std::string_view{}, "method not implemented");
+            } else if (request.knownMethod() == HttpKnownMethod::kOptions && request.path() == "*") {
                 co_return makeAllowNoContentResponse(memory, allowedMethodsForServer());
-            }
-
-            if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
+            } else if (const auto* methodNotAllowed = resolution.methodNotAllowed()) {
                 if (request.knownMethod() == HttpKnownMethod::kOptions) {
                     co_return makeAllowNoContentResponse(
                         memory, methodNotAllowed->allowedMethods());
                 }
+                error.emplace(405, std::string_view{}, "method not allowed");
+                allowedMethods = methodNotAllowed->allowedMethods();
+            }
 
-                const auto error = HttpErrorInfo(405, {}, "method not allowed");
-                auto response = co_await handleError(request, memory, error, services);
-                setAllowHeader(response, methodNotAllowed->allowedMethods());
+            if (error) {
+                auto response = co_await handleError(request, memory, *error, services);
+                if (allowedMethods != 0) {
+                    setAllowHeader(response, allowedMethods);
+                }
                 co_return response;
             }
 
