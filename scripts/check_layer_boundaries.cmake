@@ -7695,20 +7695,41 @@ if(EXISTS "${WEB_REDIS_SET_MODEL}" AND
        NOT web_redis_set_model MATCHES "enum class RedisSetCondition" OR
        NOT web_redis_set_model MATCHES "class RedisSetExpiration final" OR
        NOT web_redis_set_model MATCHES "using Value = std::variant" OR
+       NOT web_redis_set_model MATCHES
+           "std::optional<RedisSetCondition>[ \t]+condition" OR
+       NOT web_redis_set_model MATCHES
+           "std::optional<RedisSetExpiration>[ \t]+expiration" OR
        NOT web_redis_set_model MATCHES "bool[ \t]+returnPrevious" OR
        web_redis_set_handle MATCHES "options[.](ttl|nx|xx|get|keepTtl)" OR
        NOT web_redis_set_handle MATCHES "redisSetArgs[(]key, value, options" OR
-       NOT web_redis_set_args MATCHES "switch [(]options[.]condition[)]" OR
-       NOT web_redis_set_args MATCHES "options[.]expiration[.]duration[(][)]" OR
-       NOT web_redis_set_args MATCHES "options[.]expiration[.]keepsExisting[(][)]" OR
+       NOT web_redis_set_args MATCHES "switch [(][*]options[.]condition[)]" OR
+       NOT web_redis_set_args MATCHES "options[.]expiration->duration[(][)]" OR
+       NOT web_redis_set_args MATCHES "options[.]expiration->keepsExisting[(][)]" OR
        NOT web_redis_set_api_test MATCHES
            "redis_set_expiration_cannot_represent_conflicting_modes" OR
+       NOT web_redis_set_api_test MATCHES
+           "std::optional<ruvia::RedisSetCondition>" OR
+       NOT web_redis_set_api_test MATCHES
+           "std::optional<ruvia::RedisSetExpiration>" OR
        NOT web_redis_set_wire_test MATCHES
            "redis_set_options_build_one_valid_command_shape" OR
        NOT web_redis_set_package_test MATCHES
-           "HasLegacyRedisSetOptionBooleans")
+           "HasLegacyRedisSetOptionBooleans" OR
+       NOT web_redis_set_package_test MATCHES
+           "std::optional<ruvia::RedisSetCondition>" OR
+       NOT web_redis_set_package_test MATCHES
+           "std::optional<ruvia::RedisSetExpiration>")
         boundary_error("Redis SET options regained conflicting boolean state"
             "condition, expiration and returnPrevious must remain one typed command-building chain")
+    endif()
+    if(web_redis_set_model MATCHES "RedisSetCondition::kNone" OR
+       web_redis_set_model MATCHES
+           "enum class RedisSetCondition[^{]*[{][^}]*kNone" OR
+       web_redis_set_model MATCHES "std::monostate" OR
+       web_redis_set_model MATCHES
+           "RedisSetExpiration[(][)] noexcept = default")
+        boundary_error("Redis SET options restored nested absence sentinels"
+            "condition and expiration absence must live only in RedisSetOptions optionals")
     endif()
 endif()
 

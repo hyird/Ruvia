@@ -47,15 +47,12 @@ struct RedisConfig {
 };
 
 enum class RedisSetCondition : std::uint8_t {
-    kNone,
     kIfAbsent,
     kIfPresent,
 };
 
 class RedisSetExpiration final {
 public:
-    RedisSetExpiration() noexcept = default;
-
     [[nodiscard]] static RedisSetExpiration expiresAfter(
         std::chrono::milliseconds duration) {
         if (duration.count() <= 0) {
@@ -80,7 +77,6 @@ public:
 private:
     struct KeepExisting final {};
     using Value = std::variant<
-        std::monostate,
         std::chrono::milliseconds,
         KeepExisting>;
 
@@ -94,8 +90,8 @@ private:
 };
 
 struct RedisSetOptions final {
-    RedisSetCondition condition{RedisSetCondition::kNone};
-    RedisSetExpiration expiration;
+    std::optional<RedisSetCondition> condition;
+    std::optional<RedisSetExpiration> expiration;
     bool returnPrevious{false};
 };
 

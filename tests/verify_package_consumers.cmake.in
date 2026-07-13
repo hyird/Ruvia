@@ -354,6 +354,23 @@ if(NOT _installed_cookie_options MATCHES
        "enum class CookiePriority[^{]*[{][^}]*kUnspecified")
     message(FATAL_ERROR "installed Cookie options lost explicit optional attributes")
 endif()
+set(_installed_redis_set_options_path
+    "${_install_prefix}/include/ruvia/web/redis/RedisTypes.h")
+if(EXISTS "${_installed_redis_set_options_path}")
+    file(READ "${_installed_redis_set_options_path}"
+        _installed_redis_set_options)
+    if(NOT _installed_redis_set_options MATCHES
+           "std::optional<RedisSetCondition>[ \t]+condition" OR
+       NOT _installed_redis_set_options MATCHES
+           "std::optional<RedisSetExpiration>[ \t]+expiration" OR
+       _installed_redis_set_options MATCHES
+           "enum class RedisSetCondition[^{]*[{][^}]*kNone" OR
+       _installed_redis_set_options MATCHES "std::monostate" OR
+       _installed_redis_set_options MATCHES
+           "RedisSetExpiration[(][)] noexcept = default")
+        message(FATAL_ERROR "installed Redis SET options restored nested absence sentinels")
+    endif()
+endif()
 file(READ
     "${_install_prefix}/include/ruvia/http/detail/HttpExpectations.h"
     _installed_http_expectations)
