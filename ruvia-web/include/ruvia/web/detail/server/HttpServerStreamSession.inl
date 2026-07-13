@@ -18,28 +18,40 @@ Task<void> HttpServer::handleStreamSession(
     std::size_t usedBytes = 0;
     ConnectionWorkSet* workSet = nullptr;
     WorkSetReturn workSetReturn(workSetPool_, workSet);
+    // Connection-resident landing pad for the first bytes of a request that
+    // arrives while the connection holds no work set (see the idle wait below).
+    std::array<char, kIdleResidentReadBytes> idleReadBuffer;
+    std::size_t idleReadBytes = 0;
 
     constexpr bool kPlainTcp = std::is_same_v<std::remove_cvref_t<Stream>, TcpSocket>;
     for (;;) {
         scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
 
         // Borrow-on-use / return-on-idle for the whole work set: when the
-        // connection has no buffered bytes and nothing is pending, return the
-        // work set to the per-worker pool and wait for readability without
-        // holding one, so an idle keep-alive connection occupies no work set
-        // (memory scales with in-flight requests, not total connections).
-        // available() gates this, so a back-to-back / pipelined burst keeps its
-        // work set and pays no extra wait. Plain TCP only: a TLS engine may
-        // buffer a decrypted record the raw socket's available() cannot see, so
-        // a bufferless wait there could block forever; TLS holds across the
-        // connection.
+        // connection has no buffered bytes, return the work set to the
+        // per-worker pool and read the next request's first bytes into the
+        // small connection-resident buffer instead, so an idle keep-alive
+        // connection occupies no work set (memory scales with in-flight
+        // requests, not total connections). Reading directly -- rather than a
+        // bufferless readiness wait -- costs no extra reactor pass when data
+        // is already queued. A pipelined burst (usedBytes > 0) keeps its work
+        // set and skips this. Plain TCP only: a TLS engine may buffer a
+        // decrypted record that raw socket readiness cannot see, so an idle
+        // wait there could stall; TLS holds across the connection.
         if constexpr (kPlainTcp) {
-            if (plainTcpShouldWaitForNextRequest(socket, usedBytes)) {
+            if (plainTcpShouldWaitForNextRequest(usedBytes)) {
                 releaseIdleWorkSet(workSetPool_, workSet);
-                const auto waitEc = co_await waitForPlainTcpReadable(socket, scannerEntry);
-                if (waitEc || !workerRunning_) {
+                scannerEntry.setPhase(ConnectionScanner::Phase::kReadingInitial);
+                auto [idleEc, idleBytes] = co_await asyncResult<std::size_t>(
+                    [&socket, &idleReadBuffer](auto handler) mutable {
+                        socket.async_read_some(
+                            asio::buffer(idleReadBuffer.data(), idleReadBuffer.size()),
+                            std::move(handler));
+                    });
+                if (idleEc || !workerRunning_) {
                     co_return;
                 }
+                idleReadBytes = idleBytes;
             }
         }
         if (workSet == nullptr) {
@@ -51,6 +63,16 @@ Task<void> HttpServer::handleStreamSession(
         auto& responseHead = workSet->responseHead;
         auto& fileChunk = workSet->fileChunk;
         auto& routeResolution = workSet->routeResolution;
+
+        if constexpr (kPlainTcp) {
+            if (idleReadBytes > 0) {
+                static_assert(kIdleResidentReadBytes <= kInitialReadBufferBytes);
+                std::memcpy(readBuffer.data(), idleReadBuffer.data(), idleReadBytes);
+                usedBytes = idleReadBytes;
+                idleReadBytes = 0;
+                scannerEntry.touch();
+            }
+        }
 
         std::optional<RequestMemory> requestMemoryStorage;
         auto& requestMemory = emplaceRequestMemory(
