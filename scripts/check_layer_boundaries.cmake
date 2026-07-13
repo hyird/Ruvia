@@ -4786,13 +4786,23 @@ if(EXISTS "${HTTP_STATUS_HEADER}" AND
        NOT http2_status_response_headers MATCHES
            "plan[.]bodyPlan[(][)][.]responseStatus[(][)]" OR
        NOT web_context_status_header MATCHES
-           "struct ResponseInit final[ \t\r\n]*[{][ \t\r\n]*std::uint16_t status" OR
+           "struct ResponseInit final[ \t\r\n]*[{][ \t\r\n]*std::optional<std::uint16_t> status" OR
        NOT web_context_status_header MATCHES "ResponseHeaderInit headers" OR
        NOT web_error_status_normalize MATCHES "statusText = \"HTTP Error\"")
         boundary_error("response status and reason-phrase ownership split again"
             "the body/head plan must own the final status; H1 derives an optional phrase, H2 emits :status, and Web labels stay presentation-only")
     endif()
 endif()
+
+check_files_no_match("Context response status recovered a zero sentinel"
+    "statusCode[ \t]*(==|!=)[ \t]*0|statusCode[ \t]*=[ \t]*0"
+    "${WEB_CONTEXT_HEADER}"
+    "${WEB_CONTEXT_INLINE}"
+    "${WEB_CONTEXT_MODEL}"
+    "${WEB_CONTEXT_RESPONSE_SOURCE}")
+check_files_no_match("Context storage re-inferred explicit status 200"
+    "response[.]status[(][)][ \t]*==[ \t]*200"
+    "${WEB_CONTEXT_RESPONSE_SOURCE}")
 
 set(RESPONSE_STATUS_MODEL_TEST
     "${RUVIA_ROOT}/tests/unit_http_response.cpp")
