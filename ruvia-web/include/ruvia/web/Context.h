@@ -269,7 +269,7 @@ public:
 
     [[nodiscard]] ResponseStreamWriter& streamText();
 
-    [[nodiscard]] SseWriter streamSSE() const;
+    [[nodiscard]] SseWriter streamSSE();
 
     template <typename T = std::byte>
     [[nodiscard]] std::pmr::polymorphic_allocator<T> allocator() const noexcept {

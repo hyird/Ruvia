@@ -2639,6 +2639,9 @@ static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ResponseStreamWriter&>().aborted()),
     bool>);
 static_assert(std::is_same_v<
+    decltype(std::declval<ruvia::Context&>().streamSSE()),
+    ruvia::SseWriter>);
+static_assert(std::is_same_v<
     decltype(std::declval<ruvia::SseWriter&>().sleep(std::chrono::milliseconds{1})),
     ruvia::Task<void>>);
 static_assert(std::is_same_v<
