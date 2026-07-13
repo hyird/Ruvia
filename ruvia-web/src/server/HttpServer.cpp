@@ -15,7 +15,7 @@
 #include "ruvia/web/detail/server/HttpServerAccessLog.h"
 #include "ruvia/web/detail/server/HttpServerAlpn.h"
 #include "ruvia/web/detail/server/HttpServerAutoHttps.h"
-#include "ruvia/web/detail/server/HttpServerBufferedRoute.h"
+#include "ruvia/web/detail/server/HttpServerBodyRouteCompletion.h"
 #include "ruvia/web/detail/server/HttpServerCleartextHttp2.h"
 #include "ruvia/web/detail/server/HttpServerConnectionGuards.h"
 #include "ruvia/web/detail/server/HttpServerIdleWorkSet.h"

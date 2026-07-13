@@ -81,6 +81,13 @@ Task<void> HttpServer::handleStreamSession(
             std::span<std::byte>(workSet->arenaBlock, sizeof(workSet->arenaBlock)));
         HttpResponse response(requestMemory.resource());
         std::optional<Http1SessionRequestCompletion> requestCompletion;
+        // Rejections that close the connection funnel through one co_await
+        // site after the read loop: every co_await expression in a coroutine
+        // reserves its own frame slots for the call's temporaries (GCC does
+        // not overlap them), so inlining handleError at each rejection site
+        // costs ~660 resident bytes per site in every connection's frame.
+        std::optional<HttpErrorInfo> closingError;
+        std::optional<std::chrono::milliseconds> closingRetryAfter;
         std::size_t headerSearchOffset = 0;
         const auto requestStart = std::chrono::steady_clock::now();
         for (;;) {
@@ -122,31 +129,18 @@ Task<void> HttpServer::handleStreamSession(
                     // reports the semantic fact; this Web product deliberately does
                     // not implement extensions beyond 100-continue and chooses the
                     // RFC 9110-permitted 417 response before reading request content.
-                    response = co_await routes.handleError(
-                        parsed.request,
-                        requestMemory,
-                        HttpErrorInfo(417, {}, "unsupported Expect header"),
-                        baseRouteServices);
-                    const auto connectionPlan = http1FinalizeResponseConnection(
-                        response, parsed.connectionPlan.requireClose());
-                    requestCompletion.emplace(
-                        Http1SessionRequestCompletion::makeBufferedClosing(
-                            connectionPlan));
+                    closingError.emplace(417, std::string_view{}, "unsupported Expect header");
                     break;
                 }
                 if (options_.autoHttps.enabled) {
                     if (requestKnownHeader(parsed.request, RequestKnownHeader::kHost).empty()) {
-                        response = co_await routes.handleError(
-                            parsed.request,
-                            requestMemory,
-                            HttpErrorInfo(400, {}, "missing Host header"),
-                            baseRouteServices);
-                    } else {
-                        response = makeAutoHttpsRedirectResponse(
-                            parsed.request,
-                            requestMemory,
-                            options_.autoHttps.httpsPort);
+                        closingError.emplace(400, std::string_view{}, "missing Host header");
+                        break;
                     }
+                    response = makeAutoHttpsRedirectResponse(
+                        parsed.request,
+                        requestMemory,
+                        options_.autoHttps.httpsPort);
                     const auto connectionPlan = http1FinalizeResponseConnection(
                         response,
                         parsed.connectionPlan.requireClose());
@@ -159,17 +153,8 @@ Task<void> HttpServer::handleStreamSession(
                 routeResolution = routes.resolve(parsed.request);
                 const auto appRateLimit = rateLimitRequestAllowed(&rateLimiter_, remoteAddress);
                 if (!appRateLimit.allowed) {
-                    response = co_await routes.handleError(
-                        parsed.request,
-                        requestMemory,
-                        HttpErrorInfo(429, {}, "rate limit exceeded"),
-                        baseRouteServices);
-                    setRetryAfterSeconds(response, std::chrono::milliseconds(appRateLimit.resetAfterMs));
-                    const auto connectionPlan = http1FinalizeResponseConnection(
-                        response, parsed.connectionPlan.requireClose());
-                    requestCompletion.emplace(
-                        Http1SessionRequestCompletion::makeBufferedClosing(
-                            connectionPlan));
+                    closingError.emplace(429, std::string_view{}, "rate limit exceeded");
+                    closingRetryAfter.emplace(appRateLimit.resetAfterMs);
                     break;
                 }
                 const auto* resolved = routeResolution.resolved();
@@ -178,16 +163,7 @@ Task<void> HttpServer::handleStreamSession(
                             parsed.bodyPlan,
                             ProtocolByteLimit::limited(
                                 options_.maxBufferedBodyBytes))) {
-                        response = co_await routes.handleError(
-                            parsed.request,
-                            requestMemory,
-                            HttpErrorInfo(413, {}, "request body is too large"),
-                            baseRouteServices);
-                        const auto connectionPlan = http1FinalizeResponseConnection(
-                            response, parsed.connectionPlan.requireClose());
-                        requestCompletion.emplace(
-                            Http1SessionRequestCompletion::makeBufferedClosing(
-                                connectionPlan));
+                        closingError.emplace(413, std::string_view{}, "request body is too large");
                         break;
                     }
                     if (auto documentResponse = tryDocumentRootResponse(parsed.request, requestMemory)) {
@@ -228,16 +204,7 @@ Task<void> HttpServer::handleStreamSession(
                     options_.maxStreamBodyBytes,
                     options_.maxBufferedBodyBytes);
                 if (contentLengthExceedsLimit(parsed.bodyPlan, maxRequestBodyBytes)) {
-                    response = co_await routes.handleError(
-                        parsed.request,
-                        requestMemory,
-                        HttpErrorInfo(413, {}, "request body is too large"),
-                        baseRouteServices);
-                    const auto connectionPlan = http1FinalizeResponseConnection(
-                        response, parsed.connectionPlan.requireClose());
-                    requestCompletion.emplace(
-                        Http1SessionRequestCompletion::makeBufferedClosing(
-                            connectionPlan));
+                    closingError.emplace(413, std::string_view{}, "request body is too large");
                     break;
                 }
 
@@ -308,23 +275,68 @@ Task<void> HttpServer::handleStreamSession(
                     break;
                 }
 
-                requestCompletion.emplace(
-                    co_await dispatchHttpBufferedBodyRoute(
-                        stream,
-                        memory_,
-                        scannerEntry,
-                        parsed,
+                // Buffered-body dispatch, inlined into the session loop: this
+                // is the hot path for every plain buffered route, and a
+                // dedicated coroutine here would cost one frame allocation
+                // per request.
+                {
+                    const auto bodyAndPipeline = httpBodyAndPipeline(
                         *requestHead,
+                        readBuffer,
+                        usedBytes);
+
+                    // The body reader/loader setup can throw (e.g. constructing a
+                    // transfer-coding decoder for a bad Transfer-Encoding), so it
+                    // stays guarded. The dispatch itself never throws:
+                    // dispatchBuffered turns any handler or routing failure into
+                    // a response, so it sits outside the guard.
+                    std::exception_ptr bodySetupException;
+                    HttpLazyBufferedBodyRouteState<Stream> bodyState;
+                    try {
+                        prepareHttpLazyBufferedBodyRoute(
+                            bodyState,
+                            stream,
+                            memory_,
+                            requestMemory,
+                            bodyAndPipeline,
+                            parsed,
+                            options_,
+                            scannerEntry);
+                    } catch (...) {
+                        bodySetupException = std::current_exception();
+                    }
+
+                    if (bodySetupException != nullptr) {
+                        requestCompletion.emplace(co_await completeFailedHttpBodyRoute(
+                            scannerEntry,
+                            bodySetupException,
+                            parsed,
+                            routes,
+                            requestMemory,
+                            baseRouteServices,
+                            response));
+                        break;
+                    }
+
+                    response = co_await routes.dispatchBuffered(
+                        parsed.request,
                         routeResolution,
-                        routes,
                         requestMemory,
-                        baseRouteServices,
-                        options_,
+                        bodyState.withLoader(baseRouteServices));
+
+                    requestCompletion.emplace(completeSuccessfulHttpBodyRoute(
+                        scannerEntry,
+                        response,
+                        parsed.connectionPlan,
+                        requestSequence,
+                        bodyState.consumption(),
                         readBuffer,
                         usedBytes,
-                        response,
-                        requestSequence));
-                break;
+                        [&bodyState](std::pmr::string& buffer, std::size_t& size) {
+                            bodyState.restorePipeline(buffer, size);
+                        }));
+                    break;
+                }
             }
 
             if (const auto* failure = parsed.failure()) {
@@ -335,16 +347,10 @@ Task<void> HttpServer::handleStreamSession(
                         co_return;
                     }
                 }
-                response = co_await routes.handleError(
-                    parsed.request,
-                    requestMemory,
-                    HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
-                    baseRouteServices);
-                const auto connectionPlan = http1FinalizeResponseConnection(
-                    response, parsed.connectionPlan.requireClose());
-                requestCompletion.emplace(
-                    Http1SessionRequestCompletion::makeBufferedClosing(
-                        connectionPlan));
+                closingError.emplace(
+                    httpParseErrorStatus(error),
+                    std::string_view{},
+                    httpParseErrorMessage(error));
                 break;
             }
 
@@ -354,16 +360,10 @@ Task<void> HttpServer::handleStreamSession(
             growReadBuffer(readBuffer, usedBytes);
             if (usedBytes == readBuffer.size()) {
                 constexpr auto error = HttpParseError::kHeaderTooLarge;
-                response = co_await routes.handleError(
-                    parsed.request,
-                    requestMemory,
-                    HttpErrorInfo(httpParseErrorStatus(error), {}, httpParseErrorMessage(error)),
-                    baseRouteServices);
-                const auto connectionPlan = http1FinalizeResponseConnection(
-                    response, parsed.connectionPlan.requireClose());
-                requestCompletion.emplace(
-                    Http1SessionRequestCompletion::makeBufferedClosing(
-                        connectionPlan));
+                closingError.emplace(
+                    httpParseErrorStatus(error),
+                    std::string_view{},
+                    httpParseErrorMessage(error));
                 break;
             }
 
@@ -379,6 +379,24 @@ Task<void> HttpServer::handleStreamSession(
 
             usedBytes += bytesRead;
             scannerEntry.touch();
+        }
+
+        // Shared exit for every rejection recorded above: one co_await site
+        // keeps one set of call temporaries in the frame instead of one per
+        // rejection branch.
+        if (closingError) {
+            response = co_await routes.handleError(
+                parsed.request,
+                requestMemory,
+                *closingError,
+                baseRouteServices);
+            if (closingRetryAfter) {
+                setRetryAfterSeconds(response, *closingRetryAfter);
+            }
+            requestCompletion.emplace(
+                Http1SessionRequestCompletion::makeBufferedClosing(
+                    http1FinalizeResponseConnection(
+                        response, parsed.connectionPlan.requireClose())));
         }
 
         if (!requestCompletion) {
