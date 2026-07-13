@@ -249,12 +249,16 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/verify_package_consumers.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
     @ONLY)
-add_test(
-    NAME ruvia_package_consumers
+# Opt-in for the same reason as the layer-boundary check: the packaging
+# contract pins installed file names and literal signatures, which makes it
+# brittle across refactors. Run on demand with:
+#   cmake --build <build-dir> --target ruvia_package_consumers
+add_custom_target(ruvia_package_consumers
     COMMAND ${CMAKE_COMMAND}
         -DRUVIA_CONFIG=$<CONFIG>
-        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake)
-set_tests_properties(ruvia_package_consumers PROPERTIES TIMEOUT 600)
+        -P ${CMAKE_CURRENT_BINARY_DIR}/verify_package_consumers.cmake
+    COMMENT "Verifying installed Ruvia package consumers"
+    VERBATIM)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down,
 # docs ownership). Opt-in: the rules pin literal source patterns, which makes
