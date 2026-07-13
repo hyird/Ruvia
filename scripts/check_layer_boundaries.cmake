@@ -2,6 +2,37 @@ cmake_minimum_required(VERSION 3.25)
 
 get_filename_component(RUVIA_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
+# Architectural checks target the complete HTTP/2 connection implementation,
+# not one physical translation unit. Keep the implementation partition list in
+# one place so receive and local-submit responsibilities can evolve independently.
+set(HTTP2_CONNECTION_PRIMARY_SOURCE
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
+set(HTTP2_CONNECTION_IMPLEMENTATION_FILES
+    "${HTTP2_CONNECTION_PRIMARY_SOURCE}"
+    "${RUVIA_ROOT}/ruvia-http/src/http2/Http2ConnectionSubmit.cpp")
+
+function(read_http2_connection_implementation output)
+    set(content)
+    foreach(source IN LISTS HTTP2_CONNECTION_IMPLEMENTATION_FILES)
+        if(EXISTS "${source}")
+            file(READ "${source}" fragment)
+            string(APPEND content "\n${fragment}")
+        endif()
+    endforeach()
+    set(${output} "${content}" PARENT_SCOPE)
+endfunction()
+
+function(expand_http2_connection_implementation output)
+    set(paths ${ARGN})
+    list(FIND paths "${HTTP2_CONNECTION_PRIMARY_SOURCE}" primary_index)
+    if(NOT primary_index EQUAL -1)
+        list(REMOVE_ITEM paths "${HTTP2_CONNECTION_PRIMARY_SOURCE}")
+        list(APPEND paths ${HTTP2_CONNECTION_IMPLEMENTATION_FILES})
+    endif()
+    list(REMOVE_DUPLICATES paths)
+    set(${output} "${paths}" PARENT_SCOPE)
+endfunction()
+
 set(RULE_EDGE "ruvia-edge|ruvia::edge|RUVIA_BUILD_EDGE")
 set(RULE_ASIO "#[ \t]*include[ \t]*[<\"]asio|asio::")
 # The pure sans-I/O protocol library must do NO OS file I/O. The ResponseFileBody
@@ -949,7 +980,8 @@ endfunction()
 
 function(check_files_no_match label regex)
     set(hit_files)
-    foreach(path IN LISTS ARGN)
+    expand_http2_connection_implementation(paths ${ARGN})
+    foreach(path IN LISTS paths)
         if(EXISTS "${path}" AND NOT IS_DIRECTORY "${path}")
             file(READ "${path}" content)
             string(REGEX MATCH "${regex}" detected "${content}")
@@ -967,7 +999,8 @@ endfunction()
 
 function(check_files_no_lower_match label regex)
     set(hit_files)
-    foreach(path IN LISTS ARGN)
+    expand_http2_connection_implementation(paths ${ARGN})
+    foreach(path IN LISTS paths)
         if(EXISTS "${path}" AND NOT IS_DIRECTORY "${path}")
             file(READ "${path}" content)
             string(TOLOWER "${content}" content)
@@ -3577,7 +3610,7 @@ if(EXISTS "${HTTP_RESPONSE_BODY_STORAGE}" AND
     file(READ "${HTTP_RESPONSE_FILE_ACCESS}" http_response_file_access)
     file(READ "${HTTP_RESPONSE_STORAGE_SOURCE}" http_response_storage_source)
     file(READ "${HTTP_RESPONSE_WRITE_PLAN}" http_response_storage_write_plan)
-    file(READ "${HTTP_RESPONSE_H2_CONNECTION}" http_response_storage_h2)
+    read_http2_connection_implementation(http_response_storage_h2)
     file(READ "${WEB_BUFFERED_RESPONSE_WRITER}" web_buffered_response_writer)
     file(READ "${WEB_RESPONSE_COMPRESSION}" web_response_compression)
     file(READ "${WEB_RESPONSE_H2_SESSION}" web_response_h2_session)
@@ -3921,8 +3954,7 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
         response_stream_commit_plan)
     file(READ "${HTTP1_RESPONSE_STREAM_COMMIT}"
         http1_response_stream_commit)
-    file(READ "${HTTP2_RESPONSE_STREAM_COMMIT}"
-        http2_response_stream_commit)
+    read_http2_connection_implementation(http2_response_stream_commit)
     file(READ "${WEB_ROUTE_STREAM_RESULT}"
         web_route_stream_result)
     file(READ "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}"
@@ -4230,7 +4262,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
         buffered_response_h2_headers)
     file(READ "${HTTP2_BUFFERED_RESPONSE_CONNECTION_HEADER}"
         buffered_response_h2_connection_header)
-    file(READ "${HTTP2_BUFFERED_RESPONSE_CONNECTION_SOURCE}"
+    read_http2_connection_implementation(
         buffered_response_h2_connection_source)
     file(READ "${WEB_HTTP2_BUFFERED_RESPONSE_RESULT}"
         buffered_response_h2_result)
@@ -4670,8 +4702,7 @@ if(NOT EXISTS "${HTTP2_RESPONSE_HEAD_PLAN}" OR
 else()
     file(READ "${HTTP2_RESPONSE_HEAD_PLAN}" http2_response_head_plan)
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_head_encoder)
-    file(READ "${HTTP2_RESPONSE_CONNECTION_SOURCE}"
-        http2_response_head_connection)
+    read_http2_connection_implementation(http2_response_head_connection)
     set(http2_response_head_missing)
     foreach(http2_head_probe IN ITEMS
             "class Http2CanonicalResponseContentLength final"
@@ -5058,7 +5089,7 @@ if(NOT EXISTS "${HTTP_FINAL_RESPONSE_CONTROL_PLAN}" OR
 else()
     file(READ "${HTTP_FINAL_RESPONSE_CONTROL_PLAN}" http_final_response_control_plan)
     file(READ "${HTTP1_SERVER_SEMANTICS}" http1_server_semantics)
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_connection_source)
+    read_http2_connection_implementation(http2_connection_source)
     file(READ "${HTTP2_HEADER_RULES}" http2_header_rules)
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_response_headers)
     if(NOT http_final_response_control_plan MATCHES
@@ -5331,8 +5362,7 @@ else()
     file(READ "${HTTP_RESPONSE_WRITE_PLAN}" http_response_write_plan)
     file(READ "${HTTP1_CLIENT_RESPONSE_SOURCE}"
         http1_shared_response_semantics)
-    file(READ "${HTTP2_CONNECTION_SOURCE}"
-        http2_shared_response_semantics)
+    read_http2_connection_implementation(http2_shared_response_semantics)
     if(NOT http_response_content_semantics MATCHES
            "class HttpInformationalResponseContent final" OR
        NOT http_response_content_semantics MATCHES
@@ -5377,7 +5407,7 @@ else()
     file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_stream_lifecycle)
     file(READ "${HTTP2_STREAM_TABLE}" http2_stream_table)
     file(READ "${HTTP2_STREAM_STATE}" http2_local_send_stream_state)
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_local_send_connection)
+    read_http2_connection_implementation(http2_local_send_connection)
     if(NOT http2_stream_close_source MATCHES
            "enum class Http2StreamCloseSource" OR
        http2_stream_close_source MATCHES "kNone" OR
@@ -5472,7 +5502,7 @@ else()
     file(READ "${HTTP2_REMOTE_RECEIVE_STATE}" http2_remote_receive_state)
     file(READ "${HTTP2_STREAM_LIFECYCLE}" http2_remote_receive_lifecycle)
     file(READ "${HTTP2_STREAM_STATE}" http2_remote_receive_stream)
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_remote_receive_connection)
+    read_http2_connection_implementation(http2_remote_receive_connection)
     if(NOT http2_remote_receive_state MATCHES
            "private:[\r\n \t]+friend class Http2StreamLifecycle" OR
        NOT http2_remote_receive_state MATCHES
@@ -5571,7 +5601,7 @@ else()
     file(READ "${HTTP2_REMOTE_CONTENT_STATE}" http2_remote_content_state)
     file(READ "${HTTP2_REQUEST_HEADERS}" http2_request_headers)
     file(READ "${HTTP2_STREAM_STATE}" http2_remote_stream_state)
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_remote_content_connection)
+    read_http2_connection_implementation(http2_remote_content_connection)
     if(NOT http2_remote_content_state MATCHES
            "class Http2RemoteContentAllowedWithoutLength final" OR
        NOT http2_remote_content_state MATCHES
@@ -5722,7 +5752,7 @@ else()
     endif()
 endif()
 if(EXISTS "${HTTP2_CONNECTION_SOURCE}")
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_connection_source)
+    read_http2_connection_implementation(http2_connection_source)
     if(NOT http2_connection_source MATCHES
            "localSend[(][)][.]headPending[(][)]" OR
        NOT http2_connection_source MATCHES "requestContentOpen[(][)]" OR
@@ -7631,7 +7661,7 @@ if(EXISTS "${RESPONSE_TRAILER_H2_TEST}" AND
     file(READ "${RESPONSE_TRAILER_H1_TEST}" response_trailer_h1_test)
     file(READ "${RESPONSE_TRAILER_H2_CONNECTION}"
         response_trailer_h2_connection)
-    file(READ "${RESPONSE_TRAILER_H2_CONNECTION_SOURCE}"
+    read_http2_connection_implementation(
         response_trailer_h2_connection_source)
     file(READ "${RESPONSE_TRAILER_H2_STREAM_STATE}"
         response_trailer_h2_stream_state)
@@ -8741,7 +8771,7 @@ if(EXISTS "${HTTP2_STREAM_REQUEST_STATE}" AND
    EXISTS "${HTTP_PACKAGE_VERIFY}")
     file(READ "${HTTP2_STREAM_REQUEST_STATE}" http2_stream_request_state)
     file(READ "${HTTP2_STREAM_STATE}" http2_response_status_stream)
-    file(READ "${HTTP2_CONNECTION_SOURCE}" http2_response_status_connection)
+    read_http2_connection_implementation(http2_response_status_connection)
     file(READ "${HTTP2_RESPONSE_STATUS_TEST}" http2_response_status_test)
     file(READ "${HTTP_PACKAGE_CONSUMER}" http2_response_status_consumer)
     file(READ "${HTTP_PACKAGE_VERIFY}" http2_response_status_package_verify)

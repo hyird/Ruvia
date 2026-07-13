@@ -1398,6 +1398,10 @@ static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::Http2Connection&>().feed(
         std::string_view{})),
     ruvia::detail::Http2FeedResult>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::detail::Http2Connection&>().consumeOutput(
+        std::size_t{})),
+    ruvia::detail::Http2OutputConsumeStatus>);
 static_assert(std::is_enum_v<ruvia::detail::Http2FeedResult>);
 static_assert(!HasFeedStatusField<ruvia::detail::Http2FeedResult>);
 static_assert(!HasFeedConsumedField<ruvia::detail::Http2FeedResult>);

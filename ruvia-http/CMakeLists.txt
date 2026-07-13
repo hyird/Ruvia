@@ -24,10 +24,12 @@ add_library(ruvia-http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHead.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server/HttpResponseHeadBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Connection.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2ConnectionSubmit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2Hpack.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackDynamic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackEncoder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2HpackHuffman.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/http2/Http2OutputBuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketAccept.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/websocket/HttpWebSocketValidation.cpp

@@ -217,7 +217,11 @@ public:
             ruvia::detail::Http2FeedResult::kAccepted) {
             throw std::runtime_error("HTTP/2 benchmark handshake failed");
         }
-        connection_.consumeOutput(connection_.pendingOutput().size());
+        if (connection_.consumeOutput(connection_.pendingOutput().size()) !=
+            ruvia::detail::Http2OutputConsumeStatus::kDrained) {
+            throw std::runtime_error(
+                "HTTP/2 benchmark handshake output did not drain");
+        }
 
         ruvia::detail::http2EncodeFrameHeader(
             ping_.data(),
@@ -240,7 +244,11 @@ public:
             }
             const auto output = connection_.pendingOutput();
             checksum += output.size();
-            connection_.consumeOutput(output.size());
+            if (connection_.consumeOutput(output.size()) !=
+                ruvia::detail::Http2OutputConsumeStatus::kDrained) {
+                throw std::runtime_error(
+                    "HTTP/2 benchmark PING output did not drain");
+            }
         }
         return checksum;
     }
