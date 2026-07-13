@@ -37,6 +37,11 @@ void setCompressedContentLength(HttpResponse& response, std::size_t size) {
     if (mediaType.empty()) {
         return false;
     }
+    // Dominant compressible types short-circuit the skip list below.
+    if (mediaTypeStartsWith(mediaType, "text/") ||
+        httpAsciiEqualsIgnoreCase(mediaType, "application/json")) {
+        return false;
+    }
     if (httpAsciiEqualsIgnoreCase(mediaType, "image/svg+xml")) {
         return false;
     }

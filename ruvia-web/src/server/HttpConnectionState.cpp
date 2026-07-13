@@ -13,7 +13,6 @@
 namespace ruvia::detail {
 namespace {
 
-constexpr std::size_t kInitialReadBufferBytes = 8 * 1024;
 // The read buffer grows up to kMaxHttpHeaderBytes (see growReadBuffer); a
 // capacity past that means it spilled to hold a body/burst, so reclaim it back
 // to the initial size on return. Expressed in terms of the header limit so the
