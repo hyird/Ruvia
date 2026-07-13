@@ -176,10 +176,9 @@ std::pmr::string contentTypeFor(
     return std::pmr::string(options.defaultContentType, resource);
 }
 
-[[nodiscard]] std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter> makeStaticRootState() {
+[[nodiscard]] detail::StaticRootState* makeStaticRootState() {
     auto* const resource = detail::processResource();
-    return std::unique_ptr<detail::StaticRootState, detail::StaticRootStateDeleter>(
-        detail::constructPmrObject<detail::StaticRootState>(resource, resource));
+    return detail::constructPmrObject<detail::StaticRootState>(resource, resource);
 }
 
 [[nodiscard]] const detail::StaticRootEntry* findStaticRootEntry(
@@ -372,8 +371,8 @@ StaticRoot::StaticRoot(const std::filesystem::path& root, StaticRootOptions opti
 
 StaticRoot::~StaticRoot() = default;
 
-void detail::StaticRootStateDeleter::operator()(StaticRootState* state) const noexcept {
-    destroyPmrObject(state, detail::processResource());
+void StaticRoot::StateDeleter::operator()(detail::StaticRootState* state) const noexcept {
+    detail::destroyPmrObject(state, detail::processResource());
 }
 
 std::filesystem::path StaticRoot::path() const {
