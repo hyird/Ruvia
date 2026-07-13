@@ -2,7 +2,7 @@
 
 #include "ruvia/web/detail/model/ModelOptions.h"
 
-// Common preprocessor machinery and public field option macros for RUVIA_MODEL.
+// Common preprocessor machinery and public field option macros for Ruvia models.
 
 #define RUVIA_MODEL_EXPAND(x) x
 
@@ -45,7 +45,7 @@
 #define RUVIA_MODEL_GUARD_16
 #define RUVIA_MODEL_GUARD_OVERFLOW \
     static_assert(false, \
-        "RUVIA_MODEL supports at most 16 fields; split large models into nested RUVIA_MODELs");
+        "Ruvia models support at most 16 fields; split large models into nested models");
 #define RUVIA_MODEL_FIELD_COUNT_GUARD(...) \
     RUVIA_MODEL_CAT(RUVIA_MODEL_GUARD_, RUVIA_MODEL_NARG(__VA_ARGS__))
 // Sink for the FOR_EACH dispatch on an overflowing model: emit nothing so the single

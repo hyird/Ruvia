@@ -203,12 +203,53 @@ Routes and schemas are registered at startup through macros:
 - `RUVIA_GET`, `RUVIA_POST`, `RUVIA_PUT`, `RUVIA_PATCH`, `RUVIA_DELETE`
 - `RUVIA_GET_STREAM`, `RUVIA_GET_SSE`
 - `RUVIA_GET_WS`, `RUVIA_GET_WS_OPTIONS`
-- `RUVIA_MODEL`, `RUVIA_FIELD`, `RUVIA_FIELD_NAME`
+- `RUVIA_REQUEST_MODEL`, `RUVIA_RESPONSE_MODEL`, `RUVIA_FIELD`, `RUVIA_FIELD_NAME`
 - `RUVIA_VALIDATE_JSON`, `RUVIA_VALIDATE_FORM`, `RUVIA_RULE`
 
 Route tables, middleware chains, and controller factories are finalized before
 workers start. The request path does not rebuild them or use a per-request virtual
 dispatcher.
+
+## Request and Response Models
+
+Request and response schemas are deliberately separate. A request model can be
+parsed from JSON/form/fields and used with `RUVIA_VALIDATE_*`; it is not a JSON
+response type:
+
+```cpp
+RUVIA_REQUEST_MODEL(CreateUserRequest,
+    RUVIA_FIELD(name, ruvia::String),
+    RUVIA_FIELD(age, ruvia::UInt32)
+);
+
+class CreateUserValidator final
+    : public ruvia::Middleware<CreateUserValidator> {
+public:
+    RUVIA_VALIDATE_JSON(CreateUserRequest,
+        RUVIA_RULE(name, RUVIA_REQUIRED("name is required")),
+        RUVIA_RULE(age, RUVIA_MIN(1, "age must be positive")))
+};
+```
+
+A response model provides typed setters and JSON serialization only. It cannot be
+parsed as a request or passed to `RUVIA_VALIDATE_*`:
+
+```cpp
+RUVIA_RESPONSE_MODEL(CreateUserResponse,
+    RUVIA_FIELD(id, ruvia::UInt32),
+    RUVIA_FIELD(name, ruvia::String)
+);
+
+ruvia::Task<ruvia::HttpResponse> create(ruvia::Context& c) {
+    CreateUserResponse response(c);
+    response.id(ruvia::UInt32{1}).name("Ruvia");
+    co_return c.json(response, 201);
+}
+```
+
+`RUVIA_DEFAULT` belongs to request fields. `RUVIA_OMIT_EMPTY` and
+`RUVIA_EMIT_NULL` belong to response fields. Request models may nest only request
+models; response models may nest only response models.
 
 ## HTTP Protocol Library
 

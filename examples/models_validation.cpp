@@ -7,57 +7,57 @@
 #include "ruvia/web/App.h"
 #include "ruvia/web/Controller.h"
 
-RUVIA_MODEL(ProfileRequest,
+RUVIA_REQUEST_MODEL(ProfileRequest,
     RUVIA_FIELD(displayName, ruvia::String),
     RUVIA_FIELD(email, ruvia::String),
     RUVIA_FIELD(age, ruvia::UInt32)
 );
 
-RUVIA_MODEL(RoleRequest,
+RUVIA_REQUEST_MODEL(RoleRequest,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(level, ruvia::UInt32)
 );
 
-RUVIA_MODEL(RegisterRequest,
+RUVIA_REQUEST_MODEL(RegisterRequest,
     RUVIA_FIELD_NAME("user_name", username, ruvia::String, RUVIA_DEFAULT("guest")),
     RUVIA_FIELD(password, ruvia::String),
     RUVIA_FIELD(code, ruvia::String),
     RUVIA_FIELD(profile, ProfileRequest),
     RUVIA_FIELD(roles, ruvia::Array<RoleRequest>),
-    RUVIA_FIELD(tags, ruvia::Array<ruvia::String>, RUVIA_OMIT_EMPTY),
-    RUVIA_FIELD(newsletter, ruvia::Bool, RUVIA_EMIT_NULL)
+    RUVIA_FIELD(tags, ruvia::Array<ruvia::String>),
+    RUVIA_FIELD(newsletter, ruvia::Bool)
 );
 
-RUVIA_MODEL(RegisterResponse,
+RUVIA_RESPONSE_MODEL(RegisterResponse,
     RUVIA_FIELD(username, ruvia::String),
     RUVIA_FIELD(roleCount, ruvia::UInt32),
     RUVIA_FIELD(tags, ruvia::Array<ruvia::String>)
 );
 
-RUVIA_MODEL(ContactForm,
+RUVIA_REQUEST_MODEL(ContactForm,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(email, ruvia::String),
     RUVIA_FIELD(message, ruvia::String)
 );
 
-RUVIA_MODEL(SearchQuery,
+RUVIA_REQUEST_MODEL(SearchQuery,
     RUVIA_FIELD(q, ruvia::String),
     RUVIA_FIELD(page, ruvia::UInt32)
 );
 
-RUVIA_MODEL(CategoryParams,
+RUVIA_REQUEST_MODEL(CategoryParams,
     RUVIA_FIELD(id, ruvia::String)
 );
 
-RUVIA_MODEL(RequestHeaders,
+RUVIA_REQUEST_MODEL(RequestHeaders,
     RUVIA_FIELD_NAME("x-request-id", requestId, ruvia::String)
 );
 
-RUVIA_MODEL(PreferencesCookie,
+RUVIA_REQUEST_MODEL(PreferencesCookie,
     RUVIA_FIELD(theme, ruvia::String)
 );
 
-RUVIA_MODEL(Category,
+RUVIA_RESPONSE_MODEL(Category,
     RUVIA_FIELD(name, ruvia::String),
     RUVIA_FIELD(children, ruvia::List<Category>)
 );

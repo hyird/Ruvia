@@ -46,6 +46,10 @@ class RouteRateLimitResult;
 #error "RUVIA_POST_DYNAMIC must not be public; ordinary routes must not enter response streaming dynamically"
 #endif
 
+#ifdef RUVIA_MODEL
+#error "RUVIA_MODEL must not be public; declare RUVIA_REQUEST_MODEL or RUVIA_RESPONSE_MODEL explicitly"
+#endif
+
 namespace {
 
 struct CurrentUser final {
@@ -55,11 +59,11 @@ struct CurrentUser final {
 
 struct AppUseProbeMiddleware;
 
-RUVIA_MODEL(ClonePayload,
+RUVIA_REQUEST_MODEL(ClonePayload,
     RUVIA_FIELD(message, ruvia::String)
 );
 
-RUVIA_MODEL(SurfaceJsonResponse,
+RUVIA_RESPONSE_MODEL(SurfaceJsonResponse,
     RUVIA_FIELD(message, ruvia::String)
 );
 
@@ -2060,7 +2064,13 @@ static_assert(!HasModelPublicFormFieldsHook<ClonePayload>);
 static_assert(!HasModelNonConstMessageGetter<ClonePayload>);
 static_assert(!HasModelPublicJsonWriterHooks<ClonePayload>);
 static_assert(!HasModelPublicFieldStateHook<ClonePayload>);
-static_assert(std::is_base_of_v<ruvia::detail::ModelSchemaTag, ClonePayload>);
+static_assert(std::is_base_of_v<ruvia::detail::RequestModelSchemaTag, ClonePayload>);
+static_assert(ruvia::JsonBody<ClonePayload>::value);
+static_assert(!ruvia::detail::isResponseModel<ClonePayload>);
+static_assert(std::is_base_of_v<ruvia::detail::ResponseModelSchemaTag, SurfaceJsonResponse>);
+static_assert(!ruvia::JsonBody<SurfaceJsonResponse>::value);
+static_assert(!ruvia::FormBody<SurfaceJsonResponse>::value);
+static_assert(ruvia::detail::isResponseModel<SurfaceJsonResponse>);
 static_assert(!ruvia::JsonBody<ModelBodyDuckProbe>::value);
 static_assert(!ruvia::FormBody<ModelBodyDuckProbe>::value);
 static_assert(!std::is_constructible_v<ClonePayload, ruvia::detail::ModelInput>);
