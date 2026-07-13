@@ -2983,6 +2983,10 @@ check_files_no_match("Next continuation state must remain fully typed"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp")
+check_files_no_match("Router PImpl deleter must not escape the Router private contract"
+    "RouterImplDeleter"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Router.h"
+    "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp")
 check_files_no_match("HTTP/1 session completion must not split wire, connection, and buffer state"
     "${RULE_STALE_HTTP1_SESSION_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h"
