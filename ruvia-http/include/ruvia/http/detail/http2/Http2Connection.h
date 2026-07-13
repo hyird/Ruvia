@@ -20,9 +20,10 @@
 // and a mismatch is rejected before output/window/state mutation.
 //
 // All protocol primitives it builds on (frame codec, HPACK, stream state, flow
-// control, input buffer, settings) are already pure and reused as-is. Receive/frame
-// progression and local message submission live in separate implementation units;
-// Http2OutputBuffer is the sole owner of outbound storage and its consumed cursor.
+// control, input buffer, settings) are already pure and reused as-is. Generic frame
+// progression, the connection-global header-block lifecycle, and local submission
+// live in separate implementation units; Http2OutputBuffer is the sole owner of
+// outbound storage and its consumed cursor.
 
 #include <cstddef>
 #include <cstdint>

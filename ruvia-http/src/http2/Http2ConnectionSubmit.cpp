@@ -9,6 +9,7 @@
 #include "ruvia/http/detail/HttpResponseContentSemantics.h"
 #include "ruvia/http/detail/http2/Http2FlowControl.h"
 #include "ruvia/http/detail/http2/Http2HeaderRules.h"
+#include "ruvia/http/detail/http2/Http2RemoteReceiveSemantics.h"
 #include "ruvia/http/detail/http2/Http2RequestHeaders.h"
 #include "ruvia/http/detail/http2/Http2ResponseHeaders.h"
 #include "ruvia/http/detail/http2/Http2WebSocketHandshake.h"
@@ -18,22 +19,6 @@
 
 namespace ruvia::detail {
 namespace {
-
-[[nodiscard]] bool http2RemoteFinalHeadDecoded(
-    const Http2StreamState& stream) noexcept {
-    const auto& remote = stream.remoteReceive();
-    return remote.headPending() == nullptr &&
-        remote.headEndStreamPending() == nullptr;
-}
-
-[[nodiscard]] bool http2RemotePeerHalfClosed(
-    const Http2StreamState& stream) noexcept {
-    const auto& remote = stream.remoteReceive();
-    return remote.headEndStreamPending() != nullptr ||
-        remote.connectPendingEndStream() != nullptr ||
-        remote.endStream() != nullptr ||
-        remote.aborted() != nullptr;
-}
 
 [[nodiscard]] bool http2IsValidOutboundMethod(std::string_view method) noexcept {
     return method != "CONNECT" && isValidHttpMethodToken(method);
