@@ -37,11 +37,11 @@ TransferCodingDecoder::~TransferCodingDecoder() {
 TransferCodingDecodeResult TransferCodingDecoder::decode(
     std::string_view input,
     std::span<char> outputBuffer) noexcept {
-    if (failed_) {
+    if (const auto* failure = std::get_if<TransferCodingDecodeError>(&state_)) {
         return TransferCodingDecodeResult(
-            TransferCodingDecodeFailure(0, failure_));
+            TransferCodingDecodeFailure(0, *failure));
     }
-    if (ended_) {
+    if (std::holds_alternative<Complete>(state_)) {
         return input.empty()
             ? complete(0)
             : fail(0, TransferCodingDecodeError::kInvalidContent);
@@ -64,7 +64,7 @@ TransferCodingDecodeResult TransferCodingDecoder::decode(
                 TransferCodingDecodeError::kInvalidContent);
         }
         decodedBytes_ += step.produced;
-        ended_ = true;
+        state_.emplace<Complete>();
         return step.produced != 0
             ? output(
                   step.consumed,
@@ -94,13 +94,15 @@ TransferCodingDecodeResult TransferCodingDecoder::decode(
     return needInput(step.consumed);
 }
 
-TransferCodingFinishStatus TransferCodingDecoder::finishInput() noexcept {
-    if (ended_ && !failed_) {
-        return TransferCodingFinishStatus::kComplete;
+TransferCodingDecodeResult TransferCodingDecoder::finishInput() noexcept {
+    if (std::holds_alternative<Complete>(state_)) {
+        return complete(0);
     }
-    failed_ = true;
-    failure_ = TransferCodingDecodeError::kInvalidContent;
-    return TransferCodingFinishStatus::kIncomplete;
+    if (const auto* failure = std::get_if<TransferCodingDecodeError>(&state_)) {
+        return TransferCodingDecodeResult(
+            TransferCodingDecodeFailure(0, *failure));
+    }
+    return fail(0, TransferCodingDecodeError::kInvalidContent);
 }
 
 TransferCodingDecoder::InflateStep TransferCodingDecoder::inflateStep(
@@ -148,8 +150,7 @@ TransferCodingDecodeResult TransferCodingDecoder::complete(
 TransferCodingDecodeResult TransferCodingDecoder::fail(
     std::size_t consumed,
     TransferCodingDecodeError error) noexcept {
-    failed_ = true;
-    failure_ = error;
+    state_.emplace<TransferCodingDecodeError>(error);
     return TransferCodingDecodeResult(
         TransferCodingDecodeFailure(consumed, error));
 }

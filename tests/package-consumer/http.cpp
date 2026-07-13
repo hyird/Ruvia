@@ -1982,7 +1982,7 @@ static_assert(!std::default_initializable<
 static_assert(std::same_as<
     decltype(std::declval<ruvia::detail::TransferCodingDecoder&>()
         .finishInput()),
-    ruvia::detail::TransferCodingFinishStatus>);
+    ruvia::detail::TransferCodingDecodeResult>);
 static_assert(HasConsumedBytes<
     ruvia::detail::TransferCodingDecodeNeedInput>);
 static_assert(HasConsumedBytes<

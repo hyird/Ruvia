@@ -5881,6 +5881,12 @@ endif()
 
 set(WEB_HTTP2_STREAM_RUNTIME
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoStreamRuntime.h")
+
+check_files_no_match("stream request-body completion must commit once after the full decode pipeline"
+    "${RULE_STALE_STREAM_BODY_COMPLETION_SPLIT}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReader.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderCore.inl"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/body/HttpStreamBodyReaderChunked.inl")
 set(WEB_HTTP2_WS_TRANSPORT
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoWsTransport.h")
 set(WEB_HTTP2_RESPONSE_STREAM_SINK
@@ -8039,9 +8045,13 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "TransferCodingDecodeResult decode" OR
        NOT transfer_decoder MATCHES "std::span<char> output" OR
        NOT transfer_decoder MATCHES
-           "enum class TransferCodingFinishStatus" OR
+           "TransferCodingDecodeResult finishInput" OR
        NOT transfer_decoder MATCHES
-           "TransferCodingFinishStatus finishInput" OR
+           "using State = std::variant<Active, Complete, TransferCodingDecodeError>" OR
+       transfer_decoder MATCHES
+           "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
+       transfer_decoder_source MATCHES
+           "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
        transfer_decoder MATCHES
            "decodeAppend[(]|produce[(]|setInput[(]|finished[(]|empty[(]" OR
        transfer_decoder_source MATCHES
@@ -8066,10 +8076,14 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "transfer_coding_decoder_reports_typed_wire_failures" OR
        NOT transfer_decoder_test MATCHES
            "TransferCodingDecodeResult" OR
+       NOT transfer_decoder_test MATCHES
+           "repeatedFinish[.]failure[(]" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_uses_one_decoder_for_streaming_and_buffered_reads" OR
        NOT body_reader_test MATCHES
            "http1_transfer_coding_failure_maps_once_for_both_read_surfaces" OR
+       NOT body_reader_test MATCHES
+           "http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline" OR
        NOT transfer_package_consumer MATCHES
            "TransferCodingDecodeResult")
         boundary_error("typed transfer-coding chain is insufficiently tested"
