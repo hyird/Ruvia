@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ruvia/web/ValidationTypes.h"
 #include "ruvia/core/memory/PmrObject.h"
 
 #include <array>
@@ -11,6 +10,16 @@
 #include <utility>
 
 namespace ruvia::detail {
+
+template <typename T>
+struct ValidatedValueTypeKey final {
+    inline static constexpr std::byte value{};
+};
+
+template <typename T>
+[[nodiscard]] const void* validatedValueTypeKey() noexcept {
+    return &ValidatedValueTypeKey<std::remove_cvref_t<T>>::value;
+}
 
 class ValidatedValueStore final {
 public:
@@ -23,50 +32,40 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] const T& get(ValidationTarget target) const {
+    [[nodiscard]] const T& get() const {
         using BodyT = std::remove_cvref_t<T>;
-        const auto* key = validationTypeKey<BodyT>();
+        const auto* key = validatedValueTypeKey<BodyT>();
         for (std::size_t i = 0; i < count_; ++i) {
             const auto& value = values_[i];
-            if (value.target == target && value.typeKey == key) {
+            if (value.typeKey == key) {
                 return *static_cast<const BodyT*>(value.value);
             }
         }
-        throw std::logic_error("validated request body is not available");
+        throw std::logic_error("validated request model is not available");
     }
 
     template <typename T>
-    void set(ValidationTarget target, T&& body, std::pmr::memory_resource* resource) {
+    void set(T&& body, std::pmr::memory_resource* resource) {
         using BodyT = std::remove_cvref_t<T>;
-        const auto* key = validationTypeKey<BodyT>();
-        std::size_t slot = count_;
+        const auto* key = validatedValueTypeKey<BodyT>();
         for (std::size_t i = 0; i < count_; ++i) {
             const auto& value = values_[i];
-            if (value.target == target && value.typeKey == key) {
-                slot = i;
-                break;
+            if (value.typeKey == key) {
+                throw std::logic_error("validated request model type is already available");
             }
         }
 
-        if (slot == count_ && count_ == values_.size()) {
-            throw std::logic_error("too many validated request bodies");
+        if (count_ == values_.size()) {
+            throw std::logic_error("too many validated request models");
         }
 
         auto* stored = allocate<BodyT>(std::forward<T>(body), resource);
         Entry next{
-            target,
             key,
             stored,
             resource,
             &destroy<BodyT>};
-
-        if (slot == count_) {
-            values_[count_++] = next;
-            return;
-        }
-
-        clearValue(values_[slot]);
-        values_[slot] = next;
+        values_[count_++] = next;
     }
 
     void clear() noexcept {
@@ -78,18 +77,11 @@ public:
 
 private:
     struct Entry final {
-        ValidationTarget target{ValidationTarget::kJson};
         const void* typeKey{nullptr};
         void* value{nullptr};
         std::pmr::memory_resource* resource{nullptr};
         void (*destroy)(void*, std::pmr::memory_resource*) noexcept{nullptr};
     };
-
-    template <typename T>
-    [[nodiscard]] static const void* validationTypeKey() noexcept {
-        static constexpr std::byte key{};
-        return &key;
-    }
 
     template <typename BodyT, typename ArgT>
     [[nodiscard]] static BodyT* allocate(ArgT&& body, std::pmr::memory_resource* resource) {

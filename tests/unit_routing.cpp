@@ -38,6 +38,24 @@ using ruvia::detail::RouteHandler;
 using ruvia::detail::RouteMatch;
 using ruvia::detail::RequestBodyMode;
 
+class FirstIntValidator final : public ruvia::Middleware<FirstIntValidator> {
+public:
+    using RuviaValidationBody = int;
+
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
+        co_return;
+    }
+};
+
+class SecondIntValidator final : public ruvia::Middleware<SecondIntValidator> {
+public:
+    using RuviaValidationBody = int;
+
+    ruvia::Task<void> handle(ruvia::Context&, ruvia::Next&) {
+        co_return;
+    }
+};
+
 // Never invoked — resolve() only needs a registered route with a valid handler.
 ruvia::Task<ruvia::HttpResponse> dummyHandler(void*, ruvia::Context&) {
     co_return ruvia::HttpResponse(std::pmr::get_default_resource());
@@ -121,6 +139,30 @@ RUVIA_TEST(websocket_route_owns_validated_lifecycle_policy) {
     RUVIA_CHECK_EQ(
         endpoint->lifecycle().closeHandshakeTimeout->count(),
         std::int64_t{1234});
+}
+
+RUVIA_TEST(route_rejects_duplicate_validated_model_types_at_registration) {
+    ruvia::Router router;
+    auto& impl = ruvia::detail::RouterImpl::from(router);
+    const auto controllerValidator =
+        ruvia::detail::makeMiddlewareDescriptor<FirstIntValidator>();
+    const auto routeValidator =
+        ruvia::detail::makeMiddlewareDescriptor<SecondIntValidator>();
+
+    bool rejected = false;
+    try {
+        impl.registerRoute(
+            HttpKnownMethod::kPost,
+            path("/duplicate-validated-model"),
+            RouteHandler(nullptr, &dummyHandler),
+            RequestBodyMode::kBuffered,
+            std::span(&controllerValidator, std::size_t{1}),
+            std::span(&routeValidator, std::size_t{1}));
+    } catch (const std::invalid_argument& error) {
+        rejected = std::string_view(error.what()) ==
+            "duplicate validated model type on route";
+    }
+    RUVIA_CHECK(rejected);
 }
 
 struct Router final {

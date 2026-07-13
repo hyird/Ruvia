@@ -1763,9 +1763,13 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Context.h does not own all public template definitions")
     endif()
     if(_installed_context_header MATCHES
-           "valid[(]std::string_view[ 	]+target[)]" OR
+           "valid[(]ValidationTarget[ 	]+target[)]" OR
        _installed_context_header MATCHES
-           "addValidatedData[(]std::string_view[ 	]+target" OR
+           "addValidatedData[(]ValidationTarget[ 	]+target" OR
+       NOT _installed_context_header MATCHES
+           "const[ 	]+T&[ 	]+valid[(][)][ 	]+const" OR
+       NOT _installed_context_header MATCHES
+           "void[ 	]+addValidatedData[(]T&&[ 	]+data[)][ 	]+const" OR
        _installed_validation_target MATCHES
            "validationTargetFromName" OR
        _installed_validation_target MATCHES
@@ -1773,7 +1777,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_validation_target MATCHES
            "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
         message(FATAL_ERROR
-            "installed Context validation target API is not uniquely typed")
+            "installed Context validated-model API is not type-only")
     endif()
     if(_installed_context_header MATCHES "arrayBuffer[(]")
         message(FATAL_ERROR

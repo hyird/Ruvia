@@ -209,7 +209,7 @@ Task<void> invokeModelValidator(
     Validator validator(c.resource());
     validatorMiddleware.validate(body, validator);
     std::move(validator).throwIfInvalid();
-    setValidatedBody(c, Target, std::move(body));
+    setValidatedModel(c, std::move(body));
     co_await next();
 }
 

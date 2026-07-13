@@ -15,6 +15,39 @@ Task<void> ignoreExpiredNext(Next::State) {
     co_return;
 }
 
+void validateUniqueValidatedModelTypes(
+    std::span<const ControllerMiddlewareDescriptor> descriptors) {
+    for (std::size_t i = 0; i < descriptors.size(); ++i) {
+        const auto* const key = descriptors[i].validatedModelTypeKey();
+        if (key == nullptr) {
+            continue;
+        }
+        for (std::size_t j = i + 1; j < descriptors.size(); ++j) {
+            if (descriptors[j].validatedModelTypeKey() == key) {
+                throw std::invalid_argument("duplicate validated model type on route");
+            }
+        }
+    }
+}
+
+void validateUniqueValidatedModelTypes(
+    std::span<const ControllerMiddlewareDescriptor> first,
+    std::span<const ControllerMiddlewareDescriptor> second) {
+    validateUniqueValidatedModelTypes(first);
+    validateUniqueValidatedModelTypes(second);
+    for (const auto& left : first) {
+        const auto* const key = left.validatedModelTypeKey();
+        if (key == nullptr) {
+            continue;
+        }
+        for (const auto& right : second) {
+            if (right.validatedModelTypeKey() == key) {
+                throw std::invalid_argument("duplicate validated model type on route");
+            }
+        }
+    }
+}
+
 }  // namespace
 
 Next::Awaitable Next::operator()() & {
@@ -134,6 +167,7 @@ void detail::RouterImpl::appendMaterializedMiddlewares(
 std::pmr::vector<detail::RouteMiddleware> detail::RouterImpl::materializeMiddlewares(
     std::span<const ControllerMiddlewareDescriptor> first,
     std::span<const ControllerMiddlewareDescriptor> second) {
+    validateUniqueValidatedModelTypes(first, second);
     std::pmr::vector<RouteMiddleware> frames(resource_);
     frames.reserve(first.size() + second.size());
     appendMaterializedMiddlewares(frames, first);

@@ -83,7 +83,7 @@ concept HasLvalueAwait = requires(T& value) {
 };
 
 template <typename T>
-concept HasDefaultValid = requires(const ruvia::ContextRequest& request) {
+concept HasTypeOnlyValid = requires(const ruvia::ContextRequest& request) {
     request.template valid<T>();
 };
 
@@ -1883,7 +1883,7 @@ static_assert(!std::is_constructible_v<ruvia::RequestValueGroupList, std::pmr::m
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().query(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().header(std::string_view{})));
 static_assert(!noexcept(std::declval<const ruvia::ContextRequest&>().param(std::string_view{})));
-static_assert(!HasDefaultValid<CurrentUser>);
+static_assert(HasTypeOnlyValid<CurrentUser>);
 static_assert(!HasUnaryContextHeader<ruvia::Context>);
 static_assert(!HasUnaryContextQuery<ruvia::Context>);
 static_assert(!HasUnaryContextCookie<ruvia::Context>);

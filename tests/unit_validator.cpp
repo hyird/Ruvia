@@ -1,12 +1,15 @@
 #include "test_harness.h"
 
 #include <cstddef>
+#include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/web/Error.h"
 #include "ruvia/web/Validation.h"
+#include "ruvia/web/detail/ValidatedValues.h"
 
 namespace {
 
@@ -158,4 +161,28 @@ RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(validated_values_are_keyed_only_by_model_type) {
+    ruvia::detail::ValidatedValueStore values;
+    values.set(int{42}, std::pmr::get_default_resource());
+
+    RUVIA_CHECK_EQ(values.get<int>(), 42);
+
+    bool missingRejected = false;
+    try {
+        (void)values.get<std::string>();
+    } catch (const std::logic_error&) {
+        missingRejected = true;
+    }
+    RUVIA_CHECK(missingRejected);
+
+    bool duplicateRejected = false;
+    try {
+        values.set(int{7}, std::pmr::get_default_resource());
+    } catch (const std::logic_error&) {
+        duplicateRejected = true;
+    }
+    RUVIA_CHECK(duplicateRejected);
+    RUVIA_CHECK_EQ(values.get<int>(), 42);
 }

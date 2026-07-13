@@ -38,19 +38,29 @@ public:
         return destroy_;
     }
 
+    [[nodiscard]] const void* validatedModelTypeKey() const noexcept {
+        return validatedModelTypeKey_;
+    }
+
 private:
     template <typename MiddlewareT>
     friend ControllerMiddlewareDescriptor makeMiddlewareDescriptor();
 
     constexpr ControllerMiddlewareDescriptor() noexcept = default;
-    constexpr ControllerMiddlewareDescriptor(Invoke invoke, Create create, Destroy destroy) noexcept
+    constexpr ControllerMiddlewareDescriptor(
+        Invoke invoke,
+        Create create,
+        Destroy destroy,
+        const void* validatedModelTypeKey) noexcept
         : invoke_(invoke),
           create_(create),
-          destroy_(destroy) {}
+          destroy_(destroy),
+          validatedModelTypeKey_(validatedModelTypeKey) {}
 
     Invoke invoke_{nullptr};
     Create create_{nullptr};
     Destroy destroy_{nullptr};
+    const void* validatedModelTypeKey_{nullptr};
 };
 
 }  // namespace detail
