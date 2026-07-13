@@ -1590,7 +1590,8 @@ if(EXISTS "${WEB_ACCESS_LOG_MODEL}" AND
            "return request_[.]knownMethod[(][)]" OR
        NOT web_access_log_model MATCHES
            "return request_[.]path[(][)]" OR
-       NOT web_access_log_model MATCHES "using AccessLogCallback" OR
+       NOT web_access_log_model MATCHES "class AccessLogCallback final" OR
+       NOT web_access_log_model MATCHES "AccessLogCallback bind" OR
        NOT web_access_log_access MATCHES
            "const HttpRequest& request" OR
        NOT web_access_log_access MATCHES

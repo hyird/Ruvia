@@ -443,8 +443,7 @@ using RecordHttpAccessFunction = void (*)(
     std::uint16_t,
     std::chrono::steady_clock::time_point) noexcept;
 using AppOnAccessFunction = ruvia::App& (ruvia::App::*)(
-    ruvia::AccessLogCallback,
-    void*);
+    ruvia::AccessLogCallback);
 using AppSetCompressionFunction = ruvia::App& (ruvia::App::*)(
     std::optional<ruvia::CompressionConfig>);
 using AppSetCorsFunction = ruvia::App& (ruvia::App::*)(

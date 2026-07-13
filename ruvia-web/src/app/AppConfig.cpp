@@ -256,14 +256,13 @@ App& App::setGlobalRateLimit(std::optional<RateLimitRule> rule) {
         });
 }
 
-App& App::onAccess(AccessLogCallback callback, void* user) {
+App& App::onAccess(AccessLogCallback callback) {
     return detail::mutateStoppedApp(
         *this,
         *state_,
         "cannot register access-log hook while app is running",
-        [callback, user](detail::AppState& state) {
+        [callback](detail::AppState& state) {
             state.options.accessLog.callback = callback;
-            state.options.accessLog.user = user;
         });
 }
 

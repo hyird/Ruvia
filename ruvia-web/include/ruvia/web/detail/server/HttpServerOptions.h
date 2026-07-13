@@ -15,8 +15,11 @@
 namespace ruvia::detail {
 
 struct AccessLogSink final {
-    AccessLogCallback callback{nullptr};
-    void* user{nullptr};
+    AccessLogCallback callback;
+
+    void invoke(const AccessLogRecord& record) const noexcept {
+        callback.invoke(record);
+    }
 };
 
 // Fully normalized, worker-owned runtime options. Public callers configure App
