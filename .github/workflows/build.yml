@@ -12,7 +12,6 @@ on:
       - "ruvia-web/**"
       - "examples/**"
       - "tests/**"
-      - "benchmarks/**"
       - "scripts/**"
       - "README.md"
       - "AGENTS.md"
@@ -27,7 +26,6 @@ on:
       - "ruvia-web/**"
       - "examples/**"
       - "tests/**"
-      - "benchmarks/**"
       - "scripts/**"
       - "README.md"
       - "AGENTS.md"
@@ -103,6 +101,31 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/test --output-on-failure --build-config "$BUILD_TYPE"
+
+      - name: Configure HTTP hot-path benchmarks
+        run: |
+          cmake -S . -B build/benchmarks -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DRUVIA_BUILD_CORE=OFF \
+            -DRUVIA_BUILD_HTTP=ON \
+            -DRUVIA_BUILD_WEB=OFF \
+            -DRUVIA_BUILD_BENCHMARKS=ON \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Record HTTP hot-path benchmarks
+        run: |
+          cmake --build build/benchmarks --target ruvia_benchmarks
+          build/benchmarks/tests/benchmarks/ruvia_benchmark_http_hot_paths \
+            --warmup-ms 50 \
+            --duration-ms 250 \
+            --output build/benchmarks/http-hot-paths.json
+
+      - name: Upload HTTP hot-path benchmark record
+        uses: actions/upload-artifact@v4
+        with:
+          name: http-hot-paths-${{ github.sha }}
+          path: build/benchmarks/http-hot-paths.json
+          retention-days: 30
 
       - name: Verify component-only builds
         run: |

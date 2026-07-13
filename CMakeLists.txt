@@ -17,6 +17,7 @@ option(RUVIA_BUILD_HTTP "Build the standalone ruvia-http protocol library" ON)
 option(RUVIA_BUILD_WEB "Build the complete ruvia-web framework" ON)
 option(RUVIA_BUILD_EXAMPLES "Build Ruvia examples" OFF)
 option(RUVIA_BUILD_TESTS "Build Ruvia unit tests" OFF)
+option(RUVIA_BUILD_BENCHMARKS "Build Ruvia protocol hot-path benchmarks" OFF)
 
 option(RUVIA_ENABLE_MARIADB "Build MariaDB-compatible database support" OFF)
 option(RUVIA_ENABLE_REDIS "Build Redis support" OFF)
@@ -35,6 +36,9 @@ if(NOT RUVIA_BUILD_WEB AND
 endif()
 if(RUVIA_BUILD_EXAMPLES AND NOT RUVIA_BUILD_WEB)
     message(FATAL_ERROR "RUVIA_BUILD_EXAMPLES=ON requires RUVIA_BUILD_WEB=ON")
+endif()
+if(RUVIA_BUILD_BENCHMARKS AND NOT RUVIA_BUILD_HTTP)
+    message(FATAL_ERROR "RUVIA_BUILD_BENCHMARKS=ON requires RUVIA_BUILD_HTTP=ON")
 endif()
 
 # Keep manifest-mode dependency installation aligned with the selected targets.
@@ -335,6 +339,10 @@ endif()
 if(RUVIA_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(RUVIA_BUILD_BENCHMARKS)
+    add_subdirectory(tests/benchmarks)
 endif()
 
 set(_ruvia_config [=[
