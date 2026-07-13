@@ -61,8 +61,8 @@ Task<HttpResponse> detail::RouteTable::invokeRoute(const RouteEntry& route, Cont
         throw std::logic_error("route is not a buffered-response route");
     }
     // Hot path: a route with no middleware goes straight to the handler. The
-    // Context response slot is only needed when middleware can observe or mutate
-    // the downstream response through c.res().
+    // Context response slot is only needed when middleware can observe the
+    // downstream response through Context::response().
     if (!route.hasMiddleware()) {
         return endpoint->handler()(context);
     }
