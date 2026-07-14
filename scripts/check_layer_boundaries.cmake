@@ -3577,7 +3577,7 @@ check_files_no_match("response-stream runtime must consume the typed commit plan
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
 check_files_no_match("response-stream status must follow exclusive commit results"
     "${RULE_STALE_RESPONSE_STREAM_STATUS_SPLIT}"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamState.h"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h"
@@ -3588,7 +3588,7 @@ check_files_no_match("response-stream status must follow exclusive commit result
 check_files_no_match("Next continuation state must remain fully typed"
     "${RULE_STALE_NEXT_CONTINUATION_TYPE_ERASURE}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Next.h"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamState.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp"
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterMiddlewareDispatch.cpp")
@@ -3714,8 +3714,8 @@ set(HTTP1_RESPONSE_STREAM_COMMIT
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ServerSemantics.h")
 set(HTTP2_RESPONSE_STREAM_COMMIT
     "${RUVIA_ROOT}/ruvia-http/src/http2/Http2Connection.cpp")
-set(WEB_ROUTE_STREAM_RESULT
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h")
+set(WEB_ROUTE_TABLE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteTable.h")
 set(WEB_ROUTE_STREAM_DISPATCH_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
 set(WEB_RESPONSE_STREAM_DISPATCH_RESULT
@@ -3744,7 +3744,7 @@ foreach(response_stream_status_contract IN ITEMS
         "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}"
         "${HTTP1_RESPONSE_STREAM_COMMIT}"
         "${HTTP2_RESPONSE_STREAM_COMMIT}"
-        "${WEB_ROUTE_STREAM_RESULT}"
+        "${WEB_ROUTE_TABLE}"
         "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}"
         "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}"
         "${WEB_RESPONSE_STREAM_STATE}"
@@ -3767,7 +3767,7 @@ endforeach()
 if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
    EXISTS "${HTTP1_RESPONSE_STREAM_COMMIT}" AND
    EXISTS "${HTTP2_RESPONSE_STREAM_COMMIT}" AND
-   EXISTS "${WEB_ROUTE_STREAM_RESULT}" AND
+   EXISTS "${WEB_ROUTE_TABLE}" AND
    EXISTS "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}" AND
    EXISTS "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}" AND
    EXISTS "${WEB_RESPONSE_STREAM_STATE}" AND
@@ -3785,8 +3785,8 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
     file(READ "${HTTP1_RESPONSE_STREAM_COMMIT}"
         http1_response_stream_commit)
     read_http2_connection_implementation(http2_response_stream_commit)
-    file(READ "${WEB_ROUTE_STREAM_RESULT}"
-        web_route_stream_result)
+    file(READ "${WEB_ROUTE_TABLE}"
+        web_route_table)
     file(READ "${WEB_ROUTE_STREAM_DISPATCH_SOURCE}"
         web_route_stream_dispatch_source)
     file(READ "${WEB_RESPONSE_STREAM_DISPATCH_RESULT}"
@@ -3834,12 +3834,14 @@ if(EXISTS "${HTTP_RESPONSE_STREAM_COMMIT_PLAN}" AND
             "the HTTP commit plan must bind response status, framing, method-derived body semantics, and the prepared head")
     endif()
 
-    if(NOT web_route_stream_result MATCHES
-           "StreamRouteHandled" OR
-       web_route_stream_result MATCHES
-           "StreamRouteBufferedResponse" OR
-       NOT web_route_stream_result MATCHES
-           "std::get_if<HttpResponse>" OR
+    if(NOT web_route_table MATCHES
+           "Task<std::optional<HttpResponse>> dispatchResponseStream" OR
+       NOT web_route_table MATCHES
+           "Task<void> dispatchWebSocket" OR
+       web_route_table MATCHES
+           "StreamDispatchResult|StreamRouteHandled" OR
+       NOT web_route_stream_dispatch_source MATCHES
+           "co_return std::nullopt" OR
        NOT web_route_stream_dispatch_source MATCHES
            "responseStreamOutput->writer[(][)][.]end[(][)]" OR
        NOT web_route_stream_dispatch_source MATCHES
@@ -9944,8 +9946,6 @@ endif()
 
 set(WEB_EXECUTION_ROUTE_RESOLUTION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteResolution.h")
-set(WEB_EXECUTION_ROUTE_DISPATCH
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouteStreamResult.h")
 set(WEB_EXECUTION_STREAM_DISPATCH
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
 set(WEB_EXECUTION_WEBSOCKET_ROUTE
@@ -9960,7 +9960,6 @@ set(WEB_EXECUTION_PACKAGE_CONSUMER
     "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
 foreach(web_execution_contract IN ITEMS
         "${WEB_EXECUTION_ROUTE_RESOLUTION}"
-        "${WEB_EXECUTION_ROUTE_DISPATCH}"
         "${WEB_EXECUTION_STREAM_DISPATCH}"
         "${WEB_EXECUTION_WEBSOCKET_ROUTE}"
         "${WEB_EXECUTION_HTTP1_WRITE}"
@@ -9975,7 +9974,6 @@ foreach(web_execution_contract IN ITEMS
     endif()
 endforeach()
 if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
-   EXISTS "${WEB_EXECUTION_ROUTE_DISPATCH}" AND
    EXISTS "${WEB_EXECUTION_STREAM_DISPATCH}" AND
    EXISTS "${WEB_EXECUTION_WEBSOCKET_ROUTE}" AND
    EXISTS "${WEB_EXECUTION_HTTP1_WRITE}" AND
@@ -9984,8 +9982,6 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
    EXISTS "${WEB_EXECUTION_PACKAGE_CONSUMER}")
     file(READ "${WEB_EXECUTION_ROUTE_RESOLUTION}"
         web_execution_route_resolution)
-    file(READ "${WEB_EXECUTION_ROUTE_DISPATCH}"
-        web_execution_route_dispatch)
     file(READ "${WEB_EXECUTION_STREAM_DISPATCH}"
         web_execution_stream_dispatch)
     file(READ "${WEB_EXECUTION_WEBSOCKET_ROUTE}"
@@ -10006,10 +10002,6 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
            "resolved[(][)] const [&] noexcept" OR
        NOT web_execution_route_resolution MATCHES
            "notFound[(][)] const && = delete" OR
-       NOT web_execution_route_dispatch MATCHES
-           "handled[(][)] const [&] noexcept" OR
-       NOT web_execution_route_dispatch MATCHES
-           "buffered[(][)] const && = delete" OR
        NOT web_execution_stream_dispatch MATCHES
            "committed[(][)] const [&] noexcept" OR
        NOT web_execution_stream_dispatch MATCHES

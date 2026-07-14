@@ -241,7 +241,7 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
                 committedResponseStreamStatus(sink),
                 ResponseStreamCommittedOutcome::kPeerAborted);
         }
-        if (result.handled() != nullptr) {
+        if (!result.has_value()) {
             if (!sink.committed()) {
                 throw std::logic_error(
                     "handled response stream has no committed protocol plan");
@@ -254,13 +254,8 @@ Task<ResponseStreamDispatchResult> dispatchResponseStreamWith(
             throw std::logic_error(
                 "buffered stream result followed a committed response head");
         }
-        auto* buffered = result.buffered();
-        if (buffered == nullptr) {
-            throw std::logic_error(
-                "stream route returned no terminal alternative");
-        }
         co_return ResponseStreamDispatchResult::makeBuffered(
-            std::move(*buffered),
+            std::move(*result),
             false);
     } catch (...) {
         exception = std::current_exception();

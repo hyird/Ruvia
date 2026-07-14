@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -20,7 +21,7 @@
 #include "ruvia/web/detail/CallableRef.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 #include "ruvia/web/detail/router/RouteModes.h"
-#include "ruvia/web/detail/router/RouteStreamResult.h"
+#include "ruvia/web/detail/router/RouteStreamState.h"
 #include "ruvia/web/Error.h"
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/Next.h"
@@ -357,13 +358,15 @@ public:
         RequestMemory& memory,
         std::exception_ptr exception,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchResponseStream(
+    // Absence means the bound output handled the request; a value is the one
+    // buffered response produced before a response-stream commit.
+    Task<std::optional<HttpResponse>> dispatchResponseStream(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
         ResponseStreamWriter& responseStream,
         ContextServices services = {}) const;
-    Task<StreamDispatchResult> dispatchWebSocket(
+    Task<void> dispatchWebSocket(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,
@@ -491,7 +494,7 @@ private:
         std::size_t index,
         Context& context) const;
     [[nodiscard]] static Task<void> invokeMiddlewareContinuation(NextState state);
-    [[nodiscard]] Task<StreamDispatchResult> dispatchStreamRoute(
+    [[nodiscard]] Task<std::optional<HttpResponse>> dispatchStreamRoute(
         const HttpRequest& request,
         const ResolvedRoute& route,
         RequestMemory& memory,

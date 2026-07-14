@@ -2062,7 +2062,9 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
     endif()
 
-    set(_installed_route_stream_result_path
+    set(_installed_route_stream_state_path
+        "${_install_prefix}/include/ruvia/web/detail/router/RouteStreamState.h")
+    set(_installed_legacy_route_stream_result_path
         "${_install_prefix}/include/ruvia/web/detail/router/RouteStreamResult.h")
     set(_installed_response_stream_dispatch_path
         "${_install_prefix}/include/ruvia/web/detail/server/HttpResponseStreamDispatch.h")
@@ -2093,7 +2095,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     set(_installed_http2_response_stream_sink_path
         "${_install_prefix}/include/ruvia/web/detail/http2/Http2SansIoResponseStreamSink.h")
     foreach(_response_stream_status_contract IN ITEMS
-            "${_installed_route_stream_result_path}"
+            "${_installed_route_stream_state_path}"
             "${_installed_response_stream_dispatch_path}"
             "${_installed_response_stream_state_path}"
             "${_installed_http1_stream_route_path}"
@@ -2113,8 +2115,12 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
                 "installed Web package is missing response-stream status ownership")
         endif()
     endforeach()
-    file(READ "${_installed_route_stream_result_path}"
-        _installed_route_stream_result)
+    if(EXISTS "${_installed_legacy_route_stream_result_path}")
+        message(FATAL_ERROR
+            "installed Web package retained the legacy route stream result header")
+    endif()
+    file(READ "${_installed_route_stream_state_path}"
+        _installed_route_stream_state)
     file(READ "${_installed_response_stream_dispatch_path}"
         _installed_response_stream_dispatch)
     file(READ "${_installed_response_stream_state_path}"
@@ -2168,15 +2174,14 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web response compression restored external scratch ownership")
     endif()
-    if(_installed_route_stream_result MATCHES
-           "RouteStreamDispatchOutcome|streamHandled[(][)]|HttpResponse response_[ \t]*;[ \t\r\n]*Route" OR
+    if(_installed_route_stream_state MATCHES
+           "StreamDispatchResult|StreamRouteHandled|HttpResponse|std::variant" OR
+       NOT _installed_route_stream_state MATCHES
+           "class StreamMiddlewareChainState final" OR
        _installed_response_stream_dispatch MATCHES
            "result[.](streamed|abortedByPeer|abortedAfterCommit|hasBufferedResponse|takeResponse)[ \t]*[(]" OR
        _installed_response_stream_state MATCHES "trailerFraming_" OR
        _installed_http1_stream_session MATCHES "responseStreamDispatched" OR
-       NOT _installed_route_stream_result MATCHES "StreamRouteHandled" OR
-       _installed_route_stream_result MATCHES "StreamRouteBufferedResponse" OR
-       NOT _installed_route_stream_result MATCHES "std::get_if<HttpResponse>" OR
        NOT _installed_response_stream_dispatch MATCHES
            "ResponseStreamPeerAbortedBeforeCommit" OR
        NOT _installed_response_stream_dispatch MATCHES

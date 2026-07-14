@@ -167,7 +167,7 @@ Task<HttpResponse> detail::RouteTable::dispatch(
     co_return co_await dispatch(request, resolution, memory, services);
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchResponseStream(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
@@ -180,7 +180,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchResponseStream(
         request, resolved, memory, services.withResponseStream(responseStream));
 }
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
+Task<void> detail::RouteTable::dispatchWebSocket(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
@@ -189,8 +189,12 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchWebSocket(
     if (resolved.route().endpoint().webSocket() == nullptr) {
         throw std::logic_error("route is not a websocket route");
     }
-    return dispatchStreamRoute(
+    auto buffered = co_await dispatchStreamRoute(
         request, resolved, memory, services.withWebSocket(webSocket));
+    if (buffered.has_value()) {
+        throw std::logic_error(
+            "websocket middleware produced an HTTP response after upgrade");
+    }
 }
 
 namespace {
@@ -202,7 +206,7 @@ namespace {
 }
 }  // namespace
 
-Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
+Task<std::optional<HttpResponse>> detail::RouteTable::dispatchStreamRoute(
     const HttpRequest& request,
     const ResolvedRoute& resolved,
     RequestMemory& memory,
@@ -266,7 +270,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
             std::rethrow_exception(exception);
         }
         auto response = co_await handleException(context, exception);
-        co_return StreamDispatchResult::makeBuffered(std::move(response));
+        co_return std::move(response);
     }
 
     // The middleware chain converts a handler exception into a buffered error
@@ -298,8 +302,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
     if (detail::ContextAccess::hasResponse(context) &&
         !streamCommitted &&
         !webSocketHandled) {
-        co_return StreamDispatchResult::makeBuffered(
-            detail::ContextAccess::takeResponse(context));
+        co_return detail::ContextAccess::takeResponse(context);
     }
     if (handlerInvoked || streamCommitted) {
         // The bound Context is local to this coroutine. Finish a response stream
@@ -311,7 +314,7 @@ Task<detail::StreamDispatchResult> detail::RouteTable::dispatchStreamRoute(
         if (responseStreamOutput != nullptr) {
             co_await responseStreamOutput->writer().end();
         }
-        co_return StreamDispatchResult::makeHandled();
+        co_return std::nullopt;
     }
     throw std::logic_error(
         "stream route completed without a response or handled output");

@@ -65,7 +65,7 @@ Task<void> runWebSocketSession(
     scannerEntry.setPhase(ConnectionScanner::Phase::kLongLived);
     std::exception_ptr exception;
     try {
-        (void)co_await routes.dispatchWebSocket(
+        co_await routes.dispatchWebSocket(
             request, route, requestMemory, webSocket, services);
     } catch (...) {
         exception = std::current_exception();

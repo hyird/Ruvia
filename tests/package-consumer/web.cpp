@@ -39,7 +39,7 @@
 #include <ruvia/web/detail/json/JsonString.h>
 #include <ruvia/web/detail/model/Parser.h>
 #include <ruvia/web/detail/router/RouteTable.h>
-#include <ruvia/web/detail/router/RouteStreamResult.h>
+#include <ruvia/web/detail/router/RouteStreamState.h>
 #include <ruvia/web/detail/server/Http2SansIoSession.h>
 #include <ruvia/web/detail/server/Http2BufferedResponseWrite.h>
 #include <ruvia/web/detail/server/Http1BufferedResponseWrite.h>
@@ -1079,20 +1079,6 @@ static_assert(std::same_as<
         StreamMiddlewareChainState&>().handlerInvoked()),
     bool>);
 static_assert(!std::default_initializable<
-    ruvia::detail::StreamDispatchResult>);
-static_assert(!HasLegacyStreamHandledPredicate<
-    ruvia::detail::StreamDispatchResult>);
-static_assert(!HasLegacySharedStreamResponse<
-    ruvia::detail::StreamDispatchResult>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
-                 .handled()),
-    const ruvia::detail::StreamRouteHandled*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::StreamDispatchResult&>()
-                 .buffered()),
-    const ruvia::HttpResponse*>);
-static_assert(!std::default_initializable<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(!HasLegacyStreamedPredicate<
     ruvia::detail::ResponseStreamDispatchResult>);
@@ -1271,8 +1257,6 @@ static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::RouteMatch>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<ruvia::detail::ResolvedRoute>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::RouteResolution>);
-static_assert(!ExposesAnyRvalueWebExecutionBorrow<
-    ruvia::detail::StreamDispatchResult>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<
     ruvia::detail::ResponseStreamDispatchResult>);
 static_assert(!ExposesAnyRvalueWebExecutionBorrow<

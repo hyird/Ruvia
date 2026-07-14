@@ -633,10 +633,10 @@ EmptyStreamDispatchObservation dispatchEmptyStreamWith(
                         memory,
                         writer,
                         {}));
-                observation.handled = result.handled() != nullptr;
-                if (auto* buffered = result.buffered()) {
+                observation.handled = !result.has_value();
+                if (result.has_value()) {
                     observation.buffered = true;
-                    auto response = std::move(*buffered);
+                    auto response = std::move(*result);
                     const auto body =
                         ruvia::detail::responseBody(response).bytes();
                     observation.bufferedBody.assign(
@@ -745,8 +745,8 @@ RUVIA_TEST(stream_route_middleware_mid_stream_failure_propagates_like_no_middlew
     StreamCaptureSink sink;
     auto writer = scMakeWriter(sink);
 
-    // StreamDispatchResult is not default-constructible, so co_await it inside a
-    // detached coroutine and capture whether it threw rather than using use_future.
+    // Co_await inside a detached coroutine so the test can capture the transport
+    // state and whether dispatch surfaced the committed-stream failure.
     bool threw = false;
     asio::io_context ctx(1);
     asio::co_spawn(
