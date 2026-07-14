@@ -15,7 +15,7 @@
 #include "ruvia/web/ErrorHandlers.h"
 #include "ruvia/web/ServerConfig.h"
 #include "ruvia/core/memory/MemoryPool.h"
-#include "ruvia/core/WorkerHandle.h"
+#include "ruvia/web/WebWorker.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/Db.h"
@@ -47,6 +47,7 @@ public:
     App& setHttpsListenPort(std::uint16_t port);
     App& setAutoHttps(bool enabled = true);
     App& setThreadNum(std::size_t threadNum);
+    App& setWorkerMailboxCapacity(std::size_t capacity);
     App& setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout);
     App& setShutdownGracePeriod(std::chrono::milliseconds gracePeriod);
     App& setConnectionScanInterval(std::chrono::milliseconds interval);
@@ -80,7 +81,9 @@ public:
 #endif
     void run();
     void stop();
-    [[nodiscard]] std::vector<WorkerHandle> workers() const;
+    [[nodiscard]] std::vector<WebWorkerHandle> workers() const;
+    [[nodiscard]] WebWorkerHandle workerFor(std::uint64_t key) const;
+    [[nodiscard]] WebWorkerHandle workerFor(std::string_view key) const;
 
 private:
     struct StateDeleter final {

@@ -47,18 +47,19 @@
 
 ### R1：Ruvia 0.1.2 并发基础设施
 
-状态：已完成。Runtime、WorkerHandle/post、Web worker 暴露、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。
+状态：已完成。Runtime、WorkerHandle/post、WebWorkerHandle 异步作业投递、统一 deadline queue、sleep、Channel、OneShot，以及 timer-as-signal/stream timeout 迁移均已实现并通过验证。
 
 任务：
 
 0. 将 ConnectionScanner deadline、shutdown/stream timeout 合并到每 worker 唯一 deadline queue；HTTP/2/WS 写唤醒改用 mailbox/signal，不再创建 `steady_timer(max)`。
 1. 在 `ruvia-core` 增加 Runtime、WorkerHandle 和有界 `post()`。
-2. 将 WorkerHandle 从 HttpServer worker 传入 Context，并通过 `App::workers()` 暴露 worker 集合。
+2. 将 WorkerHandle 从 HttpServer worker 传入 Context；通过 `App::workerFor()`/`App::workers()` 暴露 WebWorkerHandle，使后台线程能把拥有权数据投递到稳定 Web worker，并在 `WebWorkerContext` 内使用该 worker 的 DB/Redis。
 3. 实现 worker-bound sleep。
 4. 实现创建期预分配、短临界区 mutex 保护的有界 Channel。
 5. 实现 OneShot 和 `waitFor()` 单胜者状态机。
-6. 接入 worker shutdown 注册、关闭和 mailbox drain。
-7. 增加安装包/下游消费者编译测试。
+6. 接入 worker shutdown 注册、关闭和 mailbox drain；停止时拒绝新 Web 作业，等待已接受作业后再关闭 DB/Redis；未捕获作业异常触发 App 全局停止并由 `run()` 重抛。
+7. 开放每 worker mailbox capacity，并提供 accepted/full/stopping/completed/failed/outstanding 统计。
+8. 增加安装包/下游消费者编译测试。
 
 验收：
 

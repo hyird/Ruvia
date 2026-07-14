@@ -3,6 +3,7 @@ set(RUVIA_WEB_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvParser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/DotenvPaths.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/App.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app/WebWorker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppHttpConfig.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app/AppIntegrationConfig.cpp
@@ -187,6 +188,7 @@ ruvia_install_public_headers(web
     include/ruvia/web/Validation.h
     include/ruvia/web/ValidationTypes.h
     include/ruvia/web/WebSocket.h
+    include/ruvia/web/WebWorker.h
     include/ruvia/web/Router.h
 )
 

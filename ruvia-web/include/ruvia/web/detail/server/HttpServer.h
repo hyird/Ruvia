@@ -23,6 +23,7 @@
 #include "ruvia/core/detail/WorkerTimer.h"
 #include "ruvia/core/memory/MemoryPool.h"
 #include "ruvia/core/detail/ConnectionScanner.h"
+#include "ruvia/web/WebWorker.h"
 #include "ruvia/http/HttpRequest.h"
 #include "ruvia/http/HttpResponse.h"
 #include "ruvia/web/detail/server/HttpConnectionState.h"
@@ -37,6 +38,7 @@ namespace ruvia::detail {
 class ContextServices;
 class RouteTable;
 class WorkerDispatcher;
+class WebWorkerDispatch;
 
 using SniContextStore = std::pmr::vector<asio::ssl::context>;
 using SniContextLookup = std::pmr::vector<std::pair<std::pmr::string, asio::ssl::context*>>;
@@ -64,6 +66,7 @@ public:
     void join();
     [[nodiscard]] asio::ip::tcp::endpoint localEndpoint() const;
     [[nodiscard]] WorkerHandle worker() const noexcept { return workerHandle_; }
+    [[nodiscard]] WebWorkerHandle webWorker() const;
 private:
     enum class LifecycleState : std::uint8_t {
         kFresh,
@@ -86,6 +89,7 @@ private:
     void stopOnContext(bool honorGracePeriod = true) noexcept;
     void maybeFinishDrain() noexcept;
     void forceCloseAll() noexcept;
+    void failWorker(std::exception_ptr failure) noexcept;
     void resetStartupState();
     void completeStartup(std::exception_ptr exception = nullptr) noexcept;
     void waitForStartupReady();
@@ -124,6 +128,7 @@ private:
     HttpServerOptions options_;
     DbRegistry databases_;
     RedisRegistry redis_;
+    std::shared_ptr<WebWorkerDispatch> webWorkerDispatch_;
     RateLimiter rateLimiter_;
     ConnectionScanner connectionScanner_;
     ConnectionWorkSetPool workSetPool_;
@@ -141,6 +146,7 @@ private:
     std::mutex startupMutex_;
     std::condition_variable startupCv_;
     std::exception_ptr startupException_;
+    std::exception_ptr workerException_;
     bool startupReady_{false};
 };
 

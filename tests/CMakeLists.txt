@@ -288,6 +288,16 @@ add_executable(ruvia_server_shutdown_drain server_shutdown_drain.cpp)
 target_link_libraries(ruvia_server_shutdown_drain PRIVATE ruvia::web)
 add_test(NAME ruvia_server_shutdown_drain COMMAND ruvia_server_shutdown_drain)
 set_tests_properties(ruvia_server_shutdown_drain PROPERTIES TIMEOUT 90)
+
+add_executable(ruvia_web_worker web_worker.cpp)
+target_link_libraries(ruvia_web_worker PRIVATE ruvia::web)
+add_test(NAME ruvia_web_worker COMMAND ruvia_web_worker)
+set_tests_properties(ruvia_web_worker PROPERTIES TIMEOUT 30)
+
+add_executable(ruvia_app_web_worker app_web_worker.cpp)
+target_link_libraries(ruvia_app_web_worker PRIVATE ruvia::web)
+add_test(NAME ruvia_app_web_worker COMMAND ruvia_app_web_worker)
+set_tests_properties(ruvia_app_web_worker PROPERTIES TIMEOUT 30)
 endif()
 
 configure_file(

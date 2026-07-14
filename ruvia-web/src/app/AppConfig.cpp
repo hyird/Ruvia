@@ -77,6 +77,20 @@ App& App::setThreadNum(std::size_t threadNum) {
         });
 }
 
+App& App::setWorkerMailboxCapacity(std::size_t capacity) {
+    return detail::mutateStoppedApp(
+        *this,
+        *state_,
+        "cannot change worker mailbox capacity while app is running",
+        [capacity](detail::AppState& state) {
+            if (capacity == 0) {
+                throw std::invalid_argument(
+                    "worker mailbox capacity must be greater than 0");
+            }
+            state.options.workerMailboxCapacity = capacity;
+        });
+}
+
 App& App::setKeepaliveTimeout(std::optional<std::chrono::milliseconds> timeout) {
     return detail::mutateStoppedApp(
         *this,

@@ -1,5 +1,6 @@
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/core/detail/WorkerDispatcher.h"
+#include "ruvia/web/detail/app/WebWorkerDispatch.h"
 
 #include "ruvia/web/detail/server/HttpServerTlsVerify.h"
 
@@ -163,7 +164,8 @@ HttpServer::HttpServer(
     // limited to stop()'s asio::post, which UNSAFE_IO keeps locked. Only the
     // reactor's per-descriptor I/O locking is elided.
     : ioContext_(ASIO_CONCURRENCY_HINT_UNSAFE_IO),
-      workerDispatcher_(std::make_shared<WorkerDispatcher>(ioContext_, 1024)),
+      workerDispatcher_(std::make_shared<WorkerDispatcher>(
+          ioContext_, options.workerMailboxCapacity)),
       workerHandle_(WorkerHandleAccess::make(workerDispatcher_)),
       acceptor_(ioContext_),
       endpoint_(std::move(endpoint)),
@@ -173,6 +175,16 @@ HttpServer::HttpServer(
       options_(validatedHttpServerOptions(std::move(options))),
       databases_(ioContext_, memory_.resource(), databases),
       redis_(ioContext_, memory_.resource(), redis),
+      webWorkerDispatch_(std::make_shared<WebWorkerDispatch>(
+          ioContext_.get_executor(),
+          workerHandle_,
+          memory_.resource(),
+          databases_,
+          redis_,
+          [this] { maybeFinishDrain(); },
+          [this](std::exception_ptr failure) {
+              failWorker(std::move(failure));
+          })),
       rateLimiter_(options_.rateLimit, memory_.resource()),
       connectionScanner_(workerHandle_, makeConnectionScannerOptions(options_)),
       workSetPool_(memory_) {
@@ -231,6 +243,7 @@ void HttpServer::stop() {
         return;
     }
 
+    webWorkerDispatch_->close();
     workerDispatcher_->close();
     asio::post(ioContext_, [this] { stopOnContext(); });
 }
@@ -239,10 +252,22 @@ void HttpServer::join() {
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
+    std::exception_ptr failure;
+    {
+        std::lock_guard lock(startupMutex_);
+        failure = workerException_;
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
 }
 
 TcpEndpoint HttpServer::localEndpoint() const {
     return endpoint_;
+}
+
+WebWorkerHandle HttpServer::webWorker() const {
+    return webWorkerDispatch_->handle();
 }
 void HttpServer::configureAcceptor() {
     std::error_code ec;
@@ -342,6 +367,7 @@ void HttpServer::configureTlsContext() {
 }
 
 void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
+    webWorkerDispatch_->close();
     workerDispatcher_->close();
     workerRunning_ = false;
     std::error_code ignored;
@@ -356,7 +382,7 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
     // has no in-flight requests to drain -- honoring the grace period there would
     // only stall the failure report (and the worker join) for the full period.
     if (honorGracePeriod && options_.shutdownGracePeriod.count() > 0 &&
-        activeConnectionCount_ != 0) {
+        (activeConnectionCount_ != 0 || webWorkerDispatch_->outstanding() != 0)) {
         drainPending_ = true;
         drainTimer_ = WorkerHandleAccess::scheduleTimer(
             workerHandle_,
@@ -373,7 +399,8 @@ void HttpServer::stopOnContext(bool honorGracePeriod) noexcept {
 }
 
 void HttpServer::maybeFinishDrain() noexcept {
-    if (!drainPending_ || activeConnectionCount_ != 0) {
+    if (!drainPending_ || activeConnectionCount_ != 0 ||
+        webWorkerDispatch_->outstanding() != 0) {
         return;
     }
     // Every session finished before the grace period elapsed. Release the
@@ -394,7 +421,24 @@ void HttpServer::forceCloseAll() noexcept {
 void HttpServer::resetStartupState() {
     std::lock_guard lock(startupMutex_);
     startupException_ = nullptr;
+    workerException_ = nullptr;
     startupReady_ = false;
+}
+
+void HttpServer::failWorker(std::exception_ptr failure) noexcept {
+    if (failure == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard lock(startupMutex_);
+        if (workerException_ != nullptr) {
+            return;
+        }
+        workerException_ = failure;
+    }
+    lifecycleState_.store(LifecycleState::kStopping, std::memory_order_relaxed);
+    options_.workerFailure.notify(failure);
+    stopOnContext(/*honorGracePeriod=*/false);
 }
 
 void HttpServer::completeStartup(std::exception_ptr exception) noexcept {
@@ -422,9 +466,9 @@ void HttpServer::runIoContext() noexcept {
     try {
         ioContext_.run();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-        stopOnContext(/*honorGracePeriod=*/false);
-        completeStartup(std::current_exception());
+        const auto failure = std::current_exception();
+        completeStartup(failure);
+        failWorker(failure);
         return;
     }
 
@@ -446,9 +490,9 @@ Task<void> HttpServer::runWorker() {
         completeStartup();
         co_await acceptLoop();
     } catch (...) {
-        lifecycleState_.store(LifecycleState::kStopped, std::memory_order_relaxed);
-        stopOnContext(/*honorGracePeriod=*/false);
-        completeStartup(std::current_exception());
+        const auto failure = std::current_exception();
+        completeStartup(failure);
+        failWorker(failure);
     }
 }
 

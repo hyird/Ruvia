@@ -43,14 +43,25 @@ auto result = worker.post([state = std::move(state)]() mutable {
 - 不暴露 `run()`、`stop()`、裸 executor 或 `io_context`。
 - 句柄晚于 worker 销毁仍可安全调用，返回 stopping。
 
-Web 侧提供两种入口：
+Web 侧提供普通请求和后台作业两种入口：
 
 ```cpp
 ruvia::WorkerHandle current = c.worker();
-std::vector<ruvia::WorkerHandle> webWorkers = ruvia::app().workers();
+ruvia::WebWorkerHandle target = ruvia::app().workerFor(deviceId);
+
+auto result = target.post(
+    [event = std::move(event)](
+        ruvia::WebWorkerContext& workerContext) mutable -> ruvia::Task<void> {
+        auto db = workerContext.db();
+        co_await persist(db, std::move(event));
+    });
 ```
 
-应用可在 `onStart` 中取得 `App::workers()`，按 deviceId 稳定选择 Web worker。外部线程只捕获拥有权数据；投递到 Web worker 后再获取该 worker 自己的 DB client，禁止跨线程捕获 `Context&`、`DbHandle` 或连接对象。
+`App::workerFor(uint64_t/string_view)` 按 key 稳定选择 Web worker，`App::workers()` 返回全部 `WebWorkerHandle`。`WebWorkerHandle::post()` 只接受返回 `Task<void>` 的回调，回调收到仅在该作业内有效的 `WebWorkerContext`，可访问目标 worker、PMR resource、shutdown stop token，以及该 worker 自己的 DB/Redis handle。需要纯 core 能力时使用 `WebWorkerHandle::core()`。
+
+`App::setWorkerMailboxCapacity()` 在启动前配置每 worker 有界队列，默认 1024；所有 producer 必须处理 `kQueueFull`。`WebWorkerHandle::stats()` 提供 accepted、queue-full、worker-stopping、completed、failed 和 outstanding 计数，供应用接入指标系统。
+
+外部线程只捕获拥有权数据，禁止跨线程捕获 `Context&`、`WebWorkerContext&`、`DbHandle`、`RedisHandle` 或连接对象。框架持有已接受作业的协程帧；作业完成后才释放。未捕获异常会关闭全部 App workers，并由 `App::run()` 重抛，禁止应用在单 worker 已失败后继续半死运行。shutdown 先停止接受 Web 作业并请求 stop，再等待已接受作业和活跃连接归零，最后关闭 DB/Redis。
 
 ## 3. Mailbox
 
@@ -153,6 +164,10 @@ co_await scope.join();
 4. 排空已接受 mailbox 工作和连接。
 5. 关闭 DB/Redis、销毁 `io_context` 与 worker memory。
 
+第 4 步同时等待已接受的 `WebWorkerHandle::post()` 作业。作业可观察 `WebWorkerContext::stopToken()` 协作退出；grace period 仍是最终上限。
+
+任意 Task 没有强制取消语义，因此作业必须只等待 worker 原生、关闭时可唤醒的操作，或自行观察 stop token。永久挂在不可取消第三方 callback 上属于应用契约错误，框架不会销毁仍被 callback 引用的协程帧。
+
 内部 continuation 与公开 mailbox 分开：graceful drain 期间公开投递已拒绝，但现有 TaskScope 子任务仍能完成并唤醒 join。
 
 ## 10. 验证门禁
@@ -160,6 +175,7 @@ co_await scope.join();
 - Runtime worker 线程亲和、稳定分片、round-robin。
 - move-only post、队列满、停止后 post、过期句柄。
 - posted callable 异常传播。
+- Web worker 稳定选择、队列满、统计、DB/Redis context 编译面、停止后拒绝、异常触发 App 级联停止，以及 shutdown/grace deadline 排空已接受异步作业。
 - TaskScope 完成、首异常、stop token、join。
 - timer continuation 保持 worker 亲和。
 - Channel send-before-receive、receive-before-send、full、close、跨线程 producer。

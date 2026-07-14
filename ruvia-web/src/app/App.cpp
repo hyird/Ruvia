@@ -20,6 +20,15 @@
 namespace ruvia {
 namespace {
 
+std::uint64_t webWorkerHash(std::string_view value) noexcept {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char ch : value) {
+        hash ^= ch;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
 void addShutdownSignals(asio::signal_set& signals) {
     signals.add(SIGINT);
     signals.add(SIGTERM);
@@ -87,18 +96,31 @@ const Env& App::env() const noexcept {
     return state_->env;
 }
 
-std::vector<WorkerHandle> App::workers() const {
+std::vector<WebWorkerHandle> App::workers() const {
     auto& state = *state_;
     std::lock_guard lock(state.mutex);
-    std::vector<WorkerHandle> result;
+    std::vector<WebWorkerHandle> result;
     if (!state.runtime) {
         return result;
     }
     result.reserve(state.runtime->workers.size());
     for (const auto& worker : state.runtime->workers) {
-        result.push_back(worker->worker());
+        result.push_back(worker->webWorker());
     }
     return result;
+}
+
+WebWorkerHandle App::workerFor(std::uint64_t key) const {
+    auto& state = *state_;
+    std::lock_guard lock(state.mutex);
+    if (!state.runtime || state.runtime->workers.empty()) {
+        return {};
+    }
+    return state.runtime->workers[key % state.runtime->workers.size()]->webWorker();
+}
+
+WebWorkerHandle App::workerFor(std::string_view key) const {
+    return workerFor(webWorkerHash(key));
 }
 
 void App::run() {
@@ -129,6 +151,12 @@ void App::run() {
         routes.setNotFoundHandler(state.notFoundHandler);
         routes.finalize();
         const auto& routeTable = routes.routeTable();
+        state.options.workerFailure = detail::WorkerFailureSink{
+            .target = this,
+            .invoke = [](void* target, std::exception_ptr) noexcept {
+                static_cast<App*>(target)->stop();
+            },
+        };
 
         if (state.documentRootConfig.has_value()) {
             const auto documentRootPath = detail::makePathFromNativePath(state.documentRootConfig->root);

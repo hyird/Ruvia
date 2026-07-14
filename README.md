@@ -45,9 +45,32 @@ runtime.stop();
 runtime.join();
 ```
 
-Web handlers obtain their current worker with `Context::worker()`. Background
-components can obtain the Web worker set from `App::workers()` after startup and
-post owning data back to the worker before using worker-affine DB or Redis APIs.
+Web handlers obtain their current core worker with `Context::worker()`.
+Background components select a stable Web worker with `App::workerFor()` and
+submit an asynchronous Web job. The callback receives worker-local DB and Redis
+access without exposing the underlying executor:
+
+```cpp
+auto worker = ruvia::app().workerFor("device-42");
+auto result = worker.post(
+    [event = std::move(event)](
+        ruvia::WebWorkerContext& workerContext) mutable -> ruvia::Task<void> {
+        co_await persistEvent(workerContext.db(), event);
+    });
+```
+
+Configure the bounded queue before startup with
+`App::setWorkerMailboxCapacity()` and handle `kQueueFull` at every producer.
+`WebWorkerHandle::stats()` exposes accepted, rejected, completed, failed, and
+outstanding counts for application metrics. A job accepted before shutdown is
+drained before that worker closes DB/Redis; new jobs are rejected once shutdown
+starts. Captured data must own its lifetime, and `WebWorkerContext` must not be
+stored beyond the callback. `App::workers()` returns all Web worker handles;
+`WebWorkerHandle::core()` provides the general core post capability when no Web
+service access is needed. An unhandled job exception stops every App worker and
+is rethrown by `App::run()`; applications should still catch expected DB or
+business failures inside the job. Jobs must use worker-native cancellable waits
+or observe `WebWorkerContext::stopToken()` so shutdown can finish.
 `TaskScope`, worker-bound `sleepFor`, bounded `Channel`, and `OneShot` are also
 provided by `ruvia::core`; their deadlines share the worker's single timer queue.
 

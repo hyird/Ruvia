@@ -3,9 +3,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory_resource>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/HttpLimits.h"
@@ -19,6 +21,19 @@ struct AccessLogSink final {
 
     void invoke(const AccessLogRecord& record) const noexcept {
         callback.invoke(record);
+    }
+};
+
+struct WorkerFailureSink final {
+    using Invoke = void (*)(void*, std::exception_ptr) noexcept;
+
+    void* target{nullptr};
+    Invoke invoke{nullptr};
+
+    void notify(std::exception_ptr failure) const noexcept {
+        if (invoke != nullptr) {
+            invoke(target, std::move(failure));
+        }
     }
 };
 
@@ -57,6 +72,8 @@ struct HttpServerOptions final {
     std::optional<std::chrono::milliseconds> keepaliveTimeout{std::chrono::seconds(75)};
     std::chrono::milliseconds shutdownGracePeriod{0};
     std::chrono::milliseconds scanInterval{std::chrono::seconds(1)};
+    // Capacity of the explicit cross-thread queue for this Web worker.
+    std::size_t workerMailboxCapacity{1024};
     std::optional<std::chrono::milliseconds> clientHeaderTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> clientBodyTimeout{std::chrono::seconds(60)};
     std::optional<std::chrono::milliseconds> sendTimeout{std::chrono::seconds(60)};
@@ -79,6 +96,7 @@ struct HttpServerOptions final {
     DocumentRoot documentRoot;
     AutoHttps autoHttps;
     AccessLogSink accessLog;
+    WorkerFailureSink workerFailure;
     std::optional<RateLimitRule> rateLimit;
 };
 

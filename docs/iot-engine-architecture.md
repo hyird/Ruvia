@@ -13,9 +13,9 @@ iot-engine 是单进程、生产者—消费者架构的物联网平台后端，
 职责固定如下：
 
 - Ruvia 负责 HTTP/WebSocket/SSE runtime，以及 worker 亲和的调度、等待和结构化并发原语。
-- iot-engine 负责南向 raw TCP、设备协议、事件聚合、命令持久化、Webhook 传输、后台数据库连接和产品策略。
+- iot-engine 负责南向 raw TCP、设备协议、事件聚合、命令持久化、Webhook 传输和产品策略；长批处理 runtime 可自持数据库连接，普通后台业务可投递到 Ruvia Web worker 查询。
 - `ruvia-http` 提供 Webhook 所需的 sans-I/O HTTP client 协议能力；DNS、TCP、TLS、timeout 和连接池由 iot-engine 驱动。
-- `c.db()` 和 `c.redis()` 只服务所属 Ruvia worker；后台线程不得借用这些 handle。
+- `c.db()` 和 `c.redis()` 只服务所属 Ruvia worker；后台线程不得借用这些 handle，而应使用 `App::workerFor(key).post()`，在 `WebWorkerContext` 内重新取得目标 worker 的 DB/Redis handle。
 - 单进程内事件不经 Redis 绕行。Redis 只承担跨实例协调、短期缓存、限流和分布式部署后的消息能力。
 
 ## 2. 总体结构
@@ -226,7 +226,8 @@ WebhookRuntime 使用：
 ## 8. 数据库和 Redis
 
 - HTTP handler 使用 `c.db()`/`c.redis()`。
-- pipeline、DeviceEngine、WebhookRuntime 使用应用自持的 PostgreSQL/Redis 连接或连接池。
+- 普通后台业务按 deviceId 等稳定 key 投递到 `WebWorkerHandle`，在 `WebWorkerContext` 内使用该 Web worker 的 DB/Redis；必须处理 mailbox 满和 worker stopping。
+- 持续高吞吐、长事务或需要独立并发/背压预算的 pipeline、DeviceEngine、WebhookRuntime 仍使用应用自持的 PostgreSQL/Redis 连接或连接池，避免占满 Web worker。
 - 每个后台连接槽固定 executor，不跨线程共享 libpq connection。
 - Redis 不用于进程内普通 WS fan-out、每连接 BLPOP、timer 或命令 OneShot。
 

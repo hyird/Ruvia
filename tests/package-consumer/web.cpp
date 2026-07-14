@@ -1111,6 +1111,31 @@ int main() {
     if (malformedModel.has_value()) {
         return 20;
     }
-    ruvia::app().setHttpListenPort(8080);
+    const auto unavailableWorker = ruvia::app().workerFor("package-consumer");
+    (void)unavailableWorker.stats();
+    if (unavailableWorker.valid()) {
+        return 21;
+    }
+    const auto postResult = unavailableWorker.post(
+        [](ruvia::WebWorkerContext& context) -> ruvia::Task<void> {
+            (void)context.worker();
+            (void)context.resource();
+            (void)context.stopToken();
+#ifdef RUVIA_ENABLE_DATABASE
+            if (false) {
+                (void)context.db();
+            }
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+            if (false) {
+                (void)context.redis();
+            }
+#endif
+            co_return;
+        });
+    if (postResult != ruvia::PostResult::kWorkerStopping) {
+        return 22;
+    }
+    ruvia::app().setWorkerMailboxCapacity(1024).setHttpListenPort(8080);
     return 0;
 }
