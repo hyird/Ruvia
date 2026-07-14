@@ -1,9 +1,11 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/parser/HttpHeaderBlockParser.h"
 #include "ruvia/http/HttpParseError.h"
@@ -17,6 +19,22 @@ using ruvia::detail::HttpContentLengthState;
 using ruvia::detail::HttpTransferCoding;
 using ruvia::detail::HttpTransferEncodingParseStatus;
 using ruvia::detail::HttpTransferEncodingState;
+
+template <typename T>
+concept HasValueSemanticTransferCodings =
+    requires(const T& value) {
+        { value.transferCodings() } ->
+            std::same_as<ruvia::detail::HttpTransferCodings>;
+    } &&
+    requires(const T&& value) {
+        { std::move(value).transferCodings() } ->
+            std::same_as<ruvia::detail::HttpTransferCodings>;
+    };
+
+static_assert(HasValueSemanticTransferCodings<
+    ruvia::detail::HttpNonChunkedTransferEncoding>);
+static_assert(HasValueSemanticTransferCodings<
+    ruvia::detail::HttpFinalChunkedTransferEncoding>);
 using ruvia::detail::ParsedRequestHeaderBlock;
 using ruvia::detail::parseHttpHeaderBlock;
 

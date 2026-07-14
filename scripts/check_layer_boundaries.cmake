@@ -7606,6 +7606,8 @@ set(HTTP_CONTENT_LENGTH_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpContentLength.h")
 set(HTTP_TRANSFER_ENCODING_STATE
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpTransferEncoding.h")
+set(HTTP_TRANSFER_CODING_VALUE
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpTransferCoding.h")
 foreach(obsolete_http1_client_response_header IN ITEMS
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/client/HttpClientResponseParser.h"
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/http1/Http1ClientResponsePlan.h")
@@ -7831,9 +7833,7 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http1_client_response_value_api MATCHES
        "protocolUpgrade[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT public_http1_client_response_value_api MATCHES
-       "transferCodings[(][)] const [&] noexcept" OR
-   NOT public_http1_client_response_value_api MATCHES
-       "transferCodings[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       "detail::HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
    NOT public_protocol_byte_limit_api MATCHES
        "std::optional<std::size_t> maximum[(][)] const noexcept" OR
    public_protocol_byte_limit_api MATCHES
@@ -7873,7 +7873,7 @@ if(NOT public_http_client_value_api MATCHES
    NOT public_http_value_api_surface MATCHES
        "AcceptsTemporaryHttpClientResponseHeaderLookup")
     boundary_error("public HTTP client values regained temporary borrow access"
-        "owning responses, headers, redirect targets, framing tables, and top-level alternatives must lend storage only from live lvalues")
+        "owning responses, headers, redirect targets, and top-level alternatives must lend storage only from live lvalues")
 endif()
 if(NOT public_http_client_response_owned_view_test MATCHES
        "ExposesAnyRvalueHttpClientOwnedView" OR
@@ -7906,6 +7906,10 @@ if(NOT EXISTS "${HTTP_TRANSFER_ENCODING_STATE}")
         "HTTP/1 request and response parsers must share HttpTransferEncodingState")
 else()
     file(READ "${HTTP_TRANSFER_ENCODING_STATE}" http_transfer_encoding_state)
+    file(READ "${HTTP_TRANSFER_CODING_VALUE}" http_transfer_coding_value)
+    file(READ "${HTTP1_REQUEST_BODY_PLAN}" http_transfer_coding_request_plan)
+    file(READ "${HTTP1_CLIENT_RESPONSE_PARSER_HEADER}"
+        http_transfer_coding_client_plan)
     if(NOT http_transfer_encoding_state MATCHES "class HttpTransferEncodingState" OR
        NOT http_transfer_encoding_state MATCHES "class HttpNonChunkedTransferEncoding" OR
        NOT http_transfer_encoding_state MATCHES "class HttpFinalChunkedTransferEncoding" OR
@@ -7919,6 +7923,29 @@ else()
        OR http_transfer_encoding_state MATCHES "bool present[(]")
         boundary_error("shared Transfer-Encoding parser lost ordered-list validation"
             "updates must be transactional and framing alternatives discriminated")
+    endif()
+    if(NOT http_transfer_coding_value MATCHES
+           "is_trivially_copyable_v<HttpTransferCodings>" OR
+       NOT http_transfer_coding_value MATCHES
+           "sizeof[(]HttpTransferCodings[)] <= sizeof[(]std::size_t[)] [*] 2" OR
+       http_transfer_encoding_state MATCHES
+           "const[ \t]+HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+       http_transfer_coding_request_plan MATCHES
+           "const[ \t]+HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+       http_transfer_coding_client_plan MATCHES
+           "const[ \t]+detail::HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+       NOT http_transfer_encoding_state MATCHES
+           "HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
+       NOT http_transfer_coding_request_plan MATCHES
+           "HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
+       NOT http_transfer_coding_client_plan MATCHES
+           "detail::HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
+       NOT http1_client_package_consumer MATCHES
+           "HasHttp1RequestPlanTransferCodings" OR
+       NOT public_http_client_response_owned_view_test MATCHES
+           "same_as<ruvia::detail::HttpTransferCodings>")
+        boundary_error("HTTP transfer-coding facts lost value semantics"
+            "fixed-size coding lists must return by value across parser, request, and client-response plans")
     endif()
 endif()
 if(EXISTS "${HTTP1_SERVER_PARSER}" AND EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
@@ -9596,8 +9623,6 @@ if(EXISTS "${HTTP_PROTOCOL_PLAN_RANGE}" AND
            "withoutBody[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_request MATCHES
            "expectations[(][)] const && = delete" OR
-       NOT http_protocol_plan_h1_request MATCHES
-           "transferCodings[(][)] const && = delete" OR
        NOT http_protocol_plan_h1_response MATCHES
            "buffered[(][)] const [&] noexcept" OR
        NOT http_protocol_plan_h1_response MATCHES

@@ -936,7 +936,6 @@ concept ExposesAnyRvalueHttpProtocolPlanBorrow =
     requires(T&& value) { std::move(value).contentSemantics(); } ||
     requires(T&& value) { std::move(value).bodyPlan(); } ||
     requires(T&& value) { std::move(value).expectations(); } ||
-    requires(T&& value) { std::move(value).transferCodings(); } ||
     requires(T&& value) { std::move(value).connectionOptions(); } ||
     requires(T&& value) { std::move(value).upgradeProtocols(); } ||
     requires(T&& value) { std::move(value).writePlan(); } ||
@@ -1656,7 +1655,11 @@ concept HasHttp1RequestPlanContentLength = requires(const T& framing) {
 
 template <typename T>
 concept HasHttp1RequestPlanTransferCodings = requires(const T& framing) {
-    framing.transferCodings();
+    { framing.transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
+} && requires(const T&& framing) {
+    { std::move(framing).transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
 };
 
 template <typename T>
@@ -1756,8 +1759,7 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).name(); } ||
     requires(T&& value) { std::move(value).value(); } ||
     requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).body(); } ||
-    requires(T&& value) { std::move(value).transferCodings(); };
+    requires(T&& value) { std::move(value).body(); };
 
 template <typename T>
 concept AcceptsTemporaryHttpClientResponseHeaderLookup =
@@ -1783,7 +1785,11 @@ concept HasHttp1ClientResponseContentLength = requires(const T& framing) {
 
 template <typename T>
 concept HasHttp1ClientResponseTransferCodings = requires(const T& framing) {
-    framing.transferCodings();
+    { framing.transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
+} && requires(const T&& framing) {
+    { std::move(framing).transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
 };
 
 template <typename T>
@@ -2575,6 +2581,10 @@ static_assert(!std::default_initializable<
 static_assert(!std::default_initializable<
     ruvia::detail::HttpNonChunkedTransferEncoding>);
 static_assert(!std::default_initializable<
+    ruvia::detail::HttpFinalChunkedTransferEncoding>);
+static_assert(HasHttp1RequestPlanTransferCodings<
+    ruvia::detail::HttpNonChunkedTransferEncoding>);
+static_assert(HasHttp1RequestPlanTransferCodings<
     ruvia::detail::HttpFinalChunkedTransferEncoding>);
 static_assert(!ExposesRvalueFinalChunked<
     ruvia::detail::HttpTransferEncodingValue>);

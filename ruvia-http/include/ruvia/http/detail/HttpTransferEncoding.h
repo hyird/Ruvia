@@ -18,7 +18,7 @@ enum class HttpTransferEncodingParseStatus : std::uint8_t {
 
 class HttpNonChunkedTransferEncoding final {
 public:
-    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
+    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 
@@ -34,7 +34,7 @@ private:
 
 class HttpFinalChunkedTransferEncoding final {
 public:
-    [[nodiscard]] const HttpTransferCodings& transferCodings() const noexcept {
+    [[nodiscard]] HttpTransferCodings transferCodings() const noexcept {
         return transferCodings_;
     }
 

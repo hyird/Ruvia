@@ -262,7 +262,11 @@ concept HasResponseContentLength = requires(const T& value) {
 
 template <typename T>
 concept HasResponseTransferCodings = requires(const T& value) {
-    value.transferCodings();
+    { value.transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
+} && requires(const T&& value) {
+    { std::move(value).transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
 };
 
 template <typename T>
@@ -275,8 +279,7 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).name(); } ||
     requires(T&& value) { std::move(value).value(); } ||
     requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).body(); } ||
-    requires(T&& value) { std::move(value).transferCodings(); };
+    requires(T&& value) { std::move(value).body(); };
 
 static_assert(!ExposesAnyRvalueHttpClientOwnedView<
     ruvia::HttpClientResponseHeader>);

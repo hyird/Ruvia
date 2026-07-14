@@ -1016,8 +1016,7 @@ concept ExposesAnyRvalueHttpClientOwnedView =
     requires(T&& value) { std::move(value).name(); } ||
     requires(T&& value) { std::move(value).value(); } ||
     requires(T&& value) { std::move(value).headers(); } ||
-    requires(T&& value) { std::move(value).body(); } ||
-    requires(T&& value) { std::move(value).transferCodings(); };
+    requires(T&& value) { std::move(value).body(); };
 
 template <typename T>
 concept HasCompleteType = requires {
@@ -1717,7 +1716,11 @@ concept HasHttp1RequestBodyContentLength = requires(const T& framing) {
 
 template <typename T>
 concept HasHttp1RequestBodyTransferCodings = requires(const T& framing) {
-    framing.transferCodings();
+    { framing.transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
+} && requires(const T&& framing) {
+    { std::move(framing).transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
 };
 
 template <typename T>
@@ -1883,7 +1886,11 @@ concept HasHttp1ClientResponseContentLength = requires(const T& framing) {
 
 template <typename T>
 concept HasHttp1ClientResponseTransferCodings = requires(const T& framing) {
-    framing.transferCodings();
+    { framing.transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
+} && requires(const T&& framing) {
+    { std::move(framing).transferCodings() } ->
+        std::same_as<ruvia::detail::HttpTransferCodings>;
 };
 
 template <typename T>

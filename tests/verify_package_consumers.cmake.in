@@ -242,8 +242,6 @@ if(NOT _installed_http_protocol_plan_range_text MATCHES
        "contentSemantics[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_h1_request_text MATCHES
        "expectations[(][)] const && = delete" OR
-   NOT _installed_http_protocol_plan_h1_request_text MATCHES
-       "transferCodings[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_h1_response_text MATCHES
        "headPlan[(][)] const && = delete" OR
    NOT _installed_http_protocol_plan_h2_request_text MATCHES
@@ -436,12 +434,25 @@ if(NOT _installed_http_content_length_contract MATCHES
 endif()
 set(_installed_http_transfer_encoding
     "${_install_prefix}/include/ruvia/http/detail/HttpTransferEncoding.h")
-if(NOT EXISTS "${_installed_http_transfer_encoding}")
+set(_installed_http_transfer_coding_value
+    "${_install_prefix}/include/ruvia/http/detail/HttpTransferCoding.h")
+if(NOT EXISTS "${_installed_http_transfer_encoding}" OR
+   NOT EXISTS "${_installed_http_transfer_coding_value}")
     message(FATAL_ERROR
         "installed HTTP package is missing shared Transfer-Encoding state")
 endif()
 file(READ "${_installed_http_transfer_encoding}"
     _installed_http_transfer_encoding_contract)
+file(READ "${_installed_http_transfer_coding_value}"
+    _installed_http_transfer_coding_value_contract)
+set(_installed_transfer_coding_client_plan_path
+    "${_install_prefix}/include/ruvia/http/Http1ClientResponseParser.h")
+if(NOT EXISTS "${_installed_transfer_coding_client_plan_path}")
+    message(FATAL_ERROR
+        "installed HTTP package is missing the client response framing plan")
+endif()
+file(READ "${_installed_transfer_coding_client_plan_path}"
+    _installed_transfer_coding_client_plan_contract)
 if(NOT _installed_http_transfer_encoding_contract MATCHES
        "class HttpNonChunkedTransferEncoding" OR
    NOT _installed_http_transfer_encoding_contract MATCHES
@@ -456,6 +467,25 @@ if(NOT _installed_http_transfer_encoding_contract MATCHES
        "bool present_|bool finalChunked_|bool present[(]")
     message(FATAL_ERROR
         "installed Transfer-Encoding state lost discriminated transactional semantics")
+endif()
+if(NOT _installed_http_transfer_coding_value_contract MATCHES
+       "is_trivially_copyable_v<HttpTransferCodings>" OR
+   NOT _installed_http_transfer_coding_value_contract MATCHES
+       "sizeof[(]HttpTransferCodings[)] <= sizeof[(]std::size_t[)] [*] 2" OR
+   _installed_http_transfer_encoding_contract MATCHES
+       "const[ \t]+HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+   _installed_http_protocol_plan_h1_request_text MATCHES
+       "const[ \t]+HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+   _installed_transfer_coding_client_plan_contract MATCHES
+       "const[ \t]+detail::HttpTransferCodings[ \t]*&[ \t\r\n]+transferCodings" OR
+   NOT _installed_http_transfer_encoding_contract MATCHES
+       "HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
+   NOT _installed_http_protocol_plan_h1_request_text MATCHES
+       "HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept" OR
+   NOT _installed_transfer_coding_client_plan_contract MATCHES
+       "detail::HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept")
+    message(FATAL_ERROR
+        "installed HTTP transfer-coding facts lost value semantics")
 endif()
 set(_installed_transfer_decoder
     "${_install_prefix}/include/ruvia/http/detail/body/HttpTransferCodingDecoder.h")
@@ -669,11 +699,9 @@ if(NOT _installed_http1_client_response_parser_content MATCHES
     message(FATAL_ERROR "installed HTTP/1 client response parser lost its discriminated public contract")
 endif()
 if(NOT _installed_http1_client_response_parser_content MATCHES
-       "transferCodings[(][)] const [&] noexcept" OR
-   NOT _installed_http1_client_response_parser_content MATCHES
-       "transferCodings[(][)] const && = delete")
+       "detail::HttpTransferCodings[ \t\r\n]+transferCodings[(][)] const noexcept")
     message(FATAL_ERROR
-        "installed HTTP/1 client framing exposes transfer codings from temporary owners")
+        "installed HTTP/1 client framing lost transfer-coding value semantics")
 endif()
 if(_installed_http1_client_response_parser_content MATCHES
        "Http1ClientRequestContentSignal::kNone" OR

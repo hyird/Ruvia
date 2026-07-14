@@ -45,12 +45,10 @@ private:
 
 class Http1ChunkedRequestBody final {
 public:
-    [[nodiscard]] constexpr const HttpTransferCodings&
-    transferCodings() const & noexcept {
+    [[nodiscard]] constexpr HttpTransferCodings
+    transferCodings() const noexcept {
         return transferCodings_;
     }
-    [[nodiscard]] constexpr const HttpTransferCodings&
-    transferCodings() const && = delete;
 
 private:
     friend class Http1RequestBodyPlan;

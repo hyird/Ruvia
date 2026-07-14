@@ -293,7 +293,9 @@ concept HasRequestContentLength = requires(const T& value) {
 
 template <typename T>
 concept HasRequestTransferCodings = requires(const T& value) {
-    value.transferCodings();
+    { value.transferCodings() } -> std::same_as<HttpTransferCodings>;
+} && requires(const T&& value) {
+    { std::move(value).transferCodings() } -> std::same_as<HttpTransferCodings>;
 };
 
 template <typename T>

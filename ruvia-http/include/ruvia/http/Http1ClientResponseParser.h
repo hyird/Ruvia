@@ -100,12 +100,10 @@ class Http1ClientChunkedResponse final {
 public:
     // Transfer codings preceding the terminal chunked framing. The runtime
     // removes chunk framing first and then drives this decoder list.
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
-    transferCodings() const & noexcept {
+    [[nodiscard]] constexpr detail::HttpTransferCodings
+    transferCodings() const noexcept {
         return transferCodings_;
     }
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
-    transferCodings() const && = delete;
 
     [[nodiscard]] constexpr Http1ClientResponsePersistence persistence() const noexcept {
         return persistence_;
@@ -128,12 +126,10 @@ public:
     // Any non-chunked transfer coding is decoded after EOF delimits the message.
     // This alternative always consumes through EOF and always closes; it exposes
     // no independent persistence field that could contradict those facts.
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
-    transferCodings() const & noexcept {
+    [[nodiscard]] constexpr detail::HttpTransferCodings
+    transferCodings() const noexcept {
         return transferCodings_;
     }
-    [[nodiscard]] constexpr const detail::HttpTransferCodings&
-    transferCodings() const && = delete;
 
 private:
     friend struct detail::Http1ClientResponsePlanAccess;
