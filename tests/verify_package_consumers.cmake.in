@@ -2087,6 +2087,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
         message(FATAL_ERROR
             "installed Web HTTP/2 body runtime restored a default mode plus selection flag")
     endif()
+    if(NOT _installed_http2_web_runtime MATCHES
+           "Http2SansIoStreamRuntime& ensureAccepted" OR
+       NOT _installed_http2_web_runtime MATCHES
+           "const Http2StreamState& acceptedStream" OR
+       _installed_http2_web_runtime MATCHES
+           "Http2LocalSettings|kMaxConcurrentStreams|Http2SansIoStreamRuntime[*][ \t\r\n]+ensure[(]")
+        message(FATAL_ERROR
+            "installed Web runtime redecides HTTP/2 protocol stream admission")
+    endif()
 
     set(_installed_route_stream_state_path
         "${_install_prefix}/include/ruvia/web/detail/router/RouteStreamState.h")

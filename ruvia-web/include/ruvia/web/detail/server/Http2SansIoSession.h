@@ -161,10 +161,6 @@ Task<void> runHttp2SansIoSession(
         std::uint32_t streamId) noexcept {
         return streamRuntimes.find(streamId);
     };
-    const auto ensureStreamRuntime = [&streamRuntimes](
-        std::uint32_t streamId) {
-        return streamRuntimes.ensure(streamId);
-    };
     const auto eraseStreamRuntime = [&streamRuntimes](
         std::uint32_t streamId) {
         (void)streamRuntimes.remove(streamId);
@@ -538,14 +534,11 @@ Task<void> runHttp2SansIoSession(
 
     // Owner-side route policy (1:1 port of the coroutine resolveStreamRoute), run at
     // kMessageHead so body-mode/tunnel decisions land BEFORE the next feed.
-    const auto resolveStreamRoute = [&routes, &ensureStreamRuntime](
+    const auto resolveStreamRoute = [&routes, &streamRuntimes](
         Http2StreamState& streamState) -> Http2SansIoStreamRuntime* {
         const auto method = Http2RequestBuilder::routeMethod(streamState);
         const auto path = Http2RequestBuilder::requestPath(streamState);
-        auto* runtime = ensureStreamRuntime(streamState.id());
-        if (runtime == nullptr) {
-            return nullptr;
-        }
+        auto& runtime = streamRuntimes.ensureAccepted(streamState);
         RouteResolution resolution;
         auto bodyMode = RequestBodyMode::kBuffered;
         if (method != HttpKnownMethod::kUnknown && !path.empty()) {
@@ -560,8 +553,8 @@ Task<void> runHttp2SansIoSession(
             resolved->route().endpoint().webSocket() != nullptr) {
             bodyMode = RequestBodyMode::kStream;
         }
-        return runtime->selectRoute(std::move(resolution), bodyMode)
-            ? runtime
+        return runtime.selectRoute(std::move(resolution), bodyMode)
+            ? &runtime
             : nullptr;
     };
 

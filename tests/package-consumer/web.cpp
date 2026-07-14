@@ -1439,9 +1439,11 @@ int main() {
     asio::io_context io;
     ruvia::detail::Http2SansIoStreamRuntimeTable runtimes(
         std::pmr::get_default_resource());
-    auto* runtime = runtimes.ensure(1);
-    if (runtime == nullptr ||
-        !runtime->selectRoute(
+    ruvia::detail::Http2StreamState acceptedStream(
+        1,
+        std::pmr::get_default_resource());
+    auto& runtime = runtimes.ensureAccepted(acceptedStream);
+    if (!runtime.selectRoute(
             ruvia::detail::RouteResolution{},
             ruvia::detail::RequestBodyMode::kBuffered)) {
         return 5;

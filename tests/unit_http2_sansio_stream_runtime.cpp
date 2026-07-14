@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <asio/awaitable.hpp>
 #include <asio/co_spawn.hpp>
@@ -23,6 +24,7 @@ using ruvia::detail::Http2RequestBodyStoreResult;
 using ruvia::detail::Http2SansIoBodyQueue;
 using ruvia::detail::Http2SansIoStreamRuntime;
 using ruvia::detail::Http2SansIoStreamRuntimeTable;
+using ruvia::detail::Http2StreamState;
 using ruvia::detail::RequestBodyMode;
 using ruvia::detail::RouteResolution;
 
@@ -31,7 +33,25 @@ concept HasDirectBodyModeSelection = requires(T& body) {
     body.selectMode(RequestBodyMode::kBuffered);
 };
 
+template <typename T>
+concept HasRawStreamIdAdmission = requires(T& table) {
+    table.ensure(std::uint32_t{1});
+};
+
 static_assert(!HasDirectBodyModeSelection<Http2RequestBodyRuntime>);
+static_assert(!HasRawStreamIdAdmission<Http2SansIoStreamRuntimeTable>);
+static_assert(std::same_as<
+    decltype(std::declval<Http2SansIoStreamRuntimeTable&>().ensureAccepted(
+        std::declval<const Http2StreamState&>())),
+    Http2SansIoStreamRuntime&>);
+
+Http2SansIoStreamRuntime& ensureAcceptedRuntime(
+    Http2SansIoStreamRuntimeTable& table,
+    std::uint32_t streamId,
+    std::pmr::memory_resource* resource) {
+    Http2StreamState acceptedStream(streamId, resource);
+    return table.ensureAccepted(acceptedStream);
+}
 
 }  // namespace
 
@@ -144,23 +164,19 @@ RUVIA_TEST(http2_web_request_body_runtime_enforces_total_and_backlog_limits) {
 RUVIA_TEST(http2_web_stream_runtime_table_keeps_active_storage_stable) {
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
-    auto* first = table.ensure(1);
-    RUVIA_CHECK(first != nullptr);
-    if (first == nullptr) {
-        return;
-    }
-    RUVIA_CHECK(first->selectRoute(
+    auto& first = ensureAcceptedRuntime(table, 1, &resource);
+    RUVIA_CHECK(first.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
-    RUVIA_CHECK(first->body().store(
+    RUVIA_CHECK(first.body().store(
         "tiny", ProtocolByteLimit::limited(16), 0) ==
         Http2RequestBodyStoreResult::kAccepted);
-    const auto firstBody = first->body().buffered();
-    const auto* firstAddress = first;
+    const auto firstBody = first.body().buffered();
+    const auto* firstAddress = &first;
 
     // Cross the inline capacity so pointer-vector growth and later compaction are
     // both exercised without moving active runtime objects.
     for (std::uint32_t id = 3; id < 45; id += 2) {
-        RUVIA_CHECK(table.ensure(id) != nullptr);
+        (void)ensureAcceptedRuntime(table, id, &resource);
     }
     RUVIA_CHECK(table.find(1) == firstAddress);
     RUVIA_CHECK_EQ(table.find(1)->body().buffered(), firstBody);
@@ -176,22 +192,18 @@ RUVIA_TEST(http2_web_stream_runtime_table_owns_dispatch_signal_and_lease) {
     Http2SansIoStreamRuntimeTable table(&resource);
 
     RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
-    auto* runtime = table.ensure(1);
-    RUVIA_CHECK(runtime != nullptr);
-    if (runtime == nullptr) {
-        return;
-    }
-    RUVIA_CHECK(!runtime->dispatched());
-    RUVIA_CHECK(runtime->signal() == nullptr);
+    auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
+    RUVIA_CHECK(!runtime.dispatched());
+    RUVIA_CHECK(runtime.signal() == nullptr);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{0});
     RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
-    RUVIA_CHECK(runtime->selectRoute(
+    RUVIA_CHECK(runtime.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
 
     auto* signal = table.beginDispatch(1, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
-    RUVIA_CHECK(runtime->dispatched());
-    RUVIA_CHECK(runtime->signal() == signal);
+    RUVIA_CHECK(runtime.dispatched());
+    RUVIA_CHECK(runtime.signal() == signal);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
     RUVIA_CHECK(table.beginDispatch(1, io.get_executor()) == nullptr);
     RUVIA_CHECK_EQ(table.dispatchedCount(), std::size_t{1});
@@ -217,12 +229,8 @@ RUVIA_TEST(http2_web_stream_signal_wakes_concurrent_waiters_without_self_cancel)
     asio::io_context io;
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
-    auto* runtime = table.ensure(1);
-    RUVIA_CHECK(runtime != nullptr);
-    if (runtime == nullptr) {
-        return;
-    }
-    RUVIA_CHECK(runtime->selectRoute(
+    auto& runtime = ensureAcceptedRuntime(table, 1, &resource);
+    RUVIA_CHECK(runtime.selectRoute(
         RouteResolution{}, RequestBodyMode::kBuffered));
     auto* signal = table.beginDispatch(1, io.get_executor());
     RUVIA_CHECK(signal != nullptr);
@@ -251,7 +259,7 @@ RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     std::pmr::monotonic_buffer_resource resource;
     Http2SansIoStreamRuntimeTable table(&resource);
     for (std::uint32_t id = 1; id <= 33; id += 2) {
-        RUVIA_CHECK(table.ensure(id) != nullptr);
+        (void)ensureAcceptedRuntime(table, id, &resource);
     }
     auto* runtime = table.find(33);
     RUVIA_CHECK(runtime != nullptr);
@@ -265,7 +273,7 @@ RUVIA_TEST(http2_web_stream_runtime_keeps_overflow_signal_reference_stable) {
     const auto* runtimeAddress = runtime;
 
     for (std::uint32_t id = 35; id <= 99; id += 2) {
-        RUVIA_CHECK(table.ensure(id) != nullptr);
+        (void)ensureAcceptedRuntime(table, id, &resource);
     }
     RUVIA_CHECK(table.find(33) == runtimeAddress);
     RUVIA_CHECK(table.find(33)->signal() == signal);

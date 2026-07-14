@@ -6934,6 +6934,7 @@ if(NOT EXISTS "${WEB_HTTP2_STREAM_RUNTIME}" OR
         "stable per-stream route/body/signal storage and asynchronous consumers must live under ruvia-web/include/ruvia/web/detail/http2")
 else()
     file(READ "${WEB_HTTP2_STREAM_RUNTIME}" web_http2_stream_runtime)
+    file(READ "${WEB_HTTP2_SESSION}" web_http2_stream_session)
     file(READ "${WEB_HTTP2_WS_TRANSPORT}" web_http2_ws_transport)
     file(READ "${WEB_HTTP2_RESPONSE_STREAM_SINK}"
         web_http2_response_stream_sink)
@@ -6963,6 +6964,12 @@ else()
        NOT web_http2_stream_runtime MATCHES "dispatchedCount" OR
        NOT web_http2_stream_runtime MATCHES "void forEach" OR
        NOT web_http2_stream_runtime MATCHES "makePmrObject" OR
+       NOT web_http2_stream_runtime MATCHES
+           "Http2SansIoStreamRuntime& ensureAccepted" OR
+       NOT web_http2_stream_runtime MATCHES
+           "const Http2StreamState& acceptedStream" OR
+       NOT web_http2_stream_session MATCHES
+           "streamRuntimes[.]ensureAccepted[(]streamState[)]" OR
        NOT web_http2_ws_transport MATCHES "releaseReceivedData" OR
        NOT web_http2_ws_transport MATCHES "Http2SansIoStreamSignal&" OR
        NOT web_http2_response_stream_sink MATCHES
@@ -6973,9 +6980,12 @@ else()
        web_http2_stream_runtime MATCHES
            "${RULE_STALE_HTTP2_BODY_MODE_SPLIT}" OR
        web_http2_ws_transport MATCHES
-           "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final")
+           "Http2BodyQueue|Http2StreamBodyQueue|class Http2SansIoStreamSignal final" OR
+       web_http2_stream_runtime MATCHES
+           "Http2LocalSettings|kMaxConcurrentStreams|Http2SansIoStreamRuntime[*][ \t\r\n]+ensure[(]" OR
+       web_http2_stream_session MATCHES "ensureStreamRuntime")
         boundary_error("HTTP/2 Web stream runtime lost its ownership boundary"
-            "route-selected storage, PMR-stable stream state, dispatch signal/lease, Web queues, and consume-time receive-credit release must remain one Web-owned object")
+            "protocol admission must enter one non-null Web runtime before route/body/signal ownership and consume-time receive-credit release")
     endif()
 endif()
 if(EXISTS "${HTTP2_REQUEST_BUILDER}")
@@ -7065,7 +7075,9 @@ else()
        NOT web_http2_session MATCHES "Owner-side reset" OR
        NOT web_http2_session MATCHES
            "streamRuntimes[.]beginDispatch" OR
-       NOT web_http2_session MATCHES "runtime->selectRoute" OR
+       NOT web_http2_session MATCHES
+           "streamRuntimes[.]ensureAccepted[(]streamState[)]" OR
+       NOT web_http2_session MATCHES "runtime[.]selectRoute" OR
        NOT web_http2_session MATCHES "routes[.]resolve[(]method, path[)]" OR
        NOT web_http2_session MATCHES
            "streamRuntimes[.]dispatchedCount" OR
@@ -7081,7 +7093,7 @@ else()
        web_http2_session MATCHES
            "Http2ConnectionLimits|HttpRequestBodyMode|setBodyMode|usesStreamRequestBody")
         boundary_error("ruvia-web HTTP/2 session bypasses Web-owned body storage"
-            "one stable runtime must own route/body/signal/dispatch lease, admission must precede co_spawn, owner resets must reclaim undispatched runtimes, and protocol streams must remain policy-free")
+            "one stable runtime must attach to an accepted protocol stream before route/body/signal ownership and co_spawn, owner resets must reclaim undispatched runtimes, and protocol streams must remain policy-free")
     endif()
     if(NOT web_http2_session MATCHES "feedAndDrain" OR
        NOT web_http2_session MATCHES "Http2FeedResult::kEventsPending" OR

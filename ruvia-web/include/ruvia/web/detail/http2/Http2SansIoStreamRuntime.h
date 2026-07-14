@@ -20,7 +20,7 @@
 #include "ruvia/core/memory/PmrResource.h"
 #include "ruvia/http/ProtocolByteLimit.h"
 #include "ruvia/http/detail/PmrString.h"
-#include "ruvia/http/detail/http2/Http2LocalSettings.h"
+#include "ruvia/http/detail/http2/Http2StreamState.h"
 #include "ruvia/web/detail/router/RouteModes.h"
 #include "ruvia/web/detail/router/RouteResolution.h"
 
@@ -358,19 +358,21 @@ public:
         return nullptr;
     }
 
-    [[nodiscard]] Http2SansIoStreamRuntime* ensure(
-        std::uint32_t streamId) {
+    // Protocol admission is already committed before Web receives the live
+    // Http2StreamState. This table only attaches application runtime state; it
+    // must not reapply the protocol's concurrent-stream limit or manufacture a
+    // nullable second admission result.
+    [[nodiscard]] Http2SansIoStreamRuntime& ensureAccepted(
+        const Http2StreamState& acceptedStream) {
+        const auto streamId = acceptedStream.id();
         if (auto* existing = find(streamId)) {
-            return existing;
-        }
-        if (size_ >= Http2LocalSettings::kMaxConcurrentStreams) {
-            return nullptr;
+            return *existing;
         }
         for (auto& slot : inline_) {
             if (!slot) {
                 slot.emplace(streamId, resource_);
                 ++size_;
-                return &*slot;
+                return *slot;
             }
         }
         auto runtime = makePmrObject<Http2SansIoStreamRuntime>(
@@ -378,7 +380,7 @@ public:
         auto* result = runtime.get();
         overflow_.push_back(std::move(runtime));
         ++size_;
-        return result;
+        return *result;
     }
 
     [[nodiscard]] Http2SansIoStreamSignal* beginDispatch(
