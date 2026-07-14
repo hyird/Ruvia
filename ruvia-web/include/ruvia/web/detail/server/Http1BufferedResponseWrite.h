@@ -10,20 +10,28 @@
 
 namespace ruvia::detail {
 
-// The session has only two decisions after a buffered HTTP/1 write: whether the
-// full operation completed (and the connection may remain reusable), and whether
-// the complete final head reached the transport (and therefore owns a loggable
-// status). The transport error itself is consumed by the writer and never crosses
-// this boundary.
+enum class Http1BufferedResponseWriteOutcome : std::uint8_t {
+    kCompleted,
+    kFailedBeforeCommit,
+    kFailedAfterCommit
+};
+
+// The writer collapses the transport error and complete-head byte boundary into
+// one terminal outcome. A status is committed in exactly two of the three states;
+// callers must not reconstruct that state from a completion flag plus an optional.
 class Http1BufferedResponseWriteResult final {
 public:
-    [[nodiscard]] constexpr bool completed() const noexcept {
-        return completed_;
+    [[nodiscard]] constexpr Http1BufferedResponseWriteOutcome
+    outcome() const noexcept {
+        return outcome_;
     }
 
     [[nodiscard]] constexpr std::optional<std::uint16_t>
     committedStatus() const noexcept {
-        return committedStatus_;
+        return outcome_ ==
+                Http1BufferedResponseWriteOutcome::kFailedBeforeCommit
+            ? std::nullopt
+            : std::optional<std::uint16_t>(status_);
     }
 
 private:
@@ -36,31 +44,37 @@ private:
 
     [[nodiscard]] static Http1BufferedResponseWriteResult
     makeCompleted(std::uint16_t status) noexcept {
-        return Http1BufferedResponseWriteResult(true, status);
+        return Http1BufferedResponseWriteResult(
+            Http1BufferedResponseWriteOutcome::kCompleted,
+            status);
     }
 
     [[nodiscard]] static Http1BufferedResponseWriteResult
     makeFailedBeforeCommit() noexcept {
-        return Http1BufferedResponseWriteResult(false, std::nullopt);
+        return Http1BufferedResponseWriteResult(
+            Http1BufferedResponseWriteOutcome::kFailedBeforeCommit,
+            0);
     }
 
     [[nodiscard]] static Http1BufferedResponseWriteResult
     makeFailedAfterCommit(std::uint16_t status) noexcept {
-        return Http1BufferedResponseWriteResult(false, status);
+        return Http1BufferedResponseWriteResult(
+            Http1BufferedResponseWriteOutcome::kFailedAfterCommit,
+            status);
     }
 
     constexpr Http1BufferedResponseWriteResult(
-        bool completed,
-        std::optional<std::uint16_t> committedStatus) noexcept
-        : committedStatus_(committedStatus),
-          completed_(completed) {}
+        Http1BufferedResponseWriteOutcome outcome,
+        std::uint16_t status) noexcept
+        : status_(status),
+          outcome_(outcome) {}
 
-    std::optional<std::uint16_t> committedStatus_;
-    bool completed_;
+    std::uint16_t status_;
+    Http1BufferedResponseWriteOutcome outcome_;
 };
 
 static_assert(std::is_trivially_copyable_v<Http1BufferedResponseWriteResult>);
-static_assert(sizeof(Http1BufferedResponseWriteResult) <= 8);
+static_assert(sizeof(Http1BufferedResponseWriteResult) <= 4);
 
 // `bytesTransferred` is the composed async-write prefix accepted before `error`.
 // Only a prefix containing the entire serialized head commits a final status.
