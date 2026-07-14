@@ -4319,3 +4319,71 @@ RUVIA_TEST(http2_connection_rapid_reset_flood_trips_enhance_your_calm) {
     RUVIA_CHECK(conn.connectionError().has_value());
     RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
 }
+
+// A HEADERS without END_HEADERS followed by an endless stream of EMPTY CONTINUATION
+// frames keeps the field block "in progress" forever: empty frames add no bytes,
+// so the accumulated-block size cap never trips. The CONTINUATION frame-count
+// budget cuts the peer off with GOAWAY(ENHANCE_YOUR_CALM) (RFC 9113 §6.10,
+// CVE-2024-27316).
+RUVIA_TEST(http2_connection_continuation_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    // Open the block WITHOUT END_HEADERS so CONTINUATION frames are expected.
+    const auto head = headersFrame(
+        &resource, 1, 0, std::string_view(block.data(), block.size()));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+
+    const auto empty = continuationFrame(&resource, 1, 0, {});
+    bool tripped = false;
+    for (std::uint32_t i = 0;
+         i < ruvia::detail::kHttp2MaxContinuationFrames + 2 && !tripped;
+         ++i) {
+        tripped = conn.feed(std::string_view(empty.data(), empty.size())) ==
+            ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// A well-formed head split across a few CONTINUATION frames completes normally: the
+// budget is generous enough that legitimate fragmentation never trips it.
+RUVIA_TEST(http2_connection_fragmented_headers_within_budget_complete) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    std::pmr::string block(&resource);
+    encodeGetRequest(block);
+    const std::string_view whole(block.data(), block.size());
+    const auto q = whole.size() / 4;
+    const auto head = headersFrame(&resource, 1, 0, whole.substr(0, q));
+    RUVIA_CHECK(conn.feed(std::string_view(head.data(), head.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    const auto c1 = continuationFrame(&resource, 1, 0, whole.substr(q, q));
+    const auto c2 = continuationFrame(&resource, 1, 0, whole.substr(2 * q, q));
+    const auto c3 = continuationFrame(
+        &resource, 1,
+        ruvia::detail::kHttp2FlagEndHeaders | ruvia::detail::kHttp2FlagEndStream,
+        whole.substr(3 * q));
+    RUVIA_CHECK(conn.feed(std::string_view(c1.data(), c1.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.feed(std::string_view(c2.data(), c2.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(conn.feed(std::string_view(c3.data(), c3.size())) !=
+        ruvia::detail::Http2FeedResult::kProtocolFailure);
+    RUVIA_CHECK(!conn.connectionError().has_value());
+
+    bool sawHead = false;
+    while (const auto event = conn.nextEvent()) {
+        if (event->messageHead() != nullptr) {
+            sawHead = true;
+        }
+    }
+    RUVIA_CHECK(sawHead);
+}

@@ -59,6 +59,24 @@ RUVIA_TEST(header_block_size_limit_guards_continuation_flood) {
     RUVIA_CHECK(fresh.requestHeaderBlock().empty());
 }
 
+RUVIA_TEST(header_continuation_frame_budget_bounds_empty_flood) {
+    using ruvia::detail::kHttp2MaxContinuationFrames;
+    Http2HeaderContinuation cont;
+    cont.start(1, Http2HeaderBlockKind::kInitial);
+    // Empty CONTINUATION frames add no bytes and slip past the size cap, so the
+    // frame count is the only bound (CVE-2024-27316). Every frame up to the budget
+    // is accepted; the one past it is rejected.
+    for (std::uint32_t i = 0; i < kHttp2MaxContinuationFrames; ++i) {
+        RUVIA_CHECK(cont.recordContinuationFrame());
+    }
+    RUVIA_CHECK(!cont.recordContinuationFrame());
+
+    // Starting a fresh block clears the counter so a legitimate next block is not
+    // penalized for the previous one.
+    cont.start(3, Http2HeaderBlockKind::kInitial);
+    RUVIA_CHECK(cont.recordContinuationFrame());
+}
+
 RUVIA_TEST(header_continuation_state_machine_enforces_same_stream_only) {
     Http2HeaderContinuation cont;
     // Idle: any frame type is acceptable and no stream is being continued.
