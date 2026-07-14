@@ -3964,9 +3964,43 @@ check_files_no_match("HTTP/1 buffered completion must own its commit boundary an
 check_files_no_match("HTTP file writes must return results instead of error side channels"
     "${RULE_STALE_HTTP_FILE_WRITE_COMPLETION}"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileFallback.h"
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileZeroCopy.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileWrite.h"
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h"
-    "${RUVIA_ROOT}/ruvia-web/src/server/HttpFileZeroCopy.cpp")
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpFileWrite.cpp")
+
+set(WEB_HTTP_FILE_WRITE
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileWrite.h")
+set(WEB_HTTP_FILE_WRITE_SOURCE
+    "${RUVIA_ROOT}/ruvia-web/src/server/HttpFileWrite.cpp")
+set(WEB_HTTP_RESPONSE_WRITER
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpResponseWriter.h")
+if(EXISTS "${WEB_HTTP_FILE_WRITE}" AND
+   EXISTS "${WEB_HTTP_FILE_WRITE_SOURCE}" AND
+   EXISTS "${WEB_HTTP_RESPONSE_WRITER}")
+    file(READ "${WEB_HTTP_FILE_WRITE}" web_http_file_write)
+    file(READ "${WEB_HTTP_FILE_WRITE_SOURCE}" web_http_file_write_source)
+    file(READ "${WEB_HTTP_RESPONSE_WRITER}" web_http_response_writer)
+    if(NOT web_http_file_write MATCHES
+           "Task<std::error_code> writeHttpResponseFile" OR
+       NOT web_http_file_write MATCHES
+           "return writeFileFallback" OR
+       NOT web_http_file_write_source MATCHES
+           "Task<std::error_code> writeHttpResponseFile" OR
+       NOT web_http_file_write_source MATCHES
+           "sendfile|TransmitFile|writeFileFallback" OR
+       NOT web_http_response_writer MATCHES
+           "co_await writeHttpResponseFile" OR
+       web_http_response_writer MATCHES
+           "HttpFileZeroCopy|writeFileZeroCopy|zeroCopyResult|if constexpr[^{\r\n]*asio::ip::tcp::socket" OR
+       web_http_file_write MATCHES
+           "HttpFileZeroCopy(Result|Completed|Unavailable|Failed)|std::variant")
+        boundary_error("HTTP response file strategy leaked into the generic writer"
+            "one file-write driver must own native TCP selection, unsupported-platform fallback, and the final error result")
+    endif()
+else()
+    boundary_error("HTTP response file write driver is incomplete"
+        "HttpFileWrite.h, HttpFileWrite.cpp, and HttpResponseWriter.h are required")
+endif()
 check_files_no_match("database migration must return its owned report"
     "${RULE_STALE_DB_MIGRATION_REPORT_SIDE_CHANNEL}"
     "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
@@ -4455,7 +4489,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h1_result_test MATCHES
            "http1_buffered_write_cannot_complete_without_a_full_head" OR
        NOT buffered_response_h1_result_test MATCHES
-           "http_file_zero_copy_result_distinguishes_capability" OR
+           "http_response_file_writer_hides_native_capability" OR
        NOT buffered_response_h1_result_test MATCHES
            "http1_buffered_file_fallback_completion_owns_status" OR
        NOT buffered_response_h1_result_test MATCHES
@@ -4485,7 +4519,7 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_web_package_consumer MATCHES
            "Http1BufferedResponseWriteResult" OR
        NOT buffered_response_web_package_consumer MATCHES
-           "HttpFileZeroCopyResult" OR
+           "writeHttpResponseFile" OR
        NOT buffered_response_web_package_consumer MATCHES
            "prepareBufferedHttpResponse" OR
        NOT buffered_response_web_package_consumer MATCHES
@@ -9912,8 +9946,6 @@ set(WEB_EXECUTION_HTTP1_WRITE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1BufferedResponseWrite.h")
 set(WEB_EXECUTION_HTTP2_WRITE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http2BufferedResponseWrite.h")
-set(WEB_EXECUTION_ZERO_COPY
-    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/HttpFileZeroCopy.h")
 set(WEB_EXECUTION_REQUEST_COMPLETION
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/server/Http1SessionRequestCompletion.h")
 set(WEB_EXECUTION_PACKAGE_CONSUMER
@@ -9925,7 +9957,6 @@ foreach(web_execution_contract IN ITEMS
         "${WEB_EXECUTION_WEBSOCKET_ROUTE}"
         "${WEB_EXECUTION_HTTP1_WRITE}"
         "${WEB_EXECUTION_HTTP2_WRITE}"
-        "${WEB_EXECUTION_ZERO_COPY}"
         "${WEB_EXECUTION_REQUEST_COMPLETION}"
         "${WEB_EXECUTION_PACKAGE_CONSUMER}")
     if(NOT EXISTS "${web_execution_contract}")
@@ -9941,7 +9972,6 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
    EXISTS "${WEB_EXECUTION_WEBSOCKET_ROUTE}" AND
    EXISTS "${WEB_EXECUTION_HTTP1_WRITE}" AND
    EXISTS "${WEB_EXECUTION_HTTP2_WRITE}" AND
-   EXISTS "${WEB_EXECUTION_ZERO_COPY}" AND
    EXISTS "${WEB_EXECUTION_REQUEST_COMPLETION}" AND
    EXISTS "${WEB_EXECUTION_PACKAGE_CONSUMER}")
     file(READ "${WEB_EXECUTION_ROUTE_RESOLUTION}"
@@ -9956,8 +9986,6 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
         web_execution_http1_write)
     file(READ "${WEB_EXECUTION_HTTP2_WRITE}"
         web_execution_http2_write)
-    file(READ "${WEB_EXECUTION_ZERO_COPY}"
-        web_execution_zero_copy)
     file(READ "${WEB_EXECUTION_REQUEST_COMPLETION}"
         web_execution_request_completion)
     file(READ "${WEB_EXECUTION_PACKAGE_CONSUMER}"
@@ -9992,10 +10020,6 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
            "committedStatus[(][)] const noexcept" OR
        NOT web_execution_http2_write MATCHES
            "committedStatus[(][)] const noexcept" OR
-       NOT web_execution_zero_copy MATCHES
-           "failed[(][)] const [&] noexcept" OR
-       NOT web_execution_zero_copy MATCHES
-           "unavailable[(][)][ \t\r\n]+const && = delete" OR
        NOT web_execution_request_completion MATCHES
            "compaction[(][)] const [&] noexcept" OR
        NOT web_execution_request_completion MATCHES

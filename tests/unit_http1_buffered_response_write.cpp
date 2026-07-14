@@ -36,7 +36,7 @@
 #include "ruvia/http/detail/server/HttpResponseWritePlan.h"
 #include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
 #include "ruvia/web/detail/server/HttpFileFallback.h"
-#include "ruvia/web/detail/server/HttpFileZeroCopy.h"
+#include "ruvia/web/detail/server/HttpFileWrite.h"
 #include "ruvia/web/detail/server/HttpResponseWriter.h"
 
 namespace {
@@ -46,10 +46,6 @@ using ruvia::HttpResponse;
 using ruvia::WorkerMemory;
 using ruvia::detail::Http1BufferedResponseWriteResult;
 using ruvia::detail::Http1ServerConnectionPlan;
-using ruvia::detail::HttpFileZeroCopyCompleted;
-using ruvia::detail::HttpFileZeroCopyFailed;
-using ruvia::detail::HttpFileZeroCopyResult;
-using ruvia::detail::HttpFileZeroCopyUnavailable;
 using ruvia::detail::ResponseFileBody;
 using ruvia::detail::ResponseHeadBuffer;
 using ruvia::detail::appendResponseHead;
@@ -60,7 +56,7 @@ using ruvia::detail::responseBody;
 using ruvia::detail::setResponseFileBody;
 using ruvia::detail::taskAsAwaitable;
 using ruvia::detail::writeFileFallback;
-using ruvia::detail::writeFileZeroCopy;
+using ruvia::detail::writeHttpResponseFile;
 using ruvia::detail::writeResponseWithScratch;
 
 template <typename Alternative>
@@ -72,16 +68,6 @@ template <typename Alternative>
 concept HasError = requires(const Alternative& alternative) {
     { alternative.error() } -> std::same_as<const std::error_code&>;
 };
-
-template <typename Result>
-concept HasAnyRvalueHttp1WriteBorrow =
-    requires(Result&& value) {
-        requires std::is_pointer_v<decltype(std::move(value).completed())>;
-    } ||
-    requires(Result&& value) { std::move(value).failedBeforeCommit(); } ||
-    requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
-    requires(Result&& value) { std::move(value).unavailable(); } ||
-    requires(Result&& value) { std::move(value).failed(); };
 
 static_assert(!std::is_default_constructible_v<
     Http1BufferedResponseWriteResult>);
@@ -97,28 +83,13 @@ static_assert(std::same_as<
 static_assert(std::is_trivially_copyable_v<
     Http1BufferedResponseWriteResult>);
 static_assert(sizeof(Http1BufferedResponseWriteResult) <= 8);
-static_assert(!std::is_default_constructible_v<HttpFileZeroCopyResult>);
-static_assert(!HasAnyRvalueHttp1WriteBorrow<HttpFileZeroCopyResult>);
-static_assert(!HasError<HttpFileZeroCopyResult>);
-static_assert(!HasError<HttpFileZeroCopyCompleted>);
-static_assert(!HasError<HttpFileZeroCopyUnavailable>);
-static_assert(HasError<HttpFileZeroCopyFailed>);
 static_assert(std::same_as<
-    decltype(std::declval<const HttpFileZeroCopyResult&>().completed()),
-    const HttpFileZeroCopyCompleted*>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpFileZeroCopyResult&>().unavailable()),
-    const HttpFileZeroCopyUnavailable*>);
-static_assert(std::same_as<
-    decltype(std::declval<const HttpFileZeroCopyResult&>().failed()),
-    const HttpFileZeroCopyFailed*>);
-
-using WriteFileZeroCopyFunction = ruvia::Task<HttpFileZeroCopyResult> (*)(
-    asio::ip::tcp::socket&,
-    ResponseFileBody);
-static_assert(std::same_as<
-    decltype(&writeFileZeroCopy),
-    WriteFileZeroCopyFunction>);
+    decltype(writeHttpResponseFile(
+        std::declval<asio::ip::tcp::socket&>(),
+        std::declval<WorkerMemory&>(),
+        std::declval<std::pmr::string*>(),
+        std::declval<ResponseFileBody>())),
+    ruvia::Task<std::error_code>>);
 static_assert(std::same_as<
     decltype(writeFileFallback(
         std::declval<asio::ip::tcp::socket&>(),
@@ -240,11 +211,14 @@ private:
     std::filesystem::path path_;
 };
 
-[[nodiscard]] HttpFileZeroCopyResult runZeroCopyAttempt(
+[[nodiscard]] std::error_code runHttpResponseFileWrite(
     ResponseFileBody fileBody) {
     asio::io_context context(1);
     asio::ip::tcp::socket socket(context);
-    return runTask(context, writeFileZeroCopy(socket, fileBody));
+    WorkerMemory memory;
+    return runTask(
+        context,
+        writeHttpResponseFile(socket, memory, nullptr, fileBody));
 }
 
 enum class WriteScenario {
@@ -382,9 +356,9 @@ RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
     RUVIA_CHECK(!result.committedStatus().has_value());
 }
 
-RUVIA_TEST(http_file_zero_copy_result_distinguishes_capability) {
+RUVIA_TEST(http_response_file_writer_hides_native_capability) {
     const ScopedTestFile file(
-        "ruvia_http_file_zero_copy_result.bin",
+        "ruvia_http_response_file_write.bin",
         "");
     HttpResponse response(std::pmr::get_default_resource());
     setResponseFileBody(response, file.path(), 0);
@@ -394,20 +368,12 @@ RUVIA_TEST(http_file_zero_copy_result_distinguishes_capability) {
         return;
     }
 
-    const auto result = runZeroCopyAttempt(*fileBody);
-#if defined(__linux__) || defined(_WIN32)
-    RUVIA_CHECK(result.completed() != nullptr);
-    RUVIA_CHECK(result.unavailable() == nullptr);
-#else
-    RUVIA_CHECK(result.completed() == nullptr);
-    RUVIA_CHECK(result.unavailable() != nullptr);
-#endif
-    RUVIA_CHECK(result.failed() == nullptr);
+    RUVIA_CHECK(!runHttpResponseFileWrite(*fileBody));
 }
 
-RUVIA_TEST(http_file_zero_copy_result_preserves_open_failure) {
+RUVIA_TEST(http_response_file_writer_preserves_open_failure) {
     const auto path = makeTestFilePath(
-        "ruvia_http_file_zero_copy_missing.bin");
+        "ruvia_http_response_file_write_missing.bin");
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
     HttpResponse response(std::pmr::get_default_resource());
@@ -418,19 +384,7 @@ RUVIA_TEST(http_file_zero_copy_result_preserves_open_failure) {
         return;
     }
 
-    const auto result = runZeroCopyAttempt(*fileBody);
-#if defined(__linux__) || defined(_WIN32)
-    const auto* failed = result.failed();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed != nullptr) {
-        RUVIA_CHECK(static_cast<bool>(failed->error()));
-    }
-    RUVIA_CHECK(result.unavailable() == nullptr);
-#else
-    RUVIA_CHECK(result.failed() == nullptr);
-    RUVIA_CHECK(result.unavailable() != nullptr);
-#endif
-    RUVIA_CHECK(result.completed() == nullptr);
+    RUVIA_CHECK(static_cast<bool>(runHttpResponseFileWrite(*fileBody)));
 }
 
 RUVIA_TEST(http1_buffered_file_fallback_completion_owns_status) {

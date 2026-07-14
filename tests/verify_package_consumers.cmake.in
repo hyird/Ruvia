@@ -2394,6 +2394,31 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
             "installed HTTP/1 buffered response completion ownership was split or reconstructed")
     endif()
 
+    set(_installed_http_file_write_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpFileWrite.h")
+    set(_installed_http_file_zero_copy_path
+        "${_install_prefix}/include/ruvia/web/detail/server/HttpFileZeroCopy.h")
+    if(NOT EXISTS "${_installed_http_file_write_path}" OR
+       EXISTS "${_installed_http_file_zero_copy_path}")
+        message(FATAL_ERROR
+            "installed Web package did not replace the zero-copy result surface with the unified file writer")
+    endif()
+    file(READ "${_installed_http_file_write_path}"
+        _installed_http_file_write)
+    if(NOT _installed_http_file_write MATCHES
+           "Task<std::error_code> writeHttpResponseFile" OR
+       NOT _installed_http_file_write MATCHES
+           "return writeFileFallback" OR
+       NOT _installed_http1_buffered_response_writer MATCHES
+           "co_await writeHttpResponseFile" OR
+       _installed_http1_buffered_response_writer MATCHES
+           "HttpFileZeroCopy|writeFileZeroCopy|zeroCopyResult|if constexpr[^{\r\n]*asio::ip::tcp::socket" OR
+       _installed_http_file_write MATCHES
+           "HttpFileZeroCopy(Result|Completed|Unavailable|Failed)|std::variant")
+        message(FATAL_ERROR
+            "installed HTTP response writer leaked native file capability selection")
+    endif()
+
     set(_installed_access_log_model_path
         "${_install_prefix}/include/ruvia/web/ServerConfig.h")
     set(_installed_access_log_access_path

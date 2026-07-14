@@ -8,8 +8,7 @@
 
 #include <asio.hpp>
 
-#include "ruvia/web/detail/server/HttpFileFallback.h"
-#include "ruvia/web/detail/server/HttpFileZeroCopy.h"
+#include "ruvia/web/detail/server/HttpFileWrite.h"
 #include "ruvia/web/detail/server/Http1BufferedResponseWrite.h"
 #include "ruvia/http/detail/server/HttpResponseHead.h"
 #include "ruvia/http/detail/server/HttpResponseHeadPolicy.h"
@@ -89,30 +88,7 @@ Task<Http1BufferedResponseWriteResult> writeResponseWithScratch(
                 bytesTransferred);
         }
 
-        if constexpr (std::is_same_v<
-                          std::remove_cvref_t<Stream>,
-                          asio::ip::tcp::socket>) {
-            const auto zeroCopyResult =
-                co_await writeFileZeroCopy(stream, *fileBody);
-            if (zeroCopyResult.completed() != nullptr) {
-                co_return classifyHttp1BufferedResponseWrite(
-                    responsePlan,
-                    responseHeadBytes,
-                    {},
-                    responseHeadBytes);
-            }
-            if (const auto* failed = zeroCopyResult.failed()) {
-                co_return classifyHttp1BufferedResponseWrite(
-                    responsePlan,
-                    responseHeadBytes,
-                    failed->error(),
-                    responseHeadBytes);
-            }
-            // The sole remaining alternative is zero-copy unavailable, which
-            // intentionally selects the portable buffered writer below.
-        }
-
-        const auto fileError = co_await writeFileFallback(
+        const auto fileError = co_await writeHttpResponseFile(
             stream,
             memory,
             fileChunkBuffer,
