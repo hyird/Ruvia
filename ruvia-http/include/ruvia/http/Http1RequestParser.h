@@ -125,17 +125,20 @@ public:
             : Http1RequestParseKind::kNeedMore;
     }
 
-    [[nodiscard]] const Http1RequestNeedMore* needMore() const noexcept {
+    [[nodiscard]] const Http1RequestNeedMore* needMore() const & noexcept {
         return std::get_if<Http1RequestNeedMore>(&state_);
     }
+    const Http1RequestNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] const Http1ParsedRequest* parsed() const noexcept {
+    [[nodiscard]] const Http1ParsedRequest* parsed() const & noexcept {
         return std::get_if<Http1ParsedRequest>(&state_);
     }
+    const Http1ParsedRequest* parsed() const && = delete;
 
-    [[nodiscard]] const Http1RequestParseFailure* failure() const noexcept {
+    [[nodiscard]] const Http1RequestParseFailure* failure() const & noexcept {
         return std::get_if<Http1RequestParseFailure>(&state_);
     }
+    const Http1RequestParseFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1RequestParseResultAccess;

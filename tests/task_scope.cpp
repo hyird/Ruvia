@@ -11,6 +11,12 @@
 #include <chrono>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
+
+static_assert(std::is_move_constructible_v<ruvia::Task<void>>);
+static_assert(!std::is_move_assignable_v<ruvia::Task<void>>);
+static_assert(std::is_move_constructible_v<ruvia::Task<int>>);
+static_assert(!std::is_move_assignable_v<ruvia::Task<int>>);
 
 namespace {
 

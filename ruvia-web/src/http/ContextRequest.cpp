@@ -10,6 +10,7 @@
 #include "ruvia/http/HttpProtocolError.h"
 #include "ruvia/web/detail/http/ContextRequestInternal.h"
 #include "ruvia/web/detail/http/RequestFieldsAccess.h"
+#include "ruvia/web/detail/http/RequestQueryValues.h"
 #include "ruvia/http/detail/MultipartParsing.h"
 #include "ruvia/http/detail/RequestBodyDecoding.h"
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
@@ -19,6 +20,7 @@
 #include "ruvia/web/detail/model/Parser.h"
 
 #include <algorithm>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -223,7 +225,7 @@ void appendParsedBodyField(
     std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::RequestFormField&& field,
     ContextRequest::ParseBodyOptions options) {
-    if (options.dot) {
+    if (options.dottedNames == ContextRequest::DottedNamePolicy::kExpandPath) {
         if (fieldNameHasProtoObject(field.name())) {
             return;
         }
@@ -236,7 +238,8 @@ void appendParsedBodyField(
 void compactParsedBodyFields(
     std::pmr::vector<ContextRequest::RequestFormField>& fields,
     ContextRequest::ParseBodyOptions options) {
-    if (options.all || fields.size() < 2) {
+    if (options.repeatedScalars == ContextRequest::RepeatedScalarPolicy::kRetainAll ||
+        fields.size() < 2) {
         return;
     }
 
@@ -268,11 +271,14 @@ void compactParsedBodyFields(
             continue;
         }
         if (write != read) {
-            fields[write] = std::move(fields[read]);
+            std::destroy_at(&fields[write]);
+            std::construct_at(&fields[write], std::move(fields[read]));
         }
         ++write;
     }
-    fields.erase(fields.begin() + write, fields.end());
+    while (fields.size() > write) {
+        fields.pop_back();
+    }
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseUrlEncodedFormBody(
@@ -316,7 +322,7 @@ void compactParsedBodyFields(
         throw std::invalid_argument("invalid form body");
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return detail::RequestFormDataAccess::fromFields(std::move(fields));
 }
 
 [[nodiscard]] std::pmr::vector<MultipartPart> parseCompleteMultipartBody(
@@ -364,7 +370,7 @@ void compactParsedBodyFields(
             options);
     }
     compactParsedBodyFields(fields, options);
-    return ContextRequest::RequestFormData(std::move(fields));
+    return detail::RequestFormDataAccess::fromFields(std::move(fields));
 }
 
 [[nodiscard]] ContextRequest::RequestFormData parseFormBodyFromView(
@@ -387,7 +393,7 @@ void compactParsedBodyFields(
     if (const auto* failure = boundary.failure()) {
         switch (failure->error()) {
         case detail::HttpMultipartBoundaryParseError::kInvalidContentType:
-            return ContextRequest::RequestFormData(resource);
+            return detail::RequestFormDataAccess::empty(resource);
         case detail::HttpMultipartBoundaryParseError::kInvalidBoundary:
             throw std::invalid_argument("invalid multipart boundary");
         }
@@ -396,23 +402,6 @@ void compactParsedBodyFields(
 }
 
 }  // namespace
-
-std::string_view ContextRequest::RawRequestClone::header(std::string_view name) const noexcept {
-    for (auto it = headers_.rbegin(); it != headers_.rend(); ++it) {
-        if (detail::httpAsciiEqualsIgnoreCase(it->name(), name)) {
-            return it->value();
-        }
-    }
-    return {};
-}
-
-ContextRequest::RequestFormData ContextRequest::RawRequestClone::parseBody(ParseBodyOptions options) const {
-    return parseFormBodyFromView(
-        header("Content-Type"),
-        body(),
-        body_.get_allocator().resource(),
-        options);
-}
 
 const RequestNameValueList& Context::requestHeaders() const {
     if (requestHeaders_ == nullptr) {
@@ -494,9 +483,9 @@ void Context::ensureRequestQuery() const {
     });
 
     auto& query = memory_.emplace<RequestNameValueList>(detail::RequestNameValueListAccess::make(resource()));
-    auto& groups = memory_.emplace<RequestValueGroupList>(detail::RequestValueGroupListAccess::make(resource()));
+    auto& groups = memory_.emplace<detail::RequestQueryValues>(resource());
     detail::RequestNameValueListAccess::reserve(query, builds.size());
-    detail::RequestValueGroupListAccess::reserve(groups, builds.size());
+    groups.reserve(builds.size());
     for (const auto& build : builds) {
         // A duplicated query name resolves to its LAST value, matching every other
         // duplicate-resolution path: Context::requestQuery(name), HttpRequest::query,
@@ -513,16 +502,13 @@ void Context::ensureRequestQuery() const {
                 storedStringView(storage[lastIndex * 2]),
                 storedStringView(storage[lastIndex * 2 + 1])));
 
-        auto group = detail::RequestValueGroupAccess::make(resource(), pairNameAt(storage, build.firstIndex));
+        auto& group = groups.append(pairNameAt(storage, build.firstIndex));
         for (std::size_t i = build.begin; i < build.end; ++i) {
             const auto pairIndex = order[i];
-            detail::RequestValueGroupAccess::add(group, storedStringView(storage[pairIndex * 2 + 1]));
+            group.add(storedStringView(storage[pairIndex * 2 + 1]));
         }
-        detail::RequestValueGroupListAccess::pushBack(groups, std::move(group));
     }
 
-    requestQueryStorage_ = &storage;
-    requestQueriesStorage_ = &storage;
     requestQuery_ = &query;
     requestQueries_ = &groups;
 }
@@ -553,7 +539,7 @@ std::optional<std::string_view> Context::requestQuery(std::string_view name) con
     return result;
 }
 
-const RequestValueGroupList& Context::requestQueries() const {
+const detail::RequestQueryValues& Context::requestQueries() const {
     ensureRequestQuery();
     return *requestQueries_;
 }
@@ -602,28 +588,6 @@ const RequestNameValueList& Context::requestCookies() const {
     return *requestCookies_;
 }
 
-const std::pmr::vector<ContextRequest::MatchedRoute>& Context::requestMatchedRoutes() const {
-    if (matchedRoutes_ == nullptr) {
-        auto& routes = memory_.emplace<std::pmr::vector<ContextRequest::MatchedRoute>>(resource());
-        if (!routePath_.empty() && routeMethod_ != HttpKnownMethod::kUnknown) {
-            const auto method = knownHttpMethodToken(routeMethod_);
-            routes.reserve(routeMiddlewareCount_ + 1);
-            for (std::size_t i = 0; i < routeMiddlewareCount_; ++i) {
-                routes.push_back(ContextRequest::MatchedRoute{
-                    .method = method,
-                    .path = routePath_,
-                    .kind = ContextRequest::MatchedRouteKind::kMiddleware});
-            }
-            routes.push_back(ContextRequest::MatchedRoute{
-                .method = method,
-                .path = routePath_,
-                .kind = ContextRequest::MatchedRouteKind::kHandler});
-        }
-        matchedRoutes_ = &routes;
-    }
-    return *matchedRoutes_;
-}
-
 const RequestNameValueList& Context::routeParams() const {
     if (routeParams_ == nullptr) {
         auto& storage = memory_.emplace<std::pmr::vector<std::pmr::string>>(resource());
@@ -644,7 +608,6 @@ const RequestNameValueList& Context::routeParams() const {
                     std::string_view(storage[nameIndex].data(), storage[nameIndex].size()),
                     std::string_view(storage[nameIndex + 1].data(), storage[nameIndex + 1].size())));
         }
-        routeParamStorage_ = &storage;
         routeParams_ = &params;
     }
     return *routeParams_;
@@ -771,22 +734,6 @@ std::optional<std::string_view> ContextRequest::signedCookie(
         return std::nullopt;
     }
     return value;
-}
-
-Task<ContextRequest::RawRequestClone> ContextRequest::cloneRawRequest() const {
-    RawRequestClone clone(context_->resource());
-    clone.method_.assign(raw().method().data(), raw().method().size());
-    const auto requestUrl = url();
-    clone.url_.assign(requestUrl.data(), requestUrl.size());
-    clone.path_.assign(raw().path().data(), raw().path().size());
-    clone.headers_.reserve(raw().headers().size());
-    for (const auto& header : raw().headers()) {
-        clone.headers_.push_back(
-            RawRequestClone::Header::make(context_->resource(), header.name(), header.value()));
-    }
-    const auto requestBody = co_await text();
-    clone.body_.assign(requestBody.data(), requestBody.size());
-    co_return std::move(clone);
 }
 
 bool Context::requestContentTypeMatches(std::string_view expected) const noexcept {

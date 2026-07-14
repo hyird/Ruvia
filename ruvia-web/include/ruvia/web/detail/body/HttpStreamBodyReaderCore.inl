@@ -25,7 +25,8 @@ namespace ruvia::detail {
 
 inline void requireCompleteTransferCoding(
     TransferCodingDecoder& decoder) {
-    if (decoder.finishInput().complete() == nullptr) {
+    const auto finishResult = decoder.finishInput();
+    if (finishResult.complete() == nullptr) {
         throw HttpProtocolError(400, "incomplete transfer-coding body");
     }
 }

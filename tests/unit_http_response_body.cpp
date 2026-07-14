@@ -22,6 +22,7 @@ using ruvia::HttpResponse;
 using ruvia::detail::HttpResponseBody;
 using ruvia::detail::materializeResponseBody;
 using ruvia::detail::responseBody;
+using ruvia::detail::setResponseBodyBorrowedView;
 using ruvia::detail::setResponseBodyOwned;
 using ruvia::detail::setResponseBodyStaticView;
 using ruvia::detail::setResponseBorrowedFileBody;
@@ -32,6 +33,7 @@ static_assert(std::is_same_v<
     const HttpResponseBody&>);
 static_assert(!std::is_copy_constructible_v<HttpResponseBody>);
 static_assert(std::is_nothrow_move_constructible_v<HttpResponseBody>);
+static_assert(!std::is_move_assignable_v<HttpResponseBody>);
 static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::HttpBorrowedResponseBytes>);
@@ -75,7 +77,7 @@ RUVIA_TEST(response_body_has_one_storage_alternative) {
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
 
     std::string borrowedStorage = "borrowed";
-    response.setBodyView(borrowedStorage);
+    setResponseBodyBorrowedView(response, borrowedStorage);
     RUVIA_CHECK(responseBody(response).borrowedBytes() != nullptr);
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("borrowed"));
     RUVIA_CHECK(!responseBody(response).file().has_value());
@@ -92,15 +94,27 @@ RUVIA_TEST(response_body_has_one_storage_alternative) {
     RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("owned"));
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
 
-    response.setBodyCopy({});
+    response.body({});
     RUVIA_CHECK(responseBody(response).empty() != nullptr);
     RUVIA_CHECK_EQ(activeAlternativeCount(responseBody(response)), std::size_t{1});
+}
+
+RUVIA_TEST(response_public_body_owns_its_source) {
+    HttpResponse response(std::pmr::new_delete_resource());
+    std::string source = "owned copy";
+
+    response.body(source);
+    source[0] = 'X';
+
+    RUVIA_CHECK(responseBody(response).ownedBytes() != nullptr);
+    RUVIA_CHECK(responseBody(response).borrowedBytes() == nullptr);
+    RUVIA_CHECK_EQ(responseBody(response).bytes(), std::string_view("owned copy"));
 }
 
 RUVIA_TEST(response_body_materializes_only_ephemeral_borrow) {
     HttpResponse response(std::pmr::new_delete_resource());
     std::string source = "ephemeral";
-    response.setBodyView(source);
+    setResponseBodyBorrowedView(response, source);
 
     materializeResponseBody(response);
     source[0] = 'X';
@@ -157,7 +171,7 @@ RUVIA_TEST(response_body_file_view_is_atomic_and_non_default) {
 
 RUVIA_TEST(response_body_file_transition_validates_before_replacement) {
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy("preserved");
+    response.body("preserved");
 
     RUVIA_CHECK(throwsInvalidArgument([&] {
         setResponseFileBody(response, std::filesystem::path{}, 10);
@@ -179,8 +193,8 @@ RUVIA_TEST(response_body_move_preserves_active_alternative) {
     std::pmr::monotonic_buffer_resource targetResource;
     HttpResponse source(&sourceResource);
     HttpResponse target(&targetResource);
-    source.setBodyCopy("move-owned");
-    target.setBodyView("replaced");
+    source.body("move-owned");
+    setResponseBodyBorrowedView(target, "replaced");
 
     target = std::move(source);
     RUVIA_CHECK(target.headers().empty());

@@ -65,7 +65,7 @@ private:
         auto options = signOptions(c);
         options.subject.assign(c.req().query("sub").value_or("example-user"));
         auto jwt = ruvia::jwtSign(options, c.resource());
-        co_return c.text(jwt);
+        co_return c.text(std::move(jwt));
     }
 
     ruvia::Task<ruvia::HttpResponse> me(ruvia::Context& c) {

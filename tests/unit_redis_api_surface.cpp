@@ -3,15 +3,51 @@
 #include <chrono>
 #include <concepts>
 #include <initializer_list>
+#include <memory_resource>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/web/redis/RedisHandle.h"
+#include "ruvia/web/detail/redis/RedisTypesAccess.h"
 
 namespace {
+
+class RejectingMemoryResource final : public std::pmr::memory_resource {
+public:
+    void rejectAllocations(bool value = true) noexcept {
+        rejecting_ = value;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        if (rejecting_) {
+            throw std::bad_alloc();
+        }
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(void* value, std::size_t bytes, std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(value, bytes, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    bool rejecting_{false};
+};
+
+static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
+static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisScoredValue>);
+static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 
 template <typename T>
 concept HasRedisHandleSpanArgs = requires(
@@ -68,6 +104,21 @@ concept HasRedisTransactionInitializerListCommand =
     };
 
 template <typename T>
+concept HasRedisTransactionDiscard = requires(T& transaction) {
+    transaction.discard();
+};
+
+template <typename T>
+concept HasLvalueRedisExec = requires(T& batch) {
+    batch.exec();
+};
+
+template <typename T>
+concept HasRvalueRedisExec = requires(T& batch) {
+    std::move(batch).exec();
+};
+
+template <typename T>
 concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
     options.ttl;
     options.nx;
@@ -82,6 +133,15 @@ static_assert(HasRedisPipelineSpanCommand<ruvia::RedisPipeline>);
 static_assert(!HasRedisPipelineInitializerListCommand<ruvia::RedisPipeline>);
 static_assert(HasRedisTransactionSpanCommand<ruvia::RedisTransaction>);
 static_assert(!HasRedisTransactionInitializerListCommand<ruvia::RedisTransaction>);
+static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
+static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
+static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
+static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(std::move_constructible<ruvia::RedisPipeline>);
+static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
+static_assert(std::move_constructible<ruvia::RedisTransaction>);
+static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransaction&&>);
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::RedisSetOptions>().condition),
@@ -121,4 +181,37 @@ RUVIA_TEST(redis_set_expiration_cannot_represent_conflicting_modes) {
         zeroRejected = true;
     }
     RUVIA_CHECK(zeroRejected);
+}
+
+RUVIA_TEST(redis_value_move_assignment_propagates_allocator_failure) {
+    RejectingMemoryResource rejecting;
+    const auto longValue = std::string_view(
+        "redis value large enough to exceed any small-string buffer");
+
+    auto destination = ruvia::detail::RedisTypesAccess::keyValue(
+        {}, {}, &rejecting);
+    auto source = ruvia::detail::RedisTypesAccess::keyValue(
+        longValue, longValue, std::pmr::get_default_resource());
+    rejecting.rejectAllocations();
+    bool allocationFailure = false;
+    try {
+        destination = std::move(source);
+    } catch (const std::bad_alloc&) {
+        allocationFailure = true;
+    }
+    RUVIA_CHECK(allocationFailure);
+
+    rejecting.rejectAllocations(false);
+    auto destinationValue = ruvia::detail::RedisTypesAccess::nullValue(
+        &rejecting);
+    auto sourceValue = ruvia::detail::RedisTypesAccess::stringValue(
+        longValue, std::pmr::get_default_resource());
+    rejecting.rejectAllocations();
+    allocationFailure = false;
+    try {
+        destinationValue = std::move(sourceValue);
+    } catch (const std::bad_alloc&) {
+        allocationFailure = true;
+    }
+    RUVIA_CHECK(allocationFailure);
 }

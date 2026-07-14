@@ -22,15 +22,7 @@ public:
     Task& operator=(const Task&) = delete;
 
     Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
-
-    Task& operator=(Task&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        reset();
-        handle_ = std::exchange(other.handle_, {});
-        return *this;
-    }
+    Task& operator=(Task&&) = delete;
 
     ~Task() {
         reset();
@@ -83,15 +75,7 @@ public:
     Task& operator=(const Task&) = delete;
 
     Task(Task&& other) noexcept : handle_(std::exchange(other.handle_, {})) {}
-
-    Task& operator=(Task&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        reset();
-        handle_ = std::exchange(other.handle_, {});
-        return *this;
-    }
+    Task& operator=(Task&&) = delete;
 
     ~Task() {
         reset();

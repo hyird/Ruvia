@@ -13,6 +13,7 @@
 #include <asio/io_context.hpp>
 
 #include <ruvia/core/detail/WorkerDispatcher.h>
+#include <ruvia/core/detail/WorkerSelection.h>
 
 namespace ruvia {
 namespace {
@@ -21,15 +22,6 @@ enum class RuntimeState : std::uint8_t { kReady, kRunning, kStopping, kStopped }
 
 std::size_t defaultWorkerCount() noexcept {
     return std::max<std::size_t>(1, std::thread::hardware_concurrency());
-}
-
-std::uint64_t fnv1a(std::string_view value) noexcept {
-    std::uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char ch : value) {
-        hash ^= ch;
-        hash *= 1099511628211ull;
-    }
-    return hash;
 }
 
 }
@@ -178,7 +170,7 @@ WorkerHandle Runtime::workerFor(std::uint64_t key) const noexcept {
 }
 
 WorkerHandle Runtime::workerFor(std::string_view key) const noexcept {
-    return workerFor(fnv1a(key));
+    return workerFor(detail::workerSelectionHash(key));
 }
 
 }

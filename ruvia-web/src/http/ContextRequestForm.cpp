@@ -11,9 +11,9 @@
 namespace ruvia {
 
 ContextRequest::RequestFormData::Object::Object(
-    const RequestFormData* form,
+    const RequestFormData& form,
     std::string_view dotPath)
-    : form_(form),
+    : form_(&form),
       dotPath_(dotPath, resourceFor(form)),
       entries_(resourceFor(form)) {
     rebuildEntries();
@@ -23,7 +23,7 @@ ContextRequest::RequestFormData::Object
 ContextRequest::RequestFormData::Object::object(
     std::string_view name) const {
     if (path().empty()) {
-        return Object(form_, name);
+        return Object(*form_, name);
     }
 
     std::pmr::string childPath(resource());
@@ -33,7 +33,7 @@ ContextRequest::RequestFormData::Object::object(
         childPath.push_back('.');
         childPath.append(name);
     }
-    return Object(form_, std::string_view(childPath.data(), childPath.size()));
+    return Object(*form_, std::string_view(childPath.data(), childPath.size()));
 }
 
 std::string_view ContextRequest::RequestFormData::Object::directChildName(
@@ -56,10 +56,6 @@ std::string_view ContextRequest::RequestFormData::Object::directChildName(
 
 void ContextRequest::RequestFormData::Object::rebuildEntries() {
     entries_.clear();
-    if (form_ == nullptr) {
-        return;
-    }
-
     auto* const currentResource = resource();
     std::pmr::vector<std::size_t> order(currentResource);
     order.reserve(form_->fields_.size());

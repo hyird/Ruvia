@@ -39,10 +39,17 @@ concept HasChunkScanError = requires(const T& result) {
     { result.error() } -> std::same_as<ruvia::detail::HttpChunkScanError>;
 };
 
+template <typename T>
+concept HasAnyRvalueHttpChunkScanAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(std::same_as<
     decltype(ruvia::detail::scanHttpChunkedBody(std::string_view{})),
     HttpChunkScanResult>);
 static_assert(!std::default_initializable<HttpChunkScanResult>);
+static_assert(!HasAnyRvalueHttpChunkScanAccessor<HttpChunkScanResult>);
 static_assert(!HasChunkScanConsumedBytes<HttpChunkScanNeedMore>);
 static_assert(HasChunkScanConsumedBytes<HttpChunkScanComplete>);
 static_assert(!HasChunkScanConsumedBytes<HttpChunkScanFailure>);

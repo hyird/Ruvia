@@ -36,7 +36,6 @@ struct AppState;
 
 class App final {
 public:
-    static App& instance();
     ~App();
 
     [[nodiscard]] const Env& env() const noexcept;
@@ -86,6 +85,8 @@ public:
     [[nodiscard]] WebWorkerHandle workerFor(std::string_view key) const;
 
 private:
+    friend App& app();
+
     struct StateDeleter final {
         void operator()(detail::AppState* state) const noexcept;
     };

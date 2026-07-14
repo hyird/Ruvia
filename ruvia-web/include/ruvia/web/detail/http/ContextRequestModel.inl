@@ -42,9 +42,4 @@ inline const T& ContextRequest::valid() const {
     return validatedValues().get<T>();
 }
 
-template <typename T>
-inline void ContextRequest::addValidatedData(T&& data) const {
-    validatedValues().set(std::forward<T>(data), resource());
-}
-
 }  // namespace ruvia

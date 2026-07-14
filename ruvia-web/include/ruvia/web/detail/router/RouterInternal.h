@@ -113,7 +113,7 @@ private:
         PendingRoute(const PendingRoute&) = delete;
         PendingRoute& operator=(const PendingRoute&) = delete;
         PendingRoute(PendingRoute&&) noexcept = default;
-        PendingRoute& operator=(PendingRoute&&) noexcept = default;
+        PendingRoute& operator=(PendingRoute&&) = delete;
 
         [[nodiscard]] HttpKnownMethod method() const noexcept {
             return method_;
@@ -179,7 +179,7 @@ private:
     [[nodiscard]] std::pmr::vector<RouteMiddleware> materializeMiddlewares(
         std::span<const ControllerMiddlewareDescriptor> first,
         std::span<const ControllerMiddlewareDescriptor> second = {});
-    [[nodiscard]] RouteTable buildRouteTable() const;
+    void buildRouteTable(RouteTable& table) const;
 
     struct RouteTableDeleter final {
         std::pmr::memory_resource* resource{nullptr};

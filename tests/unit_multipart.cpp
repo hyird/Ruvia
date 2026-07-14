@@ -34,11 +34,19 @@ concept HasMultipartError = requires(const T& result) {
     result.error();
 };
 
+template <typename T>
+concept HasAnyRvalueMultipartPollAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).part(); } ||
+    requires(T&& result) { std::move(result).done(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(std::same_as<
     decltype(std::declval<ruvia::MultipartParser&>().poll()),
     ruvia::MultipartPollResult>);
 static_assert(!std::default_initializable<ruvia::MultipartPollResult>);
 static_assert(!HasMultipartStatus<ruvia::MultipartPollResult>);
+static_assert(!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::MultipartPollResult&>().part()),
     const ruvia::MultipartStreamPart*>);

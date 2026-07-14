@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "ruvia/http/Http1ClientRequestWriter.h"
 #include "ruvia/http/Http1ClientResponseParser.h"
@@ -23,6 +24,37 @@ using ruvia::Http1ClientRequestWriter;
 using ruvia::HttpClientRequest;
 using ruvia::HttpClientRequestContent;
 using ruvia::HttpOrigin;
+
+template <typename T>
+concept HasAnyRvalueHttpClientRequestContentAccessor =
+    requires(T&& content) { std::move(content).withoutContent(); } ||
+    requires(T&& content) { std::move(content).borrowedBytes(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestWirePolicyAccessor =
+    requires(T&& policy) { std::move(policy).noExpectation(); } ||
+    requires(T&& policy) { std::move(policy).continueExpectation(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestContentPlanAccessor =
+    requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).immediate(); } ||
+    requires(T&& plan) { std::move(plan).continueGated(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientRequestPrepareAccessor =
+    requires(T&& result) { std::move(result).bufferTooSmall(); } ||
+    requires(T&& result) { std::move(result).prepared(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueHttp1ClientRequestPrepareAccessor<
+    ruvia::Http1ClientRequestPrepareResult>);
+static_assert(!HasAnyRvalueHttpClientRequestContentAccessor<
+    ruvia::HttpClientRequestContent>);
+static_assert(!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor<
+    ruvia::Http1ClientRequestWirePolicy>);
+static_assert(!HasAnyRvalueHttp1ClientRequestContentPlanAccessor<
+    ruvia::Http1ClientRequestContentPlan>);
 
 template <typename T>
 concept HasRequestContentMode = requires(const T& content) {

@@ -50,7 +50,6 @@ private:
     std::exception_ptr firstFailure_;
     std::coroutine_handle<> joinContinuation_{};
     bool joinStarted_{false};
-    bool joined_{false};
 };
 
 }

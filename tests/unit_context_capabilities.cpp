@@ -10,6 +10,7 @@
 #include "ruvia/web/detail/http/RequestBodyLoader.h"
 #include "ruvia/web/detail/http/StreamingInternal.h"
 #include "ruvia/web/detail/websocket/WebSocketInternal.h"
+#include "ruvia/web/detail/ContextValues.h"
 
 #include <chrono>
 #include <cstdint>
@@ -104,6 +105,25 @@ struct OutputSink final {
     std::pmr::string scratch{std::pmr::get_default_resource()};
 };
 
+struct TrackedContextValue final {
+    TrackedContextValue(int& live, int& destroyed, int value) noexcept
+        : live_(&live), destroyed_(&destroyed), value(value) {
+        ++*live_;
+    }
+
+    TrackedContextValue(const TrackedContextValue&) = delete;
+    TrackedContextValue& operator=(const TrackedContextValue&) = delete;
+
+    ~TrackedContextValue() {
+        --*live_;
+        ++*destroyed_;
+    }
+
+    int* live_;
+    int* destroyed_;
+    int value;
+};
+
 ruvia::Task<void> writeOutput(void*, std::string_view) {
     co_return;
 }
@@ -169,6 +189,33 @@ ruvia::HttpRequest makeRequest(std::pmr::memory_resource* resource) {
 }
 
 }  // namespace
+
+RUVIA_TEST(context_value_store_transfers_entry_ownership_without_assignment) {
+    std::pmr::monotonic_buffer_resource resource;
+    int live = 0;
+    int destroyed = 0;
+    {
+        ruvia::detail::ContextValueStore values(&resource);
+        values.setAs<TrackedContextValue>("same", live, destroyed, 1);
+        RUVIA_CHECK_EQ(live, 1);
+
+        auto& replacement = values.setAs<TrackedContextValue>(
+            "same", live, destroyed, 2);
+        RUVIA_CHECK_EQ(replacement.value, 2);
+        RUVIA_CHECK_EQ(live, 1);
+        RUVIA_CHECK_EQ(destroyed, 1);
+
+        for (int i = 0; i < 32; ++i) {
+            const auto name = std::to_string(i);
+            values.setAs<TrackedContextValue>(name, live, destroyed, i);
+        }
+        RUVIA_CHECK_EQ(live, 33);
+        RUVIA_CHECK_EQ(destroyed, 1);
+        RUVIA_CHECK_EQ(values.get<TrackedContextValue>("same").value, 2);
+    }
+    RUVIA_CHECK_EQ(live, 0);
+    RUVIA_CHECK_EQ(destroyed, 34);
+}
 
 RUVIA_TEST(context_request_body_source_has_one_active_alternative) {
     ruvia::detail::RequestBodyLoader loader(
@@ -251,7 +298,7 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
         request,
         ruvia::detail::ContextServices{}.withResponseStream(writer));
     RUVIA_CHECK(&streamContext.stream() == &writer);
-    (void)streamContext.streamSSE();
+    (void)streamContext.streamSse();
     const auto sseHead = ruvia::detail::ContextAccess::streamingHead(streamContext);
     RUVIA_CHECK_EQ(sseHead.header("Content-Type"), std::string_view("text/event-stream"));
     RUVIA_CHECK_EQ(sseHead.header("Cache-Control"), std::string_view("no-cache"));
@@ -263,4 +310,18 @@ RUVIA_TEST(context_copies_typed_capabilities_into_public_facades) {
         request,
         ruvia::detail::ContextServices{}.withWebSocket(webSocket));
     RUVIA_CHECK(&webSocketContext.webSocket() == &webSocket);
+}
+
+RUVIA_TEST(context_request_exposes_matched_route_path) {
+    ruvia::WorkerMemory worker;
+    ruvia::RequestMemory memory(worker);
+    auto request = makeRequest(memory.resource());
+    auto context = ruvia::detail::ContextAccess::make(
+        memory,
+        request,
+        "/items/:id",
+        0);
+
+    const auto facade = context.req();
+    RUVIA_CHECK_EQ(facade.routePath(), std::string_view("/items/:id"));
 }

@@ -7,6 +7,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/web/App.h"
+#include "ruvia/core/detail/WorkerSelection.h"
 
 namespace {
 
@@ -30,16 +31,25 @@ int main() {
     }
     bool stableSelection = false;
     bool accepted = false;
+    bool startHookFinished = false;
+    bool stopHookAfterStart = false;
+    std::size_t stopCalls = 0;
     std::vector<ruvia::WebWorkerHandle> workers;
 
     app.setListenAddress("127.0.0.1")
         .setHttpListenPort(availablePort())
         .setThreadNum(2)
         .setWorkerMailboxCapacity(8)
+        .onStop([&] {
+            ++stopCalls;
+            stopHookAfterStart = startHookFinished;
+        })
         .onStart([&] {
             workers = app.workers();
-            const auto first = app.workerFor("device-42");
-            const auto second = app.workerFor("device-42");
+            constexpr std::string_view key = "device-42";
+            const auto first = app.workerFor(key);
+            const auto second =
+                app.workerFor(ruvia::detail::workerSelectionHash(key));
             stableSelection = workers.size() == 2 && first.valid() &&
                               first.id() == second.id();
             accepted = first.post(
@@ -47,6 +57,8 @@ int main() {
                                throw std::runtime_error("app worker task failed");
                                co_return;
                            }) == ruvia::PostResult::kAccepted;
+            app.stop();
+            startHookFinished = true;
         });
 
     bool propagated = false;
@@ -56,7 +68,8 @@ int main() {
         propagated = std::string_view(error.what()) == "app worker task failed";
     }
 
-    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated) {
+    if (!rejectedZeroCapacity || !stableSelection || !accepted || !propagated ||
+        !stopHookAfterStart || stopCalls != 1) {
         return 1;
     }
     for (const auto& worker : workers) {

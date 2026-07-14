@@ -169,7 +169,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     Http1ServerRequestParser parser;
     const auto emitFor = [&](std::string_view request) {
         HttpResponse response(std::pmr::new_delete_resource());
-        response.setBodyCopy("hello");
+        response.body("hello");
         const auto connectionPlan = commitResponse(
             response,
             parser.parseMessage(request).connectionPlan);
@@ -204,7 +204,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
 RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(207);
-    response.setBodyCopy("planned");
+    response.body("planned");
     const auto plan = http1BufferedResponsePlan(
         ruvia::detail::httpBufferedResponseWritePlan(
             HttpKnownMethod::kGet,
@@ -224,14 +224,14 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
 RUVIA_TEST(http1_response_head_rejects_representation_plan_mismatch) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(207);
-    response.setBodyCopy("old");
+    response.body("old");
     const auto plan = http1BufferedResponsePlan(
         ruvia::detail::httpBufferedResponseWritePlan(
             HttpKnownMethod::kGet,
             response),
         connectionPlanFor(ruvia::HttpProtocolVersion::kHttp11));
 
-    response.setBodyCopy("longer");
+    response.body("longer");
     RUVIA_CHECK(throwsInvalid([&] {
         (void)emitHead(response, plan.headPlan());
     }));
@@ -464,7 +464,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         "POST / HTTP/1.0\r\nConnection: keep-alive\r\nContent-Length: 1\r\n\r\nx";
 
     HttpResponse completeResponse(std::pmr::new_delete_resource());
-    completeResponse.setBodyCopy("response");
+    completeResponse.body("response");
     ruvia::detail::Http1RequestSequence completeRequestSequence(
         std::nullopt);
     const auto completePlan = finalizeBodyRouteResponse(
@@ -481,7 +481,7 @@ RUVIA_TEST(http1_body_completion_tightens_without_losing_protocol_version) {
         std::string("keep-alive"));
 
     HttpResponse incompleteResponse(std::pmr::new_delete_resource());
-    incompleteResponse.setBodyCopy("response");
+    incompleteResponse.body("response");
     ruvia::detail::Http1RequestSequence incompleteRequestSequence(
         std::nullopt);
     const auto incompletePlan = finalizeBodyRouteResponse(
@@ -502,7 +502,7 @@ RUVIA_TEST(response_head_emits_well_formed_normal) {
     HttpResponse response(std::pmr::new_delete_resource());
     response.status(200);
     response.header("X-Foo", "bar");
-    response.setBodyCopy("hello");
+    response.body("hello");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));
@@ -528,7 +528,7 @@ RUVIA_TEST(response_head_preserves_explicit_server_and_does_not_duplicate_date) 
     HttpResponse response(std::pmr::new_delete_resource());
     response.header("Server", "custom");
     response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
-    response.setBodyCopy("x");
+    response.body("x");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.find("Server: custom\r\n") != std::string::npos);
@@ -540,7 +540,7 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
     // A streaming/chunked writer owns framing itself. Caller-provided framing is
     // replaced by one canonical chunked field and no Content-Length survives.
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy("hello");
+    response.body("hello");
     response.header("Transfer-Encoding", "gzip, chunked");
     response.header("Content-Length", "999");
     const auto head = emitChunkedStreamHead(response);
@@ -554,7 +554,7 @@ RUVIA_TEST(response_head_suppresses_auto_content_length) {
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy("streamed");
+    response.body("streamed");
     response.header("Transfer-Encoding", "chunked");
     response.header("Content-Length", "8");
 
@@ -596,7 +596,7 @@ RUVIA_TEST(response_head_reset_content_canonicalizes_zero_length) {
     for (const bool streaming : {false, true}) {
         HttpResponse response(std::pmr::new_delete_resource());
         response.status(205);
-        response.setBodyCopy("must-not-be-sent");
+        response.body("must-not-be-sent");
         response.header("Content-Length", "16");
         response.header("Transfer-Encoding", "chunked");
         const auto head = streaming
@@ -622,7 +622,7 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
     for (int i = 0; i < 10; ++i) {
         response.header("X-Pad-" + std::to_string(i), big);
     }
-    response.setBodyCopy("body");
+    response.body("body");
     const auto head = emitBufferedHead(response);
 
     RUVIA_CHECK(head.starts_with("HTTP/1.1 200 OK\r\n"));

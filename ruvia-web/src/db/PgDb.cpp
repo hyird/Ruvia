@@ -269,8 +269,7 @@ Task<QueryResult> PostgreSqlPool::executeOnTransactionSlot(
 }
 
 Task<DbTransaction> PostgreSqlPool::beginTransaction(
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) {
+    std::pmr::memory_resource* resource) {
     const auto slotIndex = co_await acquireSlot();
     try {
         auto& slot = slots_[slotIndex];
@@ -283,7 +282,7 @@ Task<DbTransaction> PostgreSqlPool::beginTransaction(
         releaseSlot(slotIndex);
         throw;
     }
-    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, requestMemory);
+    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource);
 }
 
 Task<void> PostgreSqlPool::commitTransaction(

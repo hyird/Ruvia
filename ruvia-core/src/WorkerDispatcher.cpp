@@ -45,8 +45,8 @@ struct WorkerDispatcher::Impl {
         : ioContext(context),
           timer(context),
           slots(requestedCapacity),
-          timers(detail::processResource()),
-          workerId(gNextWorkerId.fetch_add(1, std::memory_order_relaxed)) {
+          workerId(gNextWorkerId.fetch_add(1, std::memory_order_relaxed)),
+          timers(detail::processResource()) {
         if (requestedCapacity == 0) {
             throw std::invalid_argument("worker mailbox capacity must be greater than zero");
         }
@@ -242,15 +242,28 @@ void WorkerDispatcher::stopTimers() noexcept {
 }
 
 void WorkerDispatcher::close() noexcept {
-    std::vector<std::weak_ptr<WorkerShutdownListener>> listeners;
+    notifyStopping(beginStopping(false));
+}
+
+WorkerDispatcher::ShutdownListeners WorkerDispatcher::beginStopping(
+    bool abandonDrain) noexcept {
+    ShutdownListeners listeners;
     {
         std::lock_guard lock(impl_->mutex);
+        if (abandonDrain) {
+            impl_->drainScheduled = false;
+        }
         if (!impl_->accepting) {
-            return;
+            return listeners;
         }
         impl_->accepting = false;
         listeners.swap(impl_->shutdownListeners);
     }
+    return listeners;
+}
+
+void WorkerDispatcher::notifyStopping(
+    const ShutdownListeners& listeners) noexcept {
     for (const auto& entry : listeners) {
         if (const auto listener = entry.lock()) {
             listener->workerStopping();
@@ -288,9 +301,7 @@ void WorkerDispatcher::drain() {
         try {
             task();
         } catch (...) {
-            std::lock_guard lock(impl_->mutex);
-            impl_->accepting = false;
-            impl_->drainScheduled = false;
+            notifyStopping(beginStopping(true));
             throw;
         }
     }

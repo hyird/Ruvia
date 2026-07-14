@@ -152,6 +152,36 @@ function(check_files_no_match label regex)
     endif()
 endfunction()
 
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Channel.h"
+    core_channel_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/OneShot.h"
+    core_one_shot_contract)
+file(READ "${RUVIA_ROOT}/ruvia-core/include/ruvia/core/Task.h"
+    core_task_contract)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/core.cpp"
+    core_linear_receiver_package_contract)
+if(NOT core_channel_contract MATCHES
+       "ChannelReceiver[(][)][ \t]*=[ \t]*delete" OR
+   NOT core_channel_contract MATCHES
+       "operator=[(]ChannelReceiver&&[)][ \t]*=[ \t]*delete" OR
+   NOT core_one_shot_contract MATCHES
+       "OneShotReceiver[(][)][ \t]*=[ \t]*delete" OR
+   NOT core_one_shot_contract MATCHES
+       "operator=[(]OneShotReceiver&&[)][ \t]*=[ \t]*delete" OR
+   NOT core_task_contract MATCHES
+       "operator=[(]Task&&[)][ \t]*=[ \t]*delete" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::default_initializable<ruvia::ChannelReceiver<int>>" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::default_initializable<ruvia::OneShotReceiver<int>>" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::assignable_from<ruvia::Task<void>&, ruvia::Task<void>&&>" OR
+   NOT core_linear_receiver_package_contract MATCHES
+       "!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>")
+    boundary_error("core linear async owners regained invalid default states or destructive reassignment"
+        "receivers must be factory-created and Task/receiver handles must be move-construct-only so assignment cannot orphan endpoints or destroy live coroutine frames")
+endif()
+
 function(check_files_no_lower_match label regex)
     set(hit_files)
     expand_http2_connection_implementation(paths ${ARGN})
@@ -282,6 +312,14 @@ if(EXISTS "${HTTP1_CHUNK_DECODER}" AND EXISTS "${HTTP1_CHUNK_SCANNER}")
        NOT http1_chunk_decoder MATCHES "std::string_view bytes[(][)] const" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeBodyChunk>" OR
        NOT http1_chunk_decoder MATCHES "std::get_if<Http1ChunkDecodeFailure>" OR
+       NOT http1_chunk_decoder MATCHES
+           "needMore[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_chunk_decoder MATCHES
+           "bodyChunk[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_chunk_decoder MATCHES
+           "complete[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_chunk_decoder MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        http1_chunk_decoder MATCHES
            "${RULE_STALE_CHUNK_DECODER_FAILURE_SPLIT}" OR
        http1_chunk_decoder MATCHES "class Http1ChunkDecoder" OR
@@ -295,6 +333,12 @@ if(EXISTS "${HTTP1_CHUNK_DECODER}" AND EXISTS "${HTTP1_CHUNK_SCANNER}")
        NOT http1_chunk_scanner MATCHES "class HttpChunkScanFailure final" OR
        NOT http1_chunk_scanner MATCHES "class HttpChunkScanResult final" OR
        NOT http1_chunk_scanner MATCHES "using Value = std::variant" OR
+       NOT http1_chunk_scanner MATCHES
+           "needMore[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_chunk_scanner MATCHES
+           "complete[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_chunk_scanner MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT http1_chunk_scanner MATCHES "std::optional<HttpChunkScanError> validateHttpChunkTrailers" OR
        NOT http1_chunk_scanner MATCHES "HttpChunkScanError error[(][)] const")
         boundary_error("HTTP/1 whole-message chunk scanner lost field ownership"
@@ -337,7 +381,7 @@ file(GLOB_RECURSE CORE_SOURCE LIST_DIRECTORIES FALSE
 check_files_no_match("ruvia-http must not invent a Ruvia Server product identity"
     "${RULE_HTTP_IMPLICIT_SERVER_PRODUCT}" ${HTTP_SOURCE})
 check_files_no_match("Context request-field models must remain Web-owned"
-    "RequestNameValue(View|List)|RequestValueGroup(List)?" ${HTTP_SOURCE})
+    "RequestNameValue(View|List)|RequestQueryValues|RequestValueGroup(List)?" ${HTTP_SOURCE})
 
 set(WEB_RATE_LIMIT_RULE
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RateLimitRule.h")
@@ -597,6 +641,8 @@ set(WEB_REQUEST_FIELDS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h")
 set(WEB_REQUEST_FIELDS_ACCESS
     "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestFieldsAccess.h")
+set(WEB_REQUEST_QUERY_VALUES
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/RequestQueryValues.h")
 set(HTTP_REQUEST_MODEL
     "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpRequest.h")
 set(HTTP1_REQUEST_PARSER
@@ -729,17 +775,18 @@ else()
             "MultipartParser.h owns the read-only model and detail/MultipartPartAccess.h owns mutation")
     endif()
 endif()
-if(NOT EXISTS "${WEB_REQUEST_FIELDS}" OR NOT EXISTS "${WEB_REQUEST_FIELDS_ACCESS}")
+if(NOT EXISTS "${WEB_REQUEST_FIELDS}" OR
+   NOT EXISTS "${WEB_REQUEST_FIELDS_ACCESS}" OR
+   NOT EXISTS "${WEB_REQUEST_QUERY_VALUES}")
     boundary_error("Web request-field ownership is incomplete"
-        "RequestFields.h and detail/http/RequestFieldsAccess.h are required")
+        "RequestFields.h, RequestFieldsAccess.h and RequestQueryValues.h are required")
 else()
     file(READ "${WEB_REQUEST_FIELDS}" web_request_fields)
     file(READ "${WEB_REQUEST_FIELDS_ACCESS}" web_request_fields_access)
+    file(READ "${WEB_REQUEST_QUERY_VALUES}" web_request_query_values)
     foreach(request_field_type IN ITEMS
             RequestNameValueView
-            RequestNameValueList
-            RequestValueGroup
-            RequestValueGroupList)
+            RequestNameValueList)
         if(NOT web_request_fields MATCHES
                "class[ \t]+${request_field_type}[ \t]+final")
             boundary_error("Web request-field model lost a canonical type"
@@ -752,17 +799,28 @@ else()
             "RequestFields.h must resolve null resources through ruvia-core")
     endif()
     if(web_request_fields MATCHES
-           "struct[ \t]+Request(NameValue(View|List)|ValueGroup(List)?)Access[ \t]+final" OR
+           "RequestValueGroup|RequestQueryValues" OR
+       web_request_fields MATCHES
+           "struct[ \t]+RequestNameValue(View|List)Access[ \t]+final" OR
        NOT web_request_fields_access MATCHES
            "struct[ \t]+RequestNameValueViewAccess[ \t]+final" OR
        NOT web_request_fields_access MATCHES
            "struct[ \t]+RequestNameValueListAccess[ \t]+final" OR
-       NOT web_request_fields_access MATCHES
-           "struct[ \t]+RequestValueGroupAccess[ \t]+final" OR
-       NOT web_request_fields_access MATCHES
-           "struct[ \t]+RequestValueGroupListAccess[ \t]+final")
+       web_request_fields_access MATCHES
+           "Request(ValueGroup|QueryValues)")
         boundary_error("Web request-field mutation leaked into the public model"
             "only detail/http/RequestFieldsAccess.h may define construction and mutation access")
+    endif()
+    if(NOT web_request_query_values MATCHES
+           "namespace[ \t]+ruvia::detail" OR
+       NOT web_request_query_values MATCHES
+           "class[ \t]+RequestQueryValues[ \t]+final" OR
+       web_request_query_values MATCHES
+           "namespace[ \t]+ruvia[ \t]*[{]" OR
+       web_request_query_values MATCHES
+           "RequestValueGroup(List)?")
+        boundary_error("Query multivalue indexing escaped its internal owner"
+            "detail/http/RequestQueryValues.h must own the sole private query multivalue index")
     endif()
 endif()
 if(EXISTS "${HTTP_METHOD_CONTRACT}" AND EXISTS "${HTTP_REQUEST_MODEL}")
@@ -916,6 +974,21 @@ if(EXISTS "${WEB_ROUTE_MODES}" AND EXISTS "${WEB_ROUTE_LIMITS}" AND
         boundary_error("RouteTable lost its concrete request-time dispatch contract"
             "the startup-frozen route table must not inherit or expose a virtual dispatch interface")
     endif()
+    if(NOT web_route_table MATCHES
+           "RouteEndpoint& operator=[(]RouteEndpoint&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_route_table MATCHES
+           "RouteEntry& operator=[(]RouteEntry&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_route_table MATCHES
+           "RouteTable[(]RouteTable&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_route_table MATCHES
+           "RouteTable& operator=[(]RouteTable&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_route_resolution_test MATCHES
+           "!std::is_move_constructible_v<RouteTable>" OR
+       NOT web_route_resolution_test MATCHES
+           "!std::is_move_assignable_v<RouteEntry>")
+        boundary_error("startup route graph regained relocatable identity"
+            "the finalized RouteTable must be built at its final address, while endpoint and entry values may be move-constructed into reserved storage but never reassigned across resource domains")
+    endif()
     if(NOT web_route_http2_session MATCHES "const RouteTable& routes" OR
        NOT web_route_response_stream_dispatch MATCHES
            "const RouteTable& routes" OR
@@ -1041,6 +1114,33 @@ else()
         boundary_error("middleware public API and registration implementation were mixed"
             "the public header must contain only the CRTP marker; signature/factory checks belong in detail and guard tests")
     endif()
+endif()
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/router/RouterInternal.h"
+    route_final_storage_internal)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/router/RouterBuild.cpp"
+    route_final_storage_build)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/router/Router.cpp"
+    route_final_storage_finalize)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
+    route_final_storage_package)
+if(NOT route_final_storage_internal MATCHES
+       "void buildRouteTable[(]RouteTable& table[)] const" OR
+   route_final_storage_internal MATCHES
+       "RouteTable buildRouteTable[(][)] const" OR
+   NOT route_final_storage_build MATCHES
+       "void detail::RouterImpl::buildRouteTable[(]RouteTable& table[)] const" OR
+   route_final_storage_build MATCHES
+       "RouteTable table[(]resource_[)]" OR
+   NOT route_final_storage_finalize MATCHES
+       "constructPmrObject<RouteTable>[(]resource_, resource_[)]" OR
+   NOT route_final_storage_finalize MATCHES
+       "buildRouteTable[(][*]table[)]" OR
+   route_final_storage_finalize MATCHES
+       "constructPmrObject<RouteTable>[(]resource_, buildRouteTable" OR
+   NOT route_final_storage_package MATCHES
+       "!std::is_move_constructible_v<[ \n\t]*ruvia::detail::RouteTable>")
+    boundary_error("RouteTable is no longer built in final storage"
+        "Router finalize must allocate the address-stable table first, build every self-referential index there, and publish it only after successful completion")
 endif()
 check_files_no_match("Web routing restored split endpoint or resolution APIs"
     "${RULE_STALE_ROUTE_MODE_SPLIT}|${RULE_STALE_ROUTE_RESOLUTION_TUPLE}"
@@ -1402,7 +1502,7 @@ if(EXISTS "${WEB_CONN_INFO}" AND
     if(NOT web_conn_test MATCHES
            "conn_info_transport_has_one_active_alternative" OR
        NOT web_conn_test MATCHES
-           "context_preserves_typed_connection_info_for_url_and_handler" OR
+           "context_preserves_typed_connection_info_for_handler" OR
        NOT web_conn_test MATCHES
            "HasBooleanTransportRefinement" OR
        NOT web_conn_tls_test MATCHES "TlsConnectionObservation" OR
@@ -1829,6 +1929,14 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
        "using State = std::variant<ProgressState, MultipartParseError>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartStreamPart>" OR
    NOT multipart_public_api MATCHES "std::get_if<MultipartPollFailure>" OR
+   NOT multipart_public_api MATCHES
+       "needInput[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_public_api MATCHES
+       "part[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_public_api MATCHES
+       "done[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT multipart_public_api MATCHES
+       "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
    NOT multipart_public_api MATCHES "multipartParseErrorMessage" OR
    NOT multipart_public_api MATCHES "MultipartParser[(]MultipartBoundary boundary" OR
    NOT multipart_public_api MATCHES "void feed[(]std::string_view chunk[)]" OR
@@ -1838,6 +1946,138 @@ if(NOT multipart_public_api MATCHES "class MultipartBoundary final" OR
        "${RULE_STALE_MULTIPART_NONTERMINAL_FAILURE}")
     boundary_error("multipart public API lost its typed sans-I/O contract"
         "MultipartParser.h must validate boundary ownership once and expose discriminated phase/need-input/part/done results")
+endif()
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/MultipartReader.h"
+    multipart_web_api)
+file(READ "${RUVIA_ROOT}/tests/unit_multipart_reader.cpp"
+    multipart_lifetime_test)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    multipart_http_package_test)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
+    multipart_web_package_test)
+if(NOT multipart_public_api MATCHES
+       "MultipartParser[(]const MultipartParser&[)][ \t]*=[ \t]*delete" OR
+   NOT multipart_public_api MATCHES
+       "MultipartParser[(]MultipartParser&&[)][ \t]*=[ \t]*delete" OR
+   NOT multipart_web_api MATCHES
+       "MultipartReader[(]const MultipartReader&[)][ \t]*=[ \t]*delete" OR
+   NOT multipart_web_api MATCHES
+       "MultipartReader[(]MultipartReader&&[)][ \t]*=[ \t]*delete" OR
+   NOT multipart_lifetime_test MATCHES
+       "!std::is_copy_constructible_v<ruvia::MultipartParser>" OR
+   NOT multipart_lifetime_test MATCHES
+       "!std::is_move_constructible_v<MultipartReader>" OR
+   NOT multipart_http_package_test MATCHES
+       "!std::is_move_constructible_v<ruvia::MultipartParser>" OR
+   NOT multipart_web_package_test MATCHES
+       "!std::is_move_constructible_v<ruvia::MultipartReader>")
+    boundary_error("multipart parser state regained cross-object aliasing"
+        "the sans-I/O parser and Web stream driver must remain address-stable single-owner states because their views and body source bind to one instance")
+endif()
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
+    pmr_http_client_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClientRedirect.h"
+    pmr_http_redirect_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
+    pmr_http_client_parser_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpResponse.h"
+    pmr_http_response_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/HttpResponseBody.h"
+    pmr_http_response_body_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp"
+    pmr_http_response_impl)
+file(READ "${RUVIA_ROOT}/ruvia-http/src/HttpResponseHeadersStorage.cpp"
+    pmr_http_response_headers_impl)
+file(READ "${RUVIA_ROOT}/tests/unit_http_response.cpp"
+    pmr_http_response_test)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/RequestFields.h"
+    pmr_request_fields_api)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbMigration.h"
+    pmr_db_migration_api)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbQueryResult.h"
+    pmr_db_query_result_api)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTransaction.h"
+    pmr_db_transaction_api)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTypes.h"
+    pmr_db_types_api)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/db/DbTypes.cpp"
+    pmr_db_types_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/src/db/DbHandle.cpp"
+    pmr_db_handle_impl)
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTypes.h"
+    pmr_redis_types_api)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    pmr_http_package_contract)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
+    pmr_web_package_contract)
+if(NOT pmr_http_client_api MATCHES
+       "operator=[(]HttpClientResponse&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_redirect_api MATCHES
+       "operator=[(]HttpClientRedirectTarget&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_redirect_api MATCHES
+       "HttpClientRedirectTargetResult&&[)][ \n\t]*=[ \t]*delete" OR
+   NOT pmr_http_client_parser_api MATCHES
+       "operator=[(]Http1ParsedClientResponseHead&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_client_parser_api MATCHES
+       "operator=[(]Http1ClientResponseParseResult&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_response_api MATCHES
+       "operator=[(]HttpResponseHeaders&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_response_api MATCHES
+       "operator=[(]HttpResponse&& other[)][ \t]*noexcept" OR
+   NOT pmr_http_response_body_api MATCHES
+       "operator=[(]HttpResponseBody&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_http_response_impl MATCHES
+       "std::destroy_at[(]this[)]" OR
+   NOT pmr_http_response_impl MATCHES
+       "std::construct_at[(]this, std::move[(]other[)][)]" OR
+   pmr_http_response_headers_impl MATCHES
+       "HttpResponseHeaders::operator=" OR
+   NOT pmr_http_response_test MATCHES
+       "response_move_assignment_transfers_one_resource_domain" OR
+   NOT pmr_request_fields_api MATCHES
+       "operator=[(]RequestNameValueList&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_db_migration_api MATCHES
+       "operator=[(]DbMigrationReport&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_db_query_result_api MATCHES
+       "operator=[(]QueryResult&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_db_query_result_api MATCHES
+       "operator=[(]DbStreamResult&&[)][ \t]*=[ \t]*delete" OR
+   NOT pmr_db_transaction_api MATCHES
+       "operator=[(]DbTransaction&&[)][ \t]*=[ \t]*delete" OR
+   pmr_db_types_impl MATCHES
+       "QueryResult::operator=" OR
+   pmr_db_handle_impl MATCHES
+       "(DbStreamResult|DbTransaction)::operator=" OR
+   NOT pmr_db_types_api MATCHES
+       "operator=[(]DbField&& other[)][ \t]*;" OR
+   pmr_db_types_api MATCHES
+       "operator=[(]DbField&& other[)][ \t]*noexcept" OR
+   NOT pmr_db_types_api MATCHES
+       "operator=[(]DbRow&& other[)][ \t]*;" OR
+   pmr_db_types_api MATCHES
+       "operator=[(]DbRow&& other[)][ \t]*noexcept" OR
+   pmr_db_types_impl MATCHES
+       "operator=[(]Db(Field|Row)&& other[)][ \t]*noexcept" OR
+   NOT pmr_redis_types_api MATCHES
+       "operator=[(]RedisKeyValue&&[)][ \t]*=[ \t]*default" OR
+   pmr_redis_types_api MATCHES
+       "operator=[(]RedisKeyValue&&[)][ \t]*noexcept" OR
+   NOT pmr_redis_types_api MATCHES
+       "operator=[(]RedisScoredValue&&[)][ \t]*=[ \t]*default" OR
+   pmr_redis_types_api MATCHES
+       "operator=[(]RedisScoredValue&&[)][ \t]*noexcept" OR
+   NOT pmr_redis_types_api MATCHES
+       "operator=[(]RedisValue&&[)][ \t]*=[ \t]*default" OR
+   pmr_redis_types_api MATCHES
+       "operator=[(]RedisValue&&[)][ \t]*noexcept" OR
+   NOT pmr_http_package_contract MATCHES
+       "HttpClientResponse&, ruvia::HttpClientResponse&&" OR
+   NOT pmr_web_package_contract MATCHES
+       "!std::is_nothrow_move_assignable_v<ruvia::DbField>" OR
+   NOT pmr_web_package_contract MATCHES
+       "!std::is_nothrow_move_assignable_v<ruvia::RedisValue>")
+    boundary_error("PMR-owning public values or linear database handles regained unsafe move-assignment guarantees"
+        "single-use results and active DB operations must reject reassignment; assignable values must expose allocation failure, and HttpResponse replacement must transfer one resource domain without member-wise PMR assignment")
 endif()
 file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/detail/MultipartParsing.h"
     multipart_protocol_helpers)
@@ -1931,9 +2171,25 @@ if(NOT multipart_unit_test MATCHES "multipart_parser_commits_an_eof_close_only_a
    NOT multipart_package_consumer MATCHES "repeatedMultipartFailure" OR
    NOT multipart_package_consumer MATCHES "failedMultipartParser[.]feed" OR
    NOT multipart_package_consumer MATCHES "HttpMultipartDelimiterResult" OR
-   NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>")
+   NOT multipart_api_surface MATCHES "HasMultipartPollResultAccessors<ruvia::MultipartPollResult>" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueHttp1RequestParseAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueHttp1ClientResponseParseAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueHttp1ClientRequestPrepareAccessor" OR
+   NOT multipart_package_consumer MATCHES
+       "!HasAnyRvalueHttp1InterimResponsePrepareAccessor" OR
+   NOT multipart_api_surface MATCHES
+       "!HasAnyRvalueMultipartPollAccessor<ruvia::MultipartPollResult>" OR
+   NOT multipart_api_surface MATCHES
+       "!HasAnyRvalueHttp1RequestParseAccessor" OR
+   NOT multipart_api_surface MATCHES
+       "!HasAnyRvalueHttp1ClientResponseParseAccessor")
     boundary_error("typed multipart result ownership is insufficiently tested"
-        "unit, example, and installed-consumer contracts must pin poll, delimiter, boundary, and part-header alternatives")
+        "unit, example, and installed-consumer contracts must pin alternatives and reject pointers into temporary parse results")
 endif()
 check_files_no_match("ruvia-web handshake writers must only submit HTTP-owned parts"
     "${RULE_WEB_HANDSHAKE_PROTOCOL_BYTES}"
@@ -3380,6 +3636,183 @@ check_files_no_match("HTTP file writes must return results instead of error side
 check_files_no_match("database migration must return its owned report"
     "${RULE_STALE_DB_MIGRATION_REPORT_SIDE_CHANNEL}"
     "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
+check_files_no_match("database query results must remain direct RAII values"
+    "${RULE_STALE_DB_RESULT_MOUNT_PROXY}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbQueryResult.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbHandle.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/db/DbTransaction.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/db/DbInternal.h"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbTypes.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbHandle.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/db/DbRegistry.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/db/Db.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/db/PgDb.cpp")
+check_files_no_match("locally staged Redis transactions must not expose fake DISCARD state"
+    "${RULE_STALE_REDIS_TRANSACTION_DISCARD}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTransaction.h"
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisTransaction.cpp")
+set(WEB_REDIS_PIPELINE_API
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisPipeline.h")
+set(WEB_REDIS_PIPELINE_IMPL
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisPipeline.cpp")
+set(WEB_REDIS_TRANSACTION_API
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/redis/RedisTransaction.h")
+set(WEB_REDIS_TRANSACTION_IMPL
+    "${RUVIA_ROOT}/ruvia-web/src/redis/RedisTransaction.cpp")
+set(WEB_REDIS_LINEAR_API_TEST
+    "${RUVIA_ROOT}/tests/unit_redis_api_surface.cpp")
+set(WEB_REDIS_LINEAR_PACKAGE_TEST
+    "${RUVIA_ROOT}/tests/package-consumer/web.cpp")
+if(EXISTS "${WEB_REDIS_PIPELINE_API}" AND
+   EXISTS "${WEB_REDIS_PIPELINE_IMPL}" AND
+   EXISTS "${WEB_REDIS_TRANSACTION_API}" AND
+   EXISTS "${WEB_REDIS_TRANSACTION_IMPL}" AND
+   EXISTS "${WEB_REDIS_LINEAR_API_TEST}" AND
+   EXISTS "${WEB_REDIS_LINEAR_PACKAGE_TEST}")
+    file(READ "${WEB_REDIS_PIPELINE_API}" web_redis_pipeline_api)
+    file(READ "${WEB_REDIS_PIPELINE_IMPL}" web_redis_pipeline_impl)
+    file(READ "${WEB_REDIS_TRANSACTION_API}" web_redis_transaction_api)
+    file(READ "${WEB_REDIS_TRANSACTION_IMPL}" web_redis_transaction_impl)
+    file(READ "${WEB_REDIS_LINEAR_API_TEST}" web_redis_linear_api_test)
+    file(READ "${WEB_REDIS_LINEAR_PACKAGE_TEST}"
+        web_redis_linear_package_test)
+    if(NOT web_redis_pipeline_api MATCHES "exec[(][)][ \t]*&&" OR
+       NOT web_redis_transaction_api MATCHES "exec[(][)][ \t]*&&" OR
+       NOT web_redis_pipeline_api MATCHES
+           "operator=[(]RedisPipeline&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_redis_transaction_api MATCHES
+           "operator=[(]RedisTransaction&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_redis_pipeline_api MATCHES
+           "std::pmr::vector<Command>[ \t]+commands" OR
+       NOT web_redis_transaction_api MATCHES
+           "std::pmr::vector<RedisPipeline::Command>[ \t]+commands" OR
+       NOT web_redis_pipeline_impl MATCHES
+           "exchange[(]pool_,[ \t]*nullptr[)]" OR
+       NOT web_redis_transaction_impl MATCHES
+           "exchange[(]pipeline_[.]pool_,[ \t]*nullptr[)]" OR
+       NOT web_redis_linear_api_test MATCHES "HasLvalueRedisExec" OR
+       NOT web_redis_linear_api_test MATCHES "HasRvalueRedisExec" OR
+       NOT web_redis_linear_package_test MATCHES "HasLvalueRedisExec" OR
+       NOT web_redis_linear_package_test MATCHES "HasRvalueRedisExec")
+        boundary_error("Redis batch builders regained borrowed lazy execution"
+            "pipeline and transaction exec must consume an rvalue, transfer command ownership into the coroutine frame, and invalidate the source")
+    endif()
+endif()
+check_files_no_match("Context final-response observation must not split or expose provisional storage"
+    "${RULE_STALE_CONTEXT_RESPONSE_OBSERVATION_SPLIT}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextStorage.cpp")
+check_files_no_match("response-side cookie deletion must not read or return request state"
+    "${RULE_STALE_DELETE_COOKIE_REQUEST_COUPLING}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
+check_files_no_match("route request metadata must only be read through ContextRequest"
+    "${RULE_STALE_FREE_ROUTE_REQUEST_ACCESS}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
+check_files_no_match("request-local data must not expose a misleading whole-request clone"
+    "${RULE_STALE_REQUEST_CLONE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+check_files_no_match("form lookups must share one zero-allocation value facade"
+    "${RULE_STALE_FORM_PATH_VALUE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h")
+check_files_no_match("named form lookup must return only the Value facade"
+    "${RULE_STALE_FORM_ENTRY_LOOKUP}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h")
+check_files_no_match("form value lookup must use one get operation"
+    "${RULE_STALE_FORM_AT_LOOKUP}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h")
+check_files_no_match("SSE public operations must follow the typed facade naming"
+    "${RULE_STALE_SSE_PUBLIC_NAMING}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Streaming.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/HttpRuntimeFacades.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/http/Streaming.cpp")
+check_files_no_match("ContextRequest must not expose the borrowed protocol object"
+    "${RULE_STALE_CONTEXT_REQUEST_RAW_ESCAPE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
+check_files_no_match("Context values must use the direct set/get API"
+    "${RULE_STALE_CONTEXT_VAR_FACADE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h")
+file(READ "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/ContextValues.h"
+    context_value_store_contract)
+file(READ "${RUVIA_ROOT}/tests/unit_context_capabilities.cpp"
+    context_value_store_test)
+if(NOT context_value_store_contract MATCHES
+       "Entry&[ \t]+operator=[(]Entry&&[)][ \t]*=[ \t]*delete" OR
+   NOT context_value_store_contract MATCHES
+       "std::exchange[(]other[.]value, nullptr[)]" OR
+   NOT context_value_store_contract MATCHES
+       "std::construct_at[(]entry, std::move[(]next[)][)]" OR
+   NOT context_value_store_test MATCHES
+       "context_value_store_transfers_entry_ownership_without_assignment")
+    boundary_error("request-local context values regained split or assignable erased ownership"
+        "Entry move construction must transfer the erased pointer, and same-name replacement must reconstruct the slot after destroying its prior value")
+endif()
+check_files_no_match("Context layout mutation must not return the assigned value"
+    "${RULE_STALE_CONTEXT_LAYOUT_SETTER_RESULT}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
+check_files_no_match("HttpResponse body mutation must use one safe public operation"
+    "${RULE_STALE_HTTP_RESPONSE_BODY_SETTERS}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpResponse.h"
+    "${RUVIA_ROOT}/ruvia-http/src/HttpResponse.cpp")
+check_files_no_match("Context dynamic bodies must be owned without implicit lvalue consumption"
+    "${RULE_STALE_CONTEXT_DYNAMIC_BODY_BORROW}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/Context.inl")
+check_files_no_match("response headers must remain an owned read-only facade"
+    "${RULE_STALE_RESPONSE_HEADERS_STANDALONE_API}"
+    "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpResponse.h"
+    "${RUVIA_ROOT}/ruvia-http/src/HttpResponseHeadersStorage.cpp")
+check_files_no_match("Context cookies must use the response mutation path"
+    "${RULE_STALE_CONTEXT_COOKIE_GENERATOR}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
+check_files_no_match("session storage must not bypass SSO for obsolete response borrowing"
+    "${RULE_STALE_SESSION_SSO_BYPASS}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/SessionInternal.h")
+check_files_no_match("Context response construction must not restore request-local renderer state"
+    "${RULE_STALE_CONTEXT_RENDER_PIPELINE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextResponse.cpp")
+check_files_no_match("validated request models must have an internal-only write path"
+    "${RULE_STALE_VALIDATED_MODEL_PUBLIC_WRITE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextRequestModel.inl")
+check_files_no_match("request arena objects must not have write-only Context owner pointers"
+    "${RULE_STALE_CONTEXT_ARENA_STORAGE_POINTERS}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+check_files_no_match("request route metadata must not restore synthetic matched-route entries"
+    "${RULE_STALE_MATCHED_ROUTES_FACADE}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/Context.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextInternal.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/router/RouterDispatch.cpp")
+check_files_no_match("ContextRequest must not synthesize an absolute URL from transport metadata"
+    "${RULE_STALE_CONTEXT_REQUEST_SYNTHETIC_URL}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
+check_files_no_match("query collections must encode absence with an empty span only"
+    "${RULE_STALE_OPTIONAL_QUERY_VALUES}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
+check_files_no_match("form parsing policies must remain strongly typed and explicit"
+    "${RULE_STALE_PARSE_BODY_BOOLEAN_POLICY}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
+check_files_no_match("request blobs must use the shared contentType vocabulary"
+    "${RULE_STALE_REQUEST_BLOB_TYPE_NAME}"
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/ContextRequest.h"
+    "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequestFacade.cpp")
 
 set(DB_MIGRATION_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/db/DbMigration.cpp")
@@ -4040,6 +4473,8 @@ set(WEB_CONTEXT_REQUEST_MODEL
 set(WEB_CONTEXT_CMAKE "${RUVIA_ROOT}/ruvia-web/CMakeLists.txt")
 set(WEB_CONTEXT_REQUEST_GUARD
     "${RUVIA_ROOT}/tests/guards/context_request_header_guard.cpp")
+set(WEB_CONTEXT_REQUEST_INTERNAL
+    "${RUVIA_ROOT}/ruvia-web/include/ruvia/web/detail/http/ContextRequestInternal.h")
 set(WEB_CONTEXT_REQUEST_SOURCE
     "${RUVIA_ROOT}/ruvia-web/src/http/ContextRequest.cpp")
 set(WEB_CONTEXT_REQUEST_FACADE_SOURCE
@@ -4095,7 +4530,7 @@ elseif(EXISTS "${WEB_CONTEXT_HEADER}")
            "ruvia/web/detail/http/ContextRequestModel[.]inl" OR
        web_context_model MATCHES "ContextRequest::" OR
        NOT web_context_request_facade_source MATCHES
-           "ContextRequest::raw[(][)] const noexcept" OR
+           "ContextRequest::method[(][)] const noexcept" OR
        NOT web_context_request_facade_source MATCHES
            "Task<std::string_view> ContextRequest::text[(][)] const" OR
        NOT web_context_request_facade_source MATCHES
@@ -4110,6 +4545,37 @@ elseif(EXISTS "${WEB_CONTEXT_HEADER}")
            "&ruvia::ContextRequest::method")
         boundary_error("Context request API collapsed back into the response/state header"
             "Context.h must be an umbrella; request types/templates, linked facade, installation, and standalone compilation have separate ownership")
+    endif()
+endif()
+if(NOT EXISTS "${WEB_CONTEXT_REQUEST_HEADER}" OR
+   NOT EXISTS "${WEB_CONTEXT_REQUEST_INTERNAL}")
+    boundary_error("Request parse-result construction boundary is incomplete"
+        "ContextRequest.h and detail/http/ContextRequestInternal.h are required")
+else()
+    file(READ "${WEB_CONTEXT_REQUEST_HEADER}" web_request_result_contract)
+    file(READ "${WEB_CONTEXT_REQUEST_INTERNAL}" web_request_result_internal)
+    if(NOT web_request_result_contract MATCHES
+           "friend[ \t]+struct[ \t]+detail::RequestFormDataAccess" OR
+       NOT web_request_result_contract MATCHES
+           "RequestFormField&[ \t]+operator=[(]RequestFormField&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "Entry[(]const[ \t]+Entry&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "Entry&[ \t]+operator=[(]Entry&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "RequestFormData[(]const[ \t]+RequestFormData&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "RequestFormData&[ \t]+operator=[(]RequestFormData&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "Object[(]const[ \t]+Object&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_contract MATCHES
+           "Object&[ \t]+operator=[(]Object&&[)][ \t]*=[ \t]*delete" OR
+       NOT web_request_result_internal MATCHES
+           "struct[ \t]+RequestFormDataAccess[ \t]+final" OR
+       NOT web_request_result_internal MATCHES
+           "RequestFormData[ \t]+fromFields")
+        boundary_error("Request parse results regained unsafe construction, assignment, or pointer-copy semantics"
+            "RequestFormField, Entry, RequestFormData, and Object must be move-construct-only; parser construction must use RequestFormDataAccess")
     endif()
 endif()
 if(EXISTS "${WEB_CONTEXT_HEADER}" AND
@@ -4132,7 +4598,7 @@ if(EXISTS "${WEB_CONTEXT_HEADER}" AND
     endif()
     if(web_context_public_api MATCHES "arrayBuffer[(]")
         boundary_error("binary request bodies regained a parallel name"
-            "ContextRequest, RawRequestClone and RequestBlob must use bytes()")
+            "ContextRequest and RequestBlob must use bytes()")
     endif()
     if(web_context_public_api MATCHES "formData[(]" OR
        web_context_public_api MATCHES "SingleValueSelection")
@@ -4148,8 +4614,7 @@ endif()
 if(EXISTS "${WEB_CONTEXT_REQUEST_SOURCE}")
     file(READ "${WEB_CONTEXT_REQUEST_SOURCE}"
         web_context_request_source)
-    if(web_context_request_source MATCHES "RawRequestClone::formData" OR
-       web_context_request_source MATCHES "SingleValueSelection")
+    if(web_context_request_source MATCHES "SingleValueSelection")
         boundary_error("form body runtime regained split selection policy"
             "ContextRequest.cpp must produce one last-wins RequestFormData representation")
     endif()
@@ -4206,6 +4671,8 @@ if(EXISTS "${HTTP_STATUS_HEADER}" AND
     file(READ "${HTTP2_RESPONSE_HEADERS}" http2_status_response_headers)
     file(READ "${WEB_CONTEXT_HEADER}" web_context_status_header)
     file(READ "${WEB_ERROR_NORMALIZE}" web_error_status_normalize)
+    file(READ "${RUVIA_ROOT}/tests/package-consumer/web.cpp"
+        web_context_status_package_verify)
     if(NOT http_status_header MATCHES "httpReasonPhrase" OR
        NOT http_status_header MATCHES "default:[ \t]*return[ \t]*[{][}];" OR
        NOT http_response_model_header MATCHES
@@ -4220,11 +4687,15 @@ if(EXISTS "${HTTP_STATUS_HEADER}" AND
        NOT http2_status_response_headers MATCHES
            "plan[.]bodyPlan[(][)][.]responseStatus[(][)]" OR
        NOT web_context_status_header MATCHES
-           "struct ResponseInit final[ \t\r\n]*[{][ \t\r\n]*std::optional<std::uint16_t> status" OR
-       NOT web_context_status_header MATCHES "ResponseHeaderInit headers" OR
+           "void status[(]std::uint16_t statusCode[)];" OR
+       web_context_status_header MATCHES "ResponseInit|ResponseHeaderInit" OR
+       NOT web_context_status_package_verify MATCHES
+           "!HasResponseInit<ruvia::Context>" OR
+       NOT web_context_status_package_verify MATCHES
+           "!HasBuilderMetadataArguments<ruvia::Context>" OR
        NOT web_error_status_normalize MATCHES "statusText = \"HTTP Error\"")
         boundary_error("response status and reason-phrase ownership split again"
-            "the body/head plan must own the final status; H1 derives an optional phrase, H2 emits :status, and Web labels stay presentation-only")
+            "Context metadata must have one status path, body builders must not accept metadata, H1 derives an optional phrase, and H2 emits :status")
     endif()
 endif()
 
@@ -4584,6 +5055,12 @@ else()
        NOT http_response_source MATCHES "httpFinalStatusCodeValid" OR
        NOT http1_interim_response_writer MATCHES "Http1InterimResponseWriter" OR
        NOT http1_interim_response_writer MATCHES "requiresFinalConnectionClose" OR
+       NOT http1_interim_response_writer MATCHES
+           "bufferTooSmall[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_interim_response_writer MATCHES
+           "prepared[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_interim_response_writer MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        NOT http1_interim_response_writer_source MATCHES "kUpgradeConnectionOptionRequired" OR
        NOT http1_interim_response_writer_source MATCHES "headBuffer[.]size" OR
        NOT http_interim_response_validation MATCHES "kContentLengthForbidden" OR
@@ -6253,6 +6730,12 @@ else()
        NOT public_http1_request_parser MATCHES "requiredTotalBytes" OR
        NOT public_http1_request_parser MATCHES "bodyPlan" OR
        NOT public_http1_request_parser MATCHES "wireBody" OR
+       NOT public_http1_request_parser MATCHES
+           "needMore[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT public_http1_request_parser MATCHES
+           "parsed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT public_http1_request_parser MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        public_http1_request_parser MATCHES "HttpParseError::kNone" OR
        public_http_parse_error MATCHES "kNone" OR
        NOT http_header_block_parser MATCHES
@@ -6571,6 +7054,12 @@ else()
            "class Http1ClientRequestPrepareResult final" OR
        NOT http1_client_request_writer_header MATCHES "std::variant" OR
        NOT http1_client_request_writer_header MATCHES
+           "bufferTooSmall[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_request_writer_header MATCHES
+           "prepared[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_request_writer_header MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_request_writer_header MATCHES
            "std::span<char> headBuffer" OR
        NOT http1_client_request_writer_header MATCHES "prepareConnect" OR
        NOT http1_client_request_writer_header MATCHES
@@ -6782,7 +7271,15 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
        NOT http1_client_response_parser_header MATCHES "class Http1ClientResponseParseResult final" OR
        NOT http1_client_response_parser_header MATCHES "Http1ClientResponseParseError" OR
        NOT http1_client_response_parser_header MATCHES "std::variant" OR
-       NOT http1_client_response_parser_header MATCHES "consumedBytes")
+       NOT http1_client_response_parser_header MATCHES "consumedBytes" OR
+       NOT http1_client_response_parser_header MATCHES
+           "needMore[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_response_parser_header MATCHES
+           "parsed[(][)] &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_response_parser_header MATCHES
+           "parsed[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT http1_client_response_parser_header MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete")
         boundary_error("public HTTP/1 client response parser lost its discriminated contract"
             "NeedMore, owning Parsed, typed Failure, exact head consumption, and one immutable plan must stay bound")
     endif()
@@ -6880,6 +7377,91 @@ elseif(EXISTS "${HTTP1_CLIENT_RESPONSE_PARSER}")
         boundary_error("public redirect API is not pinned across consumers"
             "CMake install, unit ownership checks, package consumption, and API surface must compile the same result contract")
     endif()
+endif()
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClient.h"
+    public_http_client_value_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/HttpClientRedirect.h"
+    public_http_client_redirect_value_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientRequestWriter.h"
+    public_http1_client_request_value_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/Http1ClientResponseParser.h"
+    public_http1_client_response_value_api)
+file(READ "${RUVIA_ROOT}/ruvia-http/include/ruvia/http/ProtocolByteLimit.h"
+    public_protocol_byte_limit_api)
+file(READ "${RUVIA_ROOT}/tests/package-consumer/http.cpp"
+    public_http_value_package_contract)
+file(READ "${RUVIA_ROOT}/examples/api_surface.cpp"
+    public_http_value_api_surface)
+if(NOT public_http_client_value_api MATCHES
+       "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_value_api MATCHES
+       "borrowedBytes[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "absent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "found[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "repeated[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "target[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http_client_redirect_value_api MATCHES
+       "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_request_value_api MATCHES
+       "noExpectation[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_request_value_api MATCHES
+       "continueExpectation[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_request_value_api MATCHES
+       "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_request_value_api MATCHES
+       "immediate[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_request_value_api MATCHES
+       "continueGated[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "informational[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "withoutContent[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "knownLength[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "chunked[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "closeDelimited[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "connectTunnel[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_http1_client_response_value_api MATCHES
+       "protocolUpgrade[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+   NOT public_protocol_byte_limit_api MATCHES
+       "std::optional<std::size_t> maximum[(][)] const noexcept" OR
+   public_protocol_byte_limit_api MATCHES
+       "const std::size_t[*] maximum[(][)]" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttpClientRequestContentAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttp1ClientRequestContentPlanAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttp1ClientResponsePlanAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttpClientHeaderLookupAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "!HasAnyRvalueHttpClientRedirectTargetAccessor" OR
+   NOT public_http_value_package_contract MATCHES
+       "std::optional<std::size_t>" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttpClientRequestContentAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttp1ClientRequestContentPlanAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttp1ClientRequestWirePolicyAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttp1ClientResponsePlanAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttpClientHeaderLookupAccessor" OR
+   NOT public_http_value_api_surface MATCHES
+       "!HasAnyRvalueHttpClientRedirectTargetAccessor")
+    boundary_error("public HTTP value alternatives regained temporary pointer access"
+        "top-level variant alternatives must require a live lvalue owner, while optional byte limits return values instead of nullable member pointers")
 endif()
 if(NOT EXISTS "${HTTP_CONTENT_LENGTH_STATE}")
     boundary_error("shared Content-Length state is missing"
@@ -8012,6 +8594,10 @@ if(EXISTS "${HTTP1_CHUNK_WEB_DRIVER}" AND
        NOT http1_chunk_package_consumer MATCHES
            "Http1ChunkDecodeFailure" OR
        NOT http1_chunk_package_consumer MATCHES
+           "!HasAnyRvalueHttp1ChunkDecodeAccessor" OR
+       NOT http1_chunk_package_consumer MATCHES
+           "!HasAnyRvalueHttpChunkScanAccessor" OR
+       NOT http1_chunk_package_consumer MATCHES
            "HasConsumedBytes<ruvia::detail::HttpChunkScanComplete>")
         boundary_error("typed HTTP/1 chunk result ownership is insufficiently tested"
             "unit and installed-consumer contracts must pin fragmentation, pipeline preservation, and alternative-specific fields")
@@ -8063,6 +8649,14 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
            "TransferCodingDecodeResult finishInput" OR
        NOT transfer_decoder MATCHES
            "using State = std::variant<Active, Complete, TransferCodingDecodeError>" OR
+       NOT transfer_decoder MATCHES
+           "needInput[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT transfer_decoder MATCHES
+           "output[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT transfer_decoder MATCHES
+           "complete[(][)] const &&[ \\t]*=[ \\t]*delete" OR
+       NOT transfer_decoder MATCHES
+           "failure[(][)] const &&[ \\t]*=[ \\t]*delete" OR
        transfer_decoder MATCHES
            "${RULE_STALE_TRANSFER_CODING_TERMINAL_SPLIT}" OR
        transfer_decoder_source MATCHES
@@ -8100,7 +8694,9 @@ if(EXISTS "${HTTP_TRANSFER_DECODER}" AND
        NOT body_reader_test MATCHES
            "http1_transfer_coding_eof_commits_only_the_complete_decode_pipeline" OR
        NOT transfer_package_consumer MATCHES
-           "TransferCodingDecodeResult")
+           "TransferCodingDecodeResult" OR
+       NOT transfer_package_consumer MATCHES
+           "!HasAnyRvalueTransferCodingDecodeAccessor")
         boundary_error("typed transfer-coding chain is insufficiently tested"
             "core alternatives, both Web read surfaces, failure mapping, and installed consumers must stay pinned")
     endif()

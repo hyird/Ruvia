@@ -72,6 +72,16 @@ static_assert(std::same_as<
     TransferCodingDecodeResult>);
 static_assert(!std::default_initializable<TransferCodingDecodeResult>);
 
+template <typename T>
+concept HasAnyRvalueTransferCodingDecodeAccessor =
+    requires(T&& result) { std::move(result).needInput(); } ||
+    requires(T&& result) { std::move(result).output(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueTransferCodingDecodeAccessor<
+    TransferCodingDecodeResult>);
+
 std::string gzipCompress(std::string_view data) {
     z_stream stream{};
     if (deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
@@ -727,7 +737,8 @@ RUVIA_TEST(transfer_coding_decoder_gzip_round_trip) {
     const std::string gz = gzipCompress(plain);
     std::pmr::string output(resource);
     RUVIA_CHECK(!appendTransferDecoded(decoder, gz, output).has_value());
-    RUVIA_CHECK(decoder.finishInput().complete() != nullptr);
+    const auto finishResult = decoder.finishInput();
+    RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(std::string_view(output.data(), output.size()), std::string_view(plain));
 }
 
@@ -778,7 +789,8 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
         pending.remove_prefix(result.consumedBytes());
     }
     RUVIA_CHECK(complete);
-    RUVIA_CHECK(transfer.finishInput().complete() != nullptr);
+    const auto finishResult = transfer.finishInput();
+    RUVIA_CHECK(finishResult.complete() != nullptr);
     RUVIA_CHECK_EQ(
         std::string_view(output.data(), output.size()),
         std::string_view(plain));

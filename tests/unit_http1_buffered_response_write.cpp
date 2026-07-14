@@ -245,7 +245,7 @@ enum class WriteScenario {
     HttpResponse response(std::pmr::get_default_resource());
     response.status(207);
     const std::string body(bodyBytes, 'x');
-    response.setBodyView(body);
+    ruvia::detail::setResponseBodyBorrowedView(response, body);
     const auto responsePlan = http1BufferedResponsePlan(
         httpBufferedResponseWritePlan(HttpKnownMethod::kGet, response),
         Http1ServerConnectionPlan::http11Close());

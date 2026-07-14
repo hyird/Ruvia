@@ -29,8 +29,8 @@ public:
         return maximum_.has_value();
     }
 
-    [[nodiscard]] const std::size_t* maximum() const noexcept {
-        return maximum_ ? &*maximum_ : nullptr;
+    [[nodiscard]] std::optional<std::size_t> maximum() const noexcept {
+        return maximum_;
     }
 
     [[nodiscard]] bool exceeds(std::size_t bytes) const noexcept {

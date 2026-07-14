@@ -64,7 +64,6 @@ public:
     using value_type = HttpResponseHeader;
     using const_iterator = const HttpResponseHeader*;
 
-    explicit HttpResponseHeaders(std::pmr::memory_resource* resource = nullptr);
     ~HttpResponseHeaders();
 
     [[nodiscard]] const_iterator begin() const noexcept {
@@ -102,7 +101,7 @@ private:
     HttpResponseHeaders(const HttpResponseHeaders&) = delete;
     HttpResponseHeaders& operator=(const HttpResponseHeaders&) = delete;
     HttpResponseHeaders(HttpResponseHeaders&& other) noexcept;
-    HttpResponseHeaders& operator=(HttpResponseHeaders&& other) noexcept;
+    HttpResponseHeaders& operator=(HttpResponseHeaders&&) = delete;
 
     static constexpr std::size_t kInlineCapacity = 8;
     struct InlineStorage {
@@ -153,8 +152,12 @@ public:
 
     explicit HttpResponse(std::pmr::memory_resource* resource = nullptr);
 
+    HttpResponse(const HttpResponse&) = delete;
+    HttpResponse& operator=(const HttpResponse&) = delete;
+    HttpResponse(HttpResponse&&) noexcept = default;
+    HttpResponse& operator=(HttpResponse&& other) noexcept;
+
     [[nodiscard]] std::uint16_t status() const noexcept;
-    [[nodiscard]] const HttpResponseHeaders& headers() noexcept;
     [[nodiscard]] const HttpResponseHeaders& headers() const noexcept;
     [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
     // A generic HttpResponse is always final (200..599). Interim 1xx progress
@@ -163,8 +166,7 @@ public:
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, HeaderOptions options);
     void header(std::string_view key, std::nullopt_t);
-    void setBodyCopy(std::string_view value);
-    void setBodyView(std::string_view value) noexcept;
+    void body(std::string_view value);
 
 private:
     friend struct detail::HttpResponseBodyAccess;
@@ -173,6 +175,7 @@ private:
 
     static constexpr std::size_t kKnownHeaderCount = 22;
 
+    void setBodyBorrowedView(std::string_view value) noexcept;
     void setBodyStaticView(std::string_view value) noexcept;
     void setBodyOwned(std::pmr::string&& value);
     void materializeBody();
@@ -214,9 +217,5 @@ private:
     HttpResponseHeaders headers_;
     detail::HttpResponseBody body_;
 };
-
-inline const HttpResponseHeaders& HttpResponse::headers() noexcept {
-    return headers_;
-}
 
 }  // namespace ruvia

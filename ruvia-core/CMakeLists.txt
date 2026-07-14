@@ -36,6 +36,7 @@ ruvia_install_public_headers(core
     include/ruvia/core/Timer.h
     include/ruvia/core/Runtime.h
     include/ruvia/core/WorkerHandle.h
+    include/ruvia/core/WorkerWaitResult.h
     include/ruvia/core/memory/MemoryPool.h
     include/ruvia/core/memory/PmrObject.h
     include/ruvia/core/memory/PmrResource.h

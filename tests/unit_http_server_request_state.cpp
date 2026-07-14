@@ -67,13 +67,13 @@ RUVIA_TEST(request_body_limit_distinguishes_absence_from_finite_values) {
 
     const auto streamLimit = requestBodyByteLimit(
         RequestBodyMode::kStream, std::size_t{512}, 1024);
-    RUVIA_CHECK(streamLimit.maximum() != nullptr);
-    RUVIA_CHECK_EQ(*streamLimit.maximum(), std::size_t{512});
+    RUVIA_CHECK(streamLimit.maximum().has_value());
+    RUVIA_CHECK_EQ(streamLimit.maximum().value(), std::size_t{512});
 
     const auto bufferedLimit = requestBodyByteLimit(
         RequestBodyMode::kBuffered, std::nullopt, 1024);
-    RUVIA_CHECK(bufferedLimit.maximum() != nullptr);
-    RUVIA_CHECK_EQ(*bufferedLimit.maximum(), std::size_t{1024});
+    RUVIA_CHECK(bufferedLimit.maximum().has_value());
+    RUVIA_CHECK_EQ(bufferedLimit.maximum().value(), std::size_t{1024});
 }
 
 RUVIA_TEST(request_state_content_length_exceeds_limit) {

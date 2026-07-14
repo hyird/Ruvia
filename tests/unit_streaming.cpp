@@ -125,7 +125,7 @@ RUVIA_TEST(response_stream_end_submits_one_terminal_trailer_section) {
 namespace {
 
 ruvia::Task<void> writeOneSse(ruvia::SseWriter& sse, ruvia::SseMessage message) {
-    co_await sse.writeSSE(message);
+    co_await sse.write(message);
 }
 
 }  // namespace

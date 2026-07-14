@@ -171,14 +171,16 @@ public:
         const std::basic_string<char, Traits, Allocator>&&) = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<HttpClientRequestWithoutContent>(&content_);
     }
+    const HttpClientRequestWithoutContent* withoutContent() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientRequestBytes*
-    borrowedBytes() const noexcept {
+    borrowedBytes() const & noexcept {
         return std::get_if<HttpClientRequestBytes>(&content_);
     }
+    const HttpClientRequestBytes* borrowedBytes() const && = delete;
 
 private:
     using Content = std::variant<
@@ -277,7 +279,7 @@ public:
     HttpClientResponse(const HttpClientResponse&) = delete;
     HttpClientResponse& operator=(const HttpClientResponse&) = delete;
     HttpClientResponse(HttpClientResponse&&) noexcept = default;
-    HttpClientResponse& operator=(HttpClientResponse&&) noexcept = default;
+    HttpClientResponse& operator=(HttpClientResponse&&) = delete;
 
     [[nodiscard]] std::uint16_t status() const noexcept {
         return status_;

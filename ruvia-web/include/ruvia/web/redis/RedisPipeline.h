@@ -19,8 +19,8 @@ class RedisPipeline final {
 public:
     RedisPipeline(const RedisPipeline&) = delete;
     RedisPipeline& operator=(const RedisPipeline&) = delete;
-    RedisPipeline(RedisPipeline&&) noexcept = default;
-    RedisPipeline& operator=(RedisPipeline&&) noexcept = default;
+    RedisPipeline(RedisPipeline&& other) noexcept;
+    RedisPipeline& operator=(RedisPipeline&&) = delete;
 
     RedisPipeline& command(std::span<const std::string_view> args);
     RedisPipeline& command(std::initializer_list<std::string_view> args) = delete;
@@ -63,7 +63,9 @@ public:
     RedisPipeline& zscore(std::string_view key, std::string_view member);
     RedisPipeline& zcard(std::string_view key);
 
-    Task<std::pmr::vector<RedisValue>> exec();
+    // Consumes the batch before returning the lazy Task, so the coroutine frame
+    // owns every command and never borrows this builder through `this`.
+    Task<std::pmr::vector<RedisValue>> exec() &&;
 
 private:
     friend class RedisHandle;
@@ -94,6 +96,11 @@ private:
     RedisPipeline(
         detail::RedisPool& pool,
         std::pmr::memory_resource* resource) noexcept;
+    [[nodiscard]] static Task<std::pmr::vector<RedisValue>> executeOwned(
+        detail::RedisPool& pool,
+        std::pmr::vector<Command> commands,
+        std::pmr::memory_resource* resource);
+    void requireActive() const;
 
     detail::RedisPool* pool_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};

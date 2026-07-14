@@ -63,6 +63,13 @@
 #include <ruvia/web/redis/Redis.h>
 #endif
 
+static_assert(!std::is_copy_constructible_v<ruvia::MultipartReader>);
+static_assert(!std::is_copy_assignable_v<ruvia::MultipartReader>);
+static_assert(!std::is_move_constructible_v<ruvia::MultipartReader>);
+static_assert(!std::is_move_assignable_v<ruvia::MultipartReader>);
+static_assert(std::is_move_constructible_v<ruvia::RequestNameValueList>);
+static_assert(!std::is_move_assignable_v<ruvia::RequestNameValueList>);
+
 #ifdef RUVIA_ENABLE_JWT
 static_assert(std::same_as<
     decltype(ruvia::JwtSignOptions{}.expiresIn),
@@ -73,6 +80,18 @@ static_assert(std::same_as<
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
+static_assert(std::is_move_assignable_v<ruvia::DbField>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbField>);
+static_assert(std::is_move_assignable_v<ruvia::DbRow>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::DbRow>);
+static_assert(std::is_move_constructible_v<ruvia::DbMigrationReport>);
+static_assert(!std::is_move_assignable_v<ruvia::DbMigrationReport>);
+static_assert(std::is_move_constructible_v<ruvia::QueryResult>);
+static_assert(!std::is_move_assignable_v<ruvia::QueryResult>);
+static_assert(std::is_move_constructible_v<ruvia::DbStreamResult>);
+static_assert(!std::is_move_assignable_v<ruvia::DbStreamResult>);
+static_assert(std::is_move_constructible_v<ruvia::DbTransaction>);
+static_assert(!std::is_move_assignable_v<ruvia::DbTransaction>);
 static_assert(std::same_as<
     decltype(ruvia::DbConfig{}.connectTimeout),
     std::optional<std::chrono::milliseconds>>);
@@ -87,6 +106,12 @@ static_assert(std::same_as<decltype(ruvia::DbConfig::postgreSql()), ruvia::DbCon
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
+static_assert(std::is_move_assignable_v<ruvia::RedisKeyValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisKeyValue>);
+static_assert(std::is_move_assignable_v<ruvia::RedisScoredValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisScoredValue>);
+static_assert(std::is_move_assignable_v<ruvia::RedisValue>);
+static_assert(!std::is_nothrow_move_assignable_v<ruvia::RedisValue>);
 static_assert(std::same_as<
     decltype(ruvia::RedisConfig{}.connectTimeout),
     std::optional<std::chrono::milliseconds>>);
@@ -103,6 +128,19 @@ static_assert(std::same_as<
     decltype(ruvia::RedisScanOptions{}.count),
     std::optional<std::uint64_t>>);
 #endif
+
+template <typename T>
+concept HasWebWorkerCorePostEscape = requires(const T& worker) {
+    worker.core();
+};
+
+template <typename T>
+concept HasAppInstanceAlias = requires {
+    T::instance();
+};
+
+static_assert(!HasAppInstanceAlias<ruvia::App>);
+static_assert(!HasWebWorkerCorePostEscape<ruvia::WebWorkerHandle>);
 
 template <typename Runtime, typename Executor>
 concept HasDirectHttp2BeginDispatch = requires(
@@ -121,7 +159,31 @@ concept HasLegacyRedisSetOptionBooleans = requires(T& options) {
     options.keepTtl;
 };
 
+template <typename T>
+concept HasRedisTransactionDiscard = requires(T& transaction) {
+    transaction.discard();
+};
+
+template <typename T>
+concept HasLvalueRedisExec = requires(T& batch) {
+    batch.exec();
+};
+
+template <typename T>
+concept HasRvalueRedisExec = requires(T& batch) {
+    std::move(batch).exec();
+};
+
 static_assert(!HasLegacyRedisSetOptionBooleans<ruvia::RedisSetOptions>);
+static_assert(!HasRedisTransactionDiscard<ruvia::RedisTransaction>);
+static_assert(!HasLvalueRedisExec<ruvia::RedisPipeline>);
+static_assert(HasRvalueRedisExec<ruvia::RedisPipeline>);
+static_assert(!HasLvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(HasRvalueRedisExec<ruvia::RedisTransaction>);
+static_assert(std::move_constructible<ruvia::RedisPipeline>);
+static_assert(!std::assignable_from<ruvia::RedisPipeline&, ruvia::RedisPipeline&&>);
+static_assert(std::move_constructible<ruvia::RedisTransaction>);
+static_assert(!std::assignable_from<ruvia::RedisTransaction&, ruvia::RedisTransaction&&>);
 static_assert(std::same_as<
     decltype(std::declval<ruvia::RedisSetOptions>().condition),
     std::optional<ruvia::RedisSetCondition>>);
@@ -222,6 +284,10 @@ concept HasTypeOnlyValidation = requires(const Request& request) {
     {
         request.template valid<int>()
     } -> std::same_as<const int&>;
+};
+
+template <typename Request>
+concept HasPublicValidatedDataInjection = requires(const Request& request) {
     request.addValidatedData(int{});
 };
 
@@ -236,9 +302,75 @@ concept HasRequestArrayBufferAlias = requires(const Request& request) {
     request.arrayBuffer();
 };
 
+template <typename Blob>
+concept HasRequestBlobTypeAlias = requires(const Blob& blob) {
+    blob.type();
+};
+
+template <typename Options>
+concept HasLegacyParseBodyFlags = requires(Options& options) {
+    options.all;
+    options.dot;
+};
+
+template <typename Request>
+concept HasRawRequestEscape = requires(const Request& request) {
+    request.raw();
+};
+
 template <typename Request>
 concept HasRequestFormDataAlias = requires(const Request& request) {
     request.formData();
+};
+
+template <typename Form>
+concept HasFormPathValueType = requires {
+    typename Form::PathValue;
+};
+
+template <typename Form>
+concept HasFormDataEntryLookup = requires(const Form& form) {
+    form.entry(std::string_view{});
+};
+
+template <typename Form>
+concept HasFormAtLookup = requires(const Form& form) {
+    form.at(std::string_view{});
+};
+
+template <typename Request>
+concept HasRequestCloneMethod = requires(const Request& request) {
+    request.clone();
+};
+
+template <typename Request>
+concept HasRawRequestCloneType = requires {
+    typename Request::RawRequestClone;
+};
+
+template <typename Request>
+concept HasIndexedRoutePath = requires(const Request& request) {
+    request.routePath(std::ptrdiff_t{0});
+};
+
+template <typename ContextT>
+concept HasFreeRoutePath = requires(const ContextT& context) {
+    routePath(context);
+};
+
+template <typename ContextT>
+concept HasFreeMatchedRoutes = requires(const ContextT& context) {
+    matchedRoutes(context);
+};
+
+template <typename Request>
+concept HasRequestMatchedRoutes = requires(const Request& request) {
+    request.matchedRoutes();
+};
+
+template <typename Request>
+concept HasRequestUrl = requires(const Request& request) {
+    request.url();
 };
 
 template <typename T>
@@ -438,6 +570,70 @@ concept HasEmbeddedPolicyEnabledFlag = requires(Policy& policy) {
     policy.enabled;
 };
 
+template <typename ContextT>
+concept HasResponseInit = requires {
+    typename ContextT::ResponseInit;
+};
+
+template <typename ContextT>
+concept HasContextVarFacade = requires(ContextT& context) {
+    context.var();
+};
+
+template <typename ContextT>
+concept HasContextFinalized = requires(const ContextT& context) {
+    context.finalized();
+};
+
+template <typename ContextT>
+concept HasLegacyStreamSSE = requires(ContextT& context) {
+    context.streamSSE();
+};
+
+template <typename Writer>
+concept HasLegacyWriteSSE = requires(Writer& writer, const ruvia::SseMessage& message) {
+    writer.writeSSE(message);
+};
+
+template <typename ContextT>
+concept HasBuilderMetadataArguments = requires(const ContextT& context) {
+    context.body(std::string_view{}, std::uint16_t{201});
+    context.text(std::string_view{}, std::uint16_t{201});
+    context.html(std::string_view{}, std::uint16_t{201});
+    context.json(std::uint32_t{1}, std::uint16_t{201});
+};
+
+template <typename ContextT>
+concept HasPmrStringBuilderLvalues = requires(
+    const ContextT& context,
+    std::pmr::string& body,
+    const std::pmr::string& constBody) {
+    context.body(body);
+    context.text(constBody);
+    context.html(body);
+};
+
+template <typename ContextT>
+concept HasContextCookieGenerator = requires(const ContextT& context) {
+    context.generateCookie(std::string_view{}, std::string_view{});
+};
+
+template <typename ContextT>
+concept HasContextSignedCookieGenerator = requires(const ContextT& context) {
+    context.generateSignedCookie(
+        std::string_view{},
+        std::string_view{},
+        std::string_view{});
+};
+
+template <typename ContextT>
+concept HasContextRenderPipeline = requires(ContextT& context) {
+    typename ContextT::RenderOptions;
+    typename ContextT::Renderer;
+    typename ContextT::Layout;
+    context.render(std::string_view{});
+};
+
 using RecordHttpAccessFunction = void (*)(
     const ruvia::detail::AccessLogSink&,
     const ruvia::HttpRequest&,
@@ -454,9 +650,13 @@ using AppSetConnectionTimeoutFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::chrono::milliseconds>);
 using AppSetOptionalSizeFunction = ruvia::App& (ruvia::App::*)(
     std::optional<std::size_t>);
-using ContextTextStatusFunction = ruvia::HttpResponse (ruvia::Context::*)(
+using ContextTextFunction = ruvia::HttpResponse (ruvia::Context::*)(
+    std::string_view) const;
+using ContextPmrStringFunction = ruvia::HttpResponse (ruvia::Context::*)(
+    std::pmr::string&&) const;
+using ContextDeleteCookieFunction = void (ruvia::Context::*)(
     std::string_view,
-    std::optional<std::uint16_t>) const;
+    ruvia::CookieOptions);
 
 static_assert(std::same_as<
     decltype(static_cast<AppOnAccessFunction>(&ruvia::App::onAccess)),
@@ -496,11 +696,37 @@ static_assert(std::same_as<
         &ruvia::App::setMaxStreamBodyBytes)),
     AppSetOptionalSizeFunction>);
 static_assert(std::same_as<
-    decltype(static_cast<ContextTextStatusFunction>(&ruvia::Context::text)),
-    ContextTextStatusFunction>);
+    decltype(static_cast<ContextTextFunction>(&ruvia::Context::text)),
+    ContextTextFunction>);
 static_assert(std::same_as<
-    decltype(ruvia::Context::ResponseInit{}.status),
-    std::optional<std::uint16_t>>);
+    decltype(static_cast<ContextPmrStringFunction>(&ruvia::Context::body)),
+    ContextPmrStringFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<ContextPmrStringFunction>(&ruvia::Context::text)),
+    ContextPmrStringFunction>);
+static_assert(std::same_as<
+    decltype(static_cast<ContextPmrStringFunction>(&ruvia::Context::html)),
+    ContextPmrStringFunction>);
+static_assert(HasPmrStringBuilderLvalues<ruvia::Context>);
+static_assert(std::same_as<
+    decltype(static_cast<ContextDeleteCookieFunction>(&ruvia::Context::deleteCookie)),
+    ContextDeleteCookieFunction>);
+static_assert(!HasContextCookieGenerator<ruvia::Context>);
+static_assert(!HasContextSignedCookieGenerator<ruvia::Context>);
+static_assert(!HasContextRenderPipeline<ruvia::Context>);
+static_assert(!HasResponseInit<ruvia::Context>);
+static_assert(!HasContextVarFacade<ruvia::Context>);
+static_assert(!HasContextFinalized<ruvia::Context>);
+static_assert(!HasLegacyStreamSSE<ruvia::Context>);
+static_assert(!HasLegacyWriteSSE<ruvia::SseWriter>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::Context&>().streamSse()),
+    ruvia::SseWriter>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::SseWriter&>().write(
+        std::declval<const ruvia::SseMessage&>())),
+    ruvia::Task<void>>);
+static_assert(!HasBuilderMetadataArguments<ruvia::Context>);
 static_assert(std::same_as<
     ruvia::Context::HeaderOptions,
     ruvia::HttpResponse::HeaderOptions>);
@@ -537,16 +763,88 @@ static_assert(std::is_same_v<
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::ContextRequest&>().knownMethod()),
     ruvia::HttpKnownMethod>);
+static_assert(std::is_same_v<
+    decltype(std::declval<const ruvia::ContextRequest&>().queries(std::string_view{})),
+    std::span<const std::string_view>>);
+static_assert(!HasRequestCloneMethod<ruvia::ContextRequest>);
+static_assert(!HasRawRequestCloneType<ruvia::ContextRequest>);
+static_assert(!HasRequestUrl<ruvia::ContextRequest>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::ContextRequest&>().routePath()),
+    std::string_view>);
+static_assert(!HasRequestMatchedRoutes<ruvia::ContextRequest>);
+static_assert(!HasIndexedRoutePath<ruvia::ContextRequest>);
+static_assert(!HasFreeRoutePath<ruvia::Context>);
+static_assert(!HasFreeMatchedRoutes<ruvia::Context>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().bytes()),
     ruvia::Task<std::span<const std::byte>>>);
+static_assert(!HasRawRequestEscape<ruvia::ContextRequest>);
 static_assert(!HasRequestArrayBufferAlias<ruvia::ContextRequest>);
+static_assert(!HasRequestBlobTypeAlias<ruvia::ContextRequest::RequestBlob>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::ContextRequest::RequestBlob&>().contentType()),
+    std::string_view>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestBlob,
+    std::span<const std::byte>,
+    std::string_view>);
+static_assert(!std::is_copy_constructible_v<ruvia::ContextRequest::RequestFormField>);
+static_assert(std::is_move_constructible_v<ruvia::ContextRequest::RequestFormField>);
+static_assert(!std::is_move_assignable_v<ruvia::ContextRequest::RequestFormField>);
+static_assert(!std::is_copy_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!std::is_copy_assignable_v<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(std::is_move_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::ContextRequest::RequestFormData::Entry>);
+static_assert(!std::is_copy_constructible_v<ruvia::ContextRequest::RequestFormData>);
+static_assert(!std::is_copy_assignable_v<ruvia::ContextRequest::RequestFormData>);
+static_assert(std::is_move_constructible_v<ruvia::ContextRequest::RequestFormData>);
+static_assert(!std::is_move_assignable_v<ruvia::ContextRequest::RequestFormData>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData,
+    std::pmr::memory_resource*>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData,
+    std::pmr::vector<ruvia::ContextRequest::RequestFormField>&&>);
+static_assert(!std::is_copy_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(std::is_move_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::ContextRequest::RequestFormData::Object>);
+static_assert(!std::is_constructible_v<
+    ruvia::ContextRequest::RequestFormData::Object,
+    const ruvia::ContextRequest::RequestFormData*,
+    std::string_view>);
+static_assert(!HasLegacyParseBodyFlags<ruvia::ContextRequest::ParseBodyOptions>);
+static_assert(
+    ruvia::ContextRequest::ParseBodyOptions{}.repeatedScalars ==
+    ruvia::ContextRequest::RepeatedScalarPolicy::kLastValue);
+static_assert(
+    ruvia::ContextRequest::ParseBodyOptions{}.dottedNames ==
+    ruvia::ContextRequest::DottedNamePolicy::kLiteral);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::ContextRequest&>().parseBody()),
     ruvia::Task<ruvia::ContextRequest::RequestFormData>>);
 static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest>);
-static_assert(!HasRequestFormDataAlias<ruvia::ContextRequest::RawRequestClone>);
+static_assert(!HasFormPathValueType<ruvia::ContextRequest::RequestFormData>);
+static_assert(!HasFormDataEntryLookup<ruvia::ContextRequest::RequestFormData>);
+static_assert(!HasFormAtLookup<ruvia::ContextRequest::RequestFormData>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::ContextRequest::RequestFormData&>().get(
+        std::string_view{})),
+    ruvia::ContextRequest::RequestFormData::Value>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::ContextRequest::RequestFormData::Object&>().get(
+        std::string_view{})),
+    ruvia::ContextRequest::RequestFormData::Value>);
+static_assert(!HasFormAtLookup<ruvia::ContextRequest::RequestFormData::Object>);
 static_assert(HasTypeOnlyValidation<ruvia::ContextRequest>);
+static_assert(!HasPublicValidatedDataInjection<ruvia::ContextRequest>);
 static_assert(!HasExplicitValidationTarget<ruvia::ContextRequest>);
 static_assert(std::is_same_v<
     decltype(std::declval<const ruvia::AccessLogRecord&>().method()),
@@ -818,7 +1116,19 @@ static_assert(!std::is_default_constructible_v<
     ruvia::detail::ContextWebSocketOutput>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::RouteEndpoint>);
+static_assert(std::is_move_constructible_v<
+    ruvia::detail::RouteEndpoint>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::RouteEndpoint>);
+static_assert(std::is_move_constructible_v<
+    ruvia::detail::RouteEntry>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::RouteEntry>);
 static_assert(!std::is_polymorphic_v<ruvia::detail::RouteTable>);
+static_assert(!std::is_move_constructible_v<
+    ruvia::detail::RouteTable>);
+static_assert(!std::is_move_assignable_v<
+    ruvia::detail::RouteTable>);
 static_assert(!std::is_default_constructible_v<
     ruvia::detail::Http2SansIoSessionContext>);
 static_assert(std::is_nothrow_constructible_v<
@@ -990,7 +1300,7 @@ int main() {
         return 9;
     }
     ruvia::HttpResponse compressed;
-    compressed.setBodyCopy(std::string(2048, 'a'));
+    compressed.body(std::string(2048, 'a'));
     ruvia::detail::applyResponseCompression(
         ruvia::detail::HttpContentCoding::kGzip,
         ruvia::HttpKnownMethod::kGet,

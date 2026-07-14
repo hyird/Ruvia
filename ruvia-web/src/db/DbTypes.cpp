@@ -83,7 +83,7 @@ DbField::DbField(DbField&& other) noexcept
     refreshView();
 }
 
-DbField& DbField::operator=(DbField&& other) noexcept {
+DbField& DbField::operator=(DbField&& other) {
     if (this == &other) {
         return *this;
     }
@@ -126,7 +126,7 @@ DbRow::DbRow(DbRow&& other) noexcept
     refreshView();
 }
 
-DbRow& DbRow::operator=(DbRow&& other) noexcept {
+DbRow& DbRow::operator=(DbRow&& other) {
     if (this == &other) {
         return *this;
     }
@@ -177,30 +177,8 @@ QueryResult::QueryResult(QueryResult&& other) noexcept
       fields_(std::move(other.fields_)),
       affectedRows_(std::exchange(other.affectedRows_, 0)),
       lastInsertId_(std::exchange(other.lastInsertId_, 0)),
-      mounted_(std::exchange(other.mounted_, nullptr)),
       rawResult_(std::exchange(other.rawResult_, nullptr)),
       releaseRawResult_(std::exchange(other.releaseRawResult_, nullptr)) {}
-
-QueryResult& QueryResult::operator=(QueryResult&& other) {
-    if (this == &other) {
-        return *this;
-    }
-
-    if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
-        releaseRawResult_(rawResult_);
-    }
-    rawResult_ = nullptr;
-    releaseRawResult_ = nullptr;
-
-    rows_ = std::move(other.rows_);
-    fields_ = std::move(other.fields_);
-    affectedRows_ = std::exchange(other.affectedRows_, 0);
-    lastInsertId_ = std::exchange(other.lastInsertId_, 0);
-    mounted_ = std::exchange(other.mounted_, nullptr);
-    rawResult_ = std::exchange(other.rawResult_, nullptr);
-    releaseRawResult_ = std::exchange(other.releaseRawResult_, nullptr);
-    return *this;
-}
 
 QueryResult::~QueryResult() {
     if (rawResult_ != nullptr && releaseRawResult_ != nullptr) {
@@ -209,18 +187,15 @@ QueryResult::~QueryResult() {
 }
 
 std::span<const DbRow> QueryResult::rows() const noexcept {
-    const auto& result = mounted_ == nullptr ? *this : *mounted_;
-    return std::span<const DbRow>(result.rows_.data(), result.rows_.size());
+    return std::span<const DbRow>(rows_.data(), rows_.size());
 }
 
 std::uint64_t QueryResult::affectedRows() const noexcept {
-    const auto& result = mounted_ == nullptr ? *this : *mounted_;
-    return result.affectedRows_;
+    return affectedRows_;
 }
 
 std::uint64_t QueryResult::lastInsertId() const noexcept {
-    const auto& result = mounted_ == nullptr ? *this : *mounted_;
-    return result.lastInsertId_;
+    return lastInsertId_;
 }
 
 DbMigrationReport::DbMigrationReport(std::pmr::memory_resource* resource)

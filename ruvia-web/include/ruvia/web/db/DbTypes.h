@@ -125,7 +125,7 @@ private:
 class DbField final {
 public:
     DbField(DbField&& other) noexcept;
-    DbField& operator=(DbField&& other) noexcept;
+    DbField& operator=(DbField&& other);
 
     DbField(const DbField&) = delete;
     DbField& operator=(const DbField&) = delete;
@@ -154,7 +154,7 @@ private:
 class DbRow final {
 public:
     DbRow(DbRow&& other) noexcept;
-    DbRow& operator=(DbRow&& other) noexcept;
+    DbRow& operator=(DbRow&& other);
 
     DbRow(const DbRow&) = delete;
     DbRow& operator=(const DbRow&) = delete;

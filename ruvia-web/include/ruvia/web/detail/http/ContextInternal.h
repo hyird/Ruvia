@@ -24,22 +24,18 @@ inline Context::Context(
     const std::string_view* paramValues,
     std::size_t paramCount,
     std::uintptr_t routeRateLimitScope,
-    detail::ContextServices services,
-    HttpKnownMethod routeMethod,
-    std::size_t routeMiddlewareCount) noexcept
+    detail::ContextServices services) noexcept
     : memory_(memory),
       request_(request),
       connInfo_(services.connInfo()),
       worker_(services.worker()),
       routePath_(routePath),
-      routeMethod_(routeMethod),
       paramNames_(paramNames),
       paramValues_(paramValues),
       paramCount_(
           paramCount < detail::kMaxRouteParams
               ? paramCount
               : detail::kMaxRouteParams),
-      routeMiddlewareCount_(routeMiddlewareCount),
       db_(services.db()),
       redis_(services.redis()),
       rateLimiter_(services.rateLimiter()),
@@ -75,8 +71,6 @@ struct ContextAccess final {
         RequestMemory& memory,
         const HttpRequest& request,
         std::string_view routePath,
-        HttpKnownMethod routeMethod,
-        std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
         return Context(
@@ -87,9 +81,7 @@ struct ContextAccess final {
             nullptr,
             0,
             routeRateLimitScope,
-            services,
-            routeMethod,
-            routeMiddlewareCount);
+            services);
     }
 
     [[nodiscard]] static Context make(
@@ -99,8 +91,6 @@ struct ContextAccess final {
         const std::string_view* paramNames,
         const std::string_view* paramValues,
         std::size_t paramCount,
-        HttpKnownMethod routeMethod,
-        std::size_t routeMiddlewareCount,
         std::uintptr_t routeRateLimitScope,
         ContextServices services = {}) noexcept {
         return Context(
@@ -111,9 +101,7 @@ struct ContextAccess final {
             paramValues,
             paramCount,
             routeRateLimitScope,
-            services,
-            routeMethod,
-            routeMiddlewareCount);
+            services);
     }
 
     [[nodiscard]] static RateLimiter* rateLimiter(Context& context) noexcept {

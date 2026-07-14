@@ -108,21 +108,25 @@ public:
             value_);
     }
 
-    [[nodiscard]] const Http1ChunkDecodeNeedMore* needMore() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeNeedMore* needMore() const & noexcept {
         return std::get_if<Http1ChunkDecodeNeedMore>(&value_);
     }
+    const Http1ChunkDecodeNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeBodyChunk* bodyChunk() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeBodyChunk* bodyChunk() const & noexcept {
         return std::get_if<Http1ChunkDecodeBodyChunk>(&value_);
     }
+    const Http1ChunkDecodeBodyChunk* bodyChunk() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeComplete* complete() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeComplete* complete() const & noexcept {
         return std::get_if<Http1ChunkDecodeComplete>(&value_);
     }
+    const Http1ChunkDecodeComplete* complete() const && = delete;
 
-    [[nodiscard]] const Http1ChunkDecodeFailure* failure() const noexcept {
+    [[nodiscard]] const Http1ChunkDecodeFailure* failure() const & noexcept {
         return std::get_if<Http1ChunkDecodeFailure>(&value_);
     }
+    const Http1ChunkDecodeFailure* failure() const && = delete;
 
 private:
     friend class Http1ChunkedBodyDecoder;

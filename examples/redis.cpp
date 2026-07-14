@@ -77,7 +77,7 @@ public:
     ruvia::Task<ruvia::HttpResponse> ping(ruvia::Context& c) {
         co_await c.redis().ping();
         auto message = co_await c.redis().ping("hello");
-        co_return c.text(message);
+        co_return c.text(std::move(message));
     }
 
     ruvia::Task<ruvia::HttpResponse> getValue(ruvia::Context& c) {
@@ -85,7 +85,7 @@ public:
         if (!value) {
             co_return c.error(404, "not_found", "redis key not found");
         }
-        co_return c.text(*value);
+        co_return c.text(std::move(*value));
     }
 
     ruvia::Task<ruvia::HttpResponse> setValue(ruvia::Context& c) {
@@ -99,7 +99,7 @@ public:
         std::pmr::string body(c.allocator<char>());
         appendSigned(body, value);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> keyMetadata(ruvia::Context& c) {
@@ -125,7 +125,7 @@ public:
         body.append("\npersisted=");
         appendBool(body, persisted);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> strings(ruvia::Context& c) {
@@ -175,7 +175,7 @@ public:
         body.append("\nincr-by=");
         appendSigned(body, incrementedBy);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> hashes(ruvia::Context& c) {
@@ -220,7 +220,7 @@ public:
         body.append("\nremoved=");
         appendSigned(body, removed);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> lists(ruvia::Context& c) {
@@ -254,7 +254,7 @@ public:
         body.append("\nright=");
         body.append(poppedRight.value_or(""));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> sets(ruvia::Context& c) {
@@ -294,7 +294,7 @@ public:
         body.append("\nremoved=");
         appendSigned(body, removed);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> sortedSets(ruvia::Context& c) {
@@ -324,7 +324,7 @@ public:
         body.append("\nremoved=");
         appendSigned(body, removed);
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> scan(ruvia::Context& c) {
@@ -348,14 +348,13 @@ public:
         body.append("\nzset=");
         appendSigned(body, static_cast<std::int64_t>(zset.entries().size()));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> pipeline(ruvia::Context& c) {
         const std::array<std::string_view, 2> typeCommand{"TYPE", "ruvia:example:pipeline"};
         auto pipeline = c.redis().pipeline();
-        auto results = co_await pipeline
-            .set("ruvia:example:pipeline", "1")
+        pipeline.set("ruvia:example:pipeline", "1")
             .get("ruvia:example:pipeline")
             .incr("ruvia:example:pipeline")
             .hset("ruvia:example:pipeline:hash", "field", "value")
@@ -363,34 +362,30 @@ public:
             .lpush("ruvia:example:pipeline:list", "item")
             .sadd("ruvia:example:pipeline:set", "member")
             .zadd("ruvia:example:pipeline:zset", 1.0, "member")
-            .command(typeCommand)
-            .exec();
+            .command(typeCommand);
+        auto results = co_await std::move(pipeline).exec();
 
         std::pmr::string body(c.allocator<char>());
         body.append("pipeline results=");
         appendSigned(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> transaction(ruvia::Context& c) {
         const std::array<std::string_view, 1> watched{"ruvia:example:tx"};
         auto tx = c.redis().transaction();
-        auto results = co_await tx
-            .watch(watched)
+        tx.watch(watched)
             .set("ruvia:example:tx", "1")
             .incr("ruvia:example:tx")
-            .get("ruvia:example:tx")
-            .exec();
-
-        auto discarded = c.redis().transaction();
-        discarded.discard();
+            .get("ruvia:example:tx");
+        auto results = co_await std::move(tx).exec();
 
         std::pmr::string body(c.allocator<char>());
         body.append("transaction results=");
         appendSigned(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> scripts(ruvia::Context& c) {
@@ -410,7 +405,7 @@ public:
         body.append("\nexists=");
         appendSigned(body, static_cast<std::int64_t>(exists.size()));
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> blockingPop(ruvia::Context& c) {
@@ -424,7 +419,7 @@ public:
         body.append("\nright=");
         appendBool(body, right.has_value());
         body.push_back('\n');
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> aliasValue(ruvia::Context& c) {
@@ -433,7 +428,7 @@ public:
         if (value) {
             body.append(*value);
         }
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 };
 

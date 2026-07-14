@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/http/Http1InterimResponseWriter.h"
@@ -18,6 +20,15 @@ using ruvia::Http1InterimResponsePrepareError;
 using ruvia::Http1InterimResponseWriter;
 using ruvia::HttpHeaderView;
 using ruvia::HttpInterimResponseHead;
+
+template <typename T>
+concept HasAnyRvalueHttp1InterimResponsePrepareAccessor =
+    requires(T&& result) { std::move(result).bufferTooSmall(); } ||
+    requires(T&& result) { std::move(result).prepared(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueHttp1InterimResponsePrepareAccessor<
+    ruvia::Http1InterimResponsePrepareResult>);
 
 [[nodiscard]] bool unchanged(
     const std::array<char, 64>& buffer,

@@ -112,7 +112,7 @@ public:
     RedisKeyValue(const RedisKeyValue&) = default;
     RedisKeyValue& operator=(const RedisKeyValue&) = default;
     RedisKeyValue(RedisKeyValue&&) noexcept = default;
-    RedisKeyValue& operator=(RedisKeyValue&&) noexcept = default;
+    RedisKeyValue& operator=(RedisKeyValue&&) = default;
 
     [[nodiscard]] std::string_view key() const noexcept {
         return std::string_view(key_.data(), key_.size());
@@ -145,7 +145,7 @@ public:
     RedisScoredValue(const RedisScoredValue&) = default;
     RedisScoredValue& operator=(const RedisScoredValue&) = default;
     RedisScoredValue(RedisScoredValue&&) noexcept = default;
-    RedisScoredValue& operator=(RedisScoredValue&&) noexcept = default;
+    RedisScoredValue& operator=(RedisScoredValue&&) = default;
 
     [[nodiscard]] std::string_view value() const noexcept {
         return std::string_view(value_.data(), value_.size());
@@ -289,7 +289,7 @@ public:
     RedisValue(const RedisValue&) = default;
     RedisValue& operator=(const RedisValue&) = default;
     RedisValue(RedisValue&&) noexcept = default;
-    RedisValue& operator=(RedisValue&&) noexcept = default;
+    RedisValue& operator=(RedisValue&&) = default;
 
     [[nodiscard]] Kind kind() const noexcept;
     [[nodiscard]] bool null() const noexcept;

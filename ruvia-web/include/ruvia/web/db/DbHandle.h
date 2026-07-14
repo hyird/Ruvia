@@ -30,15 +30,12 @@ private:
 
     DbHandle(
         detail::DbPoolRef client,
-        std::pmr::memory_resource* resource,
-        RequestMemory* requestMemory = nullptr) noexcept;
+        std::pmr::memory_resource* resource) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
     Task<DbStreamResult> queryStreamPrepared(std::pmr::string sql, std::pmr::vector<DbValue> params) const;
-    [[nodiscard]] QueryResult mountResult(QueryResult result) const;
 
     detail::DbPoolRef client_;
     std::pmr::memory_resource* resource_;
-    RequestMemory* requestMemory_{nullptr};
 };
 
 }  // namespace ruvia

@@ -181,21 +181,19 @@ bool detail::DbRegistry::hasAnyTimeout() const noexcept {
 }
 
 DbHandle detail::DbRegistry::get(
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) const {
+    std::pmr::memory_resource* resource) const {
     if (detail::dbPoolRefEmpty(defaultClient_)) {
         throw std::logic_error("default database is not configured");
     }
-    return DbHandle(defaultClient_, resource, requestMemory);
+    return DbHandle(defaultClient_, resource);
 }
 
 DbHandle detail::DbRegistry::get(
     std::string_view alias,
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) const {
+    std::pmr::memory_resource* resource) const {
     for (const auto& entry : clients_) {
         if (std::string_view(entry.alias.data(), entry.alias.size()) == alias) {
-            return DbHandle(poolRef(entry.client), resource, requestMemory);
+            return DbHandle(poolRef(entry.client), resource);
         }
     }
     throw std::logic_error("database is not configured");
@@ -205,14 +203,14 @@ DbHandle Context::db() const {
     if (db_ == nullptr) {
         throw std::logic_error("database is not configured");
     }
-    return db_->get(resource(), const_cast<RequestMemory*>(&memory_));
+    return db_->get(resource());
 }
 
 DbHandle Context::db(std::string_view alias) const {
     if (db_ == nullptr) {
         throw std::logic_error("database is not configured");
     }
-    return db_->get(alias, resource(), const_cast<RequestMemory*>(&memory_));
+    return db_->get(alias, resource());
 }
 
 }  // namespace ruvia

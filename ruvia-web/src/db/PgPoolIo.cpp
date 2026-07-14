@@ -145,7 +145,7 @@ Task<void> PostgreSqlPool::waitForPostgreSql(
     };
 
     try {
-        co_await SocketWaitAwaiter{slot, *slot.waitSocket, read};
+        co_await SocketWaitAwaiter{slot, *slot.waitSocket, read, {}, {}};
     } catch (...) {
         clearSlotDeadline(slot);
         throw;

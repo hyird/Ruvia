@@ -3,6 +3,7 @@
 #include "ruvia/http/HttpStatus.h"
 #include "ruvia/http/detail/PmrResource.h"
 
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -17,6 +18,21 @@ HttpResponse::HttpResponse(
     detail::HttpResolvedPmrResourceTag,
     std::pmr::memory_resource* resource)
     : headers_(detail::HttpResolvedPmrResourceTag{}, resource) {}
+
+HttpResponse& HttpResponse::operator=(HttpResponse&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+
+    // A response is one resource domain. Member-wise assignment would retain the
+    // target allocator in PMR alternatives while HttpResponseHeaders follows the
+    // source resource, leaving one response split across unrelated request arenas.
+    // Reconstructing transfers every owning alternative together and does not
+    // allocate on the response hot path.
+    std::destroy_at(this);
+    std::construct_at(this, std::move(other));
+    return *this;
+}
 
 std::pmr::memory_resource* HttpResponse::resource() const noexcept {
     return headers_.resource_;
@@ -41,11 +57,11 @@ void HttpResponse::status(std::uint16_t statusCode) {
     statusCode_ = statusCode;
 }
 
-void HttpResponse::setBodyCopy(std::string_view value) {
+void HttpResponse::body(std::string_view value) {
     body_.setCopy(resource(), value);
 }
 
-void HttpResponse::setBodyView(std::string_view value) noexcept {
+void HttpResponse::setBodyBorrowedView(std::string_view value) noexcept {
     body_.setBorrowed(value);
 }
 

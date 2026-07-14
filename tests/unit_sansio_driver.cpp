@@ -102,7 +102,7 @@ ruvia::Task<ruvia::HttpResponse> largeBufferedHandler(void*, ruvia::Context&) {
     ruvia::HttpResponse response(std::pmr::get_default_resource());
     response.status(200);
     std::string body(kLargeBufferedBytes, 'Q');
-    response.setBodyCopy(body);
+    response.body(body);
     co_return response;
 }
 
@@ -246,7 +246,7 @@ RUVIA_TEST(sansio_driver_h2_get_round_trip) {
                         const auto streamId = messageEnd->streamId();
                         ruvia::HttpResponse response(&resource);
                         response.status(200);
-                        response.setBodyCopy("pong");
+                        response.body("pong");
                         const auto* stream = c.stream(streamId);
                         RUVIA_CHECK(stream != nullptr);
                         RUVIA_CHECK(

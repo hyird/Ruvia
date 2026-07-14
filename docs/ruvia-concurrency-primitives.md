@@ -57,7 +57,7 @@ auto result = target.post(
     });
 ```
 
-`App::workerFor(uint64_t/string_view)` 按 key 稳定选择 Web worker，`App::workers()` 返回全部 `WebWorkerHandle`。`WebWorkerHandle::post()` 只接受返回 `Task<void>` 的回调，回调收到仅在该作业内有效的 `WebWorkerContext`，可访问目标 worker、PMR resource、shutdown stop token，以及该 worker 自己的 DB/Redis handle。需要纯 core 能力时使用 `WebWorkerHandle::core()`。
+`App::workerFor(uint64_t/string_view)` 按 key 稳定选择 Web worker，`App::workers()` 返回全部 `WebWorkerHandle`。`WebWorkerHandle::post()` 只接受返回 `Task<void>` 的回调，回调收到仅在该作业内有效的 `WebWorkerContext`，可访问目标 worker、PMR resource、shutdown stop token，以及该 worker 自己的 DB/Redis handle。外部 producer 不暴露 core post 逃生口，确保所有已接受 Web 作业都进入 shutdown drain、失败传播和资源生命周期统计；作业内可用 `WebWorkerContext::worker()` 驱动 timer、`TaskScope` 等 worker-bound core 原语。
 
 `App::setWorkerMailboxCapacity()` 在启动前配置每 worker 有界队列，默认 1024；所有 producer 必须处理 `kQueueFull`。`WebWorkerHandle::stats()` 提供 accepted、queue-full、worker-stopping、completed、failed 和 outstanding 计数，供应用接入指标系统。
 
@@ -97,7 +97,14 @@ case ruvia::ChannelSendResult::kClosed: break;
 case ruvia::ChannelSendResult::kWorkerStopping: break;
 }
 
-auto event = co_await receiver.receive(); // 明确区分 value/closed/worker-stopping
+auto event = co_await receiver.receive();
+if (const auto* value = event.value()) {
+    consume(*value);
+} else if (event.closed()) {
+    // producer 已关闭 Channel
+} else if (event.workerStopping()) {
+    // 绑定 worker 正在停止
+}
 ```
 
 首版是单 consumer、有界 FIFO、`kRejectNewest`：
@@ -117,12 +124,19 @@ auto event = co_await receiver.receive(); // 明确区分 value/closed/worker-st
 ```cpp
 auto [completion, receiver] = ruvia::makeOneShot<Ack>(worker);
 auto result = co_await receiver.waitFor(2s);
+if (const auto* ack = result.value()) {
+    consume(*ack);
+} else if (result.timedOut()) {
+    recordTimeout();
+}
 ```
 
 - completion 可从任意线程调用。
 - 重复 completion 不覆盖首个结果，返回 already-completed。
 - wait/waitFor 只能在绑定 worker。
 - timeout、completion、close 由控制块状态机保证单胜者。
+- Channel receive 与 OneShot wait 共用封闭的 `WorkerWaitResult<T>`；只有
+  `value()` alternative 暴露 payload，closed/stopping/timeout 无法携带伪值。
 - 超时不取消已经发往设备的命令；迟到回执仍持久化并计指标。
 
 ## 7. TaskScope

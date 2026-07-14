@@ -230,6 +230,7 @@ private:
 template <typename ApplyResponseState>
 [[nodiscard]] HttpResponse makeFileResponse(
     const Context& context,
+    const HttpRequest& request,
     FileResponsePath filePath,
     std::uint64_t size,
     std::filesystem::file_time_type modified,
@@ -323,8 +324,6 @@ template <typename ApplyResponseState>
         return response;
     };
 
-    const auto contextRequest = context.req();
-    const auto& request = contextRequest.raw();
     if (request.knownMethod() == HttpKnownMethod::kGet ||
         request.knownMethod() == HttpKnownMethod::kHead) {
         const auto conditional = fileConditionalHeaders(request);
@@ -419,10 +418,11 @@ HttpResponse Context::file(
     const auto applyState = [this](
         HttpResponse& response,
         std::optional<std::uint16_t> statusCode) {
-        applyResponseState(response, statusCode, {});
+        applyResponseState(response, statusCode);
     };
     return makeFileResponse(
         *this,
+        request_,
         FileResponsePath::copying(path),
         static_cast<std::uint64_t>(size),
         modified,
@@ -582,10 +582,11 @@ HttpResponse Context::staticFile(
     const auto applyState = [this](
         HttpResponse& response,
         std::optional<std::uint16_t> statusCode) {
-        applyResponseState(response, statusCode, {});
+        applyResponseState(response, statusCode);
     };
     return makeFileResponse(
         *this,
+        request_,
         FileResponsePath::borrowing(servedEntry.filePath()),
         servedEntry.size(),
         servedEntry.modified(),

@@ -255,8 +255,7 @@ Task<void> detail::MariaDbPool::executeControl(
 }
 
 Task<DbTransaction> detail::MariaDbPool::beginTransaction(
-    std::pmr::memory_resource* resource,
-    RequestMemory* requestMemory) {
+    std::pmr::memory_resource* resource) {
     const auto slotIndex = co_await acquireSlot();
     try {
         auto& slot = slots_[slotIndex];
@@ -270,7 +269,7 @@ Task<DbTransaction> detail::MariaDbPool::beginTransaction(
         throw;
     }
 
-    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource, requestMemory);
+    co_return DbTransaction(DbPoolRef{this}, slotIndex, resource);
 }
 
 Task<void> detail::MariaDbPool::commitTransaction(std::size_t slot, std::pmr::memory_resource* resource) {

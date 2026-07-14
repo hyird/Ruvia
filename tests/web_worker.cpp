@@ -109,8 +109,7 @@ int testGracefulDrain() {
         options);
 
     auto webWorker = server.webWorker();
-    if (!webWorker.valid() || webWorker.id() == 0 ||
-        webWorker.core().id() != webWorker.id()) {
+    if (!webWorker.valid() || webWorker.id() == 0) {
         return 1;
     }
 

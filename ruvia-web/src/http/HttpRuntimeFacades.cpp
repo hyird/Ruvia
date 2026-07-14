@@ -28,7 +28,7 @@ ResponseStreamWriter& Context::streamText() {
     return stream();
 }
 
-SseWriter Context::streamSSE() {
+SseWriter Context::streamSse() {
     setStableResponseHeader("Content-Type", "text/event-stream");
     setStableResponseHeader("Cache-Control", "no-cache");
     return SseWriter(stream());

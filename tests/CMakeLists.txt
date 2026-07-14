@@ -316,12 +316,16 @@ add_custom_target(ruvia_package_consumers
     VERBATIM)
 
 # Mechanised layer-boundary checks (asio-free http, no framework reach-down,
-# docs ownership). Opt-in: the rules pin literal source patterns, which makes
-# them brittle across refactors, so they no longer gate every build or the
-# test suite. Run on demand with:
-#   cmake --build <build-dir> --target ruvia_check_boundaries
+# docs ownership). The production check gates CTest; its fixture self-test
+# remains available as an explicit maintenance target.
 set(RUVIA_BOUNDARY_CHECK_SCRIPT
     ${CMAKE_SOURCE_DIR}/scripts/check_layer_boundaries.cmake)
+add_test(
+    NAME ruvia_layer_boundaries
+    COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT})
+set_tests_properties(
+    ruvia_layer_boundaries
+    PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(ruvia_check_boundaries
     COMMAND ${CMAKE_COMMAND} -P ${RUVIA_BOUNDARY_CHECK_SCRIPT}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

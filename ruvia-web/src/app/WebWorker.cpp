@@ -79,10 +79,6 @@ WorkerId WebWorkerHandle::id() const noexcept {
     return worker_.id();
 }
 
-WorkerHandle WebWorkerHandle::core() const noexcept {
-    return worker_;
-}
-
 WebWorkerStats WebWorkerHandle::stats() const noexcept {
     if (const auto dispatch = dispatch_.lock()) {
         return dispatch->stats();
@@ -190,11 +186,13 @@ void WebWorkerDispatch::start(Task task) {
             asio::bind_executor(
                 executor_,
                 [self = shared_from_this()](TaskCompletionResult<void> result) {
-                    self->complete();
-                    if (result.exception && self->failed_) {
+                    if (result.exception) {
                         self->failedCount_.fetch_add(1, std::memory_order_relaxed);
-                        self->failed_(std::move(result.exception));
+                        if (self->failed_) {
+                            self->failed_(std::move(result.exception));
+                        }
                     }
+                    self->complete();
                 }));
     } catch (...) {
         complete();

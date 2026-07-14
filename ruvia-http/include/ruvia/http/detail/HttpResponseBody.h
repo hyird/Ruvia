@@ -173,7 +173,7 @@ public:
     HttpResponseBody(const HttpResponseBody&) = delete;
     HttpResponseBody& operator=(const HttpResponseBody&) = delete;
     HttpResponseBody(HttpResponseBody&&) = default;
-    HttpResponseBody& operator=(HttpResponseBody&&) = default;
+    HttpResponseBody& operator=(HttpResponseBody&&) = delete;
 
     [[nodiscard]] const HttpEmptyResponseBody* empty() const noexcept {
         return std::get_if<HttpEmptyResponseBody>(&value_);

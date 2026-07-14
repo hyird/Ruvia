@@ -91,7 +91,6 @@ bool TaskScope::JoinAwaiter::await_suspend(std::coroutine_handle<> continuation)
 
 void TaskScope::JoinAwaiter::await_resume() {
     scope.joinStarted_ = true;
-    scope.joined_ = true;
     scope.rethrowFailure();
 }
 

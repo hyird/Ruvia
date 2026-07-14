@@ -3,6 +3,7 @@
 #include <concepts>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,6 +19,10 @@ using ruvia::detail::Http1ChunkDecodeBodyChunk;
 using ruvia::detail::Http1ChunkDecodeComplete;
 using ruvia::detail::Http1ChunkDecodeError;
 using ruvia::detail::Http1ChunkDecodeFailure;
+
+static_assert(std::same_as<
+    decltype(std::declval<const ProtocolByteLimit&>().maximum()),
+    std::optional<std::size_t>>);
 using ruvia::detail::Http1ChunkDecodeNeedMore;
 using ruvia::detail::Http1ChunkDecodeResult;
 using ruvia::detail::Http1ChunkedBodyDecoder;
@@ -39,10 +44,18 @@ concept HasConsumedBytes = requires(const T& result) {
     { result.consumedBytes() } -> std::same_as<std::size_t>;
 };
 
+template <typename T>
+concept HasAnyRvalueHttp1ChunkDecodeAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).bodyChunk(); } ||
+    requires(T&& result) { std::move(result).complete(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
 static_assert(std::same_as<
     decltype(std::declval<Http1ChunkedBodyDecoder&>().decode({})),
     Http1ChunkDecodeResult>);
 static_assert(!std::default_initializable<Http1ChunkDecodeResult>);
+static_assert(!HasAnyRvalueHttp1ChunkDecodeAccessor<Http1ChunkDecodeResult>);
 static_assert(!HasLooseHttp1ChunkDecodeFields<Http1ChunkDecodeResult>);
 static_assert(HasConsumedBytes<Http1ChunkDecodeNeedMore>);
 static_assert(HasConsumedBytes<Http1ChunkDecodeBodyChunk>);
@@ -58,15 +71,15 @@ static_assert(!HasChunkBytes<Http1ChunkDecodeFailure>);
 RUVIA_TEST(protocol_byte_limit_has_no_numeric_sentinel) {
     const auto unlimited = ProtocolByteLimit::unlimited();
     RUVIA_CHECK(!unlimited.isLimited());
-    RUVIA_CHECK(unlimited.maximum() == nullptr);
+    RUVIA_CHECK(!unlimited.maximum().has_value());
     RUVIA_CHECK(!unlimited.exceeds((std::numeric_limits<std::size_t>::max)()));
     RUVIA_CHECK(unlimited.additionExceeds(
         (std::numeric_limits<std::size_t>::max)(), 1));
 
     const auto limited = ProtocolByteLimit::limited(8);
     RUVIA_CHECK(limited.isLimited());
-    RUVIA_CHECK(limited.maximum() != nullptr);
-    RUVIA_CHECK_EQ(*limited.maximum(), std::size_t{8});
+    RUVIA_CHECK(limited.maximum().has_value());
+    RUVIA_CHECK_EQ(limited.maximum().value(), std::size_t{8});
     RUVIA_CHECK(!limited.exceeds(8));
     RUVIA_CHECK(limited.exceeds(9));
     RUVIA_CHECK(!limited.additionExceeds(3, 5));

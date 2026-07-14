@@ -997,11 +997,13 @@ using ruvia::HttpErrorInfo;
 using ruvia::HttpNotFoundHandler;
 
 ruvia::Task<ruvia::HttpResponse> customNotFound(ruvia::Context& context) {
-    co_return context.body("custom-not-found", ruvia::Context::ResponseInit{.status = 404});
+    context.status(404);
+    co_return context.body("custom-not-found");
 }
 
 ruvia::Task<ruvia::HttpResponse> customError(ruvia::Context& context, HttpErrorInfo info) {
-    co_return context.body("custom-error", ruvia::Context::ResponseInit{.status = info.status()});
+    context.status(info.status());
+    co_return context.body("custom-error");
 }
 
 DispatchResult dispatchWithHandlersToken(

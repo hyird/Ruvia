@@ -25,6 +25,22 @@ using ruvia::planHttpClientRedirectRequest;
 using ruvia::resolveHttpClientSameOriginRedirectTarget;
 
 template <typename T>
+concept HasAnyRvalueHttpClientHeaderLookupAccessor =
+    requires(T&& result) { std::move(result).absent(); } ||
+    requires(T&& result) { std::move(result).found(); } ||
+    requires(T&& result) { std::move(result).repeated(); };
+
+template <typename T>
+concept HasAnyRvalueHttpClientRedirectTargetAccessor =
+    requires(T&& result) { std::move(result).target(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueHttpClientHeaderLookupAccessor<
+    ruvia::HttpClientResponseHeaderLookupResult>);
+static_assert(!HasAnyRvalueHttpClientRedirectTargetAccessor<
+    ruvia::HttpClientRedirectTargetResult>);
+
+template <typename T>
 concept HasHeaderValue = requires(const T& value) {
     { value.value() } -> std::same_as<std::string_view>;
 };

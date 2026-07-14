@@ -4,6 +4,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <vector>
 
 #include <asio/io_context.hpp>
 
@@ -40,6 +41,11 @@ public:
     [[nodiscard]] WorkerId id() const noexcept;
 
 private:
+    using ShutdownListeners =
+        std::vector<std::weak_ptr<WorkerShutdownListener>>;
+
+    [[nodiscard]] ShutdownListeners beginStopping(bool abandonDrain) noexcept;
+    static void notifyStopping(const ShutdownListeners& listeners) noexcept;
     void drain();
     void armTimer();
     void fireTimers();

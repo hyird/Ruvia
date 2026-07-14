@@ -39,13 +39,13 @@ detail::ContextValueStore& Context::values() {
 HttpResponse& Context::responseStorage() {
     if (response_ == nullptr) {
         response_ = &memory_.emplace<HttpResponse>(resource());
-        applyResponseState(*response_, std::nullopt, {});
+        applyResponseState(*response_, std::nullopt);
     }
     return *response_;
 }
 
 const HttpResponse* Context::response() const noexcept {
-    return response_;
+    return responseFinalized_ ? response_ : nullptr;
 }
 
 void Context::respond(HttpResponse&& response) {

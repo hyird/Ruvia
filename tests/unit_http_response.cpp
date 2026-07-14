@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
@@ -24,6 +25,37 @@ concept HasCustomReasonPhraseSetter = requires(T& response) {
 };
 
 static_assert(!HasCustomReasonPhraseSetter<HttpResponse>);
+static_assert(!std::is_copy_constructible_v<HttpResponse>);
+static_assert(!std::is_copy_assignable_v<HttpResponse>);
+static_assert(std::is_nothrow_move_constructible_v<HttpResponse>);
+static_assert(std::is_nothrow_move_assignable_v<HttpResponse>);
+
+class CountingMemoryResource final : public std::pmr::memory_resource {
+public:
+    [[nodiscard]] std::size_t allocations() const noexcept {
+        return allocations_;
+    }
+
+private:
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        ++allocations_;
+        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+    }
+
+    void do_deallocate(
+        void* pointer,
+        std::size_t bytes,
+        std::size_t alignment) override {
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+
+    [[nodiscard]] bool do_is_equal(
+        const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    std::size_t allocations_{0};
+};
 
 static_assert(!std::is_constructible_v<
     ruvia::HttpInterimResponseHead::HeaderInit,
@@ -60,6 +92,41 @@ RUVIA_TEST(response_status_is_version_neutral_code_only) {
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{599});
     response.status(299);
     RUVIA_CHECK_EQ(response.status(), std::uint16_t{299});
+}
+
+RUVIA_TEST(response_move_assignment_transfers_one_resource_domain) {
+    CountingMemoryResource sourceResource;
+    CountingMemoryResource targetResource;
+    HttpResponse source(&sourceResource);
+    HttpResponse target(&targetResource);
+
+    source.body(std::string(4096, 's'));
+    target.body(std::string(64, 't'));
+    const auto targetAllocationsBeforeAssignment = targetResource.allocations();
+
+    target = std::move(source);
+
+    RUVIA_CHECK_EQ(
+        targetResource.allocations(),
+        targetAllocationsBeforeAssignment);
+
+    // The inline header table spills on the ninth field. Its PMR vector must have
+    // moved to the same source resource as the body and owned header bytes.
+    target.header("X-Ruvia-0", "0");
+    target.header("X-Ruvia-1", "1");
+    target.header("X-Ruvia-2", "2");
+    target.header("X-Ruvia-3", "3");
+    target.header("X-Ruvia-4", "4");
+    target.header("X-Ruvia-5", "5");
+    target.header("X-Ruvia-6", "6");
+    target.header("X-Ruvia-7", "7");
+    target.header("X-Ruvia-8", "8");
+
+    RUVIA_CHECK_EQ(target.headers().size(), std::size_t{9});
+    RUVIA_CHECK_EQ(
+        targetResource.allocations(),
+        targetAllocationsBeforeAssignment);
+    RUVIA_CHECK(sourceResource.allocations() > 0);
 }
 
 RUVIA_TEST(response_status_code_range_validated) {

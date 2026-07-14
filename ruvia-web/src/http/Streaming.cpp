@@ -4,7 +4,7 @@
 
 namespace ruvia {
 
-Task<void> SseWriter::writeSSE(const SseMessage& message) {
+Task<void> SseWriter::write(const SseMessage& message) {
     auto& frame = detail::StreamingAccess::scratch(writer_);
     detail::formatSseMessage(frame, message);
     co_await writer_.write(frame);

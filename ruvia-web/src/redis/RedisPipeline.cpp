@@ -4,6 +4,7 @@
 #include "ruvia/web/detail/redis/RedisUtils.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 
@@ -23,6 +24,17 @@ RedisPipeline::RedisPipeline(
     : pool_(&pool),
       resource_(detail::pmrResourceOrDefault(resource)),
       commands_(resource_) {}
+
+RedisPipeline::RedisPipeline(RedisPipeline&& other) noexcept
+    : pool_(std::exchange(other.pool_, nullptr)),
+      resource_(other.resource_),
+      commands_(std::move(other.commands_)) {}
+
+void RedisPipeline::requireActive() const {
+    if (pool_ == nullptr) {
+        throw std::logic_error("redis pipeline has already been consumed");
+    }
+}
 
 RedisPipeline::Command RedisPipeline::makeCommand(
     std::pmr::memory_resource* resource,
@@ -65,6 +77,7 @@ void RedisPipeline::appendCommand(
 
 
 RedisPipeline& RedisPipeline::command(std::span<const std::string_view> args) {
+    requireActive();
     appendCommand(commands_, resource_, args);
     return *this;
 }
@@ -126,6 +139,7 @@ RedisPipeline& RedisPipeline::incr(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::incrBy(std::string_view key, std::int64_t value) {
+    requireActive();
     auto amount = detail::redisIntString(value, resource_);
     return appendCommandArgs(*this, "INCRBY", key, std::string_view(amount));
 }
@@ -135,6 +149,7 @@ RedisPipeline& RedisPipeline::decr(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::decrBy(std::string_view key, std::int64_t value) {
+    requireActive();
     auto amount = detail::redisIntString(value, resource_);
     return appendCommandArgs(*this, "DECRBY", key, std::string_view(amount));
 }
@@ -184,6 +199,7 @@ RedisPipeline& RedisPipeline::llen(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
+    requireActive();
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
     return appendCommandArgs(*this, "LRANGE", key, std::string_view(startValue), std::string_view(stopValue));
@@ -206,6 +222,7 @@ RedisPipeline& RedisPipeline::scard(std::string_view key) {
 }
 
 RedisPipeline& RedisPipeline::zadd(std::string_view key, double score, std::string_view member) {
+    requireActive();
     auto scoreValue = detail::redisScoreString(score, resource_);
     return appendCommandArgs(*this, "ZADD", key, std::string_view(scoreValue), member);
 }
@@ -215,6 +232,7 @@ RedisPipeline& RedisPipeline::zrem(std::string_view key, std::string_view member
 }
 
 RedisPipeline& RedisPipeline::zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
+    requireActive();
     auto startValue = detail::redisIntString(start, resource_);
     auto stopValue = detail::redisIntString(stop, resource_);
     return appendCommandArgs(*this, "ZRANGE", key, std::string_view(startValue), std::string_view(stopValue));
@@ -228,11 +246,19 @@ RedisPipeline& RedisPipeline::zcard(std::string_view key) {
     return appendCommandArgs(*this, "ZCARD", key);
 }
 
-Task<std::pmr::vector<RedisValue>> RedisPipeline::exec() {
-    if (pool_ == nullptr) {
-        throw std::logic_error("redis pipeline is empty");
-    }
-    co_return co_await pool_->executePipeline(std::span<const Command>(commands_.data(), commands_.size()), resource_);
+Task<std::pmr::vector<RedisValue>> RedisPipeline::executeOwned(
+    detail::RedisPool& pool,
+    std::pmr::vector<Command> commands,
+    std::pmr::memory_resource* resource) {
+    co_return co_await pool.executePipeline(
+        std::span<const Command>(commands.data(), commands.size()),
+        resource);
+}
+
+Task<std::pmr::vector<RedisValue>> RedisPipeline::exec() && {
+    requireActive();
+    auto& pool = *std::exchange(pool_, nullptr);
+    return executeOwned(pool, std::move(commands_), resource_);
 }
 
 }  // namespace ruvia

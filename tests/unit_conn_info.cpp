@@ -137,7 +137,7 @@ RUVIA_TEST(conn_info_transport_has_one_active_alternative) {
         std::size_t{1});
 }
 
-RUVIA_TEST(context_preserves_typed_connection_info_for_url_and_handler) {
+RUVIA_TEST(context_preserves_typed_connection_info_for_handler) {
     WorkerMemory worker;
     RequestMemory memory(worker);
     HttpRequest request = HttpRequestAccess::make();
@@ -159,8 +159,8 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_url_and_handler) {
     RUVIA_CHECK(plainInfo.plain() != nullptr);
     RUVIA_CHECK(plainInfo.tls() == nullptr);
     RUVIA_CHECK_EQ(
-        plainContext.req().url(),
-        std::string_view("http://example.test/resource"));
+        plainInfo.remote().address(),
+        std::string_view("192.0.2.44"));
 
     const auto tlsContext = ContextAccess::make(
         memory,
@@ -177,7 +177,4 @@ RUVIA_TEST(context_preserves_typed_connection_info_for_url_and_handler) {
     RUVIA_CHECK_EQ(
         tlsInfo.tls()->clientCertificateSubject(),
         std::string_view("CN=request-client"));
-    RUVIA_CHECK_EQ(
-        tlsContext.req().url(),
-        std::string_view("https://example.test/resource"));
 }

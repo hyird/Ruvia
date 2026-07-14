@@ -193,10 +193,13 @@ void detail::RouterImpl::finalize() {
     }
 
     validateNoDynamicRouteConflict(pendingRoutes_);
-    routeTable_.reset(constructPmrObject<RouteTable>(resource_, buildRouteTable()));
-    routeTable_.get_deleter().resource = resource_;
-    routeTable_->setErrorHandler(errorHandler_);
-    routeTable_->setNotFoundHandler(notFoundHandler_);
+    std::unique_ptr<RouteTable, RouteTableDeleter> table(
+        constructPmrObject<RouteTable>(resource_, resource_),
+        RouteTableDeleter{resource_});
+    buildRouteTable(*table);
+    table->setErrorHandler(errorHandler_);
+    table->setNotFoundHandler(notFoundHandler_);
+    routeTable_ = std::move(table);
     finalized_ = true;
 }
 

@@ -1950,8 +1950,8 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
            "addValidatedData[(]ValidationTarget[ 	]+target" OR
        NOT _installed_context_public_api MATCHES
            "const[ 	]+T&[ 	]+valid[(][)][ 	]+const" OR
-       NOT _installed_context_public_api MATCHES
-           "void[ 	]+addValidatedData[(]T&&[ 	]+data[)][ 	]+const" OR
+       _installed_context_public_api MATCHES
+           "addValidatedData[(]" OR
        _installed_validation_target MATCHES
            "validationTargetFromName" OR
        _installed_validation_target MATCHES
@@ -1959,7 +1959,7 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_validation_target MATCHES
            "enum[ 	]+class[ 	]+ValidationTarget[ 	]*:[ 	]*std::uint8_t")
         message(FATAL_ERROR
-            "installed Context validated-model API is not type-only")
+            "installed Context validated-model API is not read-only and type-only")
     endif()
     if(_installed_context_public_api MATCHES "arrayBuffer[(]")
         message(FATAL_ERROR

@@ -60,19 +60,22 @@ private:
 class HttpClientResponseHeaderLookupResult final {
 public:
     [[nodiscard]] constexpr const HttpClientResponseHeaderAbsent*
-    absent() const noexcept {
+    absent() const & noexcept {
         return std::get_if<HttpClientResponseHeaderAbsent>(&value_);
     }
+    const HttpClientResponseHeaderAbsent* absent() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientResponseHeaderFound*
-    found() const noexcept {
+    found() const & noexcept {
         return std::get_if<HttpClientResponseHeaderFound>(&value_);
     }
+    const HttpClientResponseHeaderFound* found() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientResponseHeaderRepeated*
-    repeated() const noexcept {
+    repeated() const & noexcept {
         return std::get_if<HttpClientResponseHeaderRepeated>(&value_);
     }
+    const HttpClientResponseHeaderRepeated* repeated() const && = delete;
 
 private:
     friend HttpClientResponseHeaderLookupResult
@@ -178,7 +181,7 @@ public:
     HttpClientRedirectTarget(const HttpClientRedirectTarget&) = delete;
     HttpClientRedirectTarget& operator=(const HttpClientRedirectTarget&) = delete;
     HttpClientRedirectTarget(HttpClientRedirectTarget&&) noexcept = default;
-    HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) noexcept = default;
+    HttpClientRedirectTarget& operator=(HttpClientRedirectTarget&&) = delete;
 
     [[nodiscard]] std::string_view value() const noexcept {
         return std::string_view(value_.data(), value_.size());
@@ -219,16 +222,18 @@ public:
         const HttpClientRedirectTargetResult&) = delete;
     HttpClientRedirectTargetResult(HttpClientRedirectTargetResult&&) noexcept = default;
     HttpClientRedirectTargetResult& operator=(
-        HttpClientRedirectTargetResult&&) noexcept = default;
+        HttpClientRedirectTargetResult&&) = delete;
 
-    [[nodiscard]] const HttpClientRedirectTarget* target() const noexcept {
+    [[nodiscard]] const HttpClientRedirectTarget* target() const & noexcept {
         return std::get_if<HttpClientRedirectTarget>(&value_);
     }
+    const HttpClientRedirectTarget* target() const && = delete;
 
     [[nodiscard]] constexpr const HttpClientRedirectTargetFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<HttpClientRedirectTargetFailure>(&value_);
     }
+    const HttpClientRedirectTargetFailure* failure() const && = delete;
 
 private:
     friend HttpClientRedirectTargetResult

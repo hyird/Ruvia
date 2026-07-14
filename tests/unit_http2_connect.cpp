@@ -393,7 +393,7 @@ RUVIA_TEST(http2_connect_server_accepts_standard_tunnel_and_preserves_half_close
 
     ruvia::HttpResponse invalidBody(&resource);
     invalidBody.status(200);
-    invalidBody.setBodyView("not tunnel metadata");
+    invalidBody.body("not tunnel metadata");
     RUVIA_CHECK(server.submitConnectResponseHead(1, invalidBody) ==
         Http2SubmitStatus::kInvalidMessage);
     ruvia::HttpResponse invalidLength(&resource);

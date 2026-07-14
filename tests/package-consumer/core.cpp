@@ -6,6 +6,9 @@
 #include <utility>
 
 #include <ruvia/core/Task.h>
+#include <ruvia/core/Channel.h>
+#include <ruvia/core/OneShot.h>
+#include <ruvia/core/WorkerWaitResult.h>
 #include <ruvia/core/detail/ConnectionScanner.h>
 #include <ruvia/core/detail/PoolWaiterQueue.h>
 #include <ruvia/core/memory/MemoryPool.h>
@@ -59,6 +62,50 @@ concept HasConnectionTimeoutMillisecondSentinels = requires(Options& options) {
     options.payloadReadTimeoutMs;
     options.writeTimeoutMs;
 };
+
+template <typename T>
+concept HasPublicWorkerWaitFields = requires(T& result) {
+    result.status;
+    result.value;
+};
+
+static_assert(!HasPublicWorkerWaitFields<ruvia::WorkerWaitResult<int>>);
+static_assert(!std::default_initializable<ruvia::WorkerWaitResult<int>>);
+static_assert(!std::default_initializable<ruvia::WorkerWaitClosed>);
+static_assert(!std::default_initializable<ruvia::WorkerWaitStopping>);
+static_assert(!std::default_initializable<ruvia::WorkerWaitTimedOut>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().value()),
+    const int*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().closed()),
+    const ruvia::WorkerWaitClosed*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().workerStopping()),
+    const ruvia::WorkerWaitStopping*>);
+static_assert(std::same_as<
+    decltype(std::declval<const ruvia::WorkerWaitResult<int>&>().timedOut()),
+    const ruvia::WorkerWaitTimedOut*>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::ChannelReceiver<int>&>().receive()),
+    ruvia::Task<ruvia::WorkerWaitResult<int>>>);
+static_assert(std::same_as<
+    decltype(std::declval<ruvia::OneShotReceiver<int>&>().wait()),
+    ruvia::Task<ruvia::WorkerWaitResult<int>>>);
+static_assert(!std::default_initializable<ruvia::ChannelReceiver<int>>);
+static_assert(std::move_constructible<ruvia::ChannelReceiver<int>>);
+static_assert(!std::assignable_from<
+    ruvia::ChannelReceiver<int>&,
+    ruvia::ChannelReceiver<int>&&>);
+static_assert(!std::default_initializable<ruvia::OneShotReceiver<int>>);
+static_assert(std::move_constructible<ruvia::OneShotReceiver<int>>);
+static_assert(!std::assignable_from<
+    ruvia::OneShotReceiver<int>&,
+    ruvia::OneShotReceiver<int>&&>);
+static_assert(std::move_constructible<ruvia::Task<void>>);
+static_assert(!std::assignable_from<ruvia::Task<void>&, ruvia::Task<void>&&>);
+static_assert(std::move_constructible<ruvia::Task<int>>);
+static_assert(!std::assignable_from<ruvia::Task<int>&, ruvia::Task<int>&&>);
 
 static_assert(!HasConnectionTimeoutMillisecondSentinels<
               ruvia::detail::ConnectionScannerOptions>);

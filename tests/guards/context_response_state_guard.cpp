@@ -36,6 +36,7 @@ void check(bool condition) {
 void exerciseAppendHeaderNotDuplicated(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     (void)ruvia::detail::ContextAccess::responseStorage(context);
+    check(context.response() == nullptr);
     context.header("X-Trace", "abc", ruvia::Context::HeaderOptions{.append = true});
     auto response = context.text("hi");
     check(countHeaders(response, "X-Trace") == 1);
@@ -49,21 +50,21 @@ void exerciseSetCookieNotDuplicated(ruvia::RequestMemory& memory, const ruvia::H
     check(countHeaders(response, "Set-Cookie") == 1);
 }
 
-// An explicit per-response status wins over the context default; only absence
-// means "use the context status".
-void exerciseExplicitStatusWinsOnReturn(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseContextStatusOnReturn(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
     context.status(404);
-    ruvia::detail::ContextAccess::setResponse(context, context.text("ok", 200));
+    ruvia::detail::ContextAccess::setResponse(context, context.text("ok"));
     auto response = ruvia::detail::ContextAccess::takeResponse(context);
-    check(response.status() == 200);
+    check(response.status() == 404);
 }
 
-void exerciseExplicitStatusWinsOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
+void exerciseContextStatusOnAssign(ruvia::RequestMemory& memory, const ruvia::HttpRequest& request) {
     auto context = ruvia::detail::ContextAccess::make(memory, request);
-    context.status(404);
-    context.respond(context.text("failed", 500));
+    context.status(500);
+    context.respond(context.text("failed"));
     check(context.response() != nullptr && context.response()->status() == 500);
+    (void)ruvia::detail::ContextAccess::takeResponse(context);
+    check(context.response() == nullptr);
 }
 
 // The redirect target wins over a prepared context Location header.
@@ -106,8 +107,8 @@ int main() {
 
     exerciseAppendHeaderNotDuplicated(memory, request);
     exerciseSetCookieNotDuplicated(memory, request);
-    exerciseExplicitStatusWinsOnReturn(memory, request);
-    exerciseExplicitStatusWinsOnAssign(memory, request);
+    exerciseContextStatusOnReturn(memory, request);
+    exerciseContextStatusOnAssign(memory, request);
     exerciseRedirectLocationWins(memory, request);
     exerciseContextStatusAppliesAsDefault(memory, request);
     exerciseRawResponseStatusIsNotReinterpreted(memory, request);

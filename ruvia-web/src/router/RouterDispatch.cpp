@@ -42,8 +42,6 @@ Context makeRouteContext(
             memory,
             request,
             route.path(),
-            route.method(),
-            route.middlewareCount(),
             routeRateLimitScope,
             services);
     }
@@ -55,8 +53,6 @@ Context makeRouteContext(
         route.paramNames().data(),
         values.data(),
         values.size(),
-        route.method(),
-        route.middlewareCount(),
         routeRateLimitScope,
         services);
 }

@@ -108,18 +108,22 @@ public:
     }
 
     [[nodiscard]] constexpr const Http1InterimResponseBufferTooSmall*
-    bufferTooSmall() const noexcept {
+    bufferTooSmall() const & noexcept {
         return std::get_if<Http1InterimResponseBufferTooSmall>(&state_);
     }
+    const Http1InterimResponseBufferTooSmall* bufferTooSmall() const && = delete;
 
-    [[nodiscard]] constexpr const PreparedHttp1InterimResponse* prepared() const noexcept {
+    [[nodiscard]] constexpr const PreparedHttp1InterimResponse*
+    prepared() const & noexcept {
         return std::get_if<PreparedHttp1InterimResponse>(&state_);
     }
+    const PreparedHttp1InterimResponse* prepared() const && = delete;
 
     [[nodiscard]] constexpr const Http1InterimResponsePrepareFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<Http1InterimResponsePrepareFailure>(&state_);
     }
+    const Http1InterimResponsePrepareFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1InterimResponsePrepareResultAccess;

@@ -3,6 +3,7 @@
 #include <coroutine>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <mutex>
@@ -13,6 +14,7 @@
 
 #include <ruvia/core/Task.h>
 #include <ruvia/core/WorkerHandle.h>
+#include <ruvia/core/WorkerWaitResult.h>
 #include <ruvia/core/detail/WorkerDispatcher.h>
 #include <ruvia/core/detail/WorkerTimer.h>
 #include <ruvia/core/memory/PmrResource.h>
@@ -24,19 +26,6 @@ enum class ChannelSendResult : std::uint8_t {
     kFull,
     kClosed,
     kWorkerStopping,
-};
-
-enum class ChannelReceiveStatus : std::uint8_t {
-    kValue,
-    kClosed,
-    kWorkerStopping,
-    kTimeout,
-};
-
-template <typename T>
-struct ChannelReceiveResult final {
-    ChannelReceiveStatus status{ChannelReceiveStatus::kClosed};
-    std::optional<T> value;
 };
 
 template <typename T>
@@ -88,23 +77,23 @@ struct ChannelReceiveAwaiter final {
     [[nodiscard]] bool await_ready() {
         std::lock_guard lock(state->mutex);
         if (state->size != 0) {
-            result.status = ChannelReceiveStatus::kValue;
-            result.value.emplace(std::move(*state->slots[state->head]));
+            result.emplace(WorkerWaitResultAccess::value(
+                std::move(*state->slots[state->head])));
             state->slots[state->head].reset();
             state->head = (state->head + 1) % state->slots.size();
             --state->size;
             return true;
         }
         if (state->workerStopped) {
-            result.status = ChannelReceiveStatus::kWorkerStopping;
+            result.emplace(WorkerWaitResultAccess::workerStopping<T>());
             return true;
         }
         if (state->closed) {
-            result.status = ChannelReceiveStatus::kClosed;
+            result.emplace(WorkerWaitResultAccess::closed<T>());
             return true;
         }
         if (timeout && *timeout <= std::chrono::steady_clock::duration::zero()) {
-            result.status = ChannelReceiveStatus::kTimeout;
+            result.emplace(WorkerWaitResultAccess::timedOut<T>());
             return true;
         }
         if (state->waiter != nullptr) {
@@ -130,7 +119,8 @@ struct ChannelReceiveAwaiter final {
                             std::lock_guard stateLock(state->mutex);
                             if (state->waiter == this) {
                                 state->waiter = nullptr;
-                                result.status = ChannelReceiveStatus::kTimeout;
+                                result.emplace(
+                                    WorkerWaitResultAccess::timedOut<T>());
                             }
                         }
                         continuation.resume();
@@ -145,14 +135,17 @@ struct ChannelReceiveAwaiter final {
         return true;
     }
 
-    [[nodiscard]] ChannelReceiveResult<T> await_resume() {
-        return std::move(result);
+    [[nodiscard]] WorkerWaitResult<T> await_resume() {
+        if (!result) {
+            std::terminate();
+        }
+        return std::move(*result);
     }
 
     std::shared_ptr<ChannelState<T>> state;
     std::optional<std::chrono::steady_clock::duration> timeout;
     WorkerTimerRegistration timer;
-    ChannelReceiveResult<T> result;
+    std::optional<WorkerWaitResult<T>> result;
     std::coroutine_handle<> continuation{};
     bool suspended{false};
     bool wakePending{false};
@@ -187,7 +180,8 @@ void ChannelState<T>::workerStopping() noexcept {
         workerStopped = true;
         pending = std::exchange(waiter, nullptr);
         if (pending != nullptr) {
-            pending->result.status = ChannelReceiveStatus::kWorkerStopping;
+            pending->result.emplace(
+                WorkerWaitResultAccess::workerStopping<T>());
             wake = prepareChannelReceiverWake(pending);
         }
     }
@@ -223,8 +217,8 @@ public:
             }
             if (state_->waiter != nullptr) {
                 waiter = std::exchange(state_->waiter, nullptr);
-                waiter->result.status = ChannelReceiveStatus::kValue;
-                waiter->result.value.emplace(std::move(value));
+                waiter->result.emplace(
+                    detail::WorkerWaitResultAccess::value(std::move(value)));
                 wake = detail::prepareChannelReceiverWake(waiter);
             } else {
                 if (state_->size == state_->slots.size()) {
@@ -255,7 +249,8 @@ public:
             state_->closed = true;
             waiter = std::exchange(state_->waiter, nullptr);
             if (waiter != nullptr) {
-                waiter->result.status = ChannelReceiveStatus::kClosed;
+                waiter->result.emplace(
+                    detail::WorkerWaitResultAccess::closed<T>());
                 wake = detail::prepareChannelReceiverWake(waiter);
             }
         }
@@ -277,15 +272,15 @@ private:
 template <typename T>
 class ChannelReceiver final {
 public:
-    ChannelReceiver() noexcept = default;
+    ChannelReceiver() = delete;
     ChannelReceiver(const ChannelReceiver&) = delete;
     ChannelReceiver& operator=(const ChannelReceiver&) = delete;
     ChannelReceiver(ChannelReceiver&&) noexcept = default;
-    ChannelReceiver& operator=(ChannelReceiver&&) noexcept = default;
+    ChannelReceiver& operator=(ChannelReceiver&&) = delete;
 
     ~ChannelReceiver() { close(); }
 
-    [[nodiscard]] Task<ChannelReceiveResult<T>> receive() {
+    [[nodiscard]] Task<WorkerWaitResult<T>> receive() {
         if (!state_ || !state_->worker.isCurrent()) {
             throw std::logic_error("channel receive must run on its bound worker");
         }
@@ -293,7 +288,7 @@ public:
     }
 
     template <typename Rep, typename Period>
-    [[nodiscard]] Task<ChannelReceiveResult<T>>
+    [[nodiscard]] Task<WorkerWaitResult<T>>
     receiveFor(std::chrono::duration<Rep, Period> duration) {
         if (!state_ || !state_->worker.isCurrent()) {
             throw std::logic_error("channel receive must run on its bound worker");

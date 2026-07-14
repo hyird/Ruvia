@@ -9,12 +9,17 @@
 
 #include <chrono>
 #include <memory>
+#include <type_traits>
+
+static_assert(!std::is_default_constructible_v<ruvia::OneShotReceiver<int>>);
+static_assert(std::is_move_constructible_v<ruvia::OneShotReceiver<int>>);
+static_assert(!std::is_move_assignable_v<ruvia::OneShotReceiver<int>>);
 
 namespace {
 
 ruvia::Task<void> waitForCompletion(ruvia::OneShotReceiver<int>& receiver, bool& success) {
     const auto result = co_await receiver.waitFor(std::chrono::seconds(1));
-    success = result.status == ruvia::OneShotWaitStatus::kValue && result.value == 42;
+    success = result.value() != nullptr && *result.value() == 42;
 }
 
 ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
@@ -25,7 +30,7 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
             co_return;
         }
         const auto result = co_await receiver.wait();
-        if (result.status != ruvia::OneShotWaitStatus::kValue || result.value != 7) {
+        if (result.value() == nullptr || *result.value() != 7) {
             co_return;
         }
     }
@@ -33,19 +38,31 @@ ruvia::Task<void> exercise(ruvia::WorkerHandle worker, bool& success) {
     {
         auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
         const auto timeout = co_await receiver.waitFor(std::chrono::milliseconds(1));
-        if (timeout.status != ruvia::OneShotWaitStatus::kTimeout ||
+        if (timeout.timedOut() == nullptr ||
             completion.complete(9) != ruvia::OneShotCompleteResult::kCompleted) {
             co_return;
         }
         const auto late = co_await receiver.wait();
-        if (late.status != ruvia::OneShotWaitStatus::kValue || late.value != 9) {
+        if (late.value() == nullptr || *late.value() != 9) {
+            co_return;
+        }
+    }
+
+    {
+        auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+        receiver.close();
+        const auto closed = co_await receiver.wait();
+        if (closed.closed() == nullptr ||
+            completion.complete(10) !=
+                ruvia::OneShotCompleteResult::kReceiverClosed) {
             co_return;
         }
     }
 
     auto [completion, receiver] = ruvia::makeOneShot<int>(worker);
+    auto activeReceiver = std::move(receiver);
     ruvia::TaskScope scope(worker);
-    scope.spawn(waitForCompletion(receiver, success));
+    scope.spawn(waitForCompletion(activeReceiver, success));
     if (completion.complete(42) != ruvia::OneShotCompleteResult::kCompleted) {
         co_return;
     }

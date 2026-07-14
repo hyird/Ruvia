@@ -143,7 +143,7 @@ bool hasHeaderName(const Collector& headers, std::string_view name) {
 
 RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
     HttpResponse buffered(std::pmr::get_default_resource());
-    buffered.setBodyCopy("hello");
+    buffered.body("hello");
     const auto bufferedPlanResult =
         ruvia::detail::http2BufferedResponseHeadPlan(
             ruvia::detail::httpBufferedResponseWritePlan(
@@ -252,7 +252,7 @@ RUVIA_TEST(http2_response_head_content_length_plan_is_exclusive) {
 RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
     HttpResponse response(std::pmr::get_default_resource());
     response.status(207);
-    response.setBodyCopy("planned");
+    response.body("planned");
     const auto bufferedWritePlan =
         ruvia::detail::httpBufferedResponseWritePlan(
             ruvia::HttpKnownMethod::kGet,
@@ -284,13 +284,13 @@ RUVIA_TEST(http2_response_head_rejects_status_plan_mismatch) {
 RUVIA_TEST(http2_response_head_rejects_representation_plan_mismatch) {
     HttpResponse response(std::pmr::get_default_resource());
     response.status(207);
-    response.setBodyCopy("old");
+    response.body("old");
     const auto writePlan =
         ruvia::detail::httpBufferedResponseWritePlan(
             ruvia::HttpKnownMethod::kGet,
             response);
 
-    response.setBodyCopy("longer");
+    response.body("longer");
     const auto result = ruvia::detail::http2BufferedResponseHeadPlan(
         writePlan,
         response);
@@ -441,7 +441,7 @@ RUVIA_TEST(http2_response_headers_override_wrong_content_length_for_200) {
     HttpResponse response(std::pmr::get_default_resource());
     response.status(200);
     response.header("Content-Length", "1000");  // wrong: the real body is 5 bytes
-    response.setBodyCopy("hello");
+    response.body("hello");
 
     Collector headers;
     RUVIA_CHECK(decodeResponseHeaders(response, headers));
@@ -454,7 +454,7 @@ RUVIA_TEST(http2_response_headers_reject_only_preserved_invalid_content_length) 
     HttpResponse streaming(std::pmr::get_default_resource());
     streaming.status(200);
     streaming.header("Content-Length", "not-a-number");
-    streaming.setBodyCopy("hello");
+    streaming.body("hello");
     Http2StreamState stream(1, std::pmr::get_default_resource());
     const auto streamingBodyPlan = ruvia::detail::httpResponseBodyPlan(
         ruvia::HttpKnownMethod::kGet,

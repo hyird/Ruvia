@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <csignal>
+#include <exception>
 #include <memory_resource>
 #include <mutex>
 #include <stdexcept>
@@ -14,20 +15,12 @@
 #include "ruvia/web/detail/controller/ControllerRuntime.h"
 #include "ruvia/web/detail/app/AppConfigGuards.h"
 #include "ruvia/core/detail/NativePath.h"
+#include "ruvia/core/detail/WorkerSelection.h"
 #include "ruvia/web/detail/server/HttpServer.h"
 #include "ruvia/web/detail/router/RouterInternal.h"
 
 namespace ruvia {
 namespace {
-
-std::uint64_t webWorkerHash(std::string_view value) noexcept {
-    std::uint64_t hash = 14695981039346656037ull;
-    for (const unsigned char ch : value) {
-        hash ^= ch;
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
 
 void addShutdownSignals(asio::signal_set& signals) {
     signals.add(SIGINT);
@@ -49,6 +42,15 @@ void addShutdownSignals(asio::signal_set& signals) {
     options.autoHttps.httpsPort = httpsPort;
     options.documentRoot.root = documentRoot;
     return options;
+}
+
+void invokeStopHooks(detail::AppState& state) noexcept {
+    for (auto& hook : state.onStopHooks) {
+        try {
+            hook();
+        } catch (...) {
+        }
+    }
 }
 
 }  // namespace
@@ -74,13 +76,9 @@ AppState::~AppState() = default;
 
 }  // namespace detail
 
-App& App::instance() {
+App& app() {
     static App instance;
     return instance;
-}
-
-App& app() {
-    return App::instance();
 }
 
 App::App()
@@ -120,7 +118,7 @@ WebWorkerHandle App::workerFor(std::uint64_t key) const {
 }
 
 WebWorkerHandle App::workerFor(std::string_view key) const {
-    return workerFor(webWorkerHash(key));
+    return workerFor(detail::workerSelectionHash(key));
 }
 
 void App::run() {
@@ -227,6 +225,8 @@ void App::run() {
 
         state.runtime = std::move(runtime);
         state.stopRequested = false;
+        state.startHooksRunning = false;
+        state.stopHooksClaimed = false;
         state.running = true;
     }
 
@@ -238,9 +238,6 @@ void App::run() {
         addShutdownSignals(signals);
         signals.async_wait([this](const std::error_code& ec, int) {
             if (!ec) {
-                for (auto& hook : state_->onStopHooks) {
-                    try { hook(); } catch (...) {}
-                }
                 stop();
             }
         });
@@ -276,14 +273,47 @@ void App::run() {
             }
         }
 
-        for (auto& hook : state.onStartHooks) {
-            hook();
+        bool runStartHooks = false;
+        {
+            std::lock_guard lock(state.mutex);
+            if (!state.stopRequested) {
+                state.startHooksRunning = true;
+                runStartHooks = true;
+            }
+        }
+
+        std::exception_ptr startHookFailure;
+        if (runStartHooks) {
+            try {
+                for (auto& hook : state.onStartHooks) {
+                    hook();
+                }
+            } catch (...) {
+                startHookFailure = std::current_exception();
+            }
+        }
+
+        bool runDeferredStopHooks = false;
+        {
+            std::lock_guard lock(state.mutex);
+            state.startHooksRunning = false;
+            if (state.stopRequested && !state.stopHooksClaimed) {
+                state.stopHooksClaimed = true;
+                runDeferredStopHooks = true;
+            }
+        }
+        if (runDeferredStopHooks) {
+            invokeStopHooks(state);
+        }
+        if (startHookFailure) {
+            std::rethrow_exception(startHookFailure);
         }
 
         for (const auto& worker : state.runtime->workers) {
             worker->join();
         }
     } catch (...) {
+        stop();
         for (auto* worker : startedWorkers) {
             worker->stop();
         }
@@ -306,25 +336,32 @@ void App::run() {
 void App::stop() {
     auto& state = *state_;
     std::pmr::vector<detail::HttpServer*> workers(detail::appResource());
+    bool runStopHooks = false;
 
     {
         std::lock_guard lock(state.mutex);
-        if (!state.running) {
+        if (!state.running || state.stopRequested) {
             return;
         }
         // Record the request durably so run()'s startup loop tears down any worker
         // it starts after this snapshot -- stop() below is a no-op on a worker that
         // is not started yet.
         state.stopRequested = true;
-
-        if (!state.runtime) {
-            return;
+        if (!state.startHooksRunning && !state.stopHooksClaimed) {
+            state.stopHooksClaimed = true;
+            runStopHooks = true;
         }
 
-        workers.reserve(state.runtime->workers.size());
-        for (const auto& worker : state.runtime->workers) {
-            workers.push_back(worker.get());
+        if (state.runtime) {
+            workers.reserve(state.runtime->workers.size());
+            for (const auto& worker : state.runtime->workers) {
+                workers.push_back(worker.get());
+            }
         }
+    }
+
+    if (runStopHooks) {
+        invokeStopHooks(state);
     }
 
     for (auto* worker : workers) {

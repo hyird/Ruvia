@@ -33,6 +33,28 @@ using ruvia::Http1ParsedClientResponseHead;
 using ruvia::HttpProtocolVersion;
 using ruvia::isValidHttpClientOriginTarget;
 
+template <typename T>
+concept HasAnyRvalueHttp1ClientResponseParseAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).parsed(); } ||
+    requires(const T&& result) { std::move(result).parsed(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+template <typename T>
+concept HasAnyRvalueHttp1ClientResponsePlanAccessor =
+    requires(T&& plan) { std::move(plan).informational(); } ||
+    requires(T&& plan) { std::move(plan).withoutContent(); } ||
+    requires(T&& plan) { std::move(plan).knownLength(); } ||
+    requires(T&& plan) { std::move(plan).chunked(); } ||
+    requires(T&& plan) { std::move(plan).closeDelimited(); } ||
+    requires(T&& plan) { std::move(plan).connectTunnel(); } ||
+    requires(T&& plan) { std::move(plan).protocolUpgrade(); };
+
+static_assert(!HasAnyRvalueHttp1ClientResponseParseAccessor<
+    Http1ClientResponseParseResult>);
+static_assert(!HasAnyRvalueHttp1ClientResponsePlanAccessor<
+    ruvia::Http1ClientResponsePlan>);
+
 template <typename Access>
 concept CanMutateHttpClientResponseStatus = requires(
     HttpClientResponse& response) {
@@ -117,8 +139,9 @@ bool parseFails(
     Http1ClientRequestClosePolicy closePolicy =
         Http1ClientRequestClosePolicy::kAllowReuse,
     std::span<const ruvia::HttpHeaderView> requestHeaders = {}) {
-    return parseResult(
-        method, headerSection, closePolicy, requestHeaders).failure() != nullptr;
+    const auto result = parseResult(
+        method, headerSection, closePolicy, requestHeaders);
+    return result.failure() != nullptr;
 }
 
 const ruvia::Http1ClientKnownLengthResponse& requireKnownLength(

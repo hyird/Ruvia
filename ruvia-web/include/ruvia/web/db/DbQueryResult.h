@@ -16,15 +16,12 @@ struct st_mysql_res;
 
 namespace ruvia {
 
-class DbHandle;
-class DbTransaction;
-
 class QueryResult final {
 public:
     QueryResult(const QueryResult&) = delete;
     QueryResult& operator=(const QueryResult&) = delete;
     QueryResult(QueryResult&& other) noexcept;
-    QueryResult& operator=(QueryResult&& other);
+    QueryResult& operator=(QueryResult&&) = delete;
     ~QueryResult();
 
     [[nodiscard]] std::span<const DbRow> rows() const noexcept;
@@ -33,8 +30,6 @@ public:
 
 private:
     friend struct detail::DbResultAccess;
-    friend class DbHandle;
-    friend class DbTransaction;
 
     explicit QueryResult(std::pmr::memory_resource* resource = nullptr);
     QueryResult(detail::ResolvedPmrResourceTag, std::pmr::memory_resource* resource);
@@ -43,7 +38,6 @@ private:
     std::pmr::vector<DbField> fields_;
     std::uint64_t affectedRows_{0};
     std::uint64_t lastInsertId_{0};
-    const QueryResult* mounted_{nullptr};
     void* rawResult_{nullptr};
     void (*releaseRawResult_)(void*) noexcept{nullptr};
 };
@@ -53,7 +47,7 @@ public:
     DbStreamResult(const DbStreamResult&) = delete;
     DbStreamResult& operator=(const DbStreamResult&) = delete;
     DbStreamResult(DbStreamResult&& other) noexcept;
-    DbStreamResult& operator=(DbStreamResult&& other) noexcept;
+    DbStreamResult& operator=(DbStreamResult&&) = delete;
     ~DbStreamResult();
 
     [[nodiscard]] bool active() const noexcept;

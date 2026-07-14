@@ -107,21 +107,25 @@ public:
             value_);
     }
 
-    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeNeedInput* needInput() const & noexcept {
         return std::get_if<TransferCodingDecodeNeedInput>(&value_);
     }
+    const TransferCodingDecodeNeedInput* needInput() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeOutput* output() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeOutput* output() const & noexcept {
         return std::get_if<TransferCodingDecodeOutput>(&value_);
     }
+    const TransferCodingDecodeOutput* output() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeComplete* complete() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeComplete* complete() const & noexcept {
         return std::get_if<TransferCodingDecodeComplete>(&value_);
     }
+    const TransferCodingDecodeComplete* complete() const && = delete;
 
-    [[nodiscard]] const TransferCodingDecodeFailure* failure() const noexcept {
+    [[nodiscard]] const TransferCodingDecodeFailure* failure() const & noexcept {
         return std::get_if<TransferCodingDecodeFailure>(&value_);
     }
+    const TransferCodingDecodeFailure* failure() const && = delete;
 
 private:
     friend class TransferCodingDecoder;

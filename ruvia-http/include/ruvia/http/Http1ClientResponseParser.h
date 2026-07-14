@@ -161,39 +161,47 @@ private:
 class Http1ClientResponsePlan final {
 public:
     [[nodiscard]] constexpr const Http1ClientInformationalResponse*
-    informational() const noexcept {
+    informational() const & noexcept {
         return std::get_if<Http1ClientInformationalResponse>(&state_);
     }
+    const Http1ClientInformationalResponse* informational() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientResponseWithoutContent*
-    withoutContent() const noexcept {
+    withoutContent() const & noexcept {
         return std::get_if<Http1ClientResponseWithoutContent>(&state_);
     }
+    const Http1ClientResponseWithoutContent* withoutContent() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientKnownLengthResponse*
-    knownLength() const noexcept {
+    knownLength() const & noexcept {
         return std::get_if<Http1ClientKnownLengthResponse>(&state_);
     }
+    const Http1ClientKnownLengthResponse* knownLength() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientChunkedResponse*
-    chunked() const noexcept {
+    chunked() const & noexcept {
         return std::get_if<Http1ClientChunkedResponse>(&state_);
     }
+    const Http1ClientChunkedResponse* chunked() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientCloseDelimitedResponse*
-    closeDelimited() const noexcept {
+    closeDelimited() const & noexcept {
         return std::get_if<Http1ClientCloseDelimitedResponse>(&state_);
     }
+    const Http1ClientCloseDelimitedResponse*
+    closeDelimited() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientConnectTunnel*
-    connectTunnel() const noexcept {
+    connectTunnel() const & noexcept {
         return std::get_if<Http1ClientConnectTunnel>(&state_);
     }
+    const Http1ClientConnectTunnel* connectTunnel() const && = delete;
 
     [[nodiscard]] constexpr const Http1ClientProtocolUpgrade*
-    protocolUpgrade() const noexcept {
+    protocolUpgrade() const & noexcept {
         return std::get_if<Http1ClientProtocolUpgrade>(&state_);
     }
+    const Http1ClientProtocolUpgrade* protocolUpgrade() const && = delete;
 
     [[nodiscard]] constexpr std::optional<Http1ClientRequestContentSignal>
     requestContentSignal() const noexcept {
@@ -264,7 +272,7 @@ public:
     Http1ParsedClientResponseHead(const Http1ParsedClientResponseHead&) = delete;
     Http1ParsedClientResponseHead& operator=(const Http1ParsedClientResponseHead&) = delete;
     Http1ParsedClientResponseHead(Http1ParsedClientResponseHead&&) noexcept = default;
-    Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) noexcept = default;
+    Http1ParsedClientResponseHead& operator=(Http1ParsedClientResponseHead&&) = delete;
 
     [[nodiscard]] const HttpClientResponse& response() const noexcept {
         return response_;
@@ -325,7 +333,7 @@ public:
     Http1ClientResponseParseResult(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult& operator=(const Http1ClientResponseParseResult&) = delete;
     Http1ClientResponseParseResult(Http1ClientResponseParseResult&&) noexcept = default;
-    Http1ClientResponseParseResult& operator=(Http1ClientResponseParseResult&&) noexcept = default;
+    Http1ClientResponseParseResult& operator=(Http1ClientResponseParseResult&&) = delete;
 
     [[nodiscard]] Http1ClientResponseParseKind kind() const noexcept {
         if (std::holds_alternative<Http1ParsedClientResponseHead>(state_)) {
@@ -336,21 +344,25 @@ public:
             : Http1ClientResponseParseKind::kNeedMore;
     }
 
-    [[nodiscard]] const Http1ClientResponseNeedMore* needMore() const noexcept {
+    [[nodiscard]] const Http1ClientResponseNeedMore* needMore() const & noexcept {
         return std::get_if<Http1ClientResponseNeedMore>(&state_);
     }
+    const Http1ClientResponseNeedMore* needMore() const && = delete;
 
-    [[nodiscard]] Http1ParsedClientResponseHead* parsed() noexcept {
+    [[nodiscard]] Http1ParsedClientResponseHead* parsed() & noexcept {
         return std::get_if<Http1ParsedClientResponseHead>(&state_);
     }
 
-    [[nodiscard]] const Http1ParsedClientResponseHead* parsed() const noexcept {
+    [[nodiscard]] const Http1ParsedClientResponseHead* parsed() const & noexcept {
         return std::get_if<Http1ParsedClientResponseHead>(&state_);
     }
+    Http1ParsedClientResponseHead* parsed() && = delete;
+    const Http1ParsedClientResponseHead* parsed() const && = delete;
 
-    [[nodiscard]] const Http1ClientResponseParseFailure* failure() const noexcept {
+    [[nodiscard]] const Http1ClientResponseParseFailure* failure() const & noexcept {
         return std::get_if<Http1ClientResponseParseFailure>(&state_);
     }
+    const Http1ClientResponseParseFailure* failure() const && = delete;
 
 private:
     friend struct detail::Http1ClientResponseParseResultAccess;

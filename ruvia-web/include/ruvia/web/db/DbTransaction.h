@@ -17,7 +17,7 @@ public:
     DbTransaction(const DbTransaction&) = delete;
     DbTransaction& operator=(const DbTransaction&) = delete;
     DbTransaction(DbTransaction&& other) noexcept;
-    DbTransaction& operator=(DbTransaction&& other) noexcept;
+    DbTransaction& operator=(DbTransaction&&) = delete;
     ~DbTransaction();
 
     [[nodiscard]] bool active() const noexcept;
@@ -35,16 +35,13 @@ private:
     DbTransaction(
         detail::DbPoolRef client,
         std::size_t slot,
-        std::pmr::memory_resource* resource,
-        RequestMemory* requestMemory = nullptr) noexcept;
+        std::pmr::memory_resource* resource) noexcept;
     Task<QueryResult> executePrepared(std::pmr::string sql, std::pmr::vector<DbValue> params);
-    [[nodiscard]] QueryResult mountResult(QueryResult result) const;
     void reset() noexcept;
 
     detail::DbPoolRef client_{};
     std::size_t slot_{0};
     std::pmr::memory_resource* resource_{nullptr};
-    RequestMemory* requestMemory_{nullptr};
     bool active_{false};
 };
 

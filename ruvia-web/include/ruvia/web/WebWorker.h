@@ -84,7 +84,6 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] WorkerId id() const noexcept;
-    [[nodiscard]] WorkerHandle core() const noexcept;
     [[nodiscard]] WebWorkerStats stats() const noexcept;
 
     template <typename Fn>

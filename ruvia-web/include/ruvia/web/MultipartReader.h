@@ -20,6 +20,11 @@ public:
         : bodyReader_(bodyReader),
           parser_(std::move(boundary), resource) {}
 
+    MultipartReader(const MultipartReader&) = delete;
+    MultipartReader& operator=(const MultipartReader&) = delete;
+    MultipartReader(MultipartReader&&) = delete;
+    MultipartReader& operator=(MultipartReader&&) = delete;
+
     /// Returns one typed chunk of the current multipart part. All views in the
     /// returned value remain valid only until the next read() call.
     [[nodiscard]] Task<std::optional<MultipartStreamPart>> read();

@@ -120,7 +120,7 @@ private:
 
 class SseWriter final {
 public:
-    Task<void> writeSSE(const SseMessage& message);
+    Task<void> write(const SseMessage& message);
 
     Task<void> sleep(std::chrono::milliseconds duration);
 

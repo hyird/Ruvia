@@ -140,7 +140,7 @@ public:
     RouteEndpoint(const RouteEndpoint&) = delete;
     RouteEndpoint& operator=(const RouteEndpoint&) = delete;
     RouteEndpoint(RouteEndpoint&&) noexcept = default;
-    RouteEndpoint& operator=(RouteEndpoint&&) noexcept = default;
+    RouteEndpoint& operator=(RouteEndpoint&&) = delete;
 
     [[nodiscard]] static RouteEndpoint buffered(
         RouteHandler handler,
@@ -251,7 +251,7 @@ public:
     RouteEntry(const RouteEntry&) = delete;
     RouteEntry& operator=(const RouteEntry&) = delete;
     RouteEntry(RouteEntry&&) noexcept = default;
-    RouteEntry& operator=(RouteEntry&&) noexcept = default;
+    RouteEntry& operator=(RouteEntry&&) = delete;
 
     [[nodiscard]] HttpKnownMethod method() const noexcept {
         return method_;
@@ -318,8 +318,8 @@ public:
     explicit RouteTable(std::pmr::memory_resource* resource);
     RouteTable(const RouteTable&) = delete;
     RouteTable& operator=(const RouteTable&) = delete;
-    RouteTable(RouteTable&&) noexcept = default;
-    RouteTable& operator=(RouteTable&&) noexcept = default;
+    RouteTable(RouteTable&&) = delete;
+    RouteTable& operator=(RouteTable&&) = delete;
 
     void setErrorHandler(HttpErrorHandler handler) noexcept;
     void setNotFoundHandler(HttpNotFoundHandler handler) noexcept;

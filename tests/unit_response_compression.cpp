@@ -85,7 +85,7 @@ const std::string kCompressibleBody(2048, 'a');
 
 HttpResponse responseWithBody(std::string_view body) {
     HttpResponse response(std::pmr::new_delete_resource());
-    response.setBodyCopy(body);
+    response.body(body);
     return response;
 }
 

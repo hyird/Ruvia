@@ -27,7 +27,7 @@ public:
     DbMigrationReport(const DbMigrationReport&) = delete;
     DbMigrationReport& operator=(const DbMigrationReport&) = delete;
     DbMigrationReport(DbMigrationReport&&) noexcept = default;
-    DbMigrationReport& operator=(DbMigrationReport&&) noexcept = default;
+    DbMigrationReport& operator=(DbMigrationReport&&) = delete;
 
     [[nodiscard]] std::span<const std::pmr::string> applied() const noexcept;
     [[nodiscard]] std::span<const std::pmr::string> skipped() const noexcept;

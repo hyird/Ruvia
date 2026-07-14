@@ -207,22 +207,26 @@ private:
 class MultipartPollResult final {
 public:
     [[nodiscard]] constexpr const MultipartPollNeedInput*
-    needInput() const noexcept {
+    needInput() const & noexcept {
         return std::get_if<MultipartPollNeedInput>(&value_);
     }
+    const MultipartPollNeedInput* needInput() const && = delete;
 
-    [[nodiscard]] constexpr const MultipartStreamPart* part() const noexcept {
+    [[nodiscard]] constexpr const MultipartStreamPart* part() const & noexcept {
         return std::get_if<MultipartStreamPart>(&value_);
     }
+    const MultipartStreamPart* part() const && = delete;
 
-    [[nodiscard]] constexpr const MultipartPollDone* done() const noexcept {
+    [[nodiscard]] constexpr const MultipartPollDone* done() const & noexcept {
         return std::get_if<MultipartPollDone>(&value_);
     }
+    const MultipartPollDone* done() const && = delete;
 
     [[nodiscard]] constexpr const MultipartPollFailure*
-    failure() const noexcept {
+    failure() const & noexcept {
         return std::get_if<MultipartPollFailure>(&value_);
     }
+    const MultipartPollFailure* failure() const && = delete;
 
 private:
     friend class MultipartParser;
@@ -350,6 +354,11 @@ private:
 class MultipartParser final {
 public:
     MultipartParser(MultipartBoundary boundary, std::pmr::memory_resource* resource);
+
+    MultipartParser(const MultipartParser&) = delete;
+    MultipartParser& operator=(const MultipartParser&) = delete;
+    MultipartParser(MultipartParser&&) = delete;
+    MultipartParser& operator=(MultipartParser&&) = delete;
 
     // Copies input into parser-owned PMR storage. finishInput() is required when
     // the enclosing HTTP body ends so a close delimiter ending exactly at EOF

@@ -1,8 +1,10 @@
 #include "test_harness.h"
 
+#include <concepts>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/detail/http1/Http1ServerRequestParser.h"
 #include "ruvia/http/Http1RequestParser.h"
@@ -20,6 +22,15 @@ using ruvia::HttpProtocolVersion;
 using ruvia::detail::Http1ServerRequestParser;
 using ruvia::detail::Http1ServerRequestParseState;
 using ruvia::detail::HttpServerExpectationAction;
+
+template <typename T>
+concept HasAnyRvalueHttp1RequestParseAccessor =
+    requires(T&& result) { std::move(result).needMore(); } ||
+    requires(T&& result) { std::move(result).parsed(); } ||
+    requires(T&& result) { std::move(result).failure(); };
+
+static_assert(!HasAnyRvalueHttp1RequestParseAccessor<
+    ruvia::Http1RequestParseResult>);
 
 const ruvia::detail::Http1KnownLengthRequestBody& requireKnownLength(
     const ruvia::detail::Http1RequestBodyPlan& plan) {

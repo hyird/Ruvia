@@ -3,6 +3,7 @@
 #include "ruvia/core/memory/PmrObject.h"
 
 #include <cstddef>
+#include <memory>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -63,7 +64,8 @@ public:
 
             if (auto* entry = find(name)) {
                 clearValue(*entry);
-                *entry = std::move(next);
+                std::destroy_at(entry);
+                std::construct_at(entry, std::move(next));
                 return *stored;
             }
 
@@ -130,8 +132,12 @@ private:
 
         Entry(const Entry&) = delete;
         Entry& operator=(const Entry&) = delete;
-        Entry(Entry&&) noexcept = default;
-        Entry& operator=(Entry&&) noexcept = default;
+        Entry(Entry&& other) noexcept
+            : name(std::move(other.name)),
+              typeKey(std::exchange(other.typeKey, nullptr)),
+              value(std::exchange(other.value, nullptr)),
+              destroy(std::exchange(other.destroy, nullptr)) {}
+        Entry& operator=(Entry&&) = delete;
 
         std::pmr::string name;
         const void* typeKey{nullptr};

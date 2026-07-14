@@ -66,13 +66,17 @@ outstanding counts for application metrics. A job accepted before shutdown is
 drained before that worker closes DB/Redis; new jobs are rejected once shutdown
 starts. Captured data must own its lifetime, and `WebWorkerContext` must not be
 stored beyond the callback. `App::workers()` returns all Web worker handles;
-`WebWorkerHandle::core()` provides the general core post capability when no Web
-service access is needed. An unhandled job exception stops every App worker and
-is rethrown by `App::run()`; applications should still catch expected DB or
-business failures inside the job. Jobs must use worker-native cancellable waits
-or observe `WebWorkerContext::stopToken()` so shutdown can finish.
+external producers must keep using `WebWorkerHandle::post()` so accepted jobs
+remain covered by Web shutdown, failure propagation, and resource draining. An
+unhandled job exception stops every App worker and is rethrown by `App::run()`;
+applications should still catch expected DB or business failures inside the job.
+Jobs may use `WebWorkerContext::worker()` for worker-bound core primitives, and
+must use cancellable waits or observe `WebWorkerContext::stopToken()` so shutdown
+can finish.
 `TaskScope`, worker-bound `sleepFor`, bounded `Channel`, and `OneShot` are also
 provided by `ruvia::core`; their deadlines share the worker's single timer queue.
+`App::onStop()` hooks run once for signal shutdown, direct `App::stop()`, and
+worker failure before the worker-local Web resources are closed.
 
 ## Requirements
 
@@ -234,8 +238,10 @@ int main() {
 ```
 
 Handlers use `ruvia::Task<T>`, read HTTP input through `c.req()`, and build
-responses through `Context`. Connection metadata is deliberately separate from the
-HTTP request model:
+responses through `Context`. Set response metadata through `c.status()`,
+`c.header()`, and `c.setCookie()` before selecting one body builder such as
+`c.text()` or `c.json()`; body builders do not accept a second metadata path.
+Connection metadata is deliberately separate from the HTTP request model:
 
 ```cpp
 const auto info = ruvia::getConnInfo(c);

@@ -63,13 +63,14 @@ private:
         co_await loadUserFound(c, found);
         std::pmr::string body(c.allocator<char>());
         body.append(found ? "found\n" : "not found\n");
-        co_return c.text(body, found ? 200 : 404);
+        c.status(found ? 200 : 404);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> streamUsers(ruvia::Context& c) {
         std::pmr::string body(c.allocator<char>());
         co_await appendUsers(c, body);
-        co_return c.text(body);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> createUser(ruvia::Context& c) {
@@ -80,7 +81,8 @@ private:
         body.append("created id=");
         appendUnsigned(body, id);
         body.push_back('\n');
-        co_return c.text(body, 201);
+        c.status(201);
+        co_return c.text(std::move(body));
     }
 
     ruvia::Task<ruvia::HttpResponse> transfer(ruvia::Context& c) {

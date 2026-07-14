@@ -1,4 +1,6 @@
 #include <ruvia/core/Runtime.h>
+#include <ruvia/core/detail/WorkerDispatcher.h>
+#include <ruvia/core/detail/WorkerSelection.h>
 
 #include <atomic>
 #include <future>
@@ -15,8 +17,9 @@ bool testDispatchAndAffinity() {
     if (!first.valid() || first.id() == 0 || first.id() == second.id() || first.isCurrent()) {
         return false;
     }
-    if (runtime.workerFor(std::string_view("device-42")).id() !=
-        runtime.workerFor(std::string_view("device-42")).id()) {
+    constexpr std::string_view key = "device-42";
+    if (runtime.workerFor(key).id() !=
+        runtime.workerFor(ruvia::detail::workerSelectionHash(key)).id()) {
         return false;
     }
 
@@ -63,6 +66,13 @@ bool testBoundedMailbox() {
 
 bool testFailurePropagation() {
     ruvia::Runtime runtime({.workerCount = 1, .mailboxCapacity = 1});
+    struct Listener final : ruvia::detail::WorkerShutdownListener {
+        void workerStopping() noexcept override { notified = true; }
+        bool notified{false};
+    };
+    const auto listener = std::make_shared<Listener>();
+    ruvia::detail::WorkerHandleAccess::registerShutdownListener(
+        runtime.worker(0), listener);
     if (runtime.worker(0).post([] { throw std::runtime_error("posted task failed"); }) !=
         ruvia::PostResult::kAccepted) {
         return false;
@@ -71,7 +81,8 @@ bool testFailurePropagation() {
     try {
         runtime.join();
     } catch (const std::runtime_error& error) {
-        return std::string_view(error.what()) == "posted task failed";
+        return listener->notified &&
+               std::string_view(error.what()) == "posted task failed";
     }
     return false;
 }

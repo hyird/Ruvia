@@ -134,7 +134,7 @@ public:
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
     Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, RequestMemory* requestMemory);
+    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     void abortTransaction(std::size_t slot) noexcept;
@@ -220,7 +220,7 @@ public:
     Task<void> closeStream(std::size_t slot, void* result, std::pmr::memory_resource* resource);
     void abortStream(std::size_t slot, void* result) noexcept;
     Task<QueryResult> executeOnTransactionSlot(std::size_t slot, std::pmr::string sql, std::pmr::vector<DbValue> params, std::pmr::memory_resource* resource);
-    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource, RequestMemory* requestMemory);
+    Task<DbTransaction> beginTransaction(std::pmr::memory_resource* resource);
     Task<void> commitTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     Task<void> rollbackTransaction(std::size_t slot, std::pmr::memory_resource* resource);
     void abortTransaction(std::size_t slot) noexcept;
@@ -248,8 +248,10 @@ public:
     void scanDeadlines() noexcept;
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool hasAnyTimeout() const noexcept;
-    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource, RequestMemory* requestMemory = nullptr) const;
-    [[nodiscard]] DbHandle get(std::string_view alias, std::pmr::memory_resource* resource, RequestMemory* requestMemory = nullptr) const;
+    [[nodiscard]] DbHandle get(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] DbHandle get(
+        std::string_view alias,
+        std::pmr::memory_resource* resource) const;
 
 public:
 #ifdef RUVIA_ENABLE_MARIADB
