@@ -2363,13 +2363,15 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
     file(READ "${_installed_http1_buffered_response_writer_path}"
         _installed_http1_buffered_response_writer)
     if(NOT _installed_http1_buffered_response_result MATCHES
-           "Http1BufferedResponseWriteCompleted" OR
+           "class Http1BufferedResponseWriteResult final" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "Http1BufferedResponseWriteFailedBeforeCommit" OR
+           "bool completed[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "Http1BufferedResponseWriteFailedAfterCommit" OR
+           "std::optional<std::uint16_t>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
        NOT _installed_http1_buffered_response_result MATCHES
-           "using Value = std::variant" OR
+           "is_trivially_copyable_v<Http1BufferedResponseWriteResult>" OR
+       NOT _installed_http1_buffered_response_result MATCHES
+           "sizeof[(]Http1BufferedResponseWriteResult[)] <= 8" OR
        NOT _installed_http1_buffered_response_result MATCHES
            "plan[.]responseStatus[(][)]" OR
        NOT _installed_http1_buffered_response_writer MATCHES
@@ -2379,11 +2381,11 @@ if(_built_components_csv MATCHES "(^|,)web(,|$)")
        NOT _installed_http1_stream_session MATCHES
            "writeResult[.]completed[(][)]" OR
        NOT _installed_http1_stream_session MATCHES
-           "writeResult[.]failedBeforeCommit[(][)]" OR
-       NOT _installed_http1_stream_session MATCHES
-           "writeResult[.]failedAfterCommit[(][)]" OR
+           "writeResult[.]committedStatus[(][)]" OR
+       _installed_http1_buffered_response_result MATCHES
+           "Http1BufferedResponseWriteCompleted|Http1BufferedResponseWriteFailedBeforeCommit|Http1BufferedResponseWriteFailedAfterCommit|using Value = std::variant|failedBeforeCommit[(]|failedAfterCommit[(]|error[(][)]" OR
        _installed_http1_stream_session MATCHES
-           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart" OR
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart|writeResult[.]failedBeforeCommit[(]|writeResult[.]failedAfterCommit[(]" OR
        _installed_http1_buffered_response_writer MATCHES
            "Task<void>[ \t\r\n]+writeResponse(WithScratch|WithLocalHead)?[ \t\r\n]*[(]" OR
        _installed_http1_buffered_response_writer MATCHES

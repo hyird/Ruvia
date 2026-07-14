@@ -4411,13 +4411,15 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
     endif()
 
     if(NOT buffered_response_h1_result MATCHES
-           "Http1BufferedResponseWriteCompleted" OR
+           "class Http1BufferedResponseWriteResult final" OR
        NOT buffered_response_h1_result MATCHES
-           "Http1BufferedResponseWriteFailedBeforeCommit" OR
+           "bool completed[(][)] const noexcept" OR
        NOT buffered_response_h1_result MATCHES
-           "Http1BufferedResponseWriteFailedAfterCommit" OR
+           "std::optional<std::uint16_t>[ \t\r\n]+committedStatus[(][)] const noexcept" OR
        NOT buffered_response_h1_result MATCHES
-           "using Value = std::variant" OR
+           "is_trivially_copyable_v<Http1BufferedResponseWriteResult>" OR
+       NOT buffered_response_h1_result MATCHES
+           "sizeof[(]Http1BufferedResponseWriteResult[)] <= 8" OR
        NOT buffered_response_h1_result MATCHES
            "plan[.]responseStatus[(][)]" OR
        NOT buffered_response_h1_writer MATCHES
@@ -4429,13 +4431,13 @@ if(EXISTS "${HTTP_BUFFERED_RESPONSE_WRITE_PLAN}" AND
        NOT buffered_response_h1_session MATCHES
            "writeResult[.]completed[(][)]" OR
        NOT buffered_response_h1_session MATCHES
-           "writeResult[.]failedBeforeCommit[(][)]" OR
-       NOT buffered_response_h1_session MATCHES
-           "writeResult[.]failedAfterCommit[(][)]" OR
+           "writeResult[.]committedStatus[(][)]" OR
+       buffered_response_h1_result MATCHES
+           "Http1BufferedResponseWriteCompleted|Http1BufferedResponseWriteFailedBeforeCommit|Http1BufferedResponseWriteFailedAfterCommit|using Value = std::variant|failedBeforeCommit[(]|failedAfterCommit[(]|error[(][)]" OR
        buffered_response_h1_session MATCHES
-           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart")
+           "response[.]status[(][)][ \t\r\n]*,[ \t\r\n]*requestStart|writeResult[.]failedBeforeCommit[(]|writeResult[.]failedAfterCommit[(]")
         boundary_error("HTTP/1 buffered completion restored a loose write/error/status path"
-            "the writer must classify the complete-head byte boundary and logging must consume only committed plan status")
+            "the writer must consume transport errors, classify the complete-head byte boundary, and expose only completion plus optional committed status")
     endif()
 
     if(NOT buffered_response_plan_test MATCHES
@@ -9985,9 +9987,9 @@ if(EXISTS "${WEB_EXECUTION_ROUTE_RESOLUTION}" AND
        web_execution_websocket_route MATCHES
            "class HttpWebSocketBufferedResponse final|bufferedResponse[(][)] const [&] noexcept" OR
        NOT web_execution_http1_write MATCHES
-           "completed[(][)] const [&] noexcept" OR
+           "completed[(][)] const noexcept" OR
        NOT web_execution_http1_write MATCHES
-           "failedAfterCommit[(][)] const && = delete" OR
+           "committedStatus[(][)] const noexcept" OR
        NOT web_execution_http2_write MATCHES
            "committedStatus[(][)] const noexcept" OR
        NOT web_execution_zero_copy MATCHES

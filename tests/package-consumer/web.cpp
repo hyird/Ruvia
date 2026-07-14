@@ -345,7 +345,9 @@ concept ExposesAnyRvalueWebExecutionBorrow =
     requires(T&& value) { std::move(value).requestCompletion(); } ||
     requires(T&& value) { std::move(value).sessionFinished(); } ||
     requires(T&& value) { std::move(value).completion(); } ||
-    requires(T&& value) { std::move(value).completed(); } ||
+    requires(T&& value) {
+        requires std::is_pointer_v<decltype(std::move(value).completed())>;
+    } ||
     requires(T&& value) { std::move(value).peerAbortedBeforeCommit(); } ||
     requires(T&& value) { std::move(value).peerAbortedAfterCommit(); } ||
     requires(T&& value) { std::move(value).failedBeforeCommit(); } ||
@@ -1118,27 +1120,15 @@ static_assert(!HasResponseWriteError<
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
         Http1BufferedResponseWriteResult&>().completed()),
-    const ruvia::detail::Http1BufferedResponseWriteCompleted*>);
+    bool>);
 static_assert(std::same_as<
     decltype(std::declval<const ruvia::detail::
-        Http1BufferedResponseWriteResult&>().failedBeforeCommit()),
-    const ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit*>);
-static_assert(std::same_as<
-    decltype(std::declval<const ruvia::detail::
-        Http1BufferedResponseWriteResult&>().failedAfterCommit()),
-    const ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit*>);
-static_assert(HasResponseStatus<
-    ruvia::detail::Http1BufferedResponseWriteCompleted>);
-static_assert(!HasResponseStatus<
-    ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit>);
-static_assert(HasResponseStatus<
-    ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit>);
-static_assert(!HasResponseWriteError<
-    ruvia::detail::Http1BufferedResponseWriteCompleted>);
-static_assert(HasResponseWriteError<
-    ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit>);
-static_assert(HasResponseWriteError<
-    ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit>);
+        Http1BufferedResponseWriteResult&>().committedStatus()),
+    std::optional<std::uint16_t>>);
+static_assert(std::is_trivially_copyable_v<
+    ruvia::detail::Http1BufferedResponseWriteResult>);
+static_assert(sizeof(
+    ruvia::detail::Http1BufferedResponseWriteResult) <= 8);
 using ClassifyHttp1BufferedResponseWriteFunction =
     ruvia::detail::Http1BufferedResponseWriteResult (*)(
         const ruvia::detail::Http1BufferedResponsePlan&,

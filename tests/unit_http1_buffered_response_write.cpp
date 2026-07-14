@@ -44,8 +44,6 @@ namespace {
 using ruvia::HttpKnownMethod;
 using ruvia::HttpResponse;
 using ruvia::WorkerMemory;
-using ruvia::detail::Http1BufferedResponseWriteFailedAfterCommit;
-using ruvia::detail::Http1BufferedResponseWriteFailedBeforeCommit;
 using ruvia::detail::Http1BufferedResponseWriteResult;
 using ruvia::detail::Http1ServerConnectionPlan;
 using ruvia::detail::HttpFileZeroCopyCompleted;
@@ -77,7 +75,9 @@ concept HasError = requires(const Alternative& alternative) {
 
 template <typename Result>
 concept HasAnyRvalueHttp1WriteBorrow =
-    requires(Result&& value) { std::move(value).completed(); } ||
+    requires(Result&& value) {
+        requires std::is_pointer_v<decltype(std::move(value).completed())>;
+    } ||
     requires(Result&& value) { std::move(value).failedBeforeCommit(); } ||
     requires(Result&& value) { std::move(value).failedAfterCommit(); } ||
     requires(Result&& value) { std::move(value).unavailable(); } ||
@@ -85,14 +85,18 @@ concept HasAnyRvalueHttp1WriteBorrow =
 
 static_assert(!std::is_default_constructible_v<
     Http1BufferedResponseWriteResult>);
-static_assert(!HasAnyRvalueHttp1WriteBorrow<
-    Http1BufferedResponseWriteResult>);
 static_assert(!HasStatus<Http1BufferedResponseWriteResult>);
 static_assert(!HasError<Http1BufferedResponseWriteResult>);
-static_assert(!HasStatus<Http1BufferedResponseWriteFailedBeforeCommit>);
-static_assert(HasError<Http1BufferedResponseWriteFailedBeforeCommit>);
-static_assert(HasStatus<Http1BufferedResponseWriteFailedAfterCommit>);
-static_assert(HasError<Http1BufferedResponseWriteFailedAfterCommit>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1BufferedResponseWriteResult&>().completed()),
+    bool>);
+static_assert(std::same_as<
+    decltype(std::declval<const Http1BufferedResponseWriteResult&>()
+                 .committedStatus()),
+    std::optional<std::uint16_t>>);
+static_assert(std::is_trivially_copyable_v<
+    Http1BufferedResponseWriteResult>);
+static_assert(sizeof(Http1BufferedResponseWriteResult) <= 8);
 static_assert(!std::is_default_constructible_v<HttpFileZeroCopyResult>);
 static_assert(!HasAnyRvalueHttp1WriteBorrow<HttpFileZeroCopyResult>);
 static_assert(!HasError<HttpFileZeroCopyResult>);
@@ -334,62 +338,33 @@ enum class WriteScenario {
 
 RUVIA_TEST(http1_buffered_write_completion_owns_plan_status) {
     const auto result = runBufferedWrite(WriteScenario::kCompleted);
-    const auto* completed = result.completed();
-    RUVIA_CHECK(completed != nullptr);
-    if (completed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK_EQ(completed->status(), std::uint16_t{207});
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
+    RUVIA_CHECK(result.completed());
+    RUVIA_CHECK(result.committedStatus().has_value());
+    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
 }
 
 RUVIA_TEST(http1_buffered_write_partial_head_has_no_status) {
     const auto result = runBufferedWrite(
         WriteScenario::kFailedBeforeCommit);
-    const auto* failed = result.failedBeforeCommit();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK(
-        failed->error() ==
-        asio::error::connection_reset);
-    RUVIA_CHECK(result.completed() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
+    RUVIA_CHECK(!result.completed());
+    RUVIA_CHECK(!result.committedStatus().has_value());
 }
 
 RUVIA_TEST(http1_buffered_write_body_failure_keeps_committed_status) {
     const auto result = runBufferedWrite(
         WriteScenario::kFailedAfterCommit);
-    const auto* failed = result.failedAfterCommit();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK_EQ(
-        failed->status(),
-        std::uint16_t{207});
-    RUVIA_CHECK(
-        failed->error() ==
-        asio::error::connection_reset);
-    RUVIA_CHECK(result.completed() == nullptr);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
+    RUVIA_CHECK(!result.completed());
+    RUVIA_CHECK(result.committedStatus().has_value());
+    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
 }
 
 RUVIA_TEST(http1_buffered_scatter_write_keeps_committed_status) {
     const auto result = runBufferedWrite(
         WriteScenario::kFailedAfterCommit,
         1024);
-    const auto* failed = result.failedAfterCommit();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK_EQ(failed->status(), std::uint16_t{207});
-    RUVIA_CHECK(
-        failed->error() ==
-        asio::error::connection_reset);
+    RUVIA_CHECK(!result.completed());
+    RUVIA_CHECK(result.committedStatus().has_value());
+    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
 }
 
 RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
@@ -403,14 +378,8 @@ RUVIA_TEST(http1_buffered_write_cannot_complete_without_a_full_head) {
         64,
         {},
         63);
-    const auto* failed = result.failedBeforeCommit();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK(failed->error() == std::errc::io_error);
-    RUVIA_CHECK(result.completed() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
+    RUVIA_CHECK(!result.completed());
+    RUVIA_CHECK(!result.committedStatus().has_value());
 }
 
 RUVIA_TEST(http_file_zero_copy_result_distinguishes_capability) {
@@ -470,14 +439,9 @@ RUVIA_TEST(http1_buffered_file_fallback_completion_owns_status) {
         "ruvia_http_file_fallback_result.bin",
         contents);
     const auto result = runBufferedFileWrite(file.path(), contents.size());
-    const auto* completed = result.completed();
-    RUVIA_CHECK(completed != nullptr);
-    if (completed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK_EQ(completed->status(), std::uint16_t{207});
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
-    RUVIA_CHECK(result.failedAfterCommit() == nullptr);
+    RUVIA_CHECK(result.completed());
+    RUVIA_CHECK(result.committedStatus().has_value());
+    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
 }
 
 RUVIA_TEST(http1_buffered_file_open_failure_preserves_committed_status) {
@@ -487,14 +451,7 @@ RUVIA_TEST(http1_buffered_file_open_failure_preserves_committed_status) {
     std::filesystem::remove(path, ignored);
 
     const auto result = runBufferedFileWrite(path, 1);
-    const auto* failed = result.failedAfterCommit();
-    RUVIA_CHECK(failed != nullptr);
-    if (failed == nullptr) {
-        return;
-    }
-    RUVIA_CHECK_EQ(failed->status(), std::uint16_t{207});
-    RUVIA_CHECK(static_cast<bool>(failed->error()));
-    RUVIA_CHECK(failed->error() != asio::error::operation_aborted);
-    RUVIA_CHECK(result.completed() == nullptr);
-    RUVIA_CHECK(result.failedBeforeCommit() == nullptr);
+    RUVIA_CHECK(!result.completed());
+    RUVIA_CHECK(result.committedStatus().has_value());
+    RUVIA_CHECK_EQ(result.committedStatus().value_or(0), std::uint16_t{207});
 }

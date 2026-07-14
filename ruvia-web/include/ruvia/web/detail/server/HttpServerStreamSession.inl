@@ -422,25 +422,15 @@ Task<void> HttpServer::handleStreamSession(
                 response,
                 responsePlan);
             scannerEntry.setPhase(ConnectionScanner::Phase::kIdle);
-            if (const auto* completed = writeResult.completed()) {
+            if (const auto committedStatus = writeResult.committedStatus()) {
                 recordHttpAccess(
                     options_.accessLog,
                     parsed.request,
                     remoteAddress,
-                    completed->status(),
+                    *committedStatus,
                     requestStart);
-            } else if (const auto* failed = writeResult.failedAfterCommit()) {
-                recordHttpAccess(
-                    options_.accessLog,
-                    parsed.request,
-                    remoteAddress,
-                    failed->status(),
-                    requestStart);
-            } else if (writeResult.failedBeforeCommit() == nullptr) {
-                throw std::logic_error(
-                    "HTTP/1 buffered write returned no terminal alternative");
             }
-            if (writeResult.completed() == nullptr) {
+            if (!writeResult.completed()) {
                 co_return;
             }
         } else if (const auto* committed =
