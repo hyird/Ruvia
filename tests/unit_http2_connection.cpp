@@ -4277,6 +4277,46 @@ RUVIA_TEST(http2_connection_drained_pings_never_trip) {
     }
 }
 
+// A peer that floods non-ACK SETTINGS without ever letting us flush the echoed ACKs is
+// cut off with GOAWAY(ENHANCE_YOUR_CALM) instead of accumulating unbounded ACK bytes
+// (CVE-2019-9515 SETTINGS flood -- the sibling of the PING flood above).
+RUVIA_TEST(http2_connection_settings_flood_trips_enhance_your_calm) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char settings[9];
+    ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+
+    bool tripped = false;
+    for (int i = 0; i < 1200 && !tripped; ++i) {
+        // Deliberately do NOT drain output between frames, so the un-drained SETTINGS
+        // budget accumulates (consumeOutput would reset it -- see the drained test below).
+        tripped = conn.feed(std::string_view(settings, sizeof(settings))) ==
+                  ruvia::detail::Http2FeedResult::kProtocolFailure;
+    }
+    RUVIA_CHECK(tripped);
+    RUVIA_CHECK(conn.connectionError().has_value());
+    RUVIA_CHECK_EQ(firstGoawayError(conn.pendingOutput()), kEnhanceYourCalm);
+}
+
+// Healthy SETTINGS re-tuning (ACKs drained each round) never trips, however many.
+RUVIA_TEST(http2_connection_drained_settings_never_trip) {
+    std::pmr::monotonic_buffer_resource resource;
+    Http2Connection conn(&resource);
+    handshake(conn);
+
+    char settings[9];
+    ruvia::detail::http2EncodeFrameHeader(settings, 0, Http2FrameType::kSettings, 0, 0);
+
+    for (int i = 0; i < 5000; ++i) {
+        const auto r = conn.feed(std::string_view(settings, sizeof(settings)));
+        RUVIA_CHECK(r == ruvia::detail::Http2FeedResult::kAccepted);
+        conn.consumeOutput(conn.pendingOutput().size());  // flush ACK -> resets budget
+        RUVIA_CHECK(!conn.connectionError().has_value());
+    }
+}
+
 // A rapid-reset flood (open a stream, RST it, repeat -- never letting a response finish)
 // is cut off with GOAWAY(ENHANCE_YOUR_CALM); the 128-stream cap alone never trips because
 // each RST immediately frees the slot (CVE-2023-44487).
